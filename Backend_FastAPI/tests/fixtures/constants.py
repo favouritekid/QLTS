@@ -1,0 +1,255 @@
+# tests/fixtures/constants.py
+# -*- coding: utf-8 -*-
+"""
+Tập trung hóa các hằng số được sử dụng trong bộ test. ⚙️
+"""
+
+# ==================================
+# URLs Endpoints 🌐
+# ==================================
+
+class AuthURLs:
+    """URLs cho module Authentication."""
+    LOGIN = "/api/auth/login"
+    REFRESH = "/api/auth/refresh"
+    LOGOUT = "/api/auth/logout"
+    CHANGE_PASSWORD = "/api/auth/change-password"
+    FORGOT_PASSWORD = "/api/auth/forgot-password"
+    RESET_PASSWORD = "/api/auth/reset-password"
+    REGISTER = "/api/auth/register" # Thêm URL đăng ký nếu có test
+
+class AdminURLs:
+    """URLs cho các endpoint /api/admin."""
+    """URLs cho các endpoint /api/admin."""
+    BASE = "/api/admin"
+    USERS = f"{BASE}/users"
+    USER_DETAIL = lambda user_id: f"{AdminURLs.USERS}/{user_id}" # Tham chiếu qua class
+    USER_SET_PASSWORD = lambda user_id: f"{AdminURLs.USER_DETAIL(user_id)}/set-password" # Tham chiếu qua class
+    BULK_ACTION = f"{USERS}/bulk-action" # Cái này OK
+
+    ORGANIZATION_UNITS = f"{BASE}/organization-units"
+    ORGANIZATION_UNIT_DETAIL = lambda unit_id: f"{AdminURLs.ORGANIZATION_UNITS}/{unit_id}" # Tham chiếu qua class
+
+    MAJORS = f"{BASE}/majors"
+    MAJOR_DETAIL = lambda major_id: f"{AdminURLs.MAJORS}/{major_id}" # Tham chiếu qua class
+
+    PIPELINE_STAGES = f"{BASE}/pipeline-stages"
+    PIPELINE_STAGE_DETAIL = lambda stage_id: f"{AdminURLs.PIPELINE_STAGES}/{stage_id}" # Tham chiếu qua class
+
+    CONSULTATION_STATUSES = f"{BASE}/consultation-statuses"
+    CONSULTATION_STATUS_DETAIL = lambda status_id: f"{AdminURLs.CONSULTATION_STATUSES}/{status_id}" # Tham chiếu qua class
+
+    ASSIGNMENT_CONFIG = f"{BASE}/assignment-config"
+    # SỬA DÒNG NÀY:
+    ASSIGNMENT_CONFIG_DETAIL = lambda unit_id: f"{AdminURLs.ASSIGNMENT_CONFIG}/{unit_id}" # Tham chiếu qua AdminURLs.ASSIGNMENT_CONFIG
+
+    SKILL_RULES = f"{BASE}/skill-rules"
+    # SỬA DÒNG NÀY:
+    SKILL_RULE_DETAIL = lambda rule_id: f"{AdminURLs.SKILL_RULES}/{rule_id}" # Tham chiếu qua AdminURLs.SKILL_RULES
+
+    POLICIES = f"{BASE}/policies"
+    ASSIGN_ROLE = f"{BASE}/assign-role"
+
+class ProfileURLs:
+    """URLs cho module Profile."""
+    PROFILE = "/api/profile"
+
+class PipelineURLs:
+    """URLs cho module Pipeline (public)."""
+    ALL = "/api/pipeline/all"
+
+class LeadsURLs:
+    LEADS = "/api/leads"
+    
+    # 1. Định nghĩa chi tiết Lead (Giữ nguyên)
+    LEAD_DETAIL = lambda lead_id: f"{LeadsURLs.LEADS}/{lead_id}"
+    
+    # 2. SỬA LỖI: Thêm LeadsURLs. vào trước các hàm lambda
+    
+    # URL gán lead: POST /api/leads/{lead_id}/assign
+    ASSIGN = lambda lead_id: f"{LeadsURLs.LEAD_DETAIL(lead_id)}/assign"
+
+    # URL actions: POST /api/leads/{lead_id}/action
+    ACTION = lambda lead_id: f"{LeadsURLs.LEAD_DETAIL(lead_id)}/action"
+    
+    # URL consultations: POST /api/leads/{lead_id}/consultations
+    CONSULTATIONS = lambda lead_id: f"{LeadsURLs.LEAD_DETAIL(lead_id)}/consultations"
+
+    # URL timeline: GET /api/leads/{lead_id}/timeline
+    TIMELINE = lambda lead_id: f"{LeadsURLs.LEAD_DETAIL(lead_id)}/timeline"
+
+    INSIGHTS = lambda lead_id: f"{LeadsURLs.LEAD_DETAIL(lead_id)}/insights"
+    
+    ADMIN_REVERT_STATUS = lambda lead_id: f"{AdminURLs.BASE}/leads/{lead_id}/revert-status"
+
+class OrganizationURLs:
+    """URLs cho module Organization (public)."""
+    UNITS = "/api/organization/organization-units"
+    MAJORS = "/api/organization/majors"
+
+class UsersURLs:
+    """URLs cho module Users (public)."""
+    ME = "/api/users/me"
+
+class HealthURLs:
+    """URLs cho Health Checks."""
+    HEALTH = "/health"
+    DETAILED_HEALTH = "/health/detailed"
+
+
+# ==================================
+# Dữ Liệu Người Dùng Mẫu 🧑‍💻
+# ==================================
+
+class TestUsers:
+    """Thông tin đăng nhập và dữ liệu cho người dùng mẫu."""
+
+    # --- User Admin ---
+    ADMIN = {
+        "username": "testadmin",
+        "email": "admin@example.com",
+        # QUAN TRỌNG: Mật khẩu này PHẢI đáp ứng validation rules (độ dài, ký tự đặc biệt,...)
+        "password": "AdminPassword!123",
+        "role": "admin",
+        "status": "active"
+    }
+
+    # --- User Thường (Regular) ---
+    REGULAR = {
+        "username": "testuser_regular",
+        "email": "regular@example.com",
+        # QUAN TRỌNG: Mật khẩu này PHẢI đáp ứng validation rules
+        "password": "RegularPassword?456",
+        "role": "user",
+        "status": "active"
+    }
+
+    # --- User Mặc Định (Thường dùng trong các test auth cơ bản) ---
+    DEFAULT = {
+        "username": "testuser_default",
+        "email": "test_default@example.com",
+        # QUAN TRỌNG: Mật khẩu này PHẢI đáp ứng validation rules
+        "password": "ValidPassword123!",
+        # Hash thật của "ValidPassword123!" (Lấy từ generate_password_hash.py hoặc conftest.py cũ)
+        # $2b$12$Ocybw6M1qmA1KVo9Z3VhY.hNGgnn1N/rA/tdlFWFuKtIfhNw7t5Hi
+        "real_hash": "$2b$12$Ocybw6M1qmA1KVo9Z3VhY.hNGgnn1N/rA/tdlFWFuKtIfhNw7t5Hi",
+        "role": "user",
+        "status": "active"
+    }
+
+    # --- User Manager (Bổ sung) ---
+    MANAGER = {
+        "username": "testmanager",
+        "email": "manager@example.com",
+        "password": "ManagerPassword!789",
+        "role": "manager", # Role trong DB
+        "status": "active"
+    }
+
+    # --- User Officer (Bổ sung) ---
+    OFFICER = {
+        "username": "testofficer",
+        "email": "officer@example.com",
+        "password": "OfficerPassword!012",
+        "role": "officer", # Role trong DB
+        "status": "active"
+    }
+
+    # --- Dữ liệu không hợp lệ ---
+    INVALID_PASSWORD = "wrongpassword" # Mật khẩu sai
+    WEAK_PASSWORD = "123" # Mật khẩu yếu
+    NON_EXISTENT_USERNAME = "nosuchuser" # Username không tồn tại
+    NON_EXISTENT_EMAIL = "noemail@example.com" # Email không tồn tại
+
+    # --- Dữ liệu cho các test khác ---
+    USER_FOR_UPDATE = {
+         "username": "update_me",
+         "email": "update_me@example.com",
+         "password": "UpdatePassword!789",
+         "full_name": "User To Update",
+         "role": "officer",
+         "status": "active"
+    }
+    USER_FOR_DELETE = {
+         "username": "delete_me",
+         "email": "delete_me@example.com",
+         "password": "DeletePassword!000",
+         "full_name": "User To Delete",
+         "role": "user",
+         "status": "pending"
+    }
+
+
+# ==================================
+# Hằng Số Bảo Mật 🔒
+# ==================================
+
+class SecurityConstants:
+    """Các giá trị liên quan đến bảo mật (hash, token...)."""
+    # Hash của "a_very_random_dummy_password_for_timing_attack_$%^&*"
+    # Lấy từ generate_password_hash.py hoặc conftest.py cũ
+    # $2b$12$d5AUHnn4.BNHoa2kuIWmt.40hvBLF4YYAjtyE9gHDNQFgypctRf62
+    DUMMY_BCRYPT_HASH = "$2b$12$d5AUHnn4.BNHoa2kuIWmt.40hvBLF4YYAjtyE9gHDNQFgypctRf62"
+
+    # Token mẫu (có thể dùng để test lỗi giải mã, hết hạn...)
+    INVALID_TOKEN_STRING = "this.is.not.a.valid.token"
+    # Có thể tạo token hết hạn ở đây nếu cần test nhiều lần
+    # EXPIRED_REFRESH_TOKEN = create_refresh_token(data={"sub": "any"}, expires_delta=timedelta(seconds=-1))
+    INVALID_RESET_TOKEN_STRING = "invalid.reset.token"
+
+# ==================================
+# Dữ Liệu Test Khác ⚙️
+# ==================================
+
+class TestPipelineData:
+    """Dữ liệu mẫu cho pipeline stages và statuses."""
+    STAGE_A = {"id": "STAGE_A", "name": "Stage A", "order": 10}
+    STAGE_B = {"id": "STAGE_B", "name": "Stage B", "order": 20}
+    STAGE_C = {"id": "STAGE_C", "name": "Stage C (No Status)", "order": 30} # Stage không có status
+
+    STATUS_A1 = {"id": "STATUS_A1", "name": "Status A1", "color_code": "#AAAAAA", "stage_id": STAGE_A["id"]}
+    STATUS_B1 = {"id": "STATUS_B1", "name": "Status B1", "color_code": "#BBBBBB", "stage_id": STAGE_B["id"]}
+    # Thêm status khác nếu cần
+
+class TestOrgData:
+    """Dữ liệu mẫu cho Organization Units và Majors."""
+    UNIT_1 = {"id": 1, "name": "Test Unit 1", "type": "Faculty"}
+    MAJOR_1 = {"id": 1, "name": "Test Major 1", "code": "TM1", "unit_id": UNIT_1["id"]}
+
+class TestLeadData:
+     """Dữ liệu mẫu cho Leads."""
+     LEAD_1 = {
+        "full_name": "Test Lead 1",
+        "email": "lead1@example.com",
+        "phone": "111111111",
+        "source": "website",
+        "unit_id": TestOrgData.UNIT_1["id"],
+        "major_id": TestOrgData.MAJOR_1["id"],
+        # Giả sử lead này đang ở trạng thái STATUS_A1
+        "status": TestPipelineData.STATUS_A1["id"],
+        "consultation_status_id": TestPipelineData.STATUS_A1["id"],
+        "pipeline_stage_id": TestPipelineData.STAGE_A["id"]
+     }
+     LEAD_CREATE_PAYLOAD = {
+        "full_name": "New Lead Payload",
+        "email": "new_lead@example.com",
+        "phone": "999888777",
+        "source": "event",
+        "unit_id": TestOrgData.UNIT_1["id"],
+        "major_id": TestOrgData.MAJOR_1["id"]
+     }
+
+class TestConfigData:
+    """Dữ liệu mẫu cho Assignment Config và Skill Rules."""
+    ASSIGNMENT_PARAMS = {"strategy": "round_robin", "max_concurrent": 5}
+    SKILL_RULE_1 = {
+        "lead_attribute": "source",
+        "attribute_value": "event",
+        "required_skill": "EventHandling"
+    }
+
+# Thêm các hằng số ID không tồn tại
+NON_EXISTENT_ID = 99999
+NON_EXISTENT_STAGE_ID = "NO_STAGE"
+NON_EXISTENT_STATUS_ID = "NO_STATUS"
+NON_EXISTENT_LEAD_ID = 88888 # Bổ sung ID lead không tồn tại

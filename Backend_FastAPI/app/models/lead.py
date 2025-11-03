@@ -1,0 +1,162 @@
+# app/models/lead.py
+from datetime import datetime, timezone
+
+from sqlalchemy import JSON, Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import relationship
+
+from .base import Base
+
+
+class Lead(Base):
+    """Model cho học viên tiềm năng (Lead)."""
+
+    __tablename__ = "lead"
+
+    id = Column(Integer, primary_key=True, index=True)
+    full_name = Column(String(255), nullable=False)
+    email = Column(String(255), nullable=False, index=True)
+    phone = Column(String(20), nullable=False, index=True)
+    source = Column(String(50), nullable=False)
+    status = Column(String(50), nullable=False, default="new", index=True)
+    lead_score = Column(Integer, default=0, nullable=False)
+    education_level = Column(String(100), nullable=True)
+    gpa = Column(Float, nullable=True)
+    location = Column(String(255), nullable=True)
+    officer_rating = Column(Integer, nullable=True)
+    officer_summary = Column(Text, nullable=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+    assigned_at = Column(DateTime(timezone=True), nullable=True)
+    major_id = Column(Integer, ForeignKey("major.id"), nullable=True)
+    unit_id = Column(Integer, ForeignKey("organization_unit.id"), nullable=False)
+    assigned_officer_id = Column(
+        Integer, ForeignKey("user.id"), nullable=True, index=True
+    )
+    consultation_status_id = Column(
+        String(50), ForeignKey("consultation_status.id"), nullable=True
+    )
+    pipeline_stage_id = Column(
+        String(50), ForeignKey("pipeline_stage.id"), nullable=True, index=True
+    )
+
+    pipeline_stage = relationship("PipelineStage", back_populates="leads")
+
+    assigned_officer = relationship(
+        "User", back_populates="leads_assigned", foreign_keys=[assigned_officer_id]
+    )
+    consultations = relationship(
+        "Consultation", back_populates="lead", cascade="all, delete-orphan"
+    )
+    application = relationship(
+        "Application",
+        back_populates="lead",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+    interactions = relationship(
+        "CRMInteraction", back_populates="lead", cascade="all, delete-orphan"
+    )
+    assignment_logs = relationship(
+        "AssignmentLog", back_populates="lead", cascade="all, delete-orphan"
+    )
+    major = relationship("Major", back_populates="leads")
+    unit = relationship("OrganizationUnit", back_populates="leads")
+    consultation_status = relationship("ConsultationStatus", back_populates="leads")
+
+    def __repr__(self):
+        return f"<Lead {self.id}: {self.full_name}>"
+
+
+class Consultation(Base):
+    """Model cho các buổi tư vấn."""
+
+    __tablename__ = "consultation"
+
+    id = Column(Integer, primary_key=True, index=True)
+    lead_id = Column(Integer, ForeignKey("lead.id"), nullable=False, index=True)
+    consultation_date = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
+    method = Column(String(50))
+    notes = Column(Text)
+    outcome = Column(String(50))
+    duration_minutes = Column(Integer, nullable=True)
+    officer_id = Column(Integer, ForeignKey("user.id"), nullable=False)
+    consultation_status_id = Column(
+        String(50), ForeignKey("consultation_status.id"), nullable=True
+    )
+
+    consultation_status = relationship("ConsultationStatus")
+    officer = relationship(
+        "User", back_populates="consultations_handled", foreign_keys=[officer_id]
+    )
+    lead = relationship("Lead", back_populates="consultations")
+
+
+class Application(Base):
+    """Model cho hồ sơ nhập học."""
+
+    __tablename__ = "application"
+
+    id = Column(Integer, primary_key=True)
+    lead_id = Column(Integer, ForeignKey("lead.id"), nullable=False, unique=True)
+    documents = Column(JSON)
+    status = Column(String(50), default="submitted")
+    officer_id = Column(Integer, ForeignKey("user.id"), nullable=False)
+
+    officer = relationship(
+        "User", back_populates="applications_handled", foreign_keys=[officer_id]
+    )
+    lead = relationship("Lead", back_populates="application")
+
+
+class CRMInteraction(Base):
+    """Model cho các tương tác CRM tự động."""
+
+    __tablename__ = "crm_interaction"
+
+    id = Column(Integer, primary_key=True)
+    lead_id = Column(Integer, ForeignKey("lead.id"), nullable=False)
+    type = Column(String(50))
+    details = Column(JSON)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    lead = relationship("Lead", back_populates="interactions")
+
+
+class AssignmentLog(Base):
+    """Model để ghi lại lịch sử phân công lead."""
+
+    __tablename__ = "assignment_log"
+
+    id = Column(Integer, primary_key=True)
+    lead_id = Column(Integer, ForeignKey("lead.id"), nullable=False)
+    method = Column(String(50))
+    timestamp = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    reason = Column(Text, nullable=True)
+    officer_id = Column(Integer, ForeignKey("user.id"), nullable=False)
+
+    officer = relationship(
+        "User", back_populates="assignment_logs_involved", foreign_keys=[officer_id]
+    )
+    lead = relationship("Lead", back_populates="assignment_logs")
