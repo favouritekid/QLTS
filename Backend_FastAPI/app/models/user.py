@@ -47,6 +47,11 @@ class User(Base):
         back_populates="officer",
         foreign_keys="AssignmentLog.officer_id",
     )
+    sessions = relationship(
+        "UserSession",
+        back_populates="user",
+        cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<User {self.username}>"

@@ -64,5 +64,13 @@ from .user import (
     UserUpdate,
 )
 
+# Schemas từ user_session.py
+from .user_session import (
+    UserSessionCreate,
+    UserSessionUpdate,
+    UserSessionResponse,
+    UserSessionListResponse,
+)
+
 # Schemas từ permissions.py (Nếu có, như trong file testing.md)
 from .permissions import PolicyCreate, RoleAssignment

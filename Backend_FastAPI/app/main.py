@@ -27,7 +27,7 @@ from .config import settings
 from .database import safe_redis_ping
 from .database import redis_client as main_redis_client
 from .ratelimit import limiter
-from .routers import admin, auth, leads, organization, pipeline, profile, users
+from .routers import admin, auth, leads, organization, pipeline, profile, sessions, users
 from .utils.exceptions import (
     AuthenticationError,
     BadRequest,
@@ -62,11 +62,13 @@ structlog.configure(
 
 # Cấu hình handler cho logging
 log_handler = logging.StreamHandler()
-# (Gỡ bỏ formatter cũ nếu bạn dùng processor của structlog)
 root_logger = logging.getLogger()
 root_logger.handlers.clear()
 root_logger.addHandler(log_handler)
 root_logger.setLevel(settings.LOG_LEVEL.upper())
+
+logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+logging.getLogger("sqlalchemy.pool").setLevel(logging.WARNING)
 
 logging.getLogger("uvicorn.access").handlers.clear()
 logging.getLogger("uvicorn.access").addHandler(log_handler)
@@ -331,12 +333,14 @@ async def request_id_tracking_middleware(request: Request, call_next):
     return response
 
 # CORS Middleware
+# ✅ SECURITY FIX: Expose Set-Cookie header for HttpOnly cookies
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in settings.CORS_ORIGINS.split(",")] if settings.CORS_ORIGINS else ["*"],
-    allow_credentials=True,
+    allow_credentials=True,  # Required for cookies
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Set-Cookie"],  # Allow frontend to see Set-Cookie header
 )
 
 @app.middleware("http")
@@ -355,6 +359,7 @@ async def add_security_headers(request: Request, call_next):
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(profile.router, prefix="/api/profile", tags=["Profile"])
 app.include_router(users.router, prefix="/api/users", tags=["Users"])
+app.include_router(sessions.router, prefix="/api", tags=["Sessions"])  # ✅ NEW: Session management
 app.include_router(leads.router, prefix="/api/leads", tags=["Leads"])
 app.include_router(pipeline.router, prefix="/api/pipeline", tags=["Pipeline"])
 app.include_router(organization.router, prefix="/api/organization", tags=["Organization"])

@@ -1,4 +1,3 @@
-
 # app/routers/auth.py
 from typing import Annotated
 
@@ -6,12 +5,15 @@ import structlog
 from fastapi import (
     APIRouter,
     Body,
+    Cookie,
     Depends,
     Header,
     HTTPException,
     Request,
+    Response,
     status,
 )
+from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from sqlalchemy import select
@@ -20,6 +22,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import database, models, schemas, security, services
 from ..config import settings
 from ..core import deps
+from ..services import session_service
+from ..services.anomaly_detection import AnomalyDetector
+from ..celery_utils import send_login_alert_email_task
 from ..database import (
     safe_redis_delete,
     safe_redis_exists,
@@ -29,16 +34,10 @@ from ..database import (
 )
 from ..ratelimit import RATE_LIMITS, limiter
 
-# === SỬA LỖI RATE LIMIT KHI TEST ===
-# Tạo một decorator "dummy" (giả) không làm gì cả
 def no_limit(func):
     return func
-
-# Quyết định dùng decorator nào dựa trên APP_ENV
 limit_auth = limiter.limit(RATE_LIMITS["auth"]) if settings.APP_ENV != "test" else no_limit
 limit_register = limiter.limit(RATE_LIMITS["auth"]) if settings.APP_ENV != "test" else no_limit
-# === KẾT THÚC SỬA LỖI ===
-
 
 from ..utils.exceptions import InvalidToken
 
@@ -49,15 +48,13 @@ log = structlog.get_logger(__name__)
 @router.post(
     "/register", response_model=schemas.User, status_code=status.HTTP_201_CREATED
 )
-@limiter.limit(RATE_LIMITS["auth"])  # <-- ÁP DỤNG GIỚI HẠN
+@limiter.limit(RATE_LIMITS["auth"])
 async def register_user(
-    request: Request,  # <-- Thêm request để limiter hoạt động
+    request: Request,
     user_in: schemas.UserCreate,
     db: AsyncSession = Depends(database.get_db),
 ):
-    """
-    Endpoint để đăng ký một người dùng mới.
-    """
+    # (Giữ nguyên logic)
     db_user_by_username = await services.user_service.get_user_by_username(
         db, username=user_in.username
     )
@@ -66,7 +63,6 @@ async def register_user(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Username '{user_in.username}' already registered",
         )
-
     db_user_by_email = await services.user_service.get_user_by_email(
         db, email=user_in.email
     )
@@ -75,12 +71,11 @@ async def register_user(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Email '{user_in.email}' already registered",
         )
-
     created_user = await services.user_service.create_user(db=db, user_in=user_in)
     return created_user
 
 
-@router.post("/login", response_model=schemas.Token)
+@router.post("/login")
 @limiter.limit(RATE_LIMITS["auth"])
 async def login_for_access_token(
     request: Request,
@@ -91,40 +86,47 @@ async def login_for_access_token(
         db, username=form_data.username, password=form_data.password
     )
     
-    # Sau khi xác thực thành công, xóa user khỏi global blacklist (nếu có)
     try:
         await services.user_service.remove_user_from_global_blacklist(user.id)
     except Exception as e:
-        # Ghi log nếu không xóa được, nhưng vẫn tiếp tục login
         await log.error(
             "Failed to remove user from global blacklist during login",
             user_id=user.id,
             error=str(e)
         )
     
-    # Tạo tokens với type
-    access_token = security.create_access_token(data={"sub": user.username})
+    # ✅ BƯỚC 2: SỬA HÀM LOGIN
+    
+    # 1. Tạo Refresh Token TRƯỚC
     refresh_token = security.create_refresh_token(data={"sub": user.username})
-
-    # Lấy JTI và thời gian hết hạn từ tokens
-    access_jti, access_ttl = security.decode_token_for_invalidation(access_token)
     refresh_jti, refresh_ttl = security.decode_token_for_invalidation(refresh_token)
-
-    if not access_jti or not refresh_jti or refresh_ttl is None:
-        log.error("Failed to decode tokens during login", user_id=user.id)
+    
+    if not refresh_jti or refresh_ttl is None:
+        await log.error("Failed to decode REFRESH token during login", user_id=user.id)
         raise HTTPException(status_code=500, detail="Could not process tokens")
 
-    # Lưu JTI access vào DB
-    user.active_jti = access_jti
-    db.add(user)
+    # 2. Tạo Access Token, truyền refresh_jti vào
+    access_token = security.create_access_token(
+        data={"sub": user.username}, refresh_jti=refresh_jti
+    )
+    access_jti, access_ttl = security.decode_token_for_invalidation(access_token)
 
-    # Lưu JTI refresh vào Redis với TTL
+    if not access_jti:
+        await log.error("Failed to decode ACCESS token during login", user_id=user.id)
+        raise HTTPException(status_code=500, detail="Could not process tokens")
+
+    # (Đã xóa logic active_jti)
+
     try:
-        # Key: refresh_jti:<user_id>, Value: <refresh_token_jti>, TTL: thời gian hết hạn của refresh token
-        await safe_redis_set(f"refresh_jti:{user.id}", refresh_jti, ex=refresh_ttl)
+        await safe_redis_set(f"session:{refresh_jti}", str(user.id), ex=refresh_ttl)
+        await log.info(
+            "Refresh JTI stored in Redis for session",
+            user_id=user.id,
+            refresh_jti=refresh_jti[:8] + "..."
+        )
     except Exception as e:
-        await db.rollback()  # Nếu lưu Redis lỗi, rollback cả DB
-        log.error(
+        await db.rollback()
+        await log.error(
             "Failed to set refresh JTI in Redis during login",
             user_id=user.id,
             error=str(e),
@@ -132,52 +134,125 @@ async def login_for_access_token(
         )
         raise HTTPException(status_code=500, detail="Could not process session")
 
+    # (Giữ nguyên logic tạo session)
     try:
-        await db.commit()  # Commit DB sau khi Redis thành công
+        from datetime import datetime, timedelta, timezone
+        ip_address = request.client.host if request.client else None
+        user_agent_string = request.headers.get("User-Agent")
+        expires_at = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+        session = await session_service.create_session(
+            db=db,
+            user_id=user.id,
+            refresh_jti=refresh_jti,
+            ip_address=ip_address,
+            user_agent_string=user_agent_string,
+            expires_at=expires_at
+        )
+        detector = AnomalyDetector(db)
+        anomalies = await detector.analyze_login(
+            user_id=user.id,
+            ip_address=ip_address,
+            device_type=session.device_type,
+            browser=session.browser,
+            os=session.os,
+            country=session.country,
+            city=session.city,
+            login_time=session.created_at
+        )
+        if anomalies["is_suspicious"]:
+            session.is_suspicious = True
+            db.add(session)
+            try:
+                send_login_alert_email_task.delay(
+                    email_to=user.email,
+                    username=user.username,
+                    ip_address=ip_address or "Unknown",
+                    user_agent=user_agent_string or "Unknown",
+                    device_type=session.device_type or "Unknown",
+                    browser=session.browser or "Unknown",
+                    os=session.os or "Unknown",
+                    anomalies=anomalies
+                )
+                await log.info(
+                    "Login alert email queued for suspicious activity",
+                    user_id=user.id,
+                    ip_address=ip_address,
+                    anomalies=anomalies
+                )
+            except Exception as email_error:
+                await log.warning(
+                    "Failed to queue login alert email",
+                    user_id=user.id,
+                    error=str(email_error)
+                )
+    except Exception as session_error:
+        await log.error(
+            "Failed to create session tracking record",
+            user_id=user.id,
+            error=str(session_error),
+            exc_info=True
+        )
+
+    # (Giữ nguyên logic commit và response)
+    try:
+        await db.commit()
     except Exception as e:
         await db.rollback()
-        # Cố gắng xóa key Redis nếu commit DB thất bại
         try:
-            await safe_redis_delete(f"refresh_jti:{user.id}")
+            await safe_redis_delete(f"session:{refresh_jti}")
         except Exception as redis_del_e:
-            log.error(
-                "Failed to delete refresh JTI from Redis after DB commit failure",
+            await log.error(
+                "Failed to delete session JTI from Redis after DB commit failure",
                 user_id=user.id,
                 error=str(redis_del_e),
             )
-        log.error(
-            "Failed to commit user active JTI during login",
+        await log.error(
+            "Failed to commit DB changes during login",
             user_id=user.id,
             error=str(e),
             exc_info=True,
         )
         raise HTTPException(status_code=500, detail="Could not save session")
 
-    return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "bearer",
-    }
+    response = JSONResponse(
+        content={
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "full_name": user.full_name,
+                "role": user.role,
+            }
+        },
+        status_code=200
+    )
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=settings.APP_ENV == "production",
+        samesite="strict",
+        max_age=int(refresh_ttl),
+        path="/api/auth",
+    )
+    return response
 
 
-@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/logout")
 async def logout(
+    response: Response,
+    refresh_token: str = Cookie(None, alias="refresh_token"),
     db: AsyncSession = Depends(database.get_db),
-    # Lấy token từ header để decode lấy TTL
     authorization: Annotated[str | None, Header()] = None,
     current_user: models.User = deps.CurrentUser,
 ):
-    """
-    Đăng xuất người dùng:
-    - Vô hiệu hóa access token hiện tại bằng blacklist.
-    - Vô hiệu hóa refresh token bằng cách xóa JTI và thêm vào blacklist.
-    - Xóa active_jti trong DB.
-    """
+    # (Giữ nguyên logic)
     access_token = None
     if authorization and authorization.lower().startswith("bearer "):
         access_token = authorization.split(" ")[1]
 
-    # 1. Vô hiệu hóa Access Token
     if access_token:
         access_jti, access_ttl = security.decode_token_for_invalidation(access_token)
         if access_jti and access_ttl is not None and access_ttl > 0:
@@ -191,44 +266,123 @@ async def logout(
                     user_id=current_user.id,
                 )
             except Exception as e:
-                log.error(
+                await log.error(
                     "Failed to blacklist access token on logout",
                     jti=access_jti,
                     error=str(e),
                 )
-                # Không raise lỗi, vẫn tiếp tục logout
 
-    # 2. Vô hiệu hóa Refresh Token
+    refresh_jti = None
     try:
-        refresh_jti = await safe_redis_get(f"refresh_jti:{current_user.id}")
+        refresh_jti, refresh_ttl = security.decode_token_for_invalidation(refresh_token)
         if refresh_jti:
-            # Xóa key lưu JTI
-            await safe_redis_delete(f"refresh_jti:{current_user.id}")
-            # Thêm JTI vào blacklist với TTL mặc định của refresh token (nếu không decode lại)
-            # Hoặc decode refresh token để lấy TTL chính xác (phức tạp hơn)
-            refresh_token_ttl = settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
-            await safe_redis_set(
-                f"blacklist:{refresh_jti}", "revoked", ex=int(refresh_token_ttl)
-            )
+            await safe_redis_delete(f"session:{refresh_jti}")
+            if refresh_ttl and refresh_ttl > 0:
+                await safe_redis_set(
+                    f"blacklist:{refresh_jti}", "revoked", ex=refresh_ttl
+                )
+            else:
+                refresh_token_ttl = settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
+                await safe_redis_set(
+                    f"blacklist:{refresh_jti}", "revoked", ex=int(refresh_token_ttl)
+                )
             await log.info(
                 "Refresh token blacklisted on logout",
                 jti=refresh_jti,
                 user_id=current_user.id,
             )
     except Exception as e:
-        log.error(
+        await log.error(
             "Failed to blacklist refresh token on logout",
             user_id=current_user.id,
             error=str(e),
         )
-        # Không raise lỗi
 
-    # 3. Xóa active_jti trong DB (dùng service)
-    await services.user_service.logout_user(
-        db, user=current_user
-    )  # Service này đã set active_jti = None và commit
+    if refresh_jti:
+        try:
+            from sqlalchemy import select
+            result = await db.execute(
+                select(models.UserSession)
+                .where(
+                    models.UserSession.refresh_jti == refresh_jti,
+                    models.UserSession.user_id == current_user.id
+                )
+            )
+            session = result.scalar_one_or_none()
+            if session:
+                from datetime import datetime, timezone
+                session.revoked_at = datetime.now(timezone.utc)
+                db.add(session)
+                await db.commit()
+                await log.info(
+                    "Session revoked on logout",
+                    session_id=session.id,
+                    user_id=current_user.id
+                )
+        except Exception as session_error:
+            await log.warning(
+                "Failed to revoke session on logout",
+                user_id=current_user.id,
+                error=str(session_error)
+            )
 
-    return None
+    response.delete_cookie(
+        key="refresh_token",
+        path="/api/auth",
+        samesite="strict",
+    )
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
+
+
+@router.get("/check-status")
+async def check_session_status(
+    current_user: models.User = Depends(deps.get_current_user),
+    authorization: Annotated[str | None, Header()] = None,
+    db: AsyncSession = Depends(database.get_db),
+):
+    # (Giữ nguyên logic - Giờ nó sẽ ổn vì get_current_user đã kiểm tra)
+    from datetime import datetime, timezone
+    from sqlalchemy import and_
+
+    result = await db.execute(
+        select(models.UserSession)
+        .where(
+            and_(
+                models.UserSession.user_id == current_user.id,
+                models.UserSession.revoked_at.is_(None),
+                models.UserSession.expires_at > datetime.now(timezone.utc)
+            )
+        )
+    )
+    active_sessions = result.scalars().all()
+
+    # (Đoạn check `has_valid_session` này giờ có thể hơi thừa
+    # vì `get_current_user` đã làm, nhưng giữ lại cũng không sao)
+    has_valid_session = False
+    for session in active_sessions:
+        stored_user_id = await safe_redis_get(f"session:{session.refresh_jti}")
+        if stored_user_id and int(stored_user_id) == current_user.id:
+            has_valid_session = True
+            break
+
+    if not has_valid_session:
+        await log.warning(
+            "No valid session found in Redis for user (in check-status)",
+            user_id=current_user.id
+        )
+        raise HTTPException(
+            status_code=401,
+            detail="Session has been revoked"
+        )
+
+    return {
+        "status": "active",
+        "user_id": current_user.id,
+        "username": current_user.username,
+        "session_valid": True,
+        "active_sessions_count": len(active_sessions)
+    }
 
 
 @router.post("/forgot-password", status_code=status.HTTP_202_ACCEPTED)
@@ -236,33 +390,25 @@ async def logout(
 async def request_password_reset(
     request: Request,
     forgot_data: schemas.ForgotPasswordSchema,
-    # background_tasks: BackgroundTasks, # <-- Xóa BackgroundTasks
     db: AsyncSession = Depends(database.get_db),
 ):
-    """
-    Endpoint để yêu cầu đặt lại mật khẩu.
-    Service sẽ gọi Celery task để xử lý.
-    """
-    # Chỉ cần gọi service, không cần background task ở router
+    # (Giữ nguyên logic)
     await services.user_service.handle_forgot_password(
         db=db, email_in=forgot_data.email
     )
-
-    # Trả về response ngay lập tức
     return {
         "msg": "If a user with that email exists, a password reset link will be sent."
     }
 
 
 @router.post("/reset-password", response_model=schemas.User)
-@limiter.limit(RATE_LIMITS["auth"])  # ← THÊM DÒNG NÀY
+@limiter.limit(RATE_LIMITS["auth"])
 async def perform_password_reset(
-    request: Request,  # ← THÊM PARAMETER
+    request: Request,
     reset_data: schemas.ResetPasswordSchema, 
     db: AsyncSession = Depends(database.get_db)
 ):
-    """Endpoint để thực hiện đặt lại mật khẩu bằng token."""
-    # Bỏ kiểm tra 'if not user:' vì service đã ném 400/404
+    # (Giữ nguyên logic)
     return await services.user_service.reset_password(
         db, token=reset_data.token, new_password=reset_data.new_password
     )
@@ -274,22 +420,13 @@ async def perform_change_password(
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = deps.CurrentUser,
 ):
-    """
-    Endpoint để người dùng tự đổi mật khẩu.
-    ✅ FIXED: Backend không cần confirm_new_password nữa.
-    ✅ FIXED: Vô hiệu hóa TẤT CẢ các phiên hoạt động sau khi đổi mật khẩu thành công.
-    """
-
-    # 1. Đổi mật khẩu (service đã có logic verify old pass)
+    # (Giữ nguyên logic)
     await services.user_service.change_password(
         db,
         user=current_user,
         old_password=password_data.old_password,
         new_password=password_data.new_password,
-    )  # Service này đã commit DB
-
-    # === ⭐️ THAY ĐỔI Ở ĐÂY ===
-    # 2. Vô hiệu hóa TẤT CẢ token cũ bằng cách gọi service mới
+    )
     try:
         await services.user_service.invalidate_all_sessions(db, current_user)
         await log.info(
@@ -297,47 +434,35 @@ async def perform_change_password(
             user_id=current_user.id,
         )
     except Exception as e:
-        # Ghi log lỗi nghiêm trọng nhưng không báo lỗi 500 cho client
-        # vì mật khẩu đã đổi thành công. User có thể login lại.
-        log.critical(
+        await log.critical(
             "Failed to invalidate all sessions after password change, "
             "potential security risk of dangling sessions!",
             user_id=current_user.id,
             error=str(e),
             exc_info=True,
         )
-        # Cân nhắc: Có thể ném 500 ở đây nếu muốn đảm bảo tuyệt đối
-
-    # === KẾT THÚC THAY ĐỔI ===
-
-    # Bỏ phần code blacklist JTI riêng lẻ cũ ở đây
-
     return None
 
 
-@router.post("/refresh", response_model=schemas.Token)
+@router.post("/refresh")
 async def refresh_access_token(
-    token_data: schemas.RefreshTokenRequest = Body(...),
+    refresh_token: str = Cookie(None, alias="refresh_token"),
     db: AsyncSession = Depends(database.get_db),
 ):
-    """
-    ✅ FIXED v2: Token rotation với Pessimistic Locking để ngăn race condition.
+    # (Giữ nguyên logic)
+    if not refresh_token:
+        raise HTTPException(
+            status_code=401,
+            detail="Refresh token missing. Please login again."
+        )
 
-    Thứ tự:
-    1. Lock user row trong DB (ngăn concurrent requests)
-    2. Validate token
-    3. Update DB
-    4. Update Redis
-    5. Nếu Redis fail -> Rollback DB
-    """
-    refresh_token = token_data.refresh_token
     credentials_exception = InvalidToken(detail="Invalid or expired refresh token")
     service_unavailable = HTTPException(
         status_code=503, detail="Auth service unavailable"
     )
 
     try:
-        # === STEP 1: DECODE TOKEN (KHÔNG ĐỔI) ===
+        # (STEP 1: Decode - Giữ nguyên)
         try:
             payload = jwt.decode(
                 refresh_token,
@@ -353,10 +478,10 @@ async def refresh_access_token(
         token_type: str | None = payload.get("type")
 
         if not username or not old_refresh_jti or token_type != "refresh":
-            log.warning("Invalid refresh token payload", payload=payload)
+            await log.warning("Invalid refresh token payload", payload=payload)
             raise credentials_exception
 
-        # === STEP 2: CHECK BLACKLIST (EARLY EXIT) ===
+        # (STEP 2: Check Blacklist - Giữ nguyên)
         try:
             is_blacklisted = await safe_redis_exists(f"blacklist:{old_refresh_jti}")
             if is_blacklisted:
@@ -365,21 +490,17 @@ async def refresh_access_token(
         except InvalidToken:
             raise
         except Exception as e:
-            log.error("Blacklist check failed", error=str(e), exc_info=True)
-            # ⚠️ Fail-open: Nếu Redis sập, vẫn cho phép refresh (policy decision)
+            await log.error("Blacklist check failed", error=str(e), exc_info=True)
             pass
 
-        # === 🔐 CRITICAL: PESSIMISTIC LOCKING ===
-        # Wrap toàn bộ logic trong một transaction lớn
+        # (STEP 3: Pessimistic Lock - Giữ nguyên)
         async with db.begin():
             try:
-                # STEP 3: LOCK user row (ngăn concurrent refresh requests)
                 stmt = (
                     select(models.User)
                     .where(models.User.username == username)
-                    .with_for_update(nowait=False)  # ❌ KHÔNG skip_locked
+                    .with_for_update(nowait=False)
                 )
-
                 result = await db.execute(stmt)
                 user = result.scalar_one_or_none()
 
@@ -387,19 +508,16 @@ async def refresh_access_token(
                     await log.warning("User not found during refresh", username=username)
                     raise credentials_exception
 
-                # STEP 4: VALIDATE JTI (TRONG LOCK SCOPE)
-                # Giờ chỉ có 1 request được vào đây tại một thời điểm
-                stored_jti = await safe_redis_get(f"refresh_jti:{user.id}")
+                # (STEP 4: Validate JTI - Giữ nguyên)
+                stored_user_id = await safe_redis_get(f"session:{old_refresh_jti}")
 
-                if not stored_jti or stored_jti != old_refresh_jti:
+                if not stored_user_id or int(stored_user_id) != user.id:
                     await log.warning(
-                        "JTI mismatch or not found in Redis",
+                        "Session not found or user mismatch in Redis",
                         user_id=user.id,
                         token_jti=old_refresh_jti,
-                        stored_jti=stored_jti,
+                        stored_user_id=stored_user_id,
                     )
-
-                    # Blacklist token bị reuse
                     if old_refresh_jti:
                         ttl = int(settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400)
                         try:
@@ -407,78 +525,107 @@ async def refresh_access_token(
                                 f"blacklist:{old_refresh_jti}", "reuse_attempt", ex=ttl
                             )
                         except Exception as e_blacklist:
-                            log.error(
+                            await log.error(
                                 "Failed to blacklist reuse attempt",
                                 jti=old_refresh_jti,
                                 error=str(e_blacklist),
                             )
-
                     raise credentials_exception
 
-                # STEP 5: GENERATE NEW TOKENS
-                new_access_token = security.create_access_token(data={"sub": username})
+                # ✅ BƯỚC 2 (tt): SỬA HÀM REFRESH
+                
+                # 1. Tạo Refresh Token MỚI TRƯỚC
                 new_refresh_token = security.create_refresh_token(
                     data={"sub": username}
-                )
-
-                new_access_jti, _ = security.decode_token_for_invalidation(
-                    new_access_token
                 )
                 new_refresh_jti, new_refresh_ttl = (
                     security.decode_token_for_invalidation(new_refresh_token)
                 )
 
-                if not new_access_jti or not new_refresh_jti or new_refresh_ttl is None:
-                    log.error("Failed to decode new tokens", user_id=user.id)
+                if not new_refresh_jti or new_refresh_ttl is None:
+                    await log.error("Failed to decode new REFRESH token", user_id=user.id)
                     raise HTTPException(
                         status_code=500, detail="Token generation failed"
                     )
 
-                # STEP 6: UPDATE DB (VẪN TRONG LOCK)
-                user.active_jti = new_access_jti
-                db.add(user)
+                # 2. Tạo Access Token MỚI, truyền new_refresh_jti vào
+                new_access_token = security.create_access_token(
+                    data={"sub": username}, refresh_jti=new_refresh_jti
+                )
+                new_access_jti, _ = security.decode_token_for_invalidation(
+                    new_access_token
+                )
+                
+                if not new_access_jti:
+                    await log.error("Failed to decode new ACCESS token", user_id=user.id)
+                    raise HTTPException(
+                        status_code=500, detail="Token generation failed"
+                    )
 
-                # ⚠️ KHÔNG commit ở đây, để outer 'async with db.begin()' handle
+                # (Đã xóa logic active_jti)
+
+                # (STEP 6: Update Session - Giữ nguyên)
+                try:
+                    await session_service.update_session_activity(
+                        db=db,
+                        old_refresh_jti=old_refresh_jti,
+                        new_refresh_jti=new_refresh_jti,
+                        user_id=user.id
+                    )
+                except Exception as session_error:
+                    await log.warning(
+                        "Failed to update session activity",
+                        user_id=user.id,
+                        error=str(session_error)
+                    )
+
                 await log.info("DB changes staged", user_id=user.id)
 
-                # STEP 7: UPDATE REDIS (TRƯỚC KHI COMMIT DB)
+                # (STEP 7: Update Redis - Giữ nguyên)
                 try:
                     async with safe_redis_pipeline(transaction=True) as pipe:
+                        pipe.delete(f"session:{old_refresh_jti}")
                         pipe.set(
-                            f"refresh_jti:{user.id}",
-                            new_refresh_jti,
+                            f"session:{new_refresh_jti}",
+                            str(user.id),
                             ex=new_refresh_ttl,
                         )
                         pipe.set(f"blacklist:{old_refresh_jti}", "rotated", ex=300)
                         await pipe.execute()
-
-                    await log.info("✅ Redis update successful", user_id=user.id)
-
+                    await log.info("✅ Redis update successful (session rotated)", user_id=user.id)
                 except Exception as e_redis:
-                    log.error(
+                    await log.error(
                         "❌ Redis pipeline failed, will rollback DB",
                         user_id=user.id,
                         error=str(e_redis),
                         exc_info=True,
                     )
-                    # ✅ Raise exception để trigger rollback của outer transaction
                     raise service_unavailable
 
-                # STEP 8: Nếu đến đây, cả DB và Redis đều OK
-                # Transaction sẽ tự động commit khi exit 'async with db.begin()'
                 await log.info("✅ Token rotation completed successfully", user_id=user.id)
 
-                return {
-                    "access_token": new_access_token,
-                    "refresh_token": new_refresh_token,
-                    "token_type": "bearer",
-                }
+                # (STEP 8: Response - Giữ nguyên)
+                response = JSONResponse(
+                    content={
+                        "access_token": new_access_token,
+                        "token_type": "bearer",
+                    },
+                    status_code=200
+                )
+                response.set_cookie(
+                    key="refresh_token",
+                    value=new_refresh_token,
+                    httponly=True,
+                    secure=settings.APP_ENV == "production",
+                    samesite="strict",
+                    max_age=int(new_refresh_ttl),
+                    path="/api/auth",
+                )
+                return response
 
             except InvalidToken:
-                # Validation failed -> Rollback transaction
                 raise credentials_exception
             except HTTPException:
-                # Service error -> Rollback transaction
                 raise
 
     except (JWTError, InvalidToken):
@@ -486,7 +633,7 @@ async def refresh_access_token(
     except HTTPException:
         raise
     except Exception as e:
-        log.error(
+        await log.error(
             "Unhandled exception in refresh token endpoint", error=str(e), exc_info=True
         )
         raise HTTPException(status_code=500, detail="An unexpected error occurred")

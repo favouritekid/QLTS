@@ -16,10 +16,8 @@ import type {
   ResetPasswordSchema,
   ChangePasswordSchema,
 } from "@/types/api.types";
-import { AxiosError, AxiosRequestConfig } from "axios";
 import { useEffect } from "react";
-import axios from "axios"; // <<< THÊM IMPORT axios gốc để gọi API route
-
+import { AxiosError } from "axios";
 export function useAuth() {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -33,7 +31,7 @@ export function useAuth() {
   } = useAuthStore();
 
   const loginMutation = useMutation<
-    { loginResp: LoginResponse; meResp: MeResponse },
+    LoginResponse, // <-- Sửa 1: Chỉ trả về LoginResponse
     AxiosError<ApiErrorResponse>,
     LoginRequest
   >({
@@ -43,49 +41,32 @@ export function useAuth() {
       params.append("username", credentials.username);
       params.append("password", credentials.password);
 
-      const loginRes = await api.post<LoginResponse>(API_ENDPOINTS.AUTH.LOGIN, params, {
+      // const loginRes = await api.post<LoginResponse>(API_ENDPOINTS.AUTH.LOGIN, params, {
+      //   headers: { "Content-Type": "application/x-form-urlencoded" },
+      //   withCredentials: true,
+      // });
+
+      const loginRes = await api.post<LoginResponse>(API_ENDPOINTS.AUTH.LOGIN, params.toString(), {
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        withCredentials: true,
       });
 
-      const { access_token } = loginRes.data;
-      const config: AxiosRequestConfig = {
-        headers: { Authorization: `Bearer ${access_token}` },
-      };
-      const meRes = await api.get<MeResponse>(API_ENDPOINTS.USERS.ME, config);
-
-      return { loginResp: loginRes.data, meResp: meRes.data };
+      // ✅ Sửa 2: Chỉ cần trả về data (LoginResponse)
+      return loginRes.data;
     },
-    // <<< SỬA onSuccess >>>
-    onSuccess: async ({ loginResp, meResp }) => {
-      // Thêm async ở đây
-      const { access_token, refresh_token } = loginResp;
-      const user = meResp;
+    onSuccess: async (loginResponse: LoginResponse) => {
+      // <-- Sửa 3: Nhận LoginResponse
 
-      try {
-        // 1. Gọi API Route để set cookie httpOnly
-        await axios.post("/api/auth/session", {
-          accessToken: access_token,
-          refreshToken: refresh_token,
-        });
-        console.log("[useAuth] Session cookie set successfully via API route.");
+      // ✅ Sửa 4: Destructure trực tiếp
+      const { access_token, user } = loginResponse;
 
-        // 2. Cập nhật state Zustand (vẫn cần thiết cho UI tức thì)
-        // Không cần lưu refresh_token vào localStorage nữa
-        setAuth(user, access_token /* Bỏ refresh_token ở đây nếu setAuth không cần */);
-        // Nếu setAuth vẫn cần refresh_token, bạn có thể truyền undefined hoặc sửa lại setAuth
-        // setAuth(user, access_token, undefined);
+      setAuth(user, access_token);
 
-        toast.success("Login successful!");
+      toast.success("Login successful!");
 
-        // 3. Redirect
-        const redirect = new URLSearchParams(window.location.search).get("redirect");
-        router.push(redirect || "/dashboard");
-      } catch (error) {
-        console.error("[useAuth] Failed to set session cookie via API route:", error);
-        toast.error("Login succeeded but failed to set session. Please try again.");
-        // Cân nhắc: Có nên logout ở đây không?
-        // logoutStore(); // Gọi logout của store để reset state
-      }
+      // Redirect
+      const redirect = new URLSearchParams(window.location.search).get("redirect");
+      router.push(redirect || "/dashboard");
     },
     // <<< KẾT THÚC SỬA onSuccess >>>
     onError: (error) => {
@@ -100,9 +81,9 @@ export function useAuth() {
 
   const logoutMutation = useMutation<void, AxiosError<ApiErrorResponse>>({
     mutationFn: async () => {
-      // Gọi API logout của backend FastAPI (nếu có token)
+      // ✅ SECURITY FIX: Call backend logout (refresh token sent via HttpOnly cookie)
       if (useAuthStore.getState().token) {
-        await api.post(API_ENDPOINTS.AUTH.LOGOUT);
+        await api.post(API_ENDPOINTS.AUTH.LOGOUT, {}, { withCredentials: true });
       }
     },
     onSuccess: () => {
@@ -112,25 +93,14 @@ export function useAuth() {
       console.error("Logout API call failed:", error.response?.data || error.message);
       toast.warning("Logout API call failed, proceeding with local logout.");
     },
-    // <<< SỬA onSettled >>>
     onSettled: async () => {
-      // Thêm async
-      try {
-        // 1. Gọi API Route để xóa cookie httpOnly TRƯỚC
-        await axios.delete("/api/auth/session");
-        console.log("[useAuth] Session cookie cleared successfully via API route.");
-      } catch (error) {
-        console.error("[useAuth] Failed to clear session cookie via API route:", error);
-        // Vẫn tiếp tục logout phía client
-      }
-
-      // 2. Xóa state client và redirect (giữ nguyên)
+      // ✅ SECURITY FIX: Refresh token cookie is cleared by backend
+      // No need to call API route to clear cookie
       logoutStore();
       queryClient.removeQueries({ queryKey: ["auth", "me"], exact: true });
       queryClient.clear();
       router.push("/login");
     },
-    // <<< KẾT THÚC SỬA onSettled >>>
   });
 
   const {
@@ -289,15 +259,6 @@ export function useAuth() {
     // 3. Xử lý thành công
     onSuccess: async () => {
       toast.success("Password changed successfully! Logging out...");
-
-      // 4. TỰ XỬ LÝ LOGOUT (Không gọi logoutMutation)
-      try {
-        // 4a. Gọi API Route để xóa httpOnly cookie
-        await axios.delete("/api/auth/session");
-        console.log("[useAuth/changePass] Session cookie cleared.");
-      } catch (error) {
-        console.error("[useAuth/changePass] Failed to clear session cookie.", error);
-      }
 
       // 4b. Dọn dẹp state client (Zustand)
       logoutStore();

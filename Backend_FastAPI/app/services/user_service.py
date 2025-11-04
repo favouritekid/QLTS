@@ -10,7 +10,7 @@ from sqlalchemy.orm import selectinload
 from .. import models, schemas
 
 from ..config import settings
-from ..database import safe_redis_delete, safe_redis_set
+from ..database import safe_redis_delete, safe_redis_set, safe_redis_pipeline
 from ..security import (
     create_password_reset_token,
     get_password_hash,
@@ -465,12 +465,27 @@ async def invalidate_all_sessions(db: AsyncSession, user: models.User):
 
         # 2. Xóa JTI refresh token hiện tại khỏi Redis
         try:
-            await safe_redis_delete(f"refresh_jti:{user.id}")
-            await log.info("Refresh JTI deleted during session invalidation", user_id=user.id)
+            # Lấy TẤT CẢ các session (kể cả đã hết hạn) để đảm bảo blacklist JTI
+            result = await db.execute(
+                select(models.UserSession).where(models.UserSession.user_id == user.id)
+            )
+            all_sessions = result.scalars().all()
+            
+            async with safe_redis_pipeline(transaction=True) as pipe:
+                for session in all_sessions:
+                    # Xóa key session đang active
+                    pipe.delete(f"session:{session.refresh_jti}")
+                    # Blacklist JTI của session đó
+                    ttl = int(settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400)
+                    pipe.set(f"blacklist:{session.refresh_jti}", "password_changed", ex=max(60, ttl))
+            
+            await log.info(
+                f"Invalidated all {len(all_sessions)} session keys/JTIs in Redis", 
+                user_id=user.id
+            )
         except Exception as e_redis_del:
-            # Ghi log nhưng không dừng lại nếu xóa Redis lỗi
             await log.error(
-                "Failed to delete refresh JTI during session invalidation",
+                "Failed to clear multi-session keys from Redis",
                 user_id=user.id,
                 error=str(e_redis_del),
             )

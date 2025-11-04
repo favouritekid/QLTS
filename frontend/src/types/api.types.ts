@@ -21,14 +21,14 @@ export interface LoginRequest {
   password: string;
 }
 
-// Kiểu dữ liệu cho response khi login thành công (khớp schemas/user.py -> Token)
-// Backend trả về access_token, refresh_token, token_type.
-// Chúng ta cần gọi thêm /users/me để lấy User object.
+// ✅ SECURITY FIX: Updated to match new HttpOnly cookie implementation
+// Backend now returns user object in response body
+// Refresh token is in HttpOnly cookie (not in response body)
 export interface LoginResponse {
   access_token: string;
-  refresh_token: string;
   token_type: string;
-  // User object không được trả về trực tiếp từ /login backend này
+  user: User; // ✅ User object now returned directly from /login
+  // refresh_token removed - now in HttpOnly cookie
 }
 
 // Kiểu dữ liệu cho response từ /users/me

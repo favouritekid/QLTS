@@ -7,3 +7,4 @@ from .lead_history import LeadStatusHistory
 from .organization import Major, OrganizationUnit
 from .pipeline import ConsultationStatus, PipelineStage
 from .user import User
+from .user_session import UserSession

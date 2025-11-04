@@ -723,7 +723,7 @@ async def admin_revert_lead_status(
     except (BadRequest, ResourceNotFoundError) as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
     except Exception as e:
-        log.error(
+        await log.error(
             "Error reverting lead status via API",
             lead_id=lead.id,
             admin_id=current_user.id,
