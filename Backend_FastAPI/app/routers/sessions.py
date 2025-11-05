@@ -3,13 +3,14 @@
 API endpoints for managing user sessions.
 Allows users to view active sessions, revoke specific sessions, and revoke all other sessions.
 """
-from typing import List, Optional
+from typing import Optional
 
 import structlog
 from fastapi import APIRouter, Cookie, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import database, models, schemas, security  # ✅ FIX: Import security from app, not app.core
+from .. import database  # ✅ FIX: Import security from app, not app.core
+from .. import models, schemas, security
 from ..core import deps
 from ..services import session_service
 
@@ -22,7 +23,9 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 async def get_active_sessions(
     current_user: models.User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(database.get_db),
-    refresh_token: Optional[str] = Cookie(None, alias="refresh_token"),  # ✅ SECURITY FIX: Read from HttpOnly cookie
+    refresh_token: Optional[str] = Cookie(
+        None, alias="refresh_token"
+    ),  # ✅ SECURITY FIX: Read from HttpOnly cookie
 ):
     """
     Get all active sessions for the current user.
@@ -35,7 +38,7 @@ async def get_active_sessions(
         - Users can only see their own sessions
         - Current session is identified by refresh token cookie
     """
-    await log.info("Fetching active sessions", user_id=current_user.id)
+    log.info("Fetching active sessions", user_id=current_user.id)
 
     # ✅ SECURITY FIX: Identify current session from refresh token cookie
     current_refresh_jti = None
@@ -43,22 +46,25 @@ async def get_active_sessions(
         try:
             payload = security.decode_token(refresh_token)
             current_refresh_jti = payload.get("jti")
-            await log.info("Current session identified", refresh_jti=current_refresh_jti)
+            log.info("Current session identified", refresh_jti=current_refresh_jti)
         except Exception as e:
-            await log.warning("Failed to decode refresh token for session identification", error=str(e))
+            log.warning(
+                "Failed to decode refresh token for session identification",
+                error=str(e),
+            )
             # Continue without marking current session
 
     try:
         sessions = await session_service.get_active_sessions(
             db,
             current_user.id,
-            current_refresh_jti=current_refresh_jti  # Pass current JTI to mark current session
+            current_refresh_jti=current_refresh_jti,  # Pass current JTI to mark current session
         )
 
-        await log.info(
+        log.info(
             "Active sessions retrieved",
             user_id=current_user.id,
-            session_count=len(sessions)
+            session_count=len(sessions),
         )
 
         # Mark current session in response
@@ -71,19 +77,19 @@ async def get_active_sessions(
         return schemas.UserSessionListResponse(
             sessions=sessions,
             total=len(sessions),
-            current_session_id=current_session_id
+            current_session_id=current_session_id,
         )
-    
+
     except Exception as e:
-        await log.error(
+        log.error(
             "Failed to fetch active sessions",
             user_id=current_user.id,
             error=str(e),
-            exc_info=True
+            exc_info=True,
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve sessions"
+            detail="Failed to retrieve sessions",
         )
 
 
@@ -106,34 +112,28 @@ async def revoke_session(
     Raises:
         404: Session not found or doesn't belong to user
     """
-    await log.info(
-        "Revoking session",
-        user_id=current_user.id,
-        session_id=session_id
-    )
+    log.info("Revoking session", user_id=current_user.id, session_id=session_id)
 
     try:
         success = await session_service.revoke_session(
-            db=db,
-            session_id=session_id,
-            user_id=current_user.id
+            db=db, session_id=session_id, user_id=current_user.id
         )
 
         if not success:
-            await log.warning(
+            log.warning(
                 "Session not found or already revoked",
                 user_id=current_user.id,
-                session_id=session_id
+                session_id=session_id,
             )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Session not found or already revoked"
+                detail="Session not found or already revoked",
             )
 
-        await log.info(
+        log.info(
             "Session revoked successfully",
             user_id=current_user.id,
-            session_id=session_id
+            session_id=session_id,
         )
 
         return None  # 204 No Content
@@ -141,16 +141,16 @@ async def revoke_session(
     except HTTPException:
         raise
     except Exception as e:
-        await log.error(
+        log.error(
             "Failed to revoke session",
             user_id=current_user.id,
             session_id=session_id,
             error=str(e),
-            exc_info=True
+            exc_info=True,
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to revoke session"
+            detail="Failed to revoke session",
         )
 
 
@@ -179,39 +179,33 @@ async def revoke_all_other_sessions(
     Returns:
         204 No Content on success
     """
-    await log.info(
+    log.info(
         "Revoking all other sessions",
         user_id=current_user.id,
-        preserve_session_id=current_session_id
+        preserve_session_id=current_session_id,
     )
 
     try:
         revoked_count = await session_service.revoke_all_other_sessions(
-            db=db,
-            user_id=current_user.id,
-            except_session_id=current_session_id
+            db=db, user_id=current_user.id, except_session_id=current_session_id
         )
 
-        await log.info(
+        log.info(
             "All other sessions revoked",
             user_id=current_user.id,
-            revoked_count=revoked_count
+            revoked_count=revoked_count,
         )
 
         return None  # 204 No Content
 
     except Exception as e:
-        await log.error(
+        log.error(
             "Failed to revoke all other sessions",
             user_id=current_user.id,
             error=str(e),
-            exc_info=True
+            exc_info=True,
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to revoke sessions"
+            detail="Failed to revoke sessions",
         )
-
-
-
-

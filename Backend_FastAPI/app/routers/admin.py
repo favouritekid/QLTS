@@ -1,10 +1,10 @@
 # app/routers/admin.py
-import structlog
-import casbin
-import pandas as pd
 import io
 from typing import List, Optional
 
+import casbin
+import pandas as pd
+import structlog
 from fastapi import (
     APIRouter,
     Body,
@@ -19,22 +19,28 @@ from fastapi import (
 )
 from pydantic import EmailStr  # <-- BỔ SUNG TypeAdapter, ValidationError
 from pydantic import TypeAdapter, ValidationError
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import settings
 
 from .. import database, models, schemas, services
+from ..celery_utils import process_automatic_lead_assignment_task
 from ..core import deps
-from ..services import config_service, lead_service, organization_service, pipeline_service
+from ..schemas.permissions import PolicyCreate, RoleAssignment
+from ..services import (
+    config_service,
+    lead_service,
+    organization_service,
+    pipeline_service,
+)
 from ..utils.exceptions import (
     BadRequest,
     DuplicateResourceError,
     PermissionDeniedError,
     ResourceNotFoundError,
 )
-from ..schemas.permissions import PolicyCreate, RoleAssignment
-from ..celery_utils import process_automatic_lead_assignment_task
-from app.config import settings
 
 log = structlog.get_logger(__name__)
 router = APIRouter(tags=["Admin"])
@@ -48,18 +54,22 @@ LeadAccessDep = Depends(deps.get_lead_for_user)
 # POLICY MANAGEMENT ROUTES
 # ===============================================================
 
+
 @router.get(
     "/policies",
-    response_model=List[List[str]], # Casbin trả về List[List[str]]
+    response_model=List[List[str]],  # Casbin trả về List[List[str]]
     tags=["Admin - Permissions"],
 )
-async def get_all_policies(request: Request, current_admin: models.User = PermissionDep):
+async def get_all_policies(
+    request: Request, current_admin: models.User = PermissionDep
+):
     """(Admin only) Lấy tất cả các chính sách (policies) hiện có."""
     # SỬA: Type hint thành AsyncEnforcer
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
     # SỬA: Bỏ await vì get_policy() không phải là async
     policies = enforcer.get_policy()
     return policies
+
 
 @router.post(
     "/policies",
@@ -84,6 +94,7 @@ async def add_new_policy(
 
     return {"message": "Policy added successfully."}
 
+
 @router.delete(
     "/policies",
     status_code=status.HTTP_200_OK,
@@ -107,6 +118,7 @@ async def delete_policy(
 
     return {"message": "Policy removed successfully."}
 
+
 @router.post(
     "/assign-role",
     status_code=status.HTTP_201_CREATED,
@@ -121,7 +133,9 @@ async def assign_role_to_user(
     # SỬA: Type hint thành AsyncEnforcer
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
-    added = await enforcer.add_grouping_policy(f"user:{assignment.user_id}", assignment.role)
+    added = await enforcer.add_grouping_policy(
+        f"user:{assignment.user_id}", assignment.role
+    )
     if not added:
         raise DuplicateResourceError("User already has this role.")
 
@@ -129,6 +143,7 @@ async def assign_role_to_user(
     # await enforcer.save_policy() # AsyncAdapter tự lưu
 
     return {"message": "Role assigned."}
+
 
 @router.delete(
     "/assign-role",
@@ -148,12 +163,15 @@ async def remove_role_from_user(
         f"user:{assignment.user_id}", assignment.role
     )
     if not removed:
-        raise ResourceNotFoundError("Role assignment not found or could not be removed.")
+        raise ResourceNotFoundError(
+            "Role assignment not found or could not be removed."
+        )
 
     # SỬA: Xóa dòng save_policy()
     # await enforcer.save_policy() # AsyncAdapter tự lưu
 
     return {"message": "Role removed from user."}
+
 
 # ===============================================================
 # USER MANAGEMENT ROUTES
@@ -510,7 +528,9 @@ async def update_assignment_config_route(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Cập nhật cấu hình phân chia của một đơn vị."""
-    updated_model = await config_service.update_assignment_config(db, unit_id, config_in.params)
+    updated_model = await config_service.update_assignment_config(
+        db, unit_id, config_in.params
+    )
     # Trả về schema Pydantic dựa trên model đã cập nhật từ DB
     return schemas.AssignmentConfig(params=updated_model.params)
 
@@ -519,7 +539,8 @@ async def update_assignment_config_route(
     "/skill-rules", response_model=List[schemas.SkillRule], tags=["Admin - Config"]
 )
 async def get_all_skill_rules_route(
-    db: AsyncSession = Depends(database.get_db), current_admin: models.User = PermissionDep
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Lấy tất cả các quy tắc kỹ năng."""
     return await config_service.get_all_skill_rules(db)
@@ -554,9 +575,11 @@ async def delete_skill_rule_route(
     await config_service.delete_skill_rule(db, rule_id)
     return None
 
+
 # ===============================================================
 # PIPELINE MANAGEMENT ROUTES (MỚI)
 # ===============================================================
+
 
 @router.get(
     "/pipeline-stages",
@@ -572,6 +595,7 @@ async def get_all_pipeline_stages_list(
     # Pydantic sẽ tự động chuyển đổi List[dict] -> List[schemas.PipelineStage]
     stages_data = await pipeline_service.get_all_pipeline_stages(db)
     return stages_data
+
 
 @router.post(
     "/pipeline-stages",
@@ -600,8 +624,6 @@ async def get_pipeline_stage_details(
 ):
     """(Admin only) Lấy chi tiết một Giai đoạn (Stage)."""
     return await pipeline_service.get_pipeline_stage(db, stage_id)
-
-
 
 
 @router.put(
@@ -692,6 +714,7 @@ async def delete_existing_consultation_status(
     await pipeline_service.delete_consultation_status(db, status_id)
     return None
 
+
 # ===============================================================
 # LEAD MANAGEMENT ROUTES
 # ===============================================================
@@ -705,7 +728,7 @@ async def delete_existing_consultation_status(
 )
 async def admin_revert_lead_status(
     lead: models.Lead = LeadAccessDep,  # <-- THAY ĐỔI (Đã bao gồm check admin)
-    current_user: models.User = PermissionDep, # <-- THAY ĐỔI (Check Casbin)
+    current_user: models.User = PermissionDep,  # <-- THAY ĐỔI (Check Casbin)
     reason: Optional[str] = Body(
         None, embed=True, description="Reason for reverting the status"
     ),
@@ -723,7 +746,7 @@ async def admin_revert_lead_status(
     except (BadRequest, ResourceNotFoundError) as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
     except Exception as e:
-        await log.error(
+        log.error(
             "Error reverting lead status via API",
             lead_id=lead.id,
             admin_id=current_user.id,
@@ -738,13 +761,13 @@ async def admin_revert_lead_status(
 
 @router.post(
     "/leads/bulk-assign",
-    status_code=status.HTTP_202_ACCEPTED, # Trả về 202 vì task chạy nền
+    status_code=status.HTTP_202_ACCEPTED,  # Trả về 202 vì task chạy nền
     tags=["Admin - Lead Management"],
     summary="Trigger automatic assignment for multiple leads",
 )
 async def bulk_assign_leads(
-    assignment_data: schemas.BulkAssignLeadsSchema, # Sử dụng schema mới
-    current_admin: models.User = PermissionDep, # Yêu cầu quyền admin (qua Casbin)
+    assignment_data: schemas.BulkAssignLeadsSchema,  # Sử dụng schema mới
+    current_admin: models.User = PermissionDep,  # Yêu cầu quyền admin (qua Casbin)
 ):
     """
     (Admin only) Kích hoạt tác vụ phân công tự động cho một danh sách các Lead ID.
@@ -754,46 +777,60 @@ async def bulk_assign_leads(
     dispatched_count = 0
     failed_ids = []
 
-    await log.info("Received bulk assign request", admin_id=current_admin.id, lead_count=len(lead_ids))
+    log.info(
+        "Received bulk assign request",
+        admin_id=current_admin.id,
+        lead_count=len(lead_ids),
+    )
 
     for lead_id in lead_ids:
         try:
             # Gọi task Celery cho từng lead_id
             process_automatic_lead_assignment_task.delay(lead_id)
             dispatched_count += 1
-            await log.debug("Dispatched assignment task", lead_id=lead_id)
+            log.debug("Dispatched assignment task", lead_id=lead_id)
         except Exception as e:
             failed_ids.append(lead_id)
-            await log.error(
+            log.error(
                 "Failed to dispatch assignment task for lead",
                 lead_id=lead_id,
                 error=str(e),
-                exc_info=True # Log traceback nếu có lỗi khi gọi .delay()
+                exc_info=True,  # Log traceback nếu có lỗi khi gọi .delay()
             )
 
     success_rate = (dispatched_count / len(lead_ids)) * 100 if lead_ids else 100
     message = f"Successfully dispatched {dispatched_count}/{len(lead_ids)} ({success_rate:.1f}%) assignment tasks."
 
     if failed_ids:
-        await log.warning("Some tasks failed to dispatch", failed_count=len(failed_ids), failed_ids=failed_ids)
+        log.warning(
+            "Some tasks failed to dispatch",
+            failed_count=len(failed_ids),
+            failed_ids=failed_ids,
+        )
         message += f" Failed to dispatch for {len(failed_ids)} leads."
         # Bạn có thể cân nhắc trả về status code khác nếu có lỗi, ví dụ 207 Multi-Status
         # Hoặc vẫn trả về 202 nhưng kèm thông tin lỗi chi tiết hơn trong body
         # return {"message": message, "failed_ids": failed_ids}
 
-    await log.info("Finished processing bulk assign request", dispatched=dispatched_count, failed=len(failed_ids))
+    log.info(
+        "Finished processing bulk assign request",
+        dispatched=dispatched_count,
+        failed=len(failed_ids),
+    )
     return {"message": message}
 
 
 @router.post(
     "/leads/import",
-    response_model=schemas.LeadImportResult, # Sử dụng schema kết quả mới
-    status_code=status.HTTP_200_OK, # Trả về 200 OK (hoặc 207 Multi-Status nếu muốn chi tiết hơn)
+    response_model=schemas.LeadImportResult,  # Sử dụng schema kết quả mới
+    status_code=status.HTTP_200_OK,  # Trả về 200 OK (hoặc 207 Multi-Status nếu muốn chi tiết hơn)
     tags=["Admin - Lead Management"],
     summary="Import leads from a CSV or Excel file",
 )
 async def import_leads_from_file(
-    file: UploadFile = File(..., description="CSV or Excel file containing lead data (.csv, .xlsx)"),
+    file: UploadFile = File(
+        ..., description="CSV or Excel file containing lead data (.csv, .xlsx)"
+    ),
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
@@ -803,71 +840,93 @@ async def import_leads_from_file(
     Endpoint sẽ tạo leads trong DB nhưng **không** tự động phân công.
     Trả về kết quả import bao gồm ID các lead đã tạo và danh sách lỗi.
     """
-    await log.info("Received lead import request", admin_id=current_admin.id, filename=file.filename)
+    log.info(
+        "Received lead import request",
+        admin_id=current_admin.id,
+        filename=file.filename,
+    )
 
     # --- 1. Kiểm tra loại file ---
     file_extension = ""
     if file.filename:
-        file_extension = file.filename.rsplit('.', 1)[-1].lower()
+        file_extension = file.filename.rsplit(".", 1)[-1].lower()
 
     if file_extension not in ["csv", "xlsx"]:
-        await log.warning("Import failed: Invalid file extension", filename=file.filename, ext=file_extension)
+        log.warning(
+            "Import failed: Invalid file extension",
+            filename=file.filename,
+            ext=file_extension,
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid file format. Only .csv and .xlsx files are supported."
+            detail="Invalid file format. Only .csv and .xlsx files are supported.",
         )
 
     # --- 2. Đọc nội dung file vào DataFrame ---
     try:
         content = await file.read()
         if not content:
-             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file uploaded.")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file uploaded."
+            )
 
         if file_extension == "csv":
             # Dùng io.BytesIO để pandas đọc từ bytes
             df = pd.read_csv(io.BytesIO(content))
-        else: # xlsx
-            df = pd.read_excel(io.BytesIO(content), engine='openpyxl')
+        else:  # xlsx
+            df = pd.read_excel(io.BytesIO(content), engine="openpyxl")
 
-        await log.info(f"Successfully read {len(df)} rows from {file_extension} file.")
+        log.info(f"Successfully read {len(df)} rows from {file_extension} file.")
 
     except HTTPException as e:
-        raise e # Ném lại lỗi 400
+        raise e  # Ném lại lỗi 400
     except Exception as e:
-        await log.error("Failed to read or parse file content", filename=file.filename, error=str(e), exc_info=True)
+        log.error(
+            "Failed to read or parse file content",
+            filename=file.filename,
+            error=str(e),
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Could not read or parse the file. Ensure it is a valid {file_extension} file. Error: {e}"
+            detail=f"Could not read or parse the file. Ensure it is a valid {file_extension} file. Error: {e}",
         )
     finally:
-        await file.close() # Luôn đóng file
+        await file.close()  # Luôn đóng file
 
     # --- 3. Xử lý dữ liệu và Tạo Leads ---
-    required_columns = {'full_name', 'email', 'phone', 'source', 'unit_id'}
-    optional_columns = {'major_id'} # Các cột tùy chọn
+    required_columns = {"full_name", "email", "phone", "source", "unit_id"}
+    # optional_columns = {"major_id"}  # Các cột tùy chọn
     # Chuẩn hóa tên cột (viết thường, bỏ dấu cách)
-    df.columns = df.columns.str.lower().str.strip().str.replace(' ', '_')
+    df.columns = df.columns.str.lower().str.strip().str.replace(" ", "_")
 
     # Kiểm tra các cột bắt buộc
     missing_cols = required_columns - set(df.columns)
     if missing_cols:
-        await log.warning("Import failed: Missing required columns", missing=list(missing_cols))
+        log.warning(
+            "Import failed: Missing required columns", missing=list(missing_cols)
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"File is missing required columns: {', '.join(missing_cols)}"
+            detail=f"File is missing required columns: {', '.join(missing_cols)}",
         )
 
     leads_to_insert = []
     errors: List[schemas.LeadImportError] = []
     processed_row_count = 0
-    initial_status_id = settings.DEFAULT_INITIAL_LEAD_STATUS_ID # Lấy status mặc định
+    initial_status_id = settings.DEFAULT_INITIAL_LEAD_STATUS_ID  # Lấy status mặc định
 
     # Lấy stage_id tương ứng với initial_status_id (cần cho bulk insert)
     initial_status_obj = await db.get(models.ConsultationStatus, initial_status_id)
     initial_stage_id = initial_status_obj.stage_id if initial_status_obj else None
     if not initial_stage_id:
-        await log.error(f"FATAL: Initial status {initial_status_id} not found in DB. Cannot determine initial stage.")
-        raise HTTPException(status_code=500, detail="System configuration error: Initial lead status not found.")
+        log.error(
+            f"FATAL: Initial status {initial_status_id} not found in DB. Cannot determine initial stage."
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="System configuration error: Initial lead status not found.",
+        )
 
     # Lấy danh sách email đã tồn tại để kiểm tra trùng lặp hiệu quả hơn
     existing_emails_in_db = set()
@@ -880,44 +939,48 @@ async def import_leads_from_file(
         processed_row_count += 1
         row_number = index + 2
         row_data = row.to_dict()
-        cleaned_data = {} # Dữ liệu đã được ép kiểu
-        validation_errors_for_row = [] # Lỗi ép kiểu
+        cleaned_data = {}  # Dữ liệu đã được ép kiểu
+        validation_errors_for_row = []  # Lỗi ép kiểu
 
         # --- ✅ BẮT ĐẦU SỬA LỖI ÉP KIỂU ---
-        
+
         # 1. Ép kiểu các trường bắt buộc
         try:
             # Dùng str() và strip() cho các trường text
-            cleaned_data['full_name'] = str(row_data.get('full_name', '')).strip()
-            cleaned_data['email'] = str(row_data.get('email', '')).strip()
+            cleaned_data["full_name"] = str(row_data.get("full_name", "")).strip()
+            cleaned_data["email"] = str(row_data.get("email", "")).strip()
             # Xử lý đặc biệt cho 'phone': luôn chuyển sang string, bỏ ".0" nếu là float
-            phone_val = row_data.get('phone')
-            cleaned_data['phone'] = str(phone_val).split('.')[0] if pd.notna(phone_val) else ""
-            
-            cleaned_data['source'] = str(row_data.get('source', '')).strip()
-            
+            phone_val = row_data.get("phone")
+            cleaned_data["phone"] = (
+                str(phone_val).split(".")[0] if pd.notna(phone_val) else ""
+            )
+
+            cleaned_data["source"] = str(row_data.get("source", "")).strip()
+
             # Xử lý 'unit_id': ép sang int
-            unit_id_val = row_data.get('unit_id')
+            unit_id_val = row_data.get("unit_id")
             if pd.notna(unit_id_val):
-                cleaned_data['unit_id'] = int(float(unit_id_val))
+                cleaned_data["unit_id"] = int(float(unit_id_val))
             else:
                 # Nếu unit_id là bắt buộc, Pydantic sẽ bắt lỗi 'missing' sau
-                cleaned_data['unit_id'] = None 
+                cleaned_data["unit_id"] = None
 
         except (ValueError, TypeError, Exception) as e:
             # Lỗi cơ bản khi ép kiểu (ví dụ: unit_id là "abc")
             validation_errors_for_row.append(f"Type conversion error: {e}")
 
         # 2. Ép kiểu trường tùy chọn 'major_id'
-        major_id_val = row_data.get('major_id')
+        major_id_val = row_data.get("major_id")
         if pd.notna(major_id_val):
             try:
-                cleaned_data['major_id'] = int(float(major_id_val))
+                cleaned_data["major_id"] = int(float(major_id_val))
             except (ValueError, TypeError):
-                validation_errors_for_row.append("Invalid format for 'major_id', expected a number.")
+                validation_errors_for_row.append(
+                    "Invalid format for 'major_id', expected a number."
+                )
         else:
-            cleaned_data['major_id'] = None
-        
+            cleaned_data["major_id"] = None
+
         # --- KẾT THÚC SỬA LỖI ÉP KIỂU ---
 
         # 3. Validate bằng Pydantic
@@ -929,33 +992,42 @@ async def import_leads_from_file(
             lead_in = schemas.LeadCreate(**cleaned_data)
 
             # Kiểm tra trùng lặp email
-            if lead_in.email in existing_emails_in_db or lead_in.email in emails_in_current_file:
-                raise ValueError(f"Email '{lead_in.email}' already exists in the database or this file.")
+            if (
+                lead_in.email in existing_emails_in_db
+                or lead_in.email in emails_in_current_file
+            ):
+                raise ValueError(
+                    f"Email '{lead_in.email}' already exists in the database or this file."
+                )
 
             emails_in_current_file.add(lead_in.email)
 
             # Chuẩn bị dict để bulk insert (Nếu mọi thứ OK)
             lead_dict = lead_in.model_dump()
-            lead_dict['status'] = initial_status_id
-            lead_dict['consultation_status_id'] = initial_status_id
-            lead_dict['pipeline_stage_id'] = initial_stage_id
-            lead_dict['assigned_officer_id'] = None
-            lead_dict['assigned_at'] = None
-            
+            lead_dict["status"] = initial_status_id
+            lead_dict["consultation_status_id"] = initial_status_id
+            lead_dict["pipeline_stage_id"] = initial_stage_id
+            lead_dict["assigned_officer_id"] = None
+            lead_dict["assigned_at"] = None
+
             leads_to_insert.append(lead_dict)
 
-        except (ValueError, TypeError) as e: 
-             errors.append(schemas.LeadImportError(
-                 row_number=row_number,
-                 error_message=f"Data validation failed: {e}", # Lỗi Pydantic hoặc lỗi ép kiểu/trùng lặp
-                 row_data=row_data
-             ))
-        except Exception as e: 
-             errors.append(schemas.LeadImportError(
-                 row_number=row_number,
-                 error_message=f"Unexpected error processing row: {e}",
-                 row_data=row_data
-             ))
+        except (ValueError, TypeError) as e:
+            errors.append(
+                schemas.LeadImportError(
+                    row_number=row_number,
+                    error_message=f"Data validation failed: {e}",  # Lỗi Pydantic hoặc lỗi ép kiểu/trùng lặp
+                    row_data=row_data,
+                )
+            )
+        except Exception as e:
+            errors.append(
+                schemas.LeadImportError(
+                    row_number=row_number,
+                    error_message=f"Unexpected error processing row: {e}",
+                    row_data=row_data,
+                )
+            )
 
     # --- 4. Thực hiện Bulk Insert ---
     created_lead_ids: List[int] = []
@@ -964,10 +1036,7 @@ async def import_leads_from_file(
             # Sử dụng bulk_insert_mappings để hiệu quả và lấy lại ID
             # Lưu ý: Cần DB và dialect hỗ trợ (asyncpg hỗ trợ)
             # Không cần begin_nested vì chúng ta muốn commit hoặc rollback toàn bộ
-            await db.execute(
-                 pg_insert(models.Lead),
-                 leads_to_insert
-             )
+            await db.execute(pg_insert(models.Lead), leads_to_insert)
 
             # Lấy ID của các lead vừa tạo (cần query lại dựa trên email chẳng hạn)
             # Hoặc nếu dùng bulk_insert_mappings với return_defaults=True trên bản SQLAlchemy mới hơn
@@ -975,28 +1044,31 @@ async def import_leads_from_file(
             # created_lead_ids = [row[0] for row in results]
 
             # Cách đơn giản hơn: Query lại các lead vừa tạo dựa trên emails
-            inserted_emails = [ld['email'] for ld in leads_to_insert]
+            inserted_emails = [ld["email"] for ld in leads_to_insert]
             query = select(models.Lead.id).where(models.Lead.email.in_(inserted_emails))
             result = await db.execute(query)
             created_lead_ids = result.scalars().all()
 
             await db.commit()
-            await log.info(f"Successfully bulk inserted {len(created_lead_ids)} leads.")
+            log.info(f"Successfully bulk inserted {len(created_lead_ids)} leads.")
 
         except Exception as e:
             await db.rollback()
-            await log.error("Bulk lead insertion failed, rolling back.", error=str(e), exc_info=True)
+            log.error(
+                "Bulk lead insertion failed, rolling back.", error=str(e), exc_info=True
+            )
             # Ghi nhận tất cả các dòng đã chuẩn bị là lỗi
             for i, lead_dict in enumerate(leads_to_insert):
-                 # Tìm row_number tương ứng (hơi phức tạp, có thể bỏ qua nếu quá khó)
-                 # Giả sử lỗi chung cho cả batch
-                 errors.append(schemas.LeadImportError(
-                     row_number=-(i+1), # Dùng số âm để chỉ lỗi batch
-                     error_message=f"Database bulk insert error: {e}",
-                     row_data=lead_dict
-                 ))
-            created_lead_ids = [] # Reset ID vì đã rollback
-
+                # Tìm row_number tương ứng (hơi phức tạp, có thể bỏ qua nếu quá khó)
+                # Giả sử lỗi chung cho cả batch
+                errors.append(
+                    schemas.LeadImportError(
+                        row_number=-(i + 1),  # Dùng số âm để chỉ lỗi batch
+                        error_message=f"Database bulk insert error: {e}",
+                        row_data=lead_dict,
+                    )
+                )
+            created_lead_ids = []  # Reset ID vì đã rollback
 
     # --- 5. Trả về kết quả ---
     result = schemas.LeadImportResult(
@@ -1004,13 +1076,13 @@ async def import_leads_from_file(
         successful_imports=len(created_lead_ids),
         failed_imports=len(errors),
         created_lead_ids=created_lead_ids,
-        errors=errors
+        errors=errors,
     )
 
-    result_summary = result.model_dump(exclude={'errors'})
+    result_summary = result.model_dump(exclude={"errors"})
     if errors:
-        await log.warning("Lead import process finished with errors", result=result_summary)
+        log.warning("Lead import process finished with errors", result=result_summary)
     else:
-        await log.info("Lead import process finished successfully", result=result_summary)
+        log.info("Lead import process finished successfully", result=result_summary)
 
     return result

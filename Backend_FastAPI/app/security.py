@@ -7,7 +7,7 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 
 from .config import settings
-
+from .utils.exceptions import InvalidToken
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
@@ -20,9 +20,7 @@ def get_password_hash(password: str) -> str:
 
 
 def create_password_reset_token(email: str) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(
-        minutes=30
-    )
+    expire = datetime.now(timezone.utc) + timedelta(minutes=30)
     to_encode = {"exp": expire, "sub": email, "scope": "password_reset"}
     encoded_jwt = jwt.encode(
         to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM
@@ -44,6 +42,7 @@ def verify_password_reset_token(token: str) -> Optional[str]:
 
 
 # 2. Các hàm xử lý JWT
+
 
 # ✅ BƯỚC 1: SỬA HÀM NÀY
 def create_access_token(
@@ -113,6 +112,7 @@ def decode_token_for_invalidation(token: str) -> tuple[str | None, int | None]:
         return jti, remaining_ttl
     except JWTError:
         return None, None
+
 
 # ✅ HÀM MỚI: Dùng để decode Access Token trong deps.py
 def decode_token(token: str) -> dict:

@@ -1,33 +1,47 @@
 # app/main.py
+import asyncio  # ✅ V5: Thêm import
 import logging
-import sys
 import uuid
+from contextlib import asynccontextmanager
+
+import casbin
+import socketio  # ✅ V5: Thêm import
 import structlog
 import ujson
-import casbin
-from .database import AsyncSessionLocal
-from . import models  # Cần import models để dùng models.User
-
-from casbin_async_sqlalchemy_adapter import Adapter as AsyncCasbinAdapter, Base as CasbinBase
-from .database import engine as async_db_engine
-from fastapi import Depends, FastAPI, Request, status
+from casbin_async_sqlalchemy_adapter import Adapter as AsyncCasbinAdapter
+from casbin_async_sqlalchemy_adapter import Base as CasbinBase
+from fastapi import Depends, FastAPI, Request, Response, status  # ✅ V5: Thêm Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from pydantic import ValidationError
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-from contextlib import asynccontextmanager
 
 from . import database
 from .celery_utils import celery_app
 from .config import settings
-from .database import safe_redis_ping
+from .database import engine as async_db_engine
 from .database import redis_client as main_redis_client
+from .database import safe_redis_ping
 from .ratelimit import limiter
-from .routers import admin, auth, leads, organization, pipeline, profile, sessions, users
+from .routers import (
+    admin,
+    auth,
+    leads,
+    organization,
+    pipeline,
+    profile,
+    sessions,
+    users,
+)
+
+# ✅ V5: Import SIO, LUA loader, và Prometheus
+from .socket_manager import load_rate_limit_script, sio
 from .utils.exceptions import (
     AuthenticationError,
     BadRequest,
@@ -37,9 +51,8 @@ from .utils.exceptions import (
     PermissionDeniedError,
     ResourceNotFoundError,
 )
-from pydantic import ValidationError
+
 # === Cấu hình Structured Logging ===
-# (Giữ nguyên cấu hình structlog của bạn, đảm bảo wrapper_class là AsyncBoundLogger)
 structlog.configure(
     processors=[
         structlog.contextvars.merge_contextvars,
@@ -49,14 +62,16 @@ structlog.configure(
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,
-        # Dùng ConsoleRenderer nếu là dev, JSONRenderer nếu là prod/tty
-        structlog.dev.ConsoleRenderer()
-        if settings.APP_ENV == "development"
-        else structlog.processors.JSONRenderer(serializer=ujson.dumps),
+        (
+            structlog.dev.ConsoleRenderer()
+            if settings.APP_ENV == "development"
+            else structlog.processors.JSONRenderer(serializer=ujson.dumps)
+        ),
     ],
     context_class=dict,
     logger_factory=structlog.stdlib.LoggerFactory(),
-    wrapper_class=structlog.stdlib.AsyncBoundLogger, # <-- Đây là lý do cần await
+    # ✅ SỬA LỖI (V5): Chuyển sang đồng bộ (sync) để không cần `await`
+    wrapper_class=structlog.stdlib.BoundLogger,
     cache_logger_on_first_use=True,
 )
 
@@ -67,142 +82,138 @@ root_logger.handlers.clear()
 root_logger.addHandler(log_handler)
 root_logger.setLevel(settings.LOG_LEVEL.upper())
 
+# Tắt log ồn ào của SQLAlchemy
 logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 logging.getLogger("sqlalchemy.pool").setLevel(logging.WARNING)
 
+# Cấu hình log uvicorn
 logging.getLogger("uvicorn.access").handlers.clear()
 logging.getLogger("uvicorn.access").addHandler(log_handler)
 logging.getLogger("uvicorn.error").handlers.clear()
 logging.getLogger("uvicorn.error").addHandler(log_handler)
 
-log = structlog.get_logger("app.main") # Logger giờ là async
+# Logger chính của app (giờ là đồng bộ)
+log = structlog.get_logger("app.main")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- LOGIC STARTUP ---
-    await log.info("--- FastAPI application startup ---", environment=settings.APP_ENV)
-    
+    log.info("--- FastAPI application startup ---", environment=settings.APP_ENV)
+
     try:
-        # 1. TẠO BẢNG CASBIN
+        # (Giữ nguyên logic Casbin)
         async with async_db_engine.begin() as conn:
             await conn.run_sync(CasbinBase.metadata.create_all)
-        await log.info("Casbin 'casbin_rule' table checked/created.")
-
-        # 2. KHỞI TẠO ADAPTER
+        log.info("Casbin 'casbin_rule' table checked/created.")
         adapter = AsyncCasbinAdapter(async_db_engine)
-        await log.info(f"Casbin Adapter successfully initialized: Type={type(adapter)}")
-
-        # 3. KHỞI TẠO ENFORCER
+        log.info(f"Casbin Adapter successfully initialized: Type={type(adapter)}")
         enforcer = casbin.AsyncEnforcer("auth_model.conf", adapter)
-
-        # 4. TẢI POLICY
         await enforcer.load_policy()
         app.state.enforcer = enforcer
-        await log.info("✅ Casbin AsyncEnforcer initialized and policies loaded.")
+        log.info("✅ Casbin AsyncEnforcer initialized and policies loaded.")
 
-        # --- LOGIC GÁN VAI TRÒ ADMIN BAN ĐẦU ---
-        # INITIAL_ADMIN_USER_ID = 115
-        # ADMIN_ROLE_NAME = "role:admin"
-        # ADMIN_SUBJECT = f"user:{INITIAL_ADMIN_USER_ID}"
-
-        # has_admin_role = enforcer.has_grouping_policy(ADMIN_SUBJECT, ADMIN_ROLE_NAME)
-
-        # if not has_admin_role:
-        #     await log.info(f"Casbin grouping policy for initial admin ({ADMIN_SUBJECT}) not found. Attempting to add.")
-        #     async with AsyncSessionLocal() as db:
-        #         admin_user = await db.get(models.User, INITIAL_ADMIN_USER_ID)
-        #         if admin_user and admin_user.role == 'admin':
-        #             await log.info(f"Assigning initial admin role in Casbin to {ADMIN_SUBJECT}")
-        #             added = await enforcer.add_grouping_policy(ADMIN_SUBJECT, ADMIN_ROLE_NAME)
-        #             if added:
-        #                 await log.info(f"Successfully added Casbin grouping policy: g, {ADMIN_SUBJECT}, {ADMIN_ROLE_NAME}")
-        #             else:
-        #                 await log.warning(f"Failed to add Casbin grouping policy (might already exist): g, {ADMIN_SUBJECT}, {ADMIN_ROLE_NAME}")
-        #         elif not admin_user:
-        #             await log.error(f"Initial admin user ID {INITIAL_ADMIN_USER_ID} not found in 'user' table. Cannot assign Casbin role.")
-        #         else:
-        #             await log.error(f"User {INITIAL_ADMIN_USER_ID} exists but does not have 'admin' role in 'user' table. Cannot assign Casbin role.")
-        # else:
-        #     await log.info(f"Casbin grouping policy for initial admin ({ADMIN_SUBJECT}) already exists.")
-        # # --- KẾT THÚC LOGIC GÁN VAI TRÒ ADMIN BAN ĐẦU ---
-
-        # 5. THÊM POLICY 'p' MẶC ĐỊNH (nếu chưa có)
+        # (Giữ nguyên logic add policy mặc định)
         if not enforcer.get_policy():
-            await log.info("No Casbin P policies found. Adding defaults...")
+            log.info("No Casbin P policies found. Adding defaults...")
             await enforcer.add_policy("role:admin", "/*", ".*")
             await enforcer.add_policy("role:manager", "/api/admin/users", ".*")
             await enforcer.add_policy("role:manager", "/api/leads/*", ".*")
             await enforcer.add_policy("role:manager", "/api/leads", "GET")
-
-            await enforcer.add_policy("role:officer", "/api/leads", "GET") # Policy mới từ Fix 1
+            await enforcer.add_policy("role:officer", "/api/leads", "GET")
             await enforcer.add_policy("role:officer", "/api/leads/{lead_id}", "GET")
-            await enforcer.add_policy("role:officer", "/api/leads/{lead_id}/consultations", "POST")
-            await enforcer.add_policy("role:officer", "/api/leads/{lead_id}/action", "POST")
-
-            # === THÊM CÁC POLICY CHO PROFILE ===
+            await enforcer.add_policy(
+                "role:officer", "/api/leads/{lead_id}/consultations", "POST"
+            )
+            await enforcer.add_policy(
+                "role:officer", "/api/leads/{lead_id}/action", "POST"
+            )
             await enforcer.add_policy("role:user", "/api/profile", "GET")
             await enforcer.add_policy("role:user", "/api/profile", "PUT")
-            await enforcer.add_policy("role:officer", "/api/profile", "GET") # Cho phép officer
+            await enforcer.add_policy("role:officer", "/api/profile", "GET")
             await enforcer.add_policy("role:officer", "/api/profile", "PUT")
-            await enforcer.add_policy("role:manager", "/api/profile", "GET") # Cho phép manager
+            await enforcer.add_policy("role:manager", "/api/profile", "GET")
             await enforcer.add_policy("role:manager", "/api/profile", "PUT")
-            # === KẾT THÚC THÊM POLICY ===
-
-            await log.info("Default P policies added.")
+            log.info("Default P policies added.")
 
     except Exception as e:
-        await log.critical("❌ FAILED TO INITIALIZE OR CONFIGURE CASBIN ENFORCER!", error=str(e), exc_info=True)
-    
-    # ==========================================================
-    # === ⭐️ DI CHUYỂN LOGIC RATE LIMITER VÀO ĐÂY ⭐️ ===
-    # ==========================================================
+        log.critical(
+            "❌ FAILED TO INITIALIZE OR CONFIGURE CASBIN ENFORCER!",
+            error=str(e),
+            exc_info=True,
+        )
+
+    # (Giữ nguyên logic Rate Limiter)
     if settings.APP_ENV != "test":
         app.state.limiter = limiter
         app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-        await log.info("SlowAPI rate limiter INITIALIZED for non-test environment.")
+        log.info("SlowAPI rate limiter INITIALIZED for non-test environment.")
     else:
-        # Thêm 'await' vì chúng ta đang ở trong hàm async
-        await log.info("APP_ENV is 'test', skipping SlowAPI rate limiter setup.")
-    # ==========================================================
-
-
+        log.info("APP_ENV is 'test', skipping SlowAPI rate limiter setup.")
 
     # --- Kiểm tra Redis ---
     try:
         pong = await safe_redis_ping()
-        await log.info("✅ Redis connection successful", response=pong)
+        log.info("✅ Redis connection successful", response=pong)
+
+        # ✅ CẢI TIẾN: Vấn đề #1 - Tải LUA script khi khởi động
+        await load_rate_limit_script()
+
     except Exception as e:
-        await log.error(
+        log.error(
             "❌ FAILED TO CONNECT TO REDIS on startup!", error=str(e), exc_info=True
         )
-    
+
     # --- Ứng dụng chạy ---
     yield
-    
-    # --- LOGIC SHUTDOWN ---
-    await log.info("--- FastAPI application shutdown ---")
-    # Thêm phần đóng Redis client ở đây
+
+    # === ✅ CẢI TIẾN: Vấn đề #2 - Graceful Shutdown ===
+    log.info("--- FastAPI application shutdown ---")
+
     try:
-        await main_redis_client.aclose() # Sử dụng client đã import
-        await log.info("✅ Main Redis client connection closed.")
+        # Thông báo cho tất cả client biết server sắp tắt
+        await sio.emit(
+            "server_shutdown",
+            {"message": "Server is restarting. Please refresh in a moment."},
+        )
+        # Chờ 1 giây (thay vì 2) để các client nhận được thông báo
+        await asyncio.sleep(1)
+        # Ngắt kết nối tất cả client
+        await sio.disconnect()
+        log.info("Socket.IO server connections closed gracefully")
     except Exception as e:
-        await log.error("Error closing main Redis client connection during shutdown.", error=str(e))
+        log.error("Error during Socket.IO shutdown", error=str(e))
+
+    try:
+        await main_redis_client.aclose()
+        log.info("✅ Main Redis client connection closed.")
+    except Exception as e:
+        log.error(
+            "Error closing main Redis client connection during shutdown.", error=str(e)
+        )
+
 
 # === KHỞI TẠO APP ===
 app = FastAPI(
     title="QLTS Project API with FastAPI",
     description="API for managing leads, users, and system configurations.",
     version="1.0.0",
-    lifespan=lifespan 
+    lifespan=lifespan,
 )
 
+# === ✅ V5: MOUNT SOCKET.IO APP ===
+# Bọc ứng dụng FastAPI BÊN TRONG ứng dụng Socket.IO
+app_with_sockets = socketio.ASGIApp(sio, app)
+
+
 # ===============================================================
-# === EXCEPTION HANDLERS (Đã thêm 'await' cho log) =============
+# === EXCEPTION HANDLERS (Đã xóa `await` khỏi log) =============
 # ===============================================================
+
 
 @app.exception_handler(InvalidToken)
 async def invalid_token_handler(request: Request, exc: InvalidToken):
-    await log.warning(
+    log.warning(  # ✅ SỬA LỖI: Xóa `await`
         "Invalid Token Error",
         detail=exc.detail,
         path=request.url.path,
@@ -213,9 +224,10 @@ async def invalid_token_handler(request: Request, exc: InvalidToken):
         headers={"WWW-Authenticate": "Bearer"},
     )
 
+
 @app.exception_handler(AuthenticationError)
 async def authentication_error_handler(request: Request, exc: AuthenticationError):
-    await log.warning(
+    log.warning(  # ✅ SỬA LỖI: Xóa `await`
         "Authentication Error",
         detail=exc.detail,
         path=request.url.path,
@@ -226,58 +238,73 @@ async def authentication_error_handler(request: Request, exc: AuthenticationErro
         headers={"WWW-Authenticate": "Bearer"},
     )
 
+
 @app.exception_handler(BadRequest)
 async def bad_request_handler(request: Request, exc: BadRequest):
-    await log.warning("Bad Request", detail=exc.detail, path=request.url.path)
+    log.warning(
+        "Bad Request", detail=exc.detail, path=request.url.path
+    )  # ✅ SỬA LỖI: Xóa `await`
     return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
         content={"detail": exc.detail},
     )
 
+
 @app.exception_handler(PermissionDeniedError)
 async def permission_denied_handler(request: Request, exc: PermissionDeniedError):
-    await log.warning("Permission Denied", detail=exc.detail, path=request.url.path)
+    log.warning(
+        "Permission Denied", detail=exc.detail, path=request.url.path
+    )  # ✅ SỬA LỖI: Xóa `await`
     return JSONResponse(
         status_code=status.HTTP_403_FORBIDDEN,
         content={"detail": exc.detail},
     )
 
+
 @app.exception_handler(ResourceNotFoundError)
 async def resource_not_found_handler(request: Request, exc: ResourceNotFoundError):
-    await log.warning("Resource Not Found", detail=exc.detail, path=request.url.path)
+    log.warning(
+        "Resource Not Found", detail=exc.detail, path=request.url.path
+    )  # ✅ SỬA LỖI: Xóa `await`
     return JSONResponse(
         status_code=status.HTTP_404_NOT_FOUND,
         content={"detail": exc.detail},
     )
 
+
 @app.exception_handler(DuplicateResourceError)
 async def duplicate_resource_handler(request: Request, exc: DuplicateResourceError):
-    await log.warning("Duplicate Resource", detail=exc.detail, path=request.url.path)
+    log.warning(
+        "Duplicate Resource", detail=exc.detail, path=request.url.path
+    )  # ✅ SỬA LỖI: Xóa `await`
     return JSONResponse(
         status_code=status.HTTP_409_CONFLICT,
         content={"detail": exc.detail},
     )
 
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     error_details = []
     for error in exc.errors():
-        # Bỏ html.escape() như đã sửa
         field_parts = [str(loc_part) for loc_part in error.get("loc", [])]
         field = " -> ".join(field_parts) if field_parts else "body"
         message = error.get("msg", "Unknown validation error")
         error_details.append({"field": field, "message": message})
 
-    await log.warning("Request Validation Error", errors=error_details, path=request.url.path)
+    log.warning(
+        "Request Validation Error", errors=error_details, path=request.url.path
+    )  # ✅ SỬA LỖI: Xóa `await`
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content={"detail": "Validation Error", "errors": error_details},
         headers={"Content-Type": "application/json; charset=utf-8"},
     )
 
+
 @app.exception_handler(BaseAppException)
 async def base_app_exception_handler(request: Request, exc: BaseAppException):
-    await log.error(
+    log.error(  # ✅ SỬA LỖI: Xóa `await`
         "Unhandled BaseAppException",
         type=type(exc).__name__,
         detail=exc.detail,
@@ -289,7 +316,8 @@ async def base_app_exception_handler(request: Request, exc: BaseAppException):
         headers=getattr(exc, "headers", None),
     )
 
-@app.exception_handler(ValidationError) # Thêm handler này
+
+@app.exception_handler(ValidationError)
 async def pydantic_validation_exception_handler(request: Request, exc: ValidationError):
     error_details = []
     for error in exc.errors():
@@ -297,60 +325,72 @@ async def pydantic_validation_exception_handler(request: Request, exc: Validatio
         message = error.get("msg", "Unknown validation error")
         error_details.append({"field": field, "message": message})
 
-    await log.warning("Pydantic Validation Error inside endpoint", errors=error_details, path=request.url.path)
+    log.warning(
+        "Pydantic Validation Error inside endpoint",
+        errors=error_details,
+        path=request.url.path,
+    )  # ✅ SỬA LỖI: Xóa `await`
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content={"detail": "Validation Error", "errors": error_details},
         headers={"Content-Type": "application/json; charset=utf-8"},
     )
 
+
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
-    await log.exception("Unhandled Internal Server Error", path=request.url.path, exc_info=True)
+    log.exception(
+        "Unhandled Internal Server Error", path=request.url.path, exc_info=True
+    )  # ✅ SỬA LỖI: Xóa `await`
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": "An unexpected internal server error occurred."},
     )
 
+
 # ===============================================================
 # === MIDDLEWARES =============================================
 # ===============================================================
 
-# Add Limiter state and exception handler
-# app.state.limiter = limiter
-# app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 @app.middleware("http")
 async def request_id_tracking_middleware(request: Request, call_next):
-    """Gán Request ID và bind vào structlog context."""
+    # (Giữ nguyên logic)
     structlog.contextvars.clear_contextvars()
     request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
     structlog.contextvars.bind_contextvars(request_id=request_id)
-    
     response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
-    structlog.contextvars.clear_contextvars() # Dọn dẹp context
+    structlog.contextvars.clear_contextvars()
     return response
 
-# CORS Middleware
-# ✅ SECURITY FIX: Expose Set-Cookie header for HttpOnly cookies
+
+# (Giữ nguyên CORS Middleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[origin.strip() for origin in settings.CORS_ORIGINS.split(",")] if settings.CORS_ORIGINS else ["*"],
-    allow_credentials=True,  # Required for cookies
+    allow_origins=(
+        [origin.strip() for origin in settings.CORS_ORIGINS.split(",")]
+        if settings.CORS_ORIGINS
+        else ["*"]
+    ),
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["Set-Cookie"],  # Allow frontend to see Set-Cookie header
+    expose_headers=["Set-Cookie"],
 )
 
+
+# (Giữ nguyên Security Headers Middleware)
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
-    """Middleware để thêm các HTTP header bảo mật."""
     response = await call_next(request)
-    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Strict-Transport-Security"] = (
+        "max-age=31536000; includeSubDomains"
+    )
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     return response
+
 
 # ===============================================================
 # === ROUTERS ===================================================
@@ -359,21 +399,31 @@ async def add_security_headers(request: Request, call_next):
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(profile.router, prefix="/api/profile", tags=["Profile"])
 app.include_router(users.router, prefix="/api/users", tags=["Users"])
-app.include_router(sessions.router, prefix="/api", tags=["Sessions"])  # ✅ NEW: Session management
+app.include_router(sessions.router, prefix="/api", tags=["Sessions"])
 app.include_router(leads.router, prefix="/api/leads", tags=["Leads"])
 app.include_router(pipeline.router, prefix="/api/pipeline", tags=["Pipeline"])
-app.include_router(organization.router, prefix="/api/organization", tags=["Organization"])
+app.include_router(
+    organization.router, prefix="/api/organization", tags=["Organization"]
+)
 app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
 
 
+# === ✅ CẢI TIẾN: Vấn đề #4 - Thêm Metrics Endpoint ===
+@app.get("/metrics", tags=["Utilities"])
+async def metrics():
+    """Endpoint cho Prometheus cào (scrape) metrics."""
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
 # ===============================================================
-# === HEALTH CHECKS (Đã thêm 'async' và 'await') ================
+# === HEALTH CHECKS (Đã xóa `await` khỏi log) ================
 # ===============================================================
 
+
 @app.get("/health", tags=["Utilities"])
-async def health_check(): # <-- SỬA: Chuyển thành async def
+async def health_check():
     """Kiểm tra API cơ bản."""
-    await log.debug("Health check endpoint was reached.") # <-- SỬA: Thêm await
+    log.debug("Health check endpoint was reached.")  # ✅ SỬA LỖI: Xóa `await`
     return {"status": "ok", "message": "Server is healthy and running!"}
 
 
@@ -390,7 +440,7 @@ async def detailed_health_check(db: AsyncSession = Depends(database.get_db)):
     }
     is_healthy = True
 
-    # 1. Kiểm tra Database (PostgreSQL)
+    # 1. Kiểm tra Database
     try:
         await db.execute(text("SELECT 1"))
         checks["database"]["status"] = "ok"
@@ -398,8 +448,12 @@ async def detailed_health_check(db: AsyncSession = Depends(database.get_db)):
     except Exception as e:
         is_healthy = False
         checks["database"]["status"] = "error"
-        checks["database"]["message"] = f"Database connection failed: {type(e).__name__}"
-        await log.error("Health check failed (Database)", error=str(e)) # <-- SỬA: Thêm await
+        checks["database"][
+            "message"
+        ] = f"Database connection failed: {type(e).__name__}"
+        log.error(
+            "Health check failed (Database)", error=str(e)
+        )  # ✅ SỬA LỖI: Xóa `await`
 
     # 2. Kiểm tra Redis
     try:
@@ -409,26 +463,36 @@ async def detailed_health_check(db: AsyncSession = Depends(database.get_db)):
     except Exception as e:
         is_healthy = False
         checks["redis_cache"]["status"] = "error"
-        checks["redis_cache"]["message"] = f"Redis connection failed: {type(e).__name__}"
-        await log.error("Health check failed (Redis Cache)", error=str(e)) # <-- SỬA: Thêm await
+        checks["redis_cache"][
+            "message"
+        ] = f"Redis connection failed: {type(e).__name__}"
+        log.error(
+            "Health check failed (Redis Cache)", error=str(e)
+        )  # ✅ SỬA LỖI: Xóa `await`
 
-    # 3. Kiểm tra Celery (Broker/Worker)
+    # 3. Kiểm tra Celery
     try:
         inspect = celery_app.control.inspect(timeout=1.0)
-        active_workers = await run_in_threadpool(inspect.active) 
+        active_workers = await run_in_threadpool(inspect.active)
 
         if active_workers:
             checks["celery_broker"]["status"] = "ok"
-            checks["celery_broker"]["message"] = f"Found {len(active_workers)} active worker(s)."
+            checks["celery_broker"][
+                "message"
+            ] = f"Found {len(active_workers)} active worker(s)."
         else:
-            is_healthy = False 
+            is_healthy = False
             checks["celery_broker"]["status"] = "error"
             checks["celery_broker"]["message"] = "No active Celery workers found."
     except Exception as e:
         is_healthy = False
         checks["celery_broker"]["status"] = "error"
-        checks["celery_broker"]["message"] = f"Celery check failed (broker down?): {type(e).__name__}"
-        await log.error("Health check failed (Celery)", error=str(e)) # <-- SỬA: Thêm await
+        checks["celery_broker"][
+            "message"
+        ] = f"Celery check failed (broker down?): {type(e).__name__}"
+        log.error(
+            "Health check failed (Celery)", error=str(e)
+        )  # ✅ SỬA LỖI: Xóa `await`
 
     status_code = (
         status.HTTP_200_OK if is_healthy else status.HTTP_503_SERVICE_UNAVAILABLE

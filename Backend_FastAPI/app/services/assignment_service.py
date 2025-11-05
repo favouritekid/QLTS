@@ -1,10 +1,11 @@
 # app/services/assignment_service.py
-from datetime import datetime, timezone
 import logging
+from datetime import datetime, timezone
+
+from celery.exceptions import Retry  # Dùng để retry task
 from sqlalchemy import func, select
+from sqlalchemy.exc import OperationalError  # Dùng để bắt LockNotAvailableError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.exc import OperationalError # Dùng để bắt LockNotAvailableError
-from celery.exceptions import Retry # Dùng để retry task
 
 from .. import models
 from ..config import settings
@@ -14,8 +15,11 @@ default_log = logging.getLogger(__name__)
 
 ACTIVE_LEAD_STATUSES_FOR_WORKLOAD = settings.ACTIVE_LEAD_STATUSES_FOR_WORKLOAD
 
+
 # Thêm tham số logger=None
-async def automatically_assign_lead(lead_id: int, db: AsyncSession, logger: logging.Logger = None):
+async def automatically_assign_lead(
+    lead_id: int, db: AsyncSession, logger: logging.Logger = None
+):
     """
     Logic nghiệp vụ chính để tự động phân công Lead.
     Sử dụng logger được truyền vào hoặc logger mặc định.
@@ -23,7 +27,7 @@ async def automatically_assign_lead(lead_id: int, db: AsyncSession, logger: logg
     Xử lý lock contention trên Lead bằng Celery Retry.
     """
     log = logger or default_log
-    await log.info(f"[Lead ID: {lead_id}] Auto-assign task started")
+    log.info(f"[Lead ID: {lead_id}] Auto-assign task started")
 
     try:
         # Sử dụng transaction lồng nhau để kiểm soát rollback tốt hơn
@@ -31,29 +35,39 @@ async def automatically_assign_lead(lead_id: int, db: AsyncSession, logger: logg
             # === BƯỚC 1: Lấy VÀ KHÓA Lead (Giữ nguyên nowait=True hoặc đổi sang skip_locked=True) ===
             # Việc khóa lead ít khi xung đột hơn, nhưng nowait giúp phát hiện sớm
             # nếu có transaction khác đang xử lý chính lead này.
-            stmt = select(models.Lead).where(models.Lead.id == lead_id).with_for_update(nowait=True)
+            stmt = (
+                select(models.Lead)
+                .where(models.Lead.id == lead_id)
+                .with_for_update(nowait=True)
+            )
             result = await db.execute(stmt)
             lead = result.scalar_one_or_none()
 
             # --- Kiểm tra trạng thái Lead ---
             if not lead:
-                await log.warning(f"[Lead ID: {lead_id}] Lead not found, skipping assignment.")
-                return # Kết thúc task nếu lead không tồn tại
+                log.warning(
+                    f"[Lead ID: {lead_id}] Lead not found, skipping assignment."
+                )
+                return  # Kết thúc task nếu lead không tồn tại
             elif lead.assigned_officer_id:
-                await log.info(f"[Lead ID: {lead_id}] Lead already assigned to officer {lead.assigned_officer_id}, skipping.")
-                return # Kết thúc task nếu lead đã được gán
+                log.info(
+                    f"[Lead ID: {lead_id}] Lead already assigned to officer {lead.assigned_officer_id}, skipping."
+                )
+                return  # Kết thúc task nếu lead đã được gán
             else:
                 lead_unit_id = lead.unit_id
-                await log.debug(f"[Lead ID: {lead_id}] Lead found and locked (Unit: {lead_unit_id}). Status: '{lead.status}'")
+                log.debug(
+                    f"[Lead ID: {lead_id}] Lead found and locked (Unit: {lead_unit_id}). Status: '{lead.status}'"
+                )
 
                 # === BƯỚC 2: Khóa các Officer liên quan (SỬ DỤNG SKIP LOCKED) ===
                 available_officers_query = (
-                    select(models.User)
-                    .where(
+                    select(models.User).where(
                         models.User.role == "officer",
                         models.User.status == "active",
-                        models.User.availability_status == "available", # Chỉ lấy officer đang sẵn sàng
-                        models.User.unit_id == lead_unit_id, # Cùng đơn vị với Lead
+                        models.User.availability_status
+                        == "available",  # Chỉ lấy officer đang sẵn sàng
+                        models.User.unit_id == lead_unit_id,  # Cùng đơn vị với Lead
                     )
                     # ✅ CẢI TIẾN: Bỏ qua các officer đang bị khóa bởi transaction khác
                     .with_for_update(skip_locked=True)
@@ -64,76 +78,105 @@ async def automatically_assign_lead(lead_id: int, db: AsyncSession, logger: logg
 
                 # --- Xử lý khi không có Officer ---
                 if not available_officers:
-                    await log.warning(f"[Lead ID: {lead_id}] No available (and unlocked) officers found for unit {lead_unit_id}. Setting status to unassigned.")
+                    log.warning(
+                        f"[Lead ID: {lead_id}] No available (and unlocked) officers found for unit {lead_unit_id}. Setting status to unassigned."
+                    )
                     lead.status = settings.DEFAULT_UNASSIGNED_LEAD_STATUS
                     # Ghi lại lịch sử thay đổi trạng thái (Optional nhưng nên có)
                     # await _log_lead_state_change(...) # Cần hàm helper này nếu muốn log
                     db.add(lead)
                     # Commit transaction lồng nhau ở đây vì đã kết thúc logic
                     # await db.commit() # Không cần commit tường minh khi dùng `async with`
-                    return # Kết thúc task
+                    return  # Kết thúc task
 
-                await log.debug(f"[Lead ID: {lead_id}] Found {len(available_officers)} available officers for unit {lead_unit_id}.")
+                log.debug(
+                    f"[Lead ID: {lead_id}] Found {len(available_officers)} available officers for unit {lead_unit_id}."
+                )
 
                 # === BƯỚC 3: TÍNH TOÁN WORKLOAD (Chỉ cho các officer lấy được) ===
                 officer_ids = [o.id for o in available_officers]
                 workload_stmt = (
-                    select(models.Lead.assigned_officer_id, func.count(models.Lead.id).label("workload"))
+                    select(
+                        models.Lead.assigned_officer_id,
+                        func.count(models.Lead.id).label("workload"),
+                    )
                     .where(
                         models.Lead.assigned_officer_id.in_(officer_ids),
                         # Chỉ đếm các lead đang thực sự "active" trong workload
                         models.Lead.status.in_(ACTIVE_LEAD_STATUSES_FOR_WORKLOAD),
-                    ).group_by(models.Lead.assigned_officer_id)
+                    )
+                    .group_by(models.Lead.assigned_officer_id)
                 )
                 workload_results = await db.execute(workload_stmt)
-                workload_map = {row.assigned_officer_id: row.workload for row in workload_results}
-                await log.debug(f"[Lead ID: {lead_id}] Calculated workloads for available officers: {workload_map}")
+                workload_map = {
+                    row.assigned_officer_id: row.workload for row in workload_results
+                }
+                log.debug(
+                    f"[Lead ID: {lead_id}] Calculated workloads for available officers: {workload_map}"
+                )
 
                 # === BƯỚC 4: Xây dựng Danh sách Officer Hợp lệ (còn capacity) ===
                 officer_loads = []
                 for officer in available_officers:
                     workload = workload_map.get(officer.id, 0)
                     # Kiểm tra capacity (đảm bảo max_capacity không phải None và > 0)
-                    capacity = officer.max_capacity if officer.max_capacity is not None else 100 # Giá trị mặc định an toàn
-                    if capacity <= 0: capacity = 1 # Tránh chia cho 0
+                    capacity = (
+                        officer.max_capacity
+                        if officer.max_capacity is not None
+                        else 100
+                    )  # Giá trị mặc định an toàn
+                    if capacity <= 0:
+                        capacity = 1  # Tránh chia cho 0
 
                     if workload < capacity:
                         utilization = workload / capacity
-                        officer_loads.append({
-                            "officer": officer,
-                            "workload": workload,
-                            "utilization": utilization,
-                            # Xử lý last_assigned_at là None (coalesce)
-                            "last_assigned": officer.last_assigned_at or datetime.min.replace(tzinfo=timezone.utc),
-                        })
+                        officer_loads.append(
+                            {
+                                "officer": officer,
+                                "workload": workload,
+                                "utilization": utilization,
+                                # Xử lý last_assigned_at là None (coalesce)
+                                "last_assigned": officer.last_assigned_at
+                                or datetime.min.replace(tzinfo=timezone.utc),
+                            }
+                        )
                     else:
-                         await log.debug(f"[Lead ID: {lead_id}] Officer {officer.id} skipped (at full capacity: {workload}/{capacity})")
-
+                        log.debug(
+                            f"[Lead ID: {lead_id}] Officer {officer.id} skipped (at full capacity: {workload}/{capacity})"
+                        )
 
                 # --- Xử lý khi tất cả Officer đã đầy tải ---
                 if not officer_loads:
-                    await log.warning(f"[Lead ID: {lead_id}] All available officers ({len(available_officers)}) in unit {lead_unit_id} are at full capacity. Setting status to unassigned.")
+                    log.warning(
+                        f"[Lead ID: {lead_id}] All available officers ({len(available_officers)}) in unit {lead_unit_id} are at full capacity. Setting status to unassigned."
+                    )
                     lead.status = settings.DEFAULT_UNASSIGNED_LEAD_STATUS
                     # await _log_lead_state_change(...)
                     db.add(lead)
                     # await db.commit()
-                    return # Kết thúc task
+                    return  # Kết thúc task
 
                 # === BƯỚC 5: Sắp xếp và Chọn Officer ===
                 # Ưu tiên:
                 # 1. Utilization thấp nhất (ít % đầy nhất)
                 # 2. Capacity còn lại nhiều nhất (nếu utilization bằng nhau)
                 # 3. Được gán lần cuối xa nhất (nếu cả 2 trên bằng nhau)
-                officer_loads.sort(key=lambda x: (
-                    x["utilization"],
-                    -(x["officer"].max_capacity - x["workload"]) if x["officer"].max_capacity is not None else 0, # Ưu tiên người còn nhiều slot trống hơn
-                    x["last_assigned"], # Sắp xếp theo datetime object
-                ))
+                officer_loads.sort(
+                    key=lambda x: (
+                        x["utilization"],
+                        (
+                            -(x["officer"].max_capacity - x["workload"])
+                            if x["officer"].max_capacity is not None
+                            else 0
+                        ),  # Ưu tiên người còn nhiều slot trống hơn
+                        x["last_assigned"],  # Sắp xếp theo datetime object
+                    )
+                )
 
                 chosen_officer_data = officer_loads[0]
                 chosen_one = chosen_officer_data["officer"]
                 chosen_workload = chosen_officer_data["workload"]
-                await log.info(
+                log.info(
                     f"[Lead ID: {lead_id}] Selected officer {chosen_one.id} ({chosen_one.username}). "
                     f"Current Workload: {chosen_workload}, Max Capacity: {chosen_one.max_capacity}, "
                     f"Utilization: {chosen_officer_data['utilization']:.2f}, "
@@ -149,7 +192,7 @@ async def automatically_assign_lead(lead_id: int, db: AsyncSession, logger: logg
                 chosen_one.last_assigned_at = now_utc
 
                 log_entry = models.AssignmentLog(
-                    lead_id=lead.id, # Lead ID chắc chắn đã có
+                    lead_id=lead.id,  # Lead ID chắc chắn đã có
                     officer_id=chosen_one.id,
                     method="automatic",
                     reason="Assigned by system (utilization routing)",
@@ -160,25 +203,38 @@ async def automatically_assign_lead(lead_id: int, db: AsyncSession, logger: logg
 
                 # Thêm tất cả các thay đổi vào session
                 db.add_all([lead, chosen_one, log_entry])
-                await log.info(f"[Lead ID: {lead_id}] Lead assignment successful to officer {chosen_one.id}.")
+                log.info(
+                    f"[Lead ID: {lead_id}] Lead assignment successful to officer {chosen_one.id}."
+                )
 
         # Kết thúc `async with db.begin_nested()` - Tự động commit nếu không có lỗi
 
     except OperationalError as e:
         # Bắt lỗi "LockNotAvailableError" (chủ yếu cho việc khóa Lead ban đầu)
-        if "could not obtain lock" in str(e).lower() or "lock not available" in str(e).lower():
-            await log.warning(f"[Lead ID: {lead_id}] Lock contention detected (possibly on Lead row). Retrying task in 5s...")
+        if (
+            "could not obtain lock" in str(e).lower()
+            or "lock not available" in str(e).lower()
+        ):
+            log.warning(
+                f"[Lead ID: {lead_id}] Lock contention detected (possibly on Lead row). Retrying task in 5s..."
+            )
             # Ném lỗi Retry để Celery tự động thử lại task sau
-            raise Retry(exc=e, countdown=5, max_retries=5) # Giới hạn số lần retry
+            raise Retry(exc=e, countdown=5, max_retries=5)  # Giới hạn số lần retry
         else:
             # Nếu là lỗi OperationalError khác (vd: mất kết nối), log và ném ra
-            await log.error(f"[Lead ID: {lead_id}] OperationalError during transaction.", exc_info=True)
+            log.error(
+                f"[Lead ID: {lead_id}] OperationalError during transaction.",
+                exc_info=True,
+            )
             # Rollback sẽ tự động xảy ra khi exception thoát khỏi `async with`
-            raise e # Ném lại lỗi để Celery biết task thất bại
+            raise e  # Ném lại lỗi để Celery biết task thất bại
     except Exception as e:
         # Bất kỳ lỗi nào khác cũng sẽ được log và ném ra
-        await log.error(f"[Lead ID: {lead_id}] Auto-assign task failed unexpectedly within transaction.", exc_info=True)
+        log.error(
+            f"[Lead ID: {lead_id}] Auto-assign task failed unexpectedly within transaction.",
+            exc_info=True,
+        )
         # Rollback tự động
-        raise e # Ném lại lỗi để Celery biết task thất bại
+        raise e  # Ném lại lỗi để Celery biết task thất bại
 
-    await log.info(f"[Lead ID: {lead_id}] Auto-assign task finished successfully.")
+    log.info(f"[Lead ID: {lead_id}] Auto-assign task finished successfully.")

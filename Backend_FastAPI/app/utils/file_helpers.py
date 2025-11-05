@@ -49,7 +49,7 @@ async def save_avatar(file: UploadFile, old_avatar_url: str = None) -> str:
         file_extension = file.filename.rsplit(".", 1)[-1].lower()
 
     if not file_extension or file_extension not in ALLOWED_EXTENSIONS:
-        await log.warning(
+        log.warning(
             "Upload rejected: Invalid file extension",
             filename=file.filename,
             ext=file_extension,
@@ -63,7 +63,7 @@ async def save_avatar(file: UploadFile, old_avatar_url: str = None) -> str:
     try:
         content = await file.read()
     except Exception as e:
-        await log.error(
+        log.error(
             "Failed to read uploaded file content", filename=file.filename, error=str(e)
         )
         raise HTTPException(
@@ -77,14 +77,14 @@ async def save_avatar(file: UploadFile, old_avatar_url: str = None) -> str:
             status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file uploaded."
         )
     if len(content) > MAX_CONTENT_LENGTH:
-        await log.warning(
+        log.warning(
             "Upload rejected: File size exceeded limit",
             filename=file.filename,
             size=len(content),
             limit=MAX_CONTENT_LENGTH,
         )
         raise HTTPException(
-            status_code=status.HTTP_413_CONTENT_TOO_LARGE, # <-- Thay đổi ở đây
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,  # <-- Thay đổi ở đây
             detail=f"File size cannot exceed {settings.MAX_AVATAR_SIZE_MB}MB.",
         )
 
@@ -92,7 +92,7 @@ async def save_avatar(file: UploadFile, old_avatar_url: str = None) -> str:
     try:
         mime_type = magic.from_buffer(content, mime=True)
         if mime_type not in ALLOWED_MIME_TYPES:
-            await log.warning(
+            log.warning(
                 "Upload rejected: Invalid MIME type detected",
                 filename=file.filename,
                 detected_mime=mime_type,
@@ -103,11 +103,11 @@ async def save_avatar(file: UploadFile, old_avatar_url: str = None) -> str:
                 # Không tiết lộ MIME type chi tiết cho client
                 detail=f"File content is not a valid image format. Allowed: {', '.join(sorted(list(ALLOWED_EXTENSIONS)))}.",
             )
-        await log.debug("MIME type validated", filename=file.filename, mime_type=mime_type)
+        log.debug("MIME type validated", filename=file.filename, mime_type=mime_type)
     except HTTPException:
         raise  # Ném lại lỗi 400 từ check MIME
     except Exception as e:
-        await log.error(
+        log.error(
             "Magic bytes check failed",
             filename=file.filename,
             error=str(e),
@@ -138,7 +138,7 @@ async def save_avatar(file: UploadFile, old_avatar_url: str = None) -> str:
         if os.path.commonpath([upload_folder_abs, file_path_abs]) != str(
             upload_folder_abs
         ):
-            await log.critical(
+            log.critical(
                 "🚨 PATH TRAVERSAL ATTEMPT DETECTED!",
                 filename=file.filename,  # Log tên file gốc để điều tra
                 generated_path=file_path,
@@ -153,7 +153,7 @@ async def save_avatar(file: UploadFile, old_avatar_url: str = None) -> str:
         raise  # Ném lại lỗi 400
     except Exception as e:
         # Bắt lỗi nếu resolve path thất bại (vd: tên file chứa ký tự không hợp lệ)
-        await log.error(
+        log.error(
             "Path validation/resolution failed", filename=file.filename, error=str(e)
         )
         raise HTTPException(
@@ -181,26 +181,26 @@ async def save_avatar(file: UploadFile, old_avatar_url: str = None) -> str:
                 ):
                     if os.path.exists(old_file_path):
                         os.remove(old_file_path)
-                        await log.info("Old avatar deleted successfully", path=old_file_path)
+                        log.info("Old avatar deleted successfully", path=old_file_path)
                     else:
-                        await log.debug(
+                        log.debug(
                             "Old avatar file not found, nothing to delete",
                             path=old_file_path,
                         )
                 else:
-                    await log.warning(
+                    log.warning(
                         "Skipping deletion of potentially unsafe old avatar path",
                         old_url=old_avatar_url,
                         resolved_path=str(old_file_path_abs),
                     )
             else:
-                await log.warning(
+                log.warning(
                     "Invalid old avatar URL format, skipping deletion",
                     old_url=old_avatar_url,
                 )
         except Exception as e:
             # Không raise lỗi nếu xóa file cũ thất bại, chỉ log lại
-            await log.error(
+            log.error(
                 "Failed to delete old avatar file", url=old_avatar_url, error=str(e)
             )
 
@@ -208,9 +208,9 @@ async def save_avatar(file: UploadFile, old_avatar_url: str = None) -> str:
     try:
         async with aiofiles.open(file_path, "wb") as buffer:
             await buffer.write(content)
-        await log.info("New avatar saved successfully", path=file_path, size=len(content))
+        log.info("New avatar saved successfully", path=file_path, size=len(content))
     except Exception as e:
-        await log.error("Failed to save new avatar file", path=file_path, error=str(e))
+        log.error("Failed to save new avatar file", path=file_path, error=str(e))
         # Cố gắng xóa file vừa tạo nếu lưu thất bại
         try:
             if os.path.exists(file_path):
@@ -233,7 +233,7 @@ async def save_avatar(file: UploadFile, old_avatar_url: str = None) -> str:
         )
         return url_path
     except ValueError:
-        await log.error(
+        log.error(
             "Could not determine relative path for avatar URL",
             upload_folder=UPLOAD_FOLDER,
         )

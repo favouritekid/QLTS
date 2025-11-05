@@ -1,4 +1,3 @@
-
 # app/services/user_service.py
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -6,17 +5,22 @@ import structlog
 from fastapi import HTTPException, UploadFile
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
-from .. import models, schemas
 
+from .. import models, schemas
 from ..config import settings
-from ..database import safe_redis_delete, safe_redis_set, safe_redis_pipeline
+
+# ✅ 1. SỬA LỖI: Thêm import `safe_redis_pipeline` (sửa NameError)
+from ..database import safe_redis_delete, safe_redis_pipeline, safe_redis_set
 from ..security import (
     create_password_reset_token,
     get_password_hash,
     verify_password,
     verify_password_reset_token,
 )
+
+# ✅ 2. THÊM IMPORT: Thêm `sio` và `metrics`
+from ..socket_manager import sio
+from ..socket_metrics import socket_emit_failures_total, socket_events_emitted_total
 from ..utils import file_helpers
 from ..utils.exceptions import (
     BadRequest,
@@ -26,6 +30,7 @@ from ..utils.exceptions import (
     ResourceNotFoundError,
 )
 
+# ✅ SỬA LỖI: Chuyển log sang đồng bộ (tương thích với main.py V5)
 log = structlog.get_logger(__name__)
 
 
@@ -39,9 +44,9 @@ async def get_user_by_username(
     result = await db.execute(query)
     user = result.scalar_one_or_none()
     if user:
-        await db.refresh(user) # Vẫn refresh
-        return user # <-- SỬA: Trả về user
-    return None # <-- SỬA: Trả về None nếu không tìm thấy
+        await db.refresh(user)
+        return user
+    return None
 
 
 async def get_user_by_email(db: AsyncSession, email: str) -> Optional[models.User]:
@@ -50,16 +55,16 @@ async def get_user_by_email(db: AsyncSession, email: str) -> Optional[models.Use
     result = await db.execute(query)
     user = result.scalar_one_or_none()
     if user:
-         await db.refresh(user) # Vẫn refresh
-         return user # <-- SỬA: Trả về user
-    return None # <-- SỬA: Trả về None nếu không tìm thấy
+        await db.refresh(user)
+        return user
+    return None
 
 
 async def get_user_by_id(db: AsyncSession, user_id: int) -> models.User:
     user = await db.get(models.User, user_id)
     if not user:
         raise ResourceNotFoundError(detail=f"User with id {user_id} not found.")
-    await db.refresh(user) # <-- THÊM DÒNG NÀY
+    await db.refresh(user)
     return user
 
 
@@ -72,26 +77,22 @@ async def authenticate_user(
     """
     user = await get_user_by_username(db, username)
 
-    # === ⭐️ SỬA LỖI TIMING ATTACK ===
-    # 1. Chuẩn bị một dummy hash hợp lệ (phải bắt đầu bằng $2b$ và có độ dài đúng)
-    # Bạn có thể tạo hash này một lần từ một mật khẩu ngẫu nhiên.
-    # Ví dụ: get_password_hash("a_very_random_dummy_password_for_timing_attack")
-    dummy_hash = "$2b$12$d5AUHnn4.BNHoa2kuIWmt.40hvBLF4YYAjtyE9gHDNQFgypctRf62"  # Thay bằng hash thật
-
-    # 2. Xác định hash nào sẽ được dùng để kiểm tra
+    # (Giữ nguyên logic Timing Attack Fix)
+    dummy_hash = "$2b$12$d5AUHnn4.BNHoa2kuIWmt.40hvBLF4YYAjtyE9gHDNQFgypctRf62"
     hash_to_check = user.password_hash if user else dummy_hash
-
-    # 3. LUÔN LUÔN thực hiện việc kiểm tra mật khẩu (tốn thời gian)
     is_password_valid = verify_password(password, hash_to_check)
 
-    # 4. KIỂM TRA KẾT QUẢ SAU KHI ĐÃ VERIFY
-    # Lỗi nếu user không tồn tại HOẶC mật khẩu không hợp lệ
     if not user or not is_password_valid:
-        await log.warning("Authentication failed", username=username, reason="Invalid user or password")
+        # ✅ SỬA LỖI: Xóa `await`
+        log.warning(
+            "Authentication failed",
+            username=username,
+            reason="Invalid user or password",
+        )
         raise InvalidCredentials()
 
-    await db.refresh(user) # <-- THÊM DÒNG NÀY
-    await log.info("Authentication successful", username=username)
+    await db.refresh(user)
+    log.info("Authentication successful", username=username)  # ✅ SỬA LỖI: Xóa `await`
     return user
 
 
@@ -115,7 +116,7 @@ async def create_user(db: AsyncSession, user_in: schemas.UserCreate) -> models.U
         return db_user
     except Exception as e:
         await db.rollback()
-        await log.error(
+        log.error(  # ✅ SỬA LỖI: Xóa `await`
             "Failed to create user",
             username=user_in.username,
             error=str(e),
@@ -141,14 +142,13 @@ async def create_user_by_admin(
             avatar_url=None,
         )
         if avatar_file:
-            await log.debug(
+            log.debug(  # ✅ SỬA LỖI: Xóa `await`
                 "Processing avatar for new admin-created user",
                 filename=avatar_file.filename,
             )
-            # Lỗi 413 từ save_avatar sẽ bị bắt bởi khối except bên ngoài
             new_avatar_url = await file_helpers.save_avatar(avatar_file)
             db_user.avatar_url = new_avatar_url
-            await log.info(
+            log.info(  # ✅ SỬA LỖI: Xóa `await`
                 "Avatar saved for new user", user=user_in.username, url=new_avatar_url
             )
 
@@ -158,7 +158,7 @@ async def create_user_by_admin(
         return db_user
     except Exception as e:
         await db.rollback()
-        await log.error(
+        log.error(  # ✅ SỬA LỖI: Xóa `await`
             "Failed to create user by admin",
             username=user_in.username,
             error=str(e),
@@ -173,9 +173,8 @@ async def create_user_by_admin(
 async def get_users(
     db: AsyncSession, params: Dict[str, Any], skip: int = 0, limit: int = 100
 ) -> Tuple[int, List[models.User]]:
-    # ... (Không thay đổi, read-only) ...
+    # (Hàm này không có log, giữ nguyên)
     query = select(models.User)
-
     allowed_filters = {
         "role": models.User.role,
         "status": models.User.status,
@@ -185,7 +184,6 @@ async def get_users(
         models.User.full_name,
         models.User.email,
     ]
-
     for key, value in params.items():
         if key in allowed_filters and value:
             values_to_filter = [v.strip() for v in value.split(",")]
@@ -231,10 +229,8 @@ async def update_user(
         update_data = user_in.model_dump(exclude_unset=True)
 
         if "email" in update_data and update_data["email"] != db_user.email:
-            # get_user_by_email đã có refresh bên trong
             existing_user = await get_user_by_email(db, update_data["email"])
-            # So sánh ID an toàn vì existing_user đã được refresh (nếu tìm thấy)
-            if existing_user and existing_user.id != user_id_for_logging: # Sử dụng biến cục bộ
+            if existing_user and existing_user.id != user_id_for_logging:
                 raise DuplicateResourceError(
                     detail="Email already registered by another user"
                 )
@@ -246,17 +242,16 @@ async def update_user(
                 )
 
         if avatar_file:
-            await log.debug(
+            log.debug(  # ✅ SỬA LỖI: Xóa `await`
                 "Processing avatar update for user",
                 user_id=db_user.id,
                 filename=avatar_file.filename,
             )
-            # Lỗi 413 từ save_avatar sẽ bị bắt
             new_avatar_url = await file_helpers.save_avatar(
                 avatar_file, old_avatar_url=db_user.avatar_url
             )
             db_user.avatar_url = new_avatar_url
-            await log.info(
+            log.info(  # ✅ SỬA LỖI: Xóa `await`
                 "Avatar updated successfully for user",
                 user_id=db_user.id,
                 url=new_avatar_url,
@@ -268,7 +263,7 @@ async def update_user(
         return db_user
     except Exception as e:
         await db.rollback()
-        await log.error(
+        log.error(  # ✅ SỬA LỖI: Xóa `await`
             "Failed to update user",
             user_id=user_id_for_logging,
             error=str(e),
@@ -297,19 +292,18 @@ async def update_profile(
                     )
 
         if avatar_file:
-            await log.debug(
+            log.debug(  # ✅ SỬA LỖI: Xóa `await`
                 "Processing profile avatar update",
-                user_id=user_id_for_logging, 
+                user_id=user_id_for_logging,
                 filename=avatar_file.filename,
             )
-            # Lỗi 413 từ save_avatar sẽ bị bắt
             new_avatar_url = await file_helpers.save_avatar(
                 avatar_file, old_avatar_url=db_user.avatar_url
             )
             db_user.avatar_url = new_avatar_url
-            await log.info(
+            log.info(  # ✅ SỬA LỖI: Xóa `await`
                 "Profile avatar updated successfully",
-                user_id=user_id_for_logging, 
+                user_id=user_id_for_logging,
                 url=new_avatar_url,
             )
 
@@ -319,7 +313,7 @@ async def update_profile(
         return db_user
     except Exception as e:
         await db.rollback()
-        await log.error(
+        log.error(  # ✅ SỬA LỖI: Xóa `await`
             "Failed to update profile",
             user_id=user_id_for_logging,
             error=str(e),
@@ -341,7 +335,9 @@ async def delete_user(db: AsyncSession, user_id: int):
         await db.commit()
     except Exception as e:
         await db.rollback()
-        await log.error("Failed to delete user", user_id=user_id, error=str(e), exc_info=True)
+        log.error(
+            "Failed to delete user", user_id=user_id, error=str(e), exc_info=True
+        )  # ✅ SỬA LỖI: Xóa `await`
         raise e
 
 
@@ -350,13 +346,16 @@ async def delete_user(db: AsyncSession, user_id: int):
 
 async def handle_forgot_password(db: AsyncSession, email_in: str):
     from ..celery_utils import send_password_reset_email_task
+
     cleaned_email = email_in.strip()
     user = await get_user_by_email(db, email=cleaned_email)
     if not user:
-        await log.debug("User not found for forgot password request", email=cleaned_email)
+        log.debug(
+            "User not found for forgot password request", email=cleaned_email
+        )  # ✅ SỬA LỖI: Xóa `await`
         return
 
-    await log.info(
+    log.info(  # ✅ SỬA LỖI: Xóa `await`
         "User found for forgot password request. Sending reset email.", user_id=user.id
     )
     token = create_password_reset_token(email=user.email)
@@ -365,7 +364,6 @@ async def handle_forgot_password(db: AsyncSession, email_in: str):
     send_password_reset_email_task.delay(
         email_to=user.email, reset_url=reset_url, username=user.username
     )
-    # Không raise lỗi ở đây vì đã trả về 202 cho client
 
 
 async def reset_password(
@@ -375,12 +373,16 @@ async def reset_password(
     try:
         email = verify_password_reset_token(token)
         if not email:
-            await log.warning("Invalid reset token attempt", token_prefix=token[:10])
+            log.warning(
+                "Invalid reset token attempt", token_prefix=token[:10]
+            )  # ✅ SỬA LỖI: Xóa `await`
             raise InvalidToken()
-        
+
         user = await get_user_by_email(db, email=email)
         if not user:
-            await log.warning("Reset token for non-existent user", email=email)
+            log.warning(
+                "Reset token for non-existent user", email=email
+            )  # ✅ SỬA LỖI: Xóa `await`
             raise ResourceNotFoundError(
                 detail="User associated with this token not found."
             )
@@ -388,11 +390,15 @@ async def reset_password(
         user.password_hash = get_password_hash(new_password)
         db.add(user)
         await db.commit()
-        await log.info("User password reset successfully", user_id=user.id)
+        log.info(
+            "User password reset successfully", user_id=user.id
+        )  # ✅ SỬA LỖI: Xóa `await`
         return user
     except Exception as e:
         await db.rollback()
-        await log.error("Failed to reset password", token=token, error=str(e), exc_info=True)
+        log.error(
+            "Failed to reset password", token=token, error=str(e), exc_info=True
+        )  # ✅ SỬA LỖI: Xóa `await`
         raise e
 
 
@@ -408,13 +414,19 @@ async def change_password(
         user.password_hash = get_password_hash(new_password)
         db.add(user)
         await db.commit()
-        await log.info("User changed password successfully", user_id=user_id_for_logging)
+        log.info(
+            "User changed password successfully", user_id=user_id_for_logging
+        )  # ✅ SỬA LỖI: Xóa `await`
     except Exception as e:
         await db.rollback()
-        await log.error(
-            "Failed to change password", user_id=user_id_for_logging, error=str(e), exc_info=True
+        log.error(  # ✅ SỬA LỖI: Xóa `await`
+            "Failed to change password",
+            user_id=user_id_for_logging,
+            error=str(e),
+            exc_info=True,
         )
         raise e
+
 
 async def remove_user_from_global_blacklist(user_id: int):
     """Xóa user khỏi global blacklist (thường gọi sau khi login thành công)."""
@@ -422,10 +434,14 @@ async def remove_user_from_global_blacklist(user_id: int):
     try:
         deleted_count = await safe_redis_delete(blacklist_key)
         if deleted_count > 0:
-            await log.info("Removed user from global blacklist", user_id=user_id)
+            log.info(
+                "Removed user from global blacklist", user_id=user_id
+            )  # ✅ SỬA LỖI: Xóa `await`
     except Exception as e:
-        await log.error("Failed to remove user from global blacklist", user_id=user_id, error=str(e))
-        raise # Ném lại lỗi để router có thể bắt
+        log.error(
+            "Failed to remove user from global blacklist", user_id=user_id, error=str(e)
+        )  # ✅ SỬA LỖI: Xóa `await`
+        raise
 
 
 async def set_password_by_admin(
@@ -433,11 +449,11 @@ async def set_password_by_admin(
 ) -> models.User:
     """Admin đặt lại mật khẩu cho người dùng. Ném ResourceNotFound."""
     try:
-        user = await get_user_by_id(db, user_id)  # Hàm này đã raise 404
+        user = await get_user_by_id(db, user_id)
         user.password_hash = get_password_hash(new_password)
         db.add(user)
         await db.commit()
-        await log.info(
+        log.info(  # ✅ SỬA LỖI: Xóa `await`
             "Admin set password for user successfully",
             admin_user="admin",
             user_id=user.id,
@@ -445,7 +461,7 @@ async def set_password_by_admin(
         return user
     except Exception as e:
         await db.rollback()
-        await log.error(
+        log.error(  # ✅ SỬA LỖI: Xóa `await`
             "Failed to set password by admin",
             user_id=user_id,
             error=str(e),
@@ -456,91 +472,104 @@ async def set_password_by_admin(
 
 async def invalidate_all_sessions(db: AsyncSession, user: models.User):
     """
-    Vô hiệu hóa tất cả các phiên hoạt động của người dùng (thường sau khi đổi mật khẩu).
+    (V5) Vô hiệu hóa tất cả các phiên hoạt động (thường sau khi đổi mật khẩu).
     """
     try:
-        # 1. Xóa JTI đang hoạt động trong DB
-        user.active_jti = None
-        db.add(user)
+        # (Đã xóa logic `active_jti`)
 
-        # 2. Xóa JTI refresh token hiện tại khỏi Redis
+        # ✅ SỬA LỖI: Logic `safe_redis_pipeline` đã được import chính xác
         try:
-            # Lấy TẤT CẢ các session (kể cả đã hết hạn) để đảm bảo blacklist JTI
             result = await db.execute(
                 select(models.UserSession).where(models.UserSession.user_id == user.id)
             )
             all_sessions = result.scalars().all()
-            
+
             async with safe_redis_pipeline(transaction=True) as pipe:
                 for session in all_sessions:
-                    # Xóa key session đang active
                     pipe.delete(f"session:{session.refresh_jti}")
-                    # Blacklist JTI của session đó
                     ttl = int(settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400)
-                    pipe.set(f"blacklist:{session.refresh_jti}", "password_changed", ex=max(60, ttl))
-            
-            await log.info(
-                f"Invalidated all {len(all_sessions)} session keys/JTIs in Redis", 
-                user_id=user.id
+                    pipe.set(
+                        f"blacklist:{session.refresh_jti}",
+                        "password_changed",
+                        ex=max(60, ttl),
+                    )
+                await pipe.execute()
+
+            log.info(  # ✅ SỬA LỖI: Xóa `await`
+                f"Invalidated all {len(all_sessions)} session keys/JTIs in Redis",
+                user_id=user.id,
             )
         except Exception as e_redis_del:
-            await log.error(
+            log.error(  # ✅ SỬA LỖI: Xóa `await`
                 "Failed to clear multi-session keys from Redis",
                 user_id=user.id,
                 error=str(e_redis_del),
             )
 
-        # 3. Thêm user ID vào blacklist toàn cục trên Redis
-        # Thời gian sống bằng thời gian sống tối đa của refresh token
-        # (Để đảm bảo mọi token cũ đều bị chặn cho đến khi hết hạn tự nhiên)
+        # (Giữ nguyên logic blacklist toàn cục)
         max_token_lifetime_seconds = int(
             settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
         )
-
-        # Đảm bảo TTL không âm
         if max_token_lifetime_seconds <= 0:
-            max_token_lifetime_seconds = 60  # Đặt TTL tối thiểu là 1 phút
+            max_token_lifetime_seconds = 60
 
         try:
             blacklist_key = f"user_blacklist:{user.id}"
             await safe_redis_set(
                 blacklist_key, "sessions_invalidated", ex=max_token_lifetime_seconds
             )
-            await log.info(
+            log.info(  # ✅ SỬA LỖI: Xóa `await`
                 "User added to global blacklist",
                 user_id=user.id,
                 ttl_seconds=max_token_lifetime_seconds,
             )
         except Exception as e_redis_set:
-            # Lỗi nghiêm trọng nếu không thể blacklist user, rollback DB
-            await log.error(
+            log.error(  # ✅ SỬA LỖI: Xóa `await`
                 "CRITICAL: Failed to add user to global blacklist, rolling back DB changes",
                 user_id=user.id,
                 error=str(e_redis_set),
             )
-            await db.rollback()  # Rollback việc xóa active_jti
-            raise  # Ném lại lỗi để báo 500
+            await db.rollback()
+            raise
 
-        # 4. Commit DB (chỉ khi Redis blacklist thành công)
         await db.commit()
-        await log.info("All sessions invalidated successfully for user", user_id=user.id)
+        log.info(
+            "All sessions invalidated successfully for user", user_id=user.id
+        )  # ✅ SỬA LỖI: Xóa `await`
+
+        # ✅ CẢI TIẾN: Vấn đề #4 - Gửi sự kiện Socket.IO
+        try:
+            room_name = f"user_room_{user.id}"
+            await sio.emit(
+                "force_logout_all", {"reason": "Password changed"}, room=room_name
+            )
+            socket_events_emitted_total.labels(event_type="force_logout_all").inc()
+            log.info(
+                "Emitted 'force_logout_all' event", room=room_name
+            )  # ✅ SỬA LỖI: Xóa `await`
+        except Exception as e_socket:
+            socket_emit_failures_total.labels(event_type="force_logout_all").inc()
+            log.error(
+                "Failed to emit socket event for invalidate-all", error=str(e_socket)
+            )  # ✅ SỬA LỖI: Xóa `await`
 
     except Exception as e:
-        # Bắt các lỗi khác (ngoài lỗi Redis blacklist đã xử lý)
         await db.rollback()
-        await log.error(
+        log.error(  # ✅ SỬA LỖI: Xóa `await`
             "Failed to invalidate sessions",
             user_id=user.id,
             error=str(e),
             exc_info=True,
         )
-        # Không ném lại lỗi ở đây trừ khi lỗi Redis blacklist xảy ra
         if "Failed to add user to global blacklist" not in str(e):
-            # Ném lỗi khác để router xử lý (vd: lỗi DB commit)
             raise HTTPException(status_code=500, detail="Could not invalidate sessions")
 
 
-# --- Logic Logout ---
+# --- Logic Logout (ĐÃ BỊ XÓA TRONG V5) ---
+# (Hàm `logout_user` đã bị xóa khỏi `routers/auth.py` V5,
+# nên chúng ta có thể xóa nó ở đây để dọn dẹp, hoặc giữ lại nếu
+# có nơi khác gọi)
+# Tạm thời giữ lại nhưng đảm bảo log là đồng bộ:
 
 
 async def logout_user(db: AsyncSession, user: models.User):
@@ -548,14 +577,22 @@ async def logout_user(db: AsyncSession, user: models.User):
         user.active_jti = None
         db.add(user)
         await db.commit()
-        await log.info("User logged out successfully", user_id=user.id)
+        log.info(
+            "User logged out successfully (legacy function)", user_id=user.id
+        )  # ✅ SỬA LỖI: Xóa `await`
     except Exception as e:
         await db.rollback()
-        await log.error("Failed to logout user", user_id=user.id, error=str(e), exc_info=True)
+        log.error(
+            "Failed to logout user (legacy function)",
+            user_id=user.id,
+            error=str(e),
+            exc_info=True,
+        )  # ✅ SỬA LỖI: Xóa `await`
         raise e
 
 
 # --- Bulk Action ---
+
 
 async def perform_bulk_action(
     db: AsyncSession,
@@ -565,42 +602,37 @@ async def perform_bulk_action(
     new_status: Optional[str] = None,
 ):
     """
-    Performs bulk actions (delete, change_status) on users.
-    ✅ IMPROVED: Validates 'new_status' before querying DB for 'change_status'.
+    (V5) Thực hiện hành động hàng loạt (đã sửa log).
     """
     try:
-        # --- IMPROVEMENT: Validate input BEFORE DB query ---
         if action == "change_status":
-            # Check if new_status is provided and valid *early*
             if new_status not in ["active", "pending", "banned"]:
-                await log.warning(
+                log.warning(  # ✅ SỬA LỖI: Xóa `await`
                     "Bulk action failed: Invalid status value provided.",
                     action=action,
                     provided_status=new_status,
-                    admin_id=admin_user.id
+                    admin_id=admin_user.id,
                 )
                 raise BadRequest(detail=f"Invalid status value: {new_status}")
-        elif action not in ["delete"]: # Check if action itself is valid
-             await log.warning(
-                    "Bulk action failed: Unsupported action.",
-                    action=action,
-                    admin_id=admin_user.id
-                )
-             raise BadRequest(detail=f"Unsupported bulk action: {action}.")
-        # --- END IMPROVEMENT ---
+        elif action not in ["delete"]:
+            log.warning(  # ✅ SỬA LỖI: Xóa `await`
+                "Bulk action failed: Unsupported action.",
+                action=action,
+                admin_id=admin_user.id,
+            )
+            raise BadRequest(detail=f"Unsupported bulk action: {action}.")
 
-        # Proceed only if the action and status (if applicable) are valid
-
-        # Query users *after* initial validation
         query = select(models.User).where(models.User.id.in_(user_ids))
         users_to_process_result = await db.execute(query)
         users_to_process = users_to_process_result.scalars().all()
 
         if not users_to_process:
-            # It's okay if no users match, just return an appropriate message
-            await log.info("Bulk action: No users found matching provided IDs.", user_ids=user_ids, admin_id=admin_user.id)
+            log.info(
+                "Bulk action: No users found matching provided IDs.",
+                user_ids=user_ids,
+                admin_id=admin_user.id,
+            )  # ✅ SỬA LỖI: Xóa `await`
             return "No users found for the provided IDs. 0 users affected."
-            # raise ResourceNotFoundError(detail="No users found for the provided IDs.") # Changed behavior
 
         processed_count = 0
         message = ""
@@ -608,59 +640,58 @@ async def perform_bulk_action(
             ids_to_delete = []
             for user in users_to_process:
                 if user.id == admin_user.id:
-                    await log.warning(
+                    log.warning(  # ✅ SỬA LỖI: Xóa `await`
                         "Admin attempted to delete self during bulk action, skipping.",
                         admin_id=admin_user.id,
                     )
                     continue
-                await db.delete(user) # Mark for deletion
+                await db.delete(user)
                 ids_to_delete.append(user.id)
                 processed_count += 1
             message = f"Successfully deleted {processed_count} users."
-            await log.info(
+            log.info(  # ✅ SỬA LỖI: Xóa `await`
                 "Admin bulk deleted users",
                 admin_id=admin_user.id,
                 deleted_ids=ids_to_delete,
             )
 
         elif action == "change_status":
-            # We already validated new_status earlier
             ids_changed = []
             for user in users_to_process:
-                if user.status != new_status: # Only update if status is different
+                if user.status != new_status:
                     user.status = new_status
-                    db.add(user) # Mark for update
+                    db.add(user)
                     ids_changed.append(user.id)
                     processed_count += 1
                 else:
-                    await log.debug("Skipping status update for user already in desired state.", user_id=user.id, status=new_status)
+                    log.debug(
+                        "Skipping status update for user already in desired state.",
+                        user_id=user.id,
+                        status=new_status,
+                    )  # ✅ SỬA LỖI: Xóa `await`
 
             message = f"Successfully updated status to '{new_status}' for {processed_count} users."
-            if ids_changed: # Only log if changes were actually made
-                await log.info(
+            if ids_changed:
+                log.info(  # ✅ SỬA LỖI: Xóa `await`
                     "Admin bulk changed user status",
                     admin_id=admin_user.id,
                     changed_ids=ids_changed,
                     new_status=new_status,
                 )
 
-        await db.commit() # Commit all changes (deletes or updates)
+        await db.commit()
         return message
 
     except Exception as e:
-        await db.rollback() # Ensure rollback on any error
-        await log.error(
+        await db.rollback()
+        log.error(  # ✅ SỬA LỖI: Xóa `await`
             "Failed to perform bulk action",
             action=action,
             admin_id=admin_user.id,
             error=str(e),
             exc_info=True,
         )
-        # Re-raise the original exception if it's a known validation error,
-        # otherwise raise a generic error.
         if isinstance(e, (BadRequest, ResourceNotFoundError)):
-             raise e
+            raise e
         else:
-             # You might want to raise a more generic 500 error here
-             # depending on your desired API behavior for unexpected errors.
-             raise # Re-raise the original unexpected error for now
+            raise

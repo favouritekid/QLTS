@@ -76,7 +76,7 @@ async def create_organization_unit(
         return await get_organization_unit_by_id(db, db_unit.id)
     except Exception as e:
         await db.rollback()
-        await log.error(
+        log.error(
             "Failed to create organization unit",
             unit_name=unit_in.name,
             error=str(e),
@@ -118,7 +118,7 @@ async def update_organization_unit(
         return await get_organization_unit_by_id(db, unit_id)
     except Exception as e:
         await db.rollback()
-        await log.error(
+        log.error(
             "Failed to update organization unit",
             unit_id=unit_id,
             error=str(e),
@@ -138,7 +138,7 @@ async def delete_organization_unit(db: AsyncSession, unit_id: int):
         await db.commit()
     except Exception as e:
         await db.rollback()
-        await log.error(
+        log.error(
             "Failed to delete organization unit",
             unit_id=unit_id,
             error=str(e),
@@ -175,7 +175,7 @@ async def create_major(db: AsyncSession, major_in: schemas.MajorCreate) -> model
         return db_major
     except Exception as e:
         await db.rollback()
-        await log.error(
+        log.error(
             "Failed to create major",
             major_code=major_in.code,
             error=str(e),
@@ -208,7 +208,7 @@ async def update_major(
         return db_major
     except Exception as e:
         await db.rollback()
-        await log.error(
+        log.error(
             "Failed to update major", major_id=major_id, error=str(e), exc_info=True
         )
         raise e
@@ -221,7 +221,7 @@ async def delete_major(db: AsyncSession, major_id: int):
         await db.commit()
     except Exception as e:
         await db.rollback()
-        await log.error(
+        log.error(
             "Failed to delete major", major_id=major_id, error=str(e), exc_info=True
         )
         raise e

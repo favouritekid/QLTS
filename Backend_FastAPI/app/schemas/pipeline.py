@@ -1,10 +1,10 @@
 # app/schemas/pipeline.py
 from typing import List, Optional  # <-- THÊM Optional
 
-from pydantic import BaseModel, Field, ConfigDict
-
+from pydantic import BaseModel, ConfigDict, Field
 
 # --- Schemas cho PipelineStage ---
+
 
 class PipelineStageBase(BaseModel):
     name: str = Field(..., min_length=3, max_length=255)
@@ -27,6 +27,7 @@ class PipelineStage(PipelineStageBase):
 
 
 # --- Schemas cho ConsultationStatus ---
+
 
 class ConsultationStatusBase(BaseModel):
     name: str = Field(..., min_length=3, max_length=255)
@@ -51,6 +52,7 @@ class ConsultationStatus(ConsultationStatusBase):
 
 
 # --- Schema chung ---
+
 
 class FullPipeline(BaseModel):
     # Dùng schema PipelineStage và ConsultationStatus

@@ -1,8 +1,8 @@
 # app/schemas/lead.py
 from datetime import datetime
-from typing import List, Dict, Literal, Optional, Union, Any
+from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, EmailStr, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from .organization import Major, OrganizationUnitShallow
 from .pipeline import ConsultationStatus, PipelineStage
@@ -136,9 +136,10 @@ class BulkAssignLeadsSchema(BaseModel):
 
 
 class LeadImportError(BaseModel):
-    row_number: int # Số dòng trong file gốc (bắt đầu từ 1 hoặc 2 tùy header)
+    row_number: int  # Số dòng trong file gốc (bắt đầu từ 1 hoặc 2 tùy header)
     error_message: str
-    row_data: Optional[Dict[str, Any]] = None # Dữ liệu gốc của dòng bị lỗi (tùy chọn)
+    row_data: Optional[Dict[str, Any]] = None  # Dữ liệu gốc của dòng bị lỗi (tùy chọn)
+
 
 class LeadImportResult(BaseModel):
     total_rows_processed: int

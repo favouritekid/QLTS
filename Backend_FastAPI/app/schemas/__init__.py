@@ -1,52 +1,67 @@
-# flake8: noqa: F401
 # app/schemas/__init__.py
+# flake8: noqa: F401
 
-# Giúp import dễ dàng hơn bằng cách "export" các schema quan trọng ra ngoài
+# Giúp import dễ dàng hơn bằng cách "export" tất cả các schema
+# ra cấp cao nhất của package 'schemas' (vd: schemas.UserCreate)
 
-# Schemas từ config.py
-from .config import AssignmentConfig, ScoringConfig, SkillRule, SkillRuleCreate
+# --- Từ config.py ---
+from .config import (
+    AssignmentConfig,
+    ScoringConfig,
+    SkillRule,
+    SkillRuleBase,
+    SkillRuleCreate,
+)
 
-# Schemas từ lead.py
+# --- Từ lead.py ---
 from .lead import (
     AssignLead,
+    AssignmentLog,
+    BulkAssignLeadsSchema,
     Consultation,
+    ConsultationBase,
     ConsultationCreate,
     Lead,
     LeadAction,
-    LeadImportError,      # <-- Đảm bảo cái này cũng được export
-    LeadImportResult,
+    LeadBase,
     LeadCreate,
+    LeadImportError,
+    LeadImportResult,
     LeadInsights,
-    LeadsPage,
     LeadUpdate,
+    LeadsPage,
     TimelineItem,
-    AssignmentLog,
-    BulkAssignLeadsSchema # <-- THÊM DÒNG NÀY
 )
 
-# Schemas từ organization.py
+# --- Từ organization.py ---
 from .organization import (
     Major,
+    MajorBase,
     MajorCreate,
     MajorUpdate,
     OrganizationUnit,
     OrganizationUnitCreate,
+    OrganizationUnitShallow,
     OrganizationUnitUpdate,
-    OrganizationUnitShallow # Đảm bảo export cả Shallow
 )
 
-# Schemas từ pipeline.py
+# --- Từ permissions.py ---
+from .permissions import Policy, PolicyCreate, RoleAssignment
+
+# --- Từ pipeline.py ---
 from .pipeline import (
     ConsultationStatus,
+    ConsultationStatusBase,
     ConsultationStatusCreate,
     ConsultationStatusUpdate,
     FullPipeline,
     PipelineStage,
+    PipelineStageBase,
     PipelineStageCreate,
     PipelineStageUpdate,
 )
 
-# Schemas từ user.py
+# --- Từ user.py ---
 from .user import (
     AdminSetPasswordSchema,
     AdminUserCreate,
@@ -59,18 +74,18 @@ from .user import (
     Token,
     TokenData,
     User,
+    UserBase,
     UserCreate,
-    UsersPage,
+    UserInDB,
     UserUpdate,
+    UsersPage,
 )
 
-# Schemas từ user_session.py
+# --- Từ user_session.py ---
 from .user_session import (
+    UserSessionBase,
     UserSessionCreate,
-    UserSessionUpdate,
-    UserSessionResponse,
     UserSessionListResponse,
+    UserSessionResponse,
+    UserSessionUpdate,
 )
-
-# Schemas từ permissions.py (Nếu có, như trong file testing.md)
-from .permissions import PolicyCreate, RoleAssignment

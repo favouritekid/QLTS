@@ -1,18 +1,20 @@
 # app/core/deps.py
-import casbin
-
 from typing import List
-from fastapi import Path
+
+import casbin
 import structlog
-from fastapi import Depends, Request
+from fastapi import Depends, Path, Request
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt # <-- Sửa: import jwt trực tiếp
+from jose import JWTError, jwt  # <-- Sửa: import jwt trực tiếp
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import database, models, services, security # ✅ THÊM IMPORT security
-from ..config import settings
+from .. import database, models, security, services  # ✅ THÊM IMPORT security
 from ..database import safe_redis_exists, safe_redis_get
-from ..utils.exceptions import InvalidToken, PermissionDeniedError, ResourceNotFoundError
+from ..utils.exceptions import (
+    InvalidToken,
+    PermissionDeniedError,
+    ResourceNotFoundError,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -36,23 +38,23 @@ async def get_current_user(
             # Dùng hàm decode mới đã tạo trong security.py
             payload = security.decode_token(token)
         except InvalidToken as e:
-            await log.warning("JWT decoding error or token expired", error=str(e))
+            log.warning("JWT decoding error or token expired", error=str(e))
             raise credentials_exception
 
         username: str | None = payload.get("sub")
         access_jti: str | None = payload.get("jti")
-        refresh_jti: str | None = payload.get("r_jti") # <-- Lấy JTI của Refresh Token
+        refresh_jti: str | None = payload.get("r_jti")  # <-- Lấy JTI của Refresh Token
         token_type: str = payload.get("type", "access")
 
         if (
             username is None
             or access_jti is None
-            or refresh_jti is None # <-- Kiểm tra cả refresh_jti
+            or refresh_jti is None  # <-- Kiểm tra cả refresh_jti
             or token_type != "access"
         ):
-            await log.warning(
+            log.warning(
                 "Token missing critical claims (sub, jti, r_jti, or wrong type)",
-                payload=payload
+                payload=payload,
             )
             raise credentials_exception
 
@@ -61,15 +63,15 @@ async def get_current_user(
         try:
             is_jti_blacklisted = await safe_redis_exists(f"blacklist:{access_jti}")
             if is_jti_blacklisted:
-                await log.info(
-                    "Token validation failed: Access JTI found in blacklist", 
-                    jti=access_jti
+                log.info(
+                    "Token validation failed: Access JTI found in blacklist",
+                    jti=access_jti,
                 )
                 raise credentials_exception
         except InvalidToken:
             raise
         except Exception as e:
-            await log.error(
+            log.error(
                 "Redis Access JTI blacklist check failed", jti=access_jti, error=str(e)
             )
             # (Không cần fallback CSDL cho access JTI)
@@ -77,13 +79,13 @@ async def get_current_user(
         # === STEP 3: GET USER & CHECK USER BLACKLIST ===
         user = await services.user_service.get_user_by_username(db, username=username)
         if user is None:
-            await log.warning("Token validation failed: User not found", username=username)
+            log.warning("Token validation failed: User not found", username=username)
             raise credentials_exception
 
         try:
             is_user_blacklisted = await safe_redis_exists(f"user_blacklist:{user.id}")
             if is_user_blacklisted:
-                await log.info(
+                log.info(
                     "Token rejected: User found in global blacklist (password changed?)",
                     user_id=user.id,
                 )
@@ -91,42 +93,44 @@ async def get_current_user(
         except InvalidToken:
             raise
         except Exception as e:
-            await log.error(
+            log.error(
                 "Redis user blacklist check failed", user_id=user.id, error=str(e)
             )
             # (Giữ nguyên logic fallback CSDL cho user blacklist)
             try:
-                from sqlalchemy import select, and_
                 from datetime import datetime, timezone
+
+                from sqlalchemy import and_, select
+
                 result = await db.execute(
                     select(models.UserSession)
                     .where(
                         and_(
                             models.UserSession.user_id == user.id,
                             models.UserSession.revoked_at.is_(None),
-                            models.UserSession.expires_at > datetime.now(timezone.utc)
+                            models.UserSession.expires_at > datetime.now(timezone.utc),
                         )
                     )
                     .limit(1)
                 )
                 active_session = result.scalar_one_or_none()
                 if active_session is None:
-                    await log.warning(
+                    log.warning(
                         "Database fallback: No active sessions found for user",
-                        user_id=user.id
+                        user_id=user.id,
                     )
                     raise credentials_exception
-                await log.info(
+                log.info(
                     "Database fallback successful: User has active sessions",
-                    user_id=user.id
+                    user_id=user.id,
                 )
             except InvalidToken:
                 raise
             except Exception as db_error:
-                await log.error(
+                log.error(
                     "Database fallback failed during user blacklist check",
                     user_id=user.id,
-                    error=str(db_error)
+                    error=str(db_error),
                 )
                 raise credentials_exception
 
@@ -135,51 +139,52 @@ async def get_current_user(
         try:
             stored_user_id = await safe_redis_get(f"session:{refresh_jti}")
             if not stored_user_id or int(stored_user_id) != user.id:
-                await log.warning(
+                log.warning(
                     "Token validation failed: Session not found in Redis (revoked?)",
                     user_id=user.id,
-                    refresh_jti=refresh_jti
+                    refresh_jti=refresh_jti,
                 )
                 raise credentials_exception
         except InvalidToken:
             raise
         except Exception as e:
-            await log.error(
+            log.error(
                 "Redis Session check failed", refresh_jti=refresh_jti, error=str(e)
             )
             # (Fallback CSDL cho session check)
             try:
-                from sqlalchemy import select, and_
                 from datetime import datetime, timezone
+
+                from sqlalchemy import and_, select
+
                 result = await db.execute(
-                    select(models.UserSession)
-                    .where(
+                    select(models.UserSession).where(
                         and_(
                             models.UserSession.user_id == user.id,
                             models.UserSession.refresh_jti == refresh_jti,
                             models.UserSession.revoked_at.is_(None),
-                            models.UserSession.expires_at > datetime.now(timezone.utc)
+                            models.UserSession.expires_at > datetime.now(timezone.utc),
                         )
                     )
                 )
                 session = result.scalar_one_or_none()
                 if session is None:
-                    await log.warning(
+                    log.warning(
                         "Database fallback: Session not found or revoked",
-                        jti=refresh_jti
+                        jti=refresh_jti,
                     )
                     raise credentials_exception
-                await log.info(
+                log.info(
                     "Database fallback successful: Session validated via database",
-                    jti=refresh_jti
+                    jti=refresh_jti,
                 )
             except InvalidToken:
                 raise
             except Exception as db_error:
-                await log.error(
+                log.error(
                     "Database fallback failed during Session check",
                     jti=refresh_jti,
-                    error=str(db_error)
+                    error=str(db_error),
                 )
                 raise credentials_exception
 
@@ -190,18 +195,17 @@ async def get_current_user(
         raise credentials_exception
     except Exception as e:
         # Bắt các lỗi chung khác
-        await log.error("Unhandled error in get_current_user", error=str(e), exc_info=True)
+        log.error("Unhandled error in get_current_user", error=str(e), exc_info=True)
         raise credentials_exception
 
 
 async def check_permission(
-    request: Request,
-    current_user: models.User = Depends(get_current_user)
+    request: Request, current_user: models.User = Depends(get_current_user)
 ):
     # (Giữ nguyên logic, thêm await cho log)
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
     if not enforcer:
-        await log.critical("Casbin enforcer not found in app state!")
+        log.critical("Casbin enforcer not found in app state!")
         raise PermissionDeniedError("Permission system is misconfigured.")
 
     subject = f"user:{current_user.id}"
@@ -209,15 +213,18 @@ async def check_permission(
     action = request.method
 
     if not enforcer.enforce(subject, object_path, action):
-        await log.warning(
+        log.warning(
             "Permission Denied (Casbin)",
             subject=subject,
             object=object_path,
             action=action,
         )
-        raise PermissionDeniedError(detail="You do not have permission for this action.")
+        raise PermissionDeniedError(
+            detail="You do not have permission for this action."
+        )
 
     return current_user
+
 
 def require_roles(required_roles: List[str]):
     # (Giữ nguyên logic)
@@ -226,11 +233,14 @@ def require_roles(required_roles: List[str]):
     ) -> models.User:
         if current_user.role not in required_roles:
             from ..utils.exceptions import PermissionDeniedError
+
             raise PermissionDeniedError(
                 detail=f"User does not have the required roles: {required_roles}"
             )
         return current_user
+
     return role_checker
+
 
 async def get_lead_for_user(
     lead_id: int = Path(..., description="ID của Lead"),
@@ -239,6 +249,7 @@ async def get_lead_for_user(
 ) -> models.Lead:
     # (Giữ nguyên logic)
     from ..services import lead_service
+
     try:
         lead = await lead_service.get_lead_by_id(db, lead_id)
     except ResourceNotFoundError:
@@ -247,7 +258,10 @@ async def get_lead_for_user(
         return lead
     if current_user.role == "officer" and lead.assigned_officer_id == current_user.id:
         return lead
-    raise PermissionDeniedError(detail="You do not have permission to access this lead.")
+    raise PermissionDeniedError(
+        detail="You do not have permission to access this lead."
+    )
+
 
 # (Giữ nguyên các dependency shortcuts)
 CurrentUser = Depends(get_current_user)

@@ -1,11 +1,11 @@
 # app/schemas/config.py
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, ConfigDict
 
 
 class AssignmentConfig(BaseModel):
-    params: Optional[Dict[str, Any]] = None # Có thể là None hoặc dict
+    params: Optional[Dict[str, Any]] = None  # Có thể là None hoặc dict
 
 
 class ScoringConfig(BaseModel):

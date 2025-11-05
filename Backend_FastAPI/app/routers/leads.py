@@ -5,8 +5,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, models, schemas
 from ..core import deps
-from ..core.deps import get_lead_for_user
-
 from ..services import insights_service, lead_service
 
 router = APIRouter(tags=["Leads"])
@@ -83,7 +81,7 @@ async def update_existing_lead(
     lead_in: schemas.LeadUpdate,
     lead: models.Lead = LeadAccessDep,
     # Lấy current_user từ Casbin check hoặc get_current_user
-    current_user: models.User = PermissionDep, # <<< LẤY USER TỪ DEPENDENCY
+    current_user: models.User = PermissionDep,  # <<< LẤY USER TỪ DEPENDENCY
     db: AsyncSession = Depends(database.get_db),
 ):
     """Cập nhật một Lead (chỉ Admin/Manager)."""
@@ -99,7 +97,7 @@ async def update_existing_lead(
 async def add_new_consultation(
     consultation_in: schemas.ConsultationCreate,
     lead: models.Lead = LeadAccessDep,  # <-- THAY ĐỔI (IDOR Check)
-    current_user: models.User = PermissionDep, # <-- THAY ĐỔI (Casbin Check)
+    current_user: models.User = PermissionDep,  # <-- THAY ĐỔI (Casbin Check)
     db: AsyncSession = Depends(database.get_db),
 ):
     """Thêm một ghi chú tư vấn mới cho Lead (Đã xác thực 2 lớp)."""
@@ -114,7 +112,7 @@ async def add_new_consultation(
 async def assign_lead_manually(
     assign_data: schemas.AssignLead,
     lead: models.Lead = LeadAccessDep,  # <-- THAY ĐỔI (IDOR Check)
-    current_user: models.User = PermissionDep, # <-- THAY ĐỔI (Casbin Check)
+    current_user: models.User = PermissionDep,  # <-- THAY ĐỔI (Casbin Check)
     db: AsyncSession = Depends(database.get_db),
 ):
     """(Admin/Manager only) Gán thủ công một Lead (Đã xác thực 2 lớp)."""
@@ -122,11 +120,12 @@ async def assign_lead_manually(
         db, lead.id, assign_data.officer_id, current_user
     )
 
+
 @router.post("/{lead_id}/action", response_model=schemas.Lead)
 async def perform_lead_action(
     action_data: schemas.LeadAction,
     lead: models.Lead = LeadAccessDep,  # <-- THAY ĐỔI (IDOR Check)
-    current_user: models.User = PermissionDep, # <-- THAY ĐỔI (Casbin Check)
+    current_user: models.User = PermissionDep,  # <-- THAY ĐỔI (Casbin Check)
     db: AsyncSession = Depends(database.get_db),
 ):
     """Xử lý hành động (reject/reassign) của Officer (Đã xác thực 2 lớp)."""
@@ -160,7 +159,7 @@ async def get_lead_insights(
 async def delete_a_consultation(
     consultation_id: int,
     lead: models.Lead = LeadAccessDep,  # <-- THAY ĐỔI (IDOR Check)
-    current_user: models.User = PermissionDep, # <-- THAY ĐỔI (Casbin Check)
+    current_user: models.User = PermissionDep,  # <-- THAY ĐỔI (Casbin Check)
     db: AsyncSession = Depends(database.get_db),
 ):
     """(Admin only) Xóa một ghi chú tư vấn (Đã xác thực 2 lớp)."""

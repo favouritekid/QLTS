@@ -1,6 +1,6 @@
 # Frontend Source Code
 
-**Generated:** 2025-11-04 21:06:05  
+**Generated:** 2025-11-05 09:28:12  
 **Project:** QLTS (Quản Lý Tài Sản)  
 **Description:** Complete source code export of the Next.js frontend application
 

@@ -1,4 +1,6 @@
 # app/database.py
+from contextlib import asynccontextmanager
+
 import redis.asyncio as redis
 import structlog
 from aiobreaker import CircuitBreaker
@@ -7,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from .config import settings
-from contextlib import asynccontextmanager
 
 log = structlog.get_logger(__name__)
 
@@ -18,8 +19,8 @@ engine = create_async_engine(
     pool_recycle=3600,
     pool_size=20,
     max_overflow=40,
-    # echo=(settings.APP_ENV == "development"), 
-    echo=False, 
+    # echo=(settings.APP_ENV == "development"),
+    echo=False,
     connect_args={
         "server_settings": {
             "application_name": "qlts_backend_api",
@@ -57,7 +58,7 @@ async def safe_redis_ping():
     try:
         return await redis_breaker.call_async(redis_client.ping)
     except REDIS_BREAKER_EXCEPTIONS:
-        await log.error("Redis ping failed", exc_info=True)
+        log.error("Redis ping failed", exc_info=True)
         return False
 
 
@@ -66,7 +67,7 @@ async def safe_redis_get(key: str):
     try:
         return await redis_breaker.call_async(redis_client.get, key)
     except REDIS_BREAKER_EXCEPTIONS:
-        await log.error("Redis GET failed", key=key, exc_info=True)
+        log.error("Redis GET failed", key=key, exc_info=True)
         return None
 
 
@@ -76,7 +77,7 @@ async def safe_redis_exists(key: str) -> bool:
         result = await redis_breaker.call_async(redis_client.exists, key)
         return bool(result)
     except REDIS_BREAKER_EXCEPTIONS:
-        await log.error("Redis EXISTS failed", key=key, exc_info=True)
+        log.error("Redis EXISTS failed", key=key, exc_info=True)
         return False
 
 
@@ -85,7 +86,7 @@ async def safe_redis_set(key: str, value: str, ex: int):
     try:
         return await redis_breaker.call_async(redis_client.set, key, value, ex=ex)
     except REDIS_BREAKER_EXCEPTIONS:
-        await log.error("Redis SET failed", key=key, exc_info=True)
+        log.error("Redis SET failed", key=key, exc_info=True)
         raise
 
 
@@ -94,7 +95,7 @@ async def safe_redis_delete(key: str):
     try:
         return await redis_breaker.call_async(redis_client.delete, key)
     except REDIS_BREAKER_EXCEPTIONS:
-        await log.error("Redis DELETE failed", key=key, exc_info=True)
+        log.error("Redis DELETE failed", key=key, exc_info=True)
         return 0
 
 
@@ -119,12 +120,12 @@ async def safe_redis_pipeline(transaction: bool = True):
         yield pipe
 
     except REDIS_BREAKER_EXCEPTIONS as e:
-        await log.error("Redis PIPELINE operation failed", error=str(e), exc_info=True)
+        log.error("Redis PIPELINE operation failed", error=str(e), exc_info=True)
         if pipe:
             await pipe.reset()  # Cleanup pipeline
         raise
     except Exception as e:
-        await log.error("Unexpected error in Redis pipeline", error=str(e), exc_info=True)
+        log.error("Unexpected error in Redis pipeline", error=str(e), exc_info=True)
         if pipe:
             await pipe.reset()
         raise

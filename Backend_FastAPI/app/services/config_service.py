@@ -24,40 +24,44 @@ async def get_assignment_config(db: AsyncSession, unit_id: int) -> dict:
     ✅ FIXED: Uses Redis Cache-Aside pattern.
     """
     cache_key = f"config:assignment:{unit_id}"
-    await log.debug("Fetching assignment config", unit_id=unit_id, cache_key=cache_key) # THÊM await
+    log.debug(
+        "Fetching assignment config", unit_id=unit_id, cache_key=cache_key
+    )  # THÊM await
 
     # 1. Try cache first
     try:
         cached_data = await safe_redis_get(cache_key)
         if cached_data:
-            await log.debug("Cache hit for assignment config", unit_id=unit_id) # THÊM await
+            log.debug("Cache hit for assignment config", unit_id=unit_id)  # THÊM await
             return json.loads(cached_data)
     except Exception as e_redis_get:
         # Log error but proceed to DB query (fail-open)
-        await log.error( # THÊM await
+        log.error(  # THÊM await
             "Failed to get assignment config from cache",
             unit_id=unit_id,
             error=str(e_redis_get),
         )
 
-    await log.debug("Cache miss for assignment config, querying DB", unit_id=unit_id) # THÊM await
+    log.debug(
+        "Cache miss for assignment config, querying DB", unit_id=unit_id
+    )  # THÊM await
     # 2. Cache Miss: Query DB
     config = await db.scalar(
         select(models.OfficerAssignmentConfig).where(
             models.OfficerAssignmentConfig.unit_id == unit_id
         )
     )
-    
+
     # === TÁCH KIỂM TRA ===
     if not config:
         raise ResourceNotFoundError(
             detail=f"Assignment config for unit {unit_id} not found."
         )
-    
+
     # Kiểm tra params (cột JSON có thể cần truy cập)
     config_params = config.params
-    
-    if not config_params: # Nếu params là None hoặc {}
+
+    if not config_params:  # Nếu params là None hoặc {}
         raise ResourceNotFoundError(
             detail=f"Assignment config for unit {unit_id} not found or has no params."
         )
@@ -68,13 +72,13 @@ async def get_assignment_config(db: AsyncSession, unit_id: int) -> dict:
         await safe_redis_set(
             cache_key, json.dumps(config_params), ex=CONFIG_CACHE_TTL_SECONDS
         )
-        await log.debug( # THÊM await
+        log.debug(  # THÊM await
             "Stored assignment config in cache",
             unit_id=unit_id,
             ttl=CONFIG_CACHE_TTL_SECONDS,
         )
     except Exception as e_redis_set:
-        await log.error( # THÊM await
+        log.error(  # THÊM await
             "Failed to set assignment config in cache",
             unit_id=unit_id,
             error=str(e_redis_set),
@@ -98,7 +102,7 @@ async def update_assignment_config(
             .where(models.OfficerAssignmentConfig.unit_id == unit_id)
             .with_for_update()  # Lock the row
         )
-        
+
         if not config:
             unit = await db.get(models.OrganizationUnit, unit_id)
             if not unit:
@@ -106,20 +110,20 @@ async def update_assignment_config(
                     detail=f"Organization Unit with id {unit_id} not found."
                 )
             config = models.OfficerAssignmentConfig(unit_id=unit_id, params=params)
-            await log.info("Creating new assignment config", unit_id=unit_id)
+            log.info("Creating new assignment config", unit_id=unit_id)
         else:
             config.params = params
-            await log.info("Updating existing assignment config", unit_id=unit_id)
+            log.info("Updating existing assignment config", unit_id=unit_id)
 
         db.add(config)
-        
+
         # === THAY ĐỔI CHÍNH ===
         # 1. Commit thay đổi vào DB
         await db.commit()
         # 2. Refresh để load lại cột 'params' sau khi commit
         # (Chỉ định rõ 'params' để đảm bảo nó được load)
-        await db.refresh(config, attribute_names=['params'])
-        
+        await db.refresh(config, attribute_names=["params"])
+
         config_to_return = config
         # === KẾT THÚC THAY ĐỔI ===
 
@@ -127,11 +131,11 @@ async def update_assignment_config(
         try:
             deleted_count = await safe_redis_delete(cache_key)
             if deleted_count > 0:
-                await log.info("Invalidated assignment config cache", unit_id=unit_id)
+                log.info("Invalidated assignment config cache", unit_id=unit_id)
             else:
-                await log.debug("No assignment config cache to invalidate", unit_id=unit_id)
+                log.debug("No assignment config cache to invalidate", unit_id=unit_id)
         except Exception as e_redis_del:
-            await log.error(
+            log.error(
                 "Failed to invalidate assignment config cache after update",
                 unit_id=unit_id,
                 error=str(e_redis_del),
@@ -140,14 +144,14 @@ async def update_assignment_config(
         return config_to_return
 
     except Exception as e:
-        await db.rollback() # Rollback nếu có lỗi TRƯỚC KHI commit
-        await log.error(
+        await db.rollback()  # Rollback nếu có lỗi TRƯỚC KHI commit
+        log.error(
             "Failed to update assignment config",
             unit_id=unit_id,
             error=str(e),
             exc_info=True,
         )
-        raise e # Ném lại lỗi (ví dụ: ResourceNotFoundError)
+        raise e  # Ném lại lỗi (ví dụ: ResourceNotFoundError)
 
 
 # --- Skill Rules (Consider caching if needed) ---
@@ -176,7 +180,7 @@ async def create_skill_rule(
         return db_rule
     except Exception as e:
         await db.rollback()
-        await log.error(
+        log.error(
             "Failed to create skill rule",
             rule=rule_in.model_dump_json(),
             error=str(e),
@@ -199,7 +203,7 @@ async def delete_skill_rule(db: AsyncSession, rule_id: int):
         # await safe_redis_delete("config:all_skill_rules")
     except Exception as e:
         await db.rollback()
-        await log.error(
+        log.error(
             "Failed to delete skill rule", rule_id=rule_id, error=str(e), exc_info=True
         )
         raise e

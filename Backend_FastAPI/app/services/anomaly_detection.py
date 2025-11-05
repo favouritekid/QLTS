@@ -3,7 +3,7 @@
 Anomaly detection service for identifying suspicious login activities.
 """
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 import structlog
 from sqlalchemy import and_, func, select
@@ -18,33 +18,31 @@ class AnomalyDetector:
     """
     Detects suspicious login patterns and anomalies.
     """
-    
+
     # Thresholds for anomaly detection
     MAX_FAILED_LOGINS_PER_HOUR = 5
     MAX_SESSIONS_PER_USER = 10
     SUSPICIOUS_COUNTRY_CHANGE_HOURS = 2  # Hours between logins from different countries
-    
+
     def __init__(self, db: AsyncSession):
         self.db = db
-    
+
     async def check_new_ip_address(
-        self,
-        user_id: int,
-        ip_address: Optional[str]
+        self, user_id: int, ip_address: Optional[str]
     ) -> bool:
         """
         Check if this IP address has been used before by this user.
-        
+
         Args:
             user_id: User ID
             ip_address: IP address to check
-        
+
         Returns:
             True if this is a new IP address, False otherwise
         """
         if not ip_address:
             return False
-        
+
         # Query for any previous session from this IP
         result = await self.db.execute(
             select(models.UserSession)
@@ -57,40 +55,38 @@ class AnomalyDetector:
             .limit(1)
         )
         existing_session = result.scalar_one_or_none()
-        
+
         is_new = existing_session is None
-        
+
         if is_new:
-            await log.warning(
-                "New IP address detected",
-                user_id=user_id,
-                ip_address=ip_address
+            log.warning(
+                "New IP address detected", user_id=user_id, ip_address=ip_address
             )
-        
+
         return is_new
-    
+
     async def check_new_device(
         self,
         user_id: int,
         device_type: Optional[str],
         browser: Optional[str],
-        os: Optional[str]
+        os: Optional[str],
     ) -> bool:
         """
         Check if this device/browser/OS combination is new for this user.
-        
+
         Args:
             user_id: User ID
             device_type: Device type (PC, Mobile, Tablet)
             browser: Browser name
             os: Operating system
-        
+
         Returns:
             True if this is a new device combination
         """
         if not all([device_type, browser, os]):
             return False
-        
+
         # Query for any previous session with same device fingerprint
         result = await self.db.execute(
             select(models.UserSession)
@@ -105,50 +101,47 @@ class AnomalyDetector:
             .limit(1)
         )
         existing_session = result.scalar_one_or_none()
-        
+
         is_new = existing_session is None
-        
+
         if is_new:
-            await log.warning(
+            log.warning(
                 "New device detected",
                 user_id=user_id,
                 device_type=device_type,
                 browser=browser,
-                os=os
+                os=os,
             )
-        
+
         return is_new
-    
+
     async def check_impossible_travel(
-        self,
-        user_id: int,
-        current_country: Optional[str],
-        current_city: Optional[str]
+        self, user_id: int, current_country: Optional[str], current_city: Optional[str]
     ) -> bool:
         """
         Detect impossible travel: login from different countries in short time.
-        
+
         This is a simplified version. In production, you would:
         - Calculate actual distance between locations
         - Consider realistic travel time
         - Use geolocation APIs
-        
+
         Args:
             user_id: User ID
             current_country: Current login country
             current_city: Current login city
-        
+
         Returns:
             True if impossible travel detected
         """
         if not current_country:
             return False
-        
+
         # Get most recent session (within last N hours)
         time_threshold = datetime.now(timezone.utc) - timedelta(
             hours=self.SUSPICIOUS_COUNTRY_CHANGE_HOURS
         )
-        
+
         result = await self.db.execute(
             select(models.UserSession)
             .where(
@@ -156,99 +149,93 @@ class AnomalyDetector:
                     models.UserSession.user_id == user_id,
                     models.UserSession.created_at >= time_threshold,
                     models.UserSession.country.isnot(None),
-                    models.UserSession.country != current_country
+                    models.UserSession.country != current_country,
                 )
             )
             .order_by(models.UserSession.created_at.desc())
             .limit(1)
         )
         recent_session = result.scalar_one_or_none()
-        
+
         if recent_session:
-            await log.warning(
+            log.warning(
                 "Impossible travel detected",
                 user_id=user_id,
                 previous_country=recent_session.country,
                 current_country=current_country,
                 time_diff_hours=(
                     datetime.now(timezone.utc) - recent_session.created_at
-                ).total_seconds() / 3600
+                ).total_seconds()
+                / 3600,
             )
             return True
-        
+
         return False
-    
+
     async def check_excessive_sessions(self, user_id: int) -> bool:
         """
         Check if user has too many active sessions.
-        
+
         Args:
             user_id: User ID
-        
+
         Returns:
             True if user has excessive active sessions
         """
         result = await self.db.execute(
-            select(func.count(models.UserSession.id))
-            .where(
+            select(func.count(models.UserSession.id)).where(
                 and_(
                     models.UserSession.user_id == user_id,
-                    models.UserSession.revoked_at.is_(None)
+                    models.UserSession.revoked_at.is_(None),
                 )
             )
         )
         session_count = result.scalar()
-        
+
         is_excessive = session_count >= self.MAX_SESSIONS_PER_USER
-        
+
         if is_excessive:
-            await log.warning(
+            log.warning(
                 "Excessive active sessions detected",
                 user_id=user_id,
                 session_count=session_count,
-                threshold=self.MAX_SESSIONS_PER_USER
+                threshold=self.MAX_SESSIONS_PER_USER,
             )
-        
+
         return is_excessive
-    
+
     async def check_unusual_login_time(
-        self,
-        user_id: int,
-        login_time: Optional[datetime] = None
+        self, user_id: int, login_time: Optional[datetime] = None
     ) -> bool:
         """
         Check if login time is unusual compared to user's typical pattern.
-        
+
         This is a simplified version. In production, you would:
         - Build user behavior profile
         - Detect logins outside typical hours
         - Consider timezone
-        
+
         Args:
             user_id: User ID
             login_time: Login timestamp (default: now)
-        
+
         Returns:
             True if login time is unusual
         """
         if login_time is None:
             login_time = datetime.now(timezone.utc)
-        
+
         # Get user's typical login hours (simplified: just check if night time)
         hour = login_time.hour
-        
+
         # Consider 2 AM - 6 AM as unusual (this is very simplified)
         is_unusual = 2 <= hour < 6
-        
+
         if is_unusual:
-            await log.info(
-                "Unusual login time detected",
-                user_id=user_id,
-                hour=hour
-            )
-        
+            log.info("Unusual login time detected", user_id=user_id, hour=hour)
+
         return is_unusual
-    
+
     async def analyze_login(
         self,
         user_id: int,
@@ -258,11 +245,11 @@ class AnomalyDetector:
         os: Optional[str],
         country: Optional[str] = None,
         city: Optional[str] = None,
-        login_time: Optional[datetime] = None
+        login_time: Optional[datetime] = None,
     ) -> Dict[str, bool]:
         """
         Comprehensive anomaly analysis for a login attempt.
-        
+
         Args:
             user_id: User ID
             ip_address: IP address
@@ -272,7 +259,7 @@ class AnomalyDetector:
             country: Country (optional)
             city: City (optional)
             login_time: Login timestamp (optional)
-        
+
         Returns:
             Dictionary of anomaly flags:
             {
@@ -286,21 +273,22 @@ class AnomalyDetector:
         """
         anomalies = {
             "new_ip": await self.check_new_ip_address(user_id, ip_address),
-            "new_device": await self.check_new_device(user_id, device_type, browser, os),
-            "impossible_travel": await self.check_impossible_travel(user_id, country, city),
+            "new_device": await self.check_new_device(
+                user_id, device_type, browser, os
+            ),
+            "impossible_travel": await self.check_impossible_travel(
+                user_id, country, city
+            ),
             "excessive_sessions": await self.check_excessive_sessions(user_id),
             "unusual_time": await self.check_unusual_login_time(user_id, login_time),
         }
-        
+
         # Mark as suspicious if ANY anomaly detected
         anomalies["is_suspicious"] = any(anomalies.values())
-        
-        if anomalies["is_suspicious"]:
-            await log.warning(
-                "Suspicious login detected",
-                user_id=user_id,
-                anomalies=anomalies
-            )
-        
-        return anomalies
 
+        if anomalies["is_suspicious"]:
+            log.warning(
+                "Suspicious login detected", user_id=user_id, anomalies=anomalies
+            )
+
+        return anomalies

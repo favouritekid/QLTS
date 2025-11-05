@@ -1,7 +1,9 @@
 # create_db.py
 import asyncio
+
 from app.database import engine
-from app.models import Base # Import Base từ __init__.py của models
+from app.models import Base  # Import Base từ __init__.py của models
+
 
 async def create_tables():
     """
@@ -14,6 +16,7 @@ async def create_tables():
     print("Tables created successfully.")
     # Đóng engine sau khi hoàn tất để script kết thúc
     await engine.dispose()
+
 
 if __name__ == "__main__":
     # Chạy hàm create_tables

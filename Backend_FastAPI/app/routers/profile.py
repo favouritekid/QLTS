@@ -11,9 +11,10 @@ from ..core import deps
 router = APIRouter(tags=["Profile"])
 PermissionDep = Depends(deps.check_permission)
 
+
 @router.get("", response_model=schemas.User)
 async def read_current_user_profile(
-    current_user: models.User = PermissionDep, # <-- THAY ĐỔI
+    current_user: models.User = PermissionDep,  # <-- THAY ĐỔI
 ):
     """
     Lấy thông tin profile của chính người dùng đang đăng nhập.
@@ -48,7 +49,7 @@ async def update_current_user_profile(
         try:
             EmailStrAdapter = TypeAdapter(EmailStr)
             valid_email = EmailStrAdapter.validate_python(cleaned_email)
-            
+
             # Chỉ kiểm tra DB nếu email thực sự thay đổi
             if valid_email != current_user.email:
                 existing_user = await services.user_service.get_user_by_email(
@@ -67,7 +68,7 @@ async def update_current_user_profile(
                 detail=f"Invalid email format: {cleaned_email}. Error: {error_detail}",
             )
     # --- KẾT THÚC SỬA LỖI ---
-    
+
     update_data = schemas.UserUpdate(**update_dict)
 
     updated_user = await services.user_service.update_profile(

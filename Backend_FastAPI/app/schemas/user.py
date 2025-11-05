@@ -4,7 +4,14 @@
 import re
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, EmailStr, constr, field_validator, model_validator, ConfigDict
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    constr,
+    field_validator,
+    model_validator,
+)
 
 
 # === TÁCH LOGIC RA HÀM RIÊNG ĐỂ TÁI SỬ DỤNG ===
@@ -39,6 +46,7 @@ class UserCreate(BaseModel):
     Schema cho user registration.
     backend chỉ cần nhận username, email, password, full_name.
     """
+
     username: str
     email: EmailStr
     password: PasswordStr
@@ -56,6 +64,7 @@ class ResetPasswordSchema(BaseModel):
     Schema cho reset password endpoint.
     backend chỉ cần nhận token và new_password.
     """
+
     token: str
     new_password: PasswordStr
 
@@ -71,6 +80,7 @@ class ChangePasswordSchema(BaseModel):
     Schema cho change password endpoint.
     backend chỉ cần nhận old_password và new_password.
     """
+
     old_password: str
     new_password: PasswordStr
 
@@ -86,6 +96,7 @@ class AdminSetPasswordSchema(BaseModel):
     Schema cho admin set password endpoint.
     backend chỉ cần nhận new_password.
     """
+
     new_password: PasswordStr
 
     @field_validator("new_password")

@@ -39,14 +39,14 @@ async def send_password_reset_email(email_to: str, reset_url: str, username: str
     )
 
     try:
-        await log.info("Attempting to send password reset email", recipient=email_to)
+        log.info("Attempting to send password reset email", recipient=email_to)
         await fm.send_message(message)
-        await log.info("Password reset email task completed", recipient=email_to)
+        log.info("Password reset email task completed", recipient=email_to)
     except Exception as e:
         # === BỔ SUNG LOG CHI TIẾT HƠN ===
         # Ghi lại cả traceback để biết lỗi xảy ra ở đâu
         detailed_error = traceback.format_exc()
-        await log.error(
+        log.error(
             "Failed to send password reset email background task",
             recipient=email_to,
             error=str(e),

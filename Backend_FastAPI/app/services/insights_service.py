@@ -4,7 +4,7 @@ from typing import List
 
 import structlog
 from sqlalchemy import select  # <-- THÊM select
-from sqlalchemy import func, case
+from sqlalchemy import case, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models, schemas
@@ -24,40 +24,43 @@ async def _calculate_engagement_score(db: AsyncSession, lead_id: int) -> int:
 
     # === BẮT ĐẦU TỐI ƯU HÓA ===
     # 1. Xây dựng truy vấn tổng hợp
-    
+
     # Định nghĩa các trường hợp (case) cho điểm
     outcome_score_case = case(
-        (models.Consultation.outcome == "successful", points_config["outcome"]["successful"]),
-        (models.Consultation.outcome == "follow-up", points_config["outcome"]["follow-up"]),
+        (
+            models.Consultation.outcome == "successful",
+            points_config["outcome"]["successful"],
+        ),
+        (
+            models.Consultation.outcome == "follow-up",
+            points_config["outcome"]["follow-up"],
+        ),
         (models.Consultation.outcome == "failed", points_config["outcome"]["failed"]),
-        else_=0
+        else_=0,
     )
-    
+
     method_score_case = case(
         (models.Consultation.method == "meeting", points_config["method"]["meeting"]),
         (models.Consultation.method == "call", points_config["method"]["call"]),
         (models.Consultation.method == "email", points_config["method"]["email"]),
-        else_=0
-    )
-    
-    duration_score_calc = (
-        (models.Consultation.duration_minutes // 10) * points_config["duration_bonus_per_10_min"]
+        else_=0,
     )
 
+    duration_score_calc = (models.Consultation.duration_minutes // 10) * points_config[
+        "duration_bonus_per_10_min"
+    ]
+
     # Truy vấn tổng hợp
-    stmt = (
-        select(
-            func.count(models.Consultation.id).label("total_count"),
-            func.sum(outcome_score_case).label("total_outcome_score"),
-            func.sum(method_score_case).label("total_method_score"),
-            func.sum(duration_score_calc).label("total_duration_score"),
-            func.max(models.Consultation.consultation_date).label("last_consultation_date")
-        )
-        .where(
-            models.Consultation.lead_id == lead_id,
-            models.Consultation.consultation_date <= now,
-            models.Consultation.duration_minutes.between(0, 480)
-        )
+    stmt = select(
+        func.count(models.Consultation.id).label("total_count"),
+        func.sum(outcome_score_case).label("total_outcome_score"),
+        func.sum(method_score_case).label("total_method_score"),
+        func.sum(duration_score_calc).label("total_duration_score"),
+        func.max(models.Consultation.consultation_date).label("last_consultation_date"),
+    ).where(
+        models.Consultation.lead_id == lead_id,
+        models.Consultation.consultation_date <= now,
+        models.Consultation.duration_minutes.between(0, 480),
     )
 
     # 2. Thực thi truy vấn (chỉ trả về 1 hàng)
@@ -70,10 +73,9 @@ async def _calculate_engagement_score(db: AsyncSession, lead_id: int) -> int:
 
     # 3. Logic tính toán (giờ đã cực kỳ đơn giản)
     score += agg_data.total_count * points_config["consultation_count_multiplier"]
-    score += (agg_data.total_outcome_score or 0)
-    score += (agg_data.total_method_score or 0)
-    score += (agg_data.total_duration_score or 0)
-
+    score += agg_data.total_outcome_score or 0
+    score += agg_data.total_method_score or 0
+    score += agg_data.total_duration_score or 0
 
     # 4. Tính phạt (sử dụng dữ liệu đã lấy)
     last_consultation_date = agg_data.last_consultation_date
@@ -108,9 +110,7 @@ def _calculate_fit_score(lead: models.Lead) -> int:
     return max(0, min(score, points_config["max_score"]))
 
 
-def _calculate_urgency_score(
-    lead: models.Lead, timeline: List[dict]
-) -> int:
+def _calculate_urgency_score(lead: models.Lead, timeline: List[dict]) -> int:
     # ... (Hàm này giữ nguyên, không thay đổi) ...
     score = 0
     points_config = settings.LEAD_SCORING_URGENCY_POINTS
@@ -163,18 +163,18 @@ async def get_lead_insights(
     ✅ FIXED: Không refresh 'consultations', thay vào đó gọi
     hàm _calculate_engagement_score đã tối ưu.
     """
-    await log.debug("Calculating insights for lead", lead_id=lead.id)
+    log.debug("Calculating insights for lead", lead_id=lead.id)
 
     # === ⭐️ THAY ĐỔI QUAN TRỌNG Ở ĐÂY ⭐️ ===
     try:
         # BỎ "consultations" khỏi danh sách refresh
         await db.refresh(lead, ["assignment_logs", "pipeline_stage"])
-        await log.debug(
+        log.debug(
             "Lead object refreshed (minimal) before insight calculation",
-            lead_id=lead.id
+            lead_id=lead.id,
         )
     except Exception as e:
-        await log.error(
+        log.error(
             "Failed to refresh lead object before calculating insights",
             lead_id=lead.id,
             error=str(e),
@@ -183,10 +183,10 @@ async def get_lead_insights(
     # === KẾT THÚC THAY ĐỔI ===
 
     # Tính toán điểm số
-    
+
     # 1. Gọi hàm async mới (chạy song song)
     engagement_score_task = _calculate_engagement_score(db, lead.id)
-    
+
     # 2. Các hàm sync cũ (vẫn cần 'lead' object)
     fit_score = _calculate_fit_score(lead)
     urgency_score = _calculate_urgency_score(lead, timeline)
@@ -209,7 +209,7 @@ async def get_lead_insights(
             ) * weights["officer_rating_weight"]
             overall_score += rating_contribution
         except (ValueError, TypeError):
-            await log.warning(
+            log.warning(
                 "Invalid officer_rating during insight calculation",
                 lead_id=lead.id,
                 rating=lead.officer_rating,
