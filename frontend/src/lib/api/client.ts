@@ -54,4 +54,7 @@ api.interceptors.response.use(
   }
 );
 
+// Export as both 'api' and 'apiClient' for backward compatibility
+export { api as apiClient };
+
 export default api;
