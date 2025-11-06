@@ -18,8 +18,10 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# lib/  # ← COMMENTED OUT: This was blocking frontend/src/lib/
+# lib64/  # Only ignore Python distribution libs in backend
+Backend_FastAPI/lib/
+Backend_FastAPI/lib64/
 parts/
 sdist/
 var/
