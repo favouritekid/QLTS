@@ -450,7 +450,7 @@ async def perform_password_reset(
     # This allows user to take action if they didn't initiate the reset
     try:
         from datetime import datetime, timezone
-        from .celery_utils import send_password_reset_confirmation_email_task
+        from ..celery_utils import send_password_reset_confirmation_email_task
 
         reset_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 

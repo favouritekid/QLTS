@@ -282,6 +282,7 @@ def send_password_reset_confirmation_email_task(
     reset_time: str,
     ip_address: str = None,
     location: str = None,
+    lang: str = "vi",
 ):
     """
     Send email notification after successful password reset.
@@ -292,83 +293,35 @@ def send_password_reset_confirmation_email_task(
     task_log = logging.getLogger("send_password_reset_confirmation_email_task")
     task_log.info(f"Password reset confirmation task started for recipient: {email_to}")
 
-    # Format location if available
-    location_info = ""
-    if location:
-        location_info = f"""
-        <tr>
-            <td style="padding: 10px; font-weight: bold; border: 1px solid #ddd;">Location:</td>
-            <td style="padding: 10px; border: 1px solid #ddd;">{location}</td>
-        </tr>
-        """
-
-    body = f"""
-    <html>
-    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-        <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-            <h2 style="color: #2e7d32;">🔐 Your Password Has Been Reset</h2>
-            <p>Hi <strong>{username}</strong>,</p>
-            <p>This email confirms that your password was successfully reset.</p>
-
-            <h3>Reset Details:</h3>
-            <table style="border-collapse: collapse; margin: 20px 0; width: 100%;">
-                <tr style="background-color: #f5f5f5;">
-                    <td style="padding: 10px; font-weight: bold; border: 1px solid #ddd;">Time:</td>
-                    <td style="padding: 10px; border: 1px solid #ddd;">{reset_time}</td>
-                </tr>
-                <tr>
-                    <td style="padding: 10px; font-weight: bold; border: 1px solid #ddd;">IP Address:</td>
-                    <td style="padding: 10px; border: 1px solid #ddd;">{ip_address or 'Unknown'}</td>
-                </tr>
-                {location_info}
-            </table>
-
-            <div style="background-color: #e3f2fd; border-left: 4px solid #2196f3; padding: 15px; margin: 20px 0;">
-                <p style="margin: 0;"><strong>ℹ️ Important Security Information:</strong></p>
-                <ul style="margin-bottom: 0;">
-                    <li>All your active sessions have been logged out for security</li>
-                    <li>You'll need to log in again with your new password</li>
-                </ul>
-            </div>
-
-            <div style="background-color: #e8f5e9; border-left: 4px solid #4caf50; padding: 15px; margin: 20px 0;">
-                <p style="margin: 0;"><strong>✅ If this was you:</strong> You can safely ignore this email.</p>
-            </div>
-
-            <div style="background-color: #ffebee; border-left: 4px solid #f44336; padding: 15px; margin: 20px 0;">
-                <p style="margin-top: 0;"><strong>❌ If you did NOT reset your password:</strong></p>
-                <p><strong>Your account may be compromised!</strong> Take these steps immediately:</p>
-                <ol style="margin-bottom: 0;">
-                    <li><strong>Reset your password again</strong> using a secure device</li>
-                    <li>Check your email account security (someone may have access)</li>
-                    <li>Enable Two-Factor Authentication (2FA) if available</li>
-                    <li>Contact support immediately if you suspect unauthorized access</li>
-                </ol>
-            </div>
-
-            <div style="text-align: center; margin: 30px 0;">
-                <p style="margin-bottom: 10px;">Need help securing your account?</p>
-                <a href="{settings.FRONTEND_URL}/settings/security"
-                   style="display: inline-block; padding: 12px 24px; background-color: #2196f3; color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
-                    Review Security Settings
-                </a>
-            </div>
-
-            <p style="color: #666; font-size: 12px; margin-top: 30px; border-top: 1px solid #ddd; padding-top: 15px;">
-                This email was sent automatically from QLTS Lead Management System.<br>
-                Please do not reply to this email.
-            </p>
-        </div>
-    </body>
-    </html>
-    """
-
     try:
+        # Import email service
+        from .services.email_service import render_email_template, get_email_subject
+
+        # Render email from professional template
+        html_body, text_body = render_email_template(
+            "password_reset_confirmation",
+            {
+                "username": username,
+                "reset_time": reset_time,
+                "ip_address": ip_address,
+                "location": location,
+                "frontend_url": settings.FRONTEND_URL,
+            },
+            lang=lang,
+        )
+
+        subject = get_email_subject("password_reset_confirmation", lang=lang)
+
+        # Send email with both HTML and plain text versions
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = "🔐 Your Password Has Been Reset Successfully"
+        msg["Subject"] = subject
         msg["From"] = settings.MAIL_FROM
         msg["To"] = email_to
-        html_part = MIMEText(body, "html")
+
+        # Attach both versions (email clients will use HTML if supported, fallback to text)
+        text_part = MIMEText(text_body, "plain", "utf-8")
+        html_part = MIMEText(html_body, "html", "utf-8")
+        msg.attach(text_part)
         msg.attach(html_part)
 
         with smtplib.SMTP(settings.MAIL_SERVER, settings.MAIL_PORT) as server:
@@ -378,7 +331,7 @@ def send_password_reset_confirmation_email_task(
             server.send_message(msg)
 
         task_log.info(f"Password reset confirmation email sent successfully to: {email_to}")
-        return {"status": "success", "recipient": email_to}
+        return {"status": "success", "recipient": email_to, "lang": lang}
     except Exception as e:
         task_log.error(f"Failed to send password reset confirmation email to {email_to}", exc_info=True)
         raise e
