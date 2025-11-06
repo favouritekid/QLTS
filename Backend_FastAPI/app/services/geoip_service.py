@@ -73,6 +73,18 @@ class GeoIPService:
         if not self.reader:
             return (None, None)
 
+        # DEVELOPMENT: Override IP for testing with localhost
+        # Set DEV_GEOIP_TEST_IP environment variable to test GeoIP with a public IP
+        # Example: DEV_GEOIP_TEST_IP=8.8.8.8 (Google DNS - Mountain View, USA)
+        dev_test_ip = os.environ.get("DEV_GEOIP_TEST_IP")
+        if dev_test_ip and self._is_private_ip(ip_address):
+            log.info(
+                "DEV MODE: Using test IP instead of private IP",
+                original_ip=ip_address,
+                test_ip=dev_test_ip,
+            )
+            ip_address = dev_test_ip
+
         # Skip private/local IP addresses
         if self._is_private_ip(ip_address):
             log.debug("Skipping GeoIP lookup for private IP", ip=ip_address)
