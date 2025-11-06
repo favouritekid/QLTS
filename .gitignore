@@ -82,6 +82,11 @@ celerybeat.pid
 *.sql
 *.db
 
+# GeoIP databases (large binary files - must be downloaded separately)
+Backend_FastAPI/geoip/*.mmdb
+Backend_FastAPI/geoip/*.dat
+Backend_FastAPI/geoip/GeoLite2-*
+
 # IDEs
 .vscode/
 .idea/
