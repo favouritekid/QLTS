@@ -20,8 +20,8 @@ is_prod = settings.APP_ENV == "production"
 sio = socketio.AsyncServer(
     async_mode="asgi",
     cors_allowed_origins=settings.CORS_ORIGINS.split(","),
-    logger=not is_prod,
-    engineio_logger=not is_prod,
+    logger=False,             # 👈 Đặt thành False
+    engineio_logger=False,    # 👈 Đặt thành False
 )
 
 # === ✅ CẢI TIẾN: Vấn đề #1 - Rate Limiting bằng Redis LUA Script ===
@@ -121,7 +121,7 @@ async def _get_user_from_token(token: str) -> models.User:
     except Exception as e:
         # Log lỗi mà không log token
         log.warning("Socket auth failed", error=str(e))
-        raise ConnectionRefusedError(f"Auth failed")
+        raise ConnectionRefusedError("Auth failed")
 
 
 @sio.event
@@ -145,7 +145,7 @@ async def connect(sid, environ, auth):
 
             await sio.save_session(sid, {"user_id": user.id, "username": user.username})
             room_name = f"user_room_{user.id}"
-            sio.enter_room(sid, room_name)
+            await sio.enter_room(sid, room_name)
 
             socket_connections_active.inc()
 
@@ -177,7 +177,7 @@ async def disconnect(sid):
 
             # ✅ CẢI TIẾN: Rời phòng một cách tường minh
             room_name = f"user_room_{user_id}"
-            sio.leave_room(sid, room_name)
+            await sio.leave_room(sid, room_name)
 
             log.info(
                 "Socket client disconnected",

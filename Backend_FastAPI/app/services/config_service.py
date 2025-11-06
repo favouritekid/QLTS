@@ -10,6 +10,7 @@ from .. import models, schemas
 
 # 👈 *** ADD REDIS IMPORTS ***
 from ..database import safe_redis_delete, safe_redis_get, safe_redis_set
+from ..services.pipeline_service import invalidate_pipeline_cache
 from ..utils.exceptions import ResourceNotFoundError
 
 log = structlog.get_logger(__name__)
@@ -175,8 +176,10 @@ async def create_skill_rule(
         db.add(db_rule)
         await db.commit()
         await db.refresh(db_rule)
-        # Invalidate cache for get_all_skill_rules if implemented
-        # await safe_redis_delete("config:all_skill_rules")
+
+        await invalidate_pipeline_cache()
+        log.info("Skill rule created, relevant cache invalidated", rule_id=db_rule.id)
+
         return db_rule
     except Exception as e:
         await db.rollback()
@@ -199,8 +202,10 @@ async def delete_skill_rule(db: AsyncSession, rule_id: int):
             )
         await db.delete(db_rule)
         await db.commit()
-        # Invalidate cache for get_all_skill_rules if implemented
-        # await safe_redis_delete("config:all_skill_rules")
+
+        await invalidate_pipeline_cache()
+        log.info("Skill rule deleted, relevant cache invalidated", rule_id=rule_id)
+
     except Exception as e:
         await db.rollback()
         log.error(

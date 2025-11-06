@@ -1,6 +1,6 @@
 # Frontend Source Code
 
-**Generated:** 2025-11-05 09:28:12  
+**Generated:** 2025-11-06 09:05:53  
 **Project:** QLTS (Quản Lý Tài Sản)  
 **Description:** Complete source code export of the Next.js frontend application
 
@@ -27,8 +27,11 @@ frontend/src/
     │   ├── profile/
     │   │   ├── page.tsx
     │   ├── settings/
+    │   │   ├── _components/
+    │   │   │   ├── SettingsNav.tsx
     │   │   ├── sessions/
     │   │   │   ├── page.tsx
+    │   │   ├── layout.tsx
     │   │   ├── page.tsx
     │   ├── layout.tsx
     ├── test/
@@ -52,6 +55,7 @@ frontend/src/
     │   │   ├── NavGroup.tsx
     │   │   ├── NavUser.tsx
     │   ├── DashboardLayout.tsx
+    │   ├── SocketHandler.tsx
     ├── sessions/
     │   ├── SessionList.tsx
     ├── ui/
@@ -84,9 +88,13 @@ frontend/src/
     │   ├── sessions.ts
     ├── config/
     │   ├── env.ts
+    ├── socket/
+    │   ├── client.ts
     ├── stores/
     │   ├── auth.store.ts
     │   ├── ui.store.ts
+    ├── utils/
+    │   ├── jwt.ts
     ├── utils.ts
 └── styles/
     ├── globals.css
@@ -436,17 +444,25 @@ export default function DashboardPage() {
 
 ## 📄 `app\(dashboard)\layout.tsx`
 
-**Lines:** 10 | **Size:** 380 bytes
+**Lines:** 18 | **Size:** 616 bytes
 
 ```typescript
 // src/app/(dashboard)/layout.tsx
 import { DashboardLayout } from "@/components/layouts/DashboardLayout";
+// ✅ SỬA LỖI: Thêm dòng import còn thiếu
+import { SocketHandler } from "@/components/layouts/SocketHandler";
 import React from "react";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   // Layout này sẽ bọc tất cả các trang con
   // ví dụ: /dashboard, /settings, /profile
-  return <DashboardLayout>{children}</DashboardLayout>;
+  return (
+    <DashboardLayout>
+      {children}
+      {/* Component này sẽ được import chính xác */}
+      <SocketHandler />
+    </DashboardLayout>
+  );
 }
 
 ```
@@ -539,42 +555,127 @@ export default function ProfilePage() {
 ```
 
 
-## 📄 `app\(dashboard)\settings\page.tsx`
+## 📄 `app\(dashboard)\settings\_components\SettingsNav.tsx`
 
-**Lines:** 34 | **Size:** 1191 bytes
+**Lines:** 44 | **Size:** 1575 bytes
 
 ```typescript
-// src/app/(dashboard)/settings/page.tsx
+// src/app/(dashboard)/settings/_components/SettingsNav.tsx
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { cn } from "@/lib/utils";
+
+// Định nghĩa các tab điều hướng
+const navItems = [
+  { name: "Password", href: "/settings" },
+  { name: "Sessions", href: "/settings/sessions" },
+  // Bạn có thể dễ dàng thêm các tab khác ở đây trong tương lai
+  // { name: "Profile", href: "/settings/profile" },
+  // { name: "Notifications", href: "/settings/notifications" },
+];
+
+export function SettingsNav() {
+  const pathname = usePathname();
+
+  return (
+    <nav
+      className="scrollbar-hide flex space-x-2 overflow-x-auto border-b"
+      aria-label="Settings navigation"
+    >
+      {navItems.map((item) => (
+        <Link
+          key={item.href}
+          href={item.href}
+          className={cn(
+            // Style chung cho tất cả các tab
+            "ring-offset-background focus-visible:ring-ring inline-flex items-center justify-center rounded-t-sm border-b-2 px-3 py-1.5 text-sm font-medium whitespace-nowrap transition-all focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none",
+            // Style cho tab KHÔNG active
+            "text-muted-foreground hover:border-border hover:text-primary border-transparent",
+            // Style cho tab ĐANG active
+            pathname === item.href && "border-primary text-primary"
+          )}
+        >
+          {item.name}
+        </Link>
+      ))}
+    </nav>
+  );
+}
+
+```
+
+
+## 📄 `app\(dashboard)\settings\layout.tsx`
+
+**Lines:** 29 | **Size:** 1097 bytes
+
+```typescript
+// src/app/(dashboard)/settings/layout.tsx
+import React from "react";
+import { SettingsNav } from "./_components/SettingsNav"; // Component điều hướng ta sẽ tạo ở bước 3
+
+/**
+ * Đây là Layout chung cho TẤT CẢ các trang con trong /settings/*
+ * Nó cung cấp tiêu đề chung và thanh điều hướng Tab.
+ * {children} sẽ là nội dung của trang con (ví dụ: page.tsx hoặc sessions/page.tsx)
+ */
+export default function SettingsLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="space-y-6">
+      {/* 1. Tiêu đề chung của trang Cài đặt */}
+      <header>
+        <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
+        <p className="text-muted-foreground">
+          Manage your account settings, password, and active sessions.
+        </p>
+      </header>
+
+      {/* 2. Thanh điều hướng dạng Tab */}
+      <SettingsNav />
+
+      {/* 3. Render nội dung của tab đang được chọn (children) */}
+      <div className="pt-4">{children}</div>
+    </div>
+  );
+}
+
+```
+
+
+## 📄 `app\(dashboard)\settings\page.tsx`
+
+**Lines:** 30 | **Size:** 965 bytes
+
+```typescript
+// src/app/(dashboard)/settings/page.tsx (ĐÃ CẬP NHẬT)
 "use client";
 
 import { ChangePasswordForm } from "@/components/forms/ChangePasswordForm";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 
-// (Bạn có thể thêm Metadata nếu muốn, nhưng vì đây là Client Component,
-// bạn có thể quản lý title động nếu cần)
-
-export default function SettingsPage() {
+/**
+ * Trang này giờ đây CHỈ chứa nội dung cho tab "Password".
+ * Tiêu đề "Settings" và thanh Tab đã được chuyển lên layout.tsx.
+ */
+export default function SettingsPasswordPage() {
   return (
-    <div className="space-y-6">
-      <header>
-        <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
-        <p className="text-muted-foreground">Manage your account settings and password.</p>
-      </header>
+    // XÓA <header> và <p> mô tả khỏi đây
 
-      <Card className="max-w-2xl">
-        <CardHeader>
-          <CardTitle>Change Password</CardTitle>
-          <CardDescription>
-            Enter your current password and a new password. You will be logged out after success.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ChangePasswordForm />
-        </CardContent>
-      </Card>
+    <Card className="max-w-2xl">
+      <CardHeader>
+        <CardTitle>Change Password</CardTitle>
+        <CardDescription>
+          Enter your current password and a new password. You will be logged out after success.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ChangePasswordForm />
+      </CardContent>
+    </Card>
 
-      {/* Thêm các Card cài đặt khác ở đây (ví dụ: Cài đặt Profile, Notifications...) */}
-    </div>
+    // XÓA Card "Manage Active Sessions" khỏi đây
   );
 }
 
@@ -2141,6 +2242,113 @@ export function DashboardLayout({
       </div>
     </div>
   );
+}
+
+```
+
+
+## 📄 `components\layouts\SocketHandler.tsx`
+
+**Lines:** 99 | **Size:** 3538 bytes
+
+```typescript
+// components/layouts/SocketHandler.tsx
+"use client";
+
+import { useEffect, useRef } from "react";
+import { useAuthStore } from "@/lib/stores/auth.store";
+import { socketService } from "@/lib/socket/client";
+import { getRefreshJtiFromToken } from "@/lib/utils/jwt";
+import { toast } from "sonner";
+
+/**
+ * Component "vô hình" (không render)
+ * Quản lý kết nối Socket.IO và lắng nghe các sự kiện auth toàn cục.
+ */
+export function SocketHandler() {
+  const { token, logout } = useAuthStore();
+
+  // Lưu trữ JTI của trình duyệt hiện tại
+  const myJti = useRef<string | null>(null);
+
+  // ✅ CẢI TIẾN: Dùng ref cho hàm logout để tránh "stale closure"
+  const logoutRef = useRef(logout);
+  useEffect(() => {
+    logoutRef.current = logout;
+  }, [logout]);
+
+  // 1. Quản lý Kết nối / Ngắt kết nối
+  useEffect(() => {
+    if (token) {
+      // Khi có token (đăng nhập)
+      myJti.current = getRefreshJtiFromToken(token);
+      console.log("[SocketHandler] My JTI:", myJti.current);
+      socketService.connect();
+    } else {
+      // Khi không có token (đăng xuất)
+      socketService.disconnect();
+      myJti.current = null;
+    }
+
+    // Cleanup khi component unmount
+    return () => {
+      socketService.disconnect();
+    };
+  }, [token]); // Chỉ chạy lại khi `token` thay đổi
+
+  // 2. Lắng nghe sự kiện
+  useEffect(() => {
+    const socket = socketService.getSocket();
+    if (!socket) {
+      // Socket chưa sẵn sàng (ví dụ: token đến chậm),
+      // effect [token] ở trên sẽ chạy và kích hoạt lại effect này
+      return;
+    }
+
+    // ✅ CẢI TIẾN: Vấn đề #6 - Dùng event `logout_confirmed`
+    // Lắng nghe sự kiện "thu hồi batch"
+    const handleForceLogoutBatch = (data: { revoked_jtis: string[] }) => {
+      console.log("[SocketHandler] Received 'force_logout_batch'", data);
+
+      if (myJti.current && data.revoked_jtis.includes(myJti.current)) {
+        toast.error("Phiên của bạn đã bị thu hồi", {
+          description: "Đăng xuất tự động...",
+          duration: 5000,
+        });
+
+        // Gửi xác nhận về server
+        socket.emit("logout_confirmed", { jti: myJti.current });
+
+        logoutRef.current(); // Dùng ref để gọi logout
+      }
+    };
+
+    // Lắng nghe sự kiện "thu hồi tất cả" (ví dụ: đổi mật khẩu)
+    const handleForceLogoutAll = (data: { reason: string }) => {
+      console.log("[SocketHandler] Received 'force_logout_all'", data);
+      toast.error("Tất cả các phiên đã bị vô hiệu hóa", {
+        description: `Lý do: ${data.reason}. Đăng xuất tự động...`,
+        duration: 5000,
+      });
+
+      // Gửi xác nhận về server
+      socket.emit("logout_confirmed", { jti: myJti.current, reason: data.reason });
+
+      logoutRef.current(); // Dùng ref
+    };
+
+    // Đăng ký listeners
+    socket.on("force_logout_batch", handleForceLogoutBatch);
+    socket.on("force_logout_all", handleForceLogoutAll);
+
+    // Cleanup listeners khi effect này chạy lại hoặc component unmount
+    return () => {
+      socket.off("force_logout_batch", handleForceLogoutBatch);
+      socket.off("force_logout_all", handleForceLogoutAll);
+    };
+  }, [token]); // Chạy lại nếu `token` thay đổi (để đảm bảo socket instance là mới nhất)
+
+  return null; // Không render gì cả
 }
 
 ```
@@ -4911,6 +5119,171 @@ export const isBrowser = typeof window !== "undefined";
 ```
 
 
+## 📄 `lib\socket\client.ts`
+
+**Lines:** 157 | **Size:** 4653 bytes
+
+```typescript
+// lib/socket/client.ts
+import { io, Socket } from "socket.io-client";
+import { env } from "@/lib/config/env";
+import { useAuthStore } from "../stores/auth.store";
+import { toast } from "sonner";
+
+class SocketService {
+  private socket: Socket | null = null;
+  private pingInterval: NodeJS.Timeout | null = null;
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts = 5;
+
+  private reconnectDelay = 1000;
+  private maxReconnectDelay = 30000;
+  private shutdownReconnectTimer: NodeJS.Timeout | null = null;
+
+  connect() {
+    if (this.socket && this.socket.connected) {
+      console.log("[SocketService] Already connected.");
+      return;
+    }
+
+    const token = useAuthStore.getState().token;
+    if (!token) {
+      console.error("[SocketService] No auth token, connection aborted.");
+      return;
+    }
+
+    console.log("[SocketService] Connecting to", env.NEXT_PUBLIC_API_URL);
+    this.reconnectAttempts = 0;
+
+    this.socket = io(env.NEXT_PUBLIC_API_URL, {
+      path: "/socket.io",
+      auth: { token },
+      transports: ["websocket", "polling"],
+      reconnection: true,
+      reconnectionAttempts: this.maxReconnectAttempts,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+    });
+
+    this.setupEventListeners();
+  }
+
+  private setupEventListeners() {
+    if (!this.socket) return;
+
+    this.socket.on("connect", () => {
+      console.log("[SocketService] ✅ Connected:", this.socket?.id);
+      this.reconnectAttempts = 0;
+      this.reconnectDelay = 1000;
+      if (this.shutdownReconnectTimer) {
+        clearTimeout(this.shutdownReconnectTimer);
+        this.shutdownReconnectTimer = null;
+      }
+      this.startHeartbeat();
+    });
+
+    this.socket.on("disconnect", (reason) => {
+      console.warn("[SocketService] ❌ Disconnected:", reason);
+      this.stopHeartbeat();
+      if (reason === "io server disconnect") {
+        console.error("[SocketService] Server disconnected session. Forcing logout.");
+        useAuthStore.getState().logout();
+      }
+    });
+
+    this.socket.on("connect_error", (error) => {
+      this.reconnectAttempts++;
+      console.error(
+        `[SocketService] Connection Error (Attempt ${this.reconnectAttempts}):`,
+        error.message
+      );
+      if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+        console.error("[SocketService] Max reconnection attempts reached. Stopping.");
+        this.disconnect();
+      }
+    });
+
+    // Xử lý Shutdown
+    this.socket.on("server_shutdown", (data: { message: string }) => {
+      console.warn("[SocketService] Server is shutting down:", data.message);
+      toast.info(data.message || "Server is restarting, please wait...", {
+        duration: this.maxReconnectDelay,
+      });
+
+      // ✅ SỬA LỖI: Dùng `if` check thay vì `?.`
+      if (this.socket) {
+        this.socket.io.opts.reconnection = false;
+      }
+      this.disconnect();
+
+      this.reconnectDelay = 1000;
+      this.attemptReconnect();
+    });
+  }
+
+  private attemptReconnect() {
+    if (this.shutdownReconnectTimer) {
+      clearTimeout(this.shutdownReconnectTimer);
+    }
+
+    this.shutdownReconnectTimer = setTimeout(() => {
+      if (this.reconnectDelay > this.maxReconnectDelay) {
+        console.error("[SocketService] Shutdown reconnect failed after max delay.");
+        return;
+      }
+
+      console.log(`[SocketService] Attempting reconnect after ${this.reconnectDelay}ms (shutdown)`);
+
+      // ✅ SỬA LỖI: Dùng `if` check thay vì `?.`
+      if (this.socket) {
+        this.socket.io.opts.reconnection = true;
+      }
+      this.connect();
+
+      this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxReconnectDelay);
+      this.attemptReconnect();
+    }, this.reconnectDelay);
+  }
+
+  private startHeartbeat() {
+    this.stopHeartbeat();
+    this.pingInterval = setInterval(() => {
+      if (this.socket?.connected) {
+        this.socket.emit("ping");
+      }
+    }, 30000);
+  }
+
+  private stopHeartbeat() {
+    if (this.pingInterval) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
+    }
+  }
+
+  disconnect() {
+    this.stopHeartbeat();
+    if (this.shutdownReconnectTimer) {
+      clearTimeout(this.shutdownReconnectTimer);
+      this.shutdownReconnectTimer = null;
+    }
+    if (this.socket) {
+      console.log("[SocketService] Disconnecting...");
+      this.socket.disconnect();
+      this.socket = null;
+    }
+  }
+
+  getSocket() {
+    return this.socket;
+  }
+}
+
+export const socketService = new SocketService();
+
+```
+
+
 ## 📄 `lib\stores\auth.store.ts`
 
 **Lines:** 74 | **Size:** 2314 bytes
@@ -5021,6 +5394,49 @@ export const useUIStore = create<UIState>((set) => ({
       isSidebarCollapsed: isCollapsed, // ← ĐÃ SỬA
     }),
 }));
+
+```
+
+
+## 📄 `lib\utils\jwt.ts`
+
+**Lines:** 35 | **Size:** 1030 bytes
+
+```typescript
+// lib/utils/jwt.ts
+import { jwtDecode } from "jwt-decode";
+
+// Định nghĩa cấu trúc payload của Access Token
+// Phải khớp với cấu trúc trong `security.py`
+interface AccessTokenPayload {
+  sub: string;
+  jti: string;
+  r_jti: string; // ✅ Đây là JTI của Refresh Token
+  type: "access";
+  exp: number;
+}
+
+/**
+ * Lấy JTI của Refresh Token (r_jti) từ bên trong Access Token.
+ * @param token Access Token
+ * @returns r_jti (Refresh Token JTI) hoặc null
+ */
+export const getRefreshJtiFromToken = (token: string): string | null => {
+  try {
+    // Giải mã token
+    const payload = jwtDecode<AccessTokenPayload>(token);
+
+    // Kiểm tra xem có đúng là Access Token và có r_jti không
+    if (payload && payload.type === "access" && payload.r_jti) {
+      return payload.r_jti;
+    }
+    console.warn("[jwt] Token is missing r_jti claim");
+    return null;
+  } catch (error) {
+    console.error("[jwt] Failed to decode token", error);
+    return null;
+  }
+};
 
 ```
 

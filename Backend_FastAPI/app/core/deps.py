@@ -5,7 +5,7 @@ import casbin
 import structlog
 from fastapi import Depends, Path, Request
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt  # <-- Sửa: import jwt trực tiếp
+from jose import JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, models, security, services  # ✅ THÊM IMPORT security
@@ -251,7 +251,7 @@ async def get_lead_for_user(
     from ..services import lead_service
 
     try:
-        lead = await lead_service.get_lead_by_id(db, lead_id)
+        lead = await lead_service.get_lead_by_id_shallow(db, lead_id)
     except ResourceNotFoundError:
         raise
     if current_user.role in ["admin", "manager"]:

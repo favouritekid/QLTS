@@ -55,28 +55,48 @@ async def get_active_sessions(
             # Continue without marking current session
 
     try:
-        sessions = await session_service.get_active_sessions(
+        # 1. Lấy danh sách thô (DB Models)
+        db_sessions = await session_service.get_active_sessions(
             db,
             current_user.id,
-            current_refresh_jti=current_refresh_jti,  # Pass current JTI to mark current session
+            current_refresh_jti=current_refresh_jti,
         )
-
         log.info(
             "Active sessions retrieved",
             user_id=current_user.id,
-            session_count=len(sessions),
+            session_count=len(db_sessions),
         )
 
-        # Mark current session in response
+        # ✅ --- BẮT ĐẦU TỐI ƯU HÓA (Theo đề xuất của bạn) ---
         current_session_id = None
-        for session in sessions:
-            if current_refresh_jti and session.refresh_jti == current_refresh_jti:
-                session.is_current = True
-                current_session_id = session.id
+        response_sessions = []
+
+        # 2. Dùng List Comprehension + model_construct
+        # Nhanh hơn nhiều so với việc lặp và gọi model_validate
+        response_sessions = [
+            schemas.UserSessionResponse.model_construct(
+                # Tự động map tất cả các cột từ CSDL
+                **{c.name: getattr(session, c.name) for c in session.__table__.columns},
+                
+                # Tính toán và ghi đè 'is_current'
+                is_current=bool(
+                    current_refresh_jti and 
+                    session.refresh_jti == current_refresh_jti
+                )
+            )
+            for session in db_sessions
+        ]
+
+        # 3. Tìm current_session_id (nếu cần) từ danh sách đã tạo
+        for s in response_sessions:
+            if s.is_current:
+                current_session_id = s.id
+                break
+        # ✅ --- KẾT THÚC TỐI ƯU HÓA ---
 
         return schemas.UserSessionListResponse(
-            sessions=sessions,
-            total=len(sessions),
+            sessions=response_sessions,
+            total=len(response_sessions),
             current_session_id=current_session_id,
         )
 
@@ -156,38 +176,23 @@ async def revoke_session(
 
 @router.post("/revoke-all", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_all_other_sessions(
-    current_session_id: int = None,  # Optional: ID of current session to preserve
+    # ✅ THAY ĐỔI Ở ĐÂY: Dùng Pydantic model để đọc JSON Body
+    request_data: schemas.RevokeAllSessionsRequest,
     current_user: models.User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(database.get_db),
 ):
-    """
-    Revoke all sessions except optionally the current one.
+    # ✅ Lấy ID từ request_data (trong body)
+    session_id_to_preserve = request_data.current_session_id
 
-    Args:
-        current_session_id: Optional ID of session to preserve (usually current session)
-
-    Useful when:
-        - User suspects account compromise
-        - User wants to logout from all other devices
-        - Security best practice after password change
-
-    Security:
-        - Requires authentication
-        - Only revokes user's own sessions
-        - Can optionally preserve current session
-
-    Returns:
-        204 No Content on success
-    """
     log.info(
         "Revoking all other sessions",
         user_id=current_user.id,
-        preserve_session_id=current_session_id,
+        preserve_session_id=session_id_to_preserve, # 👈 Log sẽ hiển thị đúng
     )
 
     try:
         revoked_count = await session_service.revoke_all_other_sessions(
-            db=db, user_id=current_user.id, except_session_id=current_session_id
+            db=db, user_id=current_user.id, except_session_id=session_id_to_preserve
         )
 
         log.info(
@@ -198,13 +203,15 @@ async def revoke_all_other_sessions(
 
         return None  # 204 No Content
 
+    # ✅ THÊM KHỐI CATCH NÀY (để bắt lỗi từ service)
     except Exception as e:
         log.error(
-            "Failed to revoke all other sessions",
+            "Failed to revoke all other sessions (endpoint level)",
             user_id=current_user.id,
             error=str(e),
             exc_info=True,
         )
+        # Báo lỗi về frontend để họ biết thao tác thất bại
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to revoke sessions",

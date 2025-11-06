@@ -28,8 +28,8 @@ from .lead import (
     LeadImportError,
     LeadImportResult,
     LeadInsights,
-    LeadUpdate,
     LeadsPage,
+    LeadUpdate,
     TimelineItem,
 )
 
@@ -77,8 +77,8 @@ from .user import (
     UserBase,
     UserCreate,
     UserInDB,
-    UserUpdate,
     UsersPage,
+    UserUpdate,
 )
 
 # --- Từ user_session.py ---
@@ -88,4 +88,5 @@ from .user_session import (
     UserSessionListResponse,
     UserSessionResponse,
     UserSessionUpdate,
+    RevokeAllSessionsRequest 
 )

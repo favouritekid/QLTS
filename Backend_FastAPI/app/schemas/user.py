@@ -8,6 +8,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     EmailStr,
+    Field,
     constr,
     field_validator,
     model_validator,
@@ -34,9 +35,10 @@ PasswordStr = constr(min_length=8, strip_whitespace=True)
 
 
 class UserBase(BaseModel):
-    username: str
-    email: EmailStr
-    full_name: Optional[str] = None
+    # ✅ SỬA: Thêm validation
+    username: str = Field(..., min_length=1, strip_whitespace=True)
+    email: EmailStr  # EmailStr tự động chuẩn hóa
+    full_name: Optional[str] = Field(None, strip_whitespace=True)
     role: str
     status: str
 
@@ -44,18 +46,17 @@ class UserBase(BaseModel):
 class UserCreate(BaseModel):
     """
     Schema cho user registration.
-    backend chỉ cần nhận username, email, password, full_name.
     """
 
-    username: str
+    # ✅ SỬA: Thêm validation
+    username: str = Field(..., min_length=3, max_length=64, strip_whitespace=True)
     email: EmailStr
     password: PasswordStr
-    full_name: Optional[str] = None
+    full_name: Optional[str] = Field(None, max_length=120, strip_whitespace=True)
 
     @field_validator("password")
     @classmethod
     def validate_password(cls, v: str) -> str:
-        # Validate password strength
         return validate_password_strength_logic(v)
 
 
@@ -130,8 +131,8 @@ class AdminUserCreate(UserCreate):
 
 class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
-    full_name: Optional[str] = None
-    phone_number: Optional[str] = None
+    full_name: Optional[str] = Field(None, max_length=120, strip_whitespace=True)
+    phone_number: Optional[str] = Field(None, max_length=20, strip_whitespace=True)
     role: Optional[str] = None
     status: Optional[str] = None
     max_capacity: Optional[int] = None

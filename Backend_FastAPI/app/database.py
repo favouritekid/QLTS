@@ -19,12 +19,15 @@ engine = create_async_engine(
     pool_recycle=3600,
     pool_size=20,
     max_overflow=40,
-    # echo=(settings.APP_ENV == "development"),
     echo=False,
     connect_args={
+        # ✅ Sét timeout ở mức độ command (phía client driver - asyncpg)
+        "command_timeout": 30,  # 30 giây
         "server_settings": {
             "application_name": "qlts_backend_api",
-        }
+            # ✅ Sét timeout ở mức độ CSDL (PostgreSQL)
+            "statement_timeout": "30000",  # 30000ms = 30 giây
+        },
     },
 )
 

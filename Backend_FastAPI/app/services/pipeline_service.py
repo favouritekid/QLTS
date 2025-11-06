@@ -1,35 +1,37 @@
 # app/services/pipeline_service.py
-import json
+import asyncio  # ✅ Thêm import
+import json  # ✅ Thêm import
 from typing import List
 
 import structlog
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import models, schemas  # <-- THÊM schemas
-
-# --- THÊM CÁC IMPORTS SAU ---
-from ..config import settings
+from .. import models, schemas
+from ..config import settings  # ✅ Thêm import
+# ✅ Thêm import
 from ..database import safe_redis_delete, safe_redis_get, safe_redis_set
-from ..utils.exceptions import DuplicateResourceError  # <-- THÊM
-from ..utils.exceptions import ResourceNotFoundError
+from ..utils.exceptions import DuplicateResourceError, ResourceNotFoundError
 
 log = structlog.get_logger(__name__)
 
-# --- ĐỊNH NGHĨA KEY VÀ TTL ---
+# --- ✅ Định nghĩa Key, TTL, và Lock cho Cache ---
 PIPELINE_STAGES_CACHE_KEY = "pipeline:all_stages"
 PIPELINE_STATUSES_CACHE_KEY = "pipeline:all_statuses"
-# Sử dụng TTL chung từ file config
-CACHE_TTL = settings.CONFIG_CACHE_TTL_SECONDS
+CACHE_TTL = settings.CONFIG_CACHE_TTL_SECONDS  # Lấy từ config (ví dụ: 3600s)
+
+_pipeline_cache_lock = asyncio.Lock()
+_status_cache_lock = asyncio.Lock()
+# ----------------------------------------------
 
 
 # ===============================================================
-# CHỨC NĂNG CACHE (Giữ nguyên)
+# CHỨC NĂNG CACHE
 # ===============================================================
 
 
 async def get_all_pipeline_stages(db: AsyncSession) -> List[dict]:
-    """Lấy tất cả Pipeline Stages (Hỗ trợ Cache)."""
+    """Lấy tất cả Pipeline Stages (Hỗ trợ Cache + Chống Cache Stampede)."""
     log.debug("Fetching all pipeline stages", cache_key=PIPELINE_STAGES_CACHE_KEY)
 
     # 1. Thử cache trước
@@ -45,38 +47,52 @@ async def get_all_pipeline_stages(db: AsyncSession) -> List[dict]:
             error=str(e_redis_get),
         )
 
-    log.debug("Cache miss for pipeline stages, querying DB")
+    log.debug("Cache miss for pipeline stages, acquiring lock...")
 
-    # 2. Cache Miss: Query DB
-    query = select(models.PipelineStage).order_by(models.PipelineStage.order)
-    result = await db.execute(query)
-    stages_models = result.scalars().all()
+    # 2. Cache Miss -> Lấy Lock
+    async with _pipeline_cache_lock:
+        # 2a. Kiểm tra lại cache (phòng trường hợp request khác đã refresh)
+        try:
+            cached_data_after_lock = await safe_redis_get(PIPELINE_STAGES_CACHE_KEY)
+            if cached_data_after_lock:
+                log.debug("Cache hit (after acquiring lock) for pipeline stages")
+                return json.loads(cached_data_after_lock)
+        except Exception:
+            pass  # Bỏ qua, chúng ta sẽ query lại
 
-    # 3. Chuyển đổi models sang list[dict]
-    stages_data = [
-        {"id": s.id, "name": s.name, "order": s.order} for s in stages_models
-    ]
+        log.debug("Cache miss (after acquiring lock), querying DB")
 
-    # 4. Lưu vào cache
-    try:
-        await safe_redis_set(
-            PIPELINE_STAGES_CACHE_KEY, json.dumps(stages_data), ex=CACHE_TTL
-        )
-        log.debug("Stored pipeline stages in cache", ttl=CACHE_TTL)
-    except Exception as e_redis_set:
-        log.error(
-            "Failed to set pipeline stages in cache",
-            cache_key=PIPELINE_STAGES_CACHE_KEY,
-            error=str(e_redis_set),
-        )
+        # 3. Cache Miss: Query DB
+        query = select(models.PipelineStage).order_by(models.PipelineStage.order)
+        result = await db.execute(query)
+        stages_models = result.scalars().all()
 
-    return stages_data
+        # 4. Chuyển đổi models sang list[dict]
+        stages_data = [
+            {"id": s.id, "name": s.name, "order": s.order} for s in stages_models
+        ]
+
+        # 5. Lưu vào cache
+        try:
+            await safe_redis_set(
+                PIPELINE_STAGES_CACHE_KEY, json.dumps(stages_data), ex=CACHE_TTL
+            )
+            log.debug("Stored pipeline stages in cache", ttl=CACHE_TTL)
+        except Exception as e_redis_set:
+            log.error(
+                "Failed to set pipeline stages in cache",
+                cache_key=PIPELINE_STAGES_CACHE_KEY,
+                error=str(e_redis_set),
+            )
+
+        # 6. Trả về (lock được tự động giải phóng)
+        return stages_data
 
 
 async def get_all_consultation_statuses(
     db: AsyncSession,
 ) -> List[dict]:
-    """Lấy tất cả Consultation Statuses (Hỗ trợ Cache)."""
+    """Lấy tất cả Consultation Statuses (Hỗ trợ Cache + Chống Cache Stampede)."""
     log.debug(
         "Fetching all consultation statuses", cache_key=PIPELINE_STATUSES_CACHE_KEY
     )
@@ -94,33 +110,52 @@ async def get_all_consultation_statuses(
             error=str(e_redis_get),
         )
 
-    log.debug("Cache miss for consultation statuses, querying DB")
+    log.debug("Cache miss for consultation statuses, acquiring lock...")
 
-    # 2. Cache Miss: Query DB
-    query = select(models.ConsultationStatus)
-    result = await db.execute(query)
-    statuses_models = result.scalars().all()
+    # 2. Cache Miss -> Lấy Lock
+    async with _status_cache_lock:
+        # 2a. Kiểm tra lại cache
+        try:
+            cached_data_after_lock = await safe_redis_get(PIPELINE_STATUSES_CACHE_KEY)
+            if cached_data_after_lock:
+                log.debug("Cache hit (after acquiring lock) for statuses")
+                return json.loads(cached_data_after_lock)
+        except Exception:
+            pass
 
-    # 3. Chuyển đổi models sang list[dict]
-    statuses_data = [
-        {"id": s.id, "name": s.name, "color_code": s.color_code, "stage_id": s.stage_id}
-        for s in statuses_models
-    ]
+        log.debug("Cache miss (after acquiring lock), querying DB")
 
-    # 4. Lưu vào cache
-    try:
-        await safe_redis_set(
-            PIPELINE_STATUSES_CACHE_KEY, json.dumps(statuses_data), ex=CACHE_TTL
-        )
-        log.debug("Stored consultation statuses in cache", ttl=CACHE_TTL)
-    except Exception as e_redis_set:
-        log.error(
-            "Failed to set consultation statuses in cache",
-            cache_key=PIPELINE_STATUSES_CACHE_KEY,
-            error=str(e_redis_set),
-        )
+        # 3. Cache Miss: Query DB
+        query = select(models.ConsultationStatus)
+        result = await db.execute(query)
+        statuses_models = result.scalars().all()
 
-    return statuses_data
+        # 4. Chuyển đổi models sang list[dict]
+        statuses_data = [
+            {
+                "id": s.id,
+                "name": s.name,
+                "color_code": s.color_code,
+                "stage_id": s.stage_id,
+            }
+            for s in statuses_models
+        ]
+
+        # 5. Lưu vào cache
+        try:
+            await safe_redis_set(
+                PIPELINE_STATUSES_CACHE_KEY, json.dumps(statuses_data), ex=CACHE_TTL
+            )
+            log.debug("Stored consultation statuses in cache", ttl=CACHE_TTL)
+        except Exception as e_redis_set:
+            log.error(
+                "Failed to set consultation statuses in cache",
+                cache_key=PIPELINE_STATUSES_CACHE_KEY,
+                error=str(e_redis_set),
+            )
+
+        # 6. Trả về (lock được tự động giải phóng)
+        return statuses_data
 
 
 async def invalidate_pipeline_cache():
@@ -160,7 +195,7 @@ async def _get_status_by_id(
 
 
 # ===============================================================
-# CRUD CHO PIPELINE STAGE (MỚI)
+# CRUD CHO PIPELINE STAGE
 # ===============================================================
 
 
@@ -286,7 +321,7 @@ async def delete_pipeline_stage(db: AsyncSession, stage_id: str):
 
 
 # ===============================================================
-# CRUD CHO CONSULTATION STATUS (MỚI)
+# CRUD CHO CONSULTATION STATUS
 # ===============================================================
 
 

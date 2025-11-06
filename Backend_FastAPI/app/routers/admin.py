@@ -92,7 +92,7 @@ async def add_new_policy(
 
     # Chính xác: Không cần save_policy()
 
-    return {"message": "Policy added successfully."}
+    return {"detail": "Policy added successfully."}
 
 
 @router.delete(
@@ -116,7 +116,7 @@ async def delete_policy(
 
     # Chính xác: Không cần save_policy()
 
-    return {"message": "Policy removed successfully."}
+    return {"detail": "Policy removed successfully."}
 
 
 @router.post(
@@ -142,7 +142,7 @@ async def assign_role_to_user(
     # SỬA: Xóa dòng save_policy()
     # await enforcer.save_policy() # AsyncAdapter tự lưu
 
-    return {"message": "Role assigned."}
+    return {"detail": "Role assigned."}
 
 
 @router.delete(
@@ -170,7 +170,7 @@ async def remove_role_from_user(
     # SỬA: Xóa dòng save_policy()
     # await enforcer.save_policy() # AsyncAdapter tự lưu
 
-    return {"message": "Role removed from user."}
+    return {"detail": "Role removed from user."}
 
 
 # ===============================================================
@@ -297,17 +297,30 @@ async def update_existing_user(
             )
     # Chỉ xử lý email nếu được cung cấp và không rỗng
     if email is not None and email.strip():
-        # Chỉ cần validate định dạng, không cần check DB
+        cleaned_email = email.strip()
         try:
             EmailStrAdapter = TypeAdapter(EmailStr)
-            valid_email = EmailStrAdapter.validate_python(email.strip())
+            valid_email = EmailStrAdapter.validate_python(cleaned_email)
+            
+            # ✅ SỬA: Thêm kiểm tra DB (giống hệt logic của profile.py)
+            if valid_email != db_user.email:
+                existing_user = await services.user_service.get_user_by_email(db, valid_email)
+                if existing_user:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="Email already registered by another user",
+                    )
             update_dict["email"] = valid_email
+            
         except ValidationError as e:
             error_detail = e.errors()[0].get("msg", "Invalid email format")
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Invalid email format: {email.strip()}. Error: {error_detail}",
+                detail=f"Invalid email format: {cleaned_email}. Error: {error_detail}",
             )
+        # (Thêm HTTPException nếu raise từ logic check DB)
+        except HTTPException as e: 
+            raise e
 
     # Tạo schema UserUpdate CHỈ với các dữ liệu đã được xác thực
     user_in = schemas.UserUpdate(**update_dict)
@@ -374,7 +387,7 @@ async def bulk_user_action(
         admin_user=current_admin,
         new_status=action_data.status,
     )
-    return {"message": message}
+    return {"detail": message}
 
 
 # ===============================================================
@@ -810,14 +823,14 @@ async def bulk_assign_leads(
         message += f" Failed to dispatch for {len(failed_ids)} leads."
         # Bạn có thể cân nhắc trả về status code khác nếu có lỗi, ví dụ 207 Multi-Status
         # Hoặc vẫn trả về 202 nhưng kèm thông tin lỗi chi tiết hơn trong body
-        # return {"message": message, "failed_ids": failed_ids}
+        # return {"detail": message, "failed_ids": failed_ids}
 
     log.info(
         "Finished processing bulk assign request",
         dispatched=dispatched_count,
         failed=len(failed_ids),
     )
-    return {"message": message}
+    return {"detail": message}
 
 
 @router.post(
@@ -1031,43 +1044,44 @@ async def import_leads_from_file(
 
     # --- 4. Thực hiện Bulk Insert ---
     created_lead_ids: List[int] = []
+    batch_size = 100  # Commit mỗi 100 lead
+
     if leads_to_insert:
         try:
-            # Sử dụng bulk_insert_mappings để hiệu quả và lấy lại ID
-            # Lưu ý: Cần DB và dialect hỗ trợ (asyncpg hỗ trợ)
-            # Không cần begin_nested vì chúng ta muốn commit hoặc rollback toàn bộ
-            await db.execute(pg_insert(models.Lead), leads_to_insert)
+            for i in range(0, len(leads_to_insert), batch_size):
+                batch = leads_to_insert[i : i + batch_size]
+                
+                async with db.begin_nested(): # Bắt đầu 1 transaction con
+                    # 1. Insert batch
+                    await db.execute(pg_insert(models.Lead), batch)
+                    
+                    # 2. Lấy ID của batch vừa insert
+                    inserted_emails = [ld["email"] for ld in batch]
+                    query = select(models.Lead.id).where(models.Lead.email.in_(inserted_emails))
+                    result = await db.execute(query)
+                    batch_ids = result.scalars().all()
+                    created_lead_ids.extend(batch_ids)
+                
+                # 3. Commit transaction con (db.begin_nested() tự commit)
+                log.info(f"Committed batch {i // batch_size + 1}, {len(batch_ids)} leads inserted.")
 
-            # Lấy ID của các lead vừa tạo (cần query lại dựa trên email chẳng hạn)
-            # Hoặc nếu dùng bulk_insert_mappings với return_defaults=True trên bản SQLAlchemy mới hơn
-            # results = await db.execute(stmt.returning(models.Lead.id))
-            # created_lead_ids = [row[0] for row in results]
-
-            # Cách đơn giản hơn: Query lại các lead vừa tạo dựa trên emails
-            inserted_emails = [ld["email"] for ld in leads_to_insert]
-            query = select(models.Lead.id).where(models.Lead.email.in_(inserted_emails))
-            result = await db.execute(query)
-            created_lead_ids = result.scalars().all()
-
+            # Commit transaction chính (nếu có)
             await db.commit()
-            log.info(f"Successfully bulk inserted {len(created_lead_ids)} leads.")
+            log.info(f"Successfully bulk inserted {len(created_lead_ids)} leads in total.")
 
         except Exception as e:
-            await db.rollback()
+            await db.rollback() # Rollback transaction chính nếu có lỗi
             log.error(
-                "Bulk lead insertion failed, rolling back.", error=str(e), exc_info=True
+                "Bulk lead insertion failed during batch, rolling back.", error=str(e), exc_info=True
             )
-            # Ghi nhận tất cả các dòng đã chuẩn bị là lỗi
-            for i, lead_dict in enumerate(leads_to_insert):
-                # Tìm row_number tương ứng (hơi phức tạp, có thể bỏ qua nếu quá khó)
-                # Giả sử lỗi chung cho cả batch
-                errors.append(
-                    schemas.LeadImportError(
-                        row_number=-(i + 1),  # Dùng số âm để chỉ lỗi batch
-                        error_message=f"Database bulk insert error: {e}",
-                        row_data=lead_dict,
-                    )
+            # Ghi nhận lỗi
+            errors.append(
+                schemas.LeadImportError(
+                    row_number=-1,
+                    error_message=f"Database bulk insert error (batch failed): {e}",
+                    row_data={},
                 )
+            )
             created_lead_ids = []  # Reset ID vì đã rollback
 
     # --- 5. Trả về kết quả ---

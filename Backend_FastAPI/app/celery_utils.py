@@ -30,25 +30,75 @@ celery_app.conf.update(
 )
 
 # ==================================================================
-# === KHÔNG CẦN ENGINE TOÀN CỤC NỮA ===
+# === ✅ KHAI BÁO BIẾN TOÀN CỤC CHO WORKER PROCESS ===
+# ==================================================================
+celery_async_engine = None
+CeleryScopedSessionMaker = None
 # ==================================================================
 
 
 @worker_process_init.connect
 def init_worker(**kwargs):
-    """Chỉ cấu hình logging cơ bản."""
+    """
+    ✅ Khởi tạo Engine và SessionMaker MỘT LẦN
+    khi worker process khởi động.
+    """
+    global celery_async_engine, CeleryScopedSessionMaker
+
     print("INFO [celery_utils.py/init_worker]: Initializing worker process...")
     logging.basicConfig(
         level=settings.LOG_LEVEL.upper(),
         format="%(asctime)s [%(levelname)-5.5s] [%(name)s] %(message)s",
     )
     log.info(f"Root logger level set to {settings.LOG_LEVEL.upper()}")
-    print("INFO [celery_utils.py/init_worker]: Worker process initialized.")
+
+    try:
+        celery_async_engine = create_async_engine(
+            settings.DATABASE_URL,
+            echo=False,
+            pool_pre_ping=True,
+            pool_recycle=3600,
+            pool_size=5,  # Giảm pool size cho worker
+            max_overflow=10,
+            pool_timeout=30,
+        )
+
+        CeleryScopedSessionMaker = sessionmaker(
+            bind=celery_async_engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+        print(
+            "INFO [celery_utils.py/init_worker]: DB Engine & SessionMaker CREATED for worker."
+        )
+    except Exception as e:
+        print(
+            f"CRITICAL [celery_utils.py/init_worker]: FAILED to create DB Engine. Error: {e}"
+        )
+        # Nếu không tạo được engine, các task sẽ fail, điều này là chấp nhận được
 
 
 @worker_process_shutdown.connect
 def shutdown_worker(**kwargs):
-    """Không cần làm gì ở đây nữa."""
+    """Hủy Engine khi worker tắt."""
+    # ✅ SỬA LỖI (F824): Xóa `global` vì biến này chỉ được đọc, không bị gán.
+    # global celery_async_engine
+    if celery_async_engine:
+        print("INFO [celery_utils.py/shutdown_worker]: Disposing DB Engine...")
+        # Chạy dispose trong một event loop tạm thời nếu cần
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(celery_async_engine.dispose())
+            else:
+                loop.run_until_complete(celery_async_engine.dispose())
+            print("INFO [celery_utils.py/shutdown_worker]: DB Engine disposed.")
+        except Exception as e:
+            print(
+                f"ERROR [celery_utils.py/shutdown_worker]: Failed to dispose engine. Error: {e}"
+            )
+
     log.info("Shutting down worker process...")
 
 
@@ -113,10 +163,9 @@ def send_login_alert_email_task(
     task_log = logging.getLogger("send_login_alert_email_task")
     task_log.info(f"Login alert task started for recipient: {email_to}")
 
-    from datetime import datetime
+    from datetime import datetime, timezone  # ✅ SỬA LỖI (F821): Thêm `timezone`
 
-    login_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
-
+    login_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     # Build anomaly warnings
     anomaly_warnings = ""
     if anomalies:
@@ -230,41 +279,32 @@ def send_login_alert_email_task(
 )
 def process_automatic_lead_assignment_task(self, lead_id: int):  # <--- QUAY LẠI `def`
     """
-    Sync Celery task. Tạo Engine/Session và gọi service async bên trong asyncio.run.
+    Sync Celery task. Sử dụng Engine/Session CÓ SẴN.
     """
     task_log = logging.getLogger("process_automatic_lead_assignment_task")
     task_log.info(f"Task received for lead_id: {lead_id}")
-    
-    # BỎ KIỂM TRA celery_async_session_maker (vì chúng ta tạo nó bên trong)
+
+    # ✅ KIỂM TRA NẾU SESSIONMAKER CHƯA SẴN SÀNG
+    if not CeleryScopedSessionMaker:
+        task_log.error("CeleryScopedSessionMaker not initialized. Retrying task...")
+        # Yêu cầu task thử lại sau 10 giây
+        raise self.retry(exc=Exception("DB Engine not ready"), countdown=10)
 
     async def _run_async_assignment_with_engine():
         # Lấy logger chuẩn bên trong hàm async
         async_task_log = logging.getLogger("assignment_task_async")
-        from .services import assignment_service
-        # 1. TẠO ENGINE MỚI BÊN TRONG EVENT LOOP
-        engine = create_async_engine(
-            settings.DATABASE_URL,
-            echo=False,
-            pool_pre_ping=True,
-            pool_recycle=3600,
-            pool_size=5,
-            max_overflow=10,
-            pool_timeout=30,
-        )
 
-        # 2. TẠO SESSIONMAKER MỚI
-        ScopedSessionMaker = sessionmaker(
-            bind=engine,
-            class_=AsyncSession,
-            expire_on_commit=False,
-            autoflush=False,
-        )
+        # ✅ IMPORT CỤC BỘ (Sửa lỗi Circular Import)
+        from .services import assignment_service
+
+        # 1. & 2. ✅ SỬ DỤNG LẠI SESSIONMAKER TOÀN CỤC
+        # (Không cần tạo engine/sessionmaker mới)
 
         try:
             async_task_log.info(
-                f"Engine created. Creating session for lead_id: {lead_id}"
+                f"Engine exists. Creating session for lead_id: {lead_id}"
             )
-            async with ScopedSessionMaker() as session:
+            async with CeleryScopedSessionMaker() as session:  # <--- Dùng SessionMaker đã tạo
                 async_task_log.debug(
                     f"Session created, calling service for lead_id: {lead_id}"
                 )
@@ -283,12 +323,10 @@ def process_automatic_lead_assignment_task(self, lead_id: int):  # <--- QUAY L�
                 async_task_log.debug(f"Transaction committed for lead_id: {lead_id}")
 
         finally:
-            # 3. QUAN TRỌNG: HỦY ENGINE SAU KHI DÙNG
+            # 3. ✅ KHÔNG CẦN HỦY ENGINE Ở ĐÂY
             async_task_log.debug(
-                f"Disposing task-specific engine for lead_id: {lead_id}"
+                f"Task finished, session closed for lead_id: {lead_id}"
             )
-            await engine.dispose()
-            async_task_log.debug(f"Engine disposed for lead_id: {lead_id}")
 
     try:
         # Chạy hàm async

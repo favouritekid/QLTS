@@ -8,7 +8,8 @@ from passlib.context import CryptContext
 
 from .config import settings
 from .utils.exceptions import InvalidToken
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=14)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

@@ -17,7 +17,8 @@ from .user import User
 
 class ConsultationBase(BaseModel):
     method: str
-    notes: str
+    # ✅ SỬA: Thêm strip_whitespace
+    notes: str = Field(..., strip_whitespace=True)
     outcome: Optional[str] = None
     duration_minutes: Optional[int] = None
 
@@ -69,7 +70,8 @@ class AssignLead(BaseModel):
 
 class LeadAction(BaseModel):
     action: Literal["reject", "reassign"]
-    reason: str
+    # ✅ SỬA: Thêm strip_whitespace
+    reason: str = Field(..., strip_whitespace=True)
 
 
 # -----------------
@@ -78,10 +80,11 @@ class LeadAction(BaseModel):
 
 
 class LeadBase(BaseModel):
-    full_name: str
-    email: EmailStr
-    phone: str
-    source: str
+    # ✅ SỬA: Thêm validation cho tất cả các trường string
+    full_name: str = Field(..., min_length=1, max_length=255, strip_whitespace=True)
+    email: EmailStr  # EmailStr đã tự động strip và validate
+    phone: str = Field(..., min_length=1, max_length=20, strip_whitespace=True)
+    source: str = Field(..., min_length=1, max_length=50, strip_whitespace=True)
     unit_id: int
     major_id: Optional[int] = None
 

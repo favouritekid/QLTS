@@ -54,6 +54,8 @@ class UserSessionResponse(UserSessionBase):
         default=True,
         description="Whether session is active (not revoked and not expired)",
     )
+    # ✅ THÊM DÒNG NÀY (Như bạn đề xuất)
+    # Thêm trường này với giá trị mặc định, Pydantic sẽ nhận nó
     is_current: bool = Field(
         default=False, description="Whether this is the current session"
     )
@@ -63,7 +65,10 @@ class UserSessionResponse(UserSessionBase):
 
 class UserSessionListResponse(BaseModel):
     """Schema for returning list of sessions."""
-
     sessions: list[UserSessionResponse]
     total: int
+    current_session_id: Optional[int] = None
+
+# ✅ THÊM SCHEMA NÀY VÀO CUỐI FILE
+class RevokeAllSessionsRequest(BaseModel):
     current_session_id: Optional[int] = None

@@ -1,7 +1,7 @@
 # app/services/user_service.py
-from typing import Any, Dict, List, Optional, Tuple
-
 import structlog
+from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime, timezone
 from fastapi import HTTPException, UploadFile
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,7 +10,13 @@ from .. import models, schemas
 from ..config import settings
 
 # ✅ 1. SỬA LỖI: Thêm import `safe_redis_pipeline` (sửa NameError)
-from ..database import safe_redis_delete, safe_redis_pipeline, safe_redis_set
+from ..database import (
+    redis_client,
+    safe_redis_delete,
+    safe_redis_pipeline,
+    safe_redis_set,
+    safe_redis_get
+)
 from ..security import (
     create_password_reset_token,
     get_password_hash,
@@ -40,7 +46,8 @@ log = structlog.get_logger(__name__)
 async def get_user_by_username(
     db: AsyncSession, username: str
 ) -> Optional[models.User]:
-    query = select(models.User).where(models.User.username == username.strip())
+    # (username đã được strip bởi Pydantic schema hoặc Form() data)
+    query = select(models.User).where(models.User.username == username)  # <--- SỬA
     result = await db.execute(query)
     user = result.scalar_one_or_none()
     if user:
@@ -50,8 +57,8 @@ async def get_user_by_username(
 
 
 async def get_user_by_email(db: AsyncSession, email: str) -> Optional[models.User]:
-    cleaned_email = email.strip()
-    query = select(models.User).where(models.User.email == cleaned_email)
+    # (EmailStr đã tự động chuẩn hóa)
+    query = select(models.User).where(models.User.email == email)  # <--- SỬA
     result = await db.execute(query)
     user = result.scalar_one_or_none()
     if user:
@@ -102,10 +109,9 @@ async def authenticate_user(
 async def create_user(db: AsyncSession, user_in: schemas.UserCreate) -> models.User:
     try:
         hashed_password = get_password_hash(user_in.password)
+        # ✅ SỬA: Dữ liệu đã sạch, chỉ cần model_dump
         db_user = models.User(
-            username=user_in.username.strip(),
-            email=user_in.email.strip(),
-            full_name=user_in.full_name,
+            **user_in.model_dump(exclude={"password"}),  # Dùng model_dump cho an toàn
             password_hash=hashed_password,
             role="user",
             status="active",
@@ -116,7 +122,7 @@ async def create_user(db: AsyncSession, user_in: schemas.UserCreate) -> models.U
         return db_user
     except Exception as e:
         await db.rollback()
-        log.error(  # ✅ SỬA LỖI: Xóa `await`
+        log.error(
             "Failed to create user",
             username=user_in.username,
             error=str(e),
@@ -133,12 +139,8 @@ async def create_user_by_admin(
     try:
         hashed_password = get_password_hash(user_in.password)
         db_user = models.User(
-            username=user_in.username.strip(),
-            email=user_in.email.strip(),
-            full_name=user_in.full_name,
+            **user_in.model_dump(exclude={"password"}),  # Dùng model_dump
             password_hash=hashed_password,
-            role=user_in.role,
-            status=user_in.status,
             avatar_url=None,
         )
         if avatar_file:
@@ -237,9 +239,7 @@ async def update_user(
 
         for field, value in update_data.items():
             if value is not None:
-                setattr(
-                    db_user, field, value.strip() if isinstance(value, str) else value
-                )
+                setattr(db_user, field, value)
 
         if avatar_file:
             log.debug(  # ✅ SỬA LỖI: Xóa `await`
@@ -285,11 +285,7 @@ async def update_profile(
         for field, value in update_data.items():
             if field in ["full_name", "phone_number", "email"]:
                 if value is not None:
-                    setattr(
-                        db_user,
-                        field,
-                        value.strip() if isinstance(value, str) else value,
-                    )
+                    setattr(db_user, field, value)
 
         if avatar_file:
             log.debug(  # ✅ SỬA LỖI: Xóa `await`
@@ -341,21 +337,47 @@ async def delete_user(db: AsyncSession, user_id: int):
         raise e
 
 
-# --- Logic Password (Hàm handle_forgot_password chỉ đọc, không commit) ---
-
-
 async def handle_forgot_password(db: AsyncSession, email_in: str):
     from ..celery_utils import send_password_reset_email_task
 
     cleaned_email = email_in.strip()
-    user = await get_user_by_email(db, email=cleaned_email)
+
+    # ✅ THÊM RATE LIMIT THEO EMAIL
+    email_rate_limit_key = f"rate_limit:forgot_pw:{cleaned_email}"
+    try:
+        # Giới hạn 5 yêu cầu mỗi giờ
+        current_count_str = await safe_redis_get(email_rate_limit_key)
+        current_count = int(current_count_str) if current_count_str else 0
+
+        if current_count >= 5:
+            log.warning(
+                "Forgot password rate limit (by email) exceeded", email=cleaned_email
+            )
+            # Vẫn trả về thành công (không để lộ thông tin)
+            return
+
+        # Tăng bộ đếm, set TTL 1 giờ (3600s)
+        # Dùng pipeline để đảm bảo INCR và EXPIRE là atomic
+        async with redis_client.pipeline() as pipe:
+            pipe.incr(email_rate_limit_key)
+            pipe.expire(email_rate_limit_key, 3600)
+            await pipe.execute()
+
+    except Exception as e_redis:
+        # Fail-open (vẫn cho chạy) nhưng log lỗi
+        log.error(
+            "Failed to check/set email rate limit for forgot_password",
+            email=cleaned_email,
+            error=str(e_redis),
+        )
+
+    # (Logic cũ tiếp tục)
+    user = await get_user_by_email(db, email=email_in)
     if not user:
-        log.debug(
-            "User not found for forgot password request", email=cleaned_email
-        )  # ✅ SỬA LỖI: Xóa `await`
+        log.debug("User not found for forgot password request", email=cleaned_email)
         return
 
-    log.info(  # ✅ SỬA LỖI: Xóa `await`
+    log.info(
         "User found for forgot password request. Sending reset email.", user_id=user.id
     )
     token = create_password_reset_token(email=user.email)
@@ -472,104 +494,109 @@ async def set_password_by_admin(
 
 async def invalidate_all_sessions(db: AsyncSession, user: models.User):
     """
-    (V5) Vô hiệu hóa tất cả các phiên hoạt động (thường sau khi đổi mật khẩu).
+    (V5 - Fixed) Vô hiệu hóa tất cả các phiên hoạt động.
+    Sửa lỗi Race Condition bằng cách khóa (lock) và cập nhật DB trong 1 transaction.
     """
-    try:
-        # (Đã xóa logic `active_jti`)
+    revoked_jtis = []
+    user_id = user.id
+    now = datetime.now(timezone.utc)
+    max_token_ttl = int(settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400)
+    safe_ttl = max(60, max_token_ttl)
 
-        # ✅ SỬA LỖI: Logic `safe_redis_pipeline` đã được import chính xác
-        try:
+    try:
+        # 1. Bắt đầu transaction và LẤY KHÓA
+        async with db.begin():
             result = await db.execute(
-                select(models.UserSession).where(models.UserSession.user_id == user.id)
+                select(models.UserSession)
+                .where(
+                    models.UserSession.user_id == user_id,
+                    models.UserSession.revoked_at.is_(None),  # Chỉ khóa session active
+                )
+                .with_for_update()  # ✅ KHÓA CÁC DÒNG NÀY
             )
             all_sessions = result.scalars().all()
 
-            async with safe_redis_pipeline(transaction=True) as pipe:
+            if not all_sessions:
+                log.info("No active sessions to invalidate", user_id=user_id)
+            else:
+                log.info(
+                    f"Found {len(all_sessions)} active sessions to invalidate",
+                    user_id=user_id,
+                )
                 for session in all_sessions:
-                    pipe.delete(f"session:{session.refresh_jti}")
-                    ttl = int(settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400)
-                    pipe.set(
-                        f"blacklist:{session.refresh_jti}",
-                        "password_changed",
-                        ex=max(60, ttl),
-                    )
-                await pipe.execute()
+                    # 2. ✅ CẬP NHẬT DATABASE
+                    session.revoked_at = now
+                    db.add(session)
+                    revoked_jtis.append(session.refresh_jti)
 
-            log.info(  # ✅ SỬA LỖI: Xóa `await`
-                f"Invalidated all {len(all_sessions)} session keys/JTIs in Redis",
-                user_id=user.id,
-            )
-        except Exception as e_redis_del:
-            log.error(  # ✅ SỬA LỖI: Xóa `await`
-                "Failed to clear multi-session keys from Redis",
-                user_id=user.id,
-                error=str(e_redis_del),
-            )
+            # 3. ✅ SET GLOBAL BLACKLIST (vẫn trong transaction)
+            # Điều này ngăn chặn login/refresh MỚI trước khi transaction commit
+            try:
+                blacklist_key = f"user_blacklist:{user_id}"
+                await safe_redis_set(blacklist_key, "sessions_invalidated", ex=safe_ttl)
+                log.info(
+                    "User added to global blacklist (in transaction)", user_id=user_id
+                )
+            except Exception as e_redis_set:
+                log.error(
+                    "CRITICAL: Failed to add user to global blacklist, rolling back DB",
+                    user_id=user_id,
+                    error=str(e_redis_set),
+                )
+                # Ném lỗi để rollback transaction
+                raise HTTPException(
+                    status_code=500, detail="Auth service failure (Cache)"
+                )
 
-        # (Giữ nguyên logic blacklist toàn cục)
-        max_token_lifetime_seconds = int(
-            settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
-        )
-        if max_token_lifetime_seconds <= 0:
-            max_token_lifetime_seconds = 60
+        # 4. ✅ COMMIT TỰ ĐỘNG (khi ra khỏi `async with db.begin()`)
+        log.info("DB transaction committed, sessions revoked in DB", user_id=user_id)
 
+        # 5. ✅ XÓA REDIS KEYS (SAU KHI COMMIT THÀNH CÔNG)
+        if revoked_jtis:
+            try:
+                async with safe_redis_pipeline(transaction=True) as pipe:
+                    for jti in revoked_jtis:
+                        pipe.delete(f"session:{jti}")
+                        pipe.set(f"blacklist:{jti}", "password_changed", ex=safe_ttl)
+                    await pipe.execute()
+                log.info(
+                    f"Invalidated {len(revoked_jtis)} session keys in Redis",
+                    user_id=user_id,
+                )
+            except Exception as e_redis_del:
+                log.error(
+                    "Failed to clear session keys from Redis",
+                    user_id=user_id,
+                    error=str(e_redis_del),
+                )
+                # Không ném lỗi ở đây, vì DB đã commit (nhưng cần log)
+
+        # 6. ✅ GỬI SOCKET EVENT (SAU KHI MỌI THỨ HOÀN TẤT)
         try:
-            blacklist_key = f"user_blacklist:{user.id}"
-            await safe_redis_set(
-                blacklist_key, "sessions_invalidated", ex=max_token_lifetime_seconds
-            )
-            log.info(  # ✅ SỬA LỖI: Xóa `await`
-                "User added to global blacklist",
-                user_id=user.id,
-                ttl_seconds=max_token_lifetime_seconds,
-            )
-        except Exception as e_redis_set:
-            log.error(  # ✅ SỬA LỖI: Xóa `await`
-                "CRITICAL: Failed to add user to global blacklist, rolling back DB changes",
-                user_id=user.id,
-                error=str(e_redis_set),
-            )
-            await db.rollback()
-            raise
-
-        await db.commit()
-        log.info(
-            "All sessions invalidated successfully for user", user_id=user.id
-        )  # ✅ SỬA LỖI: Xóa `await`
-
-        # ✅ CẢI TIẾN: Vấn đề #4 - Gửi sự kiện Socket.IO
-        try:
-            room_name = f"user_room_{user.id}"
+            room_name = f"user_room_{user_id}"
             await sio.emit(
                 "force_logout_all", {"reason": "Password changed"}, room=room_name
             )
             socket_events_emitted_total.labels(event_type="force_logout_all").inc()
-            log.info(
-                "Emitted 'force_logout_all' event", room=room_name
-            )  # ✅ SỬA LỖI: Xóa `await`
+            log.info("Emitted 'force_logout_all' event", room=room_name)
         except Exception as e_socket:
             socket_emit_failures_total.labels(event_type="force_logout_all").inc()
             log.error(
                 "Failed to emit socket event for invalidate-all", error=str(e_socket)
-            )  # ✅ SỬA LỖI: Xóa `await`
+            )
 
     except Exception as e:
-        await db.rollback()
-        log.error(  # ✅ SỬA LỖI: Xóa `await`
-            "Failed to invalidate sessions",
-            user_id=user.id,
-            error=str(e),
-            exc_info=True,
-        )
-        if "Failed to add user to global blacklist" not in str(e):
+        # Rollback tự động nếu lỗi trong `async with db.begin()`
+        if not isinstance(e, HTTPException):
+            log.error(
+                "Failed to invalidate sessions",
+                user_id=user_id,
+                error=str(e),
+                exc_info=True,
+            )
             raise HTTPException(status_code=500, detail="Could not invalidate sessions")
-
-
-# --- Logic Logout (ĐÃ BỊ XÓA TRONG V5) ---
-# (Hàm `logout_user` đã bị xóa khỏi `routers/auth.py` V5,
-# nên chúng ta có thể xóa nó ở đây để dọn dẹp, hoặc giữ lại nếu
-# có nơi khác gọi)
-# Tạm thời giữ lại nhưng đảm bảo log là đồng bộ:
+        else:
+            raise  # Ném lại lỗi HTTPException (vd: từ Redis)
 
 
 async def logout_user(db: AsyncSession, user: models.User):

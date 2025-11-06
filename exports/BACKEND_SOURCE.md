@@ -1,6 +1,6 @@
 # Backend Source Code
 
-**Generated:** 2025-11-05 09:28:12  
+**Generated:** 2025-11-06 09:05:54  
 **Project:** QLTS (Quản Lý Tài Sản)  
 **Description:** Complete source code export of the FastAPI backend application
 
@@ -88,17 +88,18 @@ Backend_FastAPI/app/
 
 ## 📄 `__init__.py`
 
-**Lines:** 2 | **Size:** 76 bytes
+**Lines:** 3 | **Size:** 78 bytes
 
 ```python
 # app/__init__.py
 # Đánh dấu thư mục 'app' là một Python package.
+
 ```
 
 
 ## 📄 `celery_utils.py`
 
-**Lines:** 302 | **Size:** 12615 bytes
+**Lines:** 340 | **Size:** 14357 bytes
 
 ```python
 # app/celery_utils.py
@@ -133,25 +134,75 @@ celery_app.conf.update(
 )
 
 # ==================================================================
-# === KHÔNG CẦN ENGINE TOÀN CỤC NỮA ===
+# === ✅ KHAI BÁO BIẾN TOÀN CỤC CHO WORKER PROCESS ===
+# ==================================================================
+celery_async_engine = None
+CeleryScopedSessionMaker = None
 # ==================================================================
 
 
 @worker_process_init.connect
 def init_worker(**kwargs):
-    """Chỉ cấu hình logging cơ bản."""
+    """
+    ✅ Khởi tạo Engine và SessionMaker MỘT LẦN
+    khi worker process khởi động.
+    """
+    global celery_async_engine, CeleryScopedSessionMaker
+
     print("INFO [celery_utils.py/init_worker]: Initializing worker process...")
     logging.basicConfig(
         level=settings.LOG_LEVEL.upper(),
         format="%(asctime)s [%(levelname)-5.5s] [%(name)s] %(message)s",
     )
     log.info(f"Root logger level set to {settings.LOG_LEVEL.upper()}")
-    print("INFO [celery_utils.py/init_worker]: Worker process initialized.")
+
+    try:
+        celery_async_engine = create_async_engine(
+            settings.DATABASE_URL,
+            echo=False,
+            pool_pre_ping=True,
+            pool_recycle=3600,
+            pool_size=5,  # Giảm pool size cho worker
+            max_overflow=10,
+            pool_timeout=30,
+        )
+
+        CeleryScopedSessionMaker = sessionmaker(
+            bind=celery_async_engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+        print(
+            "INFO [celery_utils.py/init_worker]: DB Engine & SessionMaker CREATED for worker."
+        )
+    except Exception as e:
+        print(
+            f"CRITICAL [celery_utils.py/init_worker]: FAILED to create DB Engine. Error: {e}"
+        )
+        # Nếu không tạo được engine, các task sẽ fail, điều này là chấp nhận được
 
 
 @worker_process_shutdown.connect
 def shutdown_worker(**kwargs):
-    """Không cần làm gì ở đây nữa."""
+    """Hủy Engine khi worker tắt."""
+    # ✅ SỬA LỖI (F824): Xóa `global` vì biến này chỉ được đọc, không bị gán.
+    # global celery_async_engine
+    if celery_async_engine:
+        print("INFO [celery_utils.py/shutdown_worker]: Disposing DB Engine...")
+        # Chạy dispose trong một event loop tạm thời nếu cần
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(celery_async_engine.dispose())
+            else:
+                loop.run_until_complete(celery_async_engine.dispose())
+            print("INFO [celery_utils.py/shutdown_worker]: DB Engine disposed.")
+        except Exception as e:
+            print(
+                f"ERROR [celery_utils.py/shutdown_worker]: Failed to dispose engine. Error: {e}"
+            )
+
     log.info("Shutting down worker process...")
 
 
@@ -216,10 +267,9 @@ def send_login_alert_email_task(
     task_log = logging.getLogger("send_login_alert_email_task")
     task_log.info(f"Login alert task started for recipient: {email_to}")
 
-    from datetime import datetime
+    from datetime import datetime, timezone  # ✅ SỬA LỖI (F821): Thêm `timezone`
 
-    login_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
-
+    login_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     # Build anomaly warnings
     anomaly_warnings = ""
     if anomalies:
@@ -333,41 +383,32 @@ def send_login_alert_email_task(
 )
 def process_automatic_lead_assignment_task(self, lead_id: int):  # <--- QUAY LẠI `def`
     """
-    Sync Celery task. Tạo Engine/Session và gọi service async bên trong asyncio.run.
+    Sync Celery task. Sử dụng Engine/Session CÓ SẴN.
     """
     task_log = logging.getLogger("process_automatic_lead_assignment_task")
     task_log.info(f"Task received for lead_id: {lead_id}")
-    
-    # BỎ KIỂM TRA celery_async_session_maker (vì chúng ta tạo nó bên trong)
+
+    # ✅ KIỂM TRA NẾU SESSIONMAKER CHƯA SẴN SÀNG
+    if not CeleryScopedSessionMaker:
+        task_log.error("CeleryScopedSessionMaker not initialized. Retrying task...")
+        # Yêu cầu task thử lại sau 10 giây
+        raise self.retry(exc=Exception("DB Engine not ready"), countdown=10)
 
     async def _run_async_assignment_with_engine():
         # Lấy logger chuẩn bên trong hàm async
         async_task_log = logging.getLogger("assignment_task_async")
-        from .services import assignment_service
-        # 1. TẠO ENGINE MỚI BÊN TRONG EVENT LOOP
-        engine = create_async_engine(
-            settings.DATABASE_URL,
-            echo=False,
-            pool_pre_ping=True,
-            pool_recycle=3600,
-            pool_size=5,
-            max_overflow=10,
-            pool_timeout=30,
-        )
 
-        # 2. TẠO SESSIONMAKER MỚI
-        ScopedSessionMaker = sessionmaker(
-            bind=engine,
-            class_=AsyncSession,
-            expire_on_commit=False,
-            autoflush=False,
-        )
+        # ✅ IMPORT CỤC BỘ (Sửa lỗi Circular Import)
+        from .services import assignment_service
+
+        # 1. & 2. ✅ SỬ DỤNG LẠI SESSIONMAKER TOÀN CỤC
+        # (Không cần tạo engine/sessionmaker mới)
 
         try:
             async_task_log.info(
-                f"Engine created. Creating session for lead_id: {lead_id}"
+                f"Engine exists. Creating session for lead_id: {lead_id}"
             )
-            async with ScopedSessionMaker() as session:
+            async with CeleryScopedSessionMaker() as session:  # <--- Dùng SessionMaker đã tạo
                 async_task_log.debug(
                     f"Session created, calling service for lead_id: {lead_id}"
                 )
@@ -386,12 +427,10 @@ def process_automatic_lead_assignment_task(self, lead_id: int):  # <--- QUAY L�
                 async_task_log.debug(f"Transaction committed for lead_id: {lead_id}")
 
         finally:
-            # 3. QUAN TRỌNG: HỦY ENGINE SAU KHI DÙNG
+            # 3. ✅ KHÔNG CẦN HỦY ENGINE Ở ĐÂY
             async_task_log.debug(
-                f"Disposing task-specific engine for lead_id: {lead_id}"
+                f"Task finished, session closed for lead_id: {lead_id}"
             )
-            await engine.dispose()
-            async_task_log.debug(f"Engine disposed for lead_id: {lead_id}")
 
     try:
         # Chạy hàm async
@@ -591,17 +630,18 @@ except Exception as e:
 
 ## 📄 `core\__init__.py`
 
-**Lines:** 2 | **Size:** 44 bytes
+**Lines:** 3 | **Size:** 46 bytes
 
 ```python
 # app/core/__init__.py
 # flake8: noqa: F401
+
 ```
 
 
 ## 📄 `core\deps.py`
 
-**Lines:** 271 | **Size:** 10246 bytes
+**Lines:** 271 | **Size:** 10210 bytes
 
 ```python
 # app/core/deps.py
@@ -611,7 +651,7 @@ import casbin
 import structlog
 from fastapi import Depends, Path, Request
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt  # <-- Sửa: import jwt trực tiếp
+from jose import JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, models, security, services  # ✅ THÊM IMPORT security
@@ -857,7 +897,7 @@ async def get_lead_for_user(
     from ..services import lead_service
 
     try:
-        lead = await lead_service.get_lead_by_id(db, lead_id)
+        lead = await lead_service.get_lead_by_id_shallow(db, lead_id)
     except ResourceNotFoundError:
         raise
     if current_user.role in ["admin", "manager"]:
@@ -880,7 +920,7 @@ OfficerRequired = Depends(require_roles(["officer", "admin", "manager"]))
 
 ## 📄 `database.py`
 
-**Lines:** 144 | **Size:** 4550 bytes
+**Lines:** 147 | **Size:** 4761 bytes
 
 ```python
 # app/database.py
@@ -904,12 +944,15 @@ engine = create_async_engine(
     pool_recycle=3600,
     pool_size=20,
     max_overflow=40,
-    # echo=(settings.APP_ENV == "development"),
     echo=False,
     connect_args={
+        # ✅ Sét timeout ở mức độ command (phía client driver - asyncpg)
+        "command_timeout": 30,  # 30 giây
         "server_settings": {
             "application_name": "qlts_backend_api",
-        }
+            # ✅ Sét timeout ở mức độ CSDL (PostgreSQL)
+            "statement_timeout": "30000",  # 30000ms = 30 giây
+        },
     },
 )
 
@@ -1096,7 +1139,7 @@ async def send_password_reset_email(email_to: str, reset_url: str, username: str
 
 ## 📄 `main.py`
 
-**Lines:** 501 | **Size:** 18790 bytes
+**Lines:** 542 | **Size:** 20594 bytes
 
 ```python
 # app/main.py
@@ -1183,9 +1226,25 @@ root_logger.handlers.clear()
 root_logger.addHandler(log_handler)
 root_logger.setLevel(settings.LOG_LEVEL.upper())
 
+# === ✅ BẮT ĐẦU TẮT TIẾNG LOG THỪA ===
+
 # Tắt log ồn ào của SQLAlchemy
 logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 logging.getLogger("sqlalchemy.pool").setLevel(logging.WARNING)
+
+# Tắt log DEBUG của Uvicorn (chỉ hiển thị INFO trở lên)
+logging.getLogger("uvicorn.access").setLevel(logging.INFO)
+logging.getLogger("uvicorn.error").setLevel(logging.INFO)
+
+# ❗️ Tắt log DEBUG của Socket.IO và Engine.IO (QUAN TRỌNG NHẤT)
+# Đây là những dòng log như "Sending packet...", "Received packet..."
+logging.getLogger("socketio").setLevel(logging.INFO)
+logging.getLogger("engineio").setLevel(logging.INFO)
+
+# Tắt log DEBUG của thư viện user-agents
+logging.getLogger("user_agents").setLevel(logging.INFO)
+
+# === ✅ KẾT THÚC TẮT TIẾNG LOG THỪA ===
 
 # Cấu hình log uvicorn
 logging.getLogger("uvicorn.access").handlers.clear()
@@ -1277,12 +1336,37 @@ async def lifespan(app: FastAPI):
             "server_shutdown",
             {"message": "Server is restarting. Please refresh in a moment."},
         )
-        # Chờ 1 giây (thay vì 2) để các client nhận được thông báo
+        # Chờ 1 giây
         await asyncio.sleep(1)
-        # Ngắt kết nối tất cả client
-        await sio.disconnect()
-        log.info("Socket.IO server connections closed gracefully")
+
+        # ✅ SỬA LỖI: Lặp qua và ngắt kết nối từng client
+
+        all_sids = []
+        try:
+            # SỬA: Lấy SIDs từ server Engine.IO (EIO)
+            # `eio.sockets` là dict chứa các socket đang hoạt động
+            all_sids = list(sio.eio.sockets.keys())  # <--- ĐÃ SỬA
+        except Exception as e_get_sid:
+            log.error("Failed to get SIDs for shutdown", error=str(e_get_sid))
+            all_sids = []  # Đặt là list rỗng để bỏ qua bước disconnect
+
+        if all_sids:
+            log.info(f"Disconnecting {len(all_sids)} active socket clients...")
+            for sid in all_sids:
+                try:
+                    # Ngắt kết nối từng client
+                    await sio.disconnect(sid)
+                except Exception as e_client:
+                    # Log lỗi nếu không ngắt kết nối được 1 client, nhưng vẫn tiếp tục
+                    log.warning(
+                        f"Error disconnecting client {sid}", error=str(e_client)
+                    )
+            log.info("Socket.IO server connections closed gracefully")
+        else:
+            log.info("No active socket clients to disconnect.")
+
     except Exception as e:
+        # Lỗi này giờ đây chỉ bắt các lỗi chung (ví dụ: lỗi khi emit)
         log.error("Error during Socket.IO shutdown", error=str(e))
 
     try:
@@ -1525,7 +1609,7 @@ async def metrics():
 async def health_check():
     """Kiểm tra API cơ bản."""
     log.debug("Health check endpoint was reached.")  # ✅ SỬA LỖI: Xóa `await`
-    return {"status": "ok", "message": "Server is healthy and running!"}
+    return {"status": "ok", "detail": "Server is healthy and running!"}
 
 
 @app.get("/health/detailed", tags=["Utilities"])
@@ -1613,17 +1697,17 @@ async def detailed_health_check(db: AsyncSession = Depends(database.get_db)):
 
 # Import Base (quan trọng cho Alembic/SQLAlchemy)
 from .base import Base
+from .config import LeadScoringConfig, OfficerAssignmentConfig, SkillRequirementRule
+from .lead import Application, AssignmentLog, Consultation, CRMInteraction, Lead
+from .lead_history import LeadStatusHistory
+from .organization import Major, OrganizationUnit
+from .pipeline import ConsultationStatus, PipelineStage
+from .user import User
+from .user_session import UserSession
 
 # Import tất cả các model để chúng được đăng ký với Base
 # và để chúng có thể được truy cập qua package 'models' (vd: models.User)
 
-from .config import OfficerAssignmentConfig, LeadScoringConfig, SkillRequirementRule
-from .lead import Lead, Consultation, Application, CRMInteraction, AssignmentLog
-from .lead_history import LeadStatusHistory
-from .organization import OrganizationUnit, Major
-from .pipeline import PipelineStage, ConsultationStatus
-from .user import User
-from .user_session import UserSession
 ```
 
 
@@ -2236,19 +2320,18 @@ RATE_LIMITS = {"auth": "5/minute", "default": "100/hour"}
 
 ## 📄 `routers\__init__.py`
 
-**Lines:** 4 | **Size:** 51 bytes
+**Lines:** 3 | **Size:** 49 bytes
 
 ```python
 # app/routers/__init__.py
 # flake8: noqa: F401
-
 
 ```
 
 
 ## 📄 `routers\admin.py`
 
-**Lines:** 1089 | **Size:** 39297 bytes
+**Lines:** 1103 | **Size:** 39611 bytes
 
 ```python
 # app/routers/admin.py
@@ -2345,7 +2428,7 @@ async def add_new_policy(
 
     # Chính xác: Không cần save_policy()
 
-    return {"message": "Policy added successfully."}
+    return {"detail": "Policy added successfully."}
 
 
 @router.delete(
@@ -2369,7 +2452,7 @@ async def delete_policy(
 
     # Chính xác: Không cần save_policy()
 
-    return {"message": "Policy removed successfully."}
+    return {"detail": "Policy removed successfully."}
 
 
 @router.post(
@@ -2395,7 +2478,7 @@ async def assign_role_to_user(
     # SỬA: Xóa dòng save_policy()
     # await enforcer.save_policy() # AsyncAdapter tự lưu
 
-    return {"message": "Role assigned."}
+    return {"detail": "Role assigned."}
 
 
 @router.delete(
@@ -2423,7 +2506,7 @@ async def remove_role_from_user(
     # SỬA: Xóa dòng save_policy()
     # await enforcer.save_policy() # AsyncAdapter tự lưu
 
-    return {"message": "Role removed from user."}
+    return {"detail": "Role removed from user."}
 
 
 # ===============================================================
@@ -2550,17 +2633,30 @@ async def update_existing_user(
             )
     # Chỉ xử lý email nếu được cung cấp và không rỗng
     if email is not None and email.strip():
-        # Chỉ cần validate định dạng, không cần check DB
+        cleaned_email = email.strip()
         try:
             EmailStrAdapter = TypeAdapter(EmailStr)
-            valid_email = EmailStrAdapter.validate_python(email.strip())
+            valid_email = EmailStrAdapter.validate_python(cleaned_email)
+            
+            # ✅ SỬA: Thêm kiểm tra DB (giống hệt logic của profile.py)
+            if valid_email != db_user.email:
+                existing_user = await services.user_service.get_user_by_email(db, valid_email)
+                if existing_user:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="Email already registered by another user",
+                    )
             update_dict["email"] = valid_email
+            
         except ValidationError as e:
             error_detail = e.errors()[0].get("msg", "Invalid email format")
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Invalid email format: {email.strip()}. Error: {error_detail}",
+                detail=f"Invalid email format: {cleaned_email}. Error: {error_detail}",
             )
+        # (Thêm HTTPException nếu raise từ logic check DB)
+        except HTTPException as e: 
+            raise e
 
     # Tạo schema UserUpdate CHỈ với các dữ liệu đã được xác thực
     user_in = schemas.UserUpdate(**update_dict)
@@ -2627,7 +2723,7 @@ async def bulk_user_action(
         admin_user=current_admin,
         new_status=action_data.status,
     )
-    return {"message": message}
+    return {"detail": message}
 
 
 # ===============================================================
@@ -3063,14 +3159,14 @@ async def bulk_assign_leads(
         message += f" Failed to dispatch for {len(failed_ids)} leads."
         # Bạn có thể cân nhắc trả về status code khác nếu có lỗi, ví dụ 207 Multi-Status
         # Hoặc vẫn trả về 202 nhưng kèm thông tin lỗi chi tiết hơn trong body
-        # return {"message": message, "failed_ids": failed_ids}
+        # return {"detail": message, "failed_ids": failed_ids}
 
     log.info(
         "Finished processing bulk assign request",
         dispatched=dispatched_count,
         failed=len(failed_ids),
     )
-    return {"message": message}
+    return {"detail": message}
 
 
 @router.post(
@@ -3284,43 +3380,44 @@ async def import_leads_from_file(
 
     # --- 4. Thực hiện Bulk Insert ---
     created_lead_ids: List[int] = []
+    batch_size = 100  # Commit mỗi 100 lead
+
     if leads_to_insert:
         try:
-            # Sử dụng bulk_insert_mappings để hiệu quả và lấy lại ID
-            # Lưu ý: Cần DB và dialect hỗ trợ (asyncpg hỗ trợ)
-            # Không cần begin_nested vì chúng ta muốn commit hoặc rollback toàn bộ
-            await db.execute(pg_insert(models.Lead), leads_to_insert)
+            for i in range(0, len(leads_to_insert), batch_size):
+                batch = leads_to_insert[i : i + batch_size]
+                
+                async with db.begin_nested(): # Bắt đầu 1 transaction con
+                    # 1. Insert batch
+                    await db.execute(pg_insert(models.Lead), batch)
+                    
+                    # 2. Lấy ID của batch vừa insert
+                    inserted_emails = [ld["email"] for ld in batch]
+                    query = select(models.Lead.id).where(models.Lead.email.in_(inserted_emails))
+                    result = await db.execute(query)
+                    batch_ids = result.scalars().all()
+                    created_lead_ids.extend(batch_ids)
+                
+                # 3. Commit transaction con (db.begin_nested() tự commit)
+                log.info(f"Committed batch {i // batch_size + 1}, {len(batch_ids)} leads inserted.")
 
-            # Lấy ID của các lead vừa tạo (cần query lại dựa trên email chẳng hạn)
-            # Hoặc nếu dùng bulk_insert_mappings với return_defaults=True trên bản SQLAlchemy mới hơn
-            # results = await db.execute(stmt.returning(models.Lead.id))
-            # created_lead_ids = [row[0] for row in results]
-
-            # Cách đơn giản hơn: Query lại các lead vừa tạo dựa trên emails
-            inserted_emails = [ld["email"] for ld in leads_to_insert]
-            query = select(models.Lead.id).where(models.Lead.email.in_(inserted_emails))
-            result = await db.execute(query)
-            created_lead_ids = result.scalars().all()
-
+            # Commit transaction chính (nếu có)
             await db.commit()
-            log.info(f"Successfully bulk inserted {len(created_lead_ids)} leads.")
+            log.info(f"Successfully bulk inserted {len(created_lead_ids)} leads in total.")
 
         except Exception as e:
-            await db.rollback()
+            await db.rollback() # Rollback transaction chính nếu có lỗi
             log.error(
-                "Bulk lead insertion failed, rolling back.", error=str(e), exc_info=True
+                "Bulk lead insertion failed during batch, rolling back.", error=str(e), exc_info=True
             )
-            # Ghi nhận tất cả các dòng đã chuẩn bị là lỗi
-            for i, lead_dict in enumerate(leads_to_insert):
-                # Tìm row_number tương ứng (hơi phức tạp, có thể bỏ qua nếu quá khó)
-                # Giả sử lỗi chung cho cả batch
-                errors.append(
-                    schemas.LeadImportError(
-                        row_number=-(i + 1),  # Dùng số âm để chỉ lỗi batch
-                        error_message=f"Database bulk insert error: {e}",
-                        row_data=lead_dict,
-                    )
+            # Ghi nhận lỗi
+            errors.append(
+                schemas.LeadImportError(
+                    row_number=-1,
+                    error_message=f"Database bulk insert error (batch failed): {e}",
+                    row_data={},
                 )
+            )
             created_lead_ids = []  # Reset ID vì đã rollback
 
     # --- 5. Trả về kết quả ---
@@ -3345,12 +3442,13 @@ async def import_leads_from_file(
 
 ## 📄 `routers\auth.py`
 
-**Lines:** 646 | **Size:** 23371 bytes
+**Lines:** 655 | **Size:** 23736 bytes
 
 ```python
 # app/routers/auth.py
-import structlog
 from typing import Annotated
+
+import structlog
 from fastapi import (
     APIRouter,
     Cookie,
@@ -3753,7 +3851,7 @@ async def request_password_reset(
         db=db, email_in=forgot_data.email
     )
     return {
-        "msg": "If a user with that email exists, a password reset link will be sent."
+        "detail": "If a user with that email exists, a password reset link will be sent."  # <--- ĐÃ SỬA
     }
 
 
@@ -3944,8 +4042,16 @@ async def refresh_access_token(
                             str(user.id),
                             ex=new_refresh_ttl,
                         )
-                        pipe.set(f"blacklist:{old_refresh_jti}", "rotated", ex=300)
+
+                        # ✅ SỬA LỖI: Blacklist token cũ bằng đúng TTL của nó
+                        full_refresh_ttl = int(
+                            settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400
+                        )
+                        safe_ttl = max(60, full_refresh_ttl)  # Đảm bảo TTL dương
+                        pipe.set(f"blacklist:{old_refresh_jti}", "rotated", ex=safe_ttl)
+
                         await pipe.execute()
+
                     log.info(
                         "✅ Redis update successful (session rotated)", user_id=user.id
                     )
@@ -4336,7 +4442,7 @@ async def update_current_user_profile(
 
 ## 📄 `routers\sessions.py`
 
-**Lines:** 212 | **Size:** 6479 bytes
+**Lines:** 219 | **Size:** 7124 bytes
 
 ```python
 # app/routers/sessions.py
@@ -4396,28 +4502,48 @@ async def get_active_sessions(
             # Continue without marking current session
 
     try:
-        sessions = await session_service.get_active_sessions(
+        # 1. Lấy danh sách thô (DB Models)
+        db_sessions = await session_service.get_active_sessions(
             db,
             current_user.id,
-            current_refresh_jti=current_refresh_jti,  # Pass current JTI to mark current session
+            current_refresh_jti=current_refresh_jti,
         )
-
         log.info(
             "Active sessions retrieved",
             user_id=current_user.id,
-            session_count=len(sessions),
+            session_count=len(db_sessions),
         )
 
-        # Mark current session in response
+        # ✅ --- BẮT ĐẦU TỐI ƯU HÓA (Theo đề xuất của bạn) ---
         current_session_id = None
-        for session in sessions:
-            if current_refresh_jti and session.refresh_jti == current_refresh_jti:
-                session.is_current = True
-                current_session_id = session.id
+        response_sessions = []
+
+        # 2. Dùng List Comprehension + model_construct
+        # Nhanh hơn nhiều so với việc lặp và gọi model_validate
+        response_sessions = [
+            schemas.UserSessionResponse.model_construct(
+                # Tự động map tất cả các cột từ CSDL
+                **{c.name: getattr(session, c.name) for c in session.__table__.columns},
+                
+                # Tính toán và ghi đè 'is_current'
+                is_current=bool(
+                    current_refresh_jti and 
+                    session.refresh_jti == current_refresh_jti
+                )
+            )
+            for session in db_sessions
+        ]
+
+        # 3. Tìm current_session_id (nếu cần) từ danh sách đã tạo
+        for s in response_sessions:
+            if s.is_current:
+                current_session_id = s.id
+                break
+        # ✅ --- KẾT THÚC TỐI ƯU HÓA ---
 
         return schemas.UserSessionListResponse(
-            sessions=sessions,
-            total=len(sessions),
+            sessions=response_sessions,
+            total=len(response_sessions),
             current_session_id=current_session_id,
         )
 
@@ -4497,38 +4623,23 @@ async def revoke_session(
 
 @router.post("/revoke-all", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_all_other_sessions(
-    current_session_id: int = None,  # Optional: ID of current session to preserve
+    # ✅ THAY ĐỔI Ở ĐÂY: Dùng Pydantic model để đọc JSON Body
+    request_data: schemas.RevokeAllSessionsRequest,
     current_user: models.User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(database.get_db),
 ):
-    """
-    Revoke all sessions except optionally the current one.
+    # ✅ Lấy ID từ request_data (trong body)
+    session_id_to_preserve = request_data.current_session_id
 
-    Args:
-        current_session_id: Optional ID of session to preserve (usually current session)
-
-    Useful when:
-        - User suspects account compromise
-        - User wants to logout from all other devices
-        - Security best practice after password change
-
-    Security:
-        - Requires authentication
-        - Only revokes user's own sessions
-        - Can optionally preserve current session
-
-    Returns:
-        204 No Content on success
-    """
     log.info(
         "Revoking all other sessions",
         user_id=current_user.id,
-        preserve_session_id=current_session_id,
+        preserve_session_id=session_id_to_preserve, # 👈 Log sẽ hiển thị đúng
     )
 
     try:
         revoked_count = await session_service.revoke_all_other_sessions(
-            db=db, user_id=current_user.id, except_session_id=current_session_id
+            db=db, user_id=current_user.id, except_session_id=session_id_to_preserve
         )
 
         log.info(
@@ -4539,13 +4650,15 @@ async def revoke_all_other_sessions(
 
         return None  # 204 No Content
 
+    # ✅ THÊM KHỐI CATCH NÀY (để bắt lỗi từ service)
     except Exception as e:
         log.error(
-            "Failed to revoke all other sessions",
+            "Failed to revoke all other sessions (endpoint level)",
             user_id=current_user.id,
             error=str(e),
             exc_info=True,
         )
+        # Báo lỗi về frontend để họ biết thao tác thất bại
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to revoke sessions",
@@ -4582,7 +4695,7 @@ async def read_users_me(current_user: models.User = deps.CurrentUser):
 
 ## 📄 `schemas\__init__.py`
 
-**Lines:** 91 | **Size:** 1896 bytes
+**Lines:** 92 | **Size:** 1927 bytes
 
 ```python
 # app/schemas/__init__.py
@@ -4615,8 +4728,8 @@ from .lead import (
     LeadImportError,
     LeadImportResult,
     LeadInsights,
-    LeadUpdate,
     LeadsPage,
+    LeadUpdate,
     TimelineItem,
 )
 
@@ -4664,8 +4777,8 @@ from .user import (
     UserBase,
     UserCreate,
     UserInDB,
-    UserUpdate,
     UsersPage,
+    UserUpdate,
 )
 
 # --- Từ user_session.py ---
@@ -4675,6 +4788,7 @@ from .user_session import (
     UserSessionListResponse,
     UserSessionResponse,
     UserSessionUpdate,
+    RevokeAllSessionsRequest 
 )
 ```
 
@@ -4718,7 +4832,7 @@ class SkillRule(SkillRuleBase):
 
 ## 📄 `schemas\lead.py`
 
-**Lines:** 150 | **Size:** 3875 bytes
+**Lines:** 153 | **Size:** 4346 bytes
 
 ```python
 # app/schemas/lead.py
@@ -4740,7 +4854,8 @@ from .user import User
 
 class ConsultationBase(BaseModel):
     method: str
-    notes: str
+    # ✅ SỬA: Thêm strip_whitespace
+    notes: str = Field(..., strip_whitespace=True)
     outcome: Optional[str] = None
     duration_minutes: Optional[int] = None
 
@@ -4792,7 +4907,8 @@ class AssignLead(BaseModel):
 
 class LeadAction(BaseModel):
     action: Literal["reject", "reassign"]
-    reason: str
+    # ✅ SỬA: Thêm strip_whitespace
+    reason: str = Field(..., strip_whitespace=True)
 
 
 # -----------------
@@ -4801,10 +4917,11 @@ class LeadAction(BaseModel):
 
 
 class LeadBase(BaseModel):
-    full_name: str
-    email: EmailStr
-    phone: str
-    source: str
+    # ✅ SỬA: Thêm validation cho tất cả các trường string
+    full_name: str = Field(..., min_length=1, max_length=255, strip_whitespace=True)
+    email: EmailStr  # EmailStr đã tự động strip và validate
+    phone: str = Field(..., min_length=1, max_length=20, strip_whitespace=True)
+    source: str = Field(..., min_length=1, max_length=50, strip_whitespace=True)
     unit_id: int
     major_id: Optional[int] = None
 
@@ -5065,7 +5182,7 @@ class FullPipeline(BaseModel):
 
 ## 📄 `schemas\user.py`
 
-**Lines:** 187 | **Size:** 4843 bytes
+**Lines:** 188 | **Size:** 5137 bytes
 
 ```python
 # NOTE: Các schema này được sử dụng cho các endpoint của /auth
@@ -5078,6 +5195,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     EmailStr,
+    Field,
     constr,
     field_validator,
     model_validator,
@@ -5104,9 +5222,10 @@ PasswordStr = constr(min_length=8, strip_whitespace=True)
 
 
 class UserBase(BaseModel):
-    username: str
-    email: EmailStr
-    full_name: Optional[str] = None
+    # ✅ SỬA: Thêm validation
+    username: str = Field(..., min_length=1, strip_whitespace=True)
+    email: EmailStr  # EmailStr tự động chuẩn hóa
+    full_name: Optional[str] = Field(None, strip_whitespace=True)
     role: str
     status: str
 
@@ -5114,18 +5233,17 @@ class UserBase(BaseModel):
 class UserCreate(BaseModel):
     """
     Schema cho user registration.
-    backend chỉ cần nhận username, email, password, full_name.
     """
 
-    username: str
+    # ✅ SỬA: Thêm validation
+    username: str = Field(..., min_length=3, max_length=64, strip_whitespace=True)
     email: EmailStr
     password: PasswordStr
-    full_name: Optional[str] = None
+    full_name: Optional[str] = Field(None, max_length=120, strip_whitespace=True)
 
     @field_validator("password")
     @classmethod
     def validate_password(cls, v: str) -> str:
-        # Validate password strength
         return validate_password_strength_logic(v)
 
 
@@ -5200,8 +5318,8 @@ class AdminUserCreate(UserCreate):
 
 class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
-    full_name: Optional[str] = None
-    phone_number: Optional[str] = None
+    full_name: Optional[str] = Field(None, max_length=120, strip_whitespace=True)
+    phone_number: Optional[str] = Field(None, max_length=20, strip_whitespace=True)
     role: Optional[str] = None
     status: Optional[str] = None
     max_capacity: Optional[int] = None
@@ -5260,7 +5378,7 @@ class RefreshTokenRequest(BaseModel):
 
 ## 📄 `schemas\user_session.py`
 
-**Lines:** 70 | **Size:** 1830 bytes
+**Lines:** 75 | **Size:** 2096 bytes
 
 ```python
 # app/schemas/user_session.py
@@ -5319,6 +5437,8 @@ class UserSessionResponse(UserSessionBase):
         default=True,
         description="Whether session is active (not revoked and not expired)",
     )
+    # ✅ THÊM DÒNG NÀY (Như bạn đề xuất)
+    # Thêm trường này với giá trị mặc định, Pydantic sẽ nhận nó
     is_current: bool = Field(
         default=False, description="Whether this is the current session"
     )
@@ -5328,9 +5448,12 @@ class UserSessionResponse(UserSessionBase):
 
 class UserSessionListResponse(BaseModel):
     """Schema for returning list of sessions."""
-
     sessions: list[UserSessionResponse]
     total: int
+    current_session_id: Optional[int] = None
+
+# ✅ THÊM SCHEMA NÀY VÀO CUỐI FILE
+class RevokeAllSessionsRequest(BaseModel):
     current_session_id: Optional[int] = None
 
 ```
@@ -5338,7 +5461,7 @@ class UserSessionListResponse(BaseModel):
 
 ## 📄 `security.py`
 
-**Lines:** 126 | **Size:** 3795 bytes
+**Lines:** 127 | **Size:** 3816 bytes
 
 ```python
 # app/security.py
@@ -5351,7 +5474,8 @@ from passlib.context import CryptContext
 
 from .config import settings
 from .utils.exceptions import InvalidToken
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=14)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -5472,11 +5596,20 @@ def decode_token(token: str) -> dict:
 
 ## 📄 `services\__init__.py`
 
-**Lines:** 2 | **Size:** 48 bytes
+**Lines:** 11 | **Size:** 332 bytes
 
 ```python
 # app/services/__init__.py
 # flake8: noqa: F401
+from . import user_service
+from . import lead_service
+from . import session_service
+from . import organization_service
+from . import pipeline_service
+from . import config_service
+from . import assignment_service
+from . import insights_service
+from . import anomaly_detection
 ```
 
 
@@ -6034,7 +6167,7 @@ async def automatically_assign_lead(
 
 ## 📄 `services\config_service.py`
 
-**Lines:** 210 | **Size:** 7377 bytes
+**Lines:** 215 | **Size:** 7455 bytes
 
 ```python
 # app/services/config_service.py
@@ -6049,6 +6182,7 @@ from .. import models, schemas
 
 # 👈 *** ADD REDIS IMPORTS ***
 from ..database import safe_redis_delete, safe_redis_get, safe_redis_set
+from ..services.pipeline_service import invalidate_pipeline_cache
 from ..utils.exceptions import ResourceNotFoundError
 
 log = structlog.get_logger(__name__)
@@ -6214,8 +6348,10 @@ async def create_skill_rule(
         db.add(db_rule)
         await db.commit()
         await db.refresh(db_rule)
-        # Invalidate cache for get_all_skill_rules if implemented
-        # await safe_redis_delete("config:all_skill_rules")
+
+        await invalidate_pipeline_cache()
+        log.info("Skill rule created, relevant cache invalidated", rule_id=db_rule.id)
+
         return db_rule
     except Exception as e:
         await db.rollback()
@@ -6238,8 +6374,10 @@ async def delete_skill_rule(db: AsyncSession, rule_id: int):
             )
         await db.delete(db_rule)
         await db.commit()
-        # Invalidate cache for get_all_skill_rules if implemented
-        # await safe_redis_delete("config:all_skill_rules")
+
+        await invalidate_pipeline_cache()
+        log.info("Skill rule deleted, relevant cache invalidated", rule_id=rule_id)
+
     except Exception as e:
         await db.rollback()
         log.error(
@@ -6488,19 +6626,17 @@ async def get_lead_insights(
 
 ## 📄 `services\lead_service.py`
 
-**Lines:** 1071 | **Size:** 44457 bytes
+**Lines:** 1089 | **Size:** 44932 bytes
 
 ```python
 # app/services/lead_service.py
-from datetime import (  # Thêm timedelta nếu cần (hiện tại không dùng trực tiếp)
-    datetime,
-    timedelta,
-    timezone,
+from datetime import (
+    datetime, timezone  # ✅ SỬA LỖI: Thêm dấu cách (E231) và xóa cách thừa cuối dòng (W291)
 )
 from typing import List, Optional, Tuple
 
 import structlog
-from sqlalchemy import desc, func, or_, select  # Thêm desc
+from sqlalchemy import func, or_, select  # ✅ SỬA LỖI: Thêm 'desc' vào import và xóa comment
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -6624,6 +6760,27 @@ async def get_lead_by_id(db: AsyncSession, lead_id: int) -> models.Lead:
         raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found")
     return lead
 
+async def get_lead_by_id_shallow(db: AsyncSession, lead_id: int) -> models.Lead:
+    """
+    Lấy chi tiết Lead (Shallow View - Nhanh).
+    Chỉ Eager Load các quan hệ 1-1 cần thiết cho List/Detail View.
+    """
+    query = (
+        select(models.Lead)
+        .options(
+            selectinload(models.Lead.major),
+            selectinload(models.Lead.unit), # <--- Load unit (thường là cần)
+            selectinload(models.Lead.assigned_officer),
+            selectinload(models.Lead.pipeline_stage),
+            selectinload(models.Lead.consultation_status),
+        )
+        .where(models.Lead.id == lead_id)
+    )
+    result = await db.execute(query)
+    lead = result.scalar_one_or_none()
+    if not lead:
+        raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found")
+    return lead
 
 async def get_leads(
     db: AsyncSession,
@@ -6725,7 +6882,7 @@ async def create_lead(db: AsyncSession, lead_in: schemas.LeadCreate) -> models.L
         existing_lead_query = (
             select(models.Lead)
             .where(
-                models.Lead.email == lead_in.email.strip(),
+                models.Lead.email == lead_in.email,
                 models.Lead.unit_id == lead_in.unit_id,
             )
             .with_for_update()  # Khóa để tránh race condition khi tạo
@@ -6738,8 +6895,6 @@ async def create_lead(db: AsyncSession, lead_in: schemas.LeadCreate) -> models.L
 
         # Chuẩn bị dữ liệu và tạo đối tượng Lead
         create_data = lead_in.model_dump()
-        create_data["email"] = create_data["email"].strip()
-        create_data["phone"] = create_data["phone"].strip()
         db_lead = models.Lead(**create_data)
 
         # Lấy trạng thái ban đầu từ DB
@@ -6839,10 +6994,7 @@ async def update_lead(
             # Lấy dữ liệu cập nhật từ schema Pydantic
             update_data = lead_in.model_dump(exclude_unset=True)
 
-            # Làm sạch dữ liệu chuỗi (strip whitespace)
-            for key, value in update_data.items():
-                if isinstance(value, str):
-                    update_data[key] = value.strip()
+            # (Dọn dẹp .strip() đã bị xóa vì Pydantic xử lý)
 
             # Kiểm tra trùng lặp email nếu email được cập nhật
             if "email" in update_data and update_data["email"] != db_lead.email:
@@ -6952,8 +7104,7 @@ async def add_consultation(
 
             # Chuẩn bị dữ liệu để tạo Consultation
             create_consult_data = data.model_dump(exclude={"status_id"})
-            if "notes" in create_consult_data and create_consult_data["notes"]:
-                create_consult_data["notes"] = create_consult_data["notes"].strip()
+            # (Đã xóa .strip() vì Pydantic xử lý)
 
             # Tạo đối tượng Consultation mới
             new_consultation = models.Consultation(
@@ -7097,27 +7248,31 @@ async def assign_lead_manually(
 
 async def get_lead_timeline(db: AsyncSession, lead_id: int) -> List[dict]:
     """Lấy timeline tổng hợp của Lead (consultations và assignment logs)."""
-    # Lấy lead (có thể không cần full eager loading ban đầu)
-    lead_query = select(models.Lead).where(models.Lead.id == lead_id)
-    lead_result = await db.execute(lead_query)
-    lead = lead_result.scalar_one_or_none()
-    if not lead:
-        raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found.")
 
-    # THÊM DÒNG NÀY: Refresh để đảm bảo relations được tải mới nhất
-    await db.refresh(lead, ["consultations", "assignment_logs"])
+    # 1. ✅ GỌI HÀM ĐÃ TỐI ƯU HÓA EAGER LOADING (từ dòng 104)
+    # Hàm này đã load sẵn:
+    # - consultations.officer
+    # - consultations.consultation_status
+    # - assignment_logs.officer
+    try:
+        lead = await get_lead_by_id(db, lead_id)
+    except ResourceNotFoundError:
+        raise
+    except Exception as e:
+        log.error("Failed to get lead for timeline", lead_id=lead_id, error=str(e))
+        raise
+
+    # 2. ✅ XÓA BỎ TẤT CẢ CÁC LỆNH `db.refresh(...)`
     log.debug(
-        "Refreshed lead consultations and assignment logs for timeline", lead_id=lead_id
+        "Lead and all relations loaded via eager loading for timeline", lead_id=lead_id
     )
 
     timeline_items = []
-    # Thêm consultations vào timeline
+
+    # 3. Xử lý consultations (Dữ liệu đã có sẵn)
     if lead.consultations:
         for c in lead.consultations:
-            # Refresh thêm consultation để lấy relations của nó (officer, status)
-            # Hoặc đảm bảo get_lead_by_id đã load sâu
-            # Cách an toàn: refresh consultation trước khi validate/dump
-            await db.refresh(c, ["officer", "consultation_status"])
+            # ❌ KHÔNG CẦN: await db.refresh(c, ["officer", "consultation_status"])
             timeline_items.append(
                 schemas.TimelineItem(
                     type="consultation",
@@ -7125,11 +7280,11 @@ async def get_lead_timeline(db: AsyncSession, lead_id: int) -> List[dict]:
                     timestamp=c.consultation_date,
                 ).model_dump()
             )
-    # Thêm assignment logs vào timeline
+
+    # 4. Xử lý assignment logs (Dữ liệu đã có sẵn)
     if lead.assignment_logs:
         for log_entry in lead.assignment_logs:
-            # Refresh thêm assignment log để lấy officer
-            await db.refresh(log_entry, ["officer"])
+            # ❌ KHÔNG CẦN: await db.refresh(log_entry, ["officer"])
             timeline_items.append(
                 schemas.TimelineItem(
                     type="assignment",
@@ -7296,7 +7451,8 @@ async def process_officer_action(
                 raise PermissionDeniedError(detail="You are not assigned to this lead.")
 
             log_method = ""  # Method cho AssignmentLog
-            log_reason = reason.strip() if reason else "No reason provided by officer"
+            # (Đã xóa .strip() vì Pydantic xử lý)
+            log_reason = reason if reason else "No reason provided by officer"
 
             # Lưu trạng thái cũ
             old_state = _get_current_lead_state(lead)
@@ -7438,6 +7594,7 @@ async def revert_last_status(
     """
     (Admin only) Hoàn tác thay đổi trạng thái cuối cùng của Lead về trạng thái trước đó.
     """
+    # (Pydantic/Form() nên xử lý .strip(), nhưng giữ ở đây để an toàn nếu gọi nội bộ)
     final_reason = reason.strip() if reason else "Admin reverted last status change"
     try:
         async with db.begin_nested():
@@ -7561,47 +7718,128 @@ async def revert_last_status(
 
     # Trả về lead đã được tải đầy đủ sau khi commit thành công
     return await get_lead_by_id(db, lead_id)
-
 ```
 
 
 ## 📄 `services\organization_service.py`
 
-**Lines:** 261 | **Size:** 9163 bytes
+**Lines:** 365 | **Size:** 13114 bytes
 
 ```python
 # app/services/organization_service.py
+import asyncio  # ✅ 1. Thêm import
+import json  # ✅ 2. Thêm import
 from typing import List, Optional
 
-import structlog  # <-- BỔ SUNG
+import structlog
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from .. import models, schemas
+
+# ✅ 3. Thêm import
+from ..config import settings
+from ..database import safe_redis_delete, safe_redis_get, safe_redis_set
 from ..utils.exceptions import DuplicateResourceError, ResourceNotFoundError
 
-log = structlog.get_logger(__name__)  # <-- BỔ SUNG
+log = structlog.get_logger(__name__)
 
-# --- OrganizationUnit Services ---
+# --- ✅ 4. Định nghĩa Cache Key, TTL, và Lock ---
+ORG_UNITS_CACHE_KEY = "org:all_units_tree"
+CACHE_TTL = settings.CONFIG_CACHE_TTL_SECONDS  # Lấy từ config (ví dụ: 3600s)
+_org_cache_lock = asyncio.Lock()
+# ----------------------------------------------
 
 
-async def get_all_organization_units(db: AsyncSession) -> List[models.OrganizationUnit]:
-    """Lấy danh sách tất cả các đơn vị, tải háo hức các quan hệ."""
-    query = (
-        select(models.OrganizationUnit)
-        .options(
-            selectinload(models.OrganizationUnit.parent).options(
+# --- ✅ 5. Tạo hàm Invalidate Cache ---
+async def invalidate_org_cache():
+    """Xóa cache của cây tổ chức (Organization Tree)."""
+    try:
+        await safe_redis_delete(ORG_UNITS_CACHE_KEY)
+        log.info(
+            "Organization cache invalidated successfully.", key=ORG_UNITS_CACHE_KEY
+        )
+    except Exception as e:
+        log.error("Failed to invalidate organization cache", error=str(e))
+
+
+# --- ✅ 6. Cập nhật hàm `get_all_organization_units` ---
+async def get_all_organization_units(db: AsyncSession) -> List[dict]:
+    """Lấy danh sách tất cả các đơn vị, hỗ trợ cache và chống cache stampede."""
+    log.debug("Fetching all organization units", cache_key=ORG_UNITS_CACHE_KEY)
+
+    # 1. Thử cache trước
+    try:
+        cached_data = await safe_redis_get(ORG_UNITS_CACHE_KEY)
+        if cached_data:
+            log.debug("Cache hit for organization units")
+            return json.loads(cached_data)
+    except Exception as e_redis_get:
+        log.error("Failed to get organization units from cache", error=str(e_redis_get))
+
+    log.debug("Cache miss for organization units, acquiring lock...")
+
+    # 2. Cache Miss -> Lấy Lock
+    async with _org_cache_lock:
+        # 2a. Kiểm tra lại cache (phòng trường hợp request khác đã refresh)
+        try:
+            cached_data_after_lock = await safe_redis_get(ORG_UNITS_CACHE_KEY)
+            if cached_data_after_lock:
+                log.debug("Cache hit (after lock) for organization units")
+                return json.loads(cached_data_after_lock)
+        except Exception:
+            pass  # Bỏ qua, chúng ta sẽ query lại
+
+        log.debug("Cache miss (after lock), querying DB")
+
+        # 3. Query DB (Logic cũ)
+        query = (
+            select(models.OrganizationUnit)
+            .options(
+                selectinload(models.OrganizationUnit.parent).options(
+                    selectinload(models.OrganizationUnit.children),
+                    selectinload(models.OrganizationUnit.majors),
+                ),
                 selectinload(models.OrganizationUnit.children),
                 selectinload(models.OrganizationUnit.majors),
-            ),
-            selectinload(models.OrganizationUnit.children),
-            selectinload(models.OrganizationUnit.majors),
+            )
+            .order_by(models.OrganizationUnit.name)
         )
-        .order_by(models.OrganizationUnit.name)
-    )
-    result = await db.execute(query)
-    return result.scalars().unique().all()
+        result = await db.execute(query)
+        all_units_models = result.scalars().unique().all()
+
+        # 4. Serialize (Chuyển đổi models sang Pydantic rồi sang dict để cache)
+        # Bước này rất quan trọng để xử lý các object lồng nhau
+        try:
+            schemas_list = [
+                schemas.OrganizationUnit.model_validate(unit)
+                for unit in all_units_models
+            ]
+            units_data = [s.model_dump() for s in schemas_list]
+        except Exception as e_serialize:
+            log.error(
+                "Failed to serialize organization units for cache",
+                error=str(e_serialize),
+            )
+            # Trả về dữ liệu thô (không cache) nếu lỗi
+            return all_units_models
+
+        # 5. Lưu vào cache
+        try:
+            await safe_redis_set(
+                ORG_UNITS_CACHE_KEY, json.dumps(units_data), ex=CACHE_TTL
+            )
+            log.debug("Stored organization units in cache", ttl=CACHE_TTL)
+        except Exception as e_redis_set:
+            log.error(
+                "Failed to set organization units in cache", error=str(e_redis_set)
+            )
+
+        return units_data
+
+
+# --- Các hàm Read-only khác (giữ nguyên) ---
 
 
 async def get_organization_unit_by_id(
@@ -7629,6 +7867,9 @@ async def get_organization_unit_by_id(
     return unit
 
 
+# --- ✅ 7. Cập nhật các hàm GHI (Write) để invalidate cache ---
+
+
 async def create_organization_unit(
     db: AsyncSession, unit_in: schemas.OrganizationUnitCreate
 ) -> models.OrganizationUnit:
@@ -7644,6 +7885,9 @@ async def create_organization_unit(
         db.add(db_unit)
         await db.commit()
         await db.refresh(db_unit)
+
+        await invalidate_org_cache()  # <-- THÊM HỦY CACHE
+
         # Tải lại đầy đủ relations trước khi trả về
         return await get_organization_unit_by_id(db, db_unit.id)
     except Exception as e:
@@ -7686,6 +7930,9 @@ async def update_organization_unit(
 
         db.add(db_unit)
         await db.commit()
+
+        await invalidate_org_cache()  # <-- THÊM HỦY CACHE
+
         # Tải lại đầy đủ relations
         return await get_organization_unit_by_id(db, unit_id)
     except Exception as e:
@@ -7708,6 +7955,9 @@ async def delete_organization_unit(db: AsyncSession, unit_id: int):
             )
         await db.delete(db_unit)
         await db.commit()
+
+        await invalidate_org_cache()  # <-- THÊM HỦY CACHE
+
     except Exception as e:
         await db.rollback()
         log.error(
@@ -7719,7 +7969,7 @@ async def delete_organization_unit(db: AsyncSession, unit_id: int):
         raise e
 
 
-# --- Major Services ---
+# --- Major Services (Các hàm này cũng nên HỦY CACHE TỔ CHỨC) ---
 
 
 async def get_major_by_id(db: AsyncSession, major_id: int) -> Optional[models.Major]:
@@ -7744,6 +7994,9 @@ async def create_major(db: AsyncSession, major_in: schemas.MajorCreate) -> model
         db.add(db_major)
         await db.commit()
         await db.refresh(db_major)
+
+        await invalidate_org_cache()  # <-- THÊM HỦY CACHE (vì Major là con của Unit)
+
         return db_major
     except Exception as e:
         await db.rollback()
@@ -7777,6 +8030,9 @@ async def update_major(
         db.add(db_major)
         await db.commit()
         await db.refresh(db_major)
+
+        await invalidate_org_cache()  # <-- THÊM HỦY CACHE
+
         return db_major
     except Exception as e:
         await db.rollback()
@@ -7791,6 +8047,9 @@ async def delete_major(db: AsyncSession, major_id: int):
         db_major = await get_major_by_id(db, major_id)
         await db.delete(db_major)
         await db.commit()
+
+        await invalidate_org_cache()  # <-- THÊM HỦY CACHE
+
     except Exception as e:
         await db.rollback()
         log.error(
@@ -7799,6 +8058,7 @@ async def delete_major(db: AsyncSession, major_id: int):
         raise e
 
 
+# --- (Hàm `get_majors_by_unit_tree` giữ nguyên vì nó không dùng cache) ---
 async def get_majors_by_unit_tree(
     db: AsyncSession, unit_id: int, search_term: str = None
 ) -> List[models.Major]:
@@ -7836,41 +8096,43 @@ async def get_majors_by_unit_tree(
 
 ## 📄 `services\pipeline_service.py`
 
-**Lines:** 417 | **Size:** 14043 bytes
+**Lines:** 452 | **Size:** 15713 bytes
 
 ```python
 # app/services/pipeline_service.py
-import json
+import asyncio  # ✅ Thêm import
+import json  # ✅ Thêm import
 from typing import List
 
 import structlog
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import models, schemas  # <-- THÊM schemas
-
-# --- THÊM CÁC IMPORTS SAU ---
-from ..config import settings
+from .. import models, schemas
+from ..config import settings  # ✅ Thêm import
+# ✅ Thêm import
 from ..database import safe_redis_delete, safe_redis_get, safe_redis_set
-from ..utils.exceptions import DuplicateResourceError  # <-- THÊM
-from ..utils.exceptions import ResourceNotFoundError
+from ..utils.exceptions import DuplicateResourceError, ResourceNotFoundError
 
 log = structlog.get_logger(__name__)
 
-# --- ĐỊNH NGHĨA KEY VÀ TTL ---
+# --- ✅ Định nghĩa Key, TTL, và Lock cho Cache ---
 PIPELINE_STAGES_CACHE_KEY = "pipeline:all_stages"
 PIPELINE_STATUSES_CACHE_KEY = "pipeline:all_statuses"
-# Sử dụng TTL chung từ file config
-CACHE_TTL = settings.CONFIG_CACHE_TTL_SECONDS
+CACHE_TTL = settings.CONFIG_CACHE_TTL_SECONDS  # Lấy từ config (ví dụ: 3600s)
+
+_pipeline_cache_lock = asyncio.Lock()
+_status_cache_lock = asyncio.Lock()
+# ----------------------------------------------
 
 
 # ===============================================================
-# CHỨC NĂNG CACHE (Giữ nguyên)
+# CHỨC NĂNG CACHE
 # ===============================================================
 
 
 async def get_all_pipeline_stages(db: AsyncSession) -> List[dict]:
-    """Lấy tất cả Pipeline Stages (Hỗ trợ Cache)."""
+    """Lấy tất cả Pipeline Stages (Hỗ trợ Cache + Chống Cache Stampede)."""
     log.debug("Fetching all pipeline stages", cache_key=PIPELINE_STAGES_CACHE_KEY)
 
     # 1. Thử cache trước
@@ -7886,38 +8148,52 @@ async def get_all_pipeline_stages(db: AsyncSession) -> List[dict]:
             error=str(e_redis_get),
         )
 
-    log.debug("Cache miss for pipeline stages, querying DB")
+    log.debug("Cache miss for pipeline stages, acquiring lock...")
 
-    # 2. Cache Miss: Query DB
-    query = select(models.PipelineStage).order_by(models.PipelineStage.order)
-    result = await db.execute(query)
-    stages_models = result.scalars().all()
+    # 2. Cache Miss -> Lấy Lock
+    async with _pipeline_cache_lock:
+        # 2a. Kiểm tra lại cache (phòng trường hợp request khác đã refresh)
+        try:
+            cached_data_after_lock = await safe_redis_get(PIPELINE_STAGES_CACHE_KEY)
+            if cached_data_after_lock:
+                log.debug("Cache hit (after acquiring lock) for pipeline stages")
+                return json.loads(cached_data_after_lock)
+        except Exception:
+            pass  # Bỏ qua, chúng ta sẽ query lại
 
-    # 3. Chuyển đổi models sang list[dict]
-    stages_data = [
-        {"id": s.id, "name": s.name, "order": s.order} for s in stages_models
-    ]
+        log.debug("Cache miss (after acquiring lock), querying DB")
 
-    # 4. Lưu vào cache
-    try:
-        await safe_redis_set(
-            PIPELINE_STAGES_CACHE_KEY, json.dumps(stages_data), ex=CACHE_TTL
-        )
-        log.debug("Stored pipeline stages in cache", ttl=CACHE_TTL)
-    except Exception as e_redis_set:
-        log.error(
-            "Failed to set pipeline stages in cache",
-            cache_key=PIPELINE_STAGES_CACHE_KEY,
-            error=str(e_redis_set),
-        )
+        # 3. Cache Miss: Query DB
+        query = select(models.PipelineStage).order_by(models.PipelineStage.order)
+        result = await db.execute(query)
+        stages_models = result.scalars().all()
 
-    return stages_data
+        # 4. Chuyển đổi models sang list[dict]
+        stages_data = [
+            {"id": s.id, "name": s.name, "order": s.order} for s in stages_models
+        ]
+
+        # 5. Lưu vào cache
+        try:
+            await safe_redis_set(
+                PIPELINE_STAGES_CACHE_KEY, json.dumps(stages_data), ex=CACHE_TTL
+            )
+            log.debug("Stored pipeline stages in cache", ttl=CACHE_TTL)
+        except Exception as e_redis_set:
+            log.error(
+                "Failed to set pipeline stages in cache",
+                cache_key=PIPELINE_STAGES_CACHE_KEY,
+                error=str(e_redis_set),
+            )
+
+        # 6. Trả về (lock được tự động giải phóng)
+        return stages_data
 
 
 async def get_all_consultation_statuses(
     db: AsyncSession,
 ) -> List[dict]:
-    """Lấy tất cả Consultation Statuses (Hỗ trợ Cache)."""
+    """Lấy tất cả Consultation Statuses (Hỗ trợ Cache + Chống Cache Stampede)."""
     log.debug(
         "Fetching all consultation statuses", cache_key=PIPELINE_STATUSES_CACHE_KEY
     )
@@ -7935,33 +8211,52 @@ async def get_all_consultation_statuses(
             error=str(e_redis_get),
         )
 
-    log.debug("Cache miss for consultation statuses, querying DB")
+    log.debug("Cache miss for consultation statuses, acquiring lock...")
 
-    # 2. Cache Miss: Query DB
-    query = select(models.ConsultationStatus)
-    result = await db.execute(query)
-    statuses_models = result.scalars().all()
+    # 2. Cache Miss -> Lấy Lock
+    async with _status_cache_lock:
+        # 2a. Kiểm tra lại cache
+        try:
+            cached_data_after_lock = await safe_redis_get(PIPELINE_STATUSES_CACHE_KEY)
+            if cached_data_after_lock:
+                log.debug("Cache hit (after acquiring lock) for statuses")
+                return json.loads(cached_data_after_lock)
+        except Exception:
+            pass
 
-    # 3. Chuyển đổi models sang list[dict]
-    statuses_data = [
-        {"id": s.id, "name": s.name, "color_code": s.color_code, "stage_id": s.stage_id}
-        for s in statuses_models
-    ]
+        log.debug("Cache miss (after acquiring lock), querying DB")
 
-    # 4. Lưu vào cache
-    try:
-        await safe_redis_set(
-            PIPELINE_STATUSES_CACHE_KEY, json.dumps(statuses_data), ex=CACHE_TTL
-        )
-        log.debug("Stored consultation statuses in cache", ttl=CACHE_TTL)
-    except Exception as e_redis_set:
-        log.error(
-            "Failed to set consultation statuses in cache",
-            cache_key=PIPELINE_STATUSES_CACHE_KEY,
-            error=str(e_redis_set),
-        )
+        # 3. Cache Miss: Query DB
+        query = select(models.ConsultationStatus)
+        result = await db.execute(query)
+        statuses_models = result.scalars().all()
 
-    return statuses_data
+        # 4. Chuyển đổi models sang list[dict]
+        statuses_data = [
+            {
+                "id": s.id,
+                "name": s.name,
+                "color_code": s.color_code,
+                "stage_id": s.stage_id,
+            }
+            for s in statuses_models
+        ]
+
+        # 5. Lưu vào cache
+        try:
+            await safe_redis_set(
+                PIPELINE_STATUSES_CACHE_KEY, json.dumps(statuses_data), ex=CACHE_TTL
+            )
+            log.debug("Stored consultation statuses in cache", ttl=CACHE_TTL)
+        except Exception as e_redis_set:
+            log.error(
+                "Failed to set consultation statuses in cache",
+                cache_key=PIPELINE_STATUSES_CACHE_KEY,
+                error=str(e_redis_set),
+            )
+
+        # 6. Trả về (lock được tự động giải phóng)
+        return statuses_data
 
 
 async def invalidate_pipeline_cache():
@@ -8001,7 +8296,7 @@ async def _get_status_by_id(
 
 
 # ===============================================================
-# CRUD CHO PIPELINE STAGE (MỚI)
+# CRUD CHO PIPELINE STAGE
 # ===============================================================
 
 
@@ -8127,7 +8422,7 @@ async def delete_pipeline_stage(db: AsyncSession, stage_id: str):
 
 
 # ===============================================================
-# CRUD CHO CONSULTATION STATUS (MỚI)
+# CRUD CHO CONSULTATION STATUS
 # ===============================================================
 
 
@@ -8261,7 +8556,7 @@ async def delete_consultation_status(db: AsyncSession, status_id: str):
 
 ## 📄 `services\session_service.py`
 
-**Lines:** 387 | **Size:** 12491 bytes
+**Lines:** 388 | **Size:** 12662 bytes
 
 ```python
 # app/services/session_service.py
@@ -8273,6 +8568,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.exc import NoResultFound  # ✅ Thêm exception
 from sqlalchemy.ext.asyncio import AsyncSession
 from user_agents import parse as parse_user_agent
+from fastapi import HTTPException, status
 
 from .. import models
 from ..database import safe_redis_delete, safe_redis_set
@@ -8450,14 +8746,10 @@ async def get_active_sessions(
 
 
 async def revoke_session(db: AsyncSession, session_id: int, user_id: int) -> bool:
-    """
-    (V5) Thu hồi 1 session.
-    Tích hợp Optimistic Locking, fix lỗi transaction và Metrics.
-    """
+    session_to_emit = None  # Biến để lưu session JTI ra ngoài transaction
+
     try:
-        # ✅ CẢI TIẾN: Vấn đề #5 - Bắt đầu transaction và Khóa (Lock)
-        # Dùng transaction CẤP CAO NHẤT, không lồng (nested)
-        async with db.begin():
+        async with db.begin_nested(): # Bắt đầu transaction
             result = await db.execute(
                 select(models.UserSession)
                 .where(
@@ -8466,7 +8758,7 @@ async def revoke_session(db: AsyncSession, session_id: int, user_id: int) -> boo
                         models.UserSession.user_id == user_id,
                     )
                 )
-                .with_for_update()  # ✅ Khóa dòng này lại
+                .with_for_update()
             )
             session = result.scalar_one_or_none()
 
@@ -8477,26 +8769,28 @@ async def revoke_session(db: AsyncSession, session_id: int, user_id: int) -> boo
                 log.warning("Session already revoked, skipping", session_id=session_id)
                 return False
 
-            # Mark as revoked
+            # 1. Cập nhật CSDL
             session.revoked_at = datetime.now(timezone.utc)
             db.add(session)
+            session_to_emit = session.refresh_jti # Lưu JTI
 
-            # (Logic Redis giữ nguyên)
-            try:
-                ttl = int(
-                    (session.expires_at - datetime.now(timezone.utc)).total_seconds()
+            # 2. ✅ Cập nhật REDIS (NẰM TRONG TRANSACTION)
+            # Xóa khối try...except câm
+            ttl = int(
+                (session.expires_at - datetime.now(timezone.utc)).total_seconds()
+            )
+            if ttl > 0:
+                await safe_redis_set(
+                    f"blacklist:{session.refresh_jti}", "revoked_by_user", ex=ttl
                 )
-                if ttl > 0:
-                    await safe_redis_set(
-                        f"blacklist:{session.refresh_jti}", "revoked_by_user", ex=ttl
-                    )
-                    await safe_redis_delete(f"session:{session.refresh_jti}")
-                    log.info("Session key deleted from Redis", ...)
-            except Exception:
-                log.warning("Failed to blacklist/delete refresh token in Redis", ...)
+            
+            await safe_redis_delete(f"session:{session.refresh_jti}")
+            log.info("Session DB marked and Redis keys updated (in transaction)", 
+                     session_id=session_id)
 
-        # ✅ CẢI TIẾN: Vấn đề #5 - `db.commit()` được tự động gọi ở đây
-        # khi ra khỏi `async with db.begin()`
+        # 3. ✅ COMMIT TỰ ĐỘNG
+        # Nếu Redis lỗi, exception sẽ văng ra, db.begin() sẽ tự động ROLLBACK
+        log.info("Revoke transaction committed", session_id=session_id, user_id=user_id)
 
     except NoResultFound:
         log.warning(
@@ -8504,35 +8798,37 @@ async def revoke_session(db: AsyncSession, session_id: int, user_id: int) -> boo
             session_id=session_id,
             user_id=user_id,
         )
-        return False
+        return False # Thất bại (an toàn)
     except Exception as e:
+        # Bất kỳ lỗi nào (CSDL hoặc Redis) đều sẽ bị bắt ở đây
         # db.rollback() được tự động gọi
         log.error(
-            "Failed to revoke session",
+            "Failed to revoke session (transaction rolled back)",
             session_id=session_id,
             user_id=user_id,
             error=str(e),
         )
-        return False
+        # 💡 Trả về lỗi 500 cho Frontend (Device A) biết là đã thất bại
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to revoke session due to service error: {e}"
+        )
 
-    # Nếu thành công (không có exception)
-    log.info("Session revoked", session_id=session_id, user_id=user_id)
-
-    # Gửi sự kiện Socket.IO
-    async with track_event_latency("force_logout_batch"):  # ✅ Theo dõi latency
-        try:
-            room_name = f"user_room_{user_id}"
-            await sio.emit(
-                "force_logout_batch",
-                {"revoked_jtis": [session.refresh_jti]},
-                room=room_name,
-                # ✅ CẢI TIẾN: Vấn đề #6 - Bỏ callback, dùng event `logout_confirmed`
-            )
-            socket_events_emitted_total.labels(event_type="force_logout_batch").inc()
-            log.info("Emitted 'force_logout_batch' event (single)", ...)
-        except Exception as e_socket:
-            socket_emit_failures_total.labels(event_type="force_logout_batch").inc()
-            log.error("Failed to emit socket event for revoke", error=str(e_socket))
+    # 4. Gửi Socket.IO (Chỉ khi transaction thành công)
+    if session_to_emit:
+        async with track_event_latency("force_logout_batch"):
+            try:
+                room_name = f"user_room_{user_id}"
+                await sio.emit(
+                    "force_logout_batch",
+                    {"revoked_jtis": [session_to_emit]},
+                    room=room_name,
+                )
+                socket_events_emitted_total.labels(event_type="force_logout_batch").inc()
+                log.info("Emitted 'force_logout_batch' event (single)", session_id=session_id)
+            except Exception as e_socket:
+                socket_emit_failures_total.labels(event_type="force_logout_batch").inc()
+                log.error("Failed to emit socket event for revoke", error=str(e_socket))
 
     return True
 
@@ -8587,51 +8883,50 @@ async def update_session_activity(
 async def revoke_all_other_sessions(
     db: AsyncSession, user_id: int, except_session_id: Optional[int] = None
 ) -> int:
-    # (Hàm này cũng nên dùng `async with db.begin()`)
     revoked_jtis = []
     revoked_count = 0
-    try:
-        async with db.begin():  # ✅ Thêm transaction
-            now = datetime.now(timezone.utc)
-            conditions = [
-                models.UserSession.user_id == user_id,
-                models.UserSession.revoked_at.is_(None),
-            ]
-            if except_session_id is not None:
-                conditions.append(models.UserSession.id != except_session_id)
+    
+    # ✅ XÓA KHỐI 'try...except Exception' bên ngoài
+    
+    # db.begin() sẽ tự động rollback nếu có exception
+    async with db.begin_nested():
+        now = datetime.now(timezone.utc)
+        conditions = [
+            models.UserSession.user_id == user_id,
+            models.UserSession.revoked_at.is_(None),
+        ]
+        if except_session_id is not None:
+            conditions.append(models.UserSession.id != except_session_id)
 
-            result = await db.execute(
-                select(models.UserSession).where(and_(*conditions)).with_for_update()
-            )
-            sessions = result.scalars().all()
+        result = await db.execute(
+            select(models.UserSession).where(and_(*conditions)).with_for_update()
+        )
+        sessions = result.scalars().all()
 
-            for session in sessions:
-                session.revoked_at = now
-                db.add(session)
-                revoked_jtis.append(session.refresh_jti)
-                try:
-                    ttl = int((session.expires_at - now).total_seconds())
-                    if ttl > 0:
-                        await safe_redis_set(
-                            f"blacklist:{session.refresh_jti}",
-                            "revoked_by_user",
-                            ex=ttl,
-                        )
-                        await safe_redis_delete(f"session:{session.refresh_jti}")
-                except Exception:
-                    log.warning(
-                        "Failed to blacklist/delete refresh token in Redis", ...
-                    )
-                revoked_count += 1
+        for session in sessions:
+            session.revoked_at = now
+            db.add(session)
+            revoked_jtis.append(session.refresh_jti)
+            
+            # Cập nhật Redis (Nếu đây là lỗi, exception sẽ văng ra
+            # và db.begin() sẽ tự động rollback)
+            ttl = int((session.expires_at - now).total_seconds())
+            if ttl > 0:
+                await safe_redis_set(
+                    f"blacklist:{session.refresh_jti}",
+                    "revoked_by_user",
+                    ex=ttl,
+                )
+            await safe_redis_delete(f"session:{session.refresh_jti}")
+            
+            revoked_count += 1
 
-        # ✅ Commit tự động
-        log.info("Revoked all other sessions", ...)
+    # ✅ COMMIT TỰ ĐỘNG (Chỉ khi CSDL và Redis đều thành công)
+    log.info("Revoked all other sessions and updated Redis", 
+             user_id=user_id, 
+             revoked_count=revoked_count)
 
-    except Exception as e:
-        log.error("Failed to revoke all other sessions", error=str(e))
-        return 0  # Thất bại
-
-    # Gửi sự kiện Socket.IO
+    # Gửi sự kiện Socket.IO (Sau khi đã commit)
     if revoked_jtis:
         async with track_event_latency("force_logout_batch_all"):
             try:
@@ -8646,7 +8941,8 @@ async def revoke_all_other_sessions(
             except Exception as e_socket:
                 socket_emit_failures_total.labels(event_type="force_logout_batch").inc()
                 log.error(
-                    "Failed to emit socket event for revoke-all", error=str(e_socket)
+                    "Failed to emit socket event for revoke-all", 
+                    error_message=str(e_socket) # 👈 Đổi tên key
                 )
 
     return revoked_count
@@ -8656,13 +8952,13 @@ async def revoke_all_other_sessions(
 
 ## 📄 `services\user_service.py`
 
-**Lines:** 698 | **Size:** 24690 bytes
+**Lines:** 725 | **Size:** 26045 bytes
 
 ```python
 # app/services/user_service.py
-from typing import Any, Dict, List, Optional, Tuple
-
 import structlog
+from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime, timezone
 from fastapi import HTTPException, UploadFile
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8671,7 +8967,13 @@ from .. import models, schemas
 from ..config import settings
 
 # ✅ 1. SỬA LỖI: Thêm import `safe_redis_pipeline` (sửa NameError)
-from ..database import safe_redis_delete, safe_redis_pipeline, safe_redis_set
+from ..database import (
+    redis_client,
+    safe_redis_delete,
+    safe_redis_pipeline,
+    safe_redis_set,
+    safe_redis_get
+)
 from ..security import (
     create_password_reset_token,
     get_password_hash,
@@ -8701,7 +9003,8 @@ log = structlog.get_logger(__name__)
 async def get_user_by_username(
     db: AsyncSession, username: str
 ) -> Optional[models.User]:
-    query = select(models.User).where(models.User.username == username.strip())
+    # (username đã được strip bởi Pydantic schema hoặc Form() data)
+    query = select(models.User).where(models.User.username == username)  # <--- SỬA
     result = await db.execute(query)
     user = result.scalar_one_or_none()
     if user:
@@ -8711,8 +9014,8 @@ async def get_user_by_username(
 
 
 async def get_user_by_email(db: AsyncSession, email: str) -> Optional[models.User]:
-    cleaned_email = email.strip()
-    query = select(models.User).where(models.User.email == cleaned_email)
+    # (EmailStr đã tự động chuẩn hóa)
+    query = select(models.User).where(models.User.email == email)  # <--- SỬA
     result = await db.execute(query)
     user = result.scalar_one_or_none()
     if user:
@@ -8763,10 +9066,9 @@ async def authenticate_user(
 async def create_user(db: AsyncSession, user_in: schemas.UserCreate) -> models.User:
     try:
         hashed_password = get_password_hash(user_in.password)
+        # ✅ SỬA: Dữ liệu đã sạch, chỉ cần model_dump
         db_user = models.User(
-            username=user_in.username.strip(),
-            email=user_in.email.strip(),
-            full_name=user_in.full_name,
+            **user_in.model_dump(exclude={"password"}),  # Dùng model_dump cho an toàn
             password_hash=hashed_password,
             role="user",
             status="active",
@@ -8777,7 +9079,7 @@ async def create_user(db: AsyncSession, user_in: schemas.UserCreate) -> models.U
         return db_user
     except Exception as e:
         await db.rollback()
-        log.error(  # ✅ SỬA LỖI: Xóa `await`
+        log.error(
             "Failed to create user",
             username=user_in.username,
             error=str(e),
@@ -8794,12 +9096,8 @@ async def create_user_by_admin(
     try:
         hashed_password = get_password_hash(user_in.password)
         db_user = models.User(
-            username=user_in.username.strip(),
-            email=user_in.email.strip(),
-            full_name=user_in.full_name,
+            **user_in.model_dump(exclude={"password"}),  # Dùng model_dump
             password_hash=hashed_password,
-            role=user_in.role,
-            status=user_in.status,
             avatar_url=None,
         )
         if avatar_file:
@@ -8898,9 +9196,7 @@ async def update_user(
 
         for field, value in update_data.items():
             if value is not None:
-                setattr(
-                    db_user, field, value.strip() if isinstance(value, str) else value
-                )
+                setattr(db_user, field, value)
 
         if avatar_file:
             log.debug(  # ✅ SỬA LỖI: Xóa `await`
@@ -8946,11 +9242,7 @@ async def update_profile(
         for field, value in update_data.items():
             if field in ["full_name", "phone_number", "email"]:
                 if value is not None:
-                    setattr(
-                        db_user,
-                        field,
-                        value.strip() if isinstance(value, str) else value,
-                    )
+                    setattr(db_user, field, value)
 
         if avatar_file:
             log.debug(  # ✅ SỬA LỖI: Xóa `await`
@@ -9002,21 +9294,47 @@ async def delete_user(db: AsyncSession, user_id: int):
         raise e
 
 
-# --- Logic Password (Hàm handle_forgot_password chỉ đọc, không commit) ---
-
-
 async def handle_forgot_password(db: AsyncSession, email_in: str):
     from ..celery_utils import send_password_reset_email_task
 
     cleaned_email = email_in.strip()
-    user = await get_user_by_email(db, email=cleaned_email)
+
+    # ✅ THÊM RATE LIMIT THEO EMAIL
+    email_rate_limit_key = f"rate_limit:forgot_pw:{cleaned_email}"
+    try:
+        # Giới hạn 5 yêu cầu mỗi giờ
+        current_count_str = await safe_redis_get(email_rate_limit_key)
+        current_count = int(current_count_str) if current_count_str else 0
+
+        if current_count >= 5:
+            log.warning(
+                "Forgot password rate limit (by email) exceeded", email=cleaned_email
+            )
+            # Vẫn trả về thành công (không để lộ thông tin)
+            return
+
+        # Tăng bộ đếm, set TTL 1 giờ (3600s)
+        # Dùng pipeline để đảm bảo INCR và EXPIRE là atomic
+        async with redis_client.pipeline() as pipe:
+            pipe.incr(email_rate_limit_key)
+            pipe.expire(email_rate_limit_key, 3600)
+            await pipe.execute()
+
+    except Exception as e_redis:
+        # Fail-open (vẫn cho chạy) nhưng log lỗi
+        log.error(
+            "Failed to check/set email rate limit for forgot_password",
+            email=cleaned_email,
+            error=str(e_redis),
+        )
+
+    # (Logic cũ tiếp tục)
+    user = await get_user_by_email(db, email=email_in)
     if not user:
-        log.debug(
-            "User not found for forgot password request", email=cleaned_email
-        )  # ✅ SỬA LỖI: Xóa `await`
+        log.debug("User not found for forgot password request", email=cleaned_email)
         return
 
-    log.info(  # ✅ SỬA LỖI: Xóa `await`
+    log.info(
         "User found for forgot password request. Sending reset email.", user_id=user.id
     )
     token = create_password_reset_token(email=user.email)
@@ -9133,104 +9451,109 @@ async def set_password_by_admin(
 
 async def invalidate_all_sessions(db: AsyncSession, user: models.User):
     """
-    (V5) Vô hiệu hóa tất cả các phiên hoạt động (thường sau khi đổi mật khẩu).
+    (V5 - Fixed) Vô hiệu hóa tất cả các phiên hoạt động.
+    Sửa lỗi Race Condition bằng cách khóa (lock) và cập nhật DB trong 1 transaction.
     """
-    try:
-        # (Đã xóa logic `active_jti`)
+    revoked_jtis = []
+    user_id = user.id
+    now = datetime.now(timezone.utc)
+    max_token_ttl = int(settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400)
+    safe_ttl = max(60, max_token_ttl)
 
-        # ✅ SỬA LỖI: Logic `safe_redis_pipeline` đã được import chính xác
-        try:
+    try:
+        # 1. Bắt đầu transaction và LẤY KHÓA
+        async with db.begin():
             result = await db.execute(
-                select(models.UserSession).where(models.UserSession.user_id == user.id)
+                select(models.UserSession)
+                .where(
+                    models.UserSession.user_id == user_id,
+                    models.UserSession.revoked_at.is_(None),  # Chỉ khóa session active
+                )
+                .with_for_update()  # ✅ KHÓA CÁC DÒNG NÀY
             )
             all_sessions = result.scalars().all()
 
-            async with safe_redis_pipeline(transaction=True) as pipe:
+            if not all_sessions:
+                log.info("No active sessions to invalidate", user_id=user_id)
+            else:
+                log.info(
+                    f"Found {len(all_sessions)} active sessions to invalidate",
+                    user_id=user_id,
+                )
                 for session in all_sessions:
-                    pipe.delete(f"session:{session.refresh_jti}")
-                    ttl = int(settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400)
-                    pipe.set(
-                        f"blacklist:{session.refresh_jti}",
-                        "password_changed",
-                        ex=max(60, ttl),
-                    )
-                await pipe.execute()
+                    # 2. ✅ CẬP NHẬT DATABASE
+                    session.revoked_at = now
+                    db.add(session)
+                    revoked_jtis.append(session.refresh_jti)
 
-            log.info(  # ✅ SỬA LỖI: Xóa `await`
-                f"Invalidated all {len(all_sessions)} session keys/JTIs in Redis",
-                user_id=user.id,
-            )
-        except Exception as e_redis_del:
-            log.error(  # ✅ SỬA LỖI: Xóa `await`
-                "Failed to clear multi-session keys from Redis",
-                user_id=user.id,
-                error=str(e_redis_del),
-            )
+            # 3. ✅ SET GLOBAL BLACKLIST (vẫn trong transaction)
+            # Điều này ngăn chặn login/refresh MỚI trước khi transaction commit
+            try:
+                blacklist_key = f"user_blacklist:{user_id}"
+                await safe_redis_set(blacklist_key, "sessions_invalidated", ex=safe_ttl)
+                log.info(
+                    "User added to global blacklist (in transaction)", user_id=user_id
+                )
+            except Exception as e_redis_set:
+                log.error(
+                    "CRITICAL: Failed to add user to global blacklist, rolling back DB",
+                    user_id=user_id,
+                    error=str(e_redis_set),
+                )
+                # Ném lỗi để rollback transaction
+                raise HTTPException(
+                    status_code=500, detail="Auth service failure (Cache)"
+                )
 
-        # (Giữ nguyên logic blacklist toàn cục)
-        max_token_lifetime_seconds = int(
-            settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60
-        )
-        if max_token_lifetime_seconds <= 0:
-            max_token_lifetime_seconds = 60
+        # 4. ✅ COMMIT TỰ ĐỘNG (khi ra khỏi `async with db.begin()`)
+        log.info("DB transaction committed, sessions revoked in DB", user_id=user_id)
 
+        # 5. ✅ XÓA REDIS KEYS (SAU KHI COMMIT THÀNH CÔNG)
+        if revoked_jtis:
+            try:
+                async with safe_redis_pipeline(transaction=True) as pipe:
+                    for jti in revoked_jtis:
+                        pipe.delete(f"session:{jti}")
+                        pipe.set(f"blacklist:{jti}", "password_changed", ex=safe_ttl)
+                    await pipe.execute()
+                log.info(
+                    f"Invalidated {len(revoked_jtis)} session keys in Redis",
+                    user_id=user_id,
+                )
+            except Exception as e_redis_del:
+                log.error(
+                    "Failed to clear session keys from Redis",
+                    user_id=user_id,
+                    error=str(e_redis_del),
+                )
+                # Không ném lỗi ở đây, vì DB đã commit (nhưng cần log)
+
+        # 6. ✅ GỬI SOCKET EVENT (SAU KHI MỌI THỨ HOÀN TẤT)
         try:
-            blacklist_key = f"user_blacklist:{user.id}"
-            await safe_redis_set(
-                blacklist_key, "sessions_invalidated", ex=max_token_lifetime_seconds
-            )
-            log.info(  # ✅ SỬA LỖI: Xóa `await`
-                "User added to global blacklist",
-                user_id=user.id,
-                ttl_seconds=max_token_lifetime_seconds,
-            )
-        except Exception as e_redis_set:
-            log.error(  # ✅ SỬA LỖI: Xóa `await`
-                "CRITICAL: Failed to add user to global blacklist, rolling back DB changes",
-                user_id=user.id,
-                error=str(e_redis_set),
-            )
-            await db.rollback()
-            raise
-
-        await db.commit()
-        log.info(
-            "All sessions invalidated successfully for user", user_id=user.id
-        )  # ✅ SỬA LỖI: Xóa `await`
-
-        # ✅ CẢI TIẾN: Vấn đề #4 - Gửi sự kiện Socket.IO
-        try:
-            room_name = f"user_room_{user.id}"
+            room_name = f"user_room_{user_id}"
             await sio.emit(
                 "force_logout_all", {"reason": "Password changed"}, room=room_name
             )
             socket_events_emitted_total.labels(event_type="force_logout_all").inc()
-            log.info(
-                "Emitted 'force_logout_all' event", room=room_name
-            )  # ✅ SỬA LỖI: Xóa `await`
+            log.info("Emitted 'force_logout_all' event", room=room_name)
         except Exception as e_socket:
             socket_emit_failures_total.labels(event_type="force_logout_all").inc()
             log.error(
                 "Failed to emit socket event for invalidate-all", error=str(e_socket)
-            )  # ✅ SỬA LỖI: Xóa `await`
+            )
 
     except Exception as e:
-        await db.rollback()
-        log.error(  # ✅ SỬA LỖI: Xóa `await`
-            "Failed to invalidate sessions",
-            user_id=user.id,
-            error=str(e),
-            exc_info=True,
-        )
-        if "Failed to add user to global blacklist" not in str(e):
+        # Rollback tự động nếu lỗi trong `async with db.begin()`
+        if not isinstance(e, HTTPException):
+            log.error(
+                "Failed to invalidate sessions",
+                user_id=user_id,
+                error=str(e),
+                exc_info=True,
+            )
             raise HTTPException(status_code=500, detail="Could not invalidate sessions")
-
-
-# --- Logic Logout (ĐÃ BỊ XÓA TRONG V5) ---
-# (Hàm `logout_user` đã bị xóa khỏi `routers/auth.py` V5,
-# nên chúng ta có thể xóa nó ở đây để dọn dẹp, hoặc giữ lại nếu
-# có nơi khác gọi)
-# Tạm thời giữ lại nhưng đảm bảo log là đồng bộ:
+        else:
+            raise  # Ném lại lỗi HTTPException (vd: từ Redis)
 
 
 async def logout_user(db: AsyncSession, user: models.User):
@@ -9362,7 +9685,7 @@ async def perform_bulk_action(
 
 ## 📄 `socket_manager.py`
 
-**Lines:** 212 | **Size:** 7527 bytes
+**Lines:** 212 | **Size:** 7595 bytes
 
 ```python
 # app/socket_manager.py
@@ -9387,8 +9710,8 @@ is_prod = settings.APP_ENV == "production"
 sio = socketio.AsyncServer(
     async_mode="asgi",
     cors_allowed_origins=settings.CORS_ORIGINS.split(","),
-    logger=not is_prod,
-    engineio_logger=not is_prod,
+    logger=False,             # 👈 Đặt thành False
+    engineio_logger=False,    # 👈 Đặt thành False
 )
 
 # === ✅ CẢI TIẾN: Vấn đề #1 - Rate Limiting bằng Redis LUA Script ===
@@ -9488,7 +9811,7 @@ async def _get_user_from_token(token: str) -> models.User:
     except Exception as e:
         # Log lỗi mà không log token
         log.warning("Socket auth failed", error=str(e))
-        raise ConnectionRefusedError(f"Auth failed")
+        raise ConnectionRefusedError("Auth failed")
 
 
 @sio.event
@@ -9512,7 +9835,7 @@ async def connect(sid, environ, auth):
 
             await sio.save_session(sid, {"user_id": user.id, "username": user.username})
             room_name = f"user_room_{user.id}"
-            sio.enter_room(sid, room_name)
+            await sio.enter_room(sid, room_name)
 
             socket_connections_active.inc()
 
@@ -9544,7 +9867,7 @@ async def disconnect(sid):
 
             # ✅ CẢI TIẾN: Rời phòng một cách tường minh
             room_name = f"user_room_{user_id}"
-            sio.leave_room(sid, room_name)
+            await sio.leave_room(sid, room_name)
 
             log.info(
                 "Socket client disconnected",
@@ -9721,7 +10044,7 @@ class BadRequest(BaseAppException):  # Kế thừa từ BaseAppException
 
 ## 📄 `utils\file_helpers.py`
 
-**Lines:** 242 | **Size:** 10162 bytes
+**Lines:** 251 | **Size:** 10395 bytes
 
 ```python
 # app/utils/file_helpers.py
@@ -9891,43 +10214,52 @@ async def save_avatar(file: UploadFile, old_avatar_url: str = None) -> str:
         try:
             # Chỉ lấy phần tên file từ URL (vd: /static/.../abc.png -> abc.png)
             old_file_name = os.path.basename(old_avatar_url)
-            # Kiểm tra cơ bản tên file cũ
+
+            # Kiểm tra cơ bản tên file cũ (vẫn giữ)
             if (
-                old_file_name
-                and ".." not in old_file_name
-                and "/" not in old_file_name
-                and "\\" not in old_file_name
+                not old_file_name
+                or ".." in old_file_name
+                or "/" in old_file_name
+                or "\\" in old_file_name
             ):
-                old_file_path = os.path.join(UPLOAD_FOLDER, old_file_name)
-                # Kiểm tra lại đường dẫn tuyệt đối trước khi xóa
-                old_file_path_abs = Path(old_file_path).resolve(strict=False)
-                # if old_file_path_abs.is_relative_to(upload_folder_abs): # Python 3.9+
-                if os.path.commonpath([upload_folder_abs, old_file_path_abs]) == str(
-                    upload_folder_abs
-                ):
-                    if os.path.exists(old_file_path):
-                        os.remove(old_file_path)
-                        log.info("Old avatar deleted successfully", path=old_file_path)
-                    else:
-                        log.debug(
-                            "Old avatar file not found, nothing to delete",
-                            path=old_file_path,
-                        )
-                else:
-                    log.warning(
-                        "Skipping deletion of potentially unsafe old avatar path",
-                        old_url=old_avatar_url,
-                        resolved_path=str(old_file_path_abs),
-                    )
-            else:
                 log.warning(
                     "Invalid old avatar URL format, skipping deletion",
                     old_url=old_avatar_url,
                 )
+                return  # Thoát khỏi hàm try-catch
+
+            old_file_path = os.path.join(UPLOAD_FOLDER, old_file_name)
+
+            # Kiểm tra lại đường dẫn tuyệt đối trước khi xóa (vẫn giữ)
+            old_file_path_abs = Path(old_file_path).resolve(strict=False)
+            if os.path.commonpath([upload_folder_abs, old_file_path_abs]) != str(
+                upload_folder_abs
+            ):
+                log.warning(
+                    "Skipping deletion of potentially unsafe old avatar path",
+                    old_url=old_avatar_url,
+                    resolved_path=str(old_file_path_abs),
+                )
+                return  # Thoát khỏi hàm try-catch
+
+            # ✅ SỬA LỖI: Áp dụng EAFP
+            # Cứ thử xóa, nếu không tìm thấy file thì bỏ qua
+            os.remove(old_file_path)
+            log.info("Old avatar deleted successfully", path=old_file_path)
+
+        except FileNotFoundError:
+            # Đây là trường hợp file đã bị xóa (bởi process khác hoặc không tồn tại)
+            # Đây là hành vi bình thường, không cần log error
+            log.debug(
+                "Old avatar file not found, nothing to delete",
+                path=old_file_path_abs,  # Dùng path đã resolve
+            )
         except Exception as e:
-            # Không raise lỗi nếu xóa file cũ thất bại, chỉ log lại
+            # Bắt các lỗi khác (ví dụ: không có quyền xóa)
             log.error(
-                "Failed to delete old avatar file", url=old_avatar_url, error=str(e)
+                "Failed to delete old avatar file (non-FileNotFound error)",
+                url=old_avatar_url,
+                error=str(e),
             )
 
     # 8. Lưu file mới (ghi nội dung đã đọc và validate)

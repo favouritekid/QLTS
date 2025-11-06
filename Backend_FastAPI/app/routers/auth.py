@@ -1,6 +1,7 @@
 # app/routers/auth.py
-import structlog
 from typing import Annotated
+
+import structlog
 from fastapi import (
     APIRouter,
     Cookie,
@@ -403,7 +404,7 @@ async def request_password_reset(
         db=db, email_in=forgot_data.email
     )
     return {
-        "msg": "If a user with that email exists, a password reset link will be sent."
+        "detail": "If a user with that email exists, a password reset link will be sent."  # <--- ĐÃ SỬA
     }
 
 
@@ -594,8 +595,16 @@ async def refresh_access_token(
                             str(user.id),
                             ex=new_refresh_ttl,
                         )
-                        pipe.set(f"blacklist:{old_refresh_jti}", "rotated", ex=300)
+
+                        # ✅ SỬA LỖI: Blacklist token cũ bằng đúng TTL của nó
+                        full_refresh_ttl = int(
+                            settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400
+                        )
+                        safe_ttl = max(60, full_refresh_ttl)  # Đảm bảo TTL dương
+                        pipe.set(f"blacklist:{old_refresh_jti}", "rotated", ex=safe_ttl)
+
                         await pipe.execute()
+
                     log.info(
                         "✅ Redis update successful (session rotated)", user_id=user.id
                     )

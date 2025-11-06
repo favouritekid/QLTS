@@ -165,43 +165,52 @@ async def save_avatar(file: UploadFile, old_avatar_url: str = None) -> str:
         try:
             # Chỉ lấy phần tên file từ URL (vd: /static/.../abc.png -> abc.png)
             old_file_name = os.path.basename(old_avatar_url)
-            # Kiểm tra cơ bản tên file cũ
+
+            # Kiểm tra cơ bản tên file cũ (vẫn giữ)
             if (
-                old_file_name
-                and ".." not in old_file_name
-                and "/" not in old_file_name
-                and "\\" not in old_file_name
+                not old_file_name
+                or ".." in old_file_name
+                or "/" in old_file_name
+                or "\\" in old_file_name
             ):
-                old_file_path = os.path.join(UPLOAD_FOLDER, old_file_name)
-                # Kiểm tra lại đường dẫn tuyệt đối trước khi xóa
-                old_file_path_abs = Path(old_file_path).resolve(strict=False)
-                # if old_file_path_abs.is_relative_to(upload_folder_abs): # Python 3.9+
-                if os.path.commonpath([upload_folder_abs, old_file_path_abs]) == str(
-                    upload_folder_abs
-                ):
-                    if os.path.exists(old_file_path):
-                        os.remove(old_file_path)
-                        log.info("Old avatar deleted successfully", path=old_file_path)
-                    else:
-                        log.debug(
-                            "Old avatar file not found, nothing to delete",
-                            path=old_file_path,
-                        )
-                else:
-                    log.warning(
-                        "Skipping deletion of potentially unsafe old avatar path",
-                        old_url=old_avatar_url,
-                        resolved_path=str(old_file_path_abs),
-                    )
-            else:
                 log.warning(
                     "Invalid old avatar URL format, skipping deletion",
                     old_url=old_avatar_url,
                 )
+                return  # Thoát khỏi hàm try-catch
+
+            old_file_path = os.path.join(UPLOAD_FOLDER, old_file_name)
+
+            # Kiểm tra lại đường dẫn tuyệt đối trước khi xóa (vẫn giữ)
+            old_file_path_abs = Path(old_file_path).resolve(strict=False)
+            if os.path.commonpath([upload_folder_abs, old_file_path_abs]) != str(
+                upload_folder_abs
+            ):
+                log.warning(
+                    "Skipping deletion of potentially unsafe old avatar path",
+                    old_url=old_avatar_url,
+                    resolved_path=str(old_file_path_abs),
+                )
+                return  # Thoát khỏi hàm try-catch
+
+            # ✅ SỬA LỖI: Áp dụng EAFP
+            # Cứ thử xóa, nếu không tìm thấy file thì bỏ qua
+            os.remove(old_file_path)
+            log.info("Old avatar deleted successfully", path=old_file_path)
+
+        except FileNotFoundError:
+            # Đây là trường hợp file đã bị xóa (bởi process khác hoặc không tồn tại)
+            # Đây là hành vi bình thường, không cần log error
+            log.debug(
+                "Old avatar file not found, nothing to delete",
+                path=old_file_path_abs,  # Dùng path đã resolve
+            )
         except Exception as e:
-            # Không raise lỗi nếu xóa file cũ thất bại, chỉ log lại
+            # Bắt các lỗi khác (ví dụ: không có quyền xóa)
             log.error(
-                "Failed to delete old avatar file", url=old_avatar_url, error=str(e)
+                "Failed to delete old avatar file (non-FileNotFound error)",
+                url=old_avatar_url,
+                error=str(e),
             )
 
     # 8. Lưu file mới (ghi nội dung đã đọc và validate)

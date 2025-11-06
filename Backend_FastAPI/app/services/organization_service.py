@@ -1,35 +1,117 @@
 # app/services/organization_service.py
+import asyncio  # ✅ 1. Thêm import
+import json  # ✅ 2. Thêm import
 from typing import List, Optional
 
-import structlog  # <-- BỔ SUNG
+import structlog
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from .. import models, schemas
+
+# ✅ 3. Thêm import
+from ..config import settings
+from ..database import safe_redis_delete, safe_redis_get, safe_redis_set
 from ..utils.exceptions import DuplicateResourceError, ResourceNotFoundError
 
-log = structlog.get_logger(__name__)  # <-- BỔ SUNG
+log = structlog.get_logger(__name__)
 
-# --- OrganizationUnit Services ---
+# --- ✅ 4. Định nghĩa Cache Key, TTL, và Lock ---
+ORG_UNITS_CACHE_KEY = "org:all_units_tree"
+CACHE_TTL = settings.CONFIG_CACHE_TTL_SECONDS  # Lấy từ config (ví dụ: 3600s)
+_org_cache_lock = asyncio.Lock()
+# ----------------------------------------------
 
 
-async def get_all_organization_units(db: AsyncSession) -> List[models.OrganizationUnit]:
-    """Lấy danh sách tất cả các đơn vị, tải háo hức các quan hệ."""
-    query = (
-        select(models.OrganizationUnit)
-        .options(
-            selectinload(models.OrganizationUnit.parent).options(
+# --- ✅ 5. Tạo hàm Invalidate Cache ---
+async def invalidate_org_cache():
+    """Xóa cache của cây tổ chức (Organization Tree)."""
+    try:
+        await safe_redis_delete(ORG_UNITS_CACHE_KEY)
+        log.info(
+            "Organization cache invalidated successfully.", key=ORG_UNITS_CACHE_KEY
+        )
+    except Exception as e:
+        log.error("Failed to invalidate organization cache", error=str(e))
+
+
+# --- ✅ 6. Cập nhật hàm `get_all_organization_units` ---
+async def get_all_organization_units(db: AsyncSession) -> List[dict]:
+    """Lấy danh sách tất cả các đơn vị, hỗ trợ cache và chống cache stampede."""
+    log.debug("Fetching all organization units", cache_key=ORG_UNITS_CACHE_KEY)
+
+    # 1. Thử cache trước
+    try:
+        cached_data = await safe_redis_get(ORG_UNITS_CACHE_KEY)
+        if cached_data:
+            log.debug("Cache hit for organization units")
+            return json.loads(cached_data)
+    except Exception as e_redis_get:
+        log.error("Failed to get organization units from cache", error=str(e_redis_get))
+
+    log.debug("Cache miss for organization units, acquiring lock...")
+
+    # 2. Cache Miss -> Lấy Lock
+    async with _org_cache_lock:
+        # 2a. Kiểm tra lại cache (phòng trường hợp request khác đã refresh)
+        try:
+            cached_data_after_lock = await safe_redis_get(ORG_UNITS_CACHE_KEY)
+            if cached_data_after_lock:
+                log.debug("Cache hit (after lock) for organization units")
+                return json.loads(cached_data_after_lock)
+        except Exception:
+            pass  # Bỏ qua, chúng ta sẽ query lại
+
+        log.debug("Cache miss (after lock), querying DB")
+
+        # 3. Query DB (Logic cũ)
+        query = (
+            select(models.OrganizationUnit)
+            .options(
+                selectinload(models.OrganizationUnit.parent).options(
+                    selectinload(models.OrganizationUnit.children),
+                    selectinload(models.OrganizationUnit.majors),
+                ),
                 selectinload(models.OrganizationUnit.children),
                 selectinload(models.OrganizationUnit.majors),
-            ),
-            selectinload(models.OrganizationUnit.children),
-            selectinload(models.OrganizationUnit.majors),
+            )
+            .order_by(models.OrganizationUnit.name)
         )
-        .order_by(models.OrganizationUnit.name)
-    )
-    result = await db.execute(query)
-    return result.scalars().unique().all()
+        result = await db.execute(query)
+        all_units_models = result.scalars().unique().all()
+
+        # 4. Serialize (Chuyển đổi models sang Pydantic rồi sang dict để cache)
+        # Bước này rất quan trọng để xử lý các object lồng nhau
+        try:
+            schemas_list = [
+                schemas.OrganizationUnit.model_validate(unit)
+                for unit in all_units_models
+            ]
+            units_data = [s.model_dump() for s in schemas_list]
+        except Exception as e_serialize:
+            log.error(
+                "Failed to serialize organization units for cache",
+                error=str(e_serialize),
+            )
+            # Trả về dữ liệu thô (không cache) nếu lỗi
+            return all_units_models
+
+        # 5. Lưu vào cache
+        try:
+            await safe_redis_set(
+                ORG_UNITS_CACHE_KEY, json.dumps(units_data), ex=CACHE_TTL
+            )
+            log.debug("Stored organization units in cache", ttl=CACHE_TTL)
+        except Exception as e_redis_set:
+            log.error(
+                "Failed to set organization units in cache", error=str(e_redis_set)
+            )
+
+        return units_data
+
+
+# --- Các hàm Read-only khác (giữ nguyên) ---
 
 
 async def get_organization_unit_by_id(
@@ -57,6 +139,9 @@ async def get_organization_unit_by_id(
     return unit
 
 
+# --- ✅ 7. Cập nhật các hàm GHI (Write) để invalidate cache ---
+
+
 async def create_organization_unit(
     db: AsyncSession, unit_in: schemas.OrganizationUnitCreate
 ) -> models.OrganizationUnit:
@@ -72,6 +157,9 @@ async def create_organization_unit(
         db.add(db_unit)
         await db.commit()
         await db.refresh(db_unit)
+
+        await invalidate_org_cache()  # <-- THÊM HỦY CACHE
+
         # Tải lại đầy đủ relations trước khi trả về
         return await get_organization_unit_by_id(db, db_unit.id)
     except Exception as e:
@@ -114,6 +202,9 @@ async def update_organization_unit(
 
         db.add(db_unit)
         await db.commit()
+
+        await invalidate_org_cache()  # <-- THÊM HỦY CACHE
+
         # Tải lại đầy đủ relations
         return await get_organization_unit_by_id(db, unit_id)
     except Exception as e:
@@ -136,6 +227,9 @@ async def delete_organization_unit(db: AsyncSession, unit_id: int):
             )
         await db.delete(db_unit)
         await db.commit()
+
+        await invalidate_org_cache()  # <-- THÊM HỦY CACHE
+
     except Exception as e:
         await db.rollback()
         log.error(
@@ -147,7 +241,7 @@ async def delete_organization_unit(db: AsyncSession, unit_id: int):
         raise e
 
 
-# --- Major Services ---
+# --- Major Services (Các hàm này cũng nên HỦY CACHE TỔ CHỨC) ---
 
 
 async def get_major_by_id(db: AsyncSession, major_id: int) -> Optional[models.Major]:
@@ -172,6 +266,9 @@ async def create_major(db: AsyncSession, major_in: schemas.MajorCreate) -> model
         db.add(db_major)
         await db.commit()
         await db.refresh(db_major)
+
+        await invalidate_org_cache()  # <-- THÊM HỦY CACHE (vì Major là con của Unit)
+
         return db_major
     except Exception as e:
         await db.rollback()
@@ -205,6 +302,9 @@ async def update_major(
         db.add(db_major)
         await db.commit()
         await db.refresh(db_major)
+
+        await invalidate_org_cache()  # <-- THÊM HỦY CACHE
+
         return db_major
     except Exception as e:
         await db.rollback()
@@ -219,6 +319,9 @@ async def delete_major(db: AsyncSession, major_id: int):
         db_major = await get_major_by_id(db, major_id)
         await db.delete(db_major)
         await db.commit()
+
+        await invalidate_org_cache()  # <-- THÊM HỦY CACHE
+
     except Exception as e:
         await db.rollback()
         log.error(
@@ -227,6 +330,7 @@ async def delete_major(db: AsyncSession, major_id: int):
         raise e
 
 
+# --- (Hàm `get_majors_by_unit_tree` giữ nguyên vì nó không dùng cache) ---
 async def get_majors_by_unit_tree(
     db: AsyncSession, unit_id: int, search_term: str = None
 ) -> List[models.Major]:

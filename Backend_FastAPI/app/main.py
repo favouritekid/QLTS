@@ -82,9 +82,25 @@ root_logger.handlers.clear()
 root_logger.addHandler(log_handler)
 root_logger.setLevel(settings.LOG_LEVEL.upper())
 
+# === ✅ BẮT ĐẦU TẮT TIẾNG LOG THỪA ===
+
 # Tắt log ồn ào của SQLAlchemy
 logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 logging.getLogger("sqlalchemy.pool").setLevel(logging.WARNING)
+
+# Tắt log DEBUG của Uvicorn (chỉ hiển thị INFO trở lên)
+logging.getLogger("uvicorn.access").setLevel(logging.INFO)
+logging.getLogger("uvicorn.error").setLevel(logging.INFO)
+
+# ❗️ Tắt log DEBUG của Socket.IO và Engine.IO (QUAN TRỌNG NHẤT)
+# Đây là những dòng log như "Sending packet...", "Received packet..."
+logging.getLogger("socketio").setLevel(logging.INFO)
+logging.getLogger("engineio").setLevel(logging.INFO)
+
+# Tắt log DEBUG của thư viện user-agents
+logging.getLogger("user_agents").setLevel(logging.INFO)
+
+# === ✅ KẾT THÚC TẮT TIẾNG LOG THỪA ===
 
 # Cấu hình log uvicorn
 logging.getLogger("uvicorn.access").handlers.clear()
@@ -176,12 +192,37 @@ async def lifespan(app: FastAPI):
             "server_shutdown",
             {"message": "Server is restarting. Please refresh in a moment."},
         )
-        # Chờ 1 giây (thay vì 2) để các client nhận được thông báo
+        # Chờ 1 giây
         await asyncio.sleep(1)
-        # Ngắt kết nối tất cả client
-        await sio.disconnect()
-        log.info("Socket.IO server connections closed gracefully")
+
+        # ✅ SỬA LỖI: Lặp qua và ngắt kết nối từng client
+
+        all_sids = []
+        try:
+            # SỬA: Lấy SIDs từ server Engine.IO (EIO)
+            # `eio.sockets` là dict chứa các socket đang hoạt động
+            all_sids = list(sio.eio.sockets.keys())  # <--- ĐÃ SỬA
+        except Exception as e_get_sid:
+            log.error("Failed to get SIDs for shutdown", error=str(e_get_sid))
+            all_sids = []  # Đặt là list rỗng để bỏ qua bước disconnect
+
+        if all_sids:
+            log.info(f"Disconnecting {len(all_sids)} active socket clients...")
+            for sid in all_sids:
+                try:
+                    # Ngắt kết nối từng client
+                    await sio.disconnect(sid)
+                except Exception as e_client:
+                    # Log lỗi nếu không ngắt kết nối được 1 client, nhưng vẫn tiếp tục
+                    log.warning(
+                        f"Error disconnecting client {sid}", error=str(e_client)
+                    )
+            log.info("Socket.IO server connections closed gracefully")
+        else:
+            log.info("No active socket clients to disconnect.")
+
     except Exception as e:
+        # Lỗi này giờ đây chỉ bắt các lỗi chung (ví dụ: lỗi khi emit)
         log.error("Error during Socket.IO shutdown", error=str(e))
 
     try:
@@ -424,7 +465,7 @@ async def metrics():
 async def health_check():
     """Kiểm tra API cơ bản."""
     log.debug("Health check endpoint was reached.")  # ✅ SỬA LỖI: Xóa `await`
-    return {"status": "ok", "message": "Server is healthy and running!"}
+    return {"status": "ok", "detail": "Server is healthy and running!"}
 
 
 @app.get("/health/detailed", tags=["Utilities"])

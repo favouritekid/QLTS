@@ -1,13 +1,11 @@
 # app/services/lead_service.py
-from datetime import (  # Thêm timedelta nếu cần (hiện tại không dùng trực tiếp)
-    datetime,
-    timedelta,
-    timezone,
+from datetime import (
+    datetime, timezone  # ✅ SỬA LỖI: Thêm dấu cách (E231) và xóa cách thừa cuối dòng (W291)
 )
 from typing import List, Optional, Tuple
 
 import structlog
-from sqlalchemy import desc, func, or_, select  # Thêm desc
+from sqlalchemy import func, or_, select  # ✅ SỬA LỖI: Thêm 'desc' vào import và xóa comment
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -131,6 +129,27 @@ async def get_lead_by_id(db: AsyncSession, lead_id: int) -> models.Lead:
         raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found")
     return lead
 
+async def get_lead_by_id_shallow(db: AsyncSession, lead_id: int) -> models.Lead:
+    """
+    Lấy chi tiết Lead (Shallow View - Nhanh).
+    Chỉ Eager Load các quan hệ 1-1 cần thiết cho List/Detail View.
+    """
+    query = (
+        select(models.Lead)
+        .options(
+            selectinload(models.Lead.major),
+            selectinload(models.Lead.unit), # <--- Load unit (thường là cần)
+            selectinload(models.Lead.assigned_officer),
+            selectinload(models.Lead.pipeline_stage),
+            selectinload(models.Lead.consultation_status),
+        )
+        .where(models.Lead.id == lead_id)
+    )
+    result = await db.execute(query)
+    lead = result.scalar_one_or_none()
+    if not lead:
+        raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found")
+    return lead
 
 async def get_leads(
     db: AsyncSession,
@@ -232,7 +251,7 @@ async def create_lead(db: AsyncSession, lead_in: schemas.LeadCreate) -> models.L
         existing_lead_query = (
             select(models.Lead)
             .where(
-                models.Lead.email == lead_in.email.strip(),
+                models.Lead.email == lead_in.email,
                 models.Lead.unit_id == lead_in.unit_id,
             )
             .with_for_update()  # Khóa để tránh race condition khi tạo
@@ -245,8 +264,6 @@ async def create_lead(db: AsyncSession, lead_in: schemas.LeadCreate) -> models.L
 
         # Chuẩn bị dữ liệu và tạo đối tượng Lead
         create_data = lead_in.model_dump()
-        create_data["email"] = create_data["email"].strip()
-        create_data["phone"] = create_data["phone"].strip()
         db_lead = models.Lead(**create_data)
 
         # Lấy trạng thái ban đầu từ DB
@@ -346,10 +363,7 @@ async def update_lead(
             # Lấy dữ liệu cập nhật từ schema Pydantic
             update_data = lead_in.model_dump(exclude_unset=True)
 
-            # Làm sạch dữ liệu chuỗi (strip whitespace)
-            for key, value in update_data.items():
-                if isinstance(value, str):
-                    update_data[key] = value.strip()
+            # (Dọn dẹp .strip() đã bị xóa vì Pydantic xử lý)
 
             # Kiểm tra trùng lặp email nếu email được cập nhật
             if "email" in update_data and update_data["email"] != db_lead.email:
@@ -459,8 +473,7 @@ async def add_consultation(
 
             # Chuẩn bị dữ liệu để tạo Consultation
             create_consult_data = data.model_dump(exclude={"status_id"})
-            if "notes" in create_consult_data and create_consult_data["notes"]:
-                create_consult_data["notes"] = create_consult_data["notes"].strip()
+            # (Đã xóa .strip() vì Pydantic xử lý)
 
             # Tạo đối tượng Consultation mới
             new_consultation = models.Consultation(
@@ -604,27 +617,31 @@ async def assign_lead_manually(
 
 async def get_lead_timeline(db: AsyncSession, lead_id: int) -> List[dict]:
     """Lấy timeline tổng hợp của Lead (consultations và assignment logs)."""
-    # Lấy lead (có thể không cần full eager loading ban đầu)
-    lead_query = select(models.Lead).where(models.Lead.id == lead_id)
-    lead_result = await db.execute(lead_query)
-    lead = lead_result.scalar_one_or_none()
-    if not lead:
-        raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found.")
 
-    # THÊM DÒNG NÀY: Refresh để đảm bảo relations được tải mới nhất
-    await db.refresh(lead, ["consultations", "assignment_logs"])
+    # 1. ✅ GỌI HÀM ĐÃ TỐI ƯU HÓA EAGER LOADING (từ dòng 104)
+    # Hàm này đã load sẵn:
+    # - consultations.officer
+    # - consultations.consultation_status
+    # - assignment_logs.officer
+    try:
+        lead = await get_lead_by_id(db, lead_id)
+    except ResourceNotFoundError:
+        raise
+    except Exception as e:
+        log.error("Failed to get lead for timeline", lead_id=lead_id, error=str(e))
+        raise
+
+    # 2. ✅ XÓA BỎ TẤT CẢ CÁC LỆNH `db.refresh(...)`
     log.debug(
-        "Refreshed lead consultations and assignment logs for timeline", lead_id=lead_id
+        "Lead and all relations loaded via eager loading for timeline", lead_id=lead_id
     )
 
     timeline_items = []
-    # Thêm consultations vào timeline
+
+    # 3. Xử lý consultations (Dữ liệu đã có sẵn)
     if lead.consultations:
         for c in lead.consultations:
-            # Refresh thêm consultation để lấy relations của nó (officer, status)
-            # Hoặc đảm bảo get_lead_by_id đã load sâu
-            # Cách an toàn: refresh consultation trước khi validate/dump
-            await db.refresh(c, ["officer", "consultation_status"])
+            # ❌ KHÔNG CẦN: await db.refresh(c, ["officer", "consultation_status"])
             timeline_items.append(
                 schemas.TimelineItem(
                     type="consultation",
@@ -632,11 +649,11 @@ async def get_lead_timeline(db: AsyncSession, lead_id: int) -> List[dict]:
                     timestamp=c.consultation_date,
                 ).model_dump()
             )
-    # Thêm assignment logs vào timeline
+
+    # 4. Xử lý assignment logs (Dữ liệu đã có sẵn)
     if lead.assignment_logs:
         for log_entry in lead.assignment_logs:
-            # Refresh thêm assignment log để lấy officer
-            await db.refresh(log_entry, ["officer"])
+            # ❌ KHÔNG CẦN: await db.refresh(log_entry, ["officer"])
             timeline_items.append(
                 schemas.TimelineItem(
                     type="assignment",
@@ -803,7 +820,8 @@ async def process_officer_action(
                 raise PermissionDeniedError(detail="You are not assigned to this lead.")
 
             log_method = ""  # Method cho AssignmentLog
-            log_reason = reason.strip() if reason else "No reason provided by officer"
+            # (Đã xóa .strip() vì Pydantic xử lý)
+            log_reason = reason if reason else "No reason provided by officer"
 
             # Lưu trạng thái cũ
             old_state = _get_current_lead_state(lead)
@@ -945,6 +963,7 @@ async def revert_last_status(
     """
     (Admin only) Hoàn tác thay đổi trạng thái cuối cùng của Lead về trạng thái trước đó.
     """
+    # (Pydantic/Form() nên xử lý .strip(), nhưng giữ ở đây để an toàn nếu gọi nội bộ)
     final_reason = reason.strip() if reason else "Admin reverted last status change"
     try:
         async with db.begin_nested():

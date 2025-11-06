@@ -1,6 +1,6 @@
 # Complete Project Source Code
 
-**Generated:** 2025-11-06 09:05:54  
+**Generated:** 2025-11-05 19:03:57  
 **Project:** QLTS (Quản Lý Tài Sản)  
 **Description:** Full source code export of QLTS project (Frontend + Backend)
 
@@ -17,19 +17,19 @@
 ## 📊 Statistics
 
 ### Frontend
-- **Files:** 64
-- **Lines of Code:** 5,308
-- **Total Size:** 173.51 KB
+- **Files:** 62
+- **Lines of Code:** 5,239
+- **Total Size:** 171.12 KB
 
 ### Backend
 - **Files:** 51
-- **Lines of Code:** 9,807
-- **Total Size:** 347.61 KB
+- **Lines of Code:** 9,770
+- **Total Size:** 345.52 KB
 
 ### Total
-- **Files:** 115
-- **Lines of Code:** 15,115
-- **Total Size:** 521.11 KB
+- **Files:** 113
+- **Lines of Code:** 15,009
+- **Total Size:** 516.64 KB
 
 ---
 
@@ -56,11 +56,8 @@ frontend/src/
     │   ├── profile/
     │   │   ├── page.tsx
     │   ├── settings/
-    │   │   ├── _components/
-    │   │   │   ├── SettingsNav.tsx
     │   │   ├── sessions/
     │   │   │   ├── page.tsx
-    │   │   ├── layout.tsx
     │   │   ├── page.tsx
     │   ├── layout.tsx
     ├── test/
@@ -584,127 +581,42 @@ export default function ProfilePage() {
 ```
 
 
-## 📄 `app\(dashboard)\settings\_components\SettingsNav.tsx`
-
-**Lines:** 44 | **Size:** 1575 bytes
-
-```typescript
-// src/app/(dashboard)/settings/_components/SettingsNav.tsx
-"use client";
-
-import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { cn } from "@/lib/utils";
-
-// Định nghĩa các tab điều hướng
-const navItems = [
-  { name: "Password", href: "/settings" },
-  { name: "Sessions", href: "/settings/sessions" },
-  // Bạn có thể dễ dàng thêm các tab khác ở đây trong tương lai
-  // { name: "Profile", href: "/settings/profile" },
-  // { name: "Notifications", href: "/settings/notifications" },
-];
-
-export function SettingsNav() {
-  const pathname = usePathname();
-
-  return (
-    <nav
-      className="scrollbar-hide flex space-x-2 overflow-x-auto border-b"
-      aria-label="Settings navigation"
-    >
-      {navItems.map((item) => (
-        <Link
-          key={item.href}
-          href={item.href}
-          className={cn(
-            // Style chung cho tất cả các tab
-            "ring-offset-background focus-visible:ring-ring inline-flex items-center justify-center rounded-t-sm border-b-2 px-3 py-1.5 text-sm font-medium whitespace-nowrap transition-all focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none",
-            // Style cho tab KHÔNG active
-            "text-muted-foreground hover:border-border hover:text-primary border-transparent",
-            // Style cho tab ĐANG active
-            pathname === item.href && "border-primary text-primary"
-          )}
-        >
-          {item.name}
-        </Link>
-      ))}
-    </nav>
-  );
-}
-
-```
-
-
-## 📄 `app\(dashboard)\settings\layout.tsx`
-
-**Lines:** 29 | **Size:** 1097 bytes
-
-```typescript
-// src/app/(dashboard)/settings/layout.tsx
-import React from "react";
-import { SettingsNav } from "./_components/SettingsNav"; // Component điều hướng ta sẽ tạo ở bước 3
-
-/**
- * Đây là Layout chung cho TẤT CẢ các trang con trong /settings/*
- * Nó cung cấp tiêu đề chung và thanh điều hướng Tab.
- * {children} sẽ là nội dung của trang con (ví dụ: page.tsx hoặc sessions/page.tsx)
- */
-export default function SettingsLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="space-y-6">
-      {/* 1. Tiêu đề chung của trang Cài đặt */}
-      <header>
-        <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
-        <p className="text-muted-foreground">
-          Manage your account settings, password, and active sessions.
-        </p>
-      </header>
-
-      {/* 2. Thanh điều hướng dạng Tab */}
-      <SettingsNav />
-
-      {/* 3. Render nội dung của tab đang được chọn (children) */}
-      <div className="pt-4">{children}</div>
-    </div>
-  );
-}
-
-```
-
-
 ## 📄 `app\(dashboard)\settings\page.tsx`
 
-**Lines:** 30 | **Size:** 965 bytes
+**Lines:** 34 | **Size:** 1191 bytes
 
 ```typescript
-// src/app/(dashboard)/settings/page.tsx (ĐÃ CẬP NHẬT)
+// src/app/(dashboard)/settings/page.tsx
 "use client";
 
 import { ChangePasswordForm } from "@/components/forms/ChangePasswordForm";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 
-/**
- * Trang này giờ đây CHỈ chứa nội dung cho tab "Password".
- * Tiêu đề "Settings" và thanh Tab đã được chuyển lên layout.tsx.
- */
-export default function SettingsPasswordPage() {
+// (Bạn có thể thêm Metadata nếu muốn, nhưng vì đây là Client Component,
+// bạn có thể quản lý title động nếu cần)
+
+export default function SettingsPage() {
   return (
-    // XÓA <header> và <p> mô tả khỏi đây
+    <div className="space-y-6">
+      <header>
+        <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
+        <p className="text-muted-foreground">Manage your account settings and password.</p>
+      </header>
 
-    <Card className="max-w-2xl">
-      <CardHeader>
-        <CardTitle>Change Password</CardTitle>
-        <CardDescription>
-          Enter your current password and a new password. You will be logged out after success.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <ChangePasswordForm />
-      </CardContent>
-    </Card>
+      <Card className="max-w-2xl">
+        <CardHeader>
+          <CardTitle>Change Password</CardTitle>
+          <CardDescription>
+            Enter your current password and a new password. You will be logged out after success.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ChangePasswordForm />
+        </CardContent>
+      </Card>
 
-    // XÓA Card "Manage Active Sessions" khỏi đây
+      {/* Thêm các Card cài đặt khác ở đây (ví dụ: Cài đặt Profile, Notifications...) */}
+    </div>
   );
 }
 
@@ -7096,7 +7008,7 @@ async def send_password_reset_email(email_to: str, reset_url: str, username: str
 
 ## 📄 `main.py`
 
-**Lines:** 542 | **Size:** 20594 bytes
+**Lines:** 526 | **Size:** 19920 bytes
 
 ```python
 # app/main.py
@@ -7183,25 +7095,9 @@ root_logger.handlers.clear()
 root_logger.addHandler(log_handler)
 root_logger.setLevel(settings.LOG_LEVEL.upper())
 
-# === ✅ BẮT ĐẦU TẮT TIẾNG LOG THỪA ===
-
 # Tắt log ồn ào của SQLAlchemy
 logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 logging.getLogger("sqlalchemy.pool").setLevel(logging.WARNING)
-
-# Tắt log DEBUG của Uvicorn (chỉ hiển thị INFO trở lên)
-logging.getLogger("uvicorn.access").setLevel(logging.INFO)
-logging.getLogger("uvicorn.error").setLevel(logging.INFO)
-
-# ❗️ Tắt log DEBUG của Socket.IO và Engine.IO (QUAN TRỌNG NHẤT)
-# Đây là những dòng log như "Sending packet...", "Received packet..."
-logging.getLogger("socketio").setLevel(logging.INFO)
-logging.getLogger("engineio").setLevel(logging.INFO)
-
-# Tắt log DEBUG của thư viện user-agents
-logging.getLogger("user_agents").setLevel(logging.INFO)
-
-# === ✅ KẾT THÚC TẮT TIẾNG LOG THỪA ===
 
 # Cấu hình log uvicorn
 logging.getLogger("uvicorn.access").handlers.clear()
@@ -10399,7 +10295,7 @@ async def update_current_user_profile(
 
 ## 📄 `routers\sessions.py`
 
-**Lines:** 219 | **Size:** 7124 bytes
+**Lines:** 212 | **Size:** 6479 bytes
 
 ```python
 # app/routers/sessions.py
@@ -10459,48 +10355,28 @@ async def get_active_sessions(
             # Continue without marking current session
 
     try:
-        # 1. Lấy danh sách thô (DB Models)
-        db_sessions = await session_service.get_active_sessions(
+        sessions = await session_service.get_active_sessions(
             db,
             current_user.id,
-            current_refresh_jti=current_refresh_jti,
+            current_refresh_jti=current_refresh_jti,  # Pass current JTI to mark current session
         )
+
         log.info(
             "Active sessions retrieved",
             user_id=current_user.id,
-            session_count=len(db_sessions),
+            session_count=len(sessions),
         )
 
-        # ✅ --- BẮT ĐẦU TỐI ƯU HÓA (Theo đề xuất của bạn) ---
+        # Mark current session in response
         current_session_id = None
-        response_sessions = []
-
-        # 2. Dùng List Comprehension + model_construct
-        # Nhanh hơn nhiều so với việc lặp và gọi model_validate
-        response_sessions = [
-            schemas.UserSessionResponse.model_construct(
-                # Tự động map tất cả các cột từ CSDL
-                **{c.name: getattr(session, c.name) for c in session.__table__.columns},
-                
-                # Tính toán và ghi đè 'is_current'
-                is_current=bool(
-                    current_refresh_jti and 
-                    session.refresh_jti == current_refresh_jti
-                )
-            )
-            for session in db_sessions
-        ]
-
-        # 3. Tìm current_session_id (nếu cần) từ danh sách đã tạo
-        for s in response_sessions:
-            if s.is_current:
-                current_session_id = s.id
-                break
-        # ✅ --- KẾT THÚC TỐI ƯU HÓA ---
+        for session in sessions:
+            if current_refresh_jti and session.refresh_jti == current_refresh_jti:
+                session.is_current = True
+                current_session_id = session.id
 
         return schemas.UserSessionListResponse(
-            sessions=response_sessions,
-            total=len(response_sessions),
+            sessions=sessions,
+            total=len(sessions),
             current_session_id=current_session_id,
         )
 
@@ -10580,23 +10456,38 @@ async def revoke_session(
 
 @router.post("/revoke-all", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_all_other_sessions(
-    # ✅ THAY ĐỔI Ở ĐÂY: Dùng Pydantic model để đọc JSON Body
-    request_data: schemas.RevokeAllSessionsRequest,
+    current_session_id: int = None,  # Optional: ID of current session to preserve
     current_user: models.User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(database.get_db),
 ):
-    # ✅ Lấy ID từ request_data (trong body)
-    session_id_to_preserve = request_data.current_session_id
+    """
+    Revoke all sessions except optionally the current one.
 
+    Args:
+        current_session_id: Optional ID of session to preserve (usually current session)
+
+    Useful when:
+        - User suspects account compromise
+        - User wants to logout from all other devices
+        - Security best practice after password change
+
+    Security:
+        - Requires authentication
+        - Only revokes user's own sessions
+        - Can optionally preserve current session
+
+    Returns:
+        204 No Content on success
+    """
     log.info(
         "Revoking all other sessions",
         user_id=current_user.id,
-        preserve_session_id=session_id_to_preserve, # 👈 Log sẽ hiển thị đúng
+        preserve_session_id=current_session_id,
     )
 
     try:
         revoked_count = await session_service.revoke_all_other_sessions(
-            db=db, user_id=current_user.id, except_session_id=session_id_to_preserve
+            db=db, user_id=current_user.id, except_session_id=current_session_id
         )
 
         log.info(
@@ -10607,15 +10498,13 @@ async def revoke_all_other_sessions(
 
         return None  # 204 No Content
 
-    # ✅ THÊM KHỐI CATCH NÀY (để bắt lỗi từ service)
     except Exception as e:
         log.error(
-            "Failed to revoke all other sessions (endpoint level)",
+            "Failed to revoke all other sessions",
             user_id=current_user.id,
             error=str(e),
             exc_info=True,
         )
-        # Báo lỗi về frontend để họ biết thao tác thất bại
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to revoke sessions",
@@ -10652,7 +10541,7 @@ async def read_users_me(current_user: models.User = deps.CurrentUser):
 
 ## 📄 `schemas\__init__.py`
 
-**Lines:** 92 | **Size:** 1927 bytes
+**Lines:** 92 | **Size:** 1898 bytes
 
 ```python
 # app/schemas/__init__.py
@@ -10745,8 +10634,8 @@ from .user_session import (
     UserSessionListResponse,
     UserSessionResponse,
     UserSessionUpdate,
-    RevokeAllSessionsRequest 
 )
+
 ```
 
 
@@ -11335,7 +11224,7 @@ class RefreshTokenRequest(BaseModel):
 
 ## 📄 `schemas\user_session.py`
 
-**Lines:** 75 | **Size:** 2096 bytes
+**Lines:** 70 | **Size:** 1830 bytes
 
 ```python
 # app/schemas/user_session.py
@@ -11394,8 +11283,6 @@ class UserSessionResponse(UserSessionBase):
         default=True,
         description="Whether session is active (not revoked and not expired)",
     )
-    # ✅ THÊM DÒNG NÀY (Như bạn đề xuất)
-    # Thêm trường này với giá trị mặc định, Pydantic sẽ nhận nó
     is_current: bool = Field(
         default=False, description="Whether this is the current session"
     )
@@ -11405,12 +11292,9 @@ class UserSessionResponse(UserSessionBase):
 
 class UserSessionListResponse(BaseModel):
     """Schema for returning list of sessions."""
+
     sessions: list[UserSessionResponse]
     total: int
-    current_session_id: Optional[int] = None
-
-# ✅ THÊM SCHEMA NÀY VÀO CUỐI FILE
-class RevokeAllSessionsRequest(BaseModel):
     current_session_id: Optional[int] = None
 
 ```
@@ -11553,20 +11437,12 @@ def decode_token(token: str) -> dict:
 
 ## 📄 `services\__init__.py`
 
-**Lines:** 11 | **Size:** 332 bytes
+**Lines:** 3 | **Size:** 50 bytes
 
 ```python
 # app/services/__init__.py
 # flake8: noqa: F401
-from . import user_service
-from . import lead_service
-from . import session_service
-from . import organization_service
-from . import pipeline_service
-from . import config_service
-from . import assignment_service
-from . import insights_service
-from . import anomaly_detection
+
 ```
 
 
@@ -14513,7 +14389,7 @@ async def delete_consultation_status(db: AsyncSession, status_id: str):
 
 ## 📄 `services\session_service.py`
 
-**Lines:** 388 | **Size:** 12662 bytes
+**Lines:** 387 | **Size:** 12491 bytes
 
 ```python
 # app/services/session_service.py
@@ -14525,7 +14401,6 @@ from sqlalchemy import and_, select
 from sqlalchemy.exc import NoResultFound  # ✅ Thêm exception
 from sqlalchemy.ext.asyncio import AsyncSession
 from user_agents import parse as parse_user_agent
-from fastapi import HTTPException, status
 
 from .. import models
 from ..database import safe_redis_delete, safe_redis_set
@@ -14703,10 +14578,14 @@ async def get_active_sessions(
 
 
 async def revoke_session(db: AsyncSession, session_id: int, user_id: int) -> bool:
-    session_to_emit = None  # Biến để lưu session JTI ra ngoài transaction
-
+    """
+    (V5) Thu hồi 1 session.
+    Tích hợp Optimistic Locking, fix lỗi transaction và Metrics.
+    """
     try:
-        async with db.begin_nested(): # Bắt đầu transaction
+        # ✅ CẢI TIẾN: Vấn đề #5 - Bắt đầu transaction và Khóa (Lock)
+        # Dùng transaction CẤP CAO NHẤT, không lồng (nested)
+        async with db.begin():
             result = await db.execute(
                 select(models.UserSession)
                 .where(
@@ -14715,7 +14594,7 @@ async def revoke_session(db: AsyncSession, session_id: int, user_id: int) -> boo
                         models.UserSession.user_id == user_id,
                     )
                 )
-                .with_for_update()
+                .with_for_update()  # ✅ Khóa dòng này lại
             )
             session = result.scalar_one_or_none()
 
@@ -14726,28 +14605,26 @@ async def revoke_session(db: AsyncSession, session_id: int, user_id: int) -> boo
                 log.warning("Session already revoked, skipping", session_id=session_id)
                 return False
 
-            # 1. Cập nhật CSDL
+            # Mark as revoked
             session.revoked_at = datetime.now(timezone.utc)
             db.add(session)
-            session_to_emit = session.refresh_jti # Lưu JTI
 
-            # 2. ✅ Cập nhật REDIS (NẰM TRONG TRANSACTION)
-            # Xóa khối try...except câm
-            ttl = int(
-                (session.expires_at - datetime.now(timezone.utc)).total_seconds()
-            )
-            if ttl > 0:
-                await safe_redis_set(
-                    f"blacklist:{session.refresh_jti}", "revoked_by_user", ex=ttl
+            # (Logic Redis giữ nguyên)
+            try:
+                ttl = int(
+                    (session.expires_at - datetime.now(timezone.utc)).total_seconds()
                 )
-            
-            await safe_redis_delete(f"session:{session.refresh_jti}")
-            log.info("Session DB marked and Redis keys updated (in transaction)", 
-                     session_id=session_id)
+                if ttl > 0:
+                    await safe_redis_set(
+                        f"blacklist:{session.refresh_jti}", "revoked_by_user", ex=ttl
+                    )
+                    await safe_redis_delete(f"session:{session.refresh_jti}")
+                    log.info("Session key deleted from Redis", ...)
+            except Exception:
+                log.warning("Failed to blacklist/delete refresh token in Redis", ...)
 
-        # 3. ✅ COMMIT TỰ ĐỘNG
-        # Nếu Redis lỗi, exception sẽ văng ra, db.begin() sẽ tự động ROLLBACK
-        log.info("Revoke transaction committed", session_id=session_id, user_id=user_id)
+        # ✅ CẢI TIẾN: Vấn đề #5 - `db.commit()` được tự động gọi ở đây
+        # khi ra khỏi `async with db.begin()`
 
     except NoResultFound:
         log.warning(
@@ -14755,37 +14632,35 @@ async def revoke_session(db: AsyncSession, session_id: int, user_id: int) -> boo
             session_id=session_id,
             user_id=user_id,
         )
-        return False # Thất bại (an toàn)
+        return False
     except Exception as e:
-        # Bất kỳ lỗi nào (CSDL hoặc Redis) đều sẽ bị bắt ở đây
         # db.rollback() được tự động gọi
         log.error(
-            "Failed to revoke session (transaction rolled back)",
+            "Failed to revoke session",
             session_id=session_id,
             user_id=user_id,
             error=str(e),
         )
-        # 💡 Trả về lỗi 500 cho Frontend (Device A) biết là đã thất bại
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to revoke session due to service error: {e}"
-        )
+        return False
 
-    # 4. Gửi Socket.IO (Chỉ khi transaction thành công)
-    if session_to_emit:
-        async with track_event_latency("force_logout_batch"):
-            try:
-                room_name = f"user_room_{user_id}"
-                await sio.emit(
-                    "force_logout_batch",
-                    {"revoked_jtis": [session_to_emit]},
-                    room=room_name,
-                )
-                socket_events_emitted_total.labels(event_type="force_logout_batch").inc()
-                log.info("Emitted 'force_logout_batch' event (single)", session_id=session_id)
-            except Exception as e_socket:
-                socket_emit_failures_total.labels(event_type="force_logout_batch").inc()
-                log.error("Failed to emit socket event for revoke", error=str(e_socket))
+    # Nếu thành công (không có exception)
+    log.info("Session revoked", session_id=session_id, user_id=user_id)
+
+    # Gửi sự kiện Socket.IO
+    async with track_event_latency("force_logout_batch"):  # ✅ Theo dõi latency
+        try:
+            room_name = f"user_room_{user_id}"
+            await sio.emit(
+                "force_logout_batch",
+                {"revoked_jtis": [session.refresh_jti]},
+                room=room_name,
+                # ✅ CẢI TIẾN: Vấn đề #6 - Bỏ callback, dùng event `logout_confirmed`
+            )
+            socket_events_emitted_total.labels(event_type="force_logout_batch").inc()
+            log.info("Emitted 'force_logout_batch' event (single)", ...)
+        except Exception as e_socket:
+            socket_emit_failures_total.labels(event_type="force_logout_batch").inc()
+            log.error("Failed to emit socket event for revoke", error=str(e_socket))
 
     return True
 
@@ -14840,50 +14715,51 @@ async def update_session_activity(
 async def revoke_all_other_sessions(
     db: AsyncSession, user_id: int, except_session_id: Optional[int] = None
 ) -> int:
+    # (Hàm này cũng nên dùng `async with db.begin()`)
     revoked_jtis = []
     revoked_count = 0
-    
-    # ✅ XÓA KHỐI 'try...except Exception' bên ngoài
-    
-    # db.begin() sẽ tự động rollback nếu có exception
-    async with db.begin_nested():
-        now = datetime.now(timezone.utc)
-        conditions = [
-            models.UserSession.user_id == user_id,
-            models.UserSession.revoked_at.is_(None),
-        ]
-        if except_session_id is not None:
-            conditions.append(models.UserSession.id != except_session_id)
+    try:
+        async with db.begin():  # ✅ Thêm transaction
+            now = datetime.now(timezone.utc)
+            conditions = [
+                models.UserSession.user_id == user_id,
+                models.UserSession.revoked_at.is_(None),
+            ]
+            if except_session_id is not None:
+                conditions.append(models.UserSession.id != except_session_id)
 
-        result = await db.execute(
-            select(models.UserSession).where(and_(*conditions)).with_for_update()
-        )
-        sessions = result.scalars().all()
+            result = await db.execute(
+                select(models.UserSession).where(and_(*conditions)).with_for_update()
+            )
+            sessions = result.scalars().all()
 
-        for session in sessions:
-            session.revoked_at = now
-            db.add(session)
-            revoked_jtis.append(session.refresh_jti)
-            
-            # Cập nhật Redis (Nếu đây là lỗi, exception sẽ văng ra
-            # và db.begin() sẽ tự động rollback)
-            ttl = int((session.expires_at - now).total_seconds())
-            if ttl > 0:
-                await safe_redis_set(
-                    f"blacklist:{session.refresh_jti}",
-                    "revoked_by_user",
-                    ex=ttl,
-                )
-            await safe_redis_delete(f"session:{session.refresh_jti}")
-            
-            revoked_count += 1
+            for session in sessions:
+                session.revoked_at = now
+                db.add(session)
+                revoked_jtis.append(session.refresh_jti)
+                try:
+                    ttl = int((session.expires_at - now).total_seconds())
+                    if ttl > 0:
+                        await safe_redis_set(
+                            f"blacklist:{session.refresh_jti}",
+                            "revoked_by_user",
+                            ex=ttl,
+                        )
+                        await safe_redis_delete(f"session:{session.refresh_jti}")
+                except Exception:
+                    log.warning(
+                        "Failed to blacklist/delete refresh token in Redis", ...
+                    )
+                revoked_count += 1
 
-    # ✅ COMMIT TỰ ĐỘNG (Chỉ khi CSDL và Redis đều thành công)
-    log.info("Revoked all other sessions and updated Redis", 
-             user_id=user_id, 
-             revoked_count=revoked_count)
+        # ✅ Commit tự động
+        log.info("Revoked all other sessions", ...)
 
-    # Gửi sự kiện Socket.IO (Sau khi đã commit)
+    except Exception as e:
+        log.error("Failed to revoke all other sessions", error=str(e))
+        return 0  # Thất bại
+
+    # Gửi sự kiện Socket.IO
     if revoked_jtis:
         async with track_event_latency("force_logout_batch_all"):
             try:
@@ -14898,8 +14774,7 @@ async def revoke_all_other_sessions(
             except Exception as e_socket:
                 socket_emit_failures_total.labels(event_type="force_logout_batch").inc()
                 log.error(
-                    "Failed to emit socket event for revoke-all", 
-                    error_message=str(e_socket) # 👈 Đổi tên key
+                    "Failed to emit socket event for revoke-all", error=str(e_socket)
                 )
 
     return revoked_count
@@ -15642,7 +15517,7 @@ async def perform_bulk_action(
 
 ## 📄 `socket_manager.py`
 
-**Lines:** 212 | **Size:** 7595 bytes
+**Lines:** 212 | **Size:** 7526 bytes
 
 ```python
 # app/socket_manager.py
@@ -15667,8 +15542,8 @@ is_prod = settings.APP_ENV == "production"
 sio = socketio.AsyncServer(
     async_mode="asgi",
     cors_allowed_origins=settings.CORS_ORIGINS.split(","),
-    logger=False,             # 👈 Đặt thành False
-    engineio_logger=False,    # 👈 Đặt thành False
+    logger=not is_prod,
+    engineio_logger=not is_prod,
 )
 
 # === ✅ CẢI TIẾN: Vấn đề #1 - Rate Limiting bằng Redis LUA Script ===
@@ -15792,7 +15667,7 @@ async def connect(sid, environ, auth):
 
             await sio.save_session(sid, {"user_id": user.id, "username": user.username})
             room_name = f"user_room_{user.id}"
-            await sio.enter_room(sid, room_name)
+            sio.enter_room(sid, room_name)
 
             socket_connections_active.inc()
 
@@ -15824,7 +15699,7 @@ async def disconnect(sid):
 
             # ✅ CẢI TIẾN: Rời phòng một cách tường minh
             room_name = f"user_room_{user_id}"
-            await sio.leave_room(sid, room_name)
+            sio.leave_room(sid, room_name)
 
             log.info(
                 "Socket client disconnected",
