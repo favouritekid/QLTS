@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% if lang == 'vi' %}
+<h2>🚨 Cảnh báo Bảo mật: Phát hiện Đăng nhập Đáng ngờ</h2>
+
+<p>Xin chào <strong>{{ username }}</strong>,</p>
+
+<p>Chúng tôi phát hiện một hoạt động đăng nhập đáng ngờ vào tài khoản QLTS của bạn.</p>
+
+{% if anomalies and (anomalies.new_ip or anomalies.new_device or anomalies.impossible_travel or anomalies.excessive_sessions or anomalies.unusual_time) %}
+<div class="alert alert-warning">
+    <strong>⚠️ Các Dấu hiệu Bất thường:</strong>
+    <ul style="margin: 12px 0 0 0; padding-left: 20px;">
+        {% if anomalies.new_ip %}
+        <li>Địa chỉ IP mới chưa từng sử dụng</li>
+        {% endif %}
+        {% if anomalies.new_device %}
+        <li>Thiết bị/trình duyệt mới</li>
+        {% endif %}
+        {% if anomalies.impossible_travel %}
+        <li>Đăng nhập từ vị trí khác thường trong thời gian ngắn (Impossible Travel)</li>
+        {% endif %}
+        {% if anomalies.excessive_sessions %}
+        <li>Số lượng phiên đăng nhập đồng thời cao bất thường</li>
+        {% endif %}
+        {% if anomalies.unusual_time %}
+        <li>Đăng nhập vào thời gian bất thường</li>
+        {% endif %}
+    </ul>
+</div>
+{% endif %}
+
+<h3 style="color: #333; font-size: 18px; margin-top: 30px; margin-bottom: 15px;">Chi tiết Đăng nhập:</h3>
+
+<table class="info-table">
+    <tr>
+        <td>Thời gian:</td>
+        <td>{{ login_time }}</td>
+    </tr>
+    <tr>
+        <td>Địa chỉ IP:</td>
+        <td>{{ ip_address or 'Không xác định' }}</td>
+    </tr>
+    {% if location %}
+    <tr>
+        <td>Vị trí:</td>
+        <td>{{ location }}</td>
+    </tr>
+    {% endif %}
+    <tr>
+        <td>Thiết bị:</td>
+        <td>{{ device_type }}</td>
+    </tr>
+    <tr>
+        <td>Trình duyệt:</td>
+        <td>{{ browser }}</td>
+    </tr>
+    <tr>
+        <td>Hệ điều hành:</td>
+        <td>{{ os }}</td>
+    </tr>
+</table>
+
+<div class="alert alert-success">
+    <p><strong>✅ Nếu đây là bạn:</strong></p>
+    <p>Bạn có thể bỏ qua email này một cách an toàn. Đây chỉ là cảnh báo tự động để bảo vệ tài khoản của bạn.</p>
+</div>
+
+<div class="alert alert-danger">
+    <p><strong>❌ Nếu đây KHÔNG phải là bạn:</strong></p>
+    <p><strong>Tài khoản của bạn có thể bị xâm nhập!</strong> Hãy thực hiện các bước sau ngay lập tức:</p>
+    <ol style="margin: 12px 0 0 0; padding-left: 20px;">
+        <li><strong>Đổi mật khẩu ngay lập tức</strong> từ thiết bị an toàn</li>
+        <li>Kiểm tra và revoke các phiên đăng nhập đáng ngờ trong cài đặt tài khoản</li>
+        <li>Kiểm tra bảo mật tài khoản email của bạn (có thể có người đã truy cập)</li>
+        <li>Bật Xác thực Hai yếu tố (2FA) nếu chưa có</li>
+        <li>Liên hệ hỗ trợ ngay nếu nghi ngờ bị truy cập trái phép</li>
+    </ol>
+</div>
+
+<div class="button-container">
+    <a href="{{ frontend_url }}/settings/sessions" class="button">
+        Kiểm tra Phiên Đăng nhập
+    </a>
+</div>
+
+<p style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0; color: #666; font-size: 14px;">
+    <strong>Mẹo Bảo mật:</strong><br>
+    - Thường xuyên kiểm tra các phiên đăng nhập hoạt động của bạn<br>
+    - Sử dụng mật khẩu mạnh và duy nhất cho mỗi tài khoản<br>
+    - Bật xác thực hai yếu tố khi có thể<br>
+    - Đăng xuất khỏi các thiết bị không còn sử dụng<br>
+    - Không bao giờ chia sẻ mật khẩu của bạn với bất kỳ ai
+</p>
+
+{% else %}
+<h2>🚨 Security Alert: Suspicious Login Detected</h2>
+
+<p>Hi <strong>{{ username }}</strong>,</p>
+
+<p>We detected a suspicious login activity on your QLTS account.</p>
+
+{% if anomalies and (anomalies.new_ip or anomalies.new_device or anomalies.impossible_travel or anomalies.excessive_sessions or anomalies.unusual_time) %}
+<div class="alert alert-warning">
+    <strong>⚠️ Unusual Indicators:</strong>
+    <ul style="margin: 12px 0 0 0; padding-left: 20px;">
+        {% if anomalies.new_ip %}
+        <li>New IP address never used before</li>
+        {% endif %}
+        {% if anomalies.new_device %}
+        <li>New device/browser</li>
+        {% endif %}
+        {% if anomalies.impossible_travel %}
+        <li>Login from unusual location in short time (Impossible Travel)</li>
+        {% endif %}
+        {% if anomalies.excessive_sessions %}
+        <li>Unusually high number of concurrent sessions</li>
+        {% endif %}
+        {% if anomalies.unusual_time %}
+        <li>Login at unusual time</li>
+        {% endif %}
+    </ul>
+</div>
+{% endif %}
+
+<h3 style="color: #333; font-size: 18px; margin-top: 30px; margin-bottom: 15px;">Login Details:</h3>
+
+<table class="info-table">
+    <tr>
+        <td>Time:</td>
+        <td>{{ login_time }}</td>
+    </tr>
+    <tr>
+        <td>IP Address:</td>
+        <td>{{ ip_address or 'Unknown' }}</td>
+    </tr>
+    {% if location %}
+    <tr>
+        <td>Location:</td>
+        <td>{{ location }}</td>
+    </tr>
+    {% endif %}
+    <tr>
+        <td>Device:</td>
+        <td>{{ device_type }}</td>
+    </tr>
+    <tr>
+        <td>Browser:</td>
+        <td>{{ browser }}</td>
+    </tr>
+    <tr>
+        <td>Operating System:</td>
+        <td>{{ os }}</td>
+    </tr>
+</table>
+
+<div class="alert alert-success">
+    <p><strong>✅ If this was you:</strong></p>
+    <p>You can safely ignore this email. This is just an automated alert to protect your account.</p>
+</div>
+
+<div class="alert alert-danger">
+    <p><strong>❌ If this was NOT you:</strong></p>
+    <p><strong>Your account may be compromised!</strong> Take these steps immediately:</p>
+    <ol style="margin: 12px 0 0 0; padding-left: 20px;">
+        <li><strong>Change your password immediately</strong> using a secure device</li>
+        <li>Review and revoke suspicious sessions in account settings</li>
+        <li>Check your email account security (someone may have access)</li>
+        <li>Enable Two-Factor Authentication (2FA) if not already enabled</li>
+        <li>Contact support immediately if you suspect unauthorized access</li>
+    </ol>
+</div>
+
+<div class="button-container">
+    <a href="{{ frontend_url }}/settings/sessions" class="button">
+        Review Active Sessions
+    </a>
+</div>
+
+<p style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0; color: #666; font-size: 14px;">
+    <strong>Security Tips:</strong><br>
+    - Regularly review your active sessions<br>
+    - Use strong, unique passwords for each account<br>
+    - Enable two-factor authentication when available<br>
+    - Log out from devices you're no longer using<br>
+    - Never share your password with anyone
+</p>
+
+{% endif %}
+{% endblock %}

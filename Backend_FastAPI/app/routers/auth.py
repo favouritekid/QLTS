@@ -172,6 +172,14 @@ async def login_for_access_token(
             session.is_suspicious = True
             db.add(session)
             try:
+                # Format location from session data
+                location_parts = []
+                if session.city:
+                    location_parts.append(session.city)
+                if session.country:
+                    location_parts.append(session.country)
+                location = ", ".join(location_parts) if location_parts else None
+
                 send_login_alert_email_task.delay(
                     email_to=user.email,
                     username=user.username,
@@ -181,6 +189,7 @@ async def login_for_access_token(
                     browser=session.browser or "Unknown",
                     os=session.os or "Unknown",
                     anomalies=anomalies,
+                    location=location,
                 )
                 log.info(
                     "Login alert email queued for suspicious activity",

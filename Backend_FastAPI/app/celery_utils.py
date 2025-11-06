@@ -184,103 +184,53 @@ def send_login_alert_email_task(
     device_type: str,
     browser: str,
     os: str,
-    anomalies: dict = None,  # ✅ NEW: Anomaly details
+    anomalies: dict = None,
+    location: str = None,
+    lang: str = "vi",
 ):
-    """Sync Celery task to send login alert email for suspicious activity."""
+    """
+    Send login alert email for suspicious activity.
+
+    Security: Alerts user when anomalous login patterns are detected (new IP,
+    impossible travel, excessive sessions, unusual time, etc.).
+    """
     task_log = logging.getLogger("send_login_alert_email_task")
     task_log.info(f"Login alert task started for recipient: {email_to}")
 
-    from datetime import datetime, timezone  # ✅ SỬA LỖI (F821): Thêm `timezone`
-
-    login_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    # Build anomaly warnings
-    anomaly_warnings = ""
-    if anomalies:
-        warnings = []
-        if anomalies.get("new_ip"):
-            warnings.append("⚠️ Địa chỉ IP mới chưa từng sử dụng")
-        if anomalies.get("new_device"):
-            warnings.append("⚠️ Thiết bị/trình duyệt mới")
-        if anomalies.get("impossible_travel"):
-            warnings.append("⚠️ Đăng nhập từ vị trí khác thường trong thời gian ngắn")
-        if anomalies.get("excessive_sessions"):
-            warnings.append("⚠️ Số lượng phiên đăng nhập đồng thời cao bất thường")
-        if anomalies.get("unusual_time"):
-            warnings.append("⚠️ Đăng nhập vào thời gian bất thường")
-
-        if warnings:
-            anomaly_warnings = f"""
-            <div style="background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0;">
-                <h3 style="margin-top: 0; color: #856404;">🚨 Cảnh báo Bảo mật</h3>
-                <ul style="margin-bottom: 0;">
-                    {''.join(f'<li>{w}</li>' for w in warnings)}
-                </ul>
-            </div>
-            """
-
-    body = f"""
-    <html>
-    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-        <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-            <h2 style="color: #d32f2f;">🔐 Cảnh báo Đăng nhập Đáng ngờ</h2>
-            <p>Xin chào <strong>{username}</strong>,</p>
-            <p>Chúng tôi phát hiện một hoạt động đăng nhập đáng ngờ vào tài khoản của bạn:</p>
-
-            {anomaly_warnings}
-
-            <h3>Chi tiết Đăng nhập:</h3>
-            <table style="border-collapse: collapse; margin: 20px 0; width: 100%;">
-                <tr style="background-color: #f5f5f5;">
-                    <td style="padding: 10px; font-weight: bold; border: 1px solid #ddd;">Thời gian:</td>
-                    <td style="padding: 10px; border: 1px solid #ddd;">{login_time}</td>
-                </tr>
-                <tr>
-                    <td style="padding: 10px; font-weight: bold; border: 1px solid #ddd;">Địa chỉ IP:</td>
-                    <td style="padding: 10px; border: 1px solid #ddd;">{ip_address}</td>
-                </tr>
-                <tr style="background-color: #f5f5f5;">
-                    <td style="padding: 10px; font-weight: bold; border: 1px solid #ddd;">Thiết bị:</td>
-                    <td style="padding: 10px; border: 1px solid #ddd;">{device_type.capitalize()}</td>
-                </tr>
-                <tr>
-                    <td style="padding: 10px; font-weight: bold; border: 1px solid #ddd;">Trình duyệt:</td>
-                    <td style="padding: 10px; border: 1px solid #ddd;">{browser}</td>
-                </tr>
-                <tr style="background-color: #f5f5f5;">
-                    <td style="padding: 10px; font-weight: bold; border: 1px solid #ddd;">Hệ điều hành:</td>
-                    <td style="padding: 10px; border: 1px solid #ddd;">{os}</td>
-                </tr>
-            </table>
-
-            <div style="background-color: #e8f5e9; border-left: 4px solid #4caf50; padding: 15px; margin: 20px 0;">
-                <p style="margin: 0;"><strong>✅ Nếu đây là bạn:</strong> Không cần làm gì cả. Bạn có thể bỏ qua email này.</p>
-            </div>
-
-            <div style="background-color: #ffebee; border-left: 4px solid #f44336; padding: 15px; margin: 20px 0;">
-                <p style="margin-top: 0;"><strong>❌ Nếu đây KHÔNG phải là bạn:</strong></p>
-                <ol style="margin-bottom: 0;">
-                    <li><strong>Đổi mật khẩu ngay lập tức</strong></li>
-                    <li>Kiểm tra và revoke các phiên đăng nhập đáng ngờ trong cài đặt tài khoản</li>
-                    <li>Bật xác thực hai yếu tố (2FA) nếu chưa có</li>
-                    <li>Liên hệ với bộ phận hỗ trợ nếu bạn nghi ngờ tài khoản bị xâm nhập</li>
-                </ol>
-            </div>
-
-            <p style="color: #666; font-size: 12px; margin-top: 30px; border-top: 1px solid #ddd; padding-top: 15px;">
-                Email này được gửi tự động từ hệ thống Lead Management System.<br>
-                Vui lòng không trả lời email này.
-            </p>
-        </div>
-    </body>
-    </html>
-    """
-
     try:
+        from datetime import datetime, timezone
+        from .services.email_service import render_email_template, get_email_subject
+
+        login_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+        # Render email from professional template
+        html_body, text_body = render_email_template(
+            "login_alert",
+            {
+                "username": username,
+                "login_time": login_time,
+                "ip_address": ip_address,
+                "location": location,
+                "device_type": device_type,
+                "browser": browser,
+                "os": os,
+                "anomalies": anomalies or {},
+            },
+            lang=lang,
+        )
+
+        subject = get_email_subject("login_alert", lang=lang)
+
+        # Send email with both HTML and plain text versions
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = "🚨 Cảnh báo Bảo mật: Phát hiện hoạt động đăng nhập đáng ngờ"
+        msg["Subject"] = subject
         msg["From"] = settings.MAIL_FROM
         msg["To"] = email_to
-        html_part = MIMEText(body, "html")
+
+        # Attach both versions
+        text_part = MIMEText(text_body, "plain", "utf-8")
+        html_part = MIMEText(html_body, "html", "utf-8")
+        msg.attach(text_part)
         msg.attach(html_part)
 
         with smtplib.SMTP(settings.MAIL_SERVER, settings.MAIL_PORT) as server:
@@ -290,7 +240,7 @@ def send_login_alert_email_task(
             server.send_message(msg)
 
         task_log.info(f"Login alert email sent successfully to: {email_to}")
-        return {"status": "success", "recipient": email_to, "ip_address": ip_address}
+        return {"status": "success", "recipient": email_to, "ip_address": ip_address, "lang": lang}
     except Exception as e:
         task_log.error(f"Failed to send login alert email to {email_to}", exc_info=True)
         raise e
