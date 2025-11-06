@@ -1,6 +1,6 @@
 # Frontend Source Code
 
-**Generated:** 2025-11-06 09:05:53  
+**Generated:** 2025-11-06 10:07:17  
 **Project:** QLTS (Quản Lý Tài Sản)  
 **Description:** Complete source code export of the Next.js frontend application
 
@@ -684,7 +684,7 @@ export default function SettingsPasswordPage() {
 
 ## 📄 `app\(dashboard)\settings\sessions\page.tsx`
 
-**Lines:** 126 | **Size:** 3819 bytes
+**Lines:** 119 | **Size:** 4005 bytes
 
 ```typescript
 // frontend/src/app/(dashboard)/settings/sessions/page.tsx
@@ -700,11 +700,7 @@ import { SessionList } from "@/components/sessions/SessionList";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AlertCircle, CheckCircle2 } from "lucide-react";
-import {
-  getActiveSessions,
-  revokeSession,
-  revokeAllOtherSessions,
-} from "@/lib/api/sessions";
+import { getActiveSessions, revokeSession, revokeAllOtherSessions } from "@/lib/api/sessions";
 import type { UserSession } from "@/types/session";
 
 export default function SessionsPage() {
@@ -719,6 +715,7 @@ export default function SessionsPage() {
   }, []);
 
   const loadSessions = async () => {
+    // 💡 GIỮ NGUYÊN HÀM NÀY
     setIsLoading(true);
     setError(null);
     try {
@@ -736,38 +733,37 @@ export default function SessionsPage() {
     try {
       await revokeSession(sessionId);
       setSuccessMessage("Session revoked successfully");
-      
-      // Remove from local state
-      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
-      
-      // Clear success message after 3 seconds
+
+      // ✅ SỬA LỖI: Thay vì lọc state, hãy gọi lại API
+      // setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+      await loadSessions(); // 👈 LẤY DỮ LIỆU MỚI TỪ CSDL
+
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err) {
       setError("Failed to revoke session. Please try again.");
       console.error("Error revoking session:", err);
+      // 💡 (Tùy chọn) Tải lại để đồng bộ nếu có lỗi
+      await loadSessions();
     }
   };
 
   const handleRevokeAllOthers = async () => {
     try {
-      // Find current session ID
       const currentSession = sessions.find((s) => s.is_current);
-      
+
       await revokeAllOtherSessions(currentSession?.id);
       setSuccessMessage("All other sessions revoked successfully");
-      
-      // Keep only current session in local state
-      if (currentSession) {
-        setSessions([currentSession]);
-      } else {
-        setSessions([]);
-      }
-      
-      // Clear success message after 3 seconds
+
+      // ✅ SỬA LỖI: Thay vì lọc state, hãy gọi lại API
+      // if (currentSession) { ... } else { ... }
+      await loadSessions(); // 👈 LẤY DỮ LIỆU MỚI TỪ CSDL
+
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err) {
       setError("Failed to revoke sessions. Please try again.");
       console.error("Error revoking all sessions:", err);
+      // 💡 (Tùy chọn) Tải lại để đồng bộ nếu có lỗi
+      await loadSessions();
     }
   };
 
@@ -778,9 +774,7 @@ export default function SessionsPage() {
         <Alert className="mb-6 border-green-500 bg-green-50">
           <CheckCircle2 className="h-4 w-4 text-green-600" />
           <AlertTitle className="text-green-800">Success</AlertTitle>
-          <AlertDescription className="text-green-700">
-            {successMessage}
-          </AlertDescription>
+          <AlertDescription className="text-green-700">{successMessage}</AlertDescription>
         </Alert>
       )}
 
@@ -811,7 +805,6 @@ export default function SessionsPage() {
     </div>
   );
 }
-
 
 ```
 

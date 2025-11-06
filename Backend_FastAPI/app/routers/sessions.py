@@ -117,7 +117,7 @@ async def get_active_sessions(
 async def revoke_session(
     session_id: int,
     current_user: models.User = Depends(deps.get_current_user),
-    db: AsyncSession = Depends(database.get_db),
+    # ❌ ĐÃ XÓA: db: AsyncSession = Depends(database.get_db),
 ):
     """
     Revoke a specific session.
@@ -135,8 +135,9 @@ async def revoke_session(
     log.info("Revoking session", user_id=current_user.id, session_id=session_id)
 
     try:
+        # ❌ ĐÃ XÓA `db=db,`
         success = await session_service.revoke_session(
-            db=db, session_id=session_id, user_id=current_user.id
+            session_id=session_id, user_id=current_user.id
         )
 
         if not success:
@@ -179,7 +180,7 @@ async def revoke_all_other_sessions(
     # ✅ THAY ĐỔI Ở ĐÂY: Dùng Pydantic model để đọc JSON Body
     request_data: schemas.RevokeAllSessionsRequest,
     current_user: models.User = Depends(deps.get_current_user),
-    db: AsyncSession = Depends(database.get_db),
+    # ❌ ĐÃ XÓA: db: AsyncSession = Depends(database.get_db),
 ):
     # ✅ Lấy ID từ request_data (trong body)
     session_id_to_preserve = request_data.current_session_id
@@ -191,8 +192,9 @@ async def revoke_all_other_sessions(
     )
 
     try:
+        # ❌ ĐÃ XÓA `db=db,`
         revoked_count = await session_service.revoke_all_other_sessions(
-            db=db, user_id=current_user.id, except_session_id=session_id_to_preserve
+            user_id=current_user.id, except_session_id=session_id_to_preserve
         )
 
         log.info(

@@ -1,6 +1,6 @@
 # Complete Project Source Code
 
-**Generated:** 2025-11-06 09:05:54  
+**Generated:** 2025-11-06 10:07:17  
 **Project:** QLTS (Quản Lý Tài Sản)  
 **Description:** Full source code export of QLTS project (Frontend + Backend)
 
@@ -18,18 +18,18 @@
 
 ### Frontend
 - **Files:** 64
-- **Lines of Code:** 5,308
-- **Total Size:** 173.51 KB
+- **Lines of Code:** 5,301
+- **Total Size:** 173.69 KB
 
 ### Backend
 - **Files:** 51
 - **Lines of Code:** 9,807
-- **Total Size:** 347.61 KB
+- **Total Size:** 347.62 KB
 
 ### Total
 - **Files:** 115
-- **Lines of Code:** 15,115
-- **Total Size:** 521.11 KB
+- **Lines of Code:** 15,108
+- **Total Size:** 521.30 KB
 
 ---
 
@@ -713,7 +713,7 @@ export default function SettingsPasswordPage() {
 
 ## 📄 `app\(dashboard)\settings\sessions\page.tsx`
 
-**Lines:** 126 | **Size:** 3819 bytes
+**Lines:** 119 | **Size:** 4005 bytes
 
 ```typescript
 // frontend/src/app/(dashboard)/settings/sessions/page.tsx
@@ -729,11 +729,7 @@ import { SessionList } from "@/components/sessions/SessionList";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AlertCircle, CheckCircle2 } from "lucide-react";
-import {
-  getActiveSessions,
-  revokeSession,
-  revokeAllOtherSessions,
-} from "@/lib/api/sessions";
+import { getActiveSessions, revokeSession, revokeAllOtherSessions } from "@/lib/api/sessions";
 import type { UserSession } from "@/types/session";
 
 export default function SessionsPage() {
@@ -748,6 +744,7 @@ export default function SessionsPage() {
   }, []);
 
   const loadSessions = async () => {
+    // 💡 GIỮ NGUYÊN HÀM NÀY
     setIsLoading(true);
     setError(null);
     try {
@@ -765,38 +762,37 @@ export default function SessionsPage() {
     try {
       await revokeSession(sessionId);
       setSuccessMessage("Session revoked successfully");
-      
-      // Remove from local state
-      setSessions((prev) => prev.filter((s) => s.id !== sessionId));
-      
-      // Clear success message after 3 seconds
+
+      // ✅ SỬA LỖI: Thay vì lọc state, hãy gọi lại API
+      // setSessions((prev) => prev.filter((s) => s.id !== sessionId));
+      await loadSessions(); // 👈 LẤY DỮ LIỆU MỚI TỪ CSDL
+
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err) {
       setError("Failed to revoke session. Please try again.");
       console.error("Error revoking session:", err);
+      // 💡 (Tùy chọn) Tải lại để đồng bộ nếu có lỗi
+      await loadSessions();
     }
   };
 
   const handleRevokeAllOthers = async () => {
     try {
-      // Find current session ID
       const currentSession = sessions.find((s) => s.is_current);
-      
+
       await revokeAllOtherSessions(currentSession?.id);
       setSuccessMessage("All other sessions revoked successfully");
-      
-      // Keep only current session in local state
-      if (currentSession) {
-        setSessions([currentSession]);
-      } else {
-        setSessions([]);
-      }
-      
-      // Clear success message after 3 seconds
+
+      // ✅ SỬA LỖI: Thay vì lọc state, hãy gọi lại API
+      // if (currentSession) { ... } else { ... }
+      await loadSessions(); // 👈 LẤY DỮ LIỆU MỚI TỪ CSDL
+
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err) {
       setError("Failed to revoke sessions. Please try again.");
       console.error("Error revoking all sessions:", err);
+      // 💡 (Tùy chọn) Tải lại để đồng bộ nếu có lỗi
+      await loadSessions();
     }
   };
 
@@ -807,9 +803,7 @@ export default function SessionsPage() {
         <Alert className="mb-6 border-green-500 bg-green-50">
           <CheckCircle2 className="h-4 w-4 text-green-600" />
           <AlertTitle className="text-green-800">Success</AlertTitle>
-          <AlertDescription className="text-green-700">
-            {successMessage}
-          </AlertDescription>
+          <AlertDescription className="text-green-700">{successMessage}</AlertDescription>
         </Alert>
       )}
 
@@ -840,7 +834,6 @@ export default function SessionsPage() {
     </div>
   );
 }
-
 
 ```
 
@@ -14909,7 +14902,7 @@ async def revoke_all_other_sessions(
 
 ## 📄 `services\user_service.py`
 
-**Lines:** 725 | **Size:** 26045 bytes
+**Lines:** 725 | **Size:** 26053 bytes
 
 ```python
 # app/services/user_service.py
@@ -14965,7 +14958,7 @@ async def get_user_by_username(
     result = await db.execute(query)
     user = result.scalar_one_or_none()
     if user:
-        await db.refresh(user)
+        # await db.refresh(user)
         return user
     return None
 
@@ -14976,7 +14969,7 @@ async def get_user_by_email(db: AsyncSession, email: str) -> Optional[models.Use
     result = await db.execute(query)
     user = result.scalar_one_or_none()
     if user:
-        await db.refresh(user)
+        # await db.refresh(user)
         return user
     return None
 
@@ -14985,7 +14978,7 @@ async def get_user_by_id(db: AsyncSession, user_id: int) -> models.User:
     user = await db.get(models.User, user_id)
     if not user:
         raise ResourceNotFoundError(detail=f"User with id {user_id} not found.")
-    await db.refresh(user)
+    # await db.refresh(user)
     return user
 
 
@@ -15012,7 +15005,7 @@ async def authenticate_user(
         )
         raise InvalidCredentials()
 
-    await db.refresh(user)
+    # await db.refresh(user)
     log.info("Authentication successful", username=username)  # ✅ SỬA LỖI: Xóa `await`
     return user
 
