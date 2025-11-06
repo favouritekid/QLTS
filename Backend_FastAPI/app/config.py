@@ -145,6 +145,11 @@ class Settings(BaseSettings):
         default=3600, validation_alias="CONFIG_CACHE_TTL_SECONDS"
     )
 
+    # -- GeoIP Development Mode --
+    DEV_GEOIP_TEST_IP: str | None = Field(
+        default=None, validation_alias="DEV_GEOIP_TEST_IP"
+    )
+
     # === Pydantic Settings Configuration ===
     model_config = ConfigDict(
         # Đường dẫn tới file .env cần tải (chỉ tải nếu tồn tại)
@@ -167,6 +172,16 @@ try:
     print(
         f"INFO [config.py]: Settings loaded successfully. APP_ENV={settings.APP_ENV}, DB_URL={settings.DATABASE_URL[:30]}..."
     )  # Log một phần DB_URL
+
+    # Debug log for GeoIP development mode
+    if settings.DEV_GEOIP_TEST_IP:
+        print(
+            f"INFO [config.py]: 🌍 GeoIP DEV MODE ENABLED - Test IP: {settings.DEV_GEOIP_TEST_IP}"
+        )
+    else:
+        print(
+            f"INFO [config.py]: GeoIP DEV MODE DISABLED - Set DEV_GEOIP_TEST_IP in .env to test GeoIP on localhost"
+        )
 except Exception as e:
     print(
         f"CRITICAL [config.py]: Failed to initialize Settings. Ensure all required variables are in '{_env_file}' or system environment. Error: {e}"

@@ -7,6 +7,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { SessionList } from "@/components/sessions/SessionList";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -15,6 +16,7 @@ import { getActiveSessions, revokeSession, revokeAllOtherSessions } from "@/lib/
 import type { UserSession } from "@/types/session";
 
 export default function SessionsPage() {
+  const queryClient = useQueryClient();
   const [sessions, setSessions] = useState<UserSession[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -49,6 +51,9 @@ export default function SessionsPage() {
       // setSessions((prev) => prev.filter((s) => s.id !== sessionId));
       await loadSessions(); // 👈 LẤY DỮ LIỆU MỚI TỪ CSDL
 
+      // ✅ Invalidate React Query cache để các component khác (như ChangePasswordForm) cũng refresh
+      queryClient.invalidateQueries({ queryKey: ["sessions"] });
+
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err) {
       setError("Failed to revoke session. Please try again.");
@@ -68,6 +73,9 @@ export default function SessionsPage() {
       // ✅ SỬA LỖI: Thay vì lọc state, hãy gọi lại API
       // if (currentSession) { ... } else { ... }
       await loadSessions(); // 👈 LẤY DỮ LIỆU MỚI TỪ CSDL
+
+      // ✅ Invalidate React Query cache để các component khác (như ChangePasswordForm) cũng refresh
+      queryClient.invalidateQueries({ queryKey: ["sessions"] });
 
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err) {

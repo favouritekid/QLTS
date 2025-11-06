@@ -121,7 +121,7 @@ export function getDeviceIcon(session: UserSession): string {
   }
 }
 
-// Helper function to get relative time
+// Helper function to get relative time for PAST dates (created_at, last_activity_at)
 export function getRelativeTime(dateString: string): string {
   const date = new Date(dateString);
   const now = new Date();
@@ -129,7 +129,7 @@ export function getRelativeTime(dateString: string): string {
   const diffMins = Math.floor(diffMs / 60000);
   const diffHours = Math.floor(diffMins / 60);
   const diffDays = Math.floor(diffHours / 24);
-  
+
   if (diffMins < 1) {
     return "Just now";
   } else if (diffMins < 60) {
@@ -140,6 +140,32 @@ export function getRelativeTime(dateString: string): string {
     return `${diffDays} day${diffDays > 1 ? "s" : ""} ago`;
   } else {
     return date.toLocaleDateString();
+  }
+}
+
+// Helper function to get time until expiration for FUTURE dates (expires_at)
+export function getTimeUntilExpiration(dateString: string): string {
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = date.getTime() - now.getTime();
+
+  // If already expired
+  if (diffMs < 0) {
+    return "Expired";
+  }
+
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMins / 60);
+  const diffDays = Math.floor(diffHours / 24);
+
+  if (diffMins < 60) {
+    return `in ${diffMins} minute${diffMins !== 1 ? "s" : ""}`;
+  } else if (diffHours < 24) {
+    return `in ${diffHours} hour${diffHours !== 1 ? "s" : ""}`;
+  } else if (diffDays < 30) {
+    return `in ${diffDays} day${diffDays !== 1 ? "s" : ""}`;
+  } else {
+    return `on ${date.toLocaleDateString()}`;
   }
 }
 

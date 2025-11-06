@@ -18,6 +18,7 @@ from ..socket_metrics import (
     socket_events_emitted_total,
     track_event_latency,
 )
+from .geoip_service import get_geoip_service  # ✅ Import GeoIP service
 
 log = structlog.get_logger(__name__)
 
@@ -82,6 +83,24 @@ async def create_session(
                 "Failed to parse User-Agent", user_agent=user_agent_string, error=str(e)
             )
 
+    # Lookup geographic location from IP address
+    country = None
+    city = None
+    if ip_address:
+        try:
+            geoip = get_geoip_service()
+            country, city = geoip.lookup(ip_address)
+            if country or city:
+                log.info(
+                    "GeoIP lookup successful",
+                    user_id=user_id,
+                    ip_address=ip_address,
+                    country=country,
+                    city=city,
+                )
+        except Exception as e:
+            log.warning("GeoIP lookup failed", ip_address=ip_address, error=str(e))
+
     # Create session record
     session = models.UserSession(
         user_id=user_id,
@@ -91,6 +110,8 @@ async def create_session(
         device_type=device_type,
         browser=browser,
         os=os,
+        country=country,
+        city=city,
         expires_at=expires_at,
         created_at=datetime.now(timezone.utc),
         last_activity_at=datetime.now(timezone.utc),

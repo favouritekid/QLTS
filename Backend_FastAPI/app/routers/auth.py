@@ -172,6 +172,14 @@ async def login_for_access_token(
             session.is_suspicious = True
             db.add(session)
             try:
+                # Format location from session data
+                location_parts = []
+                if session.city:
+                    location_parts.append(session.city)
+                if session.country:
+                    location_parts.append(session.country)
+                location = ", ".join(location_parts) if location_parts else None
+
                 send_login_alert_email_task.delay(
                     email_to=user.email,
                     username=user.username,
@@ -181,6 +189,7 @@ async def login_for_access_token(
                     browser=session.browser or "Unknown",
                     os=session.os or "Unknown",
                     anomalies=anomalies,
+                    location=location,
                 )
                 log.info(
                     "Login alert email queued for suspicious activity",
@@ -244,7 +253,7 @@ async def login_for_access_token(
         secure=settings.APP_ENV == "production",
         samesite="strict",
         max_age=int(refresh_ttl),
-        path="/api/auth",
+        path="/api",  # ✅ FIX: Changed from "/api/auth" to "/api" so cookie is sent to all /api/* endpoints
     )
     return response
 
@@ -415,10 +424,69 @@ async def perform_password_reset(
     reset_data: schemas.ResetPasswordSchema,
     db: AsyncSession = Depends(database.get_db),
 ):
-    # (Giữ nguyên logic)
-    return await services.user_service.reset_password(
+    """
+    Reset password using token from email.
+
+    Security: Invalidates ALL sessions after password reset to prevent
+    session hijacking attacks. If an attacker had access to the account,
+    all their sessions will be revoked.
+    """
+    user = await services.user_service.reset_password(
         db, token=reset_data.token, new_password=reset_data.new_password
     )
+
+    # 🔐 SECURITY FIX: Invalidate all sessions after password reset
+    # This prevents session hijacking if attacker had compromised account
+    try:
+        await services.user_service.invalidate_all_sessions(db, user)
+        log.warning(
+            "All user sessions invalidated after password reset",
+            user_id=user.id,
+            email=user.email,
+            security_event="PASSWORD_RESET_SESSIONS_INVALIDATED",
+        )
+    except Exception as e:
+        log.critical(
+            "Failed to invalidate all sessions after password reset, "
+            "CRITICAL SECURITY RISK: attacker sessions may still be active!",
+            user_id=user.id,
+            error=str(e),
+            exc_info=True,
+        )
+        # Don't fail the request, but log critical error for monitoring
+
+    # 📧 Send confirmation email to notify user about password reset
+    # This allows user to take action if they didn't initiate the reset
+    try:
+        from datetime import datetime, timezone
+        from ..celery_utils import send_password_reset_confirmation_email_task
+
+        reset_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+        # Try to get IP address from request
+        ip_address = request.client.host if request.client else None
+
+        send_password_reset_confirmation_email_task.delay(
+            email_to=user.email,
+            username=user.full_name or user.email,
+            reset_time=reset_time,
+            ip_address=ip_address,
+        )
+        log.info(
+            "Password reset confirmation email queued",
+            user_id=user.id,
+            email=user.email,
+        )
+    except Exception as e:
+        log.error(
+            "Failed to queue password reset confirmation email",
+            user_id=user.id,
+            error=str(e),
+            exc_info=True,
+        )
+        # Don't fail the request if email fails
+
+    return user
 
 
 @router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
@@ -634,7 +702,7 @@ async def refresh_access_token(
                     secure=settings.APP_ENV == "production",
                     samesite="strict",
                     max_age=int(new_refresh_ttl),
-                    path="/api/auth",
+                    path="/api",  # ✅ FIX: Changed from "/api/auth" to "/api" so cookie is sent to all /api/* endpoints
                 )
                 return response
 

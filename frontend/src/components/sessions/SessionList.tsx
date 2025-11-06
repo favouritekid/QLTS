@@ -19,9 +19,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Monitor, Smartphone, Tablet, MapPin, Clock, AlertTriangle } from "lucide-react";
+import { Monitor, Smartphone, Tablet, MapPin, Clock, AlertTriangle, Globe } from "lucide-react";
 import type { UserSession } from "@/types/session";
-import { formatDeviceInfo, formatLocation, getRelativeTime, getDeviceIcon } from "@/types/session";
+import {
+  formatDeviceInfo,
+  formatLocation,
+  getRelativeTime,
+  getTimeUntilExpiration,
+  getDeviceIcon,
+} from "@/types/session";
 import { cn } from "@/lib/utils"; // ✅ 1. Import CN utility
 
 interface SessionListProps {
@@ -170,14 +176,15 @@ export function SessionList({
                         Suspicious
                       </Badge>
                     )}
+                    {/* ✅ DEFENSE IN DEPTH: Disable revoke button for current session */}
                     <Button
-                      variant="outline"
+                      variant={session.is_current ? "outline" : "destructive"}
                       size="sm"
-                      // ✅ 7. Cập nhật onClick để mở dialog
                       onClick={() => setSessionToRevoke(session)}
-                      disabled={isLoading}
+                      disabled={isLoading || session.is_current}
+                      title={session.is_current ? "This is your current session" : "Revoke this session"}
                     >
-                      Revoke
+                      {session.is_current ? "Current" : "Revoke"}
                     </Button>
                   </div>
                 </div>
@@ -261,11 +268,14 @@ function SessionDetails({ session }: { session: UserSession }) {
         <Clock className="h-4 w-4" />
         <span>
           Created {getRelativeTime(session.created_at)} • Expires{" "}
-          {getRelativeTime(session.expires_at)}
+          {getTimeUntilExpiration(session.expires_at)}
         </span>
       </div>
       {session.ip_address && (
-        <div className="text-muted-foreground text-xs">IP: {session.ip_address}</div>
+        <div className="text-muted-foreground flex items-center gap-2">
+          <Globe className="h-4 w-4" />
+          <span className="text-xs">IP: {session.ip_address}</span>
+        </div>
       )}
     </div>
   );
