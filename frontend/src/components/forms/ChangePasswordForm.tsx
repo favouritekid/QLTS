@@ -199,15 +199,12 @@ export function ChangePasswordForm() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Confirm Password Change</AlertDialogTitle>
-            <AlertDialogDescription className="space-y-2">
-              <p>
-                You will be logged out from{" "}
-                <strong>
-                  {activeSessionsCount === 1 ? "this device" : `all ${activeSessionsCount} devices`}
-                </strong>
-                .
-              </p>
-              <p className="font-medium">Are you sure you want to continue?</p>
+            <AlertDialogDescription>
+              You will be logged out from{" "}
+              <strong>
+                {activeSessionsCount === 1 ? "this device" : `all ${activeSessionsCount} devices`}
+              </strong>
+              . Are you sure you want to continue?
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
