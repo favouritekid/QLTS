@@ -107,38 +107,65 @@ def shutdown_worker(**kwargs):
 # ==================================================================
 
 
-# Email task (Giữ nguyên là sync)
+# ✅ Password reset request email task (forgot password)
 @celery_app.task(
     name="send_password_reset_email_task",
     autoretry_for=(Exception,),
     max_retries=3,
     default_retry_delay=60,
 )
-def send_password_reset_email_task(email_to: str, reset_url: str, username: str):
-    """Sync Celery task để gửi email reset password."""
-    task_log = logging.getLogger("send_password_reset_email_task")
-    task_log.info(f"Task started for recipient: {email_to}")
+def send_password_reset_email_task(
+    email_to: str,
+    reset_url: str,
+    username: str,
+    lang: str = "vi",
+):
+    """
+    Send password reset request email (forgot password flow).
 
-    body = f"""
-    <html><body><p>Xin chào {username},</p><p>Bạn đã yêu cầu...</p>
-    <p><a href="{reset_url}">{reset_url}</a></p><p>Nếu bạn không yêu cầu...</p>
-    </body></html>"""
+    Security: Includes 1-hour expiration notice and security warnings.
+    """
+    task_log = logging.getLogger("send_password_reset_email_task")
+    task_log.info(f"Password reset request task started for recipient: {email_to}")
+
     try:
+        # Import email service
+        from .services.email_service import render_email_template, get_email_subject
+
+        # Render email from professional template
+        html_body, text_body = render_email_template(
+            "password_reset_request",
+            {
+                "username": username,
+                "reset_url": reset_url,
+            },
+            lang=lang,
+        )
+
+        subject = get_email_subject("password_reset_request", lang=lang)
+
+        # Send email with both HTML and plain text versions
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = "[Celery] Yêu cầu Đặt lại Mật khẩu"
+        msg["Subject"] = subject
         msg["From"] = settings.MAIL_FROM
         msg["To"] = email_to
-        html_part = MIMEText(body, "html")
+
+        # Attach both versions
+        text_part = MIMEText(text_body, "plain", "utf-8")
+        html_part = MIMEText(html_body, "html", "utf-8")
+        msg.attach(text_part)
         msg.attach(html_part)
+
         with smtplib.SMTP(settings.MAIL_SERVER, settings.MAIL_PORT) as server:
             if settings.MAIL_STARTTLS:
                 server.starttls()
             server.login(settings.MAIL_USERNAME, settings.MAIL_PASSWORD)
             server.send_message(msg)
-        task_log.info(f"Email sent successfully to: {email_to}")
-        return {"status": "success", "recipient": email_to}
+
+        task_log.info(f"Password reset request email sent successfully to: {email_to}")
+        return {"status": "success", "recipient": email_to, "lang": lang}
     except Exception as e:
-        task_log.error(f"Failed to send email to {email_to}", exc_info=True)
+        task_log.error(f"Failed to send password reset request email to {email_to}", exc_info=True)
         raise e
 
 
