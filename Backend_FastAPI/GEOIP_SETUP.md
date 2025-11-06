@@ -56,21 +56,28 @@ cd Backend_FastAPI
 ./scripts/download_geoip_db.sh
 ```
 
-#### Option B: Using Python Script (Cross-platform)
+#### Option B: Using Python Script (Cross-platform - **Recommended for Windows**)
+
+**Method 1: Command-line argument (easiest for Windows)**
 
 ```bash
-# Set your license key
+cd Backend_FastAPI
+python scripts/download_geoip_db.py --license-key YOUR_LICENSE_KEY_HERE
+```
+
+**Method 2: Environment variable**
+
+```bash
 # Linux/Mac:
 export MAXMIND_LICENSE_KEY='your_license_key_here'
-
-# Windows (Command Prompt):
-set MAXMIND_LICENSE_KEY=your_license_key_here
+python scripts/download_geoip_db.py
 
 # Windows (PowerShell):
 $env:MAXMIND_LICENSE_KEY='your_license_key_here'
+python scripts/download_geoip_db.py
 
-# Run download script
-cd Backend_FastAPI
+# Windows (Command Prompt):
+set MAXMIND_LICENSE_KEY=your_license_key_here
 python scripts/download_geoip_db.py
 ```
 

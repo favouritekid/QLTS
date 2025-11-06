@@ -5,6 +5,7 @@ Requires MaxMind license key (free account)
 Cross-platform Python version
 """
 
+import argparse
 import os
 import sys
 import tarfile
@@ -14,7 +15,7 @@ from urllib.request import urlretrieve
 from urllib.error import HTTPError, URLError
 
 
-def download_geoip_database():
+def download_geoip_database(license_key=None):
     """Download and install GeoLite2-City database"""
 
     # Configuration
@@ -44,10 +45,12 @@ def download_geoip_database():
             print("Skipping download. Existing database will be used.")
             return 0
 
-    # Check for license key
-    license_key = os.environ.get("MAXMIND_LICENSE_KEY")
+    # Check for license key (parameter takes precedence over environment variable)
     if not license_key:
-        print("❌ Error: MAXMIND_LICENSE_KEY environment variable not set")
+        license_key = os.environ.get("MAXMIND_LICENSE_KEY")
+
+    if not license_key:
+        print("❌ Error: MaxMind license key not provided")
         print()
         print("To download GeoLite2 database, you need a free MaxMind license key.")
         print()
@@ -55,11 +58,16 @@ def download_geoip_database():
         print("1. Create a free account at: https://www.maxmind.com/en/geolite2/signup")
         print("2. Login and navigate to: Account > Manage License Keys")
         print("3. Generate a new license key")
-        print("4. Set the environment variable:")
-        print("   Linux/Mac: export MAXMIND_LICENSE_KEY='your_license_key_here'")
-        print("   Windows:   set MAXMIND_LICENSE_KEY=your_license_key_here")
         print()
-        print("Then run this script again.")
+        print("Usage options:")
+        print("  Option 1 - Command line argument (recommended for Windows):")
+        print("    python download_geoip_db.py --license-key YOUR_KEY_HERE")
+        print()
+        print("  Option 2 - Environment variable:")
+        print("    Linux/Mac: export MAXMIND_LICENSE_KEY='your_key_here'")
+        print("    Windows PowerShell: $env:MAXMIND_LICENSE_KEY='your_key_here'")
+        print("    Windows CMD: set MAXMIND_LICENSE_KEY=your_key_here")
+        print()
         return 1
 
     print("📥 Downloading GeoLite2-City database...")
@@ -132,4 +140,15 @@ def download_geoip_database():
 
 
 if __name__ == "__main__":
-    sys.exit(download_geoip_database())
+    parser = argparse.ArgumentParser(
+        description="Download MaxMind GeoLite2-City database for GeoIP lookups"
+    )
+    parser.add_argument(
+        "--license-key",
+        "-k",
+        type=str,
+        help="MaxMind license key (alternatively set MAXMIND_LICENSE_KEY environment variable)",
+    )
+    args = parser.parse_args()
+
+    sys.exit(download_geoip_database(license_key=args.license_key))
