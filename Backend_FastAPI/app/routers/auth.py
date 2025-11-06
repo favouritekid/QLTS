@@ -244,7 +244,7 @@ async def login_for_access_token(
         secure=settings.APP_ENV == "production",
         samesite="strict",
         max_age=int(refresh_ttl),
-        path="/api/auth",
+        path="/api",  # ✅ FIX: Changed from "/api/auth" to "/api" so cookie is sent to all /api/* endpoints
     )
     return response
 
@@ -634,7 +634,7 @@ async def refresh_access_token(
                     secure=settings.APP_ENV == "production",
                     samesite="strict",
                     max_age=int(new_refresh_ttl),
-                    path="/api/auth",
+                    path="/api",  # ✅ FIX: Changed from "/api/auth" to "/api" so cookie is sent to all /api/* endpoints
                 )
                 return response
 
