@@ -21,7 +21,13 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Monitor, Smartphone, Tablet, MapPin, Clock, AlertTriangle } from "lucide-react";
 import type { UserSession } from "@/types/session";
-import { formatDeviceInfo, formatLocation, getRelativeTime, getDeviceIcon } from "@/types/session";
+import {
+  formatDeviceInfo,
+  formatLocation,
+  getRelativeTime,
+  getTimeUntilExpiration,
+  getDeviceIcon,
+} from "@/types/session";
 import { cn } from "@/lib/utils"; // ✅ 1. Import CN utility
 
 interface SessionListProps {
@@ -262,7 +268,7 @@ function SessionDetails({ session }: { session: UserSession }) {
         <Clock className="h-4 w-4" />
         <span>
           Created {getRelativeTime(session.created_at)} • Expires{" "}
-          {getRelativeTime(session.expires_at)}
+          {getTimeUntilExpiration(session.expires_at)}
         </span>
       </div>
       {session.ip_address && (
