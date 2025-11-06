@@ -51,7 +51,7 @@ async def get_user_by_username(
     result = await db.execute(query)
     user = result.scalar_one_or_none()
     if user:
-        await db.refresh(user)
+        # await db.refresh(user)
         return user
     return None
 
@@ -62,7 +62,7 @@ async def get_user_by_email(db: AsyncSession, email: str) -> Optional[models.Use
     result = await db.execute(query)
     user = result.scalar_one_or_none()
     if user:
-        await db.refresh(user)
+        # await db.refresh(user)
         return user
     return None
 
@@ -71,7 +71,7 @@ async def get_user_by_id(db: AsyncSession, user_id: int) -> models.User:
     user = await db.get(models.User, user_id)
     if not user:
         raise ResourceNotFoundError(detail=f"User with id {user_id} not found.")
-    await db.refresh(user)
+    # await db.refresh(user)
     return user
 
 
@@ -98,7 +98,7 @@ async def authenticate_user(
         )
         raise InvalidCredentials()
 
-    await db.refresh(user)
+    # await db.refresh(user)
     log.info("Authentication successful", username=username)  # ✅ SỬA LỖI: Xóa `await`
     return user
 
