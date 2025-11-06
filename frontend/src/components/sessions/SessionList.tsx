@@ -170,14 +170,15 @@ export function SessionList({
                         Suspicious
                       </Badge>
                     )}
+                    {/* ✅ DEFENSE IN DEPTH: Disable revoke button for current session */}
                     <Button
-                      variant="outline"
+                      variant={session.is_current ? "outline" : "destructive"}
                       size="sm"
-                      // ✅ 7. Cập nhật onClick để mở dialog
                       onClick={() => setSessionToRevoke(session)}
-                      disabled={isLoading}
+                      disabled={isLoading || session.is_current}
+                      title={session.is_current ? "This is your current session" : "Revoke this session"}
                     >
-                      Revoke
+                      {session.is_current ? "Current" : "Revoke"}
                     </Button>
                   </div>
                 </div>
