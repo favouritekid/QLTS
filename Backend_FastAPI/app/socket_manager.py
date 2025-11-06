@@ -95,7 +95,12 @@ def sanitize_token(token: str) -> str:
 
 
 async def _get_user_from_token(token: str) -> models.User:
-    """Hàm helper xác thực token (sử dụng V3)."""
+    """
+    Hàm helper xác thực token cho WebSocket (V6 - with user blacklist check).
+
+    ✅ FIX-3: Added user blacklist check for security parity with HTTP auth.
+    Now checks 3 layers: JWT validity, session validity, user blacklist.
+    """
     try:
         payload = security.decode_token(token)
         username: str | None = payload.get("sub")
@@ -104,6 +109,7 @@ async def _get_user_from_token(token: str) -> models.User:
         if not username or not refresh_jti:
             raise HTTPException(status_code=400, detail="Invalid token claims")
 
+        # Check session validity
         stored_user_id = await safe_redis_get(f"session:{refresh_jti}")
         if not stored_user_id:
             raise HTTPException(status_code=401, detail="Session revoked or expired")
@@ -116,6 +122,53 @@ async def _get_user_from_token(token: str) -> models.User:
                 raise HTTPException(status_code=404, detail="User not found")
             if user.id != int(stored_user_id):
                 raise HTTPException(status_code=401, detail="Token/User mismatch")
+
+            # ✅ FIX-3: Check user blacklist (CRITICAL SECURITY FIX)
+            try:
+                is_user_blacklisted = await safe_redis_get(f"user_blacklist:{user.id}")
+                if is_user_blacklisted:
+                    log.warning(
+                        "Socket auth rejected: User in global blacklist (password changed?)",
+                        user_id=user.id
+                    )
+                    raise HTTPException(
+                        status_code=401,
+                        detail="User session invalidated"
+                    )
+            except HTTPException:
+                raise
+            except Exception as e:
+                log.error(
+                    "Redis user blacklist check failed for WebSocket auth",
+                    user_id=user.id,
+                    error=str(e)
+                )
+                # Fallback to DB check (same logic as HTTP auth in deps.py)
+                from datetime import datetime, timezone
+                from sqlalchemy import and_, select
+
+                result = await db.execute(
+                    select(models.UserSession)
+                    .where(
+                        and_(
+                            models.UserSession.user_id == user.id,
+                            models.UserSession.revoked_at.is_(None),
+                            models.UserSession.expires_at > datetime.now(timezone.utc),
+                        )
+                    )
+                    .limit(1)
+                )
+                active_session = result.scalar_one_or_none()
+                if active_session is None:
+                    log.warning(
+                        "DB fallback: No active sessions found for user",
+                        user_id=user.id
+                    )
+                    raise HTTPException(
+                        status_code=401,
+                        detail="No active sessions"
+                    )
+
             return user
 
     except Exception as e:
@@ -209,3 +262,73 @@ async def logout_confirmed(sid, data):
             jti=data.get("jti"),
         )
         socket_events_received_total.labels(event_type="logout_confirmed").inc()
+
+
+# ✅ FIX-3: Periodic revalidation event handler
+@sio.event
+async def revalidate_auth(sid):
+    """
+    Periodic re-validation của user session.
+    Client nên gọi mỗi 5 phút để verify session vẫn hợp lệ.
+
+    This catches cases where:
+    - User changed password but socket didn't receive force_logout event
+    - User was blacklisted by admin
+    - Session was revoked by another device
+    """
+    async with track_event_latency("revalidate_auth"):
+        try:
+            session = await sio.get_session(sid)
+            if not session:
+                log.warning("Revalidation failed: No session", sid=sid)
+                await sio.disconnect(sid)
+                return {"valid": False, "reason": "No session"}
+
+            user_id = session.get("user_id")
+
+            # Check user blacklist
+            is_blacklisted = await safe_redis_get(f"user_blacklist:{user_id}")
+            if is_blacklisted:
+                log.warning(
+                    "Revalidation failed: User blacklisted",
+                    sid=sid,
+                    user_id=user_id
+                )
+                await sio.disconnect(sid)
+                return {"valid": False, "reason": "User session invalidated"}
+
+            # Check if any active sessions exist (fallback check)
+            from datetime import datetime, timezone
+            from sqlalchemy import and_, select
+
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    select(models.UserSession)
+                    .where(
+                        and_(
+                            models.UserSession.user_id == user_id,
+                            models.UserSession.revoked_at.is_(None),
+                            models.UserSession.expires_at > datetime.now(timezone.utc),
+                        )
+                    )
+                    .limit(1)
+                )
+                active_session = result.scalar_one_or_none()
+
+                if not active_session:
+                    log.warning(
+                        "Revalidation failed: No active sessions",
+                        sid=sid,
+                        user_id=user_id
+                    )
+                    await sio.disconnect(sid)
+                    return {"valid": False, "reason": "No active sessions"}
+
+            log.debug("Revalidation successful", sid=sid, user_id=user_id)
+            socket_events_received_total.labels(event_type="revalidate_auth").inc()
+            return {"valid": True}
+
+        except Exception as e:
+            log.error("Socket revalidation error", sid=sid, error=str(e))
+            await sio.disconnect(sid)
+            return {"valid": False, "reason": "Validation error"}
