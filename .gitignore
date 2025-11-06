@@ -83,9 +83,7 @@ celerybeat.pid
 *.db
 
 # GeoIP databases (large binary files - must be downloaded separately)
-Backend_FastAPI/geoip/*.mmdb
-Backend_FastAPI/geoip/*.dat
-Backend_FastAPI/geoip/GeoLite2-*
+Backend_FastAPI/geoip/
 
 # IDEs
 .vscode/
@@ -125,6 +123,7 @@ node_modules/
 out/
 next-env.d.ts
 .turbo/
+next.config.js  # Build artifact from next.config.ts
 
 # Production
 /build
