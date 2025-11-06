@@ -2,11 +2,12 @@
 """
 GeoIP service for IP address geolocation lookup using MaxMind GeoLite2.
 """
-import os
 from pathlib import Path
 from typing import Optional, Tuple
 
 import structlog
+
+from ..config import settings
 
 try:
     import geoip2.database
@@ -74,9 +75,9 @@ class GeoIPService:
             return (None, None)
 
         # DEVELOPMENT: Override IP for testing with localhost
-        # Set DEV_GEOIP_TEST_IP environment variable to test GeoIP with a public IP
+        # Set DEV_GEOIP_TEST_IP in .env file to test GeoIP with a public IP
         # Example: DEV_GEOIP_TEST_IP=8.8.8.8 (Google DNS - Mountain View, USA)
-        dev_test_ip = os.environ.get("DEV_GEOIP_TEST_IP")
+        dev_test_ip = settings.DEV_GEOIP_TEST_IP
         if dev_test_ip and self._is_private_ip(ip_address):
             log.info(
                 "DEV MODE: Using test IP instead of private IP",

@@ -145,6 +145,11 @@ class Settings(BaseSettings):
         default=3600, validation_alias="CONFIG_CACHE_TTL_SECONDS"
     )
 
+    # -- GeoIP Development Mode --
+    DEV_GEOIP_TEST_IP: str | None = Field(
+        default=None, validation_alias="DEV_GEOIP_TEST_IP"
+    )
+
     # === Pydantic Settings Configuration ===
     model_config = ConfigDict(
         # Đường dẫn tới file .env cần tải (chỉ tải nếu tồn tại)
