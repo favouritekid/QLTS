@@ -60,7 +60,8 @@ export function ChangePasswordForm() {
     queryKey: ["sessions"],
     queryFn: getActiveSessions,
     retry: 1,
-    staleTime: 30000, // 30 seconds
+    staleTime: 5000, // 5 seconds - refresh faster after session changes
+    refetchOnWindowFocus: true, // Refetch when user switches back to this tab
   });
 
   const activeSessionsCount = sessionsData?.total || 0;
