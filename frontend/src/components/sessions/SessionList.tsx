@@ -19,7 +19,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Monitor, Smartphone, Tablet, MapPin, Clock, AlertTriangle } from "lucide-react";
+import { Monitor, Smartphone, Tablet, MapPin, Clock, AlertTriangle, Globe } from "lucide-react";
 import type { UserSession } from "@/types/session";
 import {
   formatDeviceInfo,
@@ -272,7 +272,10 @@ function SessionDetails({ session }: { session: UserSession }) {
         </span>
       </div>
       {session.ip_address && (
-        <div className="text-muted-foreground text-xs">IP: {session.ip_address}</div>
+        <div className="text-muted-foreground flex items-center gap-2">
+          <Globe className="h-4 w-4" />
+          <span className="text-xs">IP: {session.ip_address}</span>
+        </div>
       )}
     </div>
   );
