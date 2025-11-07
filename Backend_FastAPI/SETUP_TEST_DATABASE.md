@@ -165,7 +165,36 @@ PostgreSQL Server (192.168.0.120:5432)
 
 ## 🆘 Troubleshooting
 
-### Lỗi: "Dangerous patterns detected"
+### ⚠️ Lỗi: "Dangerous patterns detected" (QUAN TRỌNG NHẤT!)
+
+**Triệu chứng:**
+```bash
+pytest tests/ -v
+→ 🚨 Dangerous patterns detected: ['/qlts_dev']
+
+python debug_local_env.py
+→ ✅ SAFETY CHECK WOULD PASS!
+```
+
+**Nguyên nhân:** Plugin `pytest-dotenv` tự động load `.env` TRƯỚC conftest.py!
+
+**Giải pháp:**
+```bash
+# Kiểm tra
+pip list | grep dotenv
+
+# Nếu thấy pytest-dotenv → Uninstall ngay!
+pip uninstall pytest-dotenv
+
+# Chạy lại tests
+pytest tests/ -v
+```
+
+**Chi tiết:** Xem `PYTEST_DOTENV_CONFLICT.md` để hiểu rõ vấn đề!
+
+---
+
+### Lỗi: Database name không chứa "test"
 
 **Nguyên nhân:** Database name không chứa "test" hoặc chứa pattern nguy hiểm
 
