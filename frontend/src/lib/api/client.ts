@@ -34,18 +34,25 @@ export const api = axios.create({
  * and all other requests wait for it to complete.
  */
 let isRefreshing = false;
-let refreshSubscribers: Array<(token: string) => void> = [];
+let refreshSubscribers: Array<{
+  onSuccess: (token: string) => void;
+  onError: (error: unknown) => void;
+}> = [];
 
-function subscribeTokenRefresh(cb: (token: string) => void) {
-  refreshSubscribers.push(cb);
+function subscribeTokenRefresh(
+  onSuccess: (token: string) => void,
+  onError: (error: unknown) => void
+) {
+  refreshSubscribers.push({ onSuccess, onError });
 }
 
 function onRefreshed(token: string) {
-  refreshSubscribers.forEach((cb) => cb(token));
+  refreshSubscribers.forEach((subscriber) => subscriber.onSuccess(token));
   refreshSubscribers = [];
 }
 
-function onRefreshFailed() {
+function onRefreshFailed(error: unknown) {
+  refreshSubscribers.forEach((subscriber) => subscriber.onError(error));
   refreshSubscribers = [];
 }
 
@@ -120,12 +127,17 @@ api.interceptors.response.use(
         console.log("[API Client] 🔄 Request queued (refresh in progress)");
 
         return new Promise((resolve, reject) => {
-          subscribeTokenRefresh((token: string) => {
-            if (originalRequest.headers) {
-              originalRequest.headers.Authorization = `Bearer ${token}`;
+          subscribeTokenRefresh(
+            (token: string) => {
+              if (originalRequest.headers) {
+                originalRequest.headers.Authorization = `Bearer ${token}`;
+              }
+              resolve(api(originalRequest));
+            },
+            (error: unknown) => {
+              reject(error);
             }
-            resolve(api(originalRequest));
-          });
+          );
         });
       }
 
@@ -162,9 +174,16 @@ api.interceptors.response.use(
         localStorage.setItem("access_token", newAccessToken);
 
         // Update Zustand store dynamically (avoid circular dependency)
+        // Note: We only update the token, not the user data, since refresh endpoint
+        // returns partial user data (missing status, avatar_url, etc.)
+        // The existing user data in store is still valid and will be refetched if needed
         try {
           const { useAuthStore } = await import("@/lib/stores/auth.store");
-          useAuthStore.getState().setAuth(data.user, newAccessToken);
+          const currentState = useAuthStore.getState();
+          if (currentState.user) {
+            // Only update token if user exists in store
+            useAuthStore.setState({ token: newAccessToken });
+          }
         } catch (importError) {
           console.warn(
             "[API Client] Failed to update auth store:",
@@ -194,7 +213,7 @@ api.interceptors.response.use(
         // STEP 7: HANDLE REFRESH FAILURE
         // ========================================
         isRefreshing = false;
-        onRefreshFailed();
+        onRefreshFailed(refreshError);
 
         // Clear auth state
         localStorage.removeItem("access_token");

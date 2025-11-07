@@ -15,6 +15,7 @@ import type {
   ForgotPasswordSchema,
   ResetPasswordSchema,
   ChangePasswordSchema,
+  UserUpdateProfile,
 } from "@/types/api.types";
 import { useEffect } from "react";
 import { AxiosError } from "axios";
@@ -286,6 +287,58 @@ export function useAuth() {
     },
   });
 
+  const updateProfileMutation = useMutation<
+    User, // Backend trả về User object sau khi update
+    AxiosError<ApiErrorResponse>,
+    UserUpdateProfile
+  >({
+    mutationFn: async (data) => {
+      // Tạo FormData để gửi multipart/form-data (hỗ trợ file upload)
+      const formData = new FormData();
+
+      if (data.full_name !== undefined) {
+        formData.append("full_name", data.full_name || "");
+      }
+      if (data.phone_number !== undefined) {
+        formData.append("phone_number", data.phone_number || "");
+      }
+      if (data.email !== undefined && data.email) {
+        formData.append("email", data.email);
+      }
+      if (data.avatar) {
+        formData.append("avatar", data.avatar);
+      }
+
+      const response = await api.put<User>(API_ENDPOINTS.PROFILE.UPDATE, formData, {
+        headers: {
+          "Content-Type": "multipart/form-data",
+        },
+      });
+      return response.data;
+    },
+    onSuccess: (updatedUser) => {
+      toast.success("Profile updated successfully!");
+      // Cập nhật cache của React Query với user data mới
+      queryClient.setQueryData(["auth", "me"], updatedUser);
+      // Cập nhật Zustand store
+      useAuthStore.getState().setUser(updatedUser);
+    },
+    onError: (error) => {
+      let displayMessage = "Failed to update profile.";
+      const errorDetail = error.response?.data?.detail;
+
+      if (typeof errorDetail === "string") {
+        displayMessage = errorDetail;
+      } else if (Array.isArray(errorDetail)) {
+        displayMessage = errorDetail[0].msg || "Validation error";
+      } else if (error.response?.data?.message) {
+        displayMessage = error.response.data.message;
+      }
+
+      toast.error(displayMessage);
+    },
+  });
+
   useEffect(() => {
     if (isUserError && userError) {
       console.error("Failed to fetch current user:", userError.response?.data || userError.message);
@@ -316,6 +369,7 @@ export function useAuth() {
     forgotPasswordMutation.isPending ||
     resetPasswordMutation.isPending ||
     changePasswordMutation.isPending ||
+    updateProfileMutation.isPending ||
     isUserLoading ||
     isUserFetching;
 
@@ -333,6 +387,9 @@ export function useAuth() {
     forgotPassword: forgotPasswordMutation.mutate,
     resetPassword: resetPasswordMutation.mutate,
     changePassword: changePasswordMutation.mutate,
+    updateProfile: updateProfileMutation.mutate,
+    updateProfileAsync: updateProfileMutation.mutateAsync,
+    isUpdatingProfile: updateProfileMutation.isPending,
     error:
       loginMutation.error ||
       logoutMutation.error ||
@@ -340,6 +397,7 @@ export function useAuth() {
       forgotPasswordMutation.error ||
       resetPasswordMutation.error ||
       changePasswordMutation.error ||
+      updateProfileMutation.error ||
       userError,
   };
 }

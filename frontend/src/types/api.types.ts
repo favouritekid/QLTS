@@ -67,3 +67,11 @@ export interface ChangePasswordSchema {
   old_password: string;
   new_password: string;
 }
+
+// Schema for updating user profile
+export interface UserUpdateProfile {
+  full_name?: string | null;
+  phone_number?: string | null;
+  email?: string;
+  avatar?: File;
+}

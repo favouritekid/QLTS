@@ -24,4 +24,8 @@ export const API_ENDPOINTS = {
     LIST: "/api/users",
     DETAIL: (id: number) => `/api/users/${id}`,
   },
+  PROFILE: {
+    GET: "/api/profile",
+    UPDATE: "/api/profile",
+  },
 } as const;
