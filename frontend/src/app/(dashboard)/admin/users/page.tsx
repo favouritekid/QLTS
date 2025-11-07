@@ -53,6 +53,7 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { getAvatarUrl } from "@/lib/utils";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -128,7 +129,7 @@ export default function AdminUsersPage() {
           return (
             <div className="flex items-center gap-3">
               <Avatar>
-                <AvatarImage src={user.avatar_url || ""} alt={user.username} />
+                <AvatarImage src={getAvatarUrl(user.avatar_url)} alt={user.username} />
                 <AvatarFallback>{user.username.slice(0, 2).toUpperCase()}</AvatarFallback>
               </Avatar>
               <div>

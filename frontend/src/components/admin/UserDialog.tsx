@@ -37,6 +37,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { PasswordStrengthIndicator } from "./PasswordStrengthIndicator";
 import { useAdminCreateUser, useAdminUpdateUser } from "@/hooks/useAdminUsers";
 import type { User } from "@/types/api.types";
+import { getAvatarUrl } from "@/lib/utils";
 
 // Validation schemas
 const createUserSchema = z.object({
@@ -203,7 +204,9 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
     }
   }
 
-  const displayAvatarUrl = avatarPreview || (user?.avatar_url ?? "");
+  // If user is uploading new avatar, show preview
+  // Otherwise show current avatar from server (converted to absolute URL)
+  const displayAvatarUrl = avatarPreview || getAvatarUrl(user?.avatar_url);
   const avatarFallback = isEdit && user
     ? user.username.slice(0, 2).toUpperCase()
     : "?";
