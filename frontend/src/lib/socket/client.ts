@@ -7,12 +7,14 @@ import { toast } from "sonner";
 class SocketService {
   private socket: Socket | null = null;
   private pingInterval: NodeJS.Timeout | null = null;
+  private revalidateInterval: NodeJS.Timeout | null = null; // ✅ FIX-3
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
 
   private reconnectDelay = 1000;
   private maxReconnectDelay = 30000;
   private shutdownReconnectTimer: NodeJS.Timeout | null = null;
+  private REVALIDATE_INTERVAL_MS = 5 * 60 * 1000; // ✅ FIX-3: 5 minutes
 
   connect() {
     if (this.socket && this.socket.connected) {
@@ -54,11 +56,13 @@ class SocketService {
         this.shutdownReconnectTimer = null;
       }
       this.startHeartbeat();
+      this.startRevalidation(); // ✅ FIX-3: Start periodic auth revalidation
     });
 
     this.socket.on("disconnect", (reason) => {
       console.warn("[SocketService] ❌ Disconnected:", reason);
       this.stopHeartbeat();
+      this.stopRevalidation(); // ✅ FIX-3: Stop revalidation on disconnect
       if (reason === "io server disconnect") {
         console.error("[SocketService] Server disconnected session. Forcing logout.");
         useAuthStore.getState().logout();
@@ -135,8 +139,54 @@ class SocketService {
     }
   }
 
+  // ✅ FIX-3: Periodic auth revalidation methods
+  private startRevalidation() {
+    this.stopRevalidation();
+
+    this.revalidateInterval = setInterval(() => {
+      if (this.socket?.connected) {
+        console.log("[SocketService] 🔒 Revalidating auth...");
+
+        this.socket.emit(
+          "revalidate_auth",
+          (response: { valid: boolean; reason?: string }) => {
+            if (!response.valid) {
+              console.error(
+                "[SocketService] ❌ Revalidation failed:",
+                response.reason
+              );
+              this.disconnect();
+
+              // Force logout user
+              const authStore = useAuthStore.getState();
+              authStore.logout();
+
+              toast.error("Your session is no longer valid. Please login again.", {
+                duration: 5000,
+              });
+
+              if (typeof window !== "undefined") {
+                window.location.href = "/login";
+              }
+            } else {
+              console.log("[SocketService] ✅ Revalidation successful");
+            }
+          }
+        );
+      }
+    }, this.REVALIDATE_INTERVAL_MS);
+  }
+
+  private stopRevalidation() {
+    if (this.revalidateInterval) {
+      clearInterval(this.revalidateInterval);
+      this.revalidateInterval = null;
+    }
+  }
+
   disconnect() {
     this.stopHeartbeat();
+    this.stopRevalidation(); // ✅ FIX-3: Stop revalidation on disconnect
     if (this.shutdownReconnectTimer) {
       clearTimeout(this.shutdownReconnectTimer);
       this.shutdownReconnectTimer = null;

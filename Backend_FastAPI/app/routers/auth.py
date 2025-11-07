@@ -347,7 +347,7 @@ async def logout(
 
     response.delete_cookie(
         key="refresh_token",
-        path="/api/auth",
+        path="/api",  # ✅ FIX: Changed from "/api/auth" to "/api" to match set_cookie path
         samesite="strict",
     )
     response.status_code = status.HTTP_204_NO_CONTENT
@@ -437,6 +437,7 @@ async def perform_password_reset(
 
     # 🔐 SECURITY FIX: Invalidate all sessions after password reset
     # This prevents session hijacking if attacker had compromised account
+    # ✅ FIX-2: Throw exception if invalidate fails (don't silently fail)
     try:
         await services.user_service.invalidate_all_sessions(db, user)
         log.warning(
@@ -445,6 +446,9 @@ async def perform_password_reset(
             email=user.email,
             security_event="PASSWORD_RESET_SESSIONS_INVALIDATED",
         )
+    except HTTPException:
+        # Already a proper HTTP exception, re-raise
+        raise
     except Exception as e:
         log.critical(
             "Failed to invalidate all sessions after password reset, "
@@ -453,7 +457,11 @@ async def perform_password_reset(
             error=str(e),
             exc_info=True,
         )
-        # Don't fail the request, but log critical error for monitoring
+        # ✅ NEW: Throw 500 to indicate failure (security-critical)
+        raise HTTPException(
+            status_code=500,
+            detail="Password reset successful but failed to invalidate sessions. Please logout manually from all devices and contact support immediately."
+        )
 
     # 📧 Send confirmation email to notify user about password reset
     # This allows user to take action if they didn't initiate the reset
@@ -495,27 +503,43 @@ async def perform_change_password(
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = deps.CurrentUser,
 ):
-    # (Giữ nguyên logic)
+    """
+    Change user password and invalidate all sessions.
+
+    Security: This endpoint invalidates ALL sessions after password change.
+    If session invalidation fails, the request will fail with 500 to prevent
+    security issues with dangling sessions.
+    """
     await services.user_service.change_password(
         db,
         user=current_user,
         old_password=password_data.old_password,
         new_password=password_data.new_password,
     )
+
+    # ✅ FIX-2: Throw exception if invalidate fails (don't silently fail)
     try:
         await services.user_service.invalidate_all_sessions(db, current_user)
         log.info(
             "All user sessions invalidated after password change",
             user_id=current_user.id,
         )
+    except HTTPException:
+        # Already a proper HTTP exception, re-raise
+        raise
     except Exception as e:
         log.critical(
-            "Failed to invalidate all sessions after password change, "
-            "potential security risk of dangling sessions!",
+            "Failed to invalidate all sessions after password change",
             user_id=current_user.id,
             error=str(e),
             exc_info=True,
         )
+        # ✅ NEW: Throw 500 to indicate failure
+        raise HTTPException(
+            status_code=500,
+            detail="Password changed but failed to invalidate sessions. Please logout manually from all devices and contact support."
+        )
+
     return None
 
 
@@ -687,11 +711,18 @@ async def refresh_access_token(
 
                 log.info("✅ Token rotation completed successfully", user_id=user.id)
 
-                # (STEP 8: Response - Giữ nguyên)
+                # ✅ FIX-4: Add user info to refresh response for auto-refresh mechanism
                 response = JSONResponse(
                     content={
                         "access_token": new_access_token,
                         "token_type": "bearer",
+                        "user": {
+                            "id": user.id,
+                            "username": user.username,
+                            "email": user.email,
+                            "full_name": user.full_name,
+                            "role": user.role,
+                        },
                     },
                     status_code=200,
                 )
