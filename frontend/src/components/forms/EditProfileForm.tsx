@@ -1,0 +1,274 @@
+// src/components/forms/EditProfileForm.tsx
+"use client";
+
+import { useState, useRef } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import * as z from "zod";
+import { Camera, Loader2 } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
+import { Input } from "@/components/ui/input";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { useAuth } from "@/hooks/useAuth";
+import type { UserUpdateProfile } from "@/types/api.types";
+
+// Zod schema cho form validation
+const editProfileSchema = z.object({
+  full_name: z.string().max(120, "Full name must be less than 120 characters").optional(),
+  phone_number: z
+    .string()
+    .max(20, "Phone number must be less than 20 characters")
+    .regex(/^[0-9+\-\s()]*$/, "Phone number can only contain digits, +, -, spaces, and parentheses")
+    .optional()
+    .or(z.literal("")),
+  email: z
+    .string()
+    .email("Invalid email format")
+    .min(1, "Email is required"),
+  avatar: z.instanceof(File).optional(),
+});
+
+type EditProfileFormValues = z.infer<typeof editProfileSchema>;
+
+export function EditProfileForm() {
+  const { user, updateProfile, isUpdatingProfile } = useAuth();
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Initialize form with current user data
+  const form = useForm<EditProfileFormValues>({
+    resolver: zodResolver(editProfileSchema),
+    defaultValues: {
+      full_name: user?.full_name || "",
+      phone_number: user?.phone_number || "",
+      email: user?.email || "",
+    },
+  });
+
+  // Handle avatar file selection
+  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      // Validate file type
+      if (!file.type.startsWith("image/")) {
+        form.setError("avatar", {
+          type: "manual",
+          message: "Please select a valid image file",
+        });
+        return;
+      }
+
+      // Validate file size (max 5MB)
+      if (file.size > 5 * 1024 * 1024) {
+        form.setError("avatar", {
+          type: "manual",
+          message: "Image size must be less than 5MB",
+        });
+        return;
+      }
+
+      // Set the file in form
+      form.setValue("avatar", file);
+      form.clearErrors("avatar");
+
+      // Create preview URL
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setAvatarPreview(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  // Handle form submission
+  function onSubmit(values: EditProfileFormValues) {
+    const updateData: UserUpdateProfile = {
+      full_name: values.full_name || null,
+      phone_number: values.phone_number || null,
+      email: values.email,
+    };
+
+    // Only include avatar if a new one was selected
+    if (values.avatar) {
+      updateData.avatar = values.avatar;
+    }
+
+    updateProfile(updateData);
+  }
+
+  // Handle avatar click to open file picker
+  const handleAvatarClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  if (!user) {
+    return null;
+  }
+
+  const displayAvatarUrl = avatarPreview || user.avatar_url || "";
+  const avatarFallback = user.username.slice(0, 2).toUpperCase();
+
+  return (
+    <Card className="max-w-2xl">
+      <CardHeader>
+        <CardTitle>Edit Profile</CardTitle>
+        <CardDescription>
+          Update your profile information and avatar. Changes will be saved when you click Save Changes.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+            {/* Avatar Section */}
+            <div className="flex items-center gap-6">
+              <div className="relative">
+                <Avatar className="h-24 w-24">
+                  <AvatarImage src={displayAvatarUrl} alt={user.username} />
+                  <AvatarFallback className="text-2xl">{avatarFallback}</AvatarFallback>
+                </Avatar>
+                <button
+                  type="button"
+                  onClick={handleAvatarClick}
+                  className="bg-primary text-primary-foreground hover:bg-primary/90 absolute bottom-0 right-0 rounded-full p-2 shadow-md transition-colors"
+                  disabled={isUpdatingProfile}
+                >
+                  <Camera className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-medium">Profile Picture</p>
+                <p className="text-muted-foreground text-xs">
+                  Click the camera icon to upload a new avatar. JPG, PNG or GIF. Max size 5MB.
+                </p>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handleAvatarChange}
+                  className="hidden"
+                  disabled={isUpdatingProfile}
+                />
+                {form.formState.errors.avatar && (
+                  <p className="text-destructive text-xs">{form.formState.errors.avatar.message}</p>
+                )}
+              </div>
+            </div>
+
+            {/* Full Name Field */}
+            <FormField
+              control={form.control}
+              name="full_name"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Full Name</FormLabel>
+                  <FormControl>
+                    <Input
+                      placeholder="Enter your full name"
+                      disabled={isUpdatingProfile}
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {/* Email Field */}
+            <FormField
+              control={form.control}
+              name="email"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Email</FormLabel>
+                  <FormControl>
+                    <Input
+                      type="email"
+                      placeholder="your.email@example.com"
+                      autoComplete="email"
+                      disabled={isUpdatingProfile}
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {/* Phone Number Field */}
+            <FormField
+              control={form.control}
+              name="phone_number"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Phone Number</FormLabel>
+                  <FormControl>
+                    <Input
+                      type="tel"
+                      placeholder="+1 (555) 123-4567"
+                      autoComplete="tel"
+                      disabled={isUpdatingProfile}
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {/* Username (Read-only) */}
+            <div className="space-y-2">
+              <FormLabel className="text-muted-foreground">Username</FormLabel>
+              <Input value={user.username} disabled className="bg-muted cursor-not-allowed" />
+              <p className="text-muted-foreground text-xs">Username cannot be changed</p>
+            </div>
+
+            {/* Role (Read-only) */}
+            <div className="space-y-2">
+              <FormLabel className="text-muted-foreground">Role</FormLabel>
+              <Input
+                value={user.role}
+                disabled
+                className="bg-muted cursor-not-allowed capitalize"
+              />
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex gap-3 pt-4">
+              <Button type="submit" disabled={isUpdatingProfile}>
+                {isUpdatingProfile ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  "Save Changes"
+                )}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  form.reset();
+                  setAvatarPreview(null);
+                }}
+                disabled={isUpdatingProfile}
+              >
+                Reset
+              </Button>
+            </div>
+          </form>
+        </Form>
+      </CardContent>
+    </Card>
+  );
+}
