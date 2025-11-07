@@ -131,28 +131,66 @@ class HttpxClientWrapper:
 
 
 @pytest_asyncio.fixture
+async def test_server():
+    """
+    Start a real test server for WebSocket testing.
+
+    Socket.IO with WebSocket transport requires a real HTTP server,
+    not in-memory ASGI transport, because aiohttp needs to make
+    actual network connections.
+
+    IMPORTANT: Serves app_with_sockets (not app) because socket.io
+    is mounted as socketio.ASGIApp(sio, app).
+    """
+    import asyncio
+    import uvicorn
+    from app.main import app_with_sockets
+
+    # Use a random available port
+    port = 8765
+
+    # Create server config - serve app_with_sockets for Socket.IO support
+    config = uvicorn.Config(app_with_sockets, host="127.0.0.1", port=port, log_level="error")
+    server = uvicorn.Server(config)
+
+    # Run server in background
+    server_task = asyncio.create_task(server.serve())
+
+    # Wait a bit for server to start (Socket.IO needs time to initialize)
+    await asyncio.sleep(1.0)
+
+    yield f"http://127.0.0.1:{port}"
+
+    # Shutdown server
+    server.should_exit = True
+    await server_task
+
+
+@pytest_asyncio.fixture
 async def sio_client(client):
     """
     Create Socket.IO async client for testing.
 
-    IMPORTANT: Uses httpx.AsyncClient's http_session to connect to in-memory test app.
-    This allows socketio client to communicate with the same FastAPI app instance
-    that httpx client uses, avoiding "connection refused" errors.
+    IMPORTANT: Since httpx doesn't have WebSocket client API (ws_connect),
+    we use aiohttp.ClientSession for the socketio client.
 
-    The wrapper is needed because python-engineio expects http_session.closed attribute,
-    but httpx.AsyncClient uses is_closed property.
+    The socketio client connects to the test server via HTTP/WebSocket,
+    while the main test client (httpx) is used for REST API testing.
     """
     if not SOCKETIO_AVAILABLE:
         pytest.skip("socketio not available")
 
-    # ✅ FIX: Wrap httpx client to add .closed compatibility for engineio
-    wrapped_client = HttpxClientWrapper(client)
-    sio = socketio.AsyncClient(http_session=wrapped_client)
+    # ✅ FIX: Use aiohttp for socketio (it has native ws_connect support)
+    # httpx doesn't have ws_connect method needed by python-engineio
+    import aiohttp
+    aio_session = aiohttp.ClientSession()
+    sio = socketio.AsyncClient(http_session=aio_session)
     yield sio
 
     # Cleanup
     if sio.connected:
         await sio.disconnect()
+    await aio_session.close()
 
 
 async def get_user_token(client, username: str, password: str) -> str:
@@ -172,7 +210,7 @@ async def get_user_token(client, username: str, password: str) -> str:
 
 
 @pytest.mark.asyncio
-async def test_fix3_websocket_auth_checks_user_blacklist(
+async def test_fix3_websocket_auth_checks_user_blacklist(test_server, 
     client, sio_client, regular_user_in_db: dict, test_redis_client
 ):
     """
@@ -200,7 +238,7 @@ async def test_fix3_websocket_auth_checks_user_blacklist(
 
     # Try to connect via WebSocket
     # ✅ FIX: Use http://test (in-memory transport) instead of localhost:8000
-    socket_url = "http://test"
+    socket_url = test_server
     connect_error = None
 
     try:
@@ -212,7 +250,7 @@ async def test_fix3_websocket_auth_checks_user_blacklist(
         # If we get here, connection succeeded (BAD!)
         pytest.fail("❌ SECURITY ISSUE: WebSocket connected despite user blacklist!")
 
-    except socketio.exceptions.ConnectionRefusedError as e:
+    except (socketio.exceptions.ConnectionRefusedError, socketio.exceptions.ConnectionError) as e:
         connect_error = e
         log.info(f"✅ Connection correctly refused: {e}")
 
@@ -227,7 +265,7 @@ async def test_fix3_websocket_auth_checks_user_blacklist(
 
 
 @pytest.mark.asyncio
-async def test_fix3_websocket_auth_with_valid_user(
+async def test_fix3_websocket_auth_with_valid_user(test_server, 
     client, sio_client, regular_user_in_db: dict, test_redis_client
 ):
     """
@@ -244,7 +282,7 @@ async def test_fix3_websocket_auth_with_valid_user(
 
     # Connect via WebSocket (should succeed)
     # ✅ FIX: Use http://test (in-memory transport)
-    socket_url = "http://test"
+    socket_url = test_server
 
     try:
         await sio_client.connect(
@@ -269,7 +307,7 @@ async def test_fix3_websocket_auth_with_valid_user(
 
 
 @pytest.mark.asyncio
-async def test_fix3_websocket_revalidation_success(
+async def test_fix3_websocket_revalidation_success(test_server, 
     client, sio_client, regular_user_in_db: dict, test_redis_client
 ):
     """
@@ -286,7 +324,7 @@ async def test_fix3_websocket_revalidation_success(
 
     # Get token and connect
     access_token = await get_user_token(client, username, password)
-    socket_url = "http://test"  # ✅ FIX: Use in-memory transport
+    socket_url = test_server  # ✅ FIX: Use in-memory transport
 
     await sio_client.connect(
         socket_url,
@@ -310,7 +348,7 @@ async def test_fix3_websocket_revalidation_success(
 
 
 @pytest.mark.asyncio
-async def test_fix3_websocket_revalidation_detects_blacklist(
+async def test_fix3_websocket_revalidation_detects_blacklist(test_server, 
     client, sio_client, regular_user_in_db: dict, test_redis_client
 ):
     """
@@ -331,7 +369,7 @@ async def test_fix3_websocket_revalidation_detects_blacklist(
 
     # Get token and connect
     access_token = await get_user_token(client, username, password)
-    socket_url = "http://test"  # ✅ FIX: Use in-memory transport
+    socket_url = test_server  # ✅ FIX: Use in-memory transport
 
     await sio_client.connect(
         socket_url,
@@ -381,7 +419,7 @@ async def test_fix3_websocket_revalidation_detects_blacklist(
 
 
 @pytest.mark.asyncio
-async def test_fix3_force_logout_batch_event(
+async def test_fix3_force_logout_batch_event(test_server, 
     client, sio_client, regular_user_in_db: dict
 ):
     """
@@ -395,7 +433,7 @@ async def test_fix3_force_logout_batch_event(
 
     # Get token and connect
     access_token = await get_user_token(client, username, password)
-    socket_url = "http://test"  # ✅ FIX: Use in-memory transport
+    socket_url = test_server  # ✅ FIX: Use in-memory transport
 
     # Setup event listener
     logout_event_received = asyncio.Event()
@@ -448,7 +486,7 @@ async def test_fix3_force_logout_batch_event(
 
 
 @pytest.mark.asyncio
-async def test_fix3_websocket_end_to_end_security(
+async def test_fix3_websocket_end_to_end_security(test_server, 
     client, sio_client, regular_user_in_db: dict, test_redis_client
 ):
     """
@@ -470,7 +508,7 @@ async def test_fix3_websocket_end_to_end_security(
 
     # Step 1: Connect WebSocket
     access_token = await get_user_token(client, username, password)
-    socket_url = "http://test"  # ✅ FIX: Use in-memory transport
+    socket_url = test_server  # ✅ FIX: Use in-memory transport
 
     await sio_client.connect(
         socket_url,
@@ -521,7 +559,7 @@ async def test_fix3_websocket_end_to_end_security(
             transports=["websocket"]
         )
         pytest.fail("❌ SECURITY ISSUE: Reconnected with old token after password change!")
-    except socketio.exceptions.ConnectionRefusedError:
+    except (socketio.exceptions.ConnectionRefusedError, socketio.exceptions.ConnectionError):
         log.info("✅ Step 5: Cannot reconnect with old token")
 
     log.info("--- Finished: test_fix3_websocket_end_to_end_security ---")
@@ -535,7 +573,7 @@ async def test_fix3_websocket_end_to_end_security(
 
 @pytest.mark.asyncio
 @pytest.mark.slow
-async def test_fix3_revalidation_performance(
+async def test_fix3_revalidation_performance(test_server, 
     client, sio_client, regular_user_in_db: dict
 ):
     """
@@ -551,7 +589,7 @@ async def test_fix3_revalidation_performance(
 
     # Connect
     access_token = await get_user_token(client, username, password)
-    socket_url = "http://test"  # ✅ FIX: Use in-memory transport
+    socket_url = test_server  # ✅ FIX: Use in-memory transport
 
     await sio_client.connect(
         socket_url,

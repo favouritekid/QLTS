@@ -267,8 +267,9 @@ async def setup_test_database(manage_engine):
 @pytest_asyncio.fixture(scope="function")
 async def test_redis_client():
     log.info("--- [FUNCTION SETUP] Creating FakeRedis client for testing ---")
-    # Use FakeRedis instead of real Redis for testing
-    client = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    # IMPORTANT: Use the same _fake_server as the app so data is shared!
+    # This allows tests to set data that the app can read
+    client = fakeredis.aioredis.FakeRedis(server=_fake_server, decode_responses=True)
     try:
         await client.ping()
         log.info("--- [FUNCTION SETUP] FakeRedis client created successfully ---")
