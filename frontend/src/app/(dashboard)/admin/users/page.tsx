@@ -73,8 +73,8 @@ import type { User } from "@/types/api.types";
 export default function AdminUsersPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
-  const [roleFilter, setRoleFilter] = useState<string>("");
-  const [statusFilter, setStatusFilter] = useState<string>("");
+  const [roleFilter, setRoleFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
   const [rowSelection, setRowSelection] = useState({});
   const [userToDelete, setUserToDelete] = useState<User | null>(null);
   const [userDialogOpen, setUserDialogOpen] = useState(false);
@@ -91,8 +91,8 @@ export default function AdminUsersPage() {
     page,
     page_size: 10,
     search: search || undefined,
-    role: roleFilter || undefined,
-    status: statusFilter || undefined,
+    role: roleFilter === "all" ? undefined : roleFilter,
+    status: statusFilter === "all" ? undefined : statusFilter,
   });
 
   const deleteUserMutation = useAdminDeleteUser();
@@ -393,7 +393,7 @@ export default function AdminUsersPage() {
                 <SelectValue placeholder="All Roles" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All Roles</SelectItem>
+                <SelectItem value="all">All Roles</SelectItem>
                 <SelectItem value="admin">Admin</SelectItem>
                 <SelectItem value="manager">Manager</SelectItem>
                 <SelectItem value="officer">Officer</SelectItem>
@@ -405,7 +405,7 @@ export default function AdminUsersPage() {
                 <SelectValue placeholder="All Status" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All Status</SelectItem>
+                <SelectItem value="all">All Status</SelectItem>
                 <SelectItem value="active">Active</SelectItem>
                 <SelectItem value="pending">Pending</SelectItem>
                 <SelectItem value="banned">Banned</SelectItem>
