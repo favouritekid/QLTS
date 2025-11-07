@@ -2,6 +2,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import Link from "next/link";
 import {
   Plus,
   Search,
@@ -13,6 +14,7 @@ import {
   Shield,
   CheckSquare,
   Square,
+  Eye,
 } from "lucide-react";
 import {
   useReactTable,
@@ -186,6 +188,12 @@ export default function AdminUsersPage() {
               <DropdownMenuContent align="end">
                 <DropdownMenuLabel>Actions</DropdownMenuLabel>
                 <DropdownMenuSeparator />
+                <DropdownMenuItem asChild>
+                  <Link href={`/admin/users/${user.id}`}>
+                    <Eye className="mr-2 h-4 w-4" />
+                    View Details
+                  </Link>
+                </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => handleEditUser(user)}>
                   <Edit className="mr-2 h-4 w-4" />
                   Edit User
