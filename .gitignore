@@ -205,3 +205,8 @@ docker-compose.override.yml
 # package-lock.json
 # yarn.lock
 # pnpm-lock.yaml
+# Database backups and exports (added for recovery scripts)
+backups/
+exports/
+*.dump
+migration_data/
