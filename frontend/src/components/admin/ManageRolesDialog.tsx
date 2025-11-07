@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Check, X, Plus, Loader2 } from "lucide-react";
 
 import {
@@ -43,7 +43,14 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
   const removeRoleMutation = useAdminRemoveRole();
 
   // Fetch user roles from API
-  const { data: userRoles, isLoading: isLoadingRoles } = useAdminUserRoles(user.id);
+  const { data: userRoles, isLoading: isLoadingRoles, error: rolesError, refetch } = useAdminUserRoles(user.id);
+
+  // Refetch roles when dialog opens
+  useEffect(() => {
+    if (open) {
+      refetch();
+    }
+  }, [open, refetch]);
 
   const isPending = assignRoleMutation.isPending || removeRoleMutation.isPending;
 
@@ -52,6 +59,18 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
 
   // Additional roles are all roles except the primary role
   const additionalRoles = userRoles?.filter(role => role !== primaryRole) || [];
+
+  // Debug logging
+  if (open) {
+    console.log("ManageRolesDialog Debug:", {
+      userId: user.id,
+      primaryRole,
+      userRoles,
+      additionalRoles,
+      isLoadingRoles,
+      rolesError,
+    });
+  }
 
   async function handleAssignRole() {
     if (!selectedRole) return;
@@ -112,7 +131,11 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
           <div>
             <h4 className="text-sm font-medium mb-3">Additional Casbin Roles</h4>
 
-            {isLoadingRoles ? (
+            {rolesError ? (
+              <div className="text-sm text-destructive mb-4 p-3 rounded-lg border border-destructive/50 bg-destructive/10">
+                Failed to load user roles. Please try again.
+              </div>
+            ) : isLoadingRoles ? (
               <div className="flex items-center justify-center py-4">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               </div>

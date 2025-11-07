@@ -209,8 +209,8 @@ export function useAdminAssignRole() {
     },
     onSuccess: (_, variables) => {
       toast.success("Role assigned successfully!");
-      queryClient.invalidateQueries({ queryKey: adminUsersKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: adminUsersKeys.userRoles(variables.user_id) });
+      queryClient.invalidateQueries({ queryKey: adminUsersKeys.lists(), refetchType: "active" });
+      queryClient.invalidateQueries({ queryKey: adminUsersKeys.userRoles(variables.user_id), refetchType: "active" });
     },
     onError: (error) => {
       const message = error.response?.data?.detail || "Failed to assign role";
@@ -232,8 +232,8 @@ export function useAdminRemoveRole() {
     },
     onSuccess: (_, variables) => {
       toast.success("Role removed successfully!");
-      queryClient.invalidateQueries({ queryKey: adminUsersKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: adminUsersKeys.userRoles(variables.user_id) });
+      queryClient.invalidateQueries({ queryKey: adminUsersKeys.lists(), refetchType: "active" });
+      queryClient.invalidateQueries({ queryKey: adminUsersKeys.userRoles(variables.user_id), refetchType: "active" });
     },
     onError: (error) => {
       const message = error.response?.data?.detail || "Failed to remove role";
@@ -280,5 +280,7 @@ export function useAdminUserRoles(userId: number) {
       return response.data;
     },
     enabled: !!userId,
+    staleTime: 0, // Always fetch fresh roles
+    refetchOnMount: true, // Refetch when dialog opens
   });
 }

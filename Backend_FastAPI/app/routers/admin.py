@@ -139,8 +139,8 @@ async def assign_role_to_user(
     if not added:
         raise DuplicateResourceError("User already has this role.")
 
-    # SỬA: Xóa dòng save_policy()
-    # await enforcer.save_policy() # AsyncAdapter tự lưu
+    # Explicitly save to ensure persistence
+    await enforcer.save_policy()
 
     return {"detail": "Role assigned."}
 
@@ -167,8 +167,8 @@ async def remove_role_from_user(
             "Role assignment not found or could not be removed."
         )
 
-    # SỬA: Xóa dòng save_policy()
-    # await enforcer.save_policy() # AsyncAdapter tự lưu
+    # Explicitly save to ensure persistence
+    await enforcer.save_policy()
 
     return {"detail": "Role removed from user."}
 
