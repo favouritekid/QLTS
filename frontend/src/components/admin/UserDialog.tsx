@@ -114,28 +114,25 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
 
   // Reset form when dialog opens or user changes
   useEffect(() => {
-    if (open) {
-      if (isEdit && user) {
-        form.reset({
-          full_name: user.full_name || "",
-          email: user.email,
-          phone_number: user.phone_number || "",
-          role: user.role,
-          status: user.status,
-        });
-        setAvatarPreview(null); // Reset avatar preview to show current user avatar
-      } else if (isCreate) {
-        form.reset({
-          username: "",
-          email: "",
-          password: "",
-          full_name: "",
-          role: "user" as const,
-          status: "active" as const,
-        });
-        setAvatarPreview(null);
-        setPasswordValue("");
-      }
+    if (!open) return;
+
+    if (isEdit && user) {
+      form.reset({
+        full_name: user.full_name || "",
+        email: user.email,
+        phone_number: user.phone_number || "",
+        role: user.role,
+        status: user.status,
+      });
+    } else if (isCreate) {
+      form.reset({
+        username: "",
+        email: "",
+        password: "",
+        full_name: "",
+        role: "user" as const,
+        status: "active" as const,
+      });
     }
   }, [open, user, isEdit, isCreate, form]);
 
@@ -174,6 +171,16 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
     }
   };
 
+  // Handle dialog close
+  const handleDialogClose = (open: boolean) => {
+    onOpenChange(open);
+    if (!open) {
+      // Reset state when dialog closes
+      setAvatarPreview(null);
+      setPasswordValue("");
+    }
+  };
+
   // Handle form submission
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async function onSubmit(values: any) {
@@ -183,10 +190,8 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
       } else if (user) {
         await updateUserMutation.mutateAsync(values as EditUserFormValues);
       }
-      onOpenChange(false);
+      handleDialogClose(false);
       form.reset();
-      setAvatarPreview(null);
-      setPasswordValue("");
     } catch {
       // Error handling is done in the mutation hooks
     }
@@ -200,7 +205,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
   const isPending = createUserMutation.isPending || updateUserMutation.isPending;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleDialogClose}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[600px]">
         <DialogHeader>
           <DialogTitle>{isCreate ? "Create New User" : "Edit User"}</DialogTitle>
@@ -422,7 +427,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => onOpenChange(false)}
+                onClick={() => handleDialogClose(false)}
                 disabled={isPending}
               >
                 Cancel

@@ -225,6 +225,7 @@ export default function AdminUsersPage() {
   );
 
   // Setup TanStack Table
+  // eslint-disable-next-line react-hooks/incompatible-library
   const table = useReactTable({
     data: data?.users || [],
     columns,
