@@ -139,70 +139,80 @@ export function NotificationDropdown() {
           ) : (
             <div className="divide-y">
               {notifications.map((notification) => {
-                const NotificationWrapper = notification.link ? Link : "div";
-                const wrapperProps = notification.link
-                  ? { href: notification.link }
-                  : {};
+                const wrapperClassName = cn(
+                  "block transition-colors hover:bg-muted/50",
+                  !notification.is_read && "bg-muted/30"
+                );
 
-                return (
-                  <NotificationWrapper
-                    key={notification.id}
-                    {...wrapperProps}
-                    onClick={() => handleMarkAsRead(notification)}
-                    className={cn(
-                      "block transition-colors hover:bg-muted/50",
-                      !notification.is_read && "bg-muted/30"
-                    )}
-                  >
-                    <div className="flex items-start gap-3 p-3">
-                      {/* Icon */}
-                      <div
-                        className={cn(
-                          "bg-muted flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
-                          !notification.is_read && "bg-primary/10"
-                        )}
-                      >
-                        {getNotificationIcon(notification.type)}
-                      </div>
+                const notificationContent = (
+                  <div className="flex items-start gap-3 p-3">
+                    {/* Icon */}
+                    <div
+                      className={cn(
+                        "bg-muted flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
+                        !notification.is_read && "bg-primary/10"
+                      )}
+                    >
+                      {getNotificationIcon(notification.type)}
+                    </div>
 
-                      {/* Content */}
-                      <div className="min-w-0 flex-1 space-y-1">
-                        <div className="flex items-start justify-between gap-2">
-                          <p
-                            className={cn(
-                              "text-sm leading-tight",
-                              !notification.is_read && "font-semibold"
-                            )}
-                          >
-                            {notification.title}
-                          </p>
-                          {!notification.is_read && (
-                            <div className="bg-primary mt-1 h-2 w-2 shrink-0 rounded-full" />
+                    {/* Content */}
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <p
+                          className={cn(
+                            "text-sm leading-tight",
+                            !notification.is_read && "font-semibold"
                           )}
-                        </div>
-                        <p className="text-muted-foreground text-xs leading-snug">
-                          {notification.message}
+                        >
+                          {notification.title}
                         </p>
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-muted-foreground text-xs">
-                            {formatDistanceToNow(
-                              new Date(notification.created_at),
-                              { addSuffix: true }
-                            )}
-                          </p>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6 shrink-0"
-                            onClick={(e) => handleDelete(notification.id, e)}
-                          >
-                            <Trash2 className="h-3 w-3" />
-                            <span className="sr-only">Delete</span>
-                          </Button>
-                        </div>
+                        {!notification.is_read && (
+                          <div className="bg-primary mt-1 h-2 w-2 shrink-0 rounded-full" />
+                        )}
+                      </div>
+                      <p className="text-muted-foreground text-xs leading-snug">
+                        {notification.message}
+                      </p>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-muted-foreground text-xs">
+                          {formatDistanceToNow(
+                            new Date(notification.created_at),
+                            { addSuffix: true }
+                          )}
+                        </p>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 shrink-0"
+                          onClick={(e) => handleDelete(notification.id, e)}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                          <span className="sr-only">Delete</span>
+                        </Button>
                       </div>
                     </div>
-                  </NotificationWrapper>
+                  </div>
+                );
+
+                // Render with Link if notification has a link, otherwise render as div
+                return notification.link ? (
+                  <Link
+                    key={notification.id}
+                    href={notification.link}
+                    onClick={() => handleMarkAsRead(notification)}
+                    className={wrapperClassName}
+                  >
+                    {notificationContent}
+                  </Link>
+                ) : (
+                  <div
+                    key={notification.id}
+                    onClick={() => handleMarkAsRead(notification)}
+                    className={wrapperClassName}
+                  >
+                    {notificationContent}
+                  </div>
                 );
               })}
             </div>
