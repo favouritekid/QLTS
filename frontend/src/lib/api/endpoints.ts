@@ -44,5 +44,7 @@ export const API_ENDPOINTS = {
       ASSIGN_ROLE: "/api/admin/assign-role",
       REMOVE_ROLE: "/api/admin/assign-role", // DELETE method
     },
+    ACTIVITY_LOGS: "/api/admin/activity-logs",
+    STATISTICS: "/api/admin/statistics",
   },
 } as const;

@@ -88,5 +88,15 @@ from .user_session import (
     UserSessionListResponse,
     UserSessionResponse,
     UserSessionUpdate,
-    RevokeAllSessionsRequest 
+    RevokeAllSessionsRequest
+)
+
+# --- Từ user_activity.py ---
+from .user_activity import (
+    UserActivityLog,
+    UserActivityLogBase,
+    UserActivityLogCreate,
+    UserActivityLogWithDetails,
+    ActivityLogsPage,
+    UserStatistics,
 )

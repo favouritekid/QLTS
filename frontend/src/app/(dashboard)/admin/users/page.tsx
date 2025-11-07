@@ -283,6 +283,22 @@ export default function AdminUsersPage() {
     }
   };
 
+  const handleBulkChangeStatus = async (newStatus: "active" | "pending" | "banned") => {
+    const selectedRows = table.getFilteredSelectedRowModel().rows;
+    const userIds = selectedRows.map((row) => row.original.id);
+
+    if (userIds.length === 0) return;
+
+    await bulkActionMutation.mutateAsync({
+      action: "change_status",
+      user_ids: userIds,
+      status: newStatus,
+    });
+
+    // Clear selection after successful status change
+    setRowSelection({});
+  };
+
   const handleExportCSV = () => {
     if (!data?.users) return;
 
@@ -364,6 +380,27 @@ export default function AdminUsersPage() {
                 <Square className="mr-2 h-4 w-4" />
                 Deselect All
               </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm">
+                    <Edit className="mr-2 h-4 w-4" />
+                    Change Status
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuLabel>Set status to:</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => handleBulkChangeStatus("active")}>
+                    Active
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleBulkChangeStatus("pending")}>
+                    Pending
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleBulkChangeStatus("banned")}>
+                    Banned
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <Button variant="destructive" size="sm" onClick={handleOpenBulkDelete}>
                 <Trash2 className="mr-2 h-4 w-4" />
                 Delete Selected

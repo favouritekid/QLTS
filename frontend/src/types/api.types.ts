@@ -126,13 +126,36 @@ export interface BulkAction {
 }
 
 // Activity Log Types
-export interface ActivityLog {
+export interface UserActivityLog {
   id: number;
-  user_id: number;
+  actor_id: number | null;
+  target_user_id: number | null;
   action: string;
-  resource: string;
-  details?: string | null;
-  ip_address?: string | null;
+  resource_type: string;
+  resource_id: number | null;
+  description: string | null;
+  changes: Record<string, any> | null;
+  ip_address: string | null;
+  user_agent: string | null;
   created_at: string;
-  user?: User;
+  actor_username: string | null;
+  actor_full_name: string | null;
+  target_username: string | null;
+  target_full_name: string | null;
+}
+
+export interface ActivityLogsPage {
+  total_count: number;
+  logs: UserActivityLog[];
+}
+
+export interface UserStatistics {
+  total_users: number;
+  active_users: number;
+  pending_users: number;
+  banned_users: number;
+  new_users_last_7_days: number;
+  new_users_last_30_days: number;
+  users_by_role: Record<string, number>;
+  recent_activities: UserActivityLog[];
 }

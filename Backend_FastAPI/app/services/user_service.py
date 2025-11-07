@@ -35,6 +35,7 @@ from ..utils.exceptions import (
     InvalidToken,
     ResourceNotFoundError,
 )
+from . import activity_service
 
 # ✅ SỬA LỖI: Chuyển log sang đồng bộ (tương thích với main.py V5)
 log = structlog.get_logger(__name__)

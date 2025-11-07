@@ -28,6 +28,7 @@ from app.config import settings
 from .. import database, models, schemas, services
 from ..celery_utils import process_automatic_lead_assignment_task
 from ..core import deps
+from ..services import activity_service
 from ..schemas.permissions import PolicyCreate, RoleAssignment
 from ..services import (
     config_service,
@@ -257,6 +258,18 @@ async def create_new_user(
         )
         # Don't fail user creation if Casbin update fails
 
+    # Log activity
+    await activity_service.log_activity_from_request(
+        db=db,
+        request=request,
+        action="create_user",
+        resource_type="user",
+        actor_id=current_admin.id,
+        target_user_id=created_user.id,
+        resource_id=created_user.id,
+        description=f"Admin created new user: {created_user.username}",
+    )
+
     return created_user
 
 
@@ -297,6 +310,7 @@ async def get_user_details(
 )
 async def update_existing_user(
     user_id: int,
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
     full_name: Optional[str] = Form(None),
@@ -365,13 +379,36 @@ async def update_existing_user(
         except HTTPException as e: 
             raise e
 
+    # Track changes for activity log
+    changes = {}
+    if update_dict:
+        for key, new_value in update_dict.items():
+            old_value = getattr(db_user, key, None)
+            if old_value != new_value:
+                changes[key] = {"old": str(old_value), "new": str(new_value)}
+
     # Tạo schema UserUpdate CHỈ với các dữ liệu đã được xác thực
     user_in = schemas.UserUpdate(**update_dict)
 
     # Truyền avatar vào hàm service
-    return await services.user_service.update_user(
+    updated_user = await services.user_service.update_user(
         db, db_user, user_in, avatar_file=avatar
     )
+
+    # Log activity
+    await activity_service.log_activity_from_request(
+        db=db,
+        request=request,
+        action="update_user",
+        resource_type="user",
+        actor_id=current_admin.id,
+        target_user_id=updated_user.id,
+        resource_id=updated_user.id,
+        description=f"Admin updated user: {updated_user.username}",
+        changes=changes if changes else None,
+    )
+
+    return updated_user
 
 
 # === KẾT THÚC HÀM CẬP NHẬT ===
@@ -382,6 +419,7 @@ async def update_existing_user(
 )
 async def delete_existing_user(
     user_id: int,
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
@@ -389,8 +427,25 @@ async def delete_existing_user(
     if user_id == current_admin.id:
         raise PermissionDeniedError(detail="Admin cannot delete themselves")
 
+    # Get user info before deleting for activity log
+    db_user = await services.user_service.get_user_by_id(db, user_id)
+    username = db_user.username if db_user else f"User#{user_id}"
+
     # Bỏ kiểm tra 'is None' vì service đã ném 404
     await services.user_service.delete_user(db, user_id)
+
+    # Log activity
+    await activity_service.log_activity_from_request(
+        db=db,
+        request=request,
+        action="delete_user",
+        resource_type="user",
+        actor_id=current_admin.id,
+        target_user_id=user_id,
+        resource_id=user_id,
+        description=f"Admin deleted user: {username}",
+    )
+
     return None
 
 
@@ -419,6 +474,7 @@ async def admin_set_user_password(
 )
 async def bulk_user_action(
     action_data: schemas.BulkActionSchema,
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
@@ -430,6 +486,23 @@ async def bulk_user_action(
         admin_user=current_admin,
         new_status=action_data.status,
     )
+
+    # Log activity for bulk action
+    action_desc = f"Bulk {action_data.action}"
+    if action_data.action == "change_status" and action_data.status:
+        action_desc += f" to {action_data.status}"
+    action_desc += f" for {len(action_data.user_ids)} users"
+
+    await activity_service.log_activity_from_request(
+        db=db,
+        request=request,
+        action=f"bulk_{action_data.action}",
+        resource_type="user",
+        actor_id=current_admin.id,
+        description=action_desc,
+        changes={"user_ids": action_data.user_ids, "status": action_data.status} if action_data.status else {"user_ids": action_data.user_ids},
+    )
+
     return {"detail": message}
 
 
@@ -1143,3 +1216,53 @@ async def import_leads_from_file(
         log.info("Lead import process finished successfully", result=result_summary)
 
     return result
+
+
+# ===============================================================
+# ACTIVITY LOGS & STATISTICS ROUTES
+# ===============================================================
+
+
+@router.get(
+    "/activity-logs",
+    response_model=schemas.ActivityLogsPage,
+    tags=["Admin - Activity Logs"],
+)
+async def get_activity_logs(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+    actor_id: Optional[int] = Query(None),
+    target_user_id: Optional[int] = Query(None),
+    action: Optional[str] = Query(None),
+    resource_type: Optional[str] = Query(None),
+):
+    """(Admin only) Lấy danh sách activity logs với filters."""
+    skip = (page - 1) * page_size
+
+    total, logs = await activity_service.get_activity_logs(
+        db=db,
+        skip=skip,
+        limit=page_size,
+        actor_id=actor_id,
+        target_user_id=target_user_id,
+        action=action,
+        resource_type=resource_type,
+    )
+
+    return {"total_count": total, "logs": logs}
+
+
+@router.get(
+    "/statistics",
+    response_model=schemas.UserStatistics,
+    tags=["Admin - Statistics"],
+)
+async def get_user_statistics(
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Lấy thống kê tổng quan về users cho dashboard."""
+    return await activity_service.get_user_statistics(db)

@@ -9,6 +9,7 @@ from .lead_history import LeadStatusHistory
 from .organization import Major, OrganizationUnit
 from .pipeline import ConsultationStatus, PipelineStage
 from .user import User
+from .user_activity import UserActivityLog
 from .user_session import UserSession
 
 # Import tất cả các model để chúng được đăng ký với Base
