@@ -114,25 +114,33 @@ async def test_fix1_refresh_cookie_path_consistency(
     username = regular_user_in_db["username"]
     password = regular_user_in_db["password"]
 
-    # Login
+    # Step 1: Login to get cookie
     login_data = {"username": username, "password": password}
     login_res = await client.post(AuthURLs.LOGIN, data=login_data)
-    assert login_res.status_code == 200
+    assert login_res.status_code == 200, f"Login failed: {login_res.text}"
 
-    # Get tokens
-    tokens = login_res.json()
-    refresh_token = tokens["refresh_token"]
+    # Verify refresh_token cookie is set
+    cookies_after_login = login_res.cookies
+    assert "refresh_token" in cookies_after_login, "refresh_token cookie not set after login"
+    log.info("✅ Login successful, refresh_token cookie set")
 
-    # Refresh
-    refresh_res = await client.post(AuthURLs.REFRESH, json={"refresh_token": refresh_token})
+    # Step 2: Call refresh endpoint with the cookie (cookie contains refresh_token)
+    refresh_res = await client.post(AuthURLs.REFRESH, cookies=cookies_after_login)
     assert refresh_res.status_code == 200, f"Refresh failed: {refresh_res.text}"
+    log.info("✅ Refresh successful (200)")
 
-    # Verify new cookie path
+    # Step 3: Verify new cookie path is correct
     set_cookie_header = refresh_res.headers.get("set-cookie", "")
     if "refresh_token" in set_cookie_header:
         assert "Path=/api" in set_cookie_header or "path=/api" in set_cookie_header.lower(), \
             f"Refresh cookie path mismatch! Expected '/api', got: {set_cookie_header}"
         log.info("✅ Refresh cookie uses correct path (/api)")
+
+    # Step 4: Verify response contains user info (FIX-4)
+    refresh_data = refresh_res.json()
+    assert "access_token" in refresh_data
+    assert "user" in refresh_data, "User info missing in refresh response (FIX-4)"
+    log.info("✅ Refresh response contains user info (FIX-4)")
 
     log.info("--- Finished: test_fix1_refresh_cookie_path_consistency ---")
 

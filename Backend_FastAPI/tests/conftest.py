@@ -155,6 +155,7 @@ async def _create_user_and_role(
             user_info = {
                 "id": db_user_id,
                 "username": user_data["username"],
+                "email": user_data["email"],  # ✅ ADDED: Include email
                 "password": user_data["password"],
             }
     # Reload Casbin policies sau khi thay đổi (nên làm ở đây HOẶC trong client fixture)
