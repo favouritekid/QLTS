@@ -12,7 +12,9 @@ export interface User {
   role: "user" | "admin" | "manager" | "officer"; // Các role có trong backend
   status: "active" | "pending" | "banned"; // Các status có trong backend
   unit_id?: number | null; // Có thể null
-  // Thêm các trường khác nếu cần từ schema backend (skills, max_capacity, etc.)
+  skills?: string[] | null; // User skills
+  availability_status?: string | null; // Availability status
+  max_capacity?: number | null; // Max capacity
 }
 
 // Kiểu dữ liệu cho request body khi login (khớp schemas/user.py -> LoginSchema)
@@ -134,7 +136,7 @@ export interface UserActivityLog {
   resource_type: string;
   resource_id: number | null;
   description: string | null;
-  changes: Record<string, any> | null;
+  changes: Record<string, unknown> | null;
   ip_address: string | null;
   user_agent: string | null;
   created_at: string;
