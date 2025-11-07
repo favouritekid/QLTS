@@ -60,12 +60,19 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest_asyncio.fixture
-async def sio_client():
-    """Create Socket.IO async client for testing"""
+async def sio_client(client):
+    """
+    Create Socket.IO async client for testing.
+
+    IMPORTANT: Uses httpx.AsyncClient's http_session to connect to in-memory test app.
+    This allows socketio client to communicate with the same FastAPI app instance
+    that httpx client uses, avoiding "connection refused" errors.
+    """
     if not SOCKETIO_AVAILABLE:
         pytest.skip("socketio not available")
 
-    sio = socketio.AsyncClient()
+    # ✅ FIX: Use httpx client's session for in-memory transport
+    sio = socketio.AsyncClient(http_session=client)
     yield sio
 
     # Cleanup
@@ -117,7 +124,8 @@ async def test_fix3_websocket_auth_checks_user_blacklist(
     log.info(f"✅ User {user_id} blacklisted in Redis")
 
     # Try to connect via WebSocket
-    socket_url = f"http://localhost:8000"  # Adjust based on test server
+    # ✅ FIX: Use http://test (in-memory transport) instead of localhost:8000
+    socket_url = "http://test"
     connect_error = None
 
     try:
@@ -160,7 +168,8 @@ async def test_fix3_websocket_auth_with_valid_user(
     access_token = await get_user_token(client, username, password)
 
     # Connect via WebSocket (should succeed)
-    socket_url = f"http://localhost:8000"
+    # ✅ FIX: Use http://test (in-memory transport)
+    socket_url = "http://test"
 
     try:
         await sio_client.connect(
@@ -202,7 +211,7 @@ async def test_fix3_websocket_revalidation_success(
 
     # Get token and connect
     access_token = await get_user_token(client, username, password)
-    socket_url = f"http://localhost:8000"
+    socket_url = "http://test"  # ✅ FIX: Use in-memory transport
 
     await sio_client.connect(
         socket_url,
@@ -247,7 +256,7 @@ async def test_fix3_websocket_revalidation_detects_blacklist(
 
     # Get token and connect
     access_token = await get_user_token(client, username, password)
-    socket_url = f"http://localhost:8000"
+    socket_url = "http://test"  # ✅ FIX: Use in-memory transport
 
     await sio_client.connect(
         socket_url,
@@ -311,7 +320,7 @@ async def test_fix3_force_logout_batch_event(
 
     # Get token and connect
     access_token = await get_user_token(client, username, password)
-    socket_url = f"http://localhost:8000"
+    socket_url = "http://test"  # ✅ FIX: Use in-memory transport
 
     # Setup event listener
     logout_event_received = asyncio.Event()
@@ -386,7 +395,7 @@ async def test_fix3_websocket_end_to_end_security(
 
     # Step 1: Connect WebSocket
     access_token = await get_user_token(client, username, password)
-    socket_url = f"http://localhost:8000"
+    socket_url = "http://test"  # ✅ FIX: Use in-memory transport
 
     await sio_client.connect(
         socket_url,
@@ -467,7 +476,7 @@ async def test_fix3_revalidation_performance(
 
     # Connect
     access_token = await get_user_token(client, username, password)
-    socket_url = f"http://localhost:8000"
+    socket_url = "http://test"  # ✅ FIX: Use in-memory transport
 
     await sio_client.connect(
         socket_url,
