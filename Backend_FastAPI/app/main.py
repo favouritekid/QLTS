@@ -1,8 +1,10 @@
 # app/main.py
 import asyncio  # ✅ V5: Thêm import
 import logging
+import os  # ✅ Import os để check path
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path  # ✅ Import Path để tạo absolute path
 
 import casbin
 import socketio  # ✅ V5: Thêm import
@@ -15,6 +17,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles  # ✅ Import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import ValidationError
 from slowapi import _rate_limit_exceeded_handler
@@ -447,6 +450,18 @@ app.include_router(
     organization.router, prefix="/api/organization", tags=["Organization"]
 )
 app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
+
+# ===============================================================
+# === STATIC FILES ==============================================
+# ===============================================================
+
+# Mount static files directory to serve avatars and other static content
+STATIC_DIR = Path(__file__).parent / "static"
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    log.info(f"✅ Static files mounted at /static from {STATIC_DIR}")
+else:
+    log.warning(f"⚠️ Static directory not found at {STATIC_DIR}")
 
 
 # === ✅ CẢI TIẾN: Vấn đề #4 - Thêm Metrics Endpoint ===
