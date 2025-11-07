@@ -59,6 +59,28 @@ pytestmark = pytest.mark.skipif(
 # ============================================
 
 
+class CookieJarWrapper:
+    """
+    Wrapper for httpx.Cookies to make it compatible with python-engineio.
+
+    ISSUE: python-engineio calls .update_cookies(cookies) method
+    but httpx.Cookies uses .update(cookies) method instead.
+
+    This wrapper provides the method that engineio expects.
+    """
+
+    def __init__(self, httpx_cookies):
+        self._cookies = httpx_cookies
+
+    def update_cookies(self, cookies):
+        """Map engineio's update_cookies to httpx's update method"""
+        return self._cookies.update(cookies)
+
+    def __getattr__(self, name):
+        """Delegate all other attributes/methods to the underlying httpx cookies"""
+        return getattr(self._cookies, name)
+
+
 class HttpxClientWrapper:
     """
     Wrapper for httpx.AsyncClient to make it compatible with python-engineio.
@@ -68,8 +90,10 @@ class HttpxClientWrapper:
        → httpx.AsyncClient uses `is_closed` property instead
     2. python-engineio checks for `http_session.cookie_jar` attribute
        → httpx.AsyncClient uses `cookies` property instead
+    3. python-engineio calls `cookie_jar.update_cookies(cookies)` method
+       → httpx.Cookies uses `update(cookies)` method instead
 
-    This wrapper provides the attributes that engineio expects while
+    This wrapper provides the attributes and methods that engineio expects while
     delegating all other operations to the underlying httpx client.
 
     Reference: https://github.com/miguelgrinberg/python-engineio/issues/XXX
@@ -77,6 +101,8 @@ class HttpxClientWrapper:
 
     def __init__(self, httpx_client):
         self._client = httpx_client
+        # Wrap cookies to provide update_cookies method
+        self._cookie_jar_wrapper = CookieJarWrapper(httpx_client.cookies)
 
     @property
     def closed(self):
@@ -85,8 +111,8 @@ class HttpxClientWrapper:
 
     @property
     def cookie_jar(self):
-        """Map httpx's cookies to engineio's expected cookie_jar attribute"""
-        return self._client.cookies
+        """Return wrapped cookies that provide update_cookies method"""
+        return self._cookie_jar_wrapper
 
     def __getattr__(self, name):
         """Delegate all other attributes/methods to the underlying httpx client"""
