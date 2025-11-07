@@ -154,6 +154,21 @@ async def lifespan(app: FastAPI):
             await enforcer.add_policy("role:officer", "/api/profile", "PUT")
             await enforcer.add_policy("role:manager", "/api/profile", "GET")
             await enforcer.add_policy("role:manager", "/api/profile", "PUT")
+
+            # Notification policies - all authenticated users can access their own notifications
+            await enforcer.add_policy("role:user", "/api/notifications", "GET")
+            await enforcer.add_policy("role:user", "/api/notifications/mark-as-read", "POST")
+            await enforcer.add_policy("role:user", "/api/notifications/mark-all-as-read", "POST")
+            await enforcer.add_policy("role:user", "/api/notifications/{notification_id}", "DELETE")
+            await enforcer.add_policy("role:officer", "/api/notifications", "GET")
+            await enforcer.add_policy("role:officer", "/api/notifications/mark-as-read", "POST")
+            await enforcer.add_policy("role:officer", "/api/notifications/mark-all-as-read", "POST")
+            await enforcer.add_policy("role:officer", "/api/notifications/{notification_id}", "DELETE")
+            await enforcer.add_policy("role:manager", "/api/notifications", "GET")
+            await enforcer.add_policy("role:manager", "/api/notifications/mark-as-read", "POST")
+            await enforcer.add_policy("role:manager", "/api/notifications/mark-all-as-read", "POST")
+            await enforcer.add_policy("role:manager", "/api/notifications/{notification_id}", "DELETE")
+
             log.info("Default P policies added.")
 
     except Exception as e:

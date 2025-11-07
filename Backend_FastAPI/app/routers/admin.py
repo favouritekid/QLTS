@@ -411,17 +411,44 @@ async def update_existing_user(
 
     # Send notification to user if admin updated their info
     if current_admin.id != updated_user.id and changes:
-        change_description = ", ".join([f"{key}" for key in changes.keys()])
-        notification = await notification_service.create_notification(
-            db=db,
-            user_id=updated_user.id,
-            title="Your profile has been updated",
-            message=f"An administrator has updated your profile. Changed: {change_description}",
-            notification_type="admin_update",
-            link=f"/profile",
+        log.info(
+            "Admin updated user info, creating notification",
+            admin_id=current_admin.id,
+            target_user_id=updated_user.id,
+            changes=list(changes.keys()),
         )
-        # Send real-time notification via WebSocket
-        await send_realtime_notification(notification)
+        change_description = ", ".join([f"{key}" for key in changes.keys()])
+        try:
+            notification = await notification_service.create_notification(
+                db=db,
+                user_id=updated_user.id,
+                title="Your profile has been updated",
+                message=f"An administrator has updated your profile. Changed: {change_description}",
+                notification_type="admin_update",
+                link=f"/profile",
+            )
+            log.info(
+                "Notification created successfully",
+                notification_id=notification.id,
+                target_user_id=updated_user.id,
+            )
+            # Send real-time notification via WebSocket
+            await send_realtime_notification(notification)
+        except Exception as e:
+            log.error(
+                "Failed to create/send notification",
+                admin_id=current_admin.id,
+                target_user_id=updated_user.id,
+                error=str(e),
+            )
+    else:
+        log.debug(
+            "Skipping notification",
+            admin_id=current_admin.id,
+            target_user_id=updated_user.id,
+            same_user=current_admin.id == updated_user.id,
+            has_changes=bool(changes),
+        )
 
     return updated_user
 

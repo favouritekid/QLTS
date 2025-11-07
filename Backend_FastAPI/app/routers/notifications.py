@@ -1,6 +1,7 @@
 # app/routers/notifications.py
 from typing import List
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,6 +10,7 @@ from ..core import deps
 from ..services import notification_service
 from ..socket_manager import sio
 
+log = structlog.get_logger(__name__)
 router = APIRouter(tags=["Notifications"])
 PermissionDep = Depends(deps.check_permission)
 
@@ -97,19 +99,40 @@ async def send_realtime_notification(
 ):
     """Send notification to user via WebSocket."""
     try:
+        room_name = f"user_room_{notification.user_id}"
+
+        notification_data = {
+            "id": notification.id,
+            "user_id": notification.user_id,
+            "type": notification.type,
+            "title": notification.title,
+            "message": notification.message,
+            "link": notification.link,
+            "data": notification.data,
+            "is_read": notification.is_read,
+            "created_at": notification.created_at.isoformat(),
+            "read_at": notification.read_at.isoformat() if notification.read_at else None,
+        }
+
         # Emit to specific user's room
         await sio.emit(
             "notification",
-            {
-                "id": notification.id,
-                "type": notification.type,
-                "title": notification.title,
-                "message": notification.message,
-                "link": notification.link,
-                "created_at": notification.created_at.isoformat(),
-            },
-            room=f"user_{notification.user_id}",
+            notification_data,
+            room=room_name,
+        )
+
+        log.info(
+            "Real-time notification sent via WebSocket",
+            notification_id=notification.id,
+            user_id=notification.user_id,
+            room=room_name,
+            type=notification.type,
         )
     except Exception as e:
         # Log error but don't fail the request
-        print(f"Failed to send real-time notification: {e}")
+        log.error(
+            "Failed to send real-time notification",
+            notification_id=notification.id,
+            user_id=notification.user_id,
+            error=str(e),
+        )
