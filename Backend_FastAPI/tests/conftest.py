@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 import pytest_asyncio
 import redis.asyncio as redis
+import fakeredis.aioredis
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import insert, select, text
 
@@ -25,6 +26,38 @@ app_env_check = os.getenv("APP_ENV")
 print(f"INFO [conftest.py]: Verified os.getenv('APP_ENV') = {app_env_check}")
 if app_env_check != "test":
     pytest.fail("Failed to set APP_ENV=test in os.environ early in conftest.py")
+
+# --- PATCH REDIS BEFORE APP IMPORT ---
+print("INFO [conftest.py]: Patching Redis with FakeRedis before app import...")
+import redis
+import redis.asyncio
+import fakeredis
+import fakeredis.aioredis
+
+# Create a shared FakeServer to enable LUA script support
+_fake_server = fakeredis.FakeServer()
+print(f"INFO [conftest.py]: Created shared FakeServer for LUA script support")
+
+# Save originals
+_original_from_url_async = redis.asyncio.from_url
+_original_from_url_sync = redis.from_url
+
+# Create patch functions
+def _fake_redis_from_url_async(*args, **kwargs):
+    print(f"INFO [conftest.py]: FakeRedis (async) intercepted from_url call")
+    decode_responses = kwargs.get('decode_responses', True)
+    return fakeredis.aioredis.FakeRedis(server=_fake_server, decode_responses=decode_responses)
+
+def _fake_redis_from_url_sync(*args, **kwargs):
+    print(f"INFO [conftest.py]: FakeRedis (sync) intercepted from_url call")
+    decode_responses = kwargs.get('decode_responses', True)
+    # Use shared server for LUA script support
+    return fakeredis.FakeStrictRedis(server=_fake_server, decode_responses=decode_responses)
+
+# Patch them globally
+redis.asyncio.from_url = _fake_redis_from_url_async
+redis.from_url = _fake_redis_from_url_sync
+print("INFO [conftest.py]: Redis patched with FakeRedis successfully")
 
 # --- IMPORT APP COMPONENTS ---
 print("INFO [conftest.py]: Importing app components...")
@@ -233,13 +266,15 @@ async def setup_test_database(manage_engine):
 
 @pytest_asyncio.fixture(scope="function")
 async def test_redis_client():
-    log.info(f"--- [FUNCTION SETUP] Connecting to Test Redis: {settings.REDIS_URL} ---")
-    client = redis.from_url(settings.REDIS_URL, decode_responses=True)
+    log.info("--- [FUNCTION SETUP] Creating FakeRedis client for testing ---")
+    # Use FakeRedis instead of real Redis for testing
+    client = fakeredis.aioredis.FakeRedis(decode_responses=True)
     try:
         await client.ping()
+        log.info("--- [FUNCTION SETUP] FakeRedis client created successfully ---")
         yield client
     finally:
-        log.info("--- [FUNCTION TEARDOWN] Closing Test Redis connection ---")
+        log.info("--- [FUNCTION TEARDOWN] Closing FakeRedis connection ---")
         await client.aclose()
 
 
