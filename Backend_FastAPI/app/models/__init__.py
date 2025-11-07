@@ -7,6 +7,7 @@ from .config import LeadScoringConfig, OfficerAssignmentConfig, SkillRequirement
 from .lead import Application, AssignmentLog, Consultation, CRMInteraction, Lead
 from .lead_history import LeadStatusHistory
 from .notification import Notification
+from .notification_preference import NotificationPreference
 from .organization import Major, OrganizationUnit
 from .pipeline import ConsultationStatus, PipelineStage
 from .user import User

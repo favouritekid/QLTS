@@ -109,3 +109,12 @@ from .notification import (
     NotificationsPage,
     MarkAsReadRequest,
 )
+
+# --- Từ notification_preference.py ---
+from .notification_preference import (
+    NotificationPreference,
+    NotificationPreferenceBase,
+    NotificationPreferenceCreate,
+    NotificationPreferenceUpdate,
+    NotificationTypePreference,
+)
