@@ -55,6 +55,37 @@ pytestmark = pytest.mark.skipif(
 
 
 # ============================================
+# COMPATIBILITY WRAPPER FOR HTTPX + ENGINEIO
+# ============================================
+
+
+class HttpxClientWrapper:
+    """
+    Wrapper for httpx.AsyncClient to make it compatible with python-engineio.
+
+    ISSUE: python-engineio checks for `http_session.closed` attribute,
+    but httpx.AsyncClient uses `is_closed` property instead.
+
+    This wrapper provides the `.closed` property that engineio expects
+    while delegating all other operations to the underlying httpx client.
+
+    Reference: https://github.com/miguelgrinberg/python-engineio/issues/XXX
+    """
+
+    def __init__(self, httpx_client):
+        self._client = httpx_client
+
+    @property
+    def closed(self):
+        """Map httpx's is_closed to engineio's expected closed attribute"""
+        return self._client.is_closed
+
+    def __getattr__(self, name):
+        """Delegate all other attributes/methods to the underlying httpx client"""
+        return getattr(self._client, name)
+
+
+# ============================================
 # FIXTURES
 # ============================================
 
@@ -67,12 +98,16 @@ async def sio_client(client):
     IMPORTANT: Uses httpx.AsyncClient's http_session to connect to in-memory test app.
     This allows socketio client to communicate with the same FastAPI app instance
     that httpx client uses, avoiding "connection refused" errors.
+
+    The wrapper is needed because python-engineio expects http_session.closed attribute,
+    but httpx.AsyncClient uses is_closed property.
     """
     if not SOCKETIO_AVAILABLE:
         pytest.skip("socketio not available")
 
-    # ✅ FIX: Use httpx client's session for in-memory transport
-    sio = socketio.AsyncClient(http_session=client)
+    # ✅ FIX: Wrap httpx client to add .closed compatibility for engineio
+    wrapped_client = HttpxClientWrapper(client)
+    sio = socketio.AsyncClient(http_session=wrapped_client)
     yield sio
 
     # Cleanup
