@@ -133,10 +133,20 @@ export function useAdminUpdateUser(userId: number) {
       );
       return response.data;
     },
-    onSuccess: () => {
+    onSuccess: (updatedUser) => {
       toast.success("User updated successfully!");
-      queryClient.invalidateQueries({ queryKey: adminUsersKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: adminUsersKeys.detail(userId) });
+
+      // Force refetch to get fresh data including new avatar URL
+      queryClient.invalidateQueries({ queryKey: adminUsersKeys.lists(), refetchType: "active" });
+      queryClient.invalidateQueries({ queryKey: adminUsersKeys.detail(userId), refetchType: "active" });
+
+      // If updated user is the current user, update auth query to refresh sidebar avatar
+      const currentUser = queryClient.getQueryData<User>(["auth", "me"]);
+      if (currentUser && currentUser.id === updatedUser.id) {
+        queryClient.setQueryData(["auth", "me"], updatedUser);
+        // Force refetch auth query to ensure fresh avatar
+        queryClient.invalidateQueries({ queryKey: ["auth", "me"], refetchType: "active" });
+      }
     },
     onError: (error) => {
       const message = error.response?.data?.detail || "Failed to update user";
