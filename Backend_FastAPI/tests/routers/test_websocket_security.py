@@ -63,11 +63,14 @@ class HttpxClientWrapper:
     """
     Wrapper for httpx.AsyncClient to make it compatible with python-engineio.
 
-    ISSUE: python-engineio checks for `http_session.closed` attribute,
-    but httpx.AsyncClient uses `is_closed` property instead.
+    COMPATIBILITY ISSUES:
+    1. python-engineio checks for `http_session.closed` attribute
+       → httpx.AsyncClient uses `is_closed` property instead
+    2. python-engineio checks for `http_session.cookie_jar` attribute
+       → httpx.AsyncClient uses `cookies` property instead
 
-    This wrapper provides the `.closed` property that engineio expects
-    while delegating all other operations to the underlying httpx client.
+    This wrapper provides the attributes that engineio expects while
+    delegating all other operations to the underlying httpx client.
 
     Reference: https://github.com/miguelgrinberg/python-engineio/issues/XXX
     """
@@ -79,6 +82,11 @@ class HttpxClientWrapper:
     def closed(self):
         """Map httpx's is_closed to engineio's expected closed attribute"""
         return self._client.is_closed
+
+    @property
+    def cookie_jar(self):
+        """Map httpx's cookies to engineio's expected cookie_jar attribute"""
+        return self._client.cookies
 
     def __getattr__(self, name):
         """Delegate all other attributes/methods to the underlying httpx client"""
