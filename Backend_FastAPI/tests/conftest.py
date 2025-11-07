@@ -240,8 +240,87 @@ async def manage_engine():
     log.info("--- [FUNCTION TEARDOWN] Test engine disposed ---")
 
 
+def _verify_test_database_safety():
+    """
+    🚨 CRITICAL SAFETY CHECK 🚨
+
+    Verify we're using a safe test database before allowing DROP operations.
+    This prevents accidentally dropping production database tables.
+
+    Safety criteria:
+    1. APP_ENV must be "test"
+    2. DATABASE_URL must meet ONE of these conditions:
+       - Contains ":memory:" (SQLite in-memory)
+       - Database name contains "test" (case-insensitive)
+       - Database name ends with "_test"
+
+    Production database indicators (BLOCKED):
+    - Database names: production, prod, main, qlts_dev, qlts (without _test)
+    """
+    # Check 1: APP_ENV must be "test"
+    current_env = settings.APP_ENV
+    if current_env != "test":
+        pytest.fail(
+            f"🚨 SAFETY CHECK FAILED! 🚨\n"
+            f"APP_ENV is '{current_env}', not 'test'.\n"
+            f"Tests will NOT run to prevent production database deletion!\n"
+            f"Set APP_ENV=test before running tests."
+        )
+
+    # Check 2: DATABASE_URL must be safe
+    db_url = settings.DATABASE_URL
+    db_url_lower = db_url.lower()
+
+    # Safe patterns
+    is_memory = ":memory:" in db_url_lower
+    has_test_in_name = "test" in db_url_lower or "_test" in db_url_lower
+
+    # Dangerous patterns (production database indicators)
+    dangerous_patterns = [
+        "/qlts_dev",        # Development database
+        "/qlts_prod",       # Production database
+        "/qlts_production", # Production database
+        "/qlts/",           # Production database (without suffix)
+        "/qlts ",           # Production database (space after)
+        "/production",      # Generic production
+        "/prod/",           # Generic production
+        "/main/",           # Main database
+    ]
+
+    is_dangerous = any(pattern in db_url_lower for pattern in dangerous_patterns)
+
+    # Final decision
+    if is_dangerous and not has_test_in_name:
+        pytest.fail(
+            f"🚨 SAFETY CHECK FAILED! 🚨\n"
+            f"DATABASE_URL appears to be a PRODUCTION database:\n"
+            f"  {db_url}\n\n"
+            f"Dangerous patterns detected: {[p for p in dangerous_patterns if p in db_url_lower]}\n\n"
+            f"Tests will NOT run to prevent production database deletion!\n\n"
+            f"For safe testing, use:\n"
+            f"  - ':memory:' for SQLite in-memory\n"
+            f"  - Database name containing 'test' (e.g., qlts_test, your_test_db_name)\n"
+        )
+
+    if not (is_memory or has_test_in_name):
+        pytest.fail(
+            f"🚨 SAFETY CHECK FAILED! 🚨\n"
+            f"DATABASE_URL does not appear to be a test database:\n"
+            f"  {db_url}\n\n"
+            f"Tests will NOT run to prevent production database deletion!\n\n"
+            f"For safe testing, use:\n"
+            f"  - ':memory:' for SQLite in-memory\n"
+            f"  - Database name containing 'test' (e.g., qlts_test, your_test_db_name)\n"
+        )
+
+    log.info(f"✅ Safety check passed: APP_ENV={current_env}, DB_URL={db_url[:60]}...")
+
+
 @pytest_asyncio.fixture(scope="function", autouse=True)
 async def setup_test_database(manage_engine):
+    # 🚨 CRITICAL: Verify safety before ANY database operations!
+    _verify_test_database_safety()
+
     log.info(
         "--- [FUNCTION SETUP] Setting up test database (dropping and creating all tables) ---"
     )
