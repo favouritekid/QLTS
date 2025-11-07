@@ -92,6 +92,8 @@ class HttpxClientWrapper:
        → httpx.AsyncClient uses `cookies` property instead
     3. python-engineio calls `cookie_jar.update_cookies(cookies)` method
        → httpx.Cookies uses `update(cookies)` method instead
+    4. python-engineio calls `http_session.ws_connect()` method
+       → httpx.AsyncClient uses `websocket_connect()` method instead
 
     This wrapper provides the attributes and methods that engineio expects while
     delegating all other operations to the underlying httpx client.
@@ -113,6 +115,10 @@ class HttpxClientWrapper:
     def cookie_jar(self):
         """Return wrapped cookies that provide update_cookies method"""
         return self._cookie_jar_wrapper
+
+    async def ws_connect(self, *args, **kwargs):
+        """Map engineio's ws_connect to httpx's websocket_connect method"""
+        return await self._client.websocket_connect(*args, **kwargs)
 
     def __getattr__(self, name):
         """Delegate all other attributes/methods to the underlying httpx client"""
