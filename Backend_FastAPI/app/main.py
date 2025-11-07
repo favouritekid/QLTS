@@ -36,6 +36,7 @@ from .routers import (
     admin,
     auth,
     leads,
+    notifications,
     organization,
     pipeline,
     profile,
@@ -444,6 +445,7 @@ app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(profile.router, prefix="/api/profile", tags=["Profile"])
 app.include_router(users.router, prefix="/api/users", tags=["Users"])
 app.include_router(sessions.router, prefix="/api", tags=["Sessions"])
+app.include_router(notifications.router, prefix="/api/notifications", tags=["Notifications"])
 app.include_router(leads.router, prefix="/api/leads", tags=["Leads"])
 app.include_router(pipeline.router, prefix="/api/pipeline", tags=["Pipeline"])
 app.include_router(

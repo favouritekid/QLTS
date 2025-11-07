@@ -28,7 +28,8 @@ from app.config import settings
 from .. import database, models, schemas, services
 from ..celery_utils import process_automatic_lead_assignment_task
 from ..core import deps
-from ..services import activity_service
+from ..services import activity_service, notification_service
+from ..routers.notifications import send_realtime_notification
 from ..schemas.permissions import PolicyCreate, RoleAssignment
 from ..services import (
     config_service,
@@ -407,6 +408,20 @@ async def update_existing_user(
         description=f"Admin updated user: {updated_user.username}",
         changes=changes if changes else None,
     )
+
+    # Send notification to user if admin updated their info
+    if current_admin.id != updated_user.id and changes:
+        change_description = ", ".join([f"{key}" for key in changes.keys()])
+        notification = await notification_service.create_notification(
+            db=db,
+            user_id=updated_user.id,
+            title="Your profile has been updated",
+            message=f"An administrator has updated your profile. Changed: {change_description}",
+            notification_type="admin_update",
+            link=f"/profile",
+        )
+        # Send real-time notification via WebSocket
+        await send_realtime_notification(notification)
 
     return updated_user
 

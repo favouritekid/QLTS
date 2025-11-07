@@ -100,3 +100,12 @@ from .user_activity import (
     ActivityLogsPage,
     UserStatistics,
 )
+
+# --- Từ notification.py ---
+from .notification import (
+    Notification,
+    NotificationBase,
+    NotificationCreate,
+    NotificationsPage,
+    MarkAsReadRequest,
+)

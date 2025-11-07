@@ -1,12 +1,13 @@
 # app/routers/profile.py
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import EmailStr, TypeAdapter, ValidationError  # <-- BỔ SUNG TypeAdapter
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, models, schemas, services
 from ..core import deps
+from ..services import activity_service
 
 router = APIRouter(tags=["Profile"])
 PermissionDep = Depends(deps.check_permission)
@@ -26,6 +27,7 @@ async def read_current_user_profile(
 # === HÀM ĐÃ ĐƯỢỢC CẬP NHẬT ===
 @router.put("", response_model=schemas.User)
 async def update_current_user_profile(
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
     full_name: Optional[str] = Form(None),
@@ -69,9 +71,31 @@ async def update_current_user_profile(
             )
     # --- KẾT THÚC SỬA LỖI ---
 
+    # Track changes for activity log
+    changes = {}
+    if update_dict:
+        for key, new_value in update_dict.items():
+            old_value = getattr(current_user, key, None)
+            if old_value != new_value:
+                changes[key] = {"old": str(old_value), "new": str(new_value)}
+
     update_data = schemas.UserUpdate(**update_dict)
 
     updated_user = await services.user_service.update_profile(
         db, db_user=current_user, user_in=update_data, avatar_file=avatar
     )
+
+    # Log activity
+    await activity_service.log_activity_from_request(
+        db=db,
+        request=request,
+        action="update_profile",
+        resource_type="user",
+        actor_id=current_user.id,
+        target_user_id=current_user.id,
+        resource_id=current_user.id,
+        description=f"User updated their own profile: {current_user.username}",
+        changes=changes if changes else None,
+    )
+
     return updated_user
