@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { Bell, Check, CheckCheck, Trash2, X } from "lucide-react";
+import { Bell, Check, CheckCheck, X } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import Link from "next/link";
 
@@ -23,16 +23,15 @@ import {
   useNotifications,
   useMarkAsRead,
   useMarkAllAsRead,
-  useDeleteNotification,
 } from "@/hooks/useNotifications";
 import type { Notification } from "@/types/api.types";
 
 export function NotificationDropdown() {
   const [isOpen, setIsOpen] = useState(false);
-  const { data, isLoading } = useNotifications({ page_size: 10 });
+  // Only fetch unread notifications for the dropdown
+  const { data, isLoading } = useNotifications({ page_size: 10, unread_only: true });
   const markAsRead = useMarkAsRead();
   const markAllAsRead = useMarkAllAsRead();
-  const deleteNotification = useDeleteNotification();
 
   const notifications = data?.notifications || [];
   const unreadCount = data?.unread_count || 0;
@@ -45,12 +44,6 @@ export function NotificationDropdown() {
 
   const handleMarkAllAsRead = () => {
     markAllAsRead.mutate();
-  };
-
-  const handleDelete = (id: number, e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    deleteNotification.mutate(id);
   };
 
   const getNotificationIcon = (type: Notification["type"]) => {
@@ -174,23 +167,12 @@ export function NotificationDropdown() {
                       <p className="text-muted-foreground text-xs leading-snug">
                         {notification.message}
                       </p>
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-muted-foreground text-xs">
-                          {formatDistanceToNow(
-                            new Date(notification.created_at),
-                            { addSuffix: true }
-                          )}
-                        </p>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-6 w-6 shrink-0"
-                          onClick={(e) => handleDelete(notification.id, e)}
-                        >
-                          <Trash2 className="h-3 w-3" />
-                          <span className="sr-only">Delete</span>
-                        </Button>
-                      </div>
+                      <p className="text-muted-foreground text-xs mt-1">
+                        {formatDistanceToNow(
+                          new Date(notification.created_at),
+                          { addSuffix: true }
+                        )}
+                      </p>
                     </div>
                   </div>
                 );

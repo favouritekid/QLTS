@@ -57,7 +57,11 @@ export function useActivityLogs(params: UseActivityLogsParams = {}) {
 // 📈 USER STATISTICS QUERY
 // ============================================
 
-export function useUserStatistics() {
+interface UseUserStatisticsOptions {
+  enabled?: boolean;
+}
+
+export function useUserStatistics(options: UseUserStatisticsOptions = {}) {
   return useQuery<UserStatistics, AxiosError<ApiErrorResponse>>({
     queryKey: activityLogsKeys.statistics(),
     queryFn: async () => {
@@ -67,5 +71,6 @@ export function useUserStatistics() {
       return response.data;
     },
     staleTime: 60000, // 1 minute
+    enabled: options.enabled !== false, // Default to true, but allow disabling
   });
 }

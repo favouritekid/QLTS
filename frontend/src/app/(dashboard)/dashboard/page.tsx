@@ -14,9 +14,13 @@ import { Users, TrendingUp, DollarSign, Activity, UserCheck, UserX, UserPlus, Sh
 
 export default function DashboardPage() {
   const { user, logout, isLoading } = useAuth();
-  const { data: stats, isLoading: isLoadingStats } = useUserStatistics();
 
   const isAdmin = user?.role === "admin" || user?.role === "manager";
+
+  // Only fetch statistics if user is admin or manager
+  const { data: stats, isLoading: isLoadingStats } = useUserStatistics({
+    enabled: isAdmin, // Only enable query for admin/manager
+  });
 
   if (isLoading) {
     return (
