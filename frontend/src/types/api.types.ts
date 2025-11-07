@@ -75,3 +75,46 @@ export interface UserUpdateProfile {
   email?: string;
   avatar?: File;
 }
+
+// Admin - User Management Types
+export interface UsersPage {
+  total_count: number;
+  users: User[];
+}
+
+export interface AdminUserCreate {
+  username: string;
+  email: string;
+  password: string;
+  full_name?: string | null;
+  role?: "user" | "admin" | "manager" | "officer";
+  status?: "active" | "pending" | "banned";
+  avatar?: File;
+}
+
+export interface AdminUserUpdate {
+  full_name?: string | null;
+  email?: string;
+  phone_number?: string | null;
+  role?: "user" | "admin" | "manager" | "officer";
+  status?: "active" | "pending" | "banned";
+  avatar?: File;
+  skills?: string[];
+  max_capacity?: number;
+}
+
+export interface AdminSetPassword {
+  new_password: string;
+}
+
+// Admin - Permissions Types
+export interface RoleAssignment {
+  user_id: number;
+  role: string;
+}
+
+export interface PolicyCreate {
+  subject: string;
+  object: string;
+  action: string;
+}

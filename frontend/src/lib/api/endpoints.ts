@@ -28,4 +28,18 @@ export const API_ENDPOINTS = {
     GET: "/api/profile",
     UPDATE: "/api/profile",
   },
+  ADMIN: {
+    USERS: {
+      LIST: "/api/admin/users",
+      CREATE: "/api/admin/users",
+      DETAIL: (id: number) => `/api/admin/users/${id}`,
+      UPDATE: (id: number) => `/api/admin/users/${id}`,
+      DELETE: (id: number) => `/api/admin/users/${id}`,
+      SET_PASSWORD: (id: number) => `/api/admin/users/${id}/set-password`,
+    },
+    PERMISSIONS: {
+      POLICIES: "/api/admin/policies",
+      ASSIGN_ROLE: "/api/admin/assign-role",
+    },
+  },
 } as const;
