@@ -21,7 +21,6 @@ import {
   getPaginationRowModel,
   ColumnDef,
   flexRender,
-  Row,
 } from "@tanstack/react-table";
 
 import { Button } from "@/components/ui/button";
