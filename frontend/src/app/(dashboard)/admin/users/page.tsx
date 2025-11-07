@@ -64,8 +64,10 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-import { useAdminUsersList, useAdminDeleteUser } from "@/hooks/useAdminUsers";
+import { useAdminUsersList, useAdminDeleteUser, useAdminBulkAction } from "@/hooks/useAdminUsers";
 import { UserDialog } from "@/components/admin/UserDialog";
+import { SetPasswordDialog } from "@/components/admin/SetPasswordDialog";
+import { ManageRolesDialog } from "@/components/admin/ManageRolesDialog";
 import type { User } from "@/types/api.types";
 
 export default function AdminUsersPage() {
@@ -78,6 +80,11 @@ export default function AdminUsersPage() {
   const [userDialogOpen, setUserDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<"create" | "edit">("create");
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
+  const [setPasswordDialogOpen, setSetPasswordDialogOpen] = useState(false);
+  const [setPasswordUser, setSetPasswordUser] = useState<User | null>(null);
+  const [manageRolesDialogOpen, setManageRolesDialogOpen] = useState(false);
+  const [manageRolesUser, setManageRolesUser] = useState<User | null>(null);
+  const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
 
   // Fetch users with filters
   const { data, isLoading, error } = useAdminUsersList({
@@ -89,6 +96,7 @@ export default function AdminUsersPage() {
   });
 
   const deleteUserMutation = useAdminDeleteUser();
+  const bulkActionMutation = useAdminBulkAction();
 
   // Table columns definition
   const columns = useMemo<ColumnDef<User>[]>(
@@ -181,11 +189,21 @@ export default function AdminUsersPage() {
                   <Edit className="mr-2 h-4 w-4" />
                   Edit User
                 </DropdownMenuItem>
-                <DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
+                    setSetPasswordUser(user);
+                    setSetPasswordDialogOpen(true);
+                  }}
+                >
                   <Key className="mr-2 h-4 w-4" />
                   Set Password
                 </DropdownMenuItem>
-                <DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
+                    setManageRolesUser(user);
+                    setManageRolesDialogOpen(true);
+                  }}
+                >
                   <Shield className="mr-2 h-4 w-4" />
                   Manage Roles
                 </DropdownMenuItem>
@@ -242,8 +260,25 @@ export default function AdminUsersPage() {
 
   const handleBulkDelete = async () => {
     const selectedRows = table.getFilteredSelectedRowModel().rows;
-    // TODO: Implement bulk delete
-    console.log("Bulk delete:", selectedRows.map((row) => row.original.id));
+    const userIds = selectedRows.map((row) => row.original.id);
+
+    if (userIds.length === 0) return;
+
+    await bulkActionMutation.mutateAsync({
+      action: "delete",
+      user_ids: userIds,
+    });
+
+    // Clear selection and close dialog
+    setRowSelection({});
+    setBulkDeleteDialogOpen(false);
+  };
+
+  const handleOpenBulkDelete = () => {
+    const selectedRows = table.getFilteredSelectedRowModel().rows;
+    if (selectedRows.length > 0) {
+      setBulkDeleteDialogOpen(true);
+    }
   };
 
   const handleExportCSV = () => {
@@ -327,7 +362,7 @@ export default function AdminUsersPage() {
                 <Square className="mr-2 h-4 w-4" />
                 Deselect All
               </Button>
-              <Button variant="destructive" size="sm" onClick={handleBulkDelete}>
+              <Button variant="destructive" size="sm" onClick={handleOpenBulkDelete}>
                 <Trash2 className="mr-2 h-4 w-4" />
                 Delete Selected
               </Button>
@@ -466,6 +501,24 @@ export default function AdminUsersPage() {
         mode={dialogMode}
       />
 
+      {/* Set Password Dialog */}
+      {setPasswordUser && (
+        <SetPasswordDialog
+          open={setPasswordDialogOpen}
+          onOpenChange={setSetPasswordDialogOpen}
+          user={setPasswordUser}
+        />
+      )}
+
+      {/* Manage Roles Dialog */}
+      {manageRolesUser && (
+        <ManageRolesDialog
+          open={manageRolesDialogOpen}
+          onOpenChange={setManageRolesDialogOpen}
+          user={manageRolesUser}
+        />
+      )}
+
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={!!userToDelete} onOpenChange={() => setUserToDelete(null)}>
         <AlertDialogContent>
@@ -483,6 +536,29 @@ export default function AdminUsersPage() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Bulk Delete Confirmation Dialog */}
+      <AlertDialog open={bulkDeleteDialogOpen} onOpenChange={setBulkDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Multiple Users?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete <strong>{selectedCount} user(s)</strong>. This action
+              cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleBulkDelete}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={bulkActionMutation.isPending}
+            >
+              {bulkActionMutation.isPending ? "Deleting..." : "Delete All"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

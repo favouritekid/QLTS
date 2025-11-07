@@ -10,6 +10,7 @@ import type {
   AdminUserUpdate,
   AdminSetPassword,
   RoleAssignment,
+  BulkAction,
   ApiErrorResponse,
 } from "@/types/api.types";
 import { AxiosError } from "axios";
@@ -223,6 +224,32 @@ export function useAdminRemoveRole() {
     onError: (error) => {
       const message = error.response?.data?.detail || "Failed to remove role";
       toast.error(typeof message === "string" ? message : "Failed to remove role");
+    },
+  });
+}
+
+// ============================================
+// 📦 BULK ACTION MUTATION
+// ============================================
+
+export function useAdminBulkAction() {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ detail: string }, AxiosError<ApiErrorResponse>, BulkAction>({
+    mutationFn: async (data) => {
+      const response = await api.post<{ detail: string }>(
+        API_ENDPOINTS.ADMIN.USERS.BULK_ACTION,
+        data
+      );
+      return response.data;
+    },
+    onSuccess: (data) => {
+      toast.success(data.detail || "Bulk action completed successfully!");
+      queryClient.invalidateQueries({ queryKey: adminUsersKeys.lists() });
+    },
+    onError: (error) => {
+      const message = error.response?.data?.detail || "Failed to perform bulk action";
+      toast.error(typeof message === "string" ? message : "Failed to perform bulk action");
     },
   });
 }

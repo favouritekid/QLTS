@@ -118,3 +118,21 @@ export interface PolicyCreate {
   object: string;
   action: string;
 }
+
+export interface BulkAction {
+  action: "delete" | "change_status";
+  user_ids: number[];
+  status?: "active" | "pending" | "banned";
+}
+
+// Activity Log Types
+export interface ActivityLog {
+  id: number;
+  user_id: number;
+  action: string;
+  resource: string;
+  details?: string | null;
+  ip_address?: string | null;
+  created_at: string;
+  user?: User;
+}

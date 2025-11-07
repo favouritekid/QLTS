@@ -36,10 +36,12 @@ export const API_ENDPOINTS = {
       UPDATE: (id: number) => `/api/admin/users/${id}`,
       DELETE: (id: number) => `/api/admin/users/${id}`,
       SET_PASSWORD: (id: number) => `/api/admin/users/${id}/set-password`,
+      BULK_ACTION: "/api/admin/users/bulk-action",
     },
     PERMISSIONS: {
       POLICIES: "/api/admin/policies",
       ASSIGN_ROLE: "/api/admin/assign-role",
+      REMOVE_ROLE: "/api/admin/assign-role", // DELETE method
     },
   },
 } as const;
