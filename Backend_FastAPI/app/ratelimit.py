@@ -8,11 +8,14 @@ from .config import settings  # <-- BỔ SUNG IMPORT NÀY
 # In test mode, use in-memory storage to avoid Redis dependency
 if settings.APP_ENV == "test":
     STORAGE_URI = "memory://"
+    # Very high limits for testing to avoid rate limit errors
+    RATE_LIMITS = {"auth": "1000/minute", "default": "10000/hour"}
     print(f"INFO [ratelimit.py]: Using in-memory storage for rate limiting (test mode)")
+    print(f"INFO [ratelimit.py]: Test mode rate limits: {RATE_LIMITS}")
 else:
     STORAGE_URI = settings.REDIS_URL
+    # Production rate limits
+    RATE_LIMITS = {"auth": "5/minute", "default": "100/hour"}
     print(f"INFO [ratelimit.py]: Using Redis storage for rate limiting: {STORAGE_URI}")
 
 limiter = Limiter(key_func=get_remote_address, storage_uri=STORAGE_URI)
-
-RATE_LIMITS = {"auth": "5/minute", "default": "100/hour"}
