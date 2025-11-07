@@ -240,8 +240,45 @@ async def manage_engine():
     log.info("--- [FUNCTION TEARDOWN] Test engine disposed ---")
 
 
+def _verify_test_database_safety():
+    """
+    🚨 CRITICAL SAFETY CHECK 🚨
+
+    Verify we're using a safe test database before allowing DROP operations.
+    This prevents accidentally dropping production database tables.
+    """
+    # Check 1: APP_ENV must be "test"
+    current_env = settings.APP_ENV
+    if current_env != "test":
+        pytest.fail(
+            f"🚨 SAFETY CHECK FAILED! 🚨\n"
+            f"APP_ENV is '{current_env}', not 'test'.\n"
+            f"Tests will NOT run to prevent production database deletion!\n"
+            f"Set APP_ENV=test before running tests."
+        )
+
+    # Check 2: DATABASE_URL must be safe (in-memory or contains 'test')
+    db_url = settings.DATABASE_URL
+    is_memory = ":memory:" in db_url
+    is_test_db = "test" in db_url.lower() or "_test" in db_url.lower()
+
+    if not (is_memory or is_test_db):
+        pytest.fail(
+            f"🚨 SAFETY CHECK FAILED! 🚨\n"
+            f"DATABASE_URL does not appear to be a test database:\n"
+            f"  {db_url}\n"
+            f"Tests will NOT run to prevent production database deletion!\n"
+            f"Use ':memory:' or include 'test' in database name."
+        )
+
+    log.info(f"✅ Safety check passed: APP_ENV={current_env}, DB_URL={db_url[:50]}...")
+
+
 @pytest_asyncio.fixture(scope="function", autouse=True)
 async def setup_test_database(manage_engine):
+    # 🚨 CRITICAL: Verify safety before ANY database operations!
+    _verify_test_database_safety()
+
     log.info(
         "--- [FUNCTION SETUP] Setting up test database (dropping and creating all tables) ---"
     )
