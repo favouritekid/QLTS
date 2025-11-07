@@ -173,6 +173,26 @@ async def remove_role_from_user(
     return {"detail": "Role removed from user."}
 
 
+@router.get(
+    "/users/{user_id}/roles",
+    response_model=List[str],
+    tags=["Admin - Permissions"],
+)
+async def get_user_roles(
+    user_id: int,
+    request: Request,
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Lấy tất cả các roles (grouping policies) của một user."""
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+
+    # Lấy tất cả roles của user
+    user_subject = f"user:{user_id}"
+    roles = await enforcer.get_roles_for_user(user_subject)
+
+    return roles
+
+
 # ===============================================================
 # USER MANAGEMENT ROUTES
 # ===============================================================

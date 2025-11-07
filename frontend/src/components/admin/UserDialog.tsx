@@ -1,7 +1,7 @@
 // src/components/admin/UserDialog.tsx
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -111,6 +111,33 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
           status: "active" as const,
         },
   });
+
+  // Reset form when dialog opens or user changes
+  useEffect(() => {
+    if (open) {
+      if (isEdit && user) {
+        form.reset({
+          full_name: user.full_name || "",
+          email: user.email,
+          phone_number: user.phone_number || "",
+          role: user.role,
+          status: user.status,
+        });
+        setAvatarPreview(null); // Reset avatar preview to show current user avatar
+      } else if (isCreate) {
+        form.reset({
+          username: "",
+          email: "",
+          password: "",
+          full_name: "",
+          role: "user" as const,
+          status: "active" as const,
+        });
+        setAvatarPreview(null);
+        setPasswordValue("");
+      }
+    }
+  }, [open, user, isEdit, isCreate, form]);
 
   // Handle avatar file selection
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Check, X, Plus } from "lucide-react";
+import { Check, X, Plus, Loader2 } from "lucide-react";
 
 import {
   Dialog,
@@ -20,7 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useAdminAssignRole, useAdminRemoveRole } from "@/hooks/useAdminUsers";
+import { useAdminAssignRole, useAdminRemoveRole, useAdminUserRoles } from "@/hooks/useAdminUsers";
 import type { User } from "@/types/api.types";
 
 interface ManageRolesDialogProps {
@@ -38,15 +38,20 @@ const AVAILABLE_ROLES = [
 
 export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialogProps) {
   const [selectedRole, setSelectedRole] = useState<string>("");
-  const [additionalRoles, setAdditionalRoles] = useState<string[]>([]);
 
   const assignRoleMutation = useAdminAssignRole();
   const removeRoleMutation = useAdminRemoveRole();
+
+  // Fetch user roles from API
+  const { data: userRoles, isLoading: isLoadingRoles } = useAdminUserRoles(user.id);
 
   const isPending = assignRoleMutation.isPending || removeRoleMutation.isPending;
 
   // Primary role from user object
   const primaryRole = `role:${user.role}`;
+
+  // Additional roles are all roles except the primary role
+  const additionalRoles = userRoles?.filter(role => role !== primaryRole) || [];
 
   async function handleAssignRole() {
     if (!selectedRole) return;
@@ -56,7 +61,6 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
         user_id: user.id,
         role: selectedRole,
       });
-      setAdditionalRoles((prev) => [...prev, selectedRole]);
       setSelectedRole("");
     } catch {
       // Error handling is done in the mutation hook
@@ -69,7 +73,6 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
         user_id: user.id,
         role: role,
       });
-      setAdditionalRoles((prev) => prev.filter((r) => r !== role));
     } catch {
       // Error handling is done in the mutation hook
     }
@@ -109,7 +112,11 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
           <div>
             <h4 className="text-sm font-medium mb-3">Additional Casbin Roles</h4>
 
-            {additionalRoles.length > 0 ? (
+            {isLoadingRoles ? (
+              <div className="flex items-center justify-center py-4">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : additionalRoles.length > 0 ? (
               <div className="space-y-2 mb-4">
                 {additionalRoles.map((role) => {
                   const roleLabel = AVAILABLE_ROLES.find((r) => r.value === role)?.label || role;

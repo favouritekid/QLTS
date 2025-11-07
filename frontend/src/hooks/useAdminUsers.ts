@@ -22,6 +22,8 @@ export const adminUsersKeys = {
   list: (filters: Record<string, unknown>) => [...adminUsersKeys.lists(), filters] as const,
   details: () => [...adminUsersKeys.all, "detail"] as const,
   detail: (id: number) => [...adminUsersKeys.details(), id] as const,
+  roles: () => [...adminUsersKeys.all, "roles"] as const,
+  userRoles: (id: number) => [...adminUsersKeys.roles(), id] as const,
 };
 
 // ============================================
@@ -47,7 +49,7 @@ export function useAdminUsersList(params: UseAdminUsersListParams = {}) {
       });
       return response.data;
     },
-    staleTime: 30 * 1000, // 30 seconds
+    staleTime: 0, // Always refetch to ensure fresh data including avatars
   });
 }
 
@@ -195,9 +197,10 @@ export function useAdminAssignRole() {
     mutationFn: async (data) => {
       await api.post(API_ENDPOINTS.ADMIN.PERMISSIONS.ASSIGN_ROLE, data);
     },
-    onSuccess: () => {
+    onSuccess: (_, variables) => {
       toast.success("Role assigned successfully!");
       queryClient.invalidateQueries({ queryKey: adminUsersKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: adminUsersKeys.userRoles(variables.user_id) });
     },
     onError: (error) => {
       const message = error.response?.data?.detail || "Failed to assign role";
@@ -217,9 +220,10 @@ export function useAdminRemoveRole() {
     mutationFn: async (data) => {
       await api.delete(API_ENDPOINTS.ADMIN.PERMISSIONS.ASSIGN_ROLE, { data });
     },
-    onSuccess: () => {
+    onSuccess: (_, variables) => {
       toast.success("Role removed successfully!");
       queryClient.invalidateQueries({ queryKey: adminUsersKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: adminUsersKeys.userRoles(variables.user_id) });
     },
     onError: (error) => {
       const message = error.response?.data?.detail || "Failed to remove role";
@@ -251,5 +255,20 @@ export function useAdminBulkAction() {
       const message = error.response?.data?.detail || "Failed to perform bulk action";
       toast.error(typeof message === "string" ? message : "Failed to perform bulk action");
     },
+  });
+}
+
+// ============================================
+// 👔 GET USER ROLES QUERY
+// ============================================
+
+export function useAdminUserRoles(userId: number) {
+  return useQuery<string[], AxiosError<ApiErrorResponse>>({
+    queryKey: adminUsersKeys.userRoles(userId),
+    queryFn: async () => {
+      const response = await api.get<string[]>(API_ENDPOINTS.ADMIN.USERS.ROLES(userId));
+      return response.data;
+    },
+    enabled: !!userId,
   });
 }
