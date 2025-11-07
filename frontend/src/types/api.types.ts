@@ -161,3 +161,27 @@ export interface UserStatistics {
   users_by_role: Record<string, number>;
   recent_activities: UserActivityLog[];
 }
+
+// Notification Types
+export interface Notification {
+  id: number;
+  user_id: number;
+  type: "info" | "success" | "warning" | "error" | "admin_update" | "system";
+  title: string;
+  message: string;
+  link: string | null;
+  data: Record<string, unknown> | null;
+  is_read: boolean;
+  created_at: string;
+  read_at: string | null;
+}
+
+export interface NotificationsPage {
+  total_count: number;
+  unread_count: number;
+  notifications: Notification[];
+}
+
+export interface MarkAsReadRequest {
+  notification_ids: number[];
+}

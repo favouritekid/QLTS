@@ -47,4 +47,10 @@ export const API_ENDPOINTS = {
     ACTIVITY_LOGS: "/api/admin/activity-logs",
     STATISTICS: "/api/admin/statistics",
   },
+  NOTIFICATIONS: {
+    LIST: "/api/notifications",
+    MARK_AS_READ: "/api/notifications/mark-as-read",
+    MARK_ALL_AS_READ: "/api/notifications/mark-all-as-read",
+    DELETE: (id: number) => `/api/notifications/${id}`,
+  },
 } as const;
