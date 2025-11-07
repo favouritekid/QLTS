@@ -93,6 +93,18 @@ async def test_refresh_success(
     assert (
         new_tokens.get("token_type") == "bearer"
     ), "Incorrect token_type in refresh response"
+
+    # ✅ FIX-4: Check user info in response (for auto-refresh mechanism)
+    assert "user" in new_tokens, "Refresh response missing 'user' field (FIX-4)"
+    user_data = new_tokens["user"]
+    assert isinstance(user_data, dict), "User field should be a dictionary"
+    assert user_data.get("id") == user_id, "User ID mismatch in refresh response"
+    assert user_data.get("username") == username, "Username mismatch in refresh response"
+    assert "email" in user_data, "User email missing from refresh response"
+    assert "role" in user_data, "User role missing from refresh response"
+    assert "password_hash" not in user_data, "Password hash should not be exposed"
+    log.info("✅ FIX-4: User info correctly included in refresh response")
+
     # Kiểm tra token rotation (tokens mới phải khác tokens cũ)
     new_access_token = new_tokens["access_token"]
     new_refresh_token = new_tokens["refresh_token"]
