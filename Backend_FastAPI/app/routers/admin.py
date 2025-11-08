@@ -294,6 +294,34 @@ async def get_all_users(
 
 
 @router.get(
+    "/users/export",
+    response_model=List[schemas.User],
+    tags=["Admin - User Management"],
+)
+async def export_all_users(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Export tất cả người dùng ra CSV (không phân trang).
+
+    Endpoint này trả về toàn bộ danh sách users phù hợp với các filter (role, status, search)
+    mà không có giới hạn phân trang. Được sử dụng khi Admin nhấn nút "Export CSV"
+    để đảm bảo export toàn bộ users, không chỉ trang hiện tại.
+
+    ✅ Sử dụng eager loading (selectinload) để tránh N+1 queries.
+    """
+    query_params = dict(request.query_params)
+    # Gọi get_users với skip=0 và limit rất lớn để lấy tất cả
+    # Hoặc có thể gọi với skip=0, limit=None nếu service hỗ trợ
+    total, users = await services.user_service.get_users(
+        db, params=query_params, skip=0, limit=10000  # Giới hạn tạm 10k users
+    )
+    return users
+
+
+@router.get(
     "/users/{user_id}", response_model=schemas.User, tags=["Admin - User Management"]
 )
 async def get_user_details(

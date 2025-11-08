@@ -307,34 +307,60 @@ export default function AdminUsersPage() {
     setRowSelection({});
   };
 
-  const handleExportCSV = () => {
-    if (!data?.users) return;
+  const handleExportCSV = async () => {
+    try {
+      // Import api and API_ENDPOINTS at the top of the function
+      const { api } = await import("@/lib/api/client");
+      const { API_ENDPOINTS } = await import("@/lib/api/endpoints");
 
-    const headers = ["ID", "Username", "Email", "Full Name", "Role", "Status", "Phone"];
-    const rows = data.users.map((user) => [
-      user.id,
-      user.username,
-      user.email,
-      user.full_name || "",
-      user.role,
-      user.status,
-      user.phone_number || "",
-    ]);
+      // Build query params with current filters
+      const params: Record<string, string> = {};
+      if (search) params.search = search;
+      if (roleFilter !== "all") params.role = roleFilter;
+      if (statusFilter !== "all") params.status = statusFilter;
 
-    const csvContent = [
-      headers.join(","),
-      ...rows.map((row) => row.map((cell) => `"${cell}"`).join(",")),
-    ].join("\n");
+      // Fetch all users from export endpoint
+      const response = await api.get<User[]>(API_ENDPOINTS.ADMIN.USERS.EXPORT, {
+        params,
+      });
 
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const link = document.createElement("a");
-    const url = URL.createObjectURL(blob);
-    link.setAttribute("href", url);
-    link.setAttribute("download", `users_${new Date().toISOString().split("T")[0]}.csv`);
-    link.style.visibility = "hidden";
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+      const allUsers = response.data;
+
+      if (!allUsers || allUsers.length === 0) {
+        console.warn("No users to export");
+        return;
+      }
+
+      // Generate CSV from all users
+      const headers = ["ID", "Username", "Email", "Full Name", "Role", "Status", "Phone"];
+      const rows = allUsers.map((user) => [
+        user.id,
+        user.username,
+        user.email,
+        user.full_name || "",
+        user.role,
+        user.status,
+        user.phone_number || "",
+      ]);
+
+      const csvContent = [
+        headers.join(","),
+        ...rows.map((row) => row.map((cell) => `"${cell}"`).join(",")),
+      ].join("\n");
+
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const link = document.createElement("a");
+      const url = URL.createObjectURL(blob);
+      link.setAttribute("href", url);
+      link.setAttribute("download", `users_${new Date().toISOString().split("T")[0]}.csv`);
+      link.style.visibility = "hidden";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (error) {
+      console.error("Error exporting users:", error);
+      // You might want to show a toast notification here
+    }
   };
 
   const selectedCount = table.getFilteredSelectedRowModel().rows.length;
