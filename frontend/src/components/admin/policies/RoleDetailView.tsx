@@ -12,27 +12,22 @@ interface RoleDetailViewProps {
   roleName: string;
 }
 
-export function RoleDetailView({ roleName }: RoleDetailViewProps) {
-  const { data, isLoading } = usePermissionExplain(roleName);
+interface PolicyRule {
+  subject: string;
+  object: string;
+  action: string;
+}
 
-  if (isLoading) {
-    return (
-      <div className="space-y-4">
-        <Skeleton className="h-40 w-full" />
-        <Skeleton className="h-40 w-full" />
-        <Skeleton className="h-40 w-full" />
-      </div>
-    );
-  }
+interface PolicyTableProps {
+  policies: PolicyRule[];
+  title: string;
+  icon: React.ElementType;
+  description: string;
+}
 
-  if (!data) return null;
-
-  const PolicyTable = ({ policies, title, icon: Icon, description }: {
-    policies: typeof data.policies_from_template;
-    title: string;
-    icon: React.ElementType;
-    description: string;
-  }) => (
+// Move PolicyTable outside of RoleDetailView to avoid creating component during render
+function PolicyTable({ policies, title, icon: Icon, description }: PolicyTableProps) {
+  return (
     <Card>
       <CardHeader>
         <div className="flex items-center gap-2">
@@ -71,13 +66,29 @@ export function RoleDetailView({ roleName }: RoleDetailViewProps) {
       </CardContent>
     </Card>
   );
+}
+
+export function RoleDetailView({ roleName }: RoleDetailViewProps) {
+  const { data, isLoading } = usePermissionExplain(roleName);
+
+  if (isLoading) {
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-40 w-full" />
+        <Skeleton className="h-40 w-full" />
+        <Skeleton className="h-40 w-full" />
+      </div>
+    );
+  }
+
+  if (!data) return null;
 
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-2xl font-bold">Permission Breakdown for {data.role}</h2>
         <p className="text-muted-foreground">
-          Understanding where this role's permissions come from
+          Understanding where this role&apos;s permissions come from
         </p>
       </div>
 
