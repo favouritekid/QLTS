@@ -46,7 +46,22 @@ from .organization import (
 )
 
 # --- Từ permissions.py ---
-from .permissions import Policy, PolicyCreate, RoleAssignment
+from .permissions import (
+    Policy,
+    PolicyCreate,
+    PolicyRule,
+    RoleAssignment,
+    RoleInfo,
+    RolesListResponse,
+    TemplateInfo,
+    TemplatesListResponse,
+    PolicyBatchRequest,
+    PolicyBatchResult,
+    PolicyValidationRequest,
+    PolicyValidationResult,
+    TemplateApplicationRequest,
+    PolicyStatistics,
+)
 
 # --- Từ pipeline.py ---
 from .pipeline import (
@@ -88,5 +103,33 @@ from .user_session import (
     UserSessionListResponse,
     UserSessionResponse,
     UserSessionUpdate,
-    RevokeAllSessionsRequest 
+    RevokeAllSessionsRequest
+)
+
+# --- Từ user_activity.py ---
+from .user_activity import (
+    UserActivityLog,
+    UserActivityLogBase,
+    UserActivityLogCreate,
+    UserActivityLogWithDetails,
+    ActivityLogsPage,
+    UserStatistics,
+)
+
+# --- Từ notification.py ---
+from .notification import (
+    Notification,
+    NotificationBase,
+    NotificationCreate,
+    NotificationsPage,
+    MarkAsReadRequest,
+)
+
+# --- Từ notification_preference.py ---
+from .notification_preference import (
+    NotificationPreference,
+    NotificationPreferenceBase,
+    NotificationPreferenceCreate,
+    NotificationPreferenceUpdate,
+    NotificationTypePreference,
 )

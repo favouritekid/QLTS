@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 from fastapi import HTTPException, UploadFile
 from sqlalchemy import func, or_, select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models, schemas
@@ -35,6 +36,7 @@ from ..utils.exceptions import (
     InvalidToken,
     ResourceNotFoundError,
 )
+from . import activity_service
 
 # ✅ SỬA LỖI: Chuyển log sang đồng bộ (tương thích với main.py V5)
 log = structlog.get_logger(__name__)
@@ -175,8 +177,21 @@ async def create_user_by_admin(
 async def get_users(
     db: AsyncSession, params: Dict[str, Any], skip: int = 0, limit: int = 100
 ) -> Tuple[int, List[models.User]]:
-    # (Hàm này không có log, giữ nguyên)
-    query = select(models.User)
+    """
+    Get users with filtering, sorting, and pagination.
+
+    ✅ PERFORMANCE FIX: Uses eager loading (selectinload) to prevent N+1 queries
+    when accessing user relationships like unit, sessions, etc.
+
+    This is critical for performance when displaying user lists in admin panel,
+    especially when showing related data like unit names.
+    """
+    # ✅ Eager load relationships to prevent N+1 queries
+    query = select(models.User).options(
+        selectinload(models.User.unit),  # Load organization unit (for unit.name)
+        selectinload(models.User.sessions),  # Load sessions (if needed)
+    )
+
     allowed_filters = {
         "role": models.User.role,
         "status": models.User.status,

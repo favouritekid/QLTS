@@ -2,14 +2,25 @@
 "use client";
 
 import React from "react";
+import Link from "next/link";
+import { format } from "date-fns";
 import { useAuth } from "@/hooks/useAuth";
+import { useUserStatistics } from "@/hooks/useActivityLogs";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Users, TrendingUp, DollarSign, Activity, ArrowUpRight } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Users, TrendingUp, DollarSign, Activity, UserCheck, UserX, UserPlus, Shield } from "lucide-react";
 
 export default function DashboardPage() {
   const { user, logout, isLoading } = useAuth();
+
+  const isAdmin = user?.role === "admin" || user?.role === "manager";
+
+  // Only fetch statistics if user is admin or manager
+  const { data: stats, isLoading: isLoadingStats } = useUserStatistics({
+    enabled: isAdmin, // Only enable query for admin/manager
+  });
 
   if (isLoading) {
     return (
@@ -22,36 +33,69 @@ export default function DashboardPage() {
     );
   }
 
-  const stats = [
+  // User statistics for admin/manager
+  const userStats = stats ? [
+    {
+      title: "Total Users",
+      value: stats.total_users.toString(),
+      change: `+${stats.new_users_last_7_days} this week`,
+      icon: Users,
+      trend: "up" as const,
+    },
+    {
+      title: "Active Users",
+      value: stats.active_users.toString(),
+      change: `${((stats.active_users / stats.total_users) * 100).toFixed(1)}%`,
+      icon: UserCheck,
+      trend: "up" as const,
+    },
+    {
+      title: "Pending Users",
+      value: stats.pending_users.toString(),
+      icon: UserPlus,
+      trend: "neutral" as const,
+    },
+    {
+      title: "Banned Users",
+      value: stats.banned_users.toString(),
+      icon: UserX,
+      trend: "down" as const,
+    },
+  ] : [];
+
+  // Default placeholder stats for non-admin users
+  const defaultStats = [
     {
       title: "Total Revenue",
       value: "$45,231.89",
       change: "+20.1%",
       icon: DollarSign,
-      trend: "up",
+      trend: "up" as const,
     },
     {
       title: "Active Users",
       value: "2,350",
       change: "+180.1%",
       icon: Users,
-      trend: "up",
+      trend: "up" as const,
     },
     {
       title: "Sales",
       value: "+12,234",
       change: "+19%",
       icon: TrendingUp,
-      trend: "up",
+      trend: "up" as const,
     },
     {
       title: "Active Now",
       value: "573",
       change: "+201",
       icon: Activity,
-      trend: "up",
+      trend: "up" as const,
     },
   ];
+
+  const displayStats = isAdmin && stats ? userStats : defaultStats;
 
   return (
     <div className="animate-fade-in space-y-4">
@@ -78,85 +122,176 @@ export default function DashboardPage() {
 
       {/* Stats Grid */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {stats.map((stat, index) => (
-          <Card key={index} className="transition-all hover:shadow-md">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">{stat.title}</CardTitle>
-              <stat.icon className="text-muted-foreground h-4 w-4" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{stat.value}</div>
-              <div className="text-muted-foreground mt-1 flex items-center gap-1 text-xs">
-                <Badge
-                  variant={stat.trend === "up" ? "default" : "destructive"}
-                  className="gap-1 px-1.5 py-0"
-                >
-                  <ArrowUpRight className="h-3 w-3" />
-                  {stat.change}
-                </Badge>
-                <span>from last month</span>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+        {isLoadingStats && isAdmin ? (
+          <>
+            {[1, 2, 3, 4].map((i) => (
+              <Card key={i}>
+                <CardHeader className="space-y-0 pb-2">
+                  <Skeleton className="h-4 w-24" />
+                </CardHeader>
+                <CardContent>
+                  <Skeleton className="h-8 w-16" />
+                </CardContent>
+              </Card>
+            ))}
+          </>
+        ) : (
+          displayStats.map((stat, index) => (
+            <Card key={index} className="transition-all hover:shadow-md">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">{stat.title}</CardTitle>
+                <stat.icon className="text-muted-foreground h-4 w-4" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{stat.value}</div>
+                {stat.change && (
+                  <p className="text-muted-foreground mt-1 text-xs">
+                    {stat.change}
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          ))
+        )}
       </div>
 
       {/* Content Grid */}
       <div className="grid gap-4 lg:grid-cols-3">
-        {/* Recent Activity */}
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle>Recent Activity</CardTitle>
-            <CardDescription>Your latest updates and actions</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              {[1, 2, 3, 4].map((item) => (
-                <div
-                  key={item}
-                  className="hover:bg-muted/50 flex items-center gap-3 rounded-lg p-2"
-                >
-                  <div className="bg-primary/10 flex h-9 w-9 items-center justify-center rounded-full">
-                    <Activity className="text-primary h-4 w-4" />
-                  </div>
-                  <div className="flex-1 space-y-0.5">
-                    <p className="text-sm leading-none font-medium">Activity {item}</p>
-                    <p className="text-muted-foreground text-xs">2 hours ago</p>
-                  </div>
-                  <Button variant="ghost" size="sm">
-                    View
-                  </Button>
+        {/* Recent Activity - Show for admin/manager */}
+        {isAdmin && (
+          <Card className="lg:col-span-2">
+            <CardHeader>
+              <CardTitle>Recent User Activities</CardTitle>
+              <CardDescription>Latest user management actions</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {isLoadingStats || !stats?.recent_activities ? (
+                <div className="space-y-3">
+                  {[1, 2, 3, 4].map((i) => (
+                    <Skeleton key={i} className="h-12 w-full" />
+                  ))}
                 </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+              ) : stats.recent_activities.length > 0 ? (
+                <div className="space-y-3">
+                  {stats.recent_activities.map((activity) => (
+                    <div
+                      key={activity.id}
+                      className="hover:bg-muted/50 flex items-center gap-3 rounded-lg p-2"
+                    >
+                      <div className="bg-primary/10 flex h-9 w-9 items-center justify-center rounded-full">
+                        <Activity className="text-primary h-4 w-4" />
+                      </div>
+                      <div className="flex-1 space-y-0.5">
+                        <p className="text-sm leading-none font-medium">
+                          {activity.description || activity.action}
+                        </p>
+                        <p className="text-muted-foreground text-xs">
+                          by {activity.actor_username || "System"} •{" "}
+                          {format(new Date(activity.created_at), "MMM d, HH:mm")}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-muted-foreground text-center text-sm py-8">
+                  No recent activities
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
-        {/* Quick Actions */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Quick Actions</CardTitle>
-            <CardDescription>Common tasks and shortcuts</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <Button className="w-full justify-start" variant="outline" size="sm">
-              <Users className="mr-2 h-4 w-4" />
-              Add New User
-            </Button>
-            <Button className="w-full justify-start" variant="outline" size="sm">
-              <TrendingUp className="mr-2 h-4 w-4" />
-              Create Report
-            </Button>
-            <Button className="w-full justify-start" variant="outline" size="sm">
-              <DollarSign className="mr-2 h-4 w-4" />
-              View Revenue
-            </Button>
-            <Button className="w-full justify-start" variant="outline" size="sm">
-              <Activity className="mr-2 h-4 w-4" />
-              Monitor Activity
-            </Button>
-          </CardContent>
-        </Card>
+        {/* Recent Activity - Default for non-admin */}
+        {!isAdmin && (
+          <Card className="lg:col-span-2">
+            <CardHeader>
+              <CardTitle>Recent Activity</CardTitle>
+              <CardDescription>Your latest updates and actions</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {[1, 2, 3, 4].map((item) => (
+                  <div
+                    key={item}
+                    className="hover:bg-muted/50 flex items-center gap-3 rounded-lg p-2"
+                  >
+                    <div className="bg-primary/10 flex h-9 w-9 items-center justify-center rounded-full">
+                      <Activity className="text-primary h-4 w-4" />
+                    </div>
+                    <div className="flex-1 space-y-0.5">
+                      <p className="text-sm leading-none font-medium">Activity {item}</p>
+                      <p className="text-muted-foreground text-xs">2 hours ago</p>
+                    </div>
+                    <Button variant="ghost" size="sm">
+                      View
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Quick Actions - Admin */}
+        {isAdmin && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Quick Actions</CardTitle>
+              <CardDescription>User management shortcuts</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <Link href="/admin/users">
+                <Button className="w-full justify-start" variant="outline" size="sm">
+                  <Users className="mr-2 h-4 w-4" />
+                  Manage Users
+                </Button>
+              </Link>
+              <Link href="/admin/policies">
+                <Button className="w-full justify-start" variant="outline" size="sm">
+                  <Shield className="mr-2 h-4 w-4" />
+                  Manage Policies
+                </Button>
+              </Link>
+              <Button className="w-full justify-start" variant="outline" size="sm" disabled>
+                <TrendingUp className="mr-2 h-4 w-4" />
+                View Reports
+              </Button>
+              <Button className="w-full justify-start" variant="outline" size="sm" disabled>
+                <Activity className="mr-2 h-4 w-4" />
+                Activity Logs
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Quick Actions - Default */}
+        {!isAdmin && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Quick Actions</CardTitle>
+              <CardDescription>Common tasks and shortcuts</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <Button className="w-full justify-start" variant="outline" size="sm">
+                <Users className="mr-2 h-4 w-4" />
+                Add New User
+              </Button>
+              <Button className="w-full justify-start" variant="outline" size="sm">
+                <TrendingUp className="mr-2 h-4 w-4" />
+                Create Report
+              </Button>
+              <Button className="w-full justify-start" variant="outline" size="sm">
+                <DollarSign className="mr-2 h-4 w-4" />
+                View Revenue
+              </Button>
+              <Button className="w-full justify-start" variant="outline" size="sm">
+                <Activity className="mr-2 h-4 w-4" />
+                Monitor Activity
+              </Button>
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       {/* Additional Content */}

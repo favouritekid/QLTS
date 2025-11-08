@@ -28,6 +28,8 @@ from app.config import settings
 from .. import database, models, schemas, services
 from ..celery_utils import process_automatic_lead_assignment_task
 from ..core import deps
+from ..services import activity_service, notification_service
+from ..routers.notifications import send_realtime_notification
 from ..schemas.permissions import PolicyCreate, RoleAssignment
 from ..services import (
     config_service,
@@ -79,9 +81,10 @@ async def get_all_policies(
 async def add_new_policy(
     policy_in: PolicyCreate,
     request: Request,
+    db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
-    """(Admin only) Thêm một chính sách (quyền) mới."""
+    """(Admin only) Thêm một chính sách (quyền) mới với validation và logging."""
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
     added = await enforcer.add_policy(
@@ -90,7 +93,20 @@ async def add_new_policy(
     if not added:
         raise DuplicateResourceError("Policy already exists.")
 
-    # Chính xác: Không cần save_policy()
+    # Log activity
+    await activity_service.log_activity_from_request(
+        db=db,
+        request=request,
+        action="add_policy",
+        resource_type="casbin_policy",
+        actor_id=current_admin.id,
+        description=f"Added policy: {policy_in.subject} → {policy_in.object} → {policy_in.action}",
+        changes={
+            "subject": policy_in.subject,
+            "object": policy_in.object,
+            "action": policy_in.action,
+        },
+    )
 
     return {"detail": "Policy added successfully."}
 
@@ -103,18 +119,48 @@ async def add_new_policy(
 async def delete_policy(
     policy_in: PolicyCreate,
     request: Request,
+    db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
-    """(Admin only) Xóa một chính sách (quyền) cụ thể."""
-    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+    """(Admin only) Xóa một chính sách (quyền) cụ thể với safety checks."""
+    from ..services.casbin_service import CasbinPolicyService
 
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+    casbin_service = CasbinPolicyService(db, enforcer)
+
+    # SAFETY CHECK: Validate removal operation
+    validation = await casbin_service.validate_policy_removal(
+        policy_in.subject,
+        policy_in.object,
+        policy_in.action,
+    )
+
+    if not validation.is_safe:
+        raise PermissionDeniedError(
+            detail=f"Cannot remove this policy for safety reasons: {'; '.join(validation.warnings)}"
+        )
+
+    # Remove policy
     removed = await enforcer.remove_policy(
         policy_in.subject, policy_in.object, policy_in.action
     )
     if not removed:
         raise ResourceNotFoundError("Policy not found or could not be removed.")
 
-    # Chính xác: Không cần save_policy()
+    # Log activity
+    await activity_service.log_activity_from_request(
+        db=db,
+        request=request,
+        action="remove_policy",
+        resource_type="casbin_policy",
+        actor_id=current_admin.id,
+        description=f"Removed policy: {policy_in.subject} → {policy_in.object} → {policy_in.action}",
+        changes={
+            "subject": policy_in.subject,
+            "object": policy_in.object,
+            "action": policy_in.action,
+        },
+    )
 
     return {"detail": "Policy removed successfully."}
 
@@ -139,8 +185,8 @@ async def assign_role_to_user(
     if not added:
         raise DuplicateResourceError("User already has this role.")
 
-    # SỬA: Xóa dòng save_policy()
-    # await enforcer.save_policy() # AsyncAdapter tự lưu
+    # Explicitly save to ensure persistence
+    await enforcer.save_policy()
 
     return {"detail": "Role assigned."}
 
@@ -167,10 +213,299 @@ async def remove_role_from_user(
             "Role assignment not found or could not be removed."
         )
 
-    # SỬA: Xóa dòng save_policy()
-    # await enforcer.save_policy() # AsyncAdapter tự lưu
+    # Explicitly save to ensure persistence
+    await enforcer.save_policy()
 
     return {"detail": "Role removed from user."}
+
+
+@router.get(
+    "/users/{user_id}/roles",
+    response_model=List[str],
+    tags=["Admin - Permissions"],
+)
+async def get_user_roles(
+    user_id: int,
+    request: Request,
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Lấy tất cả các roles (grouping policies) của một user."""
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+
+    # Lấy tất cả roles của user
+    user_subject = f"user:{user_id}"
+    roles = await enforcer.get_roles_for_user(user_subject)
+
+    return roles
+
+
+# ===============================================================
+# ADVANCED POLICY MANAGEMENT ROUTES (NEW)
+# ===============================================================
+
+
+@router.get(
+    "/roles",
+    response_model=schemas.RolesListResponse,
+    tags=["Admin - Permissions"],
+)
+async def get_all_roles_with_info(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Get all roles with metadata and policy counts.
+
+    Returns detailed information about all roles including:
+    - System roles (admin, manager, officer, user)
+    - Custom roles created by admins
+    - Policy counts for each role
+    """
+    from ..services.casbin_service import CasbinPolicyService
+
+    enforcer = request.app.state.enforcer
+    casbin_service = CasbinPolicyService(db, enforcer)
+
+    roles = await casbin_service.get_all_roles()
+    return {"roles": roles}
+
+
+@router.get(
+    "/policy-templates",
+    response_model=schemas.TemplatesListResponse,
+    tags=["Admin - Permissions"],
+)
+async def get_policy_templates(
+    request: Request,
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Get all available policy templates.
+
+    Templates provide pre-configured sets of policies for common roles.
+    Admins can apply templates to quickly set up permissions.
+    """
+    from ..casbin_config.policy_templates import POLICY_TEMPLATES
+
+    templates = []
+    for template_id, template_data in POLICY_TEMPLATES.items():
+        templates.append({
+            "id": template_id,
+            "display_name": template_data["display_name"],
+            "description": template_data["description"],
+            "category": template_data["category"],
+            "policies": [
+                {
+                    "subject": policy["subject"],
+                    "object": policy["object"],
+                    "action": policy["action"],
+                }
+                for policy in template_data["policies"]
+            ],
+        })
+
+    return {"templates": templates}
+
+
+@router.post(
+    "/policies/batch",
+    response_model=schemas.PolicyBatchResult,
+    tags=["Admin - Permissions"],
+)
+async def add_policies_batch(
+    request: Request,
+    batch_req: schemas.PolicyBatchRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Add multiple policies in a batch operation.
+
+    Supports:
+    - Validation before applying
+    - Dry-run mode (preview without applying)
+    - Automatic safety checks
+
+    Returns detailed results including successes, failures, and warnings.
+    """
+    from ..services.casbin_service import CasbinPolicyService
+
+    enforcer = request.app.state.enforcer
+    casbin_service = CasbinPolicyService(db, enforcer)
+
+    # Convert to tuples
+    policies_tuples = [
+        (p.subject, p.object, p.action)
+        for p in batch_req.policies
+    ]
+
+    # Dry run - just validate without applying
+    if batch_req.dry_run:
+        result = {
+            "added": 0,
+            "skipped": 0,
+            "errors": [],
+            "warnings": ["DRY RUN: No policies were actually added"],
+        }
+
+        for subject, obj, action in policies_tuples:
+            validation = await casbin_service.validate_policy_addition(subject, obj, action)
+            if not validation.is_valid:
+                result["errors"].append(f"Invalid: {subject} {obj} {action}")
+            result["warnings"].extend(validation.warnings)
+
+        return result
+
+    # Actually add policies
+    result = await casbin_service.add_policies_batch(
+        policies_tuples,
+        validate=batch_req.validate
+    )
+
+    # Log activity for each added policy
+    if result["added"] > 0:
+        await activity_service.log_activity_from_request(
+            db=db,
+            request=request,
+            action="batch_add_policies",
+            resource_type="casbin_policy",
+            actor_id=current_admin.id,
+            description=f"Batch added {result['added']} policies",
+            changes={
+                "added": result["added"],
+                "skipped": result["skipped"],
+                "policies": [f"{p[0]} → {p[1]} → {p[2]}" for p in policies_tuples],
+            },
+        )
+
+    return result
+
+
+@router.post(
+    "/policies/validate",
+    response_model=schemas.PolicyValidationResult,
+    tags=["Admin - Permissions"],
+)
+async def validate_policy_operation(
+    request: Request,
+    validation_req: schemas.PolicyValidationRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Validate a policy operation before applying.
+
+    Checks for:
+    - Critical policy protection (prevent admin lockout)
+    - Overly permissive policies
+    - Impact on users
+    - Safety warnings
+
+    Use this before deleting policies to prevent accidents.
+    """
+    from ..services.casbin_service import CasbinPolicyService
+
+    enforcer = request.app.state.enforcer
+    casbin_service = CasbinPolicyService(db, enforcer)
+
+    if validation_req.operation == "remove":
+        validation = await casbin_service.validate_policy_removal(
+            validation_req.subject,
+            validation_req.object,
+            validation_req.action,
+        )
+    else:  # add
+        validation = await casbin_service.validate_policy_addition(
+            validation_req.subject,
+            validation_req.object,
+            validation_req.action,
+        )
+
+    return {
+        "is_valid": validation.is_valid,
+        "is_safe": validation.is_safe,
+        "severity": validation.severity.value,
+        "warnings": validation.warnings,
+        "affected_users": validation.affected_users,
+    }
+
+
+@router.post(
+    "/policies/apply-template",
+    response_model=schemas.PolicyBatchResult,
+    tags=["Admin - Permissions"],
+)
+async def apply_template_to_role(
+    request: Request,
+    template_req: schemas.TemplateApplicationRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Apply a policy template to a role.
+
+    This is a convenient way to quickly set up permissions for a role
+    using pre-configured templates.
+
+    Example: Apply "officer" template to "role:custom" to give it all
+    officer permissions.
+    """
+    from ..services.casbin_service import CasbinPolicyService
+
+    enforcer = request.app.state.enforcer
+    casbin_service = CasbinPolicyService(db, enforcer)
+
+    result = await casbin_service.apply_template_to_role(
+        template_req.template_id,
+        template_req.role,
+        validate=template_req.validate,
+    )
+
+    # Log activity
+    if result.get("added", 0) > 0:
+        await activity_service.log_activity_from_request(
+            db=db,
+            request=request,
+            action="apply_policy_template",
+            resource_type="casbin_policy",
+            actor_id=current_admin.id,
+            description=f"Applied template '{template_req.template_id}' to '{template_req.role}'",
+            changes={
+                "template_id": template_req.template_id,
+                "role": template_req.role,
+                "policies_added": result.get("added", 0),
+            },
+        )
+
+    return result
+
+
+@router.get(
+    "/policies/statistics",
+    response_model=schemas.PolicyStatistics,
+    tags=["Admin - Permissions"],
+)
+async def get_policy_statistics(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Get statistics about policies.
+
+    Returns counts for:
+    - Total policies
+    - Total roles
+    - Total user-role assignments
+    """
+    from ..services.casbin_service import CasbinPolicyService
+
+    enforcer = request.app.state.enforcer
+    casbin_service = CasbinPolicyService(db, enforcer)
+
+    stats = await casbin_service.get_policy_count()
+    return stats
 
 
 # ===============================================================
@@ -185,6 +520,7 @@ async def remove_role_from_user(
     tags=["Admin - User Management"],
 )
 async def create_new_user(
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
     username: str = Form(...),
@@ -212,9 +548,43 @@ async def create_new_user(
         raise DuplicateResourceError(detail="Email already exists")
 
     # Truyền avatar vào hàm service
-    return await services.user_service.create_user_by_admin(
+    created_user = await services.user_service.create_user_by_admin(
         db, user_in, avatar_file=avatar
     )
+
+    # ✅ FIX: Automatically add Casbin grouping policy to map user to their role
+    try:
+        enforcer = request.app.state.enforcer
+        if enforcer:
+            role_name = f"role:{created_user.role}"
+            user_subject = f"user:{created_user.id}"
+            await enforcer.add_grouping_policy(user_subject, role_name)
+            log.info(
+                "Casbin grouping policy added for admin-created user",
+                user_id=created_user.id,
+                role=created_user.role,
+            )
+    except Exception as e:
+        log.error(
+            "Failed to add Casbin grouping policy for admin-created user",
+            user_id=created_user.id,
+            error=str(e),
+        )
+        # Don't fail user creation if Casbin update fails
+
+    # Log activity
+    await activity_service.log_activity_from_request(
+        db=db,
+        request=request,
+        action="create_user",
+        resource_type="user",
+        actor_id=current_admin.id,
+        target_user_id=created_user.id,
+        resource_id=created_user.id,
+        description=f"Admin created new user: {created_user.username}",
+    )
+
+    return created_user
 
 
 @router.get(
@@ -237,6 +607,34 @@ async def get_all_users(
 
 
 @router.get(
+    "/users/export",
+    response_model=List[schemas.User],
+    tags=["Admin - User Management"],
+)
+async def export_all_users(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Export tất cả người dùng ra CSV (không phân trang).
+
+    Endpoint này trả về toàn bộ danh sách users phù hợp với các filter (role, status, search)
+    mà không có giới hạn phân trang. Được sử dụng khi Admin nhấn nút "Export CSV"
+    để đảm bảo export toàn bộ users, không chỉ trang hiện tại.
+
+    ✅ Sử dụng eager loading (selectinload) để tránh N+1 queries.
+    """
+    query_params = dict(request.query_params)
+    # Gọi get_users với skip=0 và limit rất lớn để lấy tất cả
+    # Hoặc có thể gọi với skip=0, limit=None nếu service hỗ trợ
+    total, users = await services.user_service.get_users(
+        db, params=query_params, skip=0, limit=10000  # Giới hạn tạm 10k users
+    )
+    return users
+
+
+@router.get(
     "/users/{user_id}", response_model=schemas.User, tags=["Admin - User Management"]
 )
 async def get_user_details(
@@ -254,6 +652,7 @@ async def get_user_details(
 )
 async def update_existing_user(
     user_id: int,
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
     full_name: Optional[str] = Form(None),
@@ -322,13 +721,77 @@ async def update_existing_user(
         except HTTPException as e: 
             raise e
 
+    # Track changes for activity log
+    changes = {}
+    if update_dict:
+        for key, new_value in update_dict.items():
+            old_value = getattr(db_user, key, None)
+            if old_value != new_value:
+                changes[key] = {"old": str(old_value), "new": str(new_value)}
+
     # Tạo schema UserUpdate CHỈ với các dữ liệu đã được xác thực
     user_in = schemas.UserUpdate(**update_dict)
 
     # Truyền avatar vào hàm service
-    return await services.user_service.update_user(
+    updated_user = await services.user_service.update_user(
         db, db_user, user_in, avatar_file=avatar
     )
+
+    # Log activity
+    await activity_service.log_activity_from_request(
+        db=db,
+        request=request,
+        action="update_user",
+        resource_type="user",
+        actor_id=current_admin.id,
+        target_user_id=updated_user.id,
+        resource_id=updated_user.id,
+        description=f"Admin updated user: {updated_user.username}",
+        changes=changes if changes else None,
+    )
+
+    # Send notification to user if admin updated their info
+    if current_admin.id != updated_user.id and changes:
+        log.info(
+            "Admin updated user info, creating notification",
+            admin_id=current_admin.id,
+            target_user_id=updated_user.id,
+            changes=list(changes.keys()),
+        )
+        change_description = ", ".join([f"{key}" for key in changes.keys()])
+        try:
+            notification = await notification_service.create_notification(
+                db=db,
+                user_id=updated_user.id,
+                title="Your profile has been updated",
+                message=f"An administrator has updated your profile. Changed: {change_description}",
+                notification_type="admin_update",
+                link=f"/profile",
+            )
+            log.info(
+                "Notification created successfully",
+                notification_id=notification.id,
+                target_user_id=updated_user.id,
+            )
+            # Send real-time notification via WebSocket
+            await send_realtime_notification(notification)
+        except Exception as e:
+            log.error(
+                "Failed to create/send notification",
+                admin_id=current_admin.id,
+                target_user_id=updated_user.id,
+                error=str(e),
+            )
+    else:
+        log.debug(
+            "Skipping notification",
+            admin_id=current_admin.id,
+            target_user_id=updated_user.id,
+            same_user=current_admin.id == updated_user.id,
+            has_changes=bool(changes),
+        )
+
+    return updated_user
 
 
 # === KẾT THÚC HÀM CẬP NHẬT ===
@@ -339,6 +802,7 @@ async def update_existing_user(
 )
 async def delete_existing_user(
     user_id: int,
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
@@ -346,8 +810,25 @@ async def delete_existing_user(
     if user_id == current_admin.id:
         raise PermissionDeniedError(detail="Admin cannot delete themselves")
 
+    # Get user info before deleting for activity log
+    db_user = await services.user_service.get_user_by_id(db, user_id)
+    username = db_user.username if db_user else f"User#{user_id}"
+
     # Bỏ kiểm tra 'is None' vì service đã ném 404
     await services.user_service.delete_user(db, user_id)
+
+    # Log activity
+    await activity_service.log_activity_from_request(
+        db=db,
+        request=request,
+        action="delete_user",
+        resource_type="user",
+        actor_id=current_admin.id,
+        target_user_id=user_id,
+        resource_id=user_id,
+        description=f"Admin deleted user: {username}",
+    )
+
     return None
 
 
@@ -376,6 +857,7 @@ async def admin_set_user_password(
 )
 async def bulk_user_action(
     action_data: schemas.BulkActionSchema,
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
@@ -387,6 +869,23 @@ async def bulk_user_action(
         admin_user=current_admin,
         new_status=action_data.status,
     )
+
+    # Log activity for bulk action
+    action_desc = f"Bulk {action_data.action}"
+    if action_data.action == "change_status" and action_data.status:
+        action_desc += f" to {action_data.status}"
+    action_desc += f" for {len(action_data.user_ids)} users"
+
+    await activity_service.log_activity_from_request(
+        db=db,
+        request=request,
+        action=f"bulk_{action_data.action}",
+        resource_type="user",
+        actor_id=current_admin.id,
+        description=action_desc,
+        changes={"user_ids": action_data.user_ids, "status": action_data.status} if action_data.status else {"user_ids": action_data.user_ids},
+    )
+
     return {"detail": message}
 
 
@@ -1100,3 +1599,53 @@ async def import_leads_from_file(
         log.info("Lead import process finished successfully", result=result_summary)
 
     return result
+
+
+# ===============================================================
+# ACTIVITY LOGS & STATISTICS ROUTES
+# ===============================================================
+
+
+@router.get(
+    "/activity-logs",
+    response_model=schemas.ActivityLogsPage,
+    tags=["Admin - Activity Logs"],
+)
+async def get_activity_logs(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+    actor_id: Optional[int] = Query(None),
+    target_user_id: Optional[int] = Query(None),
+    action: Optional[str] = Query(None),
+    resource_type: Optional[str] = Query(None),
+):
+    """(Admin only) Lấy danh sách activity logs với filters."""
+    skip = (page - 1) * page_size
+
+    total, logs = await activity_service.get_activity_logs(
+        db=db,
+        skip=skip,
+        limit=page_size,
+        actor_id=actor_id,
+        target_user_id=target_user_id,
+        action=action,
+        resource_type=resource_type,
+    )
+
+    return {"total_count": total, "logs": logs}
+
+
+@router.get(
+    "/statistics",
+    response_model=schemas.UserStatistics,
+    tags=["Admin - Statistics"],
+)
+async def get_user_statistics(
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Lấy thống kê tổng quan về users cho dashboard."""
+    return await activity_service.get_user_statistics(db)

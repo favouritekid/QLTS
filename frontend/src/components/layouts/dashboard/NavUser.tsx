@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button"; // Import Button
 import { useAuth } from "@/hooks/useAuth";
 import { LogOut, Settings, User as UserIcon, ChevronsUpDown } from "lucide-react";
 import Link from "next/link";
-import { cn } from "@/lib/utils";
+import { cn, getAvatarUrl } from "@/lib/utils";
 
 export function NavUser({ isCollapsed }: { isCollapsed: boolean }) {
   const { user, logout, isLoading } = useAuth();
@@ -43,7 +43,7 @@ export function NavUser({ isCollapsed }: { isCollapsed: boolean }) {
           {/* Phần nội dung button */}
           <div className="flex items-center gap-2">
             <Avatar className="h-8 w-8">
-              <AvatarImage src={user?.avatar_url || ""} alt={user?.username} />
+              <AvatarImage src={getAvatarUrl(user?.avatar_url)} alt={user?.username} />
               <AvatarFallback>{fallback}</AvatarFallback>
             </Avatar>
             <div className={cn("flex flex-col", isCollapsed && "hidden")}>

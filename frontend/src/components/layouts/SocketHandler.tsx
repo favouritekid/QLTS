@@ -6,6 +6,10 @@ import { useAuthStore } from "@/lib/stores/auth.store";
 import { socketService } from "@/lib/socket/client";
 import { getRefreshJtiFromToken } from "@/lib/utils/jwt";
 import { toast } from "sonner";
+import { useAddNotification } from "@/hooks/useNotifications";
+import { useNotificationPreferences } from "@/hooks/useNotificationPreferences";
+import { playNotificationSound, showBrowserNotification } from "@/lib/sound";
+import type { Notification } from "@/types/api.types";
 
 /**
  * Component "vô hình" (không render)
@@ -13,6 +17,8 @@ import { toast } from "sonner";
  */
 export function SocketHandler() {
   const { token, logout } = useAuthStore();
+  const addNotification = useAddNotification();
+  const { data: preferences } = useNotificationPreferences();
 
   // Lưu trữ JTI của trình duyệt hiện tại
   const myJti = useRef<string | null>(null);
@@ -83,16 +89,51 @@ export function SocketHandler() {
       logoutRef.current(); // Dùng ref
     };
 
+    // Lắng nghe sự kiện notification (real-time notifications)
+    const handleNewNotification = (notification: Notification) => {
+      console.log("[SocketHandler] Received new notification:", notification);
+
+      // Add notification to the query cache
+      addNotification(notification);
+
+      // Get type-specific preferences
+      const typePrefs = preferences?.type_preferences?.[notification.type];
+      const soundAllowed = typePrefs?.sound ?? true;
+      const browserAllowed = typePrefs?.browser ?? true;
+
+      // Play sound if enabled globally and for this type
+      if (preferences?.sound_enabled && soundAllowed) {
+        playNotificationSound();
+      }
+
+      // Show browser notification if enabled
+      if (preferences?.browser_enabled && browserAllowed) {
+        showBrowserNotification(notification.title, {
+          body: notification.message,
+          icon: "/favicon.ico",
+          tag: `notification-${notification.id}`,
+        });
+      }
+
+      // Always show toast notification (this is in-app, separate from browser notifications)
+      toast.info(notification.title, {
+        description: notification.message,
+        duration: 5000,
+      });
+    };
+
     // Đăng ký listeners
     socket.on("force_logout_batch", handleForceLogoutBatch);
     socket.on("force_logout_all", handleForceLogoutAll);
+    socket.on("notification", handleNewNotification);
 
     // Cleanup listeners khi effect này chạy lại hoặc component unmount
     return () => {
       socket.off("force_logout_batch", handleForceLogoutBatch);
       socket.off("force_logout_all", handleForceLogoutAll);
+      socket.off("notification", handleNewNotification);
     };
-  }, [token]); // Chạy lại nếu `token` thay đổi (để đảm bảo socket instance là mới nhất)
+  }, [token, addNotification, preferences]); // Chạy lại nếu `token`, `addNotification`, hoặc `preferences` thay đổi
 
   return null; // Không render gì cả
 }

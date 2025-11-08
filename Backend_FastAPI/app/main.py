@@ -1,8 +1,10 @@
 # app/main.py
 import asyncio  # ✅ V5: Thêm import
 import logging
+import os  # ✅ Import os để check path
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path  # ✅ Import Path để tạo absolute path
 
 import casbin
 import socketio  # ✅ V5: Thêm import
@@ -15,6 +17,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles  # ✅ Import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import ValidationError
 from slowapi import _rate_limit_exceeded_handler
@@ -33,6 +36,8 @@ from .routers import (
     admin,
     auth,
     leads,
+    notification_preferences,
+    notifications,
     organization,
     pipeline,
     profile,
@@ -129,9 +134,17 @@ async def lifespan(app: FastAPI):
         app.state.enforcer = enforcer
         log.info("✅ Casbin AsyncEnforcer initialized and policies loaded.")
 
-        # (Giữ nguyên logic add policy mặc định)
+        # ✅ DEPRECATED: Default policies are now managed via Alembic migration
+        # Migration: i4j5k6l7m8n9_add_default_casbin_policies.py
+        #
+        # This fallback logic is kept for backward compatibility only.
+        # If this runs, it means the migration hasn't been executed yet.
         if not enforcer.get_policy():
-            log.info("No Casbin P policies found. Adding defaults...")
+            log.warning(
+                "⚠️ No Casbin policies found! Adding default policies as FALLBACK. "
+                "This should NOT happen in production if migrations are run correctly. "
+                "Please run: alembic upgrade head"
+            )
             await enforcer.add_policy("role:admin", "/*", ".*")
             await enforcer.add_policy("role:manager", "/api/admin/users", ".*")
             await enforcer.add_policy("role:manager", "/api/leads/*", ".*")
@@ -150,7 +163,22 @@ async def lifespan(app: FastAPI):
             await enforcer.add_policy("role:officer", "/api/profile", "PUT")
             await enforcer.add_policy("role:manager", "/api/profile", "GET")
             await enforcer.add_policy("role:manager", "/api/profile", "PUT")
-            log.info("Default P policies added.")
+
+            # Notification policies - all authenticated users can access their own notifications
+            await enforcer.add_policy("role:user", "/api/notifications", "GET")
+            await enforcer.add_policy("role:user", "/api/notifications/mark-as-read", "POST")
+            await enforcer.add_policy("role:user", "/api/notifications/mark-all-as-read", "POST")
+            await enforcer.add_policy("role:user", "/api/notifications/{notification_id}", "DELETE")
+            await enforcer.add_policy("role:officer", "/api/notifications", "GET")
+            await enforcer.add_policy("role:officer", "/api/notifications/mark-as-read", "POST")
+            await enforcer.add_policy("role:officer", "/api/notifications/mark-all-as-read", "POST")
+            await enforcer.add_policy("role:officer", "/api/notifications/{notification_id}", "DELETE")
+            await enforcer.add_policy("role:manager", "/api/notifications", "GET")
+            await enforcer.add_policy("role:manager", "/api/notifications/mark-as-read", "POST")
+            await enforcer.add_policy("role:manager", "/api/notifications/mark-all-as-read", "POST")
+            await enforcer.add_policy("role:manager", "/api/notifications/{notification_id}", "DELETE")
+
+            log.warning("⚠️ Fallback default policies added. Please run migrations!")
 
     except Exception as e:
         log.critical(
@@ -441,12 +469,26 @@ app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(profile.router, prefix="/api/profile", tags=["Profile"])
 app.include_router(users.router, prefix="/api/users", tags=["Users"])
 app.include_router(sessions.router, prefix="/api", tags=["Sessions"])
+app.include_router(notifications.router, prefix="/api/notifications", tags=["Notifications"])
+app.include_router(notification_preferences.router, prefix="/api/notifications", tags=["Notification Preferences"])
 app.include_router(leads.router, prefix="/api/leads", tags=["Leads"])
 app.include_router(pipeline.router, prefix="/api/pipeline", tags=["Pipeline"])
 app.include_router(
     organization.router, prefix="/api/organization", tags=["Organization"]
 )
 app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
+
+# ===============================================================
+# === STATIC FILES ==============================================
+# ===============================================================
+
+# Mount static files directory to serve avatars and other static content
+STATIC_DIR = Path(__file__).parent / "static"
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    log.info(f"✅ Static files mounted at /static from {STATIC_DIR}")
+else:
+    log.warning(f"⚠️ Static directory not found at {STATIC_DIR}")
 
 
 # === ✅ CẢI TIẾN: Vấn đề #4 - Thêm Metrics Endpoint ===

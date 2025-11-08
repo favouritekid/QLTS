@@ -78,6 +78,27 @@ async def register_user(
             detail=f"Email '{user_in.email}' already registered",
         )
     created_user = await services.user_service.create_user(db=db, user_in=user_in)
+
+    # ✅ FIX: Automatically add Casbin grouping policy to map user to their role
+    try:
+        enforcer = request.app.state.enforcer
+        if enforcer:
+            role_name = f"role:{created_user.role}"
+            user_subject = f"user:{created_user.id}"
+            await enforcer.add_grouping_policy(user_subject, role_name)
+            log.info(
+                "Casbin grouping policy added for new user",
+                user_id=created_user.id,
+                role=created_user.role,
+            )
+    except Exception as e:
+        log.error(
+            "Failed to add Casbin grouping policy for new user",
+            user_id=created_user.id,
+            error=str(e),
+        )
+        # Don't fail registration if Casbin update fails
+
     return created_user
 
 

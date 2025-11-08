@@ -9,9 +9,9 @@ import { cn } from "@/lib/utils";
 const navItems = [
   { name: "Password", href: "/settings" },
   { name: "Sessions", href: "/settings/sessions" },
+  { name: "Notifications", href: "/settings/notifications" },
   // Bạn có thể dễ dàng thêm các tab khác ở đây trong tương lai
   // { name: "Profile", href: "/settings/profile" },
-  // { name: "Notifications", href: "/settings/notifications" },
 ];
 
 export function SettingsNav() {

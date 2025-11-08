@@ -12,7 +12,9 @@ export interface User {
   role: "user" | "admin" | "manager" | "officer"; // Các role có trong backend
   status: "active" | "pending" | "banned"; // Các status có trong backend
   unit_id?: number | null; // Có thể null
-  // Thêm các trường khác nếu cần từ schema backend (skills, max_capacity, etc.)
+  skills?: string[] | null; // User skills
+  availability_status?: string | null; // Availability status
+  max_capacity?: number | null; // Max capacity
 }
 
 // Kiểu dữ liệu cho request body khi login (khớp schemas/user.py -> LoginSchema)
@@ -74,4 +76,143 @@ export interface UserUpdateProfile {
   phone_number?: string | null;
   email?: string;
   avatar?: File;
+}
+
+// Admin - User Management Types
+export interface UsersPage {
+  total_count: number;
+  users: User[];
+}
+
+export interface AdminUserCreate {
+  username: string;
+  email: string;
+  password: string;
+  full_name?: string | null;
+  role?: "user" | "admin" | "manager" | "officer";
+  status?: "active" | "pending" | "banned";
+  avatar?: File;
+}
+
+export interface AdminUserUpdate {
+  full_name?: string | null;
+  email?: string;
+  phone_number?: string | null;
+  role?: "user" | "admin" | "manager" | "officer";
+  status?: "active" | "pending" | "banned";
+  avatar?: File;
+  skills?: string[];
+  max_capacity?: number;
+}
+
+export interface AdminSetPassword {
+  new_password: string;
+}
+
+// Admin - Permissions Types
+export interface RoleAssignment {
+  user_id: number;
+  role: string;
+}
+
+export interface PolicyCreate {
+  subject: string;
+  object: string;
+  action: string;
+}
+
+export interface BulkAction {
+  action: "delete" | "change_status";
+  user_ids: number[];
+  status?: "active" | "pending" | "banned";
+}
+
+// Activity Log Types
+export interface UserActivityLog {
+  id: number;
+  actor_id: number | null;
+  target_user_id: number | null;
+  action: string;
+  resource_type: string;
+  resource_id: number | null;
+  description: string | null;
+  changes: Record<string, unknown> | null;
+  ip_address: string | null;
+  user_agent: string | null;
+  created_at: string;
+  actor_username: string | null;
+  actor_full_name: string | null;
+  target_username: string | null;
+  target_full_name: string | null;
+}
+
+export interface ActivityLogsPage {
+  total_count: number;
+  logs: UserActivityLog[];
+}
+
+export interface UserStatistics {
+  total_users: number;
+  active_users: number;
+  pending_users: number;
+  banned_users: number;
+  new_users_last_7_days: number;
+  new_users_last_30_days: number;
+  users_by_role: Record<string, number>;
+  recent_activities: UserActivityLog[];
+}
+
+// Notification Types
+export interface Notification {
+  id: number;
+  user_id: number;
+  type: "info" | "success" | "warning" | "error" | "admin_update" | "system";
+  title: string;
+  message: string;
+  link: string | null;
+  data: Record<string, unknown> | null;
+  is_read: boolean;
+  created_at: string;
+  read_at: string | null;
+}
+
+export interface NotificationsPage {
+  total_count: number;
+  unread_count: number;
+  notifications: Notification[];
+}
+
+export interface MarkAsReadRequest {
+  notification_ids: number[];
+}
+
+// Notification Preference Types
+export interface NotificationTypePreference {
+  email: boolean;
+  browser: boolean;
+  sound: boolean;
+}
+
+export interface NotificationPreference {
+  id: number;
+  user_id: number;
+  email_enabled: boolean;
+  sound_enabled: boolean;
+  browser_enabled: boolean;
+  email_digest: "instant" | "daily" | "weekly" | "disabled";
+  type_preferences: Record<string, NotificationTypePreference> | null;
+  quiet_hours_enabled: boolean;
+  quiet_hours_start: string | null; // HH:mm format
+  quiet_hours_end: string | null; // HH:mm format
+}
+
+export interface NotificationPreferenceUpdate {
+  email_enabled?: boolean;
+  sound_enabled?: boolean;
+  browser_enabled?: boolean;
+  email_digest?: "instant" | "daily" | "weekly" | "disabled";
+  type_preferences?: Record<string, NotificationTypePreference>;
+  quiet_hours_enabled?: boolean;
+  quiet_hours_start?: string | null;
+  quiet_hours_end?: string | null;
 }

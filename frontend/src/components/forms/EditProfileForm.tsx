@@ -17,10 +17,12 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/hooks/useAuth";
 import type { UserUpdateProfile } from "@/types/api.types";
+import { getAvatarUrl } from "@/lib/utils";
 
 // Zod schema cho form validation
 const editProfileSchema = z.object({
@@ -115,7 +117,9 @@ export function EditProfileForm() {
     return null;
   }
 
-  const displayAvatarUrl = avatarPreview || user.avatar_url || "";
+  // If user is uploading new avatar, show preview
+  // Otherwise show current avatar from server (converted to absolute URL)
+  const displayAvatarUrl = avatarPreview || getAvatarUrl(user.avatar_url);
   const avatarFallback = user.username.slice(0, 2).toUpperCase();
 
   return (
@@ -227,14 +231,14 @@ export function EditProfileForm() {
 
             {/* Username (Read-only) */}
             <div className="space-y-2">
-              <FormLabel className="text-muted-foreground">Username</FormLabel>
+              <Label className="text-muted-foreground">Username</Label>
               <Input value={user.username} disabled className="bg-muted cursor-not-allowed" />
               <p className="text-muted-foreground text-xs">Username cannot be changed</p>
             </div>
 
             {/* Role (Read-only) */}
             <div className="space-y-2">
-              <FormLabel className="text-muted-foreground">Role</FormLabel>
+              <Label className="text-muted-foreground">Role</Label>
               <Input
                 value={user.role}
                 disabled

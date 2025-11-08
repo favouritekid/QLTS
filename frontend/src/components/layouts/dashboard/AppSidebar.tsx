@@ -9,6 +9,8 @@ import { NavGroup } from "./NavGroup";
 import type { NavigationLink } from "@/types/layout.types";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useNotifications } from "@/hooks/useNotifications";
+import { useAuth } from "@/hooks/useAuth";
 
 const AppTitle = ({ isCollapsed }: { isCollapsed: boolean }) => (
   <TooltipProvider delayDuration={0}>
@@ -46,19 +48,39 @@ const AppTitle = ({ isCollapsed }: { isCollapsed: boolean }) => (
   </TooltipProvider>
 );
 
-const mainNavLinks: NavigationLink[] = [
-  { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { label: "Leads", href: "/leads", icon: Database },
-  { label: "Users", href: "/admin/users", icon: Users },
-];
-
-const settingsLinks: NavigationLink[] = [
-  { label: "Settings", href: "/settings", icon: Settings },
-  { label: "Notifications", href: "/notifications", icon: Bell, badge: 3 },
-];
-
 export function AppSidebar() {
   const { isSidebarCollapsed } = useUIStore();
+  const { user } = useAuth();
+
+  // Fetch unread notification count for badge
+  const { data: notificationsData } = useNotifications({
+    page: 1,
+    page_size: 1, // We only need the count, not the notifications
+    unread_only: true,
+  });
+
+  const unreadCount = notificationsData?.unread_count || 0;
+
+  // Check if user is admin or manager
+  const isAdmin = user?.role === "admin" || user?.role === "manager";
+
+  // Main navigation links - filtered by role
+  const mainNavLinks: NavigationLink[] = [
+    { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+    { label: "Leads", href: "/leads", icon: Database },
+    // Only show Users link for admin/manager
+    ...(isAdmin ? [{ label: "Users", href: "/admin/users", icon: Users }] : []),
+  ];
+
+  const settingsLinks: NavigationLink[] = [
+    { label: "Settings", href: "/settings", icon: Settings },
+    {
+      label: "Notifications",
+      href: "/notifications",
+      icon: Bell,
+      badge: unreadCount > 0 ? unreadCount : undefined,
+    },
+  ];
 
   return (
     <aside

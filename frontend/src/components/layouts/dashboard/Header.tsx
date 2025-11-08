@@ -3,11 +3,12 @@
 
 import { useUIStore } from "@/lib/stores/ui.store";
 import { cn } from "@/lib/utils";
-import { Menu, Search, Bell } from "lucide-react";
+import { Menu, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
+import { NotificationDropdown } from "@/components/notifications/NotificationDropdown";
 
 const TopNav = () => (
   <nav className="hidden items-center gap-4 text-sm font-medium lg:flex">
@@ -74,14 +75,8 @@ export function Header() {
         {/* Theme Toggle */}
         <ThemeToggle />
 
-        {/* Notification Button */}
-        <Button variant="ghost" size="icon" className="relative h-9 w-9 rounded-full">
-          <Bell className="h-5 w-5" />
-          <span className="bg-destructive text-destructive-foreground absolute top-0 right-0 flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold">
-            3
-          </span>
-          <span className="sr-only">Notifications</span>
-        </Button>
+        {/* Notification Dropdown */}
+        <NotificationDropdown />
       </div>
     </header>
   );
