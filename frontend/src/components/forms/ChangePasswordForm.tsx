@@ -10,7 +10,14 @@ import Link from "next/link";
 import { AlertTriangle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Form, FormControl, FormField, FormItem, FormLabel } from "@/components/ui/form";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage, // ✅ Thêm FormMessage chuẩn từ shadcn/ui
+} from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -25,7 +32,6 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/hooks/useAuth";
-import { FormErrorMessage } from "@/components/ui/form-error-message";
 import { getActiveSessions } from "@/lib/api/sessions";
 import type { ChangePasswordSchema } from "@/types/api.types";
 
@@ -138,7 +144,7 @@ export function ChangePasswordForm() {
           <FormField
             control={form.control}
             name="old_password"
-            render={({ field, fieldState }) => (
+            render={({ field }) => (
               <FormItem>
                 <FormLabel>Current Password</FormLabel>
                 <FormControl>
@@ -149,14 +155,14 @@ export function ChangePasswordForm() {
                     {...field}
                   />
                 </FormControl>
-                <FormErrorMessage message={fieldState.error?.message} />
+                <FormMessage />
               </FormItem>
             )}
           />
           <FormField
             control={form.control}
             name="new_password"
-            render={({ field, fieldState }) => (
+            render={({ field }) => (
               <FormItem>
                 <FormLabel>New Password</FormLabel>
                 <FormControl>
@@ -167,14 +173,14 @@ export function ChangePasswordForm() {
                     {...field}
                   />
                 </FormControl>
-                <FormErrorMessage message={fieldState.error?.message} />
+                <FormMessage />
               </FormItem>
             )}
           />
           <FormField
             control={form.control}
             name="confirm_new_password"
-            render={({ field, fieldState }) => (
+            render={({ field }) => (
               <FormItem>
                 <FormLabel>Confirm New Password</FormLabel>
                 <FormControl>
@@ -185,7 +191,7 @@ export function ChangePasswordForm() {
                     {...field}
                   />
                 </FormControl>
-                <FormErrorMessage message={fieldState.error?.message} />
+                <FormMessage />
               </FormItem>
             )}
           />
