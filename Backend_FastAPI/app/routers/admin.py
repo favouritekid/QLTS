@@ -241,6 +241,134 @@ async def get_user_roles(
     return roles
 
 
+@router.get(
+    "/roles/{role_name}/users",
+    tags=["Admin - Permissions"],
+)
+async def get_role_users(
+    role_name: str,
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Lấy tất cả users có một role cụ thể."""
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+
+    # Get all grouping policies (user-to-role assignments)
+    all_grouping = await enforcer.get_grouping_policy()
+
+    # Filter to find users with this specific role
+    user_ids = []
+    for group in all_grouping:
+        # group format: ["user:123", "role:manager"]
+        if len(group) >= 2 and group[1] == role_name:
+            # Extract user ID from "user:123"
+            user_subject = group[0]
+            if user_subject.startswith("user:"):
+                try:
+                    user_id = int(user_subject.split(":")[1])
+                    user_ids.append(user_id)
+                except (ValueError, IndexError):
+                    continue
+
+    # Fetch user details from database
+    if not user_ids:
+        return {"role": role_name, "user_count": 0, "users": []}
+
+    result = await db.execute(
+        select(models.User).where(models.User.id.in_(user_ids))
+    )
+    users = result.scalars().all()
+
+    # Return user info
+    user_list = [
+        {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "full_name": user.full_name,
+            "role": user.role,  # DB role (may differ from Casbin role)
+        }
+        for user in users
+    ]
+
+    return {
+        "role": role_name,
+        "user_count": len(user_list),
+        "users": user_list,
+    }
+
+
+@router.post(
+    "/roles/reassign-users",
+    tags=["Admin - Permissions"],
+)
+async def reassign_users_role(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+    user_ids: List[int] = Body(...),
+    from_role: str = Body(...),
+    to_role: str = Body(default="role:user"),
+):
+    """
+    (Admin only) Reassign multiple users from one role to another.
+    Updates both Casbin grouping policies and database user.role field.
+    """
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+
+    if not user_ids:
+        raise ResourceNotFoundError("No user IDs provided")
+
+    # Validate target role exists
+    all_roles_response = await enforcer.get_all_subjects()
+    role_subjects = [r for r in all_roles_response if r.startswith("role:")]
+
+    if to_role not in role_subjects:
+        raise ResourceNotFoundError(f"Target role '{to_role}' does not exist")
+
+    reassigned_count = 0
+    failed_users = []
+
+    for user_id in user_ids:
+        user_subject = f"user:{user_id}"
+
+        try:
+            # Remove old role grouping
+            await enforcer.remove_grouping_policy(user_subject, from_role)
+
+            # Add new role grouping
+            await enforcer.add_grouping_policy(user_subject, to_role)
+
+            # Update database user.role field
+            result = await db.execute(
+                select(models.User).where(models.User.id == user_id)
+            )
+            user = result.scalar_one_or_none()
+
+            if user:
+                # Extract role name without "role:" prefix for DB
+                db_role_name = to_role.replace("role:", "")
+                user.role = db_role_name
+                await db.commit()
+
+            reassigned_count += 1
+
+        except Exception as e:
+            failed_users.append({"user_id": user_id, "error": str(e)})
+            log.error(f"Failed to reassign user {user_id}", error=str(e))
+
+    # Save Casbin policies
+    await enforcer.save_policy()
+
+    return {
+        "detail": f"Reassigned {reassigned_count} user(s) from {from_role} to {to_role}",
+        "reassigned_count": reassigned_count,
+        "failed_count": len(failed_users),
+        "failed_users": failed_users,
+    }
+
+
 # ===============================================================
 # ADVANCED POLICY MANAGEMENT ROUTES (NEW)
 # ===============================================================

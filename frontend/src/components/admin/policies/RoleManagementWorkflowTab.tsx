@@ -1,7 +1,7 @@
 // src/components/admin/policies/RoleManagementWorkflowTab.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Shield, Lock, ArrowRight, CheckCircle2, Circle, ChevronRight, Plus, Trash2, AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import { api } from "@/lib/api/client";
 
@@ -91,11 +92,34 @@ export function RoleManagementWorkflowTab() {
   const [isDeletingRole, setIsDeletingRole] = useState(false);
   const [newRoleName, setNewRoleName] = useState("");
   const [newRoleDescription, setNewRoleDescription] = useState("");
+  const [usersWithRole, setUsersWithRole] = useState<any[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [forceDelete, setForceDelete] = useState(false);
 
   const { data: rolesData, isLoading } = useRoles();
   const { data: policies } = usePolicies();
   const addPolicyMutation = useAddPolicy();
   const queryClient = useQueryClient();
+
+  // Fetch users when delete dialog opens
+  useEffect(() => {
+    const fetchUsersWithRole = async () => {
+      if (deleteDialogOpen && selectedRole) {
+        setLoadingUsers(true);
+        try {
+          const response = await api.get(`/api/admin/roles/${selectedRole}/users`);
+          setUsersWithRole(response.data.users || []);
+        } catch (error) {
+          console.error("Failed to fetch users for role:", error);
+          setUsersWithRole([]);
+        } finally {
+          setLoadingUsers(false);
+        }
+      }
+    };
+
+    fetchUsersWithRole();
+  }, [deleteDialogOpen, selectedRole]);
 
   const handleRoleSelect = (roleName: string, displayName: string) => {
     setSelectedRole(roleName);
@@ -178,7 +202,42 @@ export function RoleManagementWorkflowTab() {
 
     setIsDeletingRole(true);
     try {
-      // Get all policies for this role - ONLY for the selected role
+      // STEP 1: Check if there are users with this role
+      const userCount = usersWithRole.length;
+      console.log("👥 Users with role:", userCount);
+
+      // STEP 2: Block deletion if users exist and no force delete
+      if (userCount > 0 && !forceDelete) {
+        toast.error(
+          `Cannot delete role: ${userCount} user(s) still assigned. Check "Force delete" to reassign them.`,
+          { duration: 5000 }
+        );
+        setIsDeletingRole(false);
+        return;
+      }
+
+      // STEP 3: If force delete and users exist, reassign them first
+      if (userCount > 0 && forceDelete) {
+        console.log(`🔄 Reassigning ${userCount} users from ${selectedRole} to role:user`);
+
+        try {
+          const userIds = usersWithRole.map((u) => u.id);
+          await api.post("/api/admin/roles/reassign-users", {
+            user_ids: userIds,
+            from_role: selectedRole,
+            to_role: "role:user",
+          });
+
+          toast.success(`Reassigned ${userCount} user(s) to role:user`);
+        } catch (error) {
+          console.error("❌ Failed to reassign users:", error);
+          toast.error("Failed to reassign users. Aborting deletion.");
+          setIsDeletingRole(false);
+          return;
+        }
+      }
+
+      // STEP 4: Get all policies for this role - ONLY for the selected role
       const rolePolicies = policies?.filter(p => p.subject === selectedRole) || [];
 
       console.log("🔍 Deleting role:", selectedRole);
@@ -193,7 +252,7 @@ export function RoleManagementWorkflowTab() {
         return;
       }
 
-      // Delete each policy for THIS role only
+      // STEP 5: Delete each policy for THIS role only
       let deletedCount = 0;
       for (const policy of rolePolicies) {
         console.log(`🗑️ Deleting policy ${deletedCount + 1}/${rolePolicies.length}:`, {
@@ -217,12 +276,18 @@ export function RoleManagementWorkflowTab() {
       // CRITICAL: Invalidate all policy-related caches to refresh UI
       await queryClient.invalidateQueries({ queryKey: policyKeys.all });
 
-      toast.success(`Role "${selectedRoleDisplayName}" deleted successfully (${deletedCount} policies removed)`);
+      const successMessage = userCount > 0
+        ? `Role deleted and ${userCount} user(s) reassigned to 'user'`
+        : `Role "${selectedRoleDisplayName}" deleted successfully (${deletedCount} policies removed)`;
+
+      toast.success(successMessage);
 
       // Close dialog and return to role selection
       setDeleteDialogOpen(false);
       setSelectedRole(null);
       setSelectedRoleDisplayName("");
+      setForceDelete(false);
+      setUsersWithRole([]);
       setCurrentStep("SELECT_ROLE");
     } catch (error) {
       console.error("❌ Error deleting role:", error);
@@ -478,18 +543,66 @@ export function RoleManagementWorkflowTab() {
             </DialogDescription>
           </DialogHeader>
 
-          <Alert variant="destructive" className="my-4">
-            <AlertTriangle className="h-4 w-4" />
-            <AlertDescription>
-              <strong>Cảnh báo:</strong> Tất cả policies ({policies?.filter(p => p.subject === selectedRole).length || 0} policies)
-              của vai trò này sẽ bị xóa vĩnh viễn. Users có vai trò này sẽ mất tất cả quyền hạn tương ứng.
-            </AlertDescription>
-          </Alert>
+          {loadingUsers ? (
+            <div className="py-4">
+              <Skeleton className="h-20 w-full" />
+            </div>
+          ) : (
+            <>
+              {/* User count warning */}
+              {usersWithRole.length > 0 && (
+                <Alert variant="destructive" className="my-4">
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertDescription>
+                    <strong>⚠️ Cảnh báo:</strong> Có <strong>{usersWithRole.length} user(s)</strong> đang được gán vai trò này.
+                    {!forceDelete && (
+                      <div className="mt-2">
+                        Bạn cần check "Force delete" bên dưới để tự động chuyển họ về vai trò <code>user</code>.
+                      </div>
+                    )}
+                    {forceDelete && (
+                      <div className="mt-2 text-orange-200">
+                        ✓ Tất cả users sẽ được tự động chuyển về vai trò <code>user</code>.
+                      </div>
+                    )}
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {/* Policy count info */}
+              <Alert className="my-4">
+                <AlertDescription>
+                  <strong>📋 Policies:</strong> {policies?.filter(p => p.subject === selectedRole).length || 0} policies
+                  sẽ bị xóa vĩnh viễn.
+                </AlertDescription>
+              </Alert>
+
+              {/* Force delete checkbox - only show if there are users */}
+              {usersWithRole.length > 0 && (
+                <div className="flex items-center space-x-2 my-4 p-3 border rounded-md bg-muted">
+                  <Checkbox
+                    id="force-delete"
+                    checked={forceDelete}
+                    onCheckedChange={(checked) => setForceDelete(checked === true)}
+                  />
+                  <label
+                    htmlFor="force-delete"
+                    className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                  >
+                    Force delete và tự động chuyển {usersWithRole.length} user(s) về vai trò <code className="bg-background px-1">user</code>
+                  </label>
+                </div>
+              )}
+            </>
+          )}
 
           <DialogFooter>
             <Button
               variant="outline"
-              onClick={() => setDeleteDialogOpen(false)}
+              onClick={() => {
+                setDeleteDialogOpen(false);
+                setForceDelete(false);
+              }}
               disabled={isDeletingRole}
             >
               Hủy
@@ -497,7 +610,7 @@ export function RoleManagementWorkflowTab() {
             <Button
               variant="destructive"
               onClick={handleDeleteRole}
-              disabled={isDeletingRole}
+              disabled={isDeletingRole || loadingUsers || (usersWithRole.length > 0 && !forceDelete)}
             >
               {isDeletingRole ? "Đang xóa..." : "Xóa Vai trò"}
             </Button>
