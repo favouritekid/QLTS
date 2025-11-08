@@ -9,7 +9,7 @@ export interface User {
   full_name?: string | null; // Có thể null
   avatar_url?: string | null; // Có thể null
   phone_number?: string | null; // Có thể null
-  role: "user" | "admin" | "manager" | "officer"; // Các role có trong backend
+  role: string; // Dynamic roles from Casbin (e.g., "user", "admin", "manager", "support", etc.)
   status: "active" | "pending" | "banned"; // Các status có trong backend
   unit_id?: number | null; // Có thể null
   skills?: string[] | null; // User skills
@@ -89,7 +89,7 @@ export interface AdminUserCreate {
   email: string;
   password: string;
   full_name?: string | null;
-  role?: "user" | "admin" | "manager" | "officer";
+  role?: string; // Dynamic roles from Casbin
   status?: "active" | "pending" | "banned";
   avatar?: File;
 }
@@ -98,7 +98,7 @@ export interface AdminUserUpdate {
   full_name?: string | null;
   email?: string;
   phone_number?: string | null;
-  role?: "user" | "admin" | "manager" | "officer";
+  role?: string; // Dynamic roles from Casbin
   status?: "active" | "pending" | "banned";
   avatar?: File;
   skills?: string[];

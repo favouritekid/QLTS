@@ -2,7 +2,7 @@
 "use client";
 
 import { useState } from "react";
-import { Shield, Lock, ArrowRight, CheckCircle2, Circle, ChevronRight, Plus } from "lucide-react";
+import { Shield, Lock, ArrowRight, CheckCircle2, Circle, ChevronRight, Plus, Trash2, AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -19,8 +19,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
+import { api } from "@/lib/api/client";
 
-import { useRoles, useAddPolicy } from "@/hooks/usePolicies";
+import { useRoles, useAddPolicy, usePolicies } from "@/hooks/usePolicies";
 import { FeaturePolicyTab } from "./FeaturePolicyTab";
 import { RoleDetailView } from "./RoleDetailView";
 
@@ -85,10 +86,13 @@ export function RoleManagementWorkflowTab() {
   const [selectedRole, setSelectedRole] = useState<string | null>(null);
   const [selectedRoleDisplayName, setSelectedRoleDisplayName] = useState<string>("");
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [isDeletingRole, setIsDeletingRole] = useState(false);
   const [newRoleName, setNewRoleName] = useState("");
   const [newRoleDescription, setNewRoleDescription] = useState("");
 
   const { data: rolesData, isLoading } = useRoles();
+  const { data: policies } = usePolicies();
   const addPolicyMutation = useAddPolicy();
 
   const handleRoleSelect = (roleName: string, displayName: string) => {
@@ -157,6 +161,54 @@ export function RoleManagementWorkflowTab() {
     } catch (error) {
       toast.error("Failed to create role");
       console.error(error);
+    }
+  };
+
+  const handleDeleteRole = async () => {
+    if (!selectedRole) return;
+
+    // Check if it's a system role
+    const role = rolesData?.roles.find(r => r.name === selectedRole);
+    if (role?.is_system_role) {
+      toast.error("Cannot delete system roles");
+      return;
+    }
+
+    setIsDeletingRole(true);
+    try {
+      // Get all policies for this role
+      const rolePolicies = policies?.filter(p => p.subject === selectedRole) || [];
+
+      if (rolePolicies.length === 0) {
+        toast.error("No policies found for this role");
+        setDeleteDialogOpen(false);
+        setIsDeletingRole(false);
+        return;
+      }
+
+      // Delete all policies for this role
+      for (const policy of rolePolicies) {
+        await api.delete("/api/admin/policies", {
+          data: {
+            subject: policy.subject,
+            object: policy.object,
+            action: policy.action,
+          },
+        });
+      }
+
+      toast.success(`Role "${selectedRoleDisplayName}" deleted successfully (${rolePolicies.length} policies removed)`);
+
+      // Close dialog and return to role selection
+      setDeleteDialogOpen(false);
+      setSelectedRole(null);
+      setSelectedRoleDisplayName("");
+      setCurrentStep("SELECT_ROLE");
+    } catch (error) {
+      toast.error("Failed to delete role");
+      console.error(error);
+    } finally {
+      setIsDeletingRole(false);
     }
   };
 
@@ -246,6 +298,9 @@ export function RoleManagementWorkflowTab() {
   }
   // Step 2: VIEW_DETAILS
   else if (currentStep === "VIEW_DETAILS" && selectedRole) {
+    const currentRole = rolesData?.roles.find(r => r.name === selectedRole);
+    const isSystemRole = currentRole?.is_system_role || false;
+
     stepContent = (
       <div className="space-y-4">
         <StepIndicator currentStep={currentStep} />
@@ -260,6 +315,16 @@ export function RoleManagementWorkflowTab() {
                 </CardDescription>
               </div>
               <div className="flex gap-2">
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => setDeleteDialogOpen(true)}
+                  disabled={isSystemRole}
+                  title={isSystemRole ? "Cannot delete system roles" : "Delete this role"}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Xóa Vai trò
+                </Button>
                 <Button variant="outline" onClick={handleBackToRoles}>
                   Quay lại
                 </Button>
@@ -374,6 +439,47 @@ export function RoleManagementWorkflowTab() {
               disabled={addPolicyMutation.isPending || !newRoleName.trim()}
             >
               {addPolicyMutation.isPending ? "Đang tạo..." : "Tạo Vai trò"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Role Confirmation Dialog */}
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="h-5 w-5" />
+              Xác Nhận Xóa Vai trò
+            </DialogTitle>
+            <DialogDescription>
+              Bạn có chắc chắn muốn xóa vai trò <strong>&quot;{selectedRoleDisplayName}&quot;</strong>?
+              Hành động này không thể hoàn tác.
+            </DialogDescription>
+          </DialogHeader>
+
+          <Alert variant="destructive" className="my-4">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertDescription>
+              <strong>Cảnh báo:</strong> Tất cả policies ({policies?.filter(p => p.subject === selectedRole).length || 0} policies)
+              của vai trò này sẽ bị xóa vĩnh viễn. Users có vai trò này sẽ mất tất cả quyền hạn tương ứng.
+            </AlertDescription>
+          </Alert>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDeleteDialogOpen(false)}
+              disabled={isDeletingRole}
+            >
+              Hủy
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteRole}
+              disabled={isDeletingRole}
+            >
+              {isDeletingRole ? "Đang xóa..." : "Xóa Vai trò"}
             </Button>
           </DialogFooter>
         </DialogContent>

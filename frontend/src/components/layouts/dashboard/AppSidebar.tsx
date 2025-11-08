@@ -3,7 +3,7 @@
 
 import { useUIStore } from "@/lib/stores/ui.store";
 import { cn } from "@/lib/utils";
-import { Bell, BookMarked, Settings, LayoutDashboard, Database, Users } from "lucide-react";
+import { Bell, BookMarked, Settings, LayoutDashboard, Database, Users, ShieldCheck } from "lucide-react";
 import { NavUser } from "./NavUser";
 import { NavGroup } from "./NavGroup";
 import type { NavigationLink } from "@/types/layout.types";
@@ -68,8 +68,13 @@ export function AppSidebar() {
   const mainNavLinks: NavigationLink[] = [
     { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
     { label: "Leads", href: "/leads", icon: Database },
-    // Only show Users link for admin/manager
-    ...(isAdmin ? [{ label: "Users", href: "/admin/users", icon: Users }] : []),
+    // Only show admin links for admin/manager
+    ...(isAdmin
+      ? [
+          { label: "Users", href: "/admin/users", icon: Users },
+          { label: "Policy Management", href: "/admin/policies", icon: ShieldCheck },
+        ]
+      : []),
   ];
 
   const settingsLinks: NavigationLink[] = [

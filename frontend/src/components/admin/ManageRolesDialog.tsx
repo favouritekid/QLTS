@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Check, X, Plus, Loader2 } from "lucide-react";
 
 import {
@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useAdminAssignRole, useAdminRemoveRole, useAdminUserRoles } from "@/hooks/useAdminUsers";
+import { useRoles } from "@/hooks/usePolicies";
 import type { User } from "@/types/api.types";
 
 interface ManageRolesDialogProps {
@@ -29,12 +30,12 @@ interface ManageRolesDialogProps {
   user: User;
 }
 
-const AVAILABLE_ROLES = [
-  { value: "role:user", label: "User" },
-  { value: "role:officer", label: "Officer" },
-  { value: "role:manager", label: "Manager" },
-  { value: "role:admin", label: "Admin" },
-];
+/**
+ * Capitalize first letter for display (e.g., "admin" -> "Admin")
+ */
+function capitalizeRole(role: string): string {
+  return role.charAt(0).toUpperCase() + role.slice(1);
+}
 
 export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialogProps) {
   const [selectedRole, setSelectedRole] = useState<string>("");
@@ -42,8 +43,20 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
   const assignRoleMutation = useAdminAssignRole();
   const removeRoleMutation = useAdminRemoveRole();
 
+  // Fetch available roles from Casbin
+  const { data: rolesData, isLoading: isLoadingAvailableRoles } = useRoles();
+
   // Fetch user roles from API
   const { data: userRoles, isLoading: isLoadingRoles, error: rolesError, refetch } = useAdminUserRoles(user.id);
+
+  // Build available roles from Casbin API
+  const AVAILABLE_ROLES = useMemo(() => {
+    if (!rolesData?.roles) return [];
+    return rolesData.roles.map(role => ({
+      value: role.name, // Already has "role:" prefix
+      label: capitalizeRole(role.name.replace(/^role:/, '')), // Strip prefix for display
+    }));
+  }, [rolesData]);
 
   // Refetch roles when dialog opens
   useEffect(() => {
@@ -53,6 +66,7 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
   }, [open, refetch]);
 
   const isPending = assignRoleMutation.isPending || removeRoleMutation.isPending;
+  const isLoading = isLoadingRoles || isLoadingAvailableRoles;
 
   // Primary role from user object
   const primaryRole = `role:${user.role}`;
@@ -135,7 +149,7 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
               <div className="text-sm text-destructive mb-4 p-3 rounded-lg border border-destructive/50 bg-destructive/10">
                 Failed to load user roles. Please try again.
               </div>
-            ) : isLoadingRoles ? (
+            ) : isLoading ? (
               <div className="flex items-center justify-center py-4">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               </div>
