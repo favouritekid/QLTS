@@ -44,6 +44,12 @@ export const API_ENDPOINTS = {
       POLICIES: "/api/admin/policies",
       ASSIGN_ROLE: "/api/admin/assign-role",
       REMOVE_ROLE: "/api/admin/assign-role", // DELETE method
+      ROLES: "/api/admin/roles",
+      TEMPLATES: "/api/admin/policy-templates",
+      BATCH: "/api/admin/policies/batch",
+      VALIDATE: "/api/admin/policies/validate",
+      APPLY_TEMPLATE: "/api/admin/policies/apply-template",
+      STATISTICS: "/api/admin/policies/statistics",
     },
     ACTIVITY_LOGS: "/api/admin/activity-logs",
     STATISTICS: "/api/admin/statistics",
