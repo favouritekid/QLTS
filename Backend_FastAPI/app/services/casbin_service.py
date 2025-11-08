@@ -462,3 +462,39 @@ class CasbinPolicyService:
             "total_roles": len(unique_roles),
             "total_grouping_policies": len(grouping_policies),
         }
+
+    # =========================================================================
+    # ADVANCED PERMISSION TOOLS
+    # =========================================================================
+
+    async def get_subjects_for_permission(self, obj: str, act: str) -> List[str]:
+        """
+        Reverse permission lookup: Find all subjects (roles/users) that can access a resource.
+
+        This is useful for auditing and understanding "who can access this resource?"
+
+        Args:
+            obj: Resource path (e.g., "/api/leads", "/api/admin/users")
+            act: HTTP method (e.g., "GET", "POST", ".*")
+
+        Returns:
+            List of subjects (e.g., ["role:admin", "role:manager", "user:123"])
+
+        Example:
+            >>> await get_subjects_for_permission("/api/leads", "GET")
+            ["role:admin", "role:manager", "role:officer"]
+        """
+        allowed_subjects = []
+
+        # Get all unique subjects from policies
+        all_policies = self.enforcer.get_policy()
+        all_subjects = set(policy[0] for policy in all_policies)
+
+        # Test each subject to see if they have permission
+        for subject in all_subjects:
+            # Use enforcer.enforce to check permission
+            is_allowed = await self.enforcer.enforce(subject, obj, act)
+            if is_allowed:
+                allowed_subjects.append(subject)
+
+        return sorted(allowed_subjects)  # Sort for consistent output

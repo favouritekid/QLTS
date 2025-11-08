@@ -1687,3 +1687,260 @@ async def get_user_statistics(
 ):
     """(Admin only) Lấy thống kê tổng quan về users cho dashboard."""
     return await activity_service.get_user_statistics(db)
+
+
+# =============================================================================
+# ADVANCED CASBIN PERMISSION TOOLS
+# =============================================================================
+
+
+@router.get(
+    "/policies/who-can-access",
+    response_model=schemas.WhoCanAccessResponse,
+    tags=["Admin - Policies (Advanced)"],
+)
+async def who_can_access_resource(
+    object: str = Query(..., description="Resource path (e.g., /api/leads)"),
+    action: str = Query(..., description="HTTP method (e.g., GET, POST)"),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Reverse permission lookup: Find who can access a resource.
+
+    This endpoint helps answer "Who has permission to access this resource?"
+    Useful for auditing and security analysis.
+
+    Example:
+        GET /api/admin/policies/who-can-access?object=/api/leads&action=GET
+
+    Returns list of all subjects (roles/users) that have permission.
+    """
+    # Initialize Casbin service
+    enforcer = get_casbin_enforcer()
+    casbin_service = CasbinPolicyService(db=None, enforcer=enforcer)
+
+    # Get allowed subjects
+    allowed_subjects = await casbin_service.get_subjects_for_permission(object, action)
+
+    return {
+        "object": object,
+        "action": action,
+        "allowed_subjects": allowed_subjects,
+        "total_count": len(allowed_subjects),
+    }
+
+
+@router.post(
+    "/policies/simulate",
+    response_model=schemas.PermissionSimulateResponse,
+    tags=["Admin - Policies (Advanced)"],
+)
+async def simulate_permission(
+    request_data: schemas.PermissionSimulateRequest,
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Simulate a permission check without actually granting access.
+
+    Test whether a subject (role/user) would have permission to perform an action
+    on a resource, without modifying any policies.
+
+    This is useful for:
+    - Testing policy configurations before deploying
+    - Debugging permission issues
+    - Understanding complex policy interactions
+
+    Example:
+        POST /api/admin/policies/simulate
+        {
+            "subject": "role:manager",
+            "object": "/api/leads",
+            "action": "GET"
+        }
+    """
+    enforcer = get_casbin_enforcer()
+
+    # Simulate permission check
+    is_allowed = await enforcer.enforce(
+        request_data.subject,
+        request_data.object,
+        request_data.action
+    )
+
+    # Generate user-friendly message
+    if is_allowed:
+        message = f"✅ ALLOWED: {request_data.subject} CAN {request_data.action} on {request_data.object}"
+    else:
+        message = f"❌ DENIED: {request_data.subject} CANNOT {request_data.action} on {request_data.object}"
+
+    return {
+        "subject": request_data.subject,
+        "object": request_data.object,
+        "action": request_data.action,
+        "is_allowed": is_allowed,
+        "message": message,
+    }
+
+
+@router.get(
+    "/roles/{role_name}/features",
+    response_model=schemas.RoleFeaturesResponse,
+    tags=["Admin - Policies (Advanced)"],
+)
+async def get_role_features(
+    role_name: str,
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Get feature-based permission status for a role.
+
+    Returns a high-level view of which business features are enabled
+    for a specific role, abstracting away low-level policy details.
+
+    Example:
+        GET /api/admin/roles/role:manager/features
+
+    Returns:
+        {
+            "role": "role:manager",
+            "features": [
+                {"feature_id": "view_leads", "display_name": "Xem Leads", "enabled": true, ...},
+                {"feature_id": "edit_leads", "display_name": "Sửa Leads", "enabled": false, ...},
+                ...
+            ]
+        }
+    """
+    from ..casbin_config.policy_templates import FEATURE_MAP
+
+    enforcer = get_casbin_enforcer()
+
+    # Get current policies for this role
+    all_policies = enforcer.get_policy()
+    role_policies = [
+        (p[0], p[1], p[2])
+        for p in all_policies
+        if p[0] == role_name
+    ]
+
+    features = []
+
+    # Check each feature
+    for feature_id, feature_def in FEATURE_MAP.items():
+        # Check if all policies for this feature exist for this role
+        feature_policies = [
+            (
+                policy["subject"].replace("{role}", role_name),
+                policy["object"],
+                policy["action"]
+            )
+            for policy in feature_def["policies"]
+        ]
+
+        # Feature is enabled if all its policies exist
+        enabled = all(policy in role_policies for policy in feature_policies)
+
+        features.append({
+            "feature_id": feature_id,
+            "display_name": feature_def["display_name"],
+            "enabled": enabled,
+            "policy_count": len(feature_def["policies"]),
+        })
+
+    return {
+        "role": role_name,
+        "features": features,
+    }
+
+
+@router.post(
+    "/roles/{role_name}/features",
+    response_model=schemas.PolicyBatchResult,
+    tags=["Admin - Policies (Advanced)"],
+)
+async def toggle_role_feature(
+    role_name: str,
+    request_data: schemas.ToggleFeatureRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Enable or disable a feature for a role.
+
+    This endpoint manages all policies associated with a feature as a group,
+    making it easier to grant/revoke business-level permissions.
+
+    Example:
+        POST /api/admin/roles/role:manager/features
+        {
+            "feature_id": "view_leads",
+            "enabled": true
+        }
+
+    This will add/remove all policies associated with the "view_leads" feature.
+    """
+    from ..casbin_config.policy_templates import FEATURE_MAP
+
+    # Validate feature exists
+    if request_data.feature_id not in FEATURE_MAP:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown feature: {request_data.feature_id}"
+        )
+
+    feature_def = FEATURE_MAP[request_data.feature_id]
+    enforcer = get_casbin_enforcer()
+    casbin_service = CasbinPolicyService(db=db, enforcer=enforcer)
+
+    # Convert feature policies to tuples with role substituted
+    policies_tuples = [
+        (
+            policy["subject"].replace("{role}", role_name),
+            policy["object"],
+            policy["action"]
+        )
+        for policy in feature_def["policies"]
+    ]
+
+    # Add or remove policies based on enabled flag
+    if request_data.enabled:
+        # Enable feature: add all policies
+        result = await casbin_service.add_policies_batch(policies_tuples, validate=True)
+
+        # Log activity
+        await activity_service.log_activity(
+            db=db,
+            actor_id=current_admin.id,
+            action="enable_feature",
+            description=f"Enabled feature '{feature_def['display_name']}' for {role_name}",
+            resource_type="casbin_policy",
+            resource_id=None,
+            metadata={
+                "feature_id": request_data.feature_id,
+                "role": role_name,
+                "policies_added": result["added"],
+            }
+        )
+    else:
+        # Disable feature: remove all policies
+        result = await casbin_service.remove_policies_batch(
+            policies_tuples,
+            validate=True,
+            force=False
+        )
+
+        # Log activity
+        await activity_service.log_activity(
+            db=db,
+            actor_id=current_admin.id,
+            action="disable_feature",
+            description=f"Disabled feature '{feature_def['display_name']}' for {role_name}",
+            resource_type="casbin_policy",
+            resource_id=None,
+            metadata={
+                "feature_id": request_data.feature_id,
+                "role": role_name,
+                "policies_removed": result.get("removed", 0),
+            }
+        )
+
+    return result

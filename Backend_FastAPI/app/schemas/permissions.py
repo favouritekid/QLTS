@@ -126,3 +126,60 @@ class TemplatesListResponse(BaseModel):
     """Schema for templates list endpoint response."""
 
     templates: List[TemplateInfo]
+
+
+# ============================================================================
+# ADVANCED PERMISSION TOOLS SCHEMAS
+# ============================================================================
+
+
+class WhoCanAccessResponse(BaseModel):
+    """Schema for reverse permission lookup response."""
+
+    object: str = Field(..., description="Resource path that was queried")
+    action: str = Field(..., description="Action that was queried")
+    allowed_subjects: List[str] = Field(
+        ..., description="List of subjects (roles/users) with access"
+    )
+    total_count: int = Field(..., description="Number of subjects with access")
+
+
+class PermissionSimulateRequest(BaseModel):
+    """Schema for permission simulation request."""
+
+    subject: str = Field(..., description="Subject to test (e.g., role:manager, user:123)")
+    object: str = Field(..., description="Resource path (e.g., /api/leads)")
+    action: str = Field(..., description="HTTP method (e.g., GET, POST)")
+
+
+class PermissionSimulateResponse(BaseModel):
+    """Schema for permission simulation response."""
+
+    subject: str = Field(..., description="Subject that was tested")
+    object: str = Field(..., description="Resource that was tested")
+    action: str = Field(..., description="Action that was tested")
+    is_allowed: bool = Field(..., description="Whether permission is granted")
+    message: str = Field(..., description="Human-readable result message")
+
+
+class FeatureStatus(BaseModel):
+    """Schema for a single feature's status."""
+
+    feature_id: str = Field(..., description="Feature identifier")
+    display_name: str = Field(..., description="Human-readable feature name")
+    enabled: bool = Field(..., description="Whether feature is currently enabled")
+    policy_count: int = Field(..., description="Number of policies in this feature")
+
+
+class RoleFeaturesResponse(BaseModel):
+    """Schema for role features list response."""
+
+    role: str = Field(..., description="Role name (e.g., role:manager)")
+    features: List[FeatureStatus] = Field(..., description="List of feature statuses")
+
+
+class ToggleFeatureRequest(BaseModel):
+    """Schema for feature toggle request."""
+
+    feature_id: str = Field(..., description="Feature identifier to toggle")
+    enabled: bool = Field(..., description="Whether to enable or disable the feature")
