@@ -46,7 +46,22 @@ from .organization import (
 )
 
 # --- Từ permissions.py ---
-from .permissions import Policy, PolicyCreate, RoleAssignment
+from .permissions import (
+    Policy,
+    PolicyCreate,
+    PolicyRule,
+    RoleAssignment,
+    RoleInfo,
+    RolesListResponse,
+    TemplateInfo,
+    TemplatesListResponse,
+    PolicyBatchRequest,
+    PolicyBatchResult,
+    PolicyValidationRequest,
+    PolicyValidationResult,
+    TemplateApplicationRequest,
+    PolicyStatistics,
+)
 
 # --- Từ pipeline.py ---
 from .pipeline import (
