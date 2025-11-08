@@ -36,6 +36,8 @@ interface UseAdminUsersListParams {
   search?: string;
   role?: string;
   status?: string;
+  sort?: string;
+  order?: "asc" | "desc";
 }
 
 export function useAdminUsersList(params: UseAdminUsersListParams = {}) {

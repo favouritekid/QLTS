@@ -15,6 +15,9 @@ import {
   CheckSquare,
   Square,
   Eye,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
 } from "lucide-react";
 import {
   useReactTable,
@@ -78,6 +81,8 @@ export default function AdminUsersPage() {
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [sortBy, setSortBy] = useState<string>("id");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [rowSelection, setRowSelection] = useState({});
   const [userToDelete, setUserToDelete] = useState<User | null>(null);
   const [userDialogOpen, setUserDialogOpen] = useState(false);
@@ -89,13 +94,15 @@ export default function AdminUsersPage() {
   const [manageRolesUser, setManageRolesUser] = useState<User | null>(null);
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
 
-  // Fetch users with filters
+  // Fetch users with filters and sorting
   const { data, isLoading, error } = useAdminUsersList({
     page,
     page_size: 10,
     search: search || undefined,
     role: roleFilter === "all" ? undefined : roleFilter,
     status: statusFilter === "all" ? undefined : statusFilter,
+    sort: sortBy,
+    order: sortOrder,
   });
 
   const deleteUserMutation = useAdminDeleteUser();
@@ -144,11 +151,29 @@ export default function AdminUsersPage() {
       },
       {
         accessorKey: "email",
-        header: "Email",
+        header: () => (
+          <Button
+            variant="ghost"
+            onClick={() => handleSort("email")}
+            className="-ml-4 h-8"
+          >
+            Email
+            {getSortIcon("email")}
+          </Button>
+        ),
       },
       {
         accessorKey: "role",
-        header: "Role",
+        header: () => (
+          <Button
+            variant="ghost"
+            onClick={() => handleSort("role")}
+            className="-ml-4 h-8"
+          >
+            Role
+            {getSortIcon("role")}
+          </Button>
+        ),
         cell: ({ row }) => {
           const role = row.original.role;
           const variant =
@@ -162,7 +187,16 @@ export default function AdminUsersPage() {
       },
       {
         accessorKey: "status",
-        header: "Status",
+        header: () => (
+          <Button
+            variant="ghost"
+            onClick={() => handleSort("status")}
+            className="-ml-4 h-8"
+          >
+            Status
+            {getSortIcon("status")}
+          </Button>
+        ),
         cell: ({ row }) => {
           const status = row.original.status;
           const variant =
@@ -230,7 +264,7 @@ export default function AdminUsersPage() {
         },
       },
     ],
-    []
+    [sortBy, sortOrder]
   );
 
   // Setup TanStack Table
@@ -305,6 +339,32 @@ export default function AdminUsersPage() {
 
     // Clear selection after successful status change
     setRowSelection({});
+  };
+
+  // Handle column sorting
+  const handleSort = (column: string) => {
+    if (sortBy === column) {
+      // Toggle order if same column
+      setSortOrder(sortOrder === "asc" ? "desc" : "asc");
+    } else {
+      // Set new column and default to ascending
+      setSortBy(column);
+      setSortOrder("asc");
+    }
+    // Reset to page 1 when sorting changes
+    setPage(1);
+  };
+
+  // Render sort icon for column header
+  const getSortIcon = (column: string) => {
+    if (sortBy !== column) {
+      return <ArrowUpDown className="ml-2 h-4 w-4" />;
+    }
+    return sortOrder === "asc" ? (
+      <ArrowUp className="ml-2 h-4 w-4" />
+    ) : (
+      <ArrowDown className="ml-2 h-4 w-4" />
+    );
   };
 
   const handleExportCSV = async () => {
