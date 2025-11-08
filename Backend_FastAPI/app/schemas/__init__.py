@@ -61,6 +61,13 @@ from .permissions import (
     PolicyValidationResult,
     TemplateApplicationRequest,
     PolicyStatistics,
+    # Advanced permission tools schemas
+    WhoCanAccessResponse,
+    PermissionSimulateRequest,
+    PermissionSimulateResponse,
+    FeatureStatus,
+    RoleFeaturesResponse,
+    ToggleFeatureRequest,
 )
 
 # --- Từ pipeline.py ---
