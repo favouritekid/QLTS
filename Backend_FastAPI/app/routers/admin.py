@@ -1991,3 +1991,104 @@ async def toggle_role_feature(
         )
 
     return result
+
+
+@router.get(
+    "/roles/{role_name}/explain",
+    response_model=schemas.PermissionExplainResponse,
+    tags=["Admin - Policies (Advanced)"],
+)
+async def explain_role_permissions(
+    request: Request,
+    role_name: str,
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Explain where a role's permissions come from.
+
+    Categorizes policies into:
+    - Template policies (from system role templates)
+    - Feature policies (from enabled features)
+    - Manual policies (added individually)
+
+    This helps admins understand permission inheritance and sources.
+    """
+    from ..casbin_config.policy_templates import (
+        FEATURE_MAP,
+        ADMIN_TEMPLATE,
+        MANAGER_TEMPLATE,
+        OFFICER_TEMPLATE,
+    )
+
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+
+    # Get all policies for this role
+    all_policies = enforcer.get_policy()
+    role_policies_tuples = [
+        (p[0], p[1], p[2])
+        for p in all_policies
+        if p[0] == role_name
+    ]
+
+    # Map role to template
+    TEMPLATE_MAP = {
+        "role:admin": ADMIN_TEMPLATE,
+        "role:manager": MANAGER_TEMPLATE,
+        "role:officer": OFFICER_TEMPLATE,
+    }
+
+    # 1. Policies from template
+    policies_from_template = []
+    if role_name in TEMPLATE_MAP:
+        template = TEMPLATE_MAP[role_name]
+        template_policies = [
+            (
+                policy["subject"].replace("{role}", role_name),
+                policy["object"],
+                policy["action"]
+            )
+            for policy in template["policies"]
+        ]
+        policies_from_template = [
+            {"subject": p[0], "object": p[1], "action": p[2]}
+            for p in template_policies
+            if p in role_policies_tuples
+        ]
+
+    # 2. Policies from features
+    policies_from_features = []
+    for feature_id, feature_def in FEATURE_MAP.items():
+        feature_policies = [
+            (
+                policy["subject"].replace("{role}", role_name),
+                policy["object"],
+                policy["action"]
+            )
+            for policy in feature_def["policies"]
+        ]
+
+        # Check if all feature policies exist (feature is enabled)
+        if all(fp in role_policies_tuples for fp in feature_policies):
+            for fp in feature_policies:
+                policies_from_features.append({
+                    "subject": fp[0],
+                    "object": fp[1],
+                    "action": fp[2]
+                })
+
+    # 3. Manual policies (not from template or features)
+    template_set = set(tuple(p.values()) for p in policies_from_template)
+    feature_set = set(tuple(p.values()) for p in policies_from_features)
+
+    policies_manual = []
+    for p in role_policies_tuples:
+        p_dict = {"subject": p[0], "object": p[1], "action": p[2]}
+        if tuple(p_dict.values()) not in template_set and tuple(p_dict.values()) not in feature_set:
+            policies_manual.append(p_dict)
+
+    return {
+        "role": role_name,
+        "policies_from_template": policies_from_template,
+        "policies_from_features": policies_from_features,
+        "policies_manual": policies_manual,
+    }

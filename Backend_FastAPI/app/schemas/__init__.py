@@ -69,6 +69,7 @@ from .permissions import (
     RoleFeaturesResponse,
     ToggleFeatureRequest,
     PolicySuggestionsResponse,
+    PermissionExplainResponse,
 )
 
 # --- Từ pipeline.py ---

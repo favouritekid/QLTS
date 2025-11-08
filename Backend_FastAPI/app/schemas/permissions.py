@@ -191,3 +191,18 @@ class PolicySuggestionsResponse(BaseModel):
     subjects: List[str] = Field(..., description="List of unique subjects in policies")
     objects: List[str] = Field(..., description="List of unique objects/resources in policies")
     actions: List[str] = Field(..., description="List of unique actions in policies")
+
+
+class PermissionExplainResponse(BaseModel):
+    """Schema for permission explanation (shows policy sources)."""
+
+    role: str = Field(..., description="Role name being explained")
+    policies_from_template: List[PolicyRule] = Field(
+        ..., description="Policies inherited from system templates"
+    )
+    policies_from_features: List[PolicyRule] = Field(
+        ..., description="Policies from enabled features"
+    )
+    policies_manual: List[PolicyRule] = Field(
+        ..., description="Policies added manually (not from templates/features)"
+    )
