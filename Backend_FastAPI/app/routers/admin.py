@@ -362,7 +362,7 @@ async def add_policies_batch(
     # Actually add policies
     result = await casbin_service.add_policies_batch(
         policies_tuples,
-        validate=batch_req.validate
+        validate=batch_req.run_validation
     )
 
     # Log activity for each added policy
@@ -461,7 +461,7 @@ async def apply_template_to_role(
     result = await casbin_service.apply_template_to_role(
         template_req.template_id,
         template_req.role,
-        validate=template_req.validate,
+        validate=template_req.run_validation,
     )
 
     # Log activity
@@ -1716,8 +1716,10 @@ async def who_can_access_resource(
 
     Returns list of all subjects (roles/users) that have permission.
     """
+    from ..services.casbin_service import CasbinPolicyService
+
     # Initialize Casbin service
-    enforcer = request.app.state.enforcer
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
     casbin_service = CasbinPolicyService(db=None, enforcer=enforcer)
 
     # Get allowed subjects
@@ -1760,10 +1762,11 @@ async def simulate_permission(
             "action": "GET"
         }
     """
-    enforcer = request.app.state.enforcer
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
     # Simulate permission check
-    is_allowed = await enforcer.enforce(
+    # Note: enforcer.enforce() is SYNC, not async (despite using AsyncEnforcer)
+    is_allowed = enforcer.enforce(
         request_data.subject,
         request_data.object,
         request_data.action
@@ -1815,7 +1818,7 @@ async def get_role_features(
     """
     from ..casbin_config.policy_templates import FEATURE_MAP
 
-    enforcer = request.app.state.enforcer
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
     # Get current policies for this role
     all_policies = enforcer.get_policy()
@@ -1892,7 +1895,7 @@ async def toggle_role_feature(
         )
 
     feature_def = FEATURE_MAP[request_data.feature_id]
-    enforcer = request.app.state.enforcer
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
     casbin_service = CasbinPolicyService(db=db, enforcer=enforcer)
 
     # Convert feature policies to tuples with role substituted

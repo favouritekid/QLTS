@@ -66,7 +66,7 @@ class PolicyBatchRequest(BaseModel):
     """Schema for batch policy operations."""
 
     policies: List[PolicyCreate] = Field(..., description="List of policies to add/remove")
-    validate: bool = Field(True, description="Whether to validate before applying")
+    run_validation: bool = Field(True, description="Whether to validate before applying")
     dry_run: bool = Field(False, description="Preview changes without applying")
 
 
@@ -105,7 +105,7 @@ class TemplateApplicationRequest(BaseModel):
 
     template_id: str = Field(..., description="Template identifier")
     role: str = Field(..., description="Role to apply template to (e.g., role:custom)")
-    validate: bool = Field(True, description="Whether to validate before applying")
+    run_validation: bool = Field(True, description="Whether to validate before applying")
 
 
 class PolicyStatistics(BaseModel):
