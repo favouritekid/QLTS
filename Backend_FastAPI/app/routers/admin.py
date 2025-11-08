@@ -286,7 +286,7 @@ async def get_policy_templates(
     Templates provide pre-configured sets of policies for common roles.
     Admins can apply templates to quickly set up permissions.
     """
-    from ..config.policy_templates import POLICY_TEMPLATES
+    from ..casbin_config.policy_templates import POLICY_TEMPLATES
 
     templates = []
     for template_id, template_data in POLICY_TEMPLATES.items():

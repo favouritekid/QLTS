@@ -17,7 +17,7 @@ import casbin
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..config.policy_templates import (
+from ..casbin_config.policy_templates import (
     POLICY_TEMPLATES,
     SYSTEM_ROLES,
     CRITICAL_POLICIES,
