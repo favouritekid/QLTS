@@ -1,7 +1,7 @@
 // src/components/admin/policies/FeaturePolicyTab.tsx
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   Card,
   CardContent,
@@ -51,14 +51,7 @@ export function FeaturePolicyTab() {
   const [isLoading, setIsLoading] = useState(false);
   const [togglingFeature, setTogglingFeature] = useState<string | null>(null);
 
-  // Fetch features when role changes
-  useEffect(() => {
-    if (selectedRole) {
-      fetchRoleFeatures();
-    }
-  }, [selectedRole]);
-
-  const fetchRoleFeatures = async () => {
+  const fetchRoleFeatures = useCallback(async () => {
     setIsLoading(true);
     try {
       const response = await api.get<RoleFeaturesResponse>(
@@ -71,7 +64,14 @@ export function FeaturePolicyTab() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [selectedRole]);
+
+  // Fetch features when role changes
+  useEffect(() => {
+    if (selectedRole) {
+      fetchRoleFeatures();
+    }
+  }, [selectedRole, fetchRoleFeatures]);
 
   const toggleFeature = async (featureId: string, enabled: boolean) => {
     setTogglingFeature(featureId);

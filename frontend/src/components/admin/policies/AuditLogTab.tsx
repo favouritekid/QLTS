@@ -100,7 +100,7 @@ export function AuditLogTab() {
                         <div className="flex items-center gap-2">
                           <UserIcon className="text-muted-foreground h-4 w-4" />
                           <span className="font-medium">
-                            {log.actor?.full_name || log.actor?.username || `User #${log.actor_id}`}
+                            {log.actor_full_name || log.actor_username || `User #${log.actor_id}`}
                           </span>
                         </div>
                       </TableCell>
