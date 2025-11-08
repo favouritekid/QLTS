@@ -102,8 +102,15 @@ export function SessionList({
         {getDeviceIconComponent(session)}
         <span
           className={cn(
-            "ring-card absolute right-0 bottom-0 block h-2 w-2 rounded-full ring-2",
-            isCurrent ? "bg-green-500" : "bg-gray-400"
+            // Base styles
+            "absolute right-0 bottom-0 block h-2 w-2 rounded-full",
+
+            // ✅ SỬA LỖI UX: Luôn là màu xanh (tất cả sessions đều active)
+            "bg-green-500",
+
+            // ✅ Tinh chỉnh: Dùng viền (ring) để làm nổi bật session hiện tại
+            "ring-2",
+            isCurrent ? "ring-primary" : "ring-card"
           )}
         />
       </span>
