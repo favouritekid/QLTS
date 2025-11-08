@@ -45,17 +45,29 @@ const AVAILABLE_ROLES = [
   { value: "role:user", label: "User" },
 ];
 
-export function FeaturePolicyTab() {
+interface FeaturePolicyTabProps {
+  /**
+   * Optional role name to manage features for.
+   * If provided, the role selector will be hidden and this role will be used.
+   * If not provided, the component will use its own state and show a role selector.
+   */
+  roleName?: string;
+}
+
+export function FeaturePolicyTab({ roleName: propRoleName }: FeaturePolicyTabProps = {}) {
   const [selectedRole, setSelectedRole] = useState<string>("role:manager");
   const [features, setFeatures] = useState<FeatureStatus[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [togglingFeature, setTogglingFeature] = useState<string | null>(null);
 
+  // Use prop if provided, otherwise use internal state
+  const effectiveRole = propRoleName || selectedRole;
+
   const fetchRoleFeatures = useCallback(async () => {
     setIsLoading(true);
     try {
       const response = await api.get<RoleFeaturesResponse>(
-        `/api/admin/roles/${selectedRole}/features`
+        `/api/admin/roles/${effectiveRole}/features`
       );
       setFeatures(response.data.features);
     } catch (error: unknown) {
@@ -64,19 +76,19 @@ export function FeaturePolicyTab() {
     } finally {
       setIsLoading(false);
     }
-  }, [selectedRole]);
+  }, [effectiveRole]);
 
   // Fetch features when role changes
   useEffect(() => {
-    if (selectedRole) {
+    if (effectiveRole) {
       fetchRoleFeatures();
     }
-  }, [selectedRole, fetchRoleFeatures]);
+  }, [effectiveRole, fetchRoleFeatures]);
 
   const toggleFeature = async (featureId: string, enabled: boolean) => {
     setTogglingFeature(featureId);
     try {
-      await api.post(`/api/admin/roles/${selectedRole}/features`, {
+      await api.post(`/api/admin/roles/${effectiveRole}/features`, {
         feature_id: featureId,
         enabled,
       });
@@ -121,22 +133,24 @@ export function FeaturePolicyTab() {
           </AlertDescription>
         </Alert>
 
-        {/* Role Selector */}
-        <div className="space-y-2">
-          <Label>Select Role</Label>
-          <Select value={selectedRole} onValueChange={setSelectedRole}>
-            <SelectTrigger className="w-full md:w-[300px]">
-              <SelectValue placeholder="Choose a role" />
-            </SelectTrigger>
-            <SelectContent>
-              {AVAILABLE_ROLES.map((role) => (
-                <SelectItem key={role.value} value={role.value}>
-                  {role.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        {/* Role Selector - Only show if roleName prop is not provided */}
+        {!propRoleName && (
+          <div className="space-y-2">
+            <Label>Select Role</Label>
+            <Select value={selectedRole} onValueChange={setSelectedRole}>
+              <SelectTrigger className="w-full md:w-[300px]">
+                <SelectValue placeholder="Choose a role" />
+              </SelectTrigger>
+              <SelectContent>
+                {AVAILABLE_ROLES.map((role) => (
+                  <SelectItem key={role.value} value={role.value}>
+                    {role.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
 
         {/* Features List */}
         {isLoading ? (

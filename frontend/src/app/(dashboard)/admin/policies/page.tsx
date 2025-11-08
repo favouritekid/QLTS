@@ -2,22 +2,18 @@
 "use client";
 
 import { useState } from "react";
-import { Shield, FileText, Grid3x3, Activity, Search, Wrench, Layers } from "lucide-react";
+import { Activity, HardHat, ShieldCheck } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
 import { usePolicyStatistics } from "@/hooks/usePolicies";
-import { PoliciesTab } from "@/components/admin/policies/PoliciesTab";
-import { RolesTab } from "@/components/admin/policies/RolesTab";
-import { TemplatesTab } from "@/components/admin/policies/TemplatesTab";
+import { RoleManagementWorkflowTab } from "@/components/admin/policies/RoleManagementWorkflowTab";
+import { AdvancedToolsTab } from "@/components/admin/policies/AdvancedToolsTab";
 import { AuditLogTab } from "@/components/admin/policies/AuditLogTab";
-import { PermissionLookupTab } from "@/components/admin/policies/PermissionLookupTab";
-import { PermissionSimulatorTab } from "@/components/admin/policies/PermissionSimulatorTab";
-import { FeaturePolicyTab } from "@/components/admin/policies/FeaturePolicyTab";
 
 export default function PolicyManagementPage() {
-  const [activeTab, setActiveTab] = useState("policies");
+  const [activeTab, setActiveTab] = useState("workflow");
   const { data: stats, isLoading: statsLoading } = usePolicyStatistics();
 
   return (
@@ -26,7 +22,7 @@ export default function PolicyManagementPage() {
       <header>
         <h1 className="text-3xl font-bold tracking-tight">Policy Management</h1>
         <p className="text-muted-foreground">
-          Manage Casbin policies, roles, and permissions with templates
+          Quản lý tập trung quyền truy cập hệ thống theo vai trò và tính năng.
         </p>
       </header>
 
@@ -35,7 +31,7 @@ export default function PolicyManagementPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Total Policies</CardTitle>
-            <Shield className="h-4 w-4 text-muted-foreground" />
+            <ShieldCheck className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
             {statsLoading ? (
@@ -49,7 +45,7 @@ export default function PolicyManagementPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Active Roles</CardTitle>
-            <Grid3x3 className="h-4 w-4 text-muted-foreground" />
+            <HardHat className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
             {statsLoading ? (
@@ -77,59 +73,27 @@ export default function PolicyManagementPage() {
 
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="grid w-full grid-cols-4 lg:grid-cols-7 gap-2">
-          <TabsTrigger value="policies">
-            <FileText className="mr-2 h-4 w-4" />
-            Policies
+        <TabsList className="grid w-full grid-cols-3 gap-2">
+          <TabsTrigger value="workflow">
+            <ShieldCheck className="mr-2 h-4 w-4" />
+            Quản lý Vai trò (Workflow)
           </TabsTrigger>
-          <TabsTrigger value="roles">
-            <Grid3x3 className="mr-2 h-4 w-4" />
-            Roles
-          </TabsTrigger>
-          <TabsTrigger value="templates">
-            <Shield className="mr-2 h-4 w-4" />
-            Templates
-          </TabsTrigger>
-          <TabsTrigger value="lookup">
-            <Search className="mr-2 h-4 w-4" />
-            Lookup
-          </TabsTrigger>
-          <TabsTrigger value="simulator">
-            <Wrench className="mr-2 h-4 w-4" />
-            Simulator
-          </TabsTrigger>
-          <TabsTrigger value="features">
-            <Layers className="mr-2 h-4 w-4" />
-            Features
+          <TabsTrigger value="tools">
+            <HardHat className="mr-2 h-4 w-4" />
+            Công cụ Nâng cao
           </TabsTrigger>
           <TabsTrigger value="audit">
             <Activity className="mr-2 h-4 w-4" />
-            Audit Log
+            Nhật ký Hoạt động
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="policies" className="space-y-4">
-          <PoliciesTab />
+        <TabsContent value="workflow" className="space-y-4">
+          <RoleManagementWorkflowTab />
         </TabsContent>
 
-        <TabsContent value="roles" className="space-y-4">
-          <RolesTab />
-        </TabsContent>
-
-        <TabsContent value="templates" className="space-y-4">
-          <TemplatesTab />
-        </TabsContent>
-
-        <TabsContent value="lookup" className="space-y-4">
-          <PermissionLookupTab />
-        </TabsContent>
-
-        <TabsContent value="simulator" className="space-y-4">
-          <PermissionSimulatorTab />
-        </TabsContent>
-
-        <TabsContent value="features" className="space-y-4">
-          <FeaturePolicyTab />
+        <TabsContent value="tools" className="space-y-4">
+          <AdvancedToolsTab />
         </TabsContent>
 
         <TabsContent value="audit" className="space-y-4">
