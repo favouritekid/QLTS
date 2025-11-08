@@ -81,9 +81,10 @@ async def get_all_policies(
 async def add_new_policy(
     policy_in: PolicyCreate,
     request: Request,
+    db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
-    """(Admin only) Thêm một chính sách (quyền) mới."""
+    """(Admin only) Thêm một chính sách (quyền) mới với validation và logging."""
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
     added = await enforcer.add_policy(
@@ -92,7 +93,20 @@ async def add_new_policy(
     if not added:
         raise DuplicateResourceError("Policy already exists.")
 
-    # Chính xác: Không cần save_policy()
+    # Log activity
+    await activity_service.log_activity_from_request(
+        db=db,
+        request=request,
+        action="add_policy",
+        resource_type="casbin_policy",
+        actor_id=current_admin.id,
+        description=f"Added policy: {policy_in.subject} → {policy_in.object} → {policy_in.action}",
+        changes={
+            "subject": policy_in.subject,
+            "object": policy_in.object,
+            "action": policy_in.action,
+        },
+    )
 
     return {"detail": "Policy added successfully."}
 
@@ -105,18 +119,48 @@ async def add_new_policy(
 async def delete_policy(
     policy_in: PolicyCreate,
     request: Request,
+    db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
-    """(Admin only) Xóa một chính sách (quyền) cụ thể."""
-    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+    """(Admin only) Xóa một chính sách (quyền) cụ thể với safety checks."""
+    from ..services.casbin_service import CasbinPolicyService
 
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+    casbin_service = CasbinPolicyService(db, enforcer)
+
+    # SAFETY CHECK: Validate removal operation
+    validation = await casbin_service.validate_policy_removal(
+        policy_in.subject,
+        policy_in.object,
+        policy_in.action,
+    )
+
+    if not validation.is_safe:
+        raise PermissionDeniedError(
+            detail=f"Cannot remove this policy for safety reasons: {'; '.join(validation.warnings)}"
+        )
+
+    # Remove policy
     removed = await enforcer.remove_policy(
         policy_in.subject, policy_in.object, policy_in.action
     )
     if not removed:
         raise ResourceNotFoundError("Policy not found or could not be removed.")
 
-    # Chính xác: Không cần save_policy()
+    # Log activity
+    await activity_service.log_activity_from_request(
+        db=db,
+        request=request,
+        action="remove_policy",
+        resource_type="casbin_policy",
+        actor_id=current_admin.id,
+        description=f"Removed policy: {policy_in.subject} → {policy_in.object} → {policy_in.action}",
+        changes={
+            "subject": policy_in.subject,
+            "object": policy_in.object,
+            "action": policy_in.action,
+        },
+    )
 
     return {"detail": "Policy removed successfully."}
 
@@ -193,6 +237,275 @@ async def get_user_roles(
     roles = await enforcer.get_roles_for_user(user_subject)
 
     return roles
+
+
+# ===============================================================
+# ADVANCED POLICY MANAGEMENT ROUTES (NEW)
+# ===============================================================
+
+
+@router.get(
+    "/roles",
+    response_model=schemas.RolesListResponse,
+    tags=["Admin - Permissions"],
+)
+async def get_all_roles_with_info(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Get all roles with metadata and policy counts.
+
+    Returns detailed information about all roles including:
+    - System roles (admin, manager, officer, user)
+    - Custom roles created by admins
+    - Policy counts for each role
+    """
+    from ..services.casbin_service import CasbinPolicyService
+
+    enforcer = request.app.state.enforcer
+    casbin_service = CasbinPolicyService(db, enforcer)
+
+    roles = await casbin_service.get_all_roles()
+    return {"roles": roles}
+
+
+@router.get(
+    "/policy-templates",
+    response_model=schemas.TemplatesListResponse,
+    tags=["Admin - Permissions"],
+)
+async def get_policy_templates(
+    request: Request,
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Get all available policy templates.
+
+    Templates provide pre-configured sets of policies for common roles.
+    Admins can apply templates to quickly set up permissions.
+    """
+    from ..config.policy_templates import POLICY_TEMPLATES
+
+    templates = []
+    for template_id, template_data in POLICY_TEMPLATES.items():
+        templates.append({
+            "id": template_id,
+            "display_name": template_data["display_name"],
+            "description": template_data["description"],
+            "category": template_data["category"],
+            "policies": [
+                {
+                    "subject": policy["subject"],
+                    "object": policy["object"],
+                    "action": policy["action"],
+                }
+                for policy in template_data["policies"]
+            ],
+        })
+
+    return {"templates": templates}
+
+
+@router.post(
+    "/policies/batch",
+    response_model=schemas.PolicyBatchResult,
+    tags=["Admin - Permissions"],
+)
+async def add_policies_batch(
+    request: Request,
+    batch_req: schemas.PolicyBatchRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Add multiple policies in a batch operation.
+
+    Supports:
+    - Validation before applying
+    - Dry-run mode (preview without applying)
+    - Automatic safety checks
+
+    Returns detailed results including successes, failures, and warnings.
+    """
+    from ..services.casbin_service import CasbinPolicyService
+
+    enforcer = request.app.state.enforcer
+    casbin_service = CasbinPolicyService(db, enforcer)
+
+    # Convert to tuples
+    policies_tuples = [
+        (p.subject, p.object, p.action)
+        for p in batch_req.policies
+    ]
+
+    # Dry run - just validate without applying
+    if batch_req.dry_run:
+        result = {
+            "added": 0,
+            "skipped": 0,
+            "errors": [],
+            "warnings": ["DRY RUN: No policies were actually added"],
+        }
+
+        for subject, obj, action in policies_tuples:
+            validation = await casbin_service.validate_policy_addition(subject, obj, action)
+            if not validation.is_valid:
+                result["errors"].append(f"Invalid: {subject} {obj} {action}")
+            result["warnings"].extend(validation.warnings)
+
+        return result
+
+    # Actually add policies
+    result = await casbin_service.add_policies_batch(
+        policies_tuples,
+        validate=batch_req.validate
+    )
+
+    # Log activity for each added policy
+    if result["added"] > 0:
+        await activity_service.log_activity_from_request(
+            db=db,
+            request=request,
+            action="batch_add_policies",
+            resource_type="casbin_policy",
+            actor_id=current_admin.id,
+            description=f"Batch added {result['added']} policies",
+            changes={
+                "added": result["added"],
+                "skipped": result["skipped"],
+                "policies": [f"{p[0]} → {p[1]} → {p[2]}" for p in policies_tuples],
+            },
+        )
+
+    return result
+
+
+@router.post(
+    "/policies/validate",
+    response_model=schemas.PolicyValidationResult,
+    tags=["Admin - Permissions"],
+)
+async def validate_policy_operation(
+    request: Request,
+    validation_req: schemas.PolicyValidationRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Validate a policy operation before applying.
+
+    Checks for:
+    - Critical policy protection (prevent admin lockout)
+    - Overly permissive policies
+    - Impact on users
+    - Safety warnings
+
+    Use this before deleting policies to prevent accidents.
+    """
+    from ..services.casbin_service import CasbinPolicyService
+
+    enforcer = request.app.state.enforcer
+    casbin_service = CasbinPolicyService(db, enforcer)
+
+    if validation_req.operation == "remove":
+        validation = await casbin_service.validate_policy_removal(
+            validation_req.subject,
+            validation_req.object,
+            validation_req.action,
+        )
+    else:  # add
+        validation = await casbin_service.validate_policy_addition(
+            validation_req.subject,
+            validation_req.object,
+            validation_req.action,
+        )
+
+    return {
+        "is_valid": validation.is_valid,
+        "is_safe": validation.is_safe,
+        "severity": validation.severity.value,
+        "warnings": validation.warnings,
+        "affected_users": validation.affected_users,
+    }
+
+
+@router.post(
+    "/policies/apply-template",
+    response_model=schemas.PolicyBatchResult,
+    tags=["Admin - Permissions"],
+)
+async def apply_template_to_role(
+    request: Request,
+    template_req: schemas.TemplateApplicationRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Apply a policy template to a role.
+
+    This is a convenient way to quickly set up permissions for a role
+    using pre-configured templates.
+
+    Example: Apply "officer" template to "role:custom" to give it all
+    officer permissions.
+    """
+    from ..services.casbin_service import CasbinPolicyService
+
+    enforcer = request.app.state.enforcer
+    casbin_service = CasbinPolicyService(db, enforcer)
+
+    result = await casbin_service.apply_template_to_role(
+        template_req.template_id,
+        template_req.role,
+        validate=template_req.validate,
+    )
+
+    # Log activity
+    if result.get("added", 0) > 0:
+        await activity_service.log_activity_from_request(
+            db=db,
+            request=request,
+            action="apply_policy_template",
+            resource_type="casbin_policy",
+            actor_id=current_admin.id,
+            description=f"Applied template '{template_req.template_id}' to '{template_req.role}'",
+            changes={
+                "template_id": template_req.template_id,
+                "role": template_req.role,
+                "policies_added": result.get("added", 0),
+            },
+        )
+
+    return result
+
+
+@router.get(
+    "/policies/statistics",
+    response_model=schemas.PolicyStatistics,
+    tags=["Admin - Permissions"],
+)
+async def get_policy_statistics(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Get statistics about policies.
+
+    Returns counts for:
+    - Total policies
+    - Total roles
+    - Total user-role assignments
+    """
+    from ..services.casbin_service import CasbinPolicyService
+
+    enforcer = request.app.state.enforcer
+    casbin_service = CasbinPolicyService(db, enforcer)
+
+    stats = await casbin_service.get_policy_count()
+    return stats
 
 
 # ===============================================================
