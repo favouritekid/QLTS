@@ -2,7 +2,7 @@
 import io
 from typing import List, Optional
 from fastapi.responses import StreamingResponse
-from datetime import datetime
+from datetime import datetime, timezone
 
 import casbin
 import pandas as pd
