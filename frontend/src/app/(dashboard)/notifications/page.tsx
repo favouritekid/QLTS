@@ -102,7 +102,7 @@ export default function NotificationsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Notifications</h1>
+          <h1 className="text-3xl font-bold tracking-tight">Notifications</h1>
           <p className="text-muted-foreground mt-1">
             Stay updated with your latest notifications
           </p>

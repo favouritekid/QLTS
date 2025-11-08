@@ -58,12 +58,60 @@ export function useNotifications(params: UseNotificationsParams = {}) {
 export function useMarkAsRead() {
   const queryClient = useQueryClient();
 
-  return useMutation<void, AxiosError<ApiErrorResponse>, MarkAsReadRequest>({
+  return useMutation<
+    void,
+    AxiosError<ApiErrorResponse>,
+    MarkAsReadRequest,
+    { previousData: [readonly unknown[], unknown][] }
+  >({
     mutationFn: async (data: MarkAsReadRequest) => {
       await api.post(API_ENDPOINTS.NOTIFICATIONS.MARK_AS_READ, data);
     },
-    onSuccess: () => {
-      // Invalidate all notification queries to refetch
+    onMutate: async (data: MarkAsReadRequest) => {
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({ queryKey: notificationKeys.all });
+
+      // Snapshot previous values
+      const previousData = queryClient.getQueriesData({ queryKey: notificationKeys.lists() });
+
+      // Optimistically update all notification queries
+      queryClient.setQueriesData<NotificationsPage>(
+        { queryKey: notificationKeys.lists() },
+        (oldData) => {
+          if (!oldData) return oldData;
+
+          // Mark specified notifications as read
+          const updatedNotifications = oldData.notifications.map((notification) =>
+            data.notification_ids.includes(notification.id)
+              ? { ...notification, is_read: true, read_at: new Date().toISOString() }
+              : notification
+          );
+
+          // Calculate how many unread notifications are being marked as read
+          const unreadCountChange = data.notification_ids.filter(
+            (id) => oldData.notifications.find((n) => n.id === id && !n.is_read)
+          ).length;
+
+          return {
+            ...oldData,
+            unread_count: Math.max(0, oldData.unread_count - unreadCountChange),
+            notifications: updatedNotifications,
+          };
+        }
+      );
+
+      return { previousData };
+    },
+    onError: (_err, _data, context) => {
+      // Rollback on error
+      if (context?.previousData) {
+        context.previousData.forEach(([queryKey, data]) => {
+          queryClient.setQueryData(queryKey, data);
+        });
+      }
+    },
+    onSettled: () => {
+      // Refetch to ensure sync with server
       queryClient.invalidateQueries({ queryKey: notificationKeys.all });
     },
   });
@@ -76,12 +124,55 @@ export function useMarkAsRead() {
 export function useMarkAllAsRead() {
   const queryClient = useQueryClient();
 
-  return useMutation<void, AxiosError<ApiErrorResponse>>({
+  return useMutation<
+    void,
+    AxiosError<ApiErrorResponse>,
+    void,
+    { previousData: [readonly unknown[], unknown][] }
+  >({
     mutationFn: async () => {
       await api.post(API_ENDPOINTS.NOTIFICATIONS.MARK_ALL_AS_READ);
     },
-    onSuccess: () => {
-      // Invalidate all notification queries to refetch
+    onMutate: async () => {
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({ queryKey: notificationKeys.all });
+
+      // Snapshot previous values
+      const previousData = queryClient.getQueriesData({ queryKey: notificationKeys.lists() });
+
+      // Optimistically update all notification queries
+      queryClient.setQueriesData<NotificationsPage>(
+        { queryKey: notificationKeys.lists() },
+        (oldData) => {
+          if (!oldData) return oldData;
+
+          // Mark all notifications as read
+          const updatedNotifications = oldData.notifications.map((notification) => ({
+            ...notification,
+            is_read: true,
+            read_at: new Date().toISOString(),
+          }));
+
+          return {
+            ...oldData,
+            unread_count: 0, // All marked as read
+            notifications: updatedNotifications,
+          };
+        }
+      );
+
+      return { previousData };
+    },
+    onError: (_err, _data, context) => {
+      // Rollback on error
+      if (context?.previousData) {
+        context.previousData.forEach(([queryKey, data]) => {
+          queryClient.setQueryData(queryKey, data);
+        });
+      }
+    },
+    onSettled: () => {
+      // Refetch to ensure sync with server
       queryClient.invalidateQueries({ queryKey: notificationKeys.all });
     },
   });
@@ -94,12 +185,58 @@ export function useMarkAllAsRead() {
 export function useDeleteNotification() {
   const queryClient = useQueryClient();
 
-  return useMutation<void, AxiosError<ApiErrorResponse>, number>({
+  return useMutation<
+    void,
+    AxiosError<ApiErrorResponse>,
+    number,
+    { previousData: [readonly unknown[], unknown][] }
+  >({
     mutationFn: async (id: number) => {
       await api.delete(API_ENDPOINTS.NOTIFICATIONS.DELETE(id));
     },
-    onSuccess: () => {
-      // Invalidate all notification queries to refetch
+    onMutate: async (id: number) => {
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({ queryKey: notificationKeys.all });
+
+      // Snapshot previous values
+      const previousData = queryClient.getQueriesData({ queryKey: notificationKeys.lists() });
+
+      // Optimistically update all notification queries
+      queryClient.setQueriesData<NotificationsPage>(
+        { queryKey: notificationKeys.lists() },
+        (oldData) => {
+          if (!oldData) return oldData;
+
+          // Find the notification being deleted to check if it was unread
+          const deletedNotification = oldData.notifications.find((n) => n.id === id);
+          const wasUnread = deletedNotification && !deletedNotification.is_read;
+
+          // Remove the notification from the list
+          const updatedNotifications = oldData.notifications.filter((n) => n.id !== id);
+
+          return {
+            ...oldData,
+            total_count: Math.max(0, oldData.total_count - 1),
+            unread_count: wasUnread
+              ? Math.max(0, oldData.unread_count - 1)
+              : oldData.unread_count,
+            notifications: updatedNotifications,
+          };
+        }
+      );
+
+      return { previousData };
+    },
+    onError: (_err, _data, context) => {
+      // Rollback on error
+      if (context?.previousData) {
+        context.previousData.forEach(([queryKey, data]) => {
+          queryClient.setQueryData(queryKey, data);
+        });
+      }
+    },
+    onSettled: () => {
+      // Refetch to ensure sync with server
       queryClient.invalidateQueries({ queryKey: notificationKeys.all });
     },
   });

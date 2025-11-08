@@ -103,12 +103,8 @@ export default function NotificationSettingsPage() {
 
   if (isLoading) {
     return (
-      <div className="container mx-auto max-w-4xl py-6 space-y-6">
-        <div>
-          <h1 className="text-3xl font-bold">Notification Settings</h1>
-          <p className="text-muted-foreground mt-1">Manage your notification preferences</p>
-        </div>
-        <Card>
+      <div className="space-y-6">
+        <Card className="max-w-4xl">
           <CardContent className="p-6 space-y-4">
             {[1, 2, 3, 4, 5].map((i) => (
               <div key={i} className="flex items-center justify-between">
@@ -123,15 +119,9 @@ export default function NotificationSettingsPage() {
   }
 
   return (
-    <div className="container mx-auto max-w-4xl py-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">Notification Settings</h1>
-          <p className="text-muted-foreground mt-1">
-            Customize how you receive notifications
-          </p>
-        </div>
+    <div className="space-y-6">
+      {/* Save Button */}
+      <div className="flex justify-end max-w-4xl">
         <Button onClick={handleSave} disabled={updatePreferences.isPending}>
           <Save className="mr-2 h-4 w-4" />
           Save Changes
@@ -139,7 +129,7 @@ export default function NotificationSettingsPage() {
       </div>
 
       {/* General Settings */}
-      <Card>
+      <Card className="max-w-4xl">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Bell className="h-5 w-5" />
@@ -235,7 +225,7 @@ export default function NotificationSettingsPage() {
       </Card>
 
       {/* Quiet Hours */}
-      <Card>
+      <Card className="max-w-4xl">
         <CardHeader>
           <CardTitle>Quiet Hours (Do Not Disturb)</CardTitle>
           <CardDescription>
@@ -287,7 +277,7 @@ export default function NotificationSettingsPage() {
       </Card>
 
       {/* Per-Type Preferences */}
-      <Card>
+      <Card className="max-w-4xl">
         <CardHeader>
           <CardTitle>Notification Type Preferences</CardTitle>
           <CardDescription>
