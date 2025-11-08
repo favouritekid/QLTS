@@ -7,6 +7,8 @@ import { socketService } from "@/lib/socket/client";
 import { getRefreshJtiFromToken } from "@/lib/utils/jwt";
 import { toast } from "sonner";
 import { useAddNotification } from "@/hooks/useNotifications";
+import { useNotificationPreferences } from "@/hooks/useNotificationPreferences";
+import { playNotificationSound, showBrowserNotification } from "@/lib/sound";
 import type { Notification } from "@/types/api.types";
 
 /**
@@ -16,6 +18,7 @@ import type { Notification } from "@/types/api.types";
 export function SocketHandler() {
   const { token, logout } = useAuthStore();
   const addNotification = useAddNotification();
+  const { data: preferences } = useNotificationPreferences();
 
   // Lưu trữ JTI của trình duyệt hiện tại
   const myJti = useRef<string | null>(null);
@@ -93,7 +96,26 @@ export function SocketHandler() {
       // Add notification to the query cache
       addNotification(notification);
 
-      // Show toast notification
+      // Get type-specific preferences
+      const typePrefs = preferences?.type_preferences?.[notification.type];
+      const soundAllowed = typePrefs?.sound ?? true;
+      const browserAllowed = typePrefs?.browser ?? true;
+
+      // Play sound if enabled globally and for this type
+      if (preferences?.sound_enabled && soundAllowed) {
+        playNotificationSound();
+      }
+
+      // Show browser notification if enabled
+      if (preferences?.browser_enabled && browserAllowed) {
+        showBrowserNotification(notification.title, {
+          body: notification.message,
+          icon: "/favicon.ico",
+          tag: `notification-${notification.id}`,
+        });
+      }
+
+      // Always show toast notification (this is in-app, separate from browser notifications)
       toast.info(notification.title, {
         description: notification.message,
         duration: 5000,
@@ -111,7 +133,7 @@ export function SocketHandler() {
       socket.off("force_logout_all", handleForceLogoutAll);
       socket.off("notification", handleNewNotification);
     };
-  }, [token, addNotification]); // Chạy lại nếu `token` hoặc `addNotification` thay đổi
+  }, [token, addNotification, preferences]); // Chạy lại nếu `token`, `addNotification`, hoặc `preferences` thay đổi
 
   return null; // Không render gì cả
 }

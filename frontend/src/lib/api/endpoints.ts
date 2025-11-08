@@ -52,5 +52,6 @@ export const API_ENDPOINTS = {
     MARK_AS_READ: "/api/notifications/mark-as-read",
     MARK_ALL_AS_READ: "/api/notifications/mark-all-as-read",
     DELETE: (id: number) => `/api/notifications/${id}`,
+    PREFERENCES: "/api/notifications/preferences",
   },
 } as const;

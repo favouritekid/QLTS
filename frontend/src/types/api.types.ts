@@ -185,3 +185,34 @@ export interface NotificationsPage {
 export interface MarkAsReadRequest {
   notification_ids: number[];
 }
+
+// Notification Preference Types
+export interface NotificationTypePreference {
+  email: boolean;
+  browser: boolean;
+  sound: boolean;
+}
+
+export interface NotificationPreference {
+  id: number;
+  user_id: number;
+  email_enabled: boolean;
+  sound_enabled: boolean;
+  browser_enabled: boolean;
+  email_digest: "instant" | "daily" | "weekly" | "disabled";
+  type_preferences: Record<string, NotificationTypePreference> | null;
+  quiet_hours_enabled: boolean;
+  quiet_hours_start: string | null; // HH:mm format
+  quiet_hours_end: string | null; // HH:mm format
+}
+
+export interface NotificationPreferenceUpdate {
+  email_enabled?: boolean;
+  sound_enabled?: boolean;
+  browser_enabled?: boolean;
+  email_digest?: "instant" | "daily" | "weekly" | "disabled";
+  type_preferences?: Record<string, NotificationTypePreference>;
+  quiet_hours_enabled?: boolean;
+  quiet_hours_start?: string | null;
+  quiet_hours_end?: string | null;
+}

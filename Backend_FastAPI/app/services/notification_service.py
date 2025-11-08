@@ -1,11 +1,16 @@
 # app/services/notification_service.py
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
+import logging
 
 from sqlalchemy import and_, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models, schemas
+from app.services import notification_preference_service
+from app.services.email_service import EmailService
+
+log = logging.getLogger(__name__)
 
 
 async def create_notification(
@@ -18,7 +23,12 @@ async def create_notification(
     data: Optional[Dict[str, Any]] = None,
 ) -> models.Notification:
     """
-    Create a new notification for a user.
+    Create a new notification for a user with preference checking.
+
+    This function:
+    1. Checks user's notification preferences
+    2. Creates the notification in the database (if preferences allow)
+    3. Sends an email notification (if preferences allow)
 
     Args:
         db: Database session
@@ -32,6 +42,22 @@ async def create_notification(
     Returns:
         Created Notification instance
     """
+    # Check user preferences
+    should_send = await notification_preference_service.should_send_notification(
+        db, user_id, notification_type
+    )
+
+    log.info(
+        "Notification preference check",
+        extra={
+            "user_id": user_id,
+            "notification_type": notification_type,
+            "should_send": should_send,
+        }
+    )
+
+    # Always create the notification in the database
+    # Preferences only control delivery channels (email, sound, browser)
     notification = models.Notification(
         user_id=user_id,
         type=notification_type,
@@ -44,6 +70,35 @@ async def create_notification(
     db.add(notification)
     await db.commit()
     await db.refresh(notification)
+
+    # Send email if preferences allow
+    if should_send["send_email"]:
+        try:
+            # Get user info for email
+            user = await db.get(models.User, user_id)
+            if user and user.email:
+                email_service = EmailService()
+                email_sent = email_service.send_notification_email(
+                    user.email,
+                    user.full_name or user.username,
+                    notification
+                )
+
+                if email_sent:
+                    log.info(
+                        "Email notification sent successfully",
+                        extra={"user_id": user_id, "notification_id": notification.id}
+                    )
+                else:
+                    log.warning(
+                        "Failed to send email notification",
+                        extra={"user_id": user_id, "notification_id": notification.id}
+                    )
+        except Exception as e:
+            log.error(
+                "Error sending email notification",
+                extra={"user_id": user_id, "notification_id": notification.id, "error": str(e)}
+            )
 
     return notification
 
