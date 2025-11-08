@@ -9,6 +9,7 @@ import { NavGroup } from "./NavGroup";
 import type { NavigationLink } from "@/types/layout.types";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useNotifications } from "@/hooks/useNotifications";
 
 const AppTitle = ({ isCollapsed }: { isCollapsed: boolean }) => (
   <TooltipProvider delayDuration={0}>
@@ -52,13 +53,27 @@ const mainNavLinks: NavigationLink[] = [
   { label: "Users", href: "/admin/users", icon: Users },
 ];
 
-const settingsLinks: NavigationLink[] = [
-  { label: "Settings", href: "/settings", icon: Settings },
-  { label: "Notifications", href: "/notifications", icon: Bell, badge: 3 },
-];
-
 export function AppSidebar() {
   const { isSidebarCollapsed } = useUIStore();
+
+  // Fetch unread notification count for badge
+  const { data: notificationsData } = useNotifications({
+    page: 1,
+    page_size: 1, // We only need the count, not the notifications
+    unread_only: true,
+  });
+
+  const unreadCount = notificationsData?.unread_count || 0;
+
+  const settingsLinks: NavigationLink[] = [
+    { label: "Settings", href: "/settings", icon: Settings },
+    {
+      label: "Notifications",
+      href: "/notifications",
+      icon: Bell,
+      badge: unreadCount > 0 ? unreadCount : undefined,
+    },
+  ];
 
   return (
     <aside
