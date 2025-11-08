@@ -27,23 +27,23 @@ export const policyKeys = {
 
 // Get all policies
 export function usePolicies() {
-  return useQuery({
+  return useQuery<PolicyRule[]>({
     queryKey: policyKeys.list(),
     queryFn: async () => {
-      const response = await api.get<PolicyRule[][]>(API_ENDPOINTS.ADMIN.PERMISSIONS.POLICIES);
+      const response = await api.get<string[][]>(API_ENDPOINTS.ADMIN.PERMISSIONS.POLICIES);
       // Convert from Casbin format [[subject, object, action]] to PolicyRule[]
       return response.data.map((p) => ({
         subject: p[0],
         object: p[1],
         action: p[2],
-      }));
+      })) as PolicyRule[];
     },
   });
 }
 
 // Get all roles
 export function useRoles() {
-  return useQuery({
+  return useQuery<RolesListResponse>({
     queryKey: policyKeys.roles(),
     queryFn: async () => {
       const response = await api.get<RolesListResponse>(API_ENDPOINTS.ADMIN.PERMISSIONS.ROLES);
@@ -54,7 +54,7 @@ export function useRoles() {
 
 // Get all templates
 export function useTemplates() {
-  return useQuery({
+  return useQuery<TemplatesListResponse>({
     queryKey: policyKeys.templates(),
     queryFn: async () => {
       const response = await api.get<TemplatesListResponse>(API_ENDPOINTS.ADMIN.PERMISSIONS.TEMPLATES);
@@ -65,7 +65,7 @@ export function useTemplates() {
 
 // Get policy statistics
 export function usePolicyStatistics() {
-  return useQuery({
+  return useQuery<PolicyStatistics>({
     queryKey: policyKeys.statistics(),
     queryFn: async () => {
       const response = await api.get<PolicyStatistics>(API_ENDPOINTS.ADMIN.PERMISSIONS.STATISTICS);
