@@ -134,9 +134,17 @@ async def lifespan(app: FastAPI):
         app.state.enforcer = enforcer
         log.info("✅ Casbin AsyncEnforcer initialized and policies loaded.")
 
-        # (Giữ nguyên logic add policy mặc định)
+        # ✅ DEPRECATED: Default policies are now managed via Alembic migration
+        # Migration: i4j5k6l7m8n9_add_default_casbin_policies.py
+        #
+        # This fallback logic is kept for backward compatibility only.
+        # If this runs, it means the migration hasn't been executed yet.
         if not enforcer.get_policy():
-            log.info("No Casbin P policies found. Adding defaults...")
+            log.warning(
+                "⚠️ No Casbin policies found! Adding default policies as FALLBACK. "
+                "This should NOT happen in production if migrations are run correctly. "
+                "Please run: alembic upgrade head"
+            )
             await enforcer.add_policy("role:admin", "/*", ".*")
             await enforcer.add_policy("role:manager", "/api/admin/users", ".*")
             await enforcer.add_policy("role:manager", "/api/leads/*", ".*")
@@ -170,7 +178,7 @@ async def lifespan(app: FastAPI):
             await enforcer.add_policy("role:manager", "/api/notifications/mark-all-as-read", "POST")
             await enforcer.add_policy("role:manager", "/api/notifications/{notification_id}", "DELETE")
 
-            log.info("Default P policies added.")
+            log.warning("⚠️ Fallback default policies added. Please run migrations!")
 
     except Exception as e:
         log.critical(
