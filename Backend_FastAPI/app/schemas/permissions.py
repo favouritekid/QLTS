@@ -183,3 +183,11 @@ class ToggleFeatureRequest(BaseModel):
 
     feature_id: str = Field(..., description="Feature identifier to toggle")
     enabled: bool = Field(..., description="Whether to enable or disable the feature")
+
+
+class PolicySuggestionsResponse(BaseModel):
+    """Schema for policy autocomplete suggestions."""
+
+    subjects: List[str] = Field(..., description="List of unique subjects in policies")
+    objects: List[str] = Field(..., description="List of unique objects/resources in policies")
+    actions: List[str] = Field(..., description="List of unique actions in policies")

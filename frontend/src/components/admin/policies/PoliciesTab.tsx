@@ -1,8 +1,8 @@
 // src/components/admin/policies/PoliciesTab.tsx
 "use client";
 
-import { useState } from "react";
-import { Plus, Trash2, AlertTriangle } from "lucide-react";
+import { useState, useMemo } from "react";
+import { Plus, Trash2, AlertTriangle, Filter, X } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -61,11 +61,42 @@ export function PoliciesTab() {
   const [policyToDelete, setPolicyToDelete] = useState<PolicyRule | null>(null);
   const [validationWarning, setValidationWarning] = useState<string[]>([]);
 
+  // Filter states
+  const [subjectFilter, setSubjectFilter] = useState("");
+  const [objectFilter, setObjectFilter] = useState("");
+  const [actionFilter, setActionFilter] = useState("");
+
   const [newPolicy, setNewPolicy] = useState({
     subject: "",
     object: "",
     action: "",
   });
+
+  // Filtered policies with useMemo
+  const filteredPolicies = useMemo(() => {
+    if (!policies) return [];
+
+    return policies.filter((policy) => {
+      const matchSubject = !subjectFilter ||
+        policy.subject.toLowerCase().includes(subjectFilter.toLowerCase());
+      const matchObject = !objectFilter ||
+        policy.object.toLowerCase().includes(objectFilter.toLowerCase());
+      const matchAction = !actionFilter ||
+        policy.action.toLowerCase().includes(actionFilter.toLowerCase());
+
+      return matchSubject && matchObject && matchAction;
+    });
+  }, [policies, subjectFilter, objectFilter, actionFilter]);
+
+  // Check if any filter is active
+  const hasActiveFilters = subjectFilter || objectFilter || actionFilter;
+
+  // Clear all filters
+  const clearFilters = () => {
+    setSubjectFilter("");
+    setObjectFilter("");
+    setActionFilter("");
+  };
 
   const handleAddPolicy = async () => {
     if (!newPolicy.subject || !newPolicy.object || !newPolicy.action) {
@@ -159,6 +190,70 @@ export function PoliciesTab() {
             </Alert>
           )}
 
+          {/* Filter Section */}
+          <div className="mb-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Filter className="h-4 w-4" />
+                <span>Filter Policies</span>
+              </div>
+              {hasActiveFilters && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={clearFilters}
+                  className="h-8"
+                >
+                  <X className="mr-1 h-3 w-3" />
+                  Clear Filters
+                </Button>
+              )}
+            </div>
+            <div className="grid gap-3 md:grid-cols-3">
+              <div className="space-y-1">
+                <Label htmlFor="filter-subject" className="text-xs text-muted-foreground">
+                  Subject
+                </Label>
+                <Input
+                  id="filter-subject"
+                  placeholder="e.g., role:admin"
+                  value={subjectFilter}
+                  onChange={(e) => setSubjectFilter(e.target.value)}
+                  className="h-9"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="filter-object" className="text-xs text-muted-foreground">
+                  Object / Resource
+                </Label>
+                <Input
+                  id="filter-object"
+                  placeholder="e.g., /api/leads"
+                  value={objectFilter}
+                  onChange={(e) => setObjectFilter(e.target.value)}
+                  className="h-9"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="filter-action" className="text-xs text-muted-foreground">
+                  Action
+                </Label>
+                <Input
+                  id="filter-action"
+                  placeholder="e.g., GET"
+                  value={actionFilter}
+                  onChange={(e) => setActionFilter(e.target.value)}
+                  className="h-9"
+                />
+              </div>
+            </div>
+            {hasActiveFilters && (
+              <div className="text-sm text-muted-foreground">
+                Showing {filteredPolicies.length} of {policies?.length || 0} policies
+              </div>
+            )}
+          </div>
+
           {isLoading ? (
             <div className="space-y-2">
               {Array.from({ length: 5 }).map((_, i) => (
@@ -177,8 +272,8 @@ export function PoliciesTab() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {policies && policies.length > 0 ? (
-                    policies.map((policy, index) => (
+                  {filteredPolicies.length > 0 ? (
+                    filteredPolicies.map((policy, index) => (
                       <TableRow key={index}>
                         <TableCell>
                           <Badge variant={getRoleBadgeVariant(policy.subject)}>
@@ -204,7 +299,16 @@ export function PoliciesTab() {
                   ) : (
                     <TableRow>
                       <TableCell colSpan={4} className="h-24 text-center">
-                        No policies found
+                        {hasActiveFilters ? (
+                          <div className="flex flex-col items-center gap-2">
+                            <p className="text-muted-foreground">No policies match your filter</p>
+                            <Button variant="link" size="sm" onClick={clearFilters}>
+                              Clear filters
+                            </Button>
+                          </div>
+                        ) : (
+                          <p className="text-muted-foreground">No policies found</p>
+                        )}
                       </TableCell>
                     </TableRow>
                   )}

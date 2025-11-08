@@ -510,6 +510,45 @@ async def get_policy_statistics(
     return stats
 
 
+@router.get(
+    "/policies/suggestions",
+    response_model=schemas.PolicySuggestionsResponse,
+    tags=["Admin - Permissions"],
+)
+async def get_policy_suggestions(
+    request: Request,
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Get autocomplete suggestions for policy fields.
+
+    Returns lists of unique subjects, objects, and actions from existing policies.
+    Useful for autocomplete/combobox components in the UI.
+
+    Example response:
+        {
+            "subjects": ["role:admin", "role:manager", "role:officer"],
+            "objects": ["/api/leads", "/api/users", "/api/admin/*"],
+            "actions": ["GET", "POST", "PUT", "DELETE", ".*"]
+        }
+    """
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+
+    # Get all policies
+    all_policies = enforcer.get_policy()
+
+    # Extract unique subjects, objects, actions
+    subjects = sorted(list(set(policy[0] for policy in all_policies if len(policy) > 0)))
+    objects = sorted(list(set(policy[1] for policy in all_policies if len(policy) > 1)))
+    actions = sorted(list(set(policy[2] for policy in all_policies if len(policy) > 2)))
+
+    return {
+        "subjects": subjects,
+        "objects": objects,
+        "actions": actions,
+    }
+
+
 # ===============================================================
 # USER MANAGEMENT ROUTES
 # ===============================================================
