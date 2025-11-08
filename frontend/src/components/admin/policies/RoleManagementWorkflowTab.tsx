@@ -21,7 +21,8 @@ import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { api } from "@/lib/api/client";
 
-import { useRoles, useAddPolicy, usePolicies } from "@/hooks/usePolicies";
+import { useRoles, useAddPolicy, usePolicies, policyKeys } from "@/hooks/usePolicies";
+import { useQueryClient } from "@tanstack/react-query";
 import { FeaturePolicyTab } from "./FeaturePolicyTab";
 import { RoleDetailView } from "./RoleDetailView";
 
@@ -94,6 +95,7 @@ export function RoleManagementWorkflowTab() {
   const { data: rolesData, isLoading } = useRoles();
   const { data: policies } = usePolicies();
   const addPolicyMutation = useAddPolicy();
+  const queryClient = useQueryClient();
 
   const handleRoleSelect = (roleName: string, displayName: string) => {
     setSelectedRole(roleName);
@@ -176,8 +178,13 @@ export function RoleManagementWorkflowTab() {
 
     setIsDeletingRole(true);
     try {
-      // Get all policies for this role
+      // Get all policies for this role - ONLY for the selected role
       const rolePolicies = policies?.filter(p => p.subject === selectedRole) || [];
+
+      console.log("🔍 Deleting role:", selectedRole);
+      console.log("📋 Total policies in system:", policies?.length);
+      console.log("🎯 Policies to delete for this role:", rolePolicies.length);
+      console.log("📝 Policies:", rolePolicies);
 
       if (rolePolicies.length === 0) {
         toast.error("No policies found for this role");
@@ -186,8 +193,15 @@ export function RoleManagementWorkflowTab() {
         return;
       }
 
-      // Delete all policies for this role
+      // Delete each policy for THIS role only
+      let deletedCount = 0;
       for (const policy of rolePolicies) {
+        console.log(`🗑️ Deleting policy ${deletedCount + 1}/${rolePolicies.length}:`, {
+          subject: policy.subject,
+          object: policy.object,
+          action: policy.action,
+        });
+
         await api.delete("/api/admin/policies", {
           data: {
             subject: policy.subject,
@@ -195,9 +209,15 @@ export function RoleManagementWorkflowTab() {
             action: policy.action,
           },
         });
+        deletedCount++;
       }
 
-      toast.success(`Role "${selectedRoleDisplayName}" deleted successfully (${rolePolicies.length} policies removed)`);
+      console.log(`✅ Successfully deleted ${deletedCount} policies for role: ${selectedRole}`);
+
+      // CRITICAL: Invalidate all policy-related caches to refresh UI
+      await queryClient.invalidateQueries({ queryKey: policyKeys.all });
+
+      toast.success(`Role "${selectedRoleDisplayName}" deleted successfully (${deletedCount} policies removed)`);
 
       // Close dialog and return to role selection
       setDeleteDialogOpen(false);
@@ -205,8 +225,8 @@ export function RoleManagementWorkflowTab() {
       setSelectedRoleDisplayName("");
       setCurrentStep("SELECT_ROLE");
     } catch (error) {
+      console.error("❌ Error deleting role:", error);
       toast.error("Failed to delete role");
-      console.error(error);
     } finally {
       setIsDeletingRole(false);
     }
