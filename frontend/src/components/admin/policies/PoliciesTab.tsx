@@ -36,9 +36,11 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Combobox } from "@/components/ui/combobox";
 import { toast } from "sonner";
 
 import { usePolicies, useAddPolicy, useDeletePolicy, useValidatePolicy } from "@/hooks/usePolicies";
+import { usePolicySuggestions } from "@/hooks/usePolicySuggestions";
 import type { PolicyRule } from "@/types/policy.types";
 
 // Helper to extract error message from API errors
@@ -52,6 +54,7 @@ function getErrorMessage(error: unknown, fallback: string): string {
 
 export function PoliciesTab() {
   const { data: policies, isLoading } = usePolicies();
+  const { data: suggestions } = usePolicySuggestions();
   const addPolicyMutation = useAddPolicy();
   const deletePolicyMutation = useDeletePolicy();
   const validatePolicyMutation = useValidatePolicy();
@@ -331,29 +334,35 @@ export function PoliciesTab() {
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
               <Label htmlFor="subject">Subject (e.g., role:manager)</Label>
-              <Input
-                id="subject"
-                placeholder="role:manager"
+              <Combobox
                 value={newPolicy.subject}
-                onChange={(e) => setNewPolicy({ ...newPolicy, subject: e.target.value })}
+                onChange={(value) => setNewPolicy({ ...newPolicy, subject: value })}
+                suggestions={suggestions?.subjects || []}
+                placeholder="Select or type subject..."
+                searchPlaceholder="Search subjects..."
+                emptyText="No subjects found. Type to create new."
               />
             </div>
             <div className="grid gap-2">
               <Label htmlFor="object">Object / Resource (e.g., /api/leads/*)</Label>
-              <Input
-                id="object"
-                placeholder="/api/leads/*"
+              <Combobox
                 value={newPolicy.object}
-                onChange={(e) => setNewPolicy({ ...newPolicy, object: e.target.value })}
+                onChange={(value) => setNewPolicy({ ...newPolicy, object: value })}
+                suggestions={suggestions?.objects || []}
+                placeholder="Select or type resource path..."
+                searchPlaceholder="Search resources..."
+                emptyText="No resources found. Type to create new."
               />
             </div>
             <div className="grid gap-2">
               <Label htmlFor="action">Action (e.g., GET, POST, .*)</Label>
-              <Input
-                id="action"
-                placeholder="GET"
+              <Combobox
                 value={newPolicy.action}
-                onChange={(e) => setNewPolicy({ ...newPolicy, action: e.target.value })}
+                onChange={(value) => setNewPolicy({ ...newPolicy, action: value })}
+                suggestions={suggestions?.actions || []}
+                placeholder="Select or type action..."
+                searchPlaceholder="Search actions..."
+                emptyText="No actions found. Type to create new."
               />
             </div>
           </div>

@@ -22,9 +22,11 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Combobox } from "@/components/ui/combobox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Play, CheckCircle2, XCircle, Info } from "lucide-react";
 import { api } from "@/lib/api/client";
+import { usePolicySuggestions } from "@/hooks/usePolicySuggestions";
 import { toast } from "sonner";
 
 const simulateSchema = z.object({
@@ -46,6 +48,7 @@ interface SimulationResult {
 export function PermissionSimulatorTab() {
   const [result, setResult] = useState<SimulationResult | null>(null);
   const [isSimulating, setIsSimulating] = useState(false);
+  const { data: suggestions } = usePolicySuggestions();
 
   const form = useForm<SimulateFormValues>({
     resolver: zodResolver(simulateSchema),
@@ -102,9 +105,13 @@ export function PermissionSimulatorTab() {
                 <FormItem>
                   <FormLabel>Subject (Role or User)</FormLabel>
                   <FormControl>
-                    <Input
-                      placeholder="role:manager or user:123"
-                      {...field}
+                    <Combobox
+                      value={field.value}
+                      onChange={field.onChange}
+                      suggestions={suggestions?.subjects || []}
+                      placeholder="Select or type subject..."
+                      searchPlaceholder="Search subjects..."
+                      emptyText="No subjects found. Type to create new."
                       disabled={isSimulating}
                     />
                   </FormControl>
@@ -120,9 +127,13 @@ export function PermissionSimulatorTab() {
                 <FormItem>
                   <FormLabel>Object (Resource Path)</FormLabel>
                   <FormControl>
-                    <Input
-                      placeholder="/api/leads"
-                      {...field}
+                    <Combobox
+                      value={field.value}
+                      onChange={field.onChange}
+                      suggestions={suggestions?.objects || []}
+                      placeholder="Select or type resource path..."
+                      searchPlaceholder="Search resources..."
+                      emptyText="No resources found. Type to create new."
                       disabled={isSimulating}
                     />
                   </FormControl>
@@ -138,9 +149,13 @@ export function PermissionSimulatorTab() {
                 <FormItem>
                   <FormLabel>Action (HTTP Method)</FormLabel>
                   <FormControl>
-                    <Input
-                      placeholder="GET"
-                      {...field}
+                    <Combobox
+                      value={field.value}
+                      onChange={field.onChange}
+                      suggestions={suggestions?.actions || []}
+                      placeholder="Select or type action..."
+                      searchPlaceholder="Search actions..."
+                      emptyText="No actions found. Type to create new."
                       disabled={isSimulating}
                     />
                   </FormControl>

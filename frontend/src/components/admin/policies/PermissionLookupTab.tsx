@@ -22,10 +22,12 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Combobox } from "@/components/ui/combobox";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Search, Shield, Info } from "lucide-react";
 import { api } from "@/lib/api/client";
+import { usePolicySuggestions } from "@/hooks/usePolicySuggestions";
 import { toast } from "sonner";
 
 const lookupSchema = z.object({
@@ -45,6 +47,7 @@ interface LookupResult {
 export function PermissionLookupTab() {
   const [result, setResult] = useState<LookupResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const { data: suggestions } = usePolicySuggestions();
 
   const form = useForm<LookupFormValues>({
     resolver: zodResolver(lookupSchema),
@@ -111,9 +114,13 @@ export function PermissionLookupTab() {
                 <FormItem>
                   <FormLabel>Resource Path (Object)</FormLabel>
                   <FormControl>
-                    <Input
-                      placeholder="/api/leads"
-                      {...field}
+                    <Combobox
+                      value={field.value}
+                      onChange={field.onChange}
+                      suggestions={suggestions?.objects || []}
+                      placeholder="Select or type resource path..."
+                      searchPlaceholder="Search resources..."
+                      emptyText="No resources found. Type to create new."
                       disabled={isLoading}
                     />
                   </FormControl>
@@ -129,9 +136,13 @@ export function PermissionLookupTab() {
                 <FormItem>
                   <FormLabel>Action (HTTP Method)</FormLabel>
                   <FormControl>
-                    <Input
-                      placeholder="GET"
-                      {...field}
+                    <Combobox
+                      value={field.value}
+                      onChange={field.onChange}
+                      suggestions={suggestions?.actions || []}
+                      placeholder="Select or type action..."
+                      searchPlaceholder="Search actions..."
+                      emptyText="No actions found. Type to create new."
                       disabled={isLoading}
                     />
                   </FormControl>
