@@ -69,7 +69,10 @@ export default function NotificationsPage() {
   };
 
   const getNotificationTypeBadge = (type: Notification["type"]) => {
-    const variants: Record<Notification["type"], string> = {
+    const variants: Record<
+      Notification["type"],
+      "default" | "secondary" | "destructive" | "outline"
+    > = {
       info: "default",
       success: "default",
       warning: "default",
@@ -88,7 +91,7 @@ export default function NotificationsPage() {
     };
 
     return (
-      <Badge variant={variants[type] as any} className="text-xs">
+      <Badge variant={variants[type]} className="text-xs">
         {labels[type]}
       </Badge>
     );
@@ -185,8 +188,26 @@ export default function NotificationsPage() {
             // Notifications list
             <div className="space-y-3">
               {notifications.map((notification) => {
-                const NotificationWrapper = notification.link ? Link : "div";
-                const wrapperProps = notification.link ? { href: notification.link } : {};
+                const notificationContent = (
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <h3
+                        className={cn(
+                          "text-base leading-tight",
+                          !notification.is_read && "font-semibold"
+                        )}
+                      >
+                        {notification.title}
+                      </h3>
+                      {!notification.is_read && (
+                        <div className="bg-primary h-2 w-2 shrink-0 rounded-full" />
+                      )}
+                    </div>
+                    <p className="text-muted-foreground text-sm leading-relaxed">
+                      {notification.message}
+                    </p>
+                  </div>
+                );
 
                 return (
                   <Card
@@ -211,26 +232,13 @@ export default function NotificationsPage() {
                         {/* Content */}
                         <div className="min-w-0 flex-1 space-y-2">
                           <div className="flex items-start justify-between gap-4">
-                            <NotificationWrapper {...wrapperProps} className="flex-1">
-                              <div className="space-y-1">
-                                <div className="flex items-center gap-2">
-                                  <h3
-                                    className={cn(
-                                      "text-base leading-tight",
-                                      !notification.is_read && "font-semibold"
-                                    )}
-                                  >
-                                    {notification.title}
-                                  </h3>
-                                  {!notification.is_read && (
-                                    <div className="bg-primary h-2 w-2 shrink-0 rounded-full" />
-                                  )}
-                                </div>
-                                <p className="text-muted-foreground text-sm leading-relaxed">
-                                  {notification.message}
-                                </p>
-                              </div>
-                            </NotificationWrapper>
+                            {notification.link ? (
+                              <Link href={notification.link} className="flex-1">
+                                {notificationContent}
+                              </Link>
+                            ) : (
+                              <div className="flex-1">{notificationContent}</div>
+                            )}
 
                             {/* Actions */}
                             <div className="flex shrink-0 gap-1">
