@@ -235,8 +235,9 @@ async def get_user_roles(
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
     # Lấy tất cả roles của user
+    # Note: get_roles_for_user() is NOT async even in AsyncEnforcer
     user_subject = f"user:{user_id}"
-    roles = await enforcer.get_roles_for_user(user_subject)
+    roles = enforcer.get_roles_for_user(user_subject)
 
     return roles
 
@@ -255,7 +256,8 @@ async def get_role_users(
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
     # Get all grouping policies (user-to-role assignments)
-    all_grouping = await enforcer.get_grouping_policy()
+    # Note: get_grouping_policy() is NOT async even in AsyncEnforcer
+    all_grouping = enforcer.get_grouping_policy()
 
     # Filter to find users with this specific role
     user_ids = []
@@ -280,17 +282,21 @@ async def get_role_users(
     )
     users = result.scalars().all()
 
-    # Return user info
-    user_list = [
-        {
+    # Return user info with all Casbin roles
+    user_list = []
+    for user in users:
+        user_subject = f"user:{user.id}"
+        # Get all roles for this user from Casbin
+        casbin_roles = enforcer.get_roles_for_user(user_subject)
+
+        user_list.append({
             "id": user.id,
             "username": user.username,
             "email": user.email,
             "full_name": user.full_name,
             "role": user.role,  # DB role (may differ from Casbin role)
-        }
-        for user in users
-    ]
+            "casbin_roles": casbin_roles,  # All Casbin roles
+        })
 
     return {
         "role": role_name,
@@ -321,7 +327,8 @@ async def reassign_users_role(
         raise ResourceNotFoundError("No user IDs provided")
 
     # Validate target role exists
-    all_roles_response = await enforcer.get_all_subjects()
+    # Note: get_all_subjects() is NOT async even in AsyncEnforcer
+    all_roles_response = enforcer.get_all_subjects()
     role_subjects = [r for r in all_roles_response if r.startswith("role:")]
 
     if to_role not in role_subjects:

@@ -551,22 +551,44 @@ export function RoleManagementWorkflowTab() {
             <>
               {/* User count warning */}
               {usersWithRole.length > 0 && (
-                <Alert variant="destructive" className="my-4">
-                  <AlertTriangle className="h-4 w-4" />
-                  <AlertDescription>
-                    <strong>⚠️ Cảnh báo:</strong> Có <strong>{usersWithRole.length} user(s)</strong> đang được gán vai trò này.
-                    {!forceDelete && (
-                      <div className="mt-2">
-                        Bạn cần check "Force delete" bên dưới để tự động chuyển họ về vai trò <code>user</code>.
-                      </div>
-                    )}
-                    {forceDelete && (
-                      <div className="mt-2 text-orange-200">
-                        ✓ Tất cả users sẽ được tự động chuyển về vai trò <code>user</code>.
-                      </div>
-                    )}
-                  </AlertDescription>
-                </Alert>
+                <>
+                  <Alert variant="destructive" className="my-4">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertDescription>
+                      <strong>⚠️ Cảnh báo:</strong> Có <strong>{usersWithRole.length} user(s)</strong> đang được gán vai trò này.
+                      {!forceDelete && (
+                        <div className="mt-2">
+                          Bạn cần check "Force delete" bên dưới để tự động chuyển họ về vai trò <code>user</code>.
+                        </div>
+                      )}
+                      {forceDelete && (
+                        <div className="mt-2 text-orange-200">
+                          ✓ Tất cả users sẽ được tự động chuyển về vai trò <code>user</code>.
+                        </div>
+                      )}
+                    </AlertDescription>
+                  </Alert>
+
+                  {/* List affected users */}
+                  <div className="my-4 p-3 border rounded-md bg-muted/50 max-h-40 overflow-y-auto">
+                    <div className="text-sm font-medium mb-2">Affected Users:</div>
+                    <div className="space-y-1.5">
+                      {usersWithRole.map((user) => (
+                        <div key={user.id} className="text-xs flex items-start gap-2">
+                          <span className="font-mono bg-background px-1.5 py-0.5 rounded">{user.username}</span>
+                          <span className="text-muted-foreground flex-1">
+                            {user.full_name || user.email}
+                          </span>
+                          {user.casbin_roles && user.casbin_roles.length > 1 && (
+                            <span className="text-xs text-orange-600 dark:text-orange-400">
+                              (has {user.casbin_roles.length} roles)
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
               )}
 
               {/* Policy count info */}
