@@ -1,4 +1,7 @@
 # app/services/user_service.py
+import io
+import csv
+from typing import AsyncGenerator
 import structlog
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timezone
@@ -737,3 +740,107 @@ async def perform_bulk_action(
             raise e
         else:
             raise
+async def stream_users_csv(
+    db: AsyncSession, params: Dict[str, Any]
+) -> AsyncGenerator[str, None]:
+    """
+    Stream tất cả user ra dưới dạng CSV, áp dụng các filter.
+    Hàm này là một async generator, yield từng dòng CSV.
+    """
+    log.info("Starting CSV stream generation with filters", filters=params)
+
+    # --- 1. Xây dựng Query (Sao chép logic filter/sort từ get_users) ---
+    
+    # ✅ Tối ưu: Eager load 'unit' để tránh N+1 query khi stream
+    query = select(models.User).options(selectinload(models.User.unit))
+
+    # Sao chép logic filter từ hàm get_users
+    allowed_filters = {
+        "role": models.User.role,
+        "status": models.User.status,
+    }
+    text_search_fields = [
+        models.User.username,
+        models.User.full_name,
+        models.User.email,
+    ]
+    filters = []
+    for key, value in params.items():
+        if key in allowed_filters and value:
+            values_to_filter = [v.strip() for v in value.split(",")]
+            query = query.filter(allowed_filters[key].in_(values_to_filter))
+        elif key == "search" and value:
+            search_term = f"%{value.strip()}%"
+            search_conditions = [
+                field.ilike(search_term) for field in text_search_fields
+            ]
+            query = query.filter(or_(*search_conditions))
+
+    if filters:
+        query = query.where(*filters)
+
+    # Sao chép logic sort từ hàm get_users
+    sort = params.get("sort", "id")
+    order = params.get("order", "asc")
+    if hasattr(models.User, sort):
+        sort_column = getattr(models.User, sort)
+        if order.lower() == "desc":
+            query = query.order_by(sort_column.desc())
+        else:
+            query = query.order_by(sort_column.asc())
+
+    # --- 2. Yield dòng Header ---
+    headers = [
+        "ID",
+        "Username",
+        "Email",
+        "Full Name",
+        "Role",
+        "Status",
+        "Phone",
+        "Unit",
+        "Skills",
+        "Max Capacity",
+    ]
+    
+    # Sử dụng io.StringIO để csv.writer ghi vào một string
+    string_io = io.StringIO()
+    writer = csv.writer(string_io)
+    writer.writerow(headers)
+    
+    # Gửi (yield) dòng header
+    yield string_io.getvalue()
+
+    # --- 3. Stream dữ liệu từ CSDL ---
+    # Sử dụng stream_scalars để không load tất cả user vào bộ nhớ
+    try:
+        stream = await db.stream_scalars(query)
+        
+        async for user in stream:
+            # Reset string_io cho mỗi dòng
+            string_io = io.StringIO()
+            writer = csv.writer(string_io)
+            
+            row = [
+                user.id,
+                user.username,
+                user.email,
+                user.full_name or "",
+                user.role,
+                user.status,
+                user.phone_number or "",
+                user.unit.name if user.unit else "", # An toàn nhờ selectinload
+                ",".join(user.skills) if user.skills else "",
+                user.max_capacity or 0,
+            ]
+            writer.writerow(row)
+            
+            # Gửi (yield) dòng dữ liệu
+            yield string_io.getvalue()
+            
+    except Exception as e:
+        log.error("Error during CSV stream query", error=str(e), exc_info=True)
+        # Gửi thông báo lỗi vào file CSV nếu có thể
+        yield f"\"Error streaming data: {str(e)}\""
+
+    log.info("CSV stream generation complete", filters=params)

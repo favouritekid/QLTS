@@ -39,6 +39,7 @@ export const API_ENDPOINTS = {
       BULK_ACTION: "/api/admin/users/bulk-action",
       ROLES: (id: number) => `/api/admin/users/${id}/roles`,
       EXPORT: "/api/admin/users/export",
+      EXPORT_CSV_STREAM: "/api/admin/users/export-csv",
     },
     PERMISSIONS: {
       POLICIES: "/api/admin/policies",

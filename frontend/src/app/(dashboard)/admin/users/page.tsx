@@ -75,6 +75,9 @@ import { UserDialog } from "@/components/admin/UserDialog";
 import { SetPasswordDialog } from "@/components/admin/SetPasswordDialog";
 import { ManageRolesDialog } from "@/components/admin/ManageRolesDialog";
 import type { User } from "@/types/api.types";
+import { api } from "@/lib/api/client";
+import { API_ENDPOINTS } from "@/lib/api/endpoints";
+import { toast } from "sonner";
 
 export default function AdminUsersPage() {
   const [page, setPage] = useState(1);
@@ -152,11 +155,7 @@ export default function AdminUsersPage() {
       {
         accessorKey: "email",
         header: () => (
-          <Button
-            variant="ghost"
-            onClick={() => handleSort("email")}
-            className="-ml-4 h-8"
-          >
+          <Button variant="ghost" onClick={() => handleSort("email")} className="-ml-4 h-8">
             Email
             {getSortIcon("email")}
           </Button>
@@ -165,11 +164,7 @@ export default function AdminUsersPage() {
       {
         accessorKey: "role",
         header: () => (
-          <Button
-            variant="ghost"
-            onClick={() => handleSort("role")}
-            className="-ml-4 h-8"
-          >
+          <Button variant="ghost" onClick={() => handleSort("role")} className="-ml-4 h-8">
             Role
             {getSortIcon("role")}
           </Button>
@@ -177,22 +172,14 @@ export default function AdminUsersPage() {
         cell: ({ row }) => {
           const role = row.original.role;
           const variant =
-            role === "admin"
-              ? "default"
-              : role === "manager"
-                ? "secondary"
-                : "outline";
+            role === "admin" ? "default" : role === "manager" ? "secondary" : "outline";
           return <Badge variant={variant}>{role}</Badge>;
         },
       },
       {
         accessorKey: "status",
         header: () => (
-          <Button
-            variant="ghost"
-            onClick={() => handleSort("status")}
-            className="-ml-4 h-8"
-          >
+          <Button variant="ghost" onClick={() => handleSort("status")} className="-ml-4 h-8">
             Status
             {getSortIcon("status")}
           </Button>
@@ -200,11 +187,7 @@ export default function AdminUsersPage() {
         cell: ({ row }) => {
           const status = row.original.status;
           const variant =
-            status === "active"
-              ? "default"
-              : status === "pending"
-                ? "secondary"
-                : "destructive";
+            status === "active" ? "default" : status === "pending" ? "secondary" : "destructive";
           return <Badge variant={variant}>{status}</Badge>;
         },
       },
@@ -368,58 +351,55 @@ export default function AdminUsersPage() {
   };
 
   const handleExportCSV = async () => {
+    toast.info("Starting CSV export...", {
+      description: "This may take a moment for large datasets.",
+    });
+
     try {
-      // Import api and API_ENDPOINTS at the top of the function
-      const { api } = await import("@/lib/api/client");
-      const { API_ENDPOINTS } = await import("@/lib/api/endpoints");
+      // 1. Lấy các filter hiện tại từ state
+      const params = new URLSearchParams();
+      if (search) params.set("search", search);
+      if (roleFilter !== "all") params.set("role", roleFilter);
+      if (statusFilter !== "all") params.set("status", statusFilter);
 
-      // Build query params with current filters
-      const params: Record<string, string> = {};
-      if (search) params.search = search;
-      if (roleFilter !== "all") params.role = roleFilter;
-      if (statusFilter !== "all") params.status = statusFilter;
+      // Lấy sort/order (nếu endpoint stream của bạn hỗ trợ)
+      params.set("sort", sortBy);
+      params.set("order", sortOrder);
 
-      // Fetch all users from export endpoint
-      const response = await api.get<User[]>(API_ENDPOINTS.ADMIN.USERS.EXPORT, {
-        params,
+      const queryString = params.toString();
+
+      // 2. Build URL (lấy endpoint stream MỚI)
+      const url = `${API_ENDPOINTS.ADMIN.USERS.EXPORT_CSV_STREAM}?${queryString}`;
+
+      // 3. Gọi API bằng 'api.get' (Axios)
+      // 'api' (axios instance) sẽ tự động đính kèm Authorization header
+      const response = await api.get(url, {
+        responseType: "blob", // Yêu cầu Axios trả về file dưới dạng Blob
       });
 
-      const allUsers = response.data;
-
-      if (!allUsers || allUsers.length === 0) {
-        console.warn("No users to export");
-        return;
-      }
-
-      // Generate CSV from all users
-      const headers = ["ID", "Username", "Email", "Full Name", "Role", "Status", "Phone"];
-      const rows = allUsers.map((user) => [
-        user.id,
-        user.username,
-        user.email,
-        user.full_name || "",
-        user.role,
-        user.status,
-        user.phone_number || "",
-      ]);
-
-      const csvContent = [
-        headers.join(","),
-        ...rows.map((row) => row.map((cell) => `"${cell}"`).join(",")),
-      ].join("\n");
-
-      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      // 4. Tạo link download từ Blob
+      const blob = new Blob([response.data], { type: "text/csv;charset=utf-8;" });
       const link = document.createElement("a");
-      const url = URL.createObjectURL(blob);
-      link.setAttribute("href", url);
-      link.setAttribute("download", `users_${new Date().toISOString().split("T")[0]}.csv`);
+      const blobUrl = URL.createObjectURL(blob);
+
+      const filename = `users_export_${new Date().toISOString().split("T")[0]}.csv`;
+
+      link.setAttribute("href", blobUrl);
+      link.setAttribute("download", filename);
       link.style.visibility = "hidden";
       document.body.appendChild(link);
       link.click();
+
+      // 5. Dọn dẹp
       document.body.removeChild(link);
+      URL.revokeObjectURL(blobUrl);
+
+      toast.success("CSV export finished successfully.");
     } catch (error) {
-      console.error("Error exporting users:", error);
-      // You might want to show a toast notification here
+      console.error("Error exporting users CSV:", error);
+      toast.error("Failed to export CSV", {
+        description: "An error occurred while generating the file.",
+      });
     }
   };
 
@@ -466,7 +446,7 @@ export default function AdminUsersPage() {
         <Card className="border-primary">
           <CardContent className="flex items-center justify-between p-4">
             <div className="flex items-center gap-2">
-              <CheckSquare className="h-5 w-5 text-primary" />
+              <CheckSquare className="text-primary h-5 w-5" />
               <span className="font-medium">{selectedCount} user(s) selected</span>
             </div>
             <div className="flex gap-2">
@@ -513,7 +493,7 @@ export default function AdminUsersPage() {
         <CardContent>
           <div className="flex flex-col gap-4 md:flex-row">
             <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Search className="text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
               <Input
                 placeholder="Search by username or email..."
                 value={search}
