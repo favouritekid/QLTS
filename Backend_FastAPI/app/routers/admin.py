@@ -305,34 +305,40 @@ async def get_role_users(
 
 
 @router.post(
-    "/roles/reassign-users",
+    "/roles/remove-from-users",
     tags=["Admin - Permissions"],
 )
-async def reassign_users_role(
+async def remove_role_from_users(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
     user_ids: List[int] = Body(...),
-    from_role: str = Body(...),
-    to_role: str = Body(default="role:user"),
+    role_to_remove: str = Body(...),
 ):
     """
-    (Admin only) Reassign multiple users from one role to another.
-    Updates both Casbin grouping policies and database user.role field.
+    (Admin only) Remove a specific role from multiple users.
+
+    SMART BEHAVIOR:
+    - If user has ONLY this role → remove it and auto-assign role:user
+    - If user has MULTIPLE roles → only remove this role, keep others
+    - Updates database user.role to reflect remaining highest-priority role
+
+    Priority order: admin > manager > officer > user
     """
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
     if not user_ids:
         raise ResourceNotFoundError("No user IDs provided")
 
-    # Validate target role exists
-    # Note: get_all_subjects() is NOT async even in AsyncEnforcer
-    all_roles_response = enforcer.get_all_subjects()
-    role_subjects = [r for r in all_roles_response if r.startswith("role:")]
+    # Role priority for DB field (highest to lowest)
+    ROLE_PRIORITY = {
+        "role:admin": 4,
+        "role:manager": 3,
+        "role:officer": 2,
+        "role:user": 1,
+    }
 
-    if to_role not in role_subjects:
-        raise ResourceNotFoundError(f"Target role '{to_role}' does not exist")
-
+    removed_count = 0
     reassigned_count = 0
     failed_users = []
 
@@ -340,36 +346,65 @@ async def reassign_users_role(
         user_subject = f"user:{user_id}"
 
         try:
-            # Remove old role grouping
-            await enforcer.remove_grouping_policy(user_subject, from_role)
+            # Get all current roles for this user
+            current_roles = await enforcer.get_roles_for_user(user_subject)
 
-            # Add new role grouping
-            await enforcer.add_grouping_policy(user_subject, to_role)
+            # Check if user actually has the role to remove
+            if role_to_remove not in current_roles:
+                log.warning(f"User {user_id} doesn't have role {role_to_remove}, skipping")
+                continue
 
-            # Update database user.role field
+            # Remove the specified role
+            await enforcer.remove_grouping_policy(user_subject, role_to_remove)
+            removed_count += 1
+
+            # Get remaining roles after removal
+            remaining_roles = [r for r in current_roles if r != role_to_remove]
+
+            # If no roles left, auto-assign role:user as fallback
+            if not remaining_roles:
+                await enforcer.add_grouping_policy(user_subject, "role:user")
+                remaining_roles = ["role:user"]
+                reassigned_count += 1
+                log.info(f"User {user_id} had no roles left, auto-assigned role:user")
+
+            # Update database user.role field to highest priority remaining role
             result = await db.execute(
                 select(models.User).where(models.User.id == user_id)
             )
             user = result.scalar_one_or_none()
 
             if user:
+                # Find highest priority role from remaining roles
+                highest_priority_role = max(
+                    remaining_roles,
+                    key=lambda r: ROLE_PRIORITY.get(r, 0),
+                    default="role:user"
+                )
+
                 # Extract role name without "role:" prefix for DB
-                db_role_name = to_role.replace("role:", "")
+                db_role_name = highest_priority_role.replace("role:", "")
                 user.role = db_role_name
                 await db.commit()
 
-            reassigned_count += 1
+                log.info(
+                    f"User {user_id} updated",
+                    removed_role=role_to_remove,
+                    remaining_roles=remaining_roles,
+                    db_role=db_role_name
+                )
 
         except Exception as e:
             failed_users.append({"user_id": user_id, "error": str(e)})
-            log.error(f"Failed to reassign user {user_id}", error=str(e))
+            log.error(f"Failed to remove role from user {user_id}", error=str(e))
 
     # Save Casbin policies
     await enforcer.save_policy()
 
     return {
-        "detail": f"Reassigned {reassigned_count} user(s) from {from_role} to {to_role}",
-        "reassigned_count": reassigned_count,
+        "detail": f"Removed {role_to_remove} from {removed_count} user(s), {reassigned_count} auto-assigned to role:user",
+        "removed_count": removed_count,
+        "reassigned_to_user_count": reassigned_count,
         "failed_count": len(failed_users),
         "failed_users": failed_users,
     }

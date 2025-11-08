@@ -216,22 +216,39 @@ export function RoleManagementWorkflowTab() {
         return;
       }
 
-      // STEP 3: If force delete and users exist, reassign them first
+      // STEP 3: If force delete and users exist, remove role from them
       if (userCount > 0 && forceDelete) {
-        console.log(`🔄 Reassigning ${userCount} users from ${selectedRole} to role:user`);
+        console.log(`🔄 Removing ${selectedRole} from ${userCount} users`);
 
         try {
           const userIds = usersWithRole.map((u) => u.id);
-          await api.post("/api/admin/roles/reassign-users", {
+          const response = await api.post("/api/admin/roles/remove-from-users", {
             user_ids: userIds,
-            from_role: selectedRole,
-            to_role: "role:user",
+            role_to_remove: selectedRole,
           });
 
-          toast.success(`Reassigned ${userCount} user(s) to role:user`);
+          const { removed_count, reassigned_to_user_count } = response.data;
+
+          // Count users with multiple roles
+          const multiRoleUsers = usersWithRole.filter(
+            (u) => u.casbin_roles && u.casbin_roles.length > 1
+          ).length;
+          const singleRoleUsers = userCount - multiRoleUsers;
+
+          console.log(`✅ Removed role from ${removed_count} users`);
+          console.log(`  - ${multiRoleUsers} users kept their other roles`);
+          console.log(`  - ${reassigned_to_user_count} users reassigned to role:user`);
+
+          if (reassigned_to_user_count > 0) {
+            toast.success(
+              `Removed role from ${removed_count} user(s): ${multiRoleUsers} kept other roles, ${reassigned_to_user_count} reassigned to 'user'`
+            );
+          } else {
+            toast.success(`Removed role from ${removed_count} user(s) who kept their other roles`);
+          }
         } catch (error) {
-          console.error("❌ Failed to reassign users:", error);
-          toast.error("Failed to reassign users. Aborting deletion.");
+          console.error("❌ Failed to remove role from users:", error);
+          toast.error("Failed to remove role from users. Aborting deletion.");
           setIsDeletingRole(false);
           return;
         }
@@ -276,11 +293,12 @@ export function RoleManagementWorkflowTab() {
       // CRITICAL: Invalidate all policy-related caches to refresh UI
       await queryClient.invalidateQueries({ queryKey: policyKeys.all });
 
-      const successMessage = userCount > 0
-        ? `Role deleted and ${userCount} user(s) reassigned to 'user'`
-        : `Role "${selectedRoleDisplayName}" deleted successfully (${deletedCount} policies removed)`;
-
-      toast.success(successMessage);
+      // Final success message (user reassignment message already shown above)
+      if (userCount === 0) {
+        toast.success(`Role "${selectedRoleDisplayName}" deleted successfully (${deletedCount} policies removed)`);
+      } else {
+        toast.success(`Role "${selectedRoleDisplayName}" deleted with ${deletedCount} policies removed`);
+      }
 
       // Close dialog and return to role selection
       setDeleteDialogOpen(false);
@@ -556,16 +574,39 @@ export function RoleManagementWorkflowTab() {
                     <AlertTriangle className="h-4 w-4" />
                     <AlertDescription>
                       <strong>⚠️ Cảnh báo:</strong> Có <strong>{usersWithRole.length} user(s)</strong> đang được gán vai trò này.
-                      {!forceDelete && (
-                        <div className="mt-2">
-                          Bạn cần check "Force delete" bên dưới để tự động chuyển họ về vai trò <code>user</code>.
-                        </div>
-                      )}
-                      {forceDelete && (
-                        <div className="mt-2 text-orange-200">
-                          ✓ Tất cả users sẽ được tự động chuyển về vai trò <code>user</code>.
-                        </div>
-                      )}
+                      {(() => {
+                        const multiRoleCount = usersWithRole.filter(
+                          (u) => u.casbin_roles && u.casbin_roles.length > 1
+                        ).length;
+                        const singleRoleCount = usersWithRole.length - multiRoleCount;
+
+                        return (
+                          <>
+                            <div className="mt-2 space-y-1">
+                              {multiRoleCount > 0 && (
+                                <div className="text-sm">
+                                  • <strong>{multiRoleCount} user(s)</strong> có nhiều vai trò → sẽ giữ lại các vai trò khác
+                                </div>
+                              )}
+                              {singleRoleCount > 0 && (
+                                <div className="text-sm">
+                                  • <strong>{singleRoleCount} user(s)</strong> chỉ có vai trò này → sẽ được chuyển về <code>user</code>
+                                </div>
+                              )}
+                            </div>
+                            {!forceDelete && (
+                              <div className="mt-2 font-medium">
+                                Bạn cần check "Force delete" bên dưới để xác nhận.
+                              </div>
+                            )}
+                            {forceDelete && (
+                              <div className="mt-2 text-orange-200 font-medium">
+                                ✓ Đã xác nhận xóa vai trò khỏi tất cả users.
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
                     </AlertDescription>
                   </Alert>
 
@@ -601,17 +642,23 @@ export function RoleManagementWorkflowTab() {
 
               {/* Force delete checkbox - only show if there are users */}
               {usersWithRole.length > 0 && (
-                <div className="flex items-center space-x-2 my-4 p-3 border rounded-md bg-muted">
+                <div className="flex items-start space-x-2 my-4 p-3 border rounded-md bg-muted">
                   <Checkbox
                     id="force-delete"
                     checked={forceDelete}
                     onCheckedChange={(checked) => setForceDelete(checked === true)}
+                    className="mt-0.5"
                   />
                   <label
                     htmlFor="force-delete"
-                    className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                    className="text-sm leading-relaxed peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer flex-1"
                   >
-                    Force delete và tự động chuyển {usersWithRole.length} user(s) về vai trò <code className="bg-background px-1">user</code>
+                    <div className="font-medium mb-1">
+                      Xác nhận xóa vai trò khỏi {usersWithRole.length} user(s)
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Users có nhiều vai trò sẽ giữ lại các vai trò khác. Users chỉ có vai trò này sẽ được chuyển về <code className="bg-background px-1">user</code>.
+                    </div>
                   </label>
                 </div>
               )}
