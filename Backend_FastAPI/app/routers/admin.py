@@ -1700,6 +1700,7 @@ async def get_user_statistics(
     tags=["Admin - Policies (Advanced)"],
 )
 async def who_can_access_resource(
+    request: Request,
     object: str = Query(..., description="Resource path (e.g., /api/leads)"),
     action: str = Query(..., description="HTTP method (e.g., GET, POST)"),
     current_admin: models.User = PermissionDep,
@@ -1716,7 +1717,7 @@ async def who_can_access_resource(
     Returns list of all subjects (roles/users) that have permission.
     """
     # Initialize Casbin service
-    enforcer = get_casbin_enforcer()
+    enforcer = request.app.state.enforcer
     casbin_service = CasbinPolicyService(db=None, enforcer=enforcer)
 
     # Get allowed subjects
@@ -1736,6 +1737,7 @@ async def who_can_access_resource(
     tags=["Admin - Policies (Advanced)"],
 )
 async def simulate_permission(
+    request: Request,
     request_data: schemas.PermissionSimulateRequest,
     current_admin: models.User = PermissionDep,
 ):
@@ -1758,7 +1760,7 @@ async def simulate_permission(
             "action": "GET"
         }
     """
-    enforcer = get_casbin_enforcer()
+    enforcer = request.app.state.enforcer
 
     # Simulate permission check
     is_allowed = await enforcer.enforce(
@@ -1788,6 +1790,7 @@ async def simulate_permission(
     tags=["Admin - Policies (Advanced)"],
 )
 async def get_role_features(
+    request: Request,
     role_name: str,
     current_admin: models.User = PermissionDep,
 ):
@@ -1812,7 +1815,7 @@ async def get_role_features(
     """
     from ..casbin_config.policy_templates import FEATURE_MAP
 
-    enforcer = get_casbin_enforcer()
+    enforcer = request.app.state.enforcer
 
     # Get current policies for this role
     all_policies = enforcer.get_policy()
@@ -1858,6 +1861,7 @@ async def get_role_features(
     tags=["Admin - Policies (Advanced)"],
 )
 async def toggle_role_feature(
+    request: Request,
     role_name: str,
     request_data: schemas.ToggleFeatureRequest,
     db: AsyncSession = Depends(database.get_db),
@@ -1888,7 +1892,7 @@ async def toggle_role_feature(
         )
 
     feature_def = FEATURE_MAP[request_data.feature_id]
-    enforcer = get_casbin_enforcer()
+    enforcer = request.app.state.enforcer
     casbin_service = CasbinPolicyService(db=db, enforcer=enforcer)
 
     # Convert feature policies to tuples with role substituted
