@@ -2,6 +2,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Card,
   CardContent,
@@ -25,6 +26,8 @@ import { Badge } from "@/components/ui/badge";
 import { Loader2, Info, CheckCircle2 } from "lucide-react";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
+import { policyKeys } from "@/hooks/usePolicies";
+import { activityLogsKeys } from "@/hooks/useActivityLogs";
 
 interface FeatureStatus {
   feature_id: string;
@@ -55,6 +58,7 @@ interface FeaturePolicyTabProps {
 }
 
 export function FeaturePolicyTab({ roleName: propRoleName }: FeaturePolicyTabProps = {}) {
+  const queryClient = useQueryClient();
   const [selectedRole, setSelectedRole] = useState<string>("role:manager");
   const [features, setFeatures] = useState<FeatureStatus[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -99,6 +103,24 @@ export function FeaturePolicyTab({ roleName: propRoleName }: FeaturePolicyTabPro
           f.feature_id === featureId ? { ...f, enabled } : f
         )
       );
+
+      // Invalidate all policy-related queries to refresh data across all components
+      await queryClient.invalidateQueries({ queryKey: policyKeys.all });
+
+      // Invalidate role-specific explain query
+      await queryClient.invalidateQueries({
+        queryKey: ["admin", "roles", effectiveRole, "explain"]
+      });
+
+      // Invalidate policy suggestions for autocomplete
+      await queryClient.invalidateQueries({
+        queryKey: ["admin", "policies", "suggestions"]
+      });
+
+      // Invalidate activity logs to show new activity
+      await queryClient.invalidateQueries({
+        queryKey: activityLogsKeys.all
+      });
 
       toast.success(
         enabled

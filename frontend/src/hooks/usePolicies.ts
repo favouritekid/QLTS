@@ -2,6 +2,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api/client";
 import { API_ENDPOINTS } from "@/lib/api/endpoints";
+import { activityLogsKeys } from "@/hooks/useActivityLogs";
 import type {
   RolesListResponse,
   TemplatesListResponse,
@@ -85,6 +86,7 @@ export function useAddPolicy() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: policyKeys.all });
+      queryClient.invalidateQueries({ queryKey: activityLogsKeys.all });
     },
   });
 }
@@ -102,6 +104,7 @@ export function useDeletePolicy() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: policyKeys.all });
+      queryClient.invalidateQueries({ queryKey: activityLogsKeys.all });
     },
   });
 }
@@ -120,6 +123,7 @@ export function useBatchAddPolicies() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: policyKeys.all });
+      queryClient.invalidateQueries({ queryKey: activityLogsKeys.all });
     },
   });
 }
@@ -151,6 +155,7 @@ export function useApplyTemplate() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: policyKeys.all });
+      queryClient.invalidateQueries({ queryKey: activityLogsKeys.all });
     },
   });
 }
