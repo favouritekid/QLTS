@@ -1961,7 +1961,7 @@ async def toggle_role_feature(
             description=f"Enabled feature '{feature_def['display_name']}' for {role_name}",
             resource_type="casbin_policy",
             resource_id=None,
-            metadata={
+            changes={
                 "feature_id": request_data.feature_id,
                 "role": role_name,
                 "policies_added": result["added"],
@@ -1983,7 +1983,7 @@ async def toggle_role_feature(
             description=f"Disabled feature '{feature_def['display_name']}' for {role_name}",
             resource_type="casbin_policy",
             resource_id=None,
-            metadata={
+            changes={
                 "feature_id": request_data.feature_id,
                 "role": role_name,
                 "policies_removed": result.get("removed", 0),
