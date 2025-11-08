@@ -235,9 +235,8 @@ async def get_user_roles(
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
     # Lấy tất cả roles của user
-    # Note: get_roles_for_user() is NOT async even in AsyncEnforcer
     user_subject = f"user:{user_id}"
-    roles = enforcer.get_roles_for_user(user_subject)
+    roles = await enforcer.get_roles_for_user(user_subject)
 
     return roles
 
@@ -287,7 +286,7 @@ async def get_role_users(
     for user in users:
         user_subject = f"user:{user.id}"
         # Get all roles for this user from Casbin
-        casbin_roles = enforcer.get_roles_for_user(user_subject)
+        casbin_roles = await enforcer.get_roles_for_user(user_subject)
 
         user_list.append({
             "id": user.id,
