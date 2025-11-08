@@ -1886,6 +1886,7 @@ async def toggle_role_feature(
     This will add/remove all policies associated with the "view_leads" feature.
     """
     from ..casbin_config.policy_templates import FEATURE_MAP
+    from ..services.casbin_service import CasbinPolicyService
 
     # Validate feature exists
     if request_data.feature_id not in FEATURE_MAP:

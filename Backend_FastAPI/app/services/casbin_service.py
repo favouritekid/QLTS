@@ -493,7 +493,8 @@ class CasbinPolicyService:
         # Test each subject to see if they have permission
         for subject in all_subjects:
             # Use enforcer.enforce to check permission
-            is_allowed = await self.enforcer.enforce(subject, obj, act)
+            # Note: enforcer.enforce() is SYNC despite AsyncEnforcer
+            is_allowed = self.enforcer.enforce(subject, obj, act)
             if is_allowed:
                 allowed_subjects.append(subject)
 
