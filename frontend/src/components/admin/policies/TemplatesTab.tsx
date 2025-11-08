@@ -17,13 +17,12 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useToast } from "@/hooks/use-toast";
+import { toast } from "sonner";
 
 import { useTemplates, useApplyTemplate } from "@/hooks/usePolicies";
 import type { TemplateInfo } from "@/types/policy.types";
 
 export function TemplatesTab() {
-  const { toast } = useToast();
   const { data, isLoading } = useTemplates();
   const applyTemplateMutation = useApplyTemplate();
 
@@ -33,11 +32,7 @@ export function TemplatesTab() {
 
   const handleApplyTemplate = async () => {
     if (!selectedTemplate || !targetRole) {
-      toast({
-        title: "Validation Error",
-        description: "Please enter a role name",
-        variant: "destructive",
-      });
+      toast.error("Please enter a role name");
       return;
     }
 
@@ -48,18 +43,11 @@ export function TemplatesTab() {
         validate: true,
       });
 
-      toast({
-        title: "Success",
-        description: `Applied ${result.added} policies to ${targetRole}`,
-      });
+      toast.success(`Applied ${result.added} policies to ${targetRole}`);
       setApplyDialogOpen(false);
       setTargetRole("");
     } catch (error: any) {
-      toast({
-        title: "Error",
-        description: error.response?.data?.detail || "Failed to apply template",
-        variant: "destructive",
-      });
+      toast.error(error.response?.data?.detail || "Failed to apply template");
     }
   };
 

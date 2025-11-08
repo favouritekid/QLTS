@@ -36,13 +36,12 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useToast } from "@/hooks/use-toast";
+import { toast } from "sonner";
 
 import { usePolicies, useAddPolicy, useDeletePolicy, useValidatePolicy } from "@/hooks/usePolicies";
 import type { PolicyRule } from "@/types/policy.types";
 
 export function PoliciesTab() {
-  const { toast } = useToast();
   const { data: policies, isLoading } = usePolicies();
   const addPolicyMutation = useAddPolicy();
   const deletePolicyMutation = useDeletePolicy();
@@ -61,28 +60,17 @@ export function PoliciesTab() {
 
   const handleAddPolicy = async () => {
     if (!newPolicy.subject || !newPolicy.object || !newPolicy.action) {
-      toast({
-        title: "Validation Error",
-        description: "All fields are required",
-        variant: "destructive",
-      });
+      toast.error("All fields are required");
       return;
     }
 
     try {
       await addPolicyMutation.mutateAsync(newPolicy);
-      toast({
-        title: "Success",
-        description: "Policy added successfully",
-      });
+      toast.success("Policy added successfully");
       setAddDialogOpen(false);
       setNewPolicy({ subject: "", object: "", action: "" });
     } catch (error: any) {
-      toast({
-        title: "Error",
-        description: error.response?.data?.detail || "Failed to add policy",
-        variant: "destructive",
-      });
+      toast.error(error.response?.data?.detail || "Failed to add policy");
     }
   };
 
@@ -106,11 +94,7 @@ export function PoliciesTab() {
       setPolicyToDelete(policy);
       setDeleteDialogOpen(true);
     } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to validate policy deletion",
-        variant: "destructive",
-      });
+      toast.error("Failed to validate policy deletion");
     }
   };
 
@@ -119,19 +103,12 @@ export function PoliciesTab() {
 
     try {
       await deletePolicyMutation.mutateAsync(policyToDelete);
-      toast({
-        title: "Success",
-        description: "Policy deleted successfully",
-      });
+      toast.success("Policy deleted successfully");
       setDeleteDialogOpen(false);
       setPolicyToDelete(null);
       setValidationWarning([]);
     } catch (error: any) {
-      toast({
-        title: "Error",
-        description: error.response?.data?.detail || "Failed to delete policy",
-        variant: "destructive",
-      });
+      toast.error(error.response?.data?.detail || "Failed to delete policy");
     }
   };
 
