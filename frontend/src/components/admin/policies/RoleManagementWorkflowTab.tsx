@@ -2,14 +2,25 @@
 "use client";
 
 import { useState } from "react";
-import { Shield, Lock, ArrowRight, CheckCircle2, Circle, ChevronRight } from "lucide-react";
+import { Shield, Lock, ArrowRight, CheckCircle2, Circle, ChevronRight, Plus } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { toast } from "sonner";
 
-import { useRoles } from "@/hooks/usePolicies";
+import { useRoles, useAddPolicy } from "@/hooks/usePolicies";
 import { FeaturePolicyTab } from "./FeaturePolicyTab";
 import { RoleDetailView } from "./RoleDetailView";
 
@@ -73,8 +84,12 @@ export function RoleManagementWorkflowTab() {
   const [currentStep, setCurrentStep] = useState<WorkflowStep>("SELECT_ROLE");
   const [selectedRole, setSelectedRole] = useState<string | null>(null);
   const [selectedRoleDisplayName, setSelectedRoleDisplayName] = useState<string>("");
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [newRoleName, setNewRoleName] = useState("");
+  const [newRoleDescription, setNewRoleDescription] = useState("");
 
   const { data: rolesData, isLoading } = useRoles();
+  const addPolicyMutation = useAddPolicy();
 
   const handleRoleSelect = (roleName: string, displayName: string) => {
     setSelectedRole(roleName);
@@ -96,24 +111,84 @@ export function RoleManagementWorkflowTab() {
     setCurrentStep("VIEW_DETAILS");
   };
 
+  const handleCreateRole = async () => {
+    // Validate role name
+    if (!newRoleName.trim()) {
+      toast.error("Role name is required");
+      return;
+    }
+
+    // Validate role name format (alphanumeric, hyphen, underscore only)
+    if (!/^[a-zA-Z0-9_-]+$/.test(newRoleName)) {
+      toast.error("Role name can only contain letters, numbers, hyphens, and underscores");
+      return;
+    }
+
+    const roleWithPrefix = `role:${newRoleName.toLowerCase()}`;
+
+    // Check if role already exists
+    const roleExists = rolesData?.roles.some(r => r.name === roleWithPrefix);
+    if (roleExists) {
+      toast.error(`Role "${newRoleName}" already exists`);
+      return;
+    }
+
+    try {
+      // Create the role by adding a basic policy
+      // This will make the role appear in the roles list
+      await addPolicyMutation.mutateAsync({
+        subject: roleWithPrefix,
+        object: "/api/profile", // Basic permission - view own profile
+        action: "GET",
+      });
+
+      toast.success(`Role "${newRoleName}" created successfully`);
+
+      // Close dialog and reset form
+      setCreateDialogOpen(false);
+      setNewRoleName("");
+      setNewRoleDescription("");
+
+      // Auto-select the newly created role and proceed to features
+      const capitalizedName = newRoleName.charAt(0).toUpperCase() + newRoleName.slice(1);
+      setSelectedRole(roleWithPrefix);
+      setSelectedRoleDisplayName(capitalizedName);
+      setCurrentStep("MANAGE_FEATURES");
+    } catch (error) {
+      toast.error("Failed to create role");
+      console.error(error);
+    }
+  };
+
+  // Render main content based on current step
+  let stepContent;
+
   // Step 1: SELECT_ROLE
   if (currentStep === "SELECT_ROLE") {
-    return (
+    stepContent = (
       <div className="space-y-4">
         <StepIndicator currentStep={currentStep} />
 
         <Card>
           <CardHeader>
-            <CardTitle>Bước 1: Chọn Vai trò</CardTitle>
-            <CardDescription>
-              Chọn vai trò bạn muốn quản lý hoặc tạo vai trò mới
-            </CardDescription>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle>Bước 1: Chọn Vai trò</CardTitle>
+                <CardDescription>
+                  Chọn vai trò bạn muốn quản lý hoặc tạo vai trò mới
+                </CardDescription>
+              </div>
+              <Button onClick={() => setCreateDialogOpen(true)}>
+                <Plus className="mr-2 h-4 w-4" />
+                Tạo Vai trò Mới
+              </Button>
+            </div>
           </CardHeader>
           <CardContent>
             <Alert className="mb-4">
               <AlertDescription>
                 💡 <strong>Hướng dẫn:</strong> Click vào vai trò để xem chi tiết quyền và quản lý
-                tính năng của vai trò đó.
+                tính năng của vai trò đó. Hoặc tạo vai trò mới bằng nút bên trên.
               </AlertDescription>
             </Alert>
 
@@ -169,10 +244,9 @@ export function RoleManagementWorkflowTab() {
       </div>
     );
   }
-
   // Step 2: VIEW_DETAILS
-  if (currentStep === "VIEW_DETAILS" && selectedRole) {
-    return (
+  else if (currentStep === "VIEW_DETAILS" && selectedRole) {
+    stepContent = (
       <div className="space-y-4">
         <StepIndicator currentStep={currentStep} />
 
@@ -202,10 +276,9 @@ export function RoleManagementWorkflowTab() {
       </div>
     );
   }
-
   // Step 3: MANAGE_FEATURES
-  if (currentStep === "MANAGE_FEATURES" && selectedRole) {
-    return (
+  else if (currentStep === "MANAGE_FEATURES" && selectedRole) {
+    stepContent = (
       <div className="space-y-4">
         <StepIndicator currentStep={currentStep} />
 
@@ -235,5 +308,76 @@ export function RoleManagementWorkflowTab() {
     );
   }
 
-  return null;
+  // Render step content + dialog
+  return (
+    <>
+      {/* Main step content */}
+      {stepContent}
+
+      {/* Create Role Dialog (available in all steps) */}
+      <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Tạo Vai trò Mới</DialogTitle>
+            <DialogDescription>
+              Tạo vai trò tùy chỉnh với tên riêng. Vai trò mới sẽ có quyền cơ bản và bạn có thể cấu hình thêm ở bước tiếp theo.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="roleName">Tên Vai trò *</Label>
+              <Input
+                id="roleName"
+                placeholder="ví dụ: support, analyst, developer"
+                value={newRoleName}
+                onChange={(e) => setNewRoleName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    handleCreateRole();
+                  }
+                }}
+              />
+              <p className="text-xs text-muted-foreground">
+                Chỉ sử dụng chữ cái, số, gạch ngang và gạch dưới. Tên sẽ được tự động chuyển thành chữ thường.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="roleDescription">Mô tả (tùy chọn)</Label>
+              <Input
+                id="roleDescription"
+                placeholder="ví dụ: Nhân viên hỗ trợ khách hàng"
+                value={newRoleDescription}
+                onChange={(e) => setNewRoleDescription(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Mô tả này chỉ để tham khảo, không ảnh hưởng đến quyền hạn.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setCreateDialogOpen(false);
+                setNewRoleName("");
+                setNewRoleDescription("");
+              }}
+              disabled={addPolicyMutation.isPending}
+            >
+              Hủy
+            </Button>
+            <Button
+              onClick={handleCreateRole}
+              disabled={addPolicyMutation.isPending || !newRoleName.trim()}
+            >
+              {addPolicyMutation.isPending ? "Đang tạo..." : "Tạo Vai trò"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
 }
