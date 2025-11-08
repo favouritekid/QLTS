@@ -41,6 +41,15 @@ import { toast } from "sonner";
 import { usePolicies, useAddPolicy, useDeletePolicy, useValidatePolicy } from "@/hooks/usePolicies";
 import type { PolicyRule } from "@/types/policy.types";
 
+// Helper to extract error message from API errors
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error && typeof error === 'object' && 'response' in error) {
+    const response = (error as { response?: { data?: { detail?: string } } }).response;
+    return response?.data?.detail || fallback;
+  }
+  return fallback;
+}
+
 export function PoliciesTab() {
   const { data: policies, isLoading } = usePolicies();
   const addPolicyMutation = useAddPolicy();
@@ -69,8 +78,8 @@ export function PoliciesTab() {
       toast.success("Policy added successfully");
       setAddDialogOpen(false);
       setNewPolicy({ subject: "", object: "", action: "" });
-    } catch (error: any) {
-      toast.error(error.response?.data?.detail || "Failed to add policy");
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Failed to add policy"));
     }
   };
 
@@ -93,7 +102,7 @@ export function PoliciesTab() {
 
       setPolicyToDelete(policy);
       setDeleteDialogOpen(true);
-    } catch (error) {
+    } catch {
       toast.error("Failed to validate policy deletion");
     }
   };
@@ -107,8 +116,8 @@ export function PoliciesTab() {
       setDeleteDialogOpen(false);
       setPolicyToDelete(null);
       setValidationWarning([]);
-    } catch (error: any) {
-      toast.error(error.response?.data?.detail || "Failed to delete policy");
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Failed to delete policy"));
     }
   };
 

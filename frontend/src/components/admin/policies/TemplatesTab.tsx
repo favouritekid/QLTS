@@ -22,6 +22,15 @@ import { toast } from "sonner";
 import { useTemplates, useApplyTemplate } from "@/hooks/usePolicies";
 import type { TemplateInfo } from "@/types/policy.types";
 
+// Helper to extract error message from API errors
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error && typeof error === 'object' && 'response' in error) {
+    const response = (error as { response?: { data?: { detail?: string } } }).response;
+    return response?.data?.detail || fallback;
+  }
+  return fallback;
+}
+
 export function TemplatesTab() {
   const { data, isLoading } = useTemplates();
   const applyTemplateMutation = useApplyTemplate();
@@ -46,8 +55,8 @@ export function TemplatesTab() {
       toast.success(`Applied ${result.added} policies to ${targetRole}`);
       setApplyDialogOpen(false);
       setTargetRole("");
-    } catch (error: any) {
-      toast.error(error.response?.data?.detail || "Failed to apply template");
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Failed to apply template"));
     }
   };
 
