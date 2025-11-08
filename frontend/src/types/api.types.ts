@@ -121,6 +121,45 @@ export interface PolicyCreate {
   action: string;
 }
 
+// Advanced Permission Tools Types
+export interface WhoCanAccessResponse {
+  object: string;
+  action: string;
+  allowed_subjects: string[];
+  total_count: number;
+}
+
+export interface PermissionSimulateRequest {
+  subject: string;
+  object: string;
+  action: string;
+}
+
+export interface PermissionSimulateResponse {
+  subject: string;
+  object: string;
+  action: string;
+  is_allowed: boolean;
+  message: string;
+}
+
+export interface FeatureStatus {
+  feature_id: string;
+  display_name: string;
+  enabled: boolean;
+  policy_count: number;
+}
+
+export interface RoleFeaturesResponse {
+  role: string;
+  features: FeatureStatus[];
+}
+
+export interface ToggleFeatureRequest {
+  feature_id: string;
+  enabled: boolean;
+}
+
 export interface BulkAction {
   action: "delete" | "change_status";
   user_ids: number[];

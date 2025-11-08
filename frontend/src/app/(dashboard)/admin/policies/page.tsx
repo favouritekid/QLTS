@@ -2,7 +2,7 @@
 "use client";
 
 import { useState } from "react";
-import { Shield, FileText, Grid3x3, Activity } from "lucide-react";
+import { Shield, FileText, Grid3x3, Activity, Search, Wrench, Layers } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -12,6 +12,9 @@ import { PoliciesTab } from "@/components/admin/policies/PoliciesTab";
 import { RolesTab } from "@/components/admin/policies/RolesTab";
 import { TemplatesTab } from "@/components/admin/policies/TemplatesTab";
 import { AuditLogTab } from "@/components/admin/policies/AuditLogTab";
+import { PermissionLookupTab } from "@/components/admin/policies/PermissionLookupTab";
+import { PermissionSimulatorTab } from "@/components/admin/policies/PermissionSimulatorTab";
+import { FeaturePolicyTab } from "@/components/admin/policies/FeaturePolicyTab";
 
 export default function PolicyManagementPage() {
   const [activeTab, setActiveTab] = useState("policies");
@@ -74,7 +77,7 @@ export default function PolicyManagementPage() {
 
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className="grid w-full grid-cols-4 lg:grid-cols-7 gap-2">
           <TabsTrigger value="policies">
             <FileText className="mr-2 h-4 w-4" />
             Policies
@@ -86,6 +89,18 @@ export default function PolicyManagementPage() {
           <TabsTrigger value="templates">
             <Shield className="mr-2 h-4 w-4" />
             Templates
+          </TabsTrigger>
+          <TabsTrigger value="lookup">
+            <Search className="mr-2 h-4 w-4" />
+            Lookup
+          </TabsTrigger>
+          <TabsTrigger value="simulator">
+            <Wrench className="mr-2 h-4 w-4" />
+            Simulator
+          </TabsTrigger>
+          <TabsTrigger value="features">
+            <Layers className="mr-2 h-4 w-4" />
+            Features
           </TabsTrigger>
           <TabsTrigger value="audit">
             <Activity className="mr-2 h-4 w-4" />
@@ -103,6 +118,18 @@ export default function PolicyManagementPage() {
 
         <TabsContent value="templates" className="space-y-4">
           <TemplatesTab />
+        </TabsContent>
+
+        <TabsContent value="lookup" className="space-y-4">
+          <PermissionLookupTab />
+        </TabsContent>
+
+        <TabsContent value="simulator" className="space-y-4">
+          <PermissionSimulatorTab />
+        </TabsContent>
+
+        <TabsContent value="features" className="space-y-4">
+          <FeaturePolicyTab />
         </TabsContent>
 
         <TabsContent value="audit" className="space-y-4">
