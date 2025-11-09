@@ -2,6 +2,7 @@
 "use client";
 
 import { useState } from "react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -194,33 +195,20 @@ export default function OrganizationManagementPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex space-x-4 border-b">
-        <button
-          onClick={() => setActiveTab("units")}
-          className={`pb-2 px-4 font-medium transition-colors ${
-            activeTab === "units"
-              ? "border-b-2 border-primary text-primary"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          <Building2 className="inline-block w-4 h-4 mr-2" />
-          Đơn vị tổ chức
-        </button>
-        <button
-          onClick={() => setActiveTab("majors")}
-          className={`pb-2 px-4 font-medium transition-colors ${
-            activeTab === "majors"
-              ? "border-b-2 border-primary text-primary"
-              : "text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          <GraduationCap className="inline-block w-4 h-4 mr-2" />
-          Ngành học
-        </button>
-      </div>
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList className="grid w-full grid-cols-2 gap-2">
+          <TabsTrigger value="units">
+            <Building2 className="mr-2 h-4 w-4" />
+            Đơn vị tổ chức
+          </TabsTrigger>
+          <TabsTrigger value="majors">
+            <GraduationCap className="mr-2 h-4 w-4" />
+            Ngành học
+          </TabsTrigger>
+        </TabsList>
 
-      {/* Units Tab */}
-      {activeTab === "units" && (
+        {/* Units Tab */}
+        <TabsContent value="units" className="space-y-4">
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -323,10 +311,10 @@ export default function OrganizationManagementPage() {
             )}
           </CardContent>
         </Card>
-      )}
+        </TabsContent>
 
-      {/* Majors Tab */}
-      {activeTab === "majors" && (
+        {/* Majors Tab */}
+        <TabsContent value="majors" className="space-y-4">
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -432,7 +420,8 @@ export default function OrganizationManagementPage() {
             )}
           </CardContent>
         </Card>
-      )}
+        </TabsContent>
+      </Tabs>
 
       {/* Dialogs */}
       <UnitDialog
