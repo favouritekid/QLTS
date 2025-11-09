@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { FileCode, Layers, PlusCircle } from "lucide-react";
+import { FileCode, Layers, PlusCircle, Link2 } from "lucide-react";
 import { usePermissionExplain } from "@/hooks/usePermissionExplain";
 
 interface RoleDetailViewProps {
@@ -104,6 +104,13 @@ export function RoleDetailView({ roleName }: RoleDetailViewProps) {
         title={`From Features (${data.policies_from_features.length})`}
         icon={Layers}
         description="Policies granted by enabled features"
+      />
+
+      <PolicyTable
+        policies={data.policies_inherited || []}
+        title={`Inherited Policies (${data.policies_inherited?.length || 0})`}
+        icon={Link2}
+        description="Policies inherited from other roles via grouping policies (e.g., role:user)"
       />
 
       <PolicyTable

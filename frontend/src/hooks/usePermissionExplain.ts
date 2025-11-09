@@ -13,6 +13,7 @@ interface PermissionExplainResponse {
   policies_from_template: PolicyRule[];
   policies_from_features: PolicyRule[];
   policies_manual: PolicyRule[];
+  policies_inherited?: PolicyRule[];
 }
 
 /**
@@ -21,6 +22,7 @@ interface PermissionExplainResponse {
  * Fetches permission explanation showing which policies come from:
  * - System templates
  * - Enabled features
+ * - Role inheritance (via grouping policies)
  * - Manual additions
  */
 export function usePermissionExplain(roleName: string) {

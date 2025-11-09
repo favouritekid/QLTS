@@ -213,3 +213,6 @@ class PermissionExplainResponse(BaseModel):
     policies_manual: List[PolicyRule] = Field(
         ..., description="Policies added manually (not from templates/features)"
     )
+    policies_inherited: List[PolicyRule] = Field(
+        default_factory=list, description="Policies inherited from other roles via grouping policies"
+    )

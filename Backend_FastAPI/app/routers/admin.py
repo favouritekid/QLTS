@@ -2461,6 +2461,7 @@ async def explain_role_permissions(
     - Template policies (from system role templates)
     - Feature policies (from enabled features)
     - Manual policies (added individually)
+    - Inherited policies (from role inheritance via grouping policies)
 
     This helps admins understand permission inheritance and sources.
     """
@@ -2469,77 +2470,97 @@ async def explain_role_permissions(
         ADMIN_TEMPLATE,
         MANAGER_TEMPLATE,
         OFFICER_TEMPLATE,
+        BASIC_USER_TEMPLATE,  # ← (1) IMPORT BASIC_USER_TEMPLATE
     )
 
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
-    # Get all policies for this role
-    all_policies = enforcer.get_policy()
-    role_policies_tuples = [
-        (p[0], p[1], p[2])
-        for p in all_policies
-        if p[0] == role_name
-    ]
-
-    # Map role to template
+    # (2) ĐỊNH NGHĨA TEMPLATE_MAP ĐẦY ĐỦ
     TEMPLATE_MAP = {
         "role:admin": ADMIN_TEMPLATE,
         "role:manager": MANAGER_TEMPLATE,
         "role:officer": OFFICER_TEMPLATE,
+        "role:user": BASIC_USER_TEMPLATE,  # ← THÊM DÒNG NÀY
     }
 
-    # 1. Policies from template
+    # (3) LẤY CÁC VAI TRÒ MÀ ROLE NÀY KẾ THỪA
+    # Ví dụ: cho "role:support", sẽ trả về ["role:user"]
+    inherited_roles = await enforcer.get_roles_for_user(role_name)
+
+    # (4) LẤY CÁC POLICY TRỰC TIẾP (DIRECT) CỦA ROLE NÀY
+    direct_policies_tuples = enforcer.get_policies_for_user(role_name)
+
     policies_from_template = []
+    policies_from_features = []
+    policies_manual = []
+    policies_inherited = []  # ← (5) KHỞI TẠO LIST MỚI
+
+    template_policy_set = set()
+    feature_policy_set = set()
+
+    # (6) PHÂN LOẠI CÁC POLICY TRỰC TIẾP
+    # 6a. Tìm quyền từ Template
     if role_name in TEMPLATE_MAP:
         template = TEMPLATE_MAP[role_name]
         template_policies = [
-            (
-                policy["subject"].replace("{role}", role_name),
-                policy["object"],
-                policy["action"]
-            )
-            for policy in template["policies"]
+            (p["subject"].replace("{role}", role_name), p["object"], p["action"])
+            for p in template["policies"]
         ]
-        policies_from_template = [
-            {"subject": p[0], "object": p[1], "action": p[2]}
-            for p in template_policies
-            if p in role_policies_tuples
-        ]
+        for p_tuple in template_policies:
+            if p_tuple in direct_policies_tuples:
+                policies_from_template.append({
+                    "subject": p_tuple[0],
+                    "object": p_tuple[1],
+                    "action": p_tuple[2]
+                })
+                template_policy_set.add(p_tuple)
 
-    # 2. Policies from features
-    policies_from_features = []
+    # 6b. Tìm quyền từ Features
     for feature_id, feature_def in FEATURE_MAP.items():
         feature_policies = [
-            (
-                policy["subject"].replace("{role}", role_name),
-                policy["object"],
-                policy["action"]
-            )
-            for policy in feature_def["policies"]
+            (p["subject"].replace("{role}", role_name), p["object"], p["action"])
+            for p in feature_def["policies"]
         ]
-
-        # Check if all feature policies exist (feature is enabled)
-        if all(fp in role_policies_tuples for fp in feature_policies):
+        if all(fp in direct_policies_tuples for fp in feature_policies):
             for fp in feature_policies:
                 policies_from_features.append({
                     "subject": fp[0],
                     "object": fp[1],
                     "action": fp[2]
                 })
+                feature_policy_set.add(fp)
 
-    # 3. Manual policies (not from template or features)
-    template_set = set(tuple(p.values()) for p in policies_from_template)
-    feature_set = set(tuple(p.values()) for p in policies_from_features)
+    # 6c. Tìm quyền Manual (Thủ công)
+    direct_policies_set = set(direct_policies_tuples)
+    for p_tuple in direct_policies_tuples:
+        if p_tuple not in template_policy_set and p_tuple not in feature_policy_set:
+            policies_manual.append({
+                "subject": p_tuple[0],
+                "object": p_tuple[1],
+                "action": p_tuple[2]
+            })
 
-    policies_manual = []
-    for p in role_policies_tuples:
-        p_dict = {"subject": p[0], "object": p[1], "action": p[2]}
-        if tuple(p_dict.values()) not in template_set and tuple(p_dict.values()) not in feature_set:
-            policies_manual.append(p_dict)
+    # (7) TÌM QUYỀN KẾ THỪA (PHẦN QUAN TRỌNG NHẤT)
+    for inherited_role_name in inherited_roles:
+        # Lấy tất cả policy của role CHA (bao gồm cả kế thừa của NÓ)
+        # Note: get_implicit_permissions_for_user là SYNC method
+        inherited_policies = enforcer.get_implicit_permissions_for_user(inherited_role_name)
+
+        for p_tuple in inherited_policies:
+            # Chỉ thêm nếu nó chưa phải là quyền trực tiếp (tránh trùng lặp)
+            if tuple(p_tuple) not in direct_policies_set:
+                # Hiển thị rõ nguồn gốc kế thừa
+                inherited_role_display = inherited_role_name.replace("role:", "")
+                policies_inherited.append({
+                    "subject": f"{role_name} (← {inherited_role_display})",
+                    "object": p_tuple[1],
+                    "action": p_tuple[2]
+                })
 
     return {
         "role": role_name,
         "policies_from_template": policies_from_template,
         "policies_from_features": policies_from_features,
         "policies_manual": policies_manual,
+        "policies_inherited": policies_inherited,  # ← (8) TRẢ VỀ DỮ LIỆU MỚI
     }
