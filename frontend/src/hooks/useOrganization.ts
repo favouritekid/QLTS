@@ -138,7 +138,12 @@ export function useCreateUnit() {
       // Socket.IO will handle cache invalidation
     },
     onError: (error) => {
-      const message = error.response?.data?.detail || "Tạo đơn vị thất bại";
+      const detail = error.response?.data?.detail;
+      const message = typeof detail === 'string'
+        ? detail
+        : Array.isArray(detail)
+          ? detail.map(e => e.msg).join(', ')
+          : "Tạo đơn vị thất bại";
       toast.error("Lỗi", { description: message });
     },
   });
@@ -154,7 +159,8 @@ export function useUpdateUnit() {
   return useMutation<
     OrganizationUnit,
     AxiosError<ApiErrorResponse>,
-    { id: number; data: OrganizationUnitUpdate }
+    { id: number; data: OrganizationUnitUpdate },
+    { previousUnits: OrganizationUnit[] | undefined }
   >({
     mutationFn: async ({ id, data }) => {
       const response = await api.put<OrganizationUnit>(
@@ -209,7 +215,12 @@ export function useUpdateUnit() {
         );
       }
 
-      const message = err.response?.data?.detail || "Cập nhật đơn vị thất bại";
+      const detail = err.response?.data?.detail;
+      const message = typeof detail === 'string'
+        ? detail
+        : Array.isArray(detail)
+          ? detail.map(e => e.msg).join(', ')
+          : "Cập nhật đơn vị thất bại";
       toast.error("Lỗi", { description: message });
     },
 
@@ -239,7 +250,12 @@ export function useDeleteUnit() {
     },
 
     onError: (error) => {
-      const message = error.response?.data?.detail || "Xóa đơn vị thất bại";
+      const detail = error.response?.data?.detail;
+      const message = typeof detail === 'string'
+        ? detail
+        : Array.isArray(detail)
+          ? detail.map(e => e.msg).join(', ')
+          : "Xóa đơn vị thất bại";
       toast.error("Lỗi", { description: message });
     },
   });
@@ -270,7 +286,12 @@ export function useCreateMajor() {
       // Socket.IO will handle cache invalidation
     },
     onError: (error) => {
-      const message = error.response?.data?.detail || "Tạo ngành học thất bại";
+      const detail = error.response?.data?.detail;
+      const message = typeof detail === 'string'
+        ? detail
+        : Array.isArray(detail)
+          ? detail.map(e => e.msg).join(', ')
+          : "Tạo ngành học thất bại";
       toast.error("Lỗi", { description: message });
     },
   });
@@ -301,7 +322,12 @@ export function useUpdateMajor() {
       // Socket.IO will handle cache invalidation
     },
     onError: (error) => {
-      const message = error.response?.data?.detail || "Cập nhật ngành học thất bại";
+      const detail = error.response?.data?.detail;
+      const message = typeof detail === 'string'
+        ? detail
+        : Array.isArray(detail)
+          ? detail.map(e => e.msg).join(', ')
+          : "Cập nhật ngành học thất bại";
       toast.error("Lỗi", { description: message });
     },
   });
@@ -322,7 +348,12 @@ export function useDeleteMajor() {
       // Socket.IO will handle cache invalidation
     },
     onError: (error) => {
-      const message = error.response?.data?.detail || "Xóa ngành học thất bại";
+      const detail = error.response?.data?.detail;
+      const message = typeof detail === 'string'
+        ? detail
+        : Array.isArray(detail)
+          ? detail.map(e => e.msg).join(', ')
+          : "Xóa ngành học thất bại";
       toast.error("Lỗi", { description: message });
     },
   });
