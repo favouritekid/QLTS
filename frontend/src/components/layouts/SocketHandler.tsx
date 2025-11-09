@@ -156,7 +156,36 @@ export function SocketHandler() {
           break;
 
         case "organization":
-          queryClient.invalidateQueries({ queryKey: ["organizations"] });
+          // Invalidate all organization-related queries
+          queryClient.invalidateQueries({ queryKey: ["organization"] });
+
+          // Show toast for organization updates
+          const orgOperation =
+            data.operation === "create" ? "đã tạo" :
+            data.operation === "update" ? "đã cập nhật" :
+            "đã xóa";
+
+          toast.info(`Đơn vị tổ chức ${orgOperation}`, {
+            description: "Dữ liệu đã được làm mới tự động",
+            duration: 3000,
+          });
+          break;
+
+        case "major":
+          // Invalidate all major-related queries
+          queryClient.invalidateQueries({ queryKey: ["organization", "majors"] });
+          queryClient.invalidateQueries({ queryKey: ["organization", "list"] });
+
+          // Show toast for major updates
+          const majorOperation =
+            data.operation === "create" ? "đã tạo" :
+            data.operation === "update" ? "đã cập nhật" :
+            "đã xóa";
+
+          toast.info(`Ngành học ${majorOperation}`, {
+            description: "Dữ liệu đã được làm mới tự động",
+            duration: 3000,
+          });
           break;
 
         case "policy":

@@ -373,3 +373,33 @@ async def revalidate_auth(sid):
             log.error("Socket revalidation error", sid=sid, error=str(e))
             await sio.disconnect(sid)
             return {"valid": False, "reason": "Validation error"}
+
+
+# =====================================================================
+# UTILITY FUNCTIONS FOR ORGANIZATION MODULE
+# =====================================================================
+
+async def emit_to_all(event: str, data: dict, namespace: str = "/"):
+    """
+    Phát sóng một sự kiện đến TẤT CẢ clients đã kết nối.
+
+    Args:
+        event: Tên sự kiện (ví dụ: "data_updated")
+        data: Dữ liệu cần gửi
+        namespace: Socket.IO namespace (mặc định "/")
+    """
+    try:
+        await sio.emit(event, data, namespace=namespace)
+        log.info(
+            "Emitted event to all clients",
+            event=event,
+            namespace=namespace,
+            data_keys=list(data.keys())
+        )
+    except Exception as e:
+        log.error(
+            "Failed to emit event to all clients",
+            event=event,
+            error=str(e),
+            exc_info=True
+        )

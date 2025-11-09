@@ -1,6 +1,7 @@
 # app/services/organization_service.py
 import asyncio  # ✅ 1. Thêm import
 import json  # ✅ 2. Thêm import
+from datetime import datetime
 from typing import List, Optional
 
 import structlog
@@ -13,6 +14,7 @@ from .. import models, schemas
 # ✅ 3. Thêm import
 from ..config import settings
 from ..database import safe_redis_delete, safe_redis_get, safe_redis_set
+from ..socket_manager import emit_to_all
 from ..utils.exceptions import DuplicateResourceError, ResourceNotFoundError
 
 log = structlog.get_logger(__name__)
@@ -34,6 +36,49 @@ async def invalidate_org_cache():
         )
     except Exception as e:
         log.error("Failed to invalidate organization cache", error=str(e))
+
+
+# --- ✅ Emit Organization Updated via Socket.IO ---
+async def emit_organization_updated(
+    operation: str,
+    resource_type: str,  # "organization" hoặc "major"
+    resource_id: int,
+    resource_name: str = None
+):
+    """
+    Phát sóng sự kiện cập nhật organization qua Socket.IO.
+
+    Args:
+        operation: "create", "update", hoặc "delete"
+        resource_type: "organization" hoặc "major"
+        resource_id: ID của resource
+        resource_name: Tên của resource (optional)
+    """
+    try:
+        await emit_to_all(
+            "data_updated",
+            {
+                "resource_type": resource_type,
+                "operation": operation,
+                "resource_id": resource_id,
+                "resource_name": resource_name,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        )
+        log.info(
+            "Emitted organization update",
+            resource_type=resource_type,
+            operation=operation,
+            resource_id=resource_id
+        )
+    except Exception as e:
+        log.error(
+            "Failed to emit organization update",
+            resource_type=resource_type,
+            operation=operation,
+            resource_id=resource_id,
+            error=str(e)
+        )
 
 
 # --- ✅ 6. Cập nhật hàm `get_all_organization_units` ---
@@ -160,6 +205,14 @@ async def create_organization_unit(
 
         await invalidate_org_cache()  # <-- THÊM HỦY CACHE
 
+        # 🆕 THÊM EMIT
+        await emit_organization_updated(
+            operation="create",
+            resource_type="organization",
+            resource_id=db_unit.id,
+            resource_name=db_unit.name
+        )
+
         # Tải lại đầy đủ relations trước khi trả về
         return await get_organization_unit_by_id(db, db_unit.id)
     except Exception as e:
@@ -205,6 +258,14 @@ async def update_organization_unit(
 
         await invalidate_org_cache()  # <-- THÊM HỦY CACHE
 
+        # 🆕 THÊM EMIT
+        await emit_organization_updated(
+            operation="update",
+            resource_type="organization",
+            resource_id=db_unit.id,
+            resource_name=db_unit.name
+        )
+
         # Tải lại đầy đủ relations
         return await get_organization_unit_by_id(db, unit_id)
     except Exception as e:
@@ -221,6 +282,8 @@ async def update_organization_unit(
 async def delete_organization_unit(db: AsyncSession, unit_id: int):
     try:
         db_unit = await get_organization_unit_by_id(db, unit_id)
+        unit_name = db_unit.name  # Lưu tên trước khi xóa
+
         if db_unit.children or db_unit.majors:
             raise DuplicateResourceError(
                 detail="Cannot delete unit: It contains child units or majors."
@@ -229,6 +292,14 @@ async def delete_organization_unit(db: AsyncSession, unit_id: int):
         await db.commit()
 
         await invalidate_org_cache()  # <-- THÊM HỦY CACHE
+
+        # 🆕 THÊM EMIT
+        await emit_organization_updated(
+            operation="delete",
+            resource_type="organization",
+            resource_id=unit_id,
+            resource_name=unit_name
+        )
 
     except Exception as e:
         await db.rollback()
@@ -269,6 +340,14 @@ async def create_major(db: AsyncSession, major_in: schemas.MajorCreate) -> model
 
         await invalidate_org_cache()  # <-- THÊM HỦY CACHE (vì Major là con của Unit)
 
+        # 🆕 THÊM EMIT
+        await emit_organization_updated(
+            operation="create",
+            resource_type="major",
+            resource_id=db_major.id,
+            resource_name=db_major.name
+        )
+
         return db_major
     except Exception as e:
         await db.rollback()
@@ -305,6 +384,14 @@ async def update_major(
 
         await invalidate_org_cache()  # <-- THÊM HỦY CACHE
 
+        # 🆕 THÊM EMIT
+        await emit_organization_updated(
+            operation="update",
+            resource_type="major",
+            resource_id=db_major.id,
+            resource_name=db_major.name
+        )
+
         return db_major
     except Exception as e:
         await db.rollback()
@@ -317,10 +404,20 @@ async def update_major(
 async def delete_major(db: AsyncSession, major_id: int):
     try:
         db_major = await get_major_by_id(db, major_id)
+        major_name = db_major.name  # Lưu tên trước khi xóa
+
         await db.delete(db_major)
         await db.commit()
 
         await invalidate_org_cache()  # <-- THÊM HỦY CACHE
+
+        # 🆕 THÊM EMIT
+        await emit_organization_updated(
+            operation="delete",
+            resource_type="major",
+            resource_id=major_id,
+            resource_name=major_name
+        )
 
     except Exception as e:
         await db.rollback()

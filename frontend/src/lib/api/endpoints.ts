@@ -28,6 +28,13 @@ export const API_ENDPOINTS = {
     GET: "/api/profile",
     UPDATE: "/api/profile",
   },
+  // Organization (Public endpoints)
+  ORGANIZATION: {
+    LIST_UNITS: "/api/organization-units",
+    GET_UNIT: (id: number) => `/api/organization-units/${id}`,
+    LIST_MAJORS: "/api/majors",
+    GET_MAJOR: (id: number) => `/api/majors/${id}`,
+  },
   ADMIN: {
     USERS: {
       LIST: "/api/admin/users",
@@ -51,6 +58,19 @@ export const API_ENDPOINTS = {
       VALIDATE: "/api/admin/policies/validate",
       APPLY_TEMPLATE: "/api/admin/policies/apply-template",
       STATISTICS: "/api/admin/policies/statistics",
+    },
+    // Organization Management (Admin Only)
+    ORGANIZATION: {
+      // Units
+      CREATE_UNIT: "/api/admin/organization-units",
+      UPDATE_UNIT: (id: number) => `/api/admin/organization-units/${id}`,
+      DELETE_UNIT: (id: number) => `/api/admin/organization-units/${id}`,
+      GET_UNIT: (id: number) => `/api/admin/organization-units/${id}`,
+      // Majors
+      CREATE_MAJOR: "/api/admin/majors",
+      UPDATE_MAJOR: (id: number) => `/api/admin/majors/${id}`,
+      DELETE_MAJOR: (id: number) => `/api/admin/majors/${id}`,
+      GET_MAJOR: (id: number) => `/api/admin/majors/${id}`,
     },
     ACTIVITY_LOGS: "/api/admin/activity-logs",
     STATISTICS: "/api/admin/statistics",
