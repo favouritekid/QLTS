@@ -1203,9 +1203,9 @@ async def get_sync_status(
 )
 async def sync_users(
     request: Request,
+    sync_request: schemas.SyncUsersRequest,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
-    user_ids: Optional[List[int]] = Body(None)  # None = sync all users
 ):
     """
     (Admin only) Đồng bộ role từ Casbin về DB cho tất cả users hoặc một nhóm users cụ thể.
@@ -1214,6 +1214,7 @@ async def sync_users(
     - `user_ids`: Danh sách ID users cần sync. Nếu None hoặc rỗng, sync tất cả users.
     """
     enforcer = request.app.state.enforcer
+    user_ids = sync_request.user_ids
 
     # Determine which users to sync
     if user_ids:
