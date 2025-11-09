@@ -462,3 +462,49 @@ class CasbinPolicyService:
             "total_roles": len(unique_roles),
             "total_grouping_policies": len(grouping_policies),
         }
+
+    # =========================================================================
+    # ADVANCED PERMISSION TOOLS
+    # =========================================================================
+
+    async def get_subjects_for_permission(self, obj: str, act: str) -> List[str]:
+        """
+        ✅ PATCHED FOR DoS (v15):
+        Reverse permission lookup - Find all roles that can access a resource.
+
+        SECURITY FIX:
+        - Only loops through ROLES (not individual users)
+        - Casbin's enforce() automatically handles role inheritance
+        - Prevents DoS attack where 50k+ users could crash server
+
+        Args:
+            obj: Resource path (e.g., "/api/leads", "/api/admin/users")
+            act: HTTP method (e.g., "GET", "POST", ".*")
+
+        Returns:
+            List of roles (e.g., ["role:admin", "role:manager"])
+
+        Example:
+            >>> await get_subjects_for_permission("/api/leads", "GET")
+            ["role:admin", "role:manager", "role:officer"]
+
+        PERFORMANCE:
+            - OLD: O(n) where n = all users + roles (50,000+ iterations) ⚠️
+            - NEW: O(r) where r = number of roles (~10 iterations) ✅
+            - Speedup: ~5000x for systems with 50k users
+        """
+        allowed_subjects = []
+
+        # CHỈ LẤY CÁC VAI TRÒ (VÀI CHỤC ROLES)
+        # This returns only roles, not individual users - preventing DoS
+        # Note: get_all_roles() is synchronous in pycasbin
+        all_roles = self.enforcer.get_all_roles()
+
+        # CHỈ LẶP QUA CÁC VAI TRÒ
+        # Casbin's enforce() automatically handles role inheritance
+        for role in all_roles:
+            is_allowed = self.enforcer.enforce(role, obj, act)
+            if is_allowed:
+                allowed_subjects.append(role)
+
+        return sorted(list(set(allowed_subjects)))

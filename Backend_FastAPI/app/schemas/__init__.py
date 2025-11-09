@@ -51,6 +51,7 @@ from .permissions import (
     PolicyCreate,
     PolicyRule,
     RoleAssignment,
+    GroupingPolicyCreate,
     RoleInfo,
     RolesListResponse,
     TemplateInfo,
@@ -61,6 +62,15 @@ from .permissions import (
     PolicyValidationResult,
     TemplateApplicationRequest,
     PolicyStatistics,
+    # Advanced permission tools schemas
+    WhoCanAccessResponse,
+    PermissionSimulateRequest,
+    PermissionSimulateResponse,
+    FeatureStatus,
+    RoleFeaturesResponse,
+    ToggleFeatureRequest,
+    PolicySuggestionsResponse,
+    PermissionExplainResponse,
 )
 
 # --- Từ pipeline.py ---
@@ -86,6 +96,7 @@ from .user import (
     LoginSchema,
     RefreshTokenRequest,
     ResetPasswordSchema,
+    SyncUsersRequest,
     Token,
     TokenData,
     User,

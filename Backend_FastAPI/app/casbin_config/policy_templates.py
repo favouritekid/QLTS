@@ -284,3 +284,64 @@ def is_critical_policy(subject: str, obj: str, action: str) -> bool:
         True if critical policy, False otherwise
     """
     return (subject, obj, action) in CRITICAL_POLICIES
+
+
+# =============================================================================
+# FEATURE-BASED PERMISSION MAP (Business-Level Abstraction)
+# =============================================================================
+
+class FeatureDefinition(TypedDict):
+    """Type definition for a feature permission set."""
+    display_name: str
+    policies: List[PolicyRule]
+
+
+FEATURE_MAP: Dict[str, FeatureDefinition] = {
+    "view_leads": {
+        "display_name": "Xem Leads",
+        "policies": [
+            {"subject": "{role}", "object": "/api/leads", "action": "GET"},
+            {"subject": "{role}", "object": "/api/leads/{lead_id}", "action": "GET"},
+        ]
+    },
+    "edit_leads": {
+        "display_name": "Sửa Leads",
+        "policies": [
+            {"subject": "{role}", "object": "/api/leads/{lead_id}", "action": "PUT"},
+            {"subject": "{role}", "object": "/api/leads/{lead_id}", "action": "PATCH"},
+        ]
+    },
+    "create_leads": {
+        "display_name": "Tạo Leads",
+        "policies": [
+            {"subject": "{role}", "object": "/api/leads", "action": "POST"},
+        ]
+    },
+    "delete_leads": {
+        "display_name": "Xóa Leads",
+        "policies": [
+            {"subject": "{role}", "object": "/api/leads/{lead_id}", "action": "DELETE"},
+        ]
+    },
+    "manage_users": {
+        "display_name": "Quản lý Users",
+        "policies": [
+            {"subject": "{role}", "object": "/api/admin/users", "action": ".*"},
+            {"subject": "{role}", "object": "/api/admin/users/*", "action": ".*"},
+        ]
+    },
+    "view_reports": {
+        "display_name": "Xem Báo cáo",
+        "policies": [
+            {"subject": "{role}", "object": "/api/admin/statistics", "action": "GET"},
+            {"subject": "{role}", "object": "/api/admin/activity-logs", "action": "GET"},
+        ]
+    },
+    "manage_notifications": {
+        "display_name": "Quản lý Thông báo",
+        "policies": [
+            {"subject": "{role}", "object": "/api/notifications", "action": ".*"},
+            {"subject": "{role}", "object": "/api/notifications/*", "action": ".*"},
+        ]
+    },
+}

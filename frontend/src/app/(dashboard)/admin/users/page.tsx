@@ -112,6 +112,7 @@ export default function AdminUsersPage() {
   const bulkActionMutation = useAdminBulkAction();
 
   // Table columns definition
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const columns = useMemo<ColumnDef<User>[]>(
     () => [
       {

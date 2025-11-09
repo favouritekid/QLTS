@@ -185,3 +185,9 @@ class RefreshTokenRequest(BaseModel):
     """Schema cho request body của endpoint /refresh."""
 
     refresh_token: str
+
+
+class SyncUsersRequest(BaseModel):
+    """Schema cho request body của POST /admin/sync/users endpoint."""
+
+    user_ids: Optional[List[int]] = None  # None hoặc empty list = sync all users

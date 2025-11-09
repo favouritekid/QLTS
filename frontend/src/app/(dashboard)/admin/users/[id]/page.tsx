@@ -77,13 +77,13 @@ export default function UserDetailPage() {
     );
   }
 
-  const statusColors = {
+  const statusColors: Record<string, string> = {
     active: "bg-green-500/10 text-green-500 border-green-500/20",
     pending: "bg-yellow-500/10 text-yellow-500 border-yellow-500/20",
     banned: "bg-red-500/10 text-red-500 border-red-500/20",
   };
 
-  const roleColors = {
+  const roleColors: Record<string, string> = {
     admin: "bg-purple-500/10 text-purple-500 border-purple-500/20",
     manager: "bg-blue-500/10 text-blue-500 border-blue-500/20",
     officer: "bg-cyan-500/10 text-cyan-500 border-cyan-500/20",
@@ -147,13 +147,13 @@ export default function UserDetailPage() {
               </div>
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Role</p>
-                <Badge variant="outline" className={roleColors[user.role]}>
+                <Badge variant="outline" className={roleColors[user.role] || roleColors.user}>
                   {user.role.toUpperCase()}
                 </Badge>
               </div>
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Status</p>
-                <Badge variant="outline" className={statusColors[user.status]}>
+                <Badge variant="outline" className={statusColors[user.status] || statusColors.active}>
                   {user.status.toUpperCase()}
                 </Badge>
               </div>

@@ -46,8 +46,10 @@ export function useNotifications(params: UseNotificationsParams = {}) {
       );
       return response.data;
     },
-    refetchInterval: 30000, // Refetch every 30 seconds
-    staleTime: 10000, // Consider data stale after 10 seconds
+    // ✅ PERFORMANCE FIX (v17): Remove polling - rely on Socket.IO for real-time updates
+    // refetchInterval: 30000, // ❌ REMOVED - Socket.IO pushes notifications in real-time
+    staleTime: Infinity, // Never mark as stale - Socket.IO will invalidate when needed
+    gcTime: 10 * 60 * 1000, // Garbage collect after 10 minutes of inactivity
   });
 }
 

@@ -10,6 +10,7 @@ import { useAddNotification } from "@/hooks/useNotifications";
 import { useNotificationPreferences } from "@/hooks/useNotificationPreferences";
 import { playNotificationSound, showBrowserNotification } from "@/lib/sound";
 import type { Notification } from "@/types/api.types";
+import { useQueryClient } from "@tanstack/react-query";
 
 /**
  * Component "vô hình" (không render)
@@ -19,6 +20,7 @@ export function SocketHandler() {
   const { token, logout } = useAuthStore();
   const addNotification = useAddNotification();
   const { data: preferences } = useNotificationPreferences();
+  const queryClient = useQueryClient();
 
   // Lưu trữ JTI của trình duyệt hiện tại
   const myJti = useRef<string | null>(null);
@@ -122,18 +124,68 @@ export function SocketHandler() {
       });
     };
 
+    // ✅ REAL-TIME DATA SYNC (v16): Lắng nghe sự kiện data_updated
+    const handleDataUpdated = (data: {
+      resource_type: string;
+      operation: "create" | "update" | "delete";
+      resource_id: number;
+      data?: Record<string, unknown>;
+      timestamp: string;
+    }) => {
+      console.log("[SocketHandler] Received data_updated event:", data);
+
+      // Invalidate queries based on resource_type
+      switch (data.resource_type) {
+        case "user":
+          // Invalidate all user-related queries
+          queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+          queryClient.invalidateQueries({ queryKey: ["admin", "users", "list"] });
+          queryClient.invalidateQueries({ queryKey: ["admin", "statistics"] });
+
+          // Show subtle toast for real-time updates
+          const operationText =
+            data.operation === "create" ? "created" :
+            data.operation === "update" ? "updated" :
+            "deleted";
+
+          toast.info(`User ${operationText}`, {
+            description: `Data refreshed automatically`,
+            duration: 3000,
+          });
+          break;
+
+        case "lead":
+          queryClient.invalidateQueries({ queryKey: ["leads"] });
+          break;
+
+        case "organization":
+          queryClient.invalidateQueries({ queryKey: ["organizations"] });
+          break;
+
+        case "policy":
+          queryClient.invalidateQueries({ queryKey: ["policies"] });
+          queryClient.invalidateQueries({ queryKey: ["admin", "roles"] });
+          break;
+
+        default:
+          console.warn("[SocketHandler] Unknown resource_type:", data.resource_type);
+      }
+    };
+
     // Đăng ký listeners
     socket.on("force_logout_batch", handleForceLogoutBatch);
     socket.on("force_logout_all", handleForceLogoutAll);
     socket.on("notification", handleNewNotification);
+    socket.on("data_updated", handleDataUpdated);
 
     // Cleanup listeners khi effect này chạy lại hoặc component unmount
     return () => {
       socket.off("force_logout_batch", handleForceLogoutBatch);
       socket.off("force_logout_all", handleForceLogoutAll);
       socket.off("notification", handleNewNotification);
+      socket.off("data_updated", handleDataUpdated);
     };
-  }, [token, addNotification, preferences]); // Chạy lại nếu `token`, `addNotification`, hoặc `preferences` thay đổi
+  }, [token, addNotification, preferences, queryClient]); // Chạy lại nếu `token`, `addNotification`, `preferences`, hoặc `queryClient` thay đổi
 
   return null; // Không render gì cả
 }

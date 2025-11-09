@@ -7,12 +7,16 @@ import * as z from "zod";
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
-// Xóa FormMessage khỏi import vì chúng ta dùng component tùy chỉnh
-import { Form, FormControl, FormField, FormItem, FormLabel } from "@/components/ui/form";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage, // ✅ Thêm FormMessage chuẩn từ shadcn/ui
+} from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/useAuth";
-// Import component báo lỗi tùy chỉnh
-import { FormErrorMessage } from "@/components/ui/form-error-message";
 import type { UserCreate } from "@/types/api.types";
 
 const registerSchema = z
@@ -85,14 +89,13 @@ export function RegisterForm() {
           <FormField
             control={form.control}
             name="username"
-            render={({ field, fieldState }) => (
+            render={({ field }) => (
               <FormItem>
                 <FormLabel>Username</FormLabel>
                 <FormControl>
                   <Input placeholder="your_username" disabled={isLoading} {...field} />
                 </FormControl>
-                {/* Sử dụng component tùy chỉnh */}
-                <FormErrorMessage message={fieldState.error?.message} />
+                <FormMessage />
               </FormItem>
             )}
           />
@@ -100,7 +103,7 @@ export function RegisterForm() {
           <FormField
             control={form.control}
             name="email"
-            render={({ field, fieldState }) => (
+            render={({ field }) => (
               <FormItem>
                 <FormLabel>Email</FormLabel>
                 <FormControl>
@@ -111,7 +114,7 @@ export function RegisterForm() {
                     {...field}
                   />
                 </FormControl>
-                <FormErrorMessage message={fieldState.error?.message} />
+                <FormMessage />
               </FormItem>
             )}
           />
@@ -119,13 +122,13 @@ export function RegisterForm() {
           <FormField
             control={form.control}
             name="full_name"
-            render={({ field, fieldState }) => (
+            render={({ field }) => (
               <FormItem>
                 <FormLabel>Full Name (Optional)</FormLabel>
                 <FormControl>
                   <Input placeholder="Your Full Name" disabled={isLoading} {...field} />
                 </FormControl>
-                <FormErrorMessage message={fieldState.error?.message} />
+                <FormMessage />
               </FormItem>
             )}
           />
@@ -133,13 +136,13 @@ export function RegisterForm() {
           <FormField
             control={form.control}
             name="password"
-            render={({ field, fieldState }) => (
+            render={({ field }) => (
               <FormItem>
                 <FormLabel>Password</FormLabel>
                 <FormControl>
                   <Input type="password" placeholder="••••••••" disabled={isLoading} {...field} />
                 </FormControl>
-                <FormErrorMessage message={fieldState.error?.message} />
+                <FormMessage />
               </FormItem>
             )}
           />
@@ -147,13 +150,13 @@ export function RegisterForm() {
           <FormField
             control={form.control}
             name="confirmPassword"
-            render={({ field, fieldState }) => (
+            render={({ field }) => (
               <FormItem>
                 <FormLabel>Confirm Password</FormLabel>
                 <FormControl>
                   <Input type="password" placeholder="••••••••" disabled={isLoading} {...field} />
                 </FormControl>
-                <FormErrorMessage message={fieldState.error?.message} />
+                <FormMessage />
               </FormItem>
             )}
           />

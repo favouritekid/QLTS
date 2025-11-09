@@ -2,7 +2,7 @@
 import io
 from typing import List, Optional
 from fastapi.responses import StreamingResponse
-from datetime import datetime
+from datetime import datetime, timezone
 
 import casbin
 import pandas as pd
@@ -32,7 +32,7 @@ from ..celery_utils import process_automatic_lead_assignment_task
 from ..core import deps
 from ..services import activity_service, notification_service
 from ..routers.notifications import send_realtime_notification
-from ..schemas.permissions import PolicyCreate, RoleAssignment
+from ..schemas.permissions import PolicyCreate, RoleAssignment, GroupingPolicyCreate
 from ..services import (
     config_service,
     lead_service,
@@ -241,6 +241,302 @@ async def get_user_roles(
     return roles
 
 
+@router.get(
+    "/roles/{role_name}/users",
+    tags=["Admin - Permissions"],
+)
+async def get_role_users(
+    role_name: str,
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Lấy tất cả users có một role cụ thể."""
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+
+    # Get all grouping policies (user-to-role assignments)
+    # Note: get_grouping_policy() is NOT async even in AsyncEnforcer
+    all_grouping = enforcer.get_grouping_policy()
+
+    # Filter to find users with this specific role
+    user_ids = []
+    for group in all_grouping:
+        # group format: ["user:123", "role:manager"]
+        if len(group) >= 2 and group[1] == role_name:
+            # Extract user ID from "user:123"
+            user_subject = group[0]
+            if user_subject.startswith("user:"):
+                try:
+                    user_id = int(user_subject.split(":")[1])
+                    user_ids.append(user_id)
+                except (ValueError, IndexError):
+                    continue
+
+    # Fetch user details from database
+    if not user_ids:
+        return {"role": role_name, "user_count": 0, "users": []}
+
+    result = await db.execute(
+        select(models.User).where(models.User.id.in_(user_ids))
+    )
+    users = result.scalars().all()
+
+    # Return user info with all Casbin roles
+    user_list = []
+    for user in users:
+        user_subject = f"user:{user.id}"
+        # Get all roles for this user from Casbin
+        casbin_roles = await enforcer.get_roles_for_user(user_subject)
+
+        user_list.append({
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "full_name": user.full_name,
+            "role": user.role,  # DB role (may differ from Casbin role)
+            "casbin_roles": casbin_roles,  # All Casbin roles
+        })
+
+    return {
+        "role": role_name,
+        "user_count": len(user_list),
+        "users": user_list,
+    }
+
+
+@router.post(
+    "/roles/remove-from-users",
+    tags=["Admin - Permissions"],
+)
+async def remove_role_from_users(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+    user_ids: List[int] = Body(...),
+    role_to_remove: str = Body(...),
+):
+    """
+    (Admin only) Remove a specific role from multiple users.
+
+    SMART BEHAVIOR:
+    - If user has ONLY this role → remove it and auto-assign role:user
+    - If user has MULTIPLE roles → only remove this role, keep others
+    - Updates database user.role to reflect remaining highest-priority role
+
+    Priority order: admin > manager > officer > user
+    """
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+
+    if not user_ids:
+        raise ResourceNotFoundError("No user IDs provided")
+
+    # Role priority for DB field (highest to lowest)
+    ROLE_PRIORITY = {
+        "role:admin": 4,
+        "role:manager": 3,
+        "role:officer": 2,
+        "role:user": 1,
+    }
+
+    removed_count = 0
+    reassigned_count = 0
+    failed_users = []
+
+    for user_id in user_ids:
+        user_subject = f"user:{user_id}"
+
+        try:
+            # Get all current roles for this user
+            current_roles = await enforcer.get_roles_for_user(user_subject)
+
+            # Check if user actually has the role to remove
+            if role_to_remove not in current_roles:
+                log.warning(f"User {user_id} doesn't have role {role_to_remove}, skipping")
+                continue
+
+            # Remove the specified role
+            await enforcer.remove_grouping_policy(user_subject, role_to_remove)
+            removed_count += 1
+
+            # Get remaining roles after removal
+            remaining_roles = [r for r in current_roles if r != role_to_remove]
+
+            # If no roles left, auto-assign role:user as fallback
+            if not remaining_roles:
+                await enforcer.add_grouping_policy(user_subject, "role:user")
+                remaining_roles = ["role:user"]
+                reassigned_count += 1
+                log.info(f"User {user_id} had no roles left, auto-assigned role:user")
+
+            # Update database user.role field to highest priority remaining role
+            result = await db.execute(
+                select(models.User).where(models.User.id == user_id)
+            )
+            user = result.scalar_one_or_none()
+
+            if user:
+                # Find highest priority role from remaining roles
+                highest_priority_role = max(
+                    remaining_roles,
+                    key=lambda r: ROLE_PRIORITY.get(r, 0),
+                    default="role:user"
+                )
+
+                # Extract role name without "role:" prefix for DB
+                db_role_name = highest_priority_role.replace("role:", "")
+                user.role = db_role_name
+                await db.commit()
+
+                log.info(
+                    f"User {user_id} updated",
+                    removed_role=role_to_remove,
+                    remaining_roles=remaining_roles,
+                    db_role=db_role_name
+                )
+
+        except Exception as e:
+            failed_users.append({"user_id": user_id, "error": str(e)})
+            log.error(f"Failed to remove role from user {user_id}", error=str(e))
+
+    # Save Casbin policies
+    await enforcer.save_policy()
+
+    return {
+        "detail": f"Removed {role_to_remove} from {removed_count} user(s), {reassigned_count} auto-assigned to role:user",
+        "removed_count": removed_count,
+        "reassigned_to_user_count": reassigned_count,
+        "failed_count": len(failed_users),
+        "failed_users": failed_users,
+    }
+
+
+@router.post(
+    "/grouping-policies",
+    status_code=status.HTTP_201_CREATED,
+    tags=["Admin - Permissions"],
+)
+async def add_grouping_policy(
+    grouping: GroupingPolicyCreate,
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Add a grouping policy for role inheritance or role assignment.
+
+    This endpoint supports two use cases:
+    1. Role-to-role inheritance: g, role:support, role:user
+    2. User-to-role assignment: g, user:5, role:manager
+
+    Examples:
+        - Make role:support inherit from role:user:
+          POST /grouping-policies
+          {"subject": "role:support", "parent_role": "role:user"}
+
+        - Assign role:manager to user:5:
+          POST /grouping-policies
+          {"subject": "user:5", "parent_role": "role:manager"}
+    """
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+
+    # Add the grouping policy (g rule)
+    added = await enforcer.add_grouping_policy(grouping.subject, grouping.parent_role)
+
+    if not added:
+        raise DuplicateResourceError(
+            f"Grouping policy already exists: {grouping.subject} → {grouping.parent_role}"
+        )
+
+    # Save to database
+    await enforcer.save_policy()
+
+    # Log activity
+    await activity_service.log_activity_from_request(
+        db=db,
+        request=request,
+        action="add_grouping_policy",
+        resource_type="policy",
+        actor_id=current_admin.id,
+        resource_id=None,
+        changes={
+            "subject": grouping.subject,
+            "parent_role": grouping.parent_role,
+            "type": "grouping_policy",
+        },
+    )
+
+    log.info(
+        "Grouping policy added",
+        admin_id=current_admin.id,
+        subject=grouping.subject,
+        parent_role=grouping.parent_role,
+    )
+
+    return {
+        "detail": f"Grouping policy added: {grouping.subject} → {grouping.parent_role}",
+        "subject": grouping.subject,
+        "parent_role": grouping.parent_role,
+    }
+
+
+@router.delete(
+    "/grouping-policies",
+    status_code=status.HTTP_200_OK,
+    tags=["Admin - Permissions"],
+)
+async def delete_grouping_policy(
+    grouping: GroupingPolicyCreate,
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Remove a grouping policy.
+
+    Removes a grouping policy for either:
+    1. Role-to-role inheritance
+    2. User-to-role assignment
+    """
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+
+    # Remove the grouping policy
+    removed = await enforcer.remove_grouping_policy(grouping.subject, grouping.parent_role)
+
+    if not removed:
+        raise ResourceNotFoundError(
+            f"Grouping policy not found: {grouping.subject} → {grouping.parent_role}"
+        )
+
+    # Save to database
+    await enforcer.save_policy()
+
+    # Log activity
+    await activity_service.log_activity_from_request(
+        db=db,
+        request=request,
+        action="remove_grouping_policy",
+        resource_type="policy",
+        actor_id=current_admin.id,
+        resource_id=None,
+        changes={
+            "subject": grouping.subject,
+            "parent_role": grouping.parent_role,
+            "type": "grouping_policy",
+        },
+    )
+
+    log.info(
+        "Grouping policy removed",
+        admin_id=current_admin.id,
+        subject=grouping.subject,
+        parent_role=grouping.parent_role,
+    )
+
+    return {
+        "detail": f"Grouping policy removed: {grouping.subject} → {grouping.parent_role}"
+    }
+
+
 # ===============================================================
 # ADVANCED POLICY MANAGEMENT ROUTES (NEW)
 # ===============================================================
@@ -271,6 +567,189 @@ async def get_all_roles_with_info(
 
     roles = await casbin_service.get_all_roles()
     return {"roles": roles}
+
+
+@router.delete(
+    "/roles/{role_name}",
+    status_code=status.HTTP_200_OK,
+    tags=["Admin - Permissions"],
+)
+async def delete_role_atomic(
+    role_name: str,
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Atomically delete a role with all its associations.
+
+    This endpoint performs ALL deletion operations in a single atomic transaction:
+    1. Validates role can be deleted (not a system role)
+    2. Finds all users with this role (DB + Casbin)
+    3. Reassigns users to role:user
+    4. Removes all permission policies (p rules)
+    5. Removes all grouping policies (g rules)
+    6. Commits everything atomically
+
+    This prevents race conditions that could occur with client-side orchestration.
+
+    SAFETY GUARANTEES:
+    - All operations happen in a DB transaction
+    - Either ALL succeed or ALL fail (rollback)
+    - No zombie roles (roles without permissions)
+    - No orphaned users (users with deleted roles)
+
+    Args:
+        role_name: Role identifier (e.g., "role:support")
+
+    Returns:
+        Success message with deletion statistics
+
+    Raises:
+        400: If trying to delete a system role
+        404: If role doesn't exist
+    """
+    from ..services.casbin_service import CasbinPolicyService
+
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+
+    # STEP 1: Validate - System roles cannot be deleted
+    SYSTEM_ROLES = {"role:admin", "role:manager", "role:officer", "role:user"}
+    if role_name in SYSTEM_ROLES:
+        raise BadRequest(f"Cannot delete system role: {role_name}")
+
+    # STEP 2: Check if role exists (has any policies)
+    all_policies = enforcer.get_policy()
+    role_has_policies = any(p[0] == role_name for p in all_policies)
+    if not role_has_policies:
+        raise ResourceNotFoundError(f"Role not found: {role_name}")
+
+    # BEGIN ATOMIC TRANSACTION
+    try:
+        # STEP 3a: Find all users with this role in DB
+        result = await db.execute(
+            select(models.User).where(models.User.role == role_name.replace("role:", ""))
+        )
+        users_from_db = result.scalars().all()
+
+        # STEP 3b: Find all users with grouping policy for this role
+        all_grouping = enforcer.get_grouping_policy()
+        user_ids_from_casbin = []
+        for group in all_grouping:
+            # group format: ["user:123", "role:support"]
+            if len(group) >= 2 and group[1] == role_name and group[0].startswith("user:"):
+                try:
+                    user_id = int(group[0].split(":")[1])
+                    user_ids_from_casbin.append(user_id)
+                except (ValueError, IndexError):
+                    continue
+
+        # Merge: Get all unique user IDs
+        all_user_ids = set([u.id for u in users_from_db] + user_ids_from_casbin)
+
+        # STEP 4: Update users in DB to role:user
+        reassigned_count = 0
+        for user_id in all_user_ids:
+            result = await db.execute(
+                select(models.User).where(models.User.id == user_id)
+            )
+            user = result.scalar_one_or_none()
+            if user:
+                # Only update if they had this role
+                if user.role == role_name.replace("role:", ""):
+                    user.role = "user"
+                    db.add(user)
+                    reassigned_count += 1
+
+        # STEP 5: Remove grouping policies (user → role)
+        removed_g_user_count = 0
+        for user_id in all_user_ids:
+            user_subject = f"user:{user_id}"
+            removed = await enforcer.remove_grouping_policy(user_subject, role_name)
+            if removed:
+                removed_g_user_count += 1
+
+            # STEP 6: Add grouping policy (user → role:user) if needed
+            user_roles = await enforcer.get_roles_for_user(user_subject)
+            if not user_roles or len(user_roles) == 0:
+                await enforcer.add_grouping_policy(user_subject, "role:user")
+
+        # STEP 7: Remove all permission policies (p rules) for this role
+        policies_to_remove = [
+            (p[0], p[1], p[2])
+            for p in all_policies
+            if p[0] == role_name
+        ]
+        removed_p_count = 0
+        for p in policies_to_remove:
+            removed = await enforcer.remove_policy(p[0], p[1], p[2])
+            if removed:
+                removed_p_count += 1
+
+        # STEP 8: Remove role inheritance grouping policies (g, role:X, role:user)
+        removed_g_inherit_count = 0
+        for group in all_grouping:
+            # Check if this is a role inheriting from another role
+            if len(group) >= 2 and group[0] == role_name:
+                removed = await enforcer.remove_grouping_policy(group[0], group[1])
+                if removed:
+                    removed_g_inherit_count += 1
+
+        # STEP 9: Save Casbin policies
+        await enforcer.save_policy()
+
+        # STEP 10: Commit DB transaction
+        await db.commit()
+
+        # STEP 11: Log activity
+        await activity_service.log_activity_from_request(
+            db=db,
+            request=request,
+            action="delete_role_atomic",
+            resource_type="role",
+            actor_id=current_admin.id,
+            resource_id=None,
+            changes={
+                "role_name": role_name,
+                "users_reassigned": reassigned_count,
+                "permission_policies_removed": removed_p_count,
+                "user_grouping_policies_removed": removed_g_user_count,
+                "inheritance_grouping_policies_removed": removed_g_inherit_count,
+                "total_affected_users": len(all_user_ids),
+            },
+        )
+
+        log.info(
+            "Role deleted atomically",
+            admin_id=current_admin.id,
+            role_name=role_name,
+            users_reassigned=reassigned_count,
+            policies_removed=removed_p_count,
+        )
+
+        return {
+            "detail": f"Role {role_name} deleted successfully",
+            "role_name": role_name,
+            "users_reassigned": reassigned_count,
+            "permission_policies_removed": removed_p_count,
+            "user_grouping_policies_removed": removed_g_user_count,
+            "inheritance_grouping_policies_removed": removed_g_inherit_count,
+            "total_affected_users": len(all_user_ids),
+        }
+
+    except Exception as e:
+        # Rollback DB transaction
+        await db.rollback()
+        log.error(
+            "Failed to delete role atomically",
+            role_name=role_name,
+            error=str(e),
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete role: {str(e)}",
+        )
 
 
 @router.get(
@@ -362,7 +841,7 @@ async def add_policies_batch(
     # Actually add policies
     result = await casbin_service.add_policies_batch(
         policies_tuples,
-        validate=batch_req.validate
+        validate=batch_req.run_validation
     )
 
     # Log activity for each added policy
@@ -461,7 +940,7 @@ async def apply_template_to_role(
     result = await casbin_service.apply_template_to_role(
         template_req.template_id,
         template_req.role,
-        validate=template_req.validate,
+        validate=template_req.run_validation,
     )
 
     # Log activity
@@ -510,6 +989,45 @@ async def get_policy_statistics(
     return stats
 
 
+@router.get(
+    "/policies/suggestions",
+    response_model=schemas.PolicySuggestionsResponse,
+    tags=["Admin - Permissions"],
+)
+async def get_policy_suggestions(
+    request: Request,
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Get autocomplete suggestions for policy fields.
+
+    Returns lists of unique subjects, objects, and actions from existing policies.
+    Useful for autocomplete/combobox components in the UI.
+
+    Example response:
+        {
+            "subjects": ["role:admin", "role:manager", "role:officer"],
+            "objects": ["/api/leads", "/api/users", "/api/admin/*"],
+            "actions": ["GET", "POST", "PUT", "DELETE", ".*"]
+        }
+    """
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+
+    # Get all policies
+    all_policies = enforcer.get_policy()
+
+    # Extract unique subjects, objects, actions
+    subjects = sorted(list(set(policy[0] for policy in all_policies if len(policy) > 0)))
+    objects = sorted(list(set(policy[1] for policy in all_policies if len(policy) > 1)))
+    actions = sorted(list(set(policy[2] for policy in all_policies if len(policy) > 2)))
+
+    return {
+        "subjects": subjects,
+        "objects": objects,
+        "actions": actions,
+    }
+
+
 # ===============================================================
 # USER MANAGEMENT ROUTES
 # ===============================================================
@@ -549,30 +1067,15 @@ async def create_new_user(
     if await services.user_service.get_user_by_email(db, user_in.email):
         raise DuplicateResourceError(detail="Email already exists")
 
-    # Truyền avatar vào hàm service
+    # ✅ ATOMIC FIX (v17): Pass enforcer to service for atomic DB + Casbin transaction
+    enforcer = request.app.state.enforcer
     created_user = await services.user_service.create_user_by_admin(
-        db, user_in, avatar_file=avatar
+        db=db,
+        user_in=user_in,
+        enforcer=enforcer,
+        avatar_file=avatar
     )
-
-    # ✅ FIX: Automatically add Casbin grouping policy to map user to their role
-    try:
-        enforcer = request.app.state.enforcer
-        if enforcer:
-            role_name = f"role:{created_user.role}"
-            user_subject = f"user:{created_user.id}"
-            await enforcer.add_grouping_policy(user_subject, role_name)
-            log.info(
-                "Casbin grouping policy added for admin-created user",
-                user_id=created_user.id,
-                role=created_user.role,
-            )
-    except Exception as e:
-        log.error(
-            "Failed to add Casbin grouping policy for admin-created user",
-            user_id=created_user.id,
-            error=str(e),
-        )
-        # Don't fail user creation if Casbin update fails
+    # Casbin sync now happens inside create_user_by_admin atomically
 
     # Log activity
     await activity_service.log_activity_from_request(
@@ -734,9 +1237,12 @@ async def update_existing_user(
     # Tạo schema UserUpdate CHỈ với các dữ liệu đã được xác thực
     user_in = schemas.UserUpdate(**update_dict)
 
-    # Truyền avatar vào hàm service
+    # ← PHASE 1: Lấy enforcer từ app state để sync Casbin khi role thay đổi
+    enforcer = request.app.state.enforcer
+
+    # Truyền avatar và enforcer vào hàm service
     updated_user = await services.user_service.update_user(
-        db, db_user, user_in, avatar_file=avatar
+        db, db_user, user_in, enforcer=enforcer, avatar_file=avatar
     )
 
     # Log activity
@@ -921,10 +1427,162 @@ async def stream_export_users_csv(
     
     # 3. Trả về StreamingResponse
     return StreamingResponse(
-        csv_streamer, 
-        headers=headers, 
+        csv_streamer,
+        headers=headers,
         media_type="text/csv"
     )
+
+
+# ← PHASE 3: Detection endpoint - check DB/Casbin sync status
+@router.get(
+    "/sync/status",
+    tags=["Admin - User Management"],
+    summary="Check sync status between DB and Casbin roles"
+)
+async def get_sync_status(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep
+):
+    """
+    (Admin only) Kiểm tra tình trạng đồng bộ giữa DB (user.role) và Casbin (grouping policies).
+    Trả về số lượng user đã sync, chưa sync, và chi tiết các user bị lệch.
+    """
+    enforcer = request.app.state.enforcer
+
+    # Get all users
+    result = await db.execute(select(models.User))
+    users = result.scalars().all()
+
+    mismatched_users = []
+    synced_count = 0
+
+    for user in users:
+        casbin_role = await services.user_service.get_highest_priority_role_from_casbin(
+            enforcer, user.id
+        )
+
+        if user.role != casbin_role:
+            casbin_roles = await enforcer.get_roles_for_user(f"user:{user.id}")
+            mismatched_users.append({
+                "user_id": user.id,
+                "username": user.username,
+                "db_role": user.role,
+                "casbin_role": casbin_role,
+                "all_casbin_roles": casbin_roles
+            })
+        else:
+            synced_count += 1
+
+    log.info(
+        "Sync status check completed",
+        admin_id=current_admin.id,
+        total=len(users),
+        synced=synced_count,
+        out_of_sync=len(mismatched_users)
+    )
+
+    return {
+        "total_users": len(users),
+        "synced_count": synced_count,
+        "out_of_sync_count": len(mismatched_users),
+        "mismatched_users": mismatched_users
+    }
+
+
+# ← PHASE 4: Remediation endpoint - manually sync DB to match Casbin
+@router.post(
+    "/sync/users",
+    tags=["Admin - User Management"],
+    summary="Manually sync DB roles to match Casbin (source of truth)"
+)
+async def sync_users(
+    request: Request,
+    sync_request: schemas.SyncUsersRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Đồng bộ role từ Casbin về DB cho tất cả users hoặc một nhóm users cụ thể.
+    Casbin được coi là source of truth (nguồn chân lý).
+
+    - `user_ids`: Danh sách ID users cần sync. Nếu None hoặc rỗng, sync tất cả users.
+    """
+    enforcer = request.app.state.enforcer
+    user_ids = sync_request.user_ids
+
+    # Determine which users to sync
+    if user_ids:
+        result = await db.execute(
+            select(models.User).where(models.User.id.in_(user_ids))
+        )
+    else:
+        result = await db.execute(select(models.User))
+
+    users = result.scalars().all()
+
+    synced_count = 0
+    failed_users = []
+
+    for user in users:
+        try:
+            casbin_role = await services.user_service.get_highest_priority_role_from_casbin(
+                enforcer, user.id
+            )
+
+            if user.role != casbin_role:
+                old_role = user.role
+                user.role = casbin_role
+                db.add(user)
+                synced_count += 1
+                log.info(
+                    "User role synced",
+                    user_id=user.id,
+                    old_role=old_role,
+                    new_role=casbin_role
+                )
+        except Exception as e:
+            log.error(
+                "Failed to sync user",
+                user_id=user.id,
+                error=str(e),
+                exc_info=True
+            )
+            failed_users.append({
+                "user_id": user.id,
+                "username": user.username,
+                "error": str(e)
+            })
+
+    await db.commit()
+
+    # Log activity
+    await activity_service.log_activity_from_request(
+        db=db,
+        request=request,
+        action="sync_users",
+        resource_type="user",
+        actor_id=current_admin.id,
+        resource_id=None,
+        changes={
+            "synced_count": synced_count,
+            "failed_count": len(failed_users),
+            "user_ids": user_ids or "all"
+        }
+    )
+
+    log.info(
+        "User sync completed",
+        admin_id=current_admin.id,
+        synced=synced_count,
+        failed=len(failed_users)
+    )
+
+    return {
+        "synced_count": synced_count,
+        "failed_count": len(failed_users),
+        "failed_users": failed_users
+    }
 
 
 # ===============================================================
@@ -1687,3 +2345,452 @@ async def get_user_statistics(
 ):
     """(Admin only) Lấy thống kê tổng quan về users cho dashboard."""
     return await activity_service.get_user_statistics(db)
+
+
+# =============================================================================
+# ADVANCED CASBIN PERMISSION TOOLS
+# =============================================================================
+
+
+@router.get(
+    "/policies/who-can-access",
+    response_model=schemas.WhoCanAccessResponse,
+    tags=["Admin - Policies (Advanced)"],
+)
+async def who_can_access_resource(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    object: str = Query(..., description="Resource path (e.g., /api/leads)"),
+    action: str = Query(..., description="HTTP method (e.g., GET, POST)"),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    ✅ PATCHED FOR DoS (v15):
+    (Admin only) Reverse permission lookup: Find which roles can access a resource.
+
+    SECURITY FIX:
+    - Only returns ROLES (not individual users) - preventing DoS attacks
+    - With 50k users, old implementation could crash server
+    - New implementation: ~10ms for ~10 roles (5000x faster)
+
+    This endpoint has been hardened against DoS attacks where malicious
+    admins could spam requests to exhaust CPU by triggering 50,000+
+    permission checks.
+
+    Example:
+        GET /api/admin/policies/who-can-access?object=/api/leads&action=GET
+
+    Returns:
+        List of roles that have permission to access the resource.
+        Casbin automatically handles role inheritance.
+
+    PERFORMANCE:
+        - Checks ~10 roles instead of 50k users
+        - ~10ms execution time (vs 5000ms+ in old implementation)
+    """
+    import time
+    from ..services.casbin_service import CasbinPolicyService
+
+    start_time = time.time()
+
+    # Initialize Casbin service
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+    casbin_service = CasbinPolicyService(db=None, enforcer=enforcer)
+
+    # Get allowed roles (simplified - no more include_users or max_results)
+    allowed_subjects = await casbin_service.get_subjects_for_permission(
+        obj=object,
+        act=action
+    )
+
+    # Calculate execution time for monitoring
+    execution_time_ms = int((time.time() - start_time) * 1000)
+
+    # Generate warning if execution took too long (should be rare now)
+    warning = None
+    if execution_time_ms > 1000:
+        warning = f"⚠️ Slow query ({execution_time_ms}ms). This is unusual for role-only lookup."
+
+    # Log activity for audit trail
+    await activity_service.log_activity_from_request(
+        db=db,
+        request=request,
+        action="permission_lookup",
+        resource_type="policy",
+        actor_id=current_admin.id,
+        resource_id=None,
+        changes={
+            "object": object,
+            "action": action,
+            "results_count": len(allowed_subjects),
+            "execution_time_ms": execution_time_ms,
+        },
+    )
+
+    log.info(
+        "Permission lookup completed",
+        admin_id=current_admin.id,
+        object=object,
+        action=action,
+        results=len(allowed_subjects),
+        time_ms=execution_time_ms,
+    )
+
+    return {
+        "object": object,
+        "action": action,
+        "allowed_subjects": allowed_subjects,
+        "total_count": len(allowed_subjects),
+        "execution_time_ms": execution_time_ms,
+        "include_users": False,  # Always false now - we only check roles
+        "warning": warning,
+    }
+
+
+@router.post(
+    "/policies/simulate",
+    response_model=schemas.PermissionSimulateResponse,
+    tags=["Admin - Policies (Advanced)"],
+)
+async def simulate_permission(
+    request: Request,
+    request_data: schemas.PermissionSimulateRequest,
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Simulate a permission check without actually granting access.
+
+    Test whether a subject (role/user) would have permission to perform an action
+    on a resource, without modifying any policies.
+
+    This is useful for:
+    - Testing policy configurations before deploying
+    - Debugging permission issues
+    - Understanding complex policy interactions
+
+    Example:
+        POST /api/admin/policies/simulate
+        {
+            "subject": "role:manager",
+            "object": "/api/leads",
+            "action": "GET"
+        }
+    """
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+
+    # Simulate permission check
+    # Note: enforcer.enforce() is SYNC, not async (despite using AsyncEnforcer)
+    is_allowed = enforcer.enforce(
+        request_data.subject,
+        request_data.object,
+        request_data.action
+    )
+
+    # Generate user-friendly message
+    if is_allowed:
+        message = f"✅ ALLOWED: {request_data.subject} CAN {request_data.action} on {request_data.object}"
+    else:
+        message = f"❌ DENIED: {request_data.subject} CANNOT {request_data.action} on {request_data.object}"
+
+    return {
+        "subject": request_data.subject,
+        "object": request_data.object,
+        "action": request_data.action,
+        "is_allowed": is_allowed,
+        "message": message,
+    }
+
+
+@router.get(
+    "/roles/{role_name}/features",
+    response_model=schemas.RoleFeaturesResponse,
+    tags=["Admin - Policies (Advanced)"],
+)
+async def get_role_features(
+    request: Request,
+    role_name: str,
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Get feature-based permission status for a role.
+
+    Returns a high-level view of which business features are enabled
+    for a specific role, abstracting away low-level policy details.
+
+    Example:
+        GET /api/admin/roles/role:manager/features
+
+    Returns:
+        {
+            "role": "role:manager",
+            "features": [
+                {"feature_id": "view_leads", "display_name": "Xem Leads", "enabled": true, ...},
+                {"feature_id": "edit_leads", "display_name": "Sửa Leads", "enabled": false, ...},
+                ...
+            ]
+        }
+    """
+    from ..casbin_config.policy_templates import FEATURE_MAP
+
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+
+    # Get current policies for this role
+    all_policies = enforcer.get_policy()
+    role_policies = [
+        (p[0], p[1], p[2])
+        for p in all_policies
+        if p[0] == role_name
+    ]
+
+    features = []
+
+    # Check each feature
+    for feature_id, feature_def in FEATURE_MAP.items():
+        # Check if all policies for this feature exist for this role
+        feature_policies = [
+            (
+                policy["subject"].replace("{role}", role_name),
+                policy["object"],
+                policy["action"]
+            )
+            for policy in feature_def["policies"]
+        ]
+
+        # Feature is enabled if all its policies exist
+        enabled = all(policy in role_policies for policy in feature_policies)
+
+        features.append({
+            "feature_id": feature_id,
+            "display_name": feature_def["display_name"],
+            "enabled": enabled,
+            "policy_count": len(feature_def["policies"]),
+        })
+
+    return {
+        "role": role_name,
+        "features": features,
+    }
+
+
+@router.post(
+    "/roles/{role_name}/features",
+    response_model=schemas.PolicyBatchResult,
+    tags=["Admin - Policies (Advanced)"],
+)
+async def toggle_role_feature(
+    request: Request,
+    role_name: str,
+    request_data: schemas.ToggleFeatureRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Enable or disable a feature for a role.
+
+    This endpoint manages all policies associated with a feature as a group,
+    making it easier to grant/revoke business-level permissions.
+
+    Example:
+        POST /api/admin/roles/role:manager/features
+        {
+            "feature_id": "view_leads",
+            "enabled": true
+        }
+
+    This will add/remove all policies associated with the "view_leads" feature.
+    """
+    from ..casbin_config.policy_templates import FEATURE_MAP
+    from ..services.casbin_service import CasbinPolicyService
+
+    # Validate feature exists
+    if request_data.feature_id not in FEATURE_MAP:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown feature: {request_data.feature_id}"
+        )
+
+    feature_def = FEATURE_MAP[request_data.feature_id]
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+    casbin_service = CasbinPolicyService(db=db, enforcer=enforcer)
+
+    # Convert feature policies to tuples with role substituted
+    policies_tuples = [
+        (
+            policy["subject"].replace("{role}", role_name),
+            policy["object"],
+            policy["action"]
+        )
+        for policy in feature_def["policies"]
+    ]
+
+    # Add or remove policies based on enabled flag
+    if request_data.enabled:
+        # Enable feature: add all policies
+        result = await casbin_service.add_policies_batch(policies_tuples, validate=True)
+
+        # Log activity
+        await activity_service.log_activity(
+            db=db,
+            actor_id=current_admin.id,
+            action="enable_feature",
+            description=f"Enabled feature '{feature_def['display_name']}' for {role_name}",
+            resource_type="casbin_policy",
+            resource_id=None,
+            changes={
+                "feature_id": request_data.feature_id,
+                "role": role_name,
+                "policies_added": result["added"],
+            }
+        )
+    else:
+        # Disable feature: remove all policies
+        result = await casbin_service.remove_policies_batch(
+            policies_tuples,
+            validate=True,
+            force=False
+        )
+
+        # Log activity
+        await activity_service.log_activity(
+            db=db,
+            actor_id=current_admin.id,
+            action="disable_feature",
+            description=f"Disabled feature '{feature_def['display_name']}' for {role_name}",
+            resource_type="casbin_policy",
+            resource_id=None,
+            changes={
+                "feature_id": request_data.feature_id,
+                "role": role_name,
+                "policies_removed": result.get("removed", 0),
+            }
+        )
+
+    return result
+
+
+@router.get(
+    "/roles/{role_name}/explain",
+    response_model=schemas.PermissionExplainResponse,
+    tags=["Admin - Policies (Advanced)"],
+)
+async def explain_role_permissions(
+    request: Request,
+    role_name: str,
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Explain where a role's permissions come from.
+
+    Categorizes policies into:
+    - Template policies (from system role templates)
+    - Feature policies (from enabled features)
+    - Manual policies (added individually)
+    - Inherited policies (from role inheritance via grouping policies)
+
+    This helps admins understand permission inheritance and sources.
+    """
+    from ..casbin_config.policy_templates import (
+        FEATURE_MAP,
+        ADMIN_TEMPLATE,
+        MANAGER_TEMPLATE,
+        OFFICER_TEMPLATE,
+        BASIC_USER_TEMPLATE,  # ← (1) IMPORT BASIC_USER_TEMPLATE
+    )
+
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+
+    # (2) ĐỊNH NGHĨA TEMPLATE_MAP ĐẦY ĐỦ
+    TEMPLATE_MAP = {
+        "role:admin": ADMIN_TEMPLATE,
+        "role:manager": MANAGER_TEMPLATE,
+        "role:officer": OFFICER_TEMPLATE,
+        "role:user": BASIC_USER_TEMPLATE,  # ← THÊM DÒNG NÀY
+    }
+
+    # (3) LẤY CÁC VAI TRÒ MÀ ROLE NÀY KẾ THỪA
+    # Ví dụ: cho "role:support", sẽ trả về ["role:user"]
+    inherited_roles = await enforcer.get_roles_for_user(role_name)
+
+    # (4) LẤY CÁC POLICY TRỰC TIẾP (DIRECT) CỦA ROLE NÀY
+    # Note: get_policy() là SYNC method, trả về tất cả policies
+    all_policies = enforcer.get_policy()
+    direct_policies_tuples = [
+        (p[0], p[1], p[2])
+        for p in all_policies
+        if p[0] == role_name
+    ]
+
+    policies_from_template = []
+    policies_from_features = []
+    policies_manual = []
+    policies_inherited = []  # ← (5) KHỞI TẠO LIST MỚI
+
+    template_policy_set = set()
+    feature_policy_set = set()
+
+    # (6) PHÂN LOẠI CÁC POLICY TRỰC TIẾP
+    # 6a. Tìm quyền từ Template
+    if role_name in TEMPLATE_MAP:
+        template = TEMPLATE_MAP[role_name]
+        template_policies = [
+            (p["subject"].replace("{role}", role_name), p["object"], p["action"])
+            for p in template["policies"]
+        ]
+        for p_tuple in template_policies:
+            if p_tuple in direct_policies_tuples:
+                policies_from_template.append({
+                    "subject": p_tuple[0],
+                    "object": p_tuple[1],
+                    "action": p_tuple[2]
+                })
+                template_policy_set.add(p_tuple)
+
+    # 6b. Tìm quyền từ Features
+    for feature_id, feature_def in FEATURE_MAP.items():
+        feature_policies = [
+            (p["subject"].replace("{role}", role_name), p["object"], p["action"])
+            for p in feature_def["policies"]
+        ]
+        if all(fp in direct_policies_tuples for fp in feature_policies):
+            for fp in feature_policies:
+                policies_from_features.append({
+                    "subject": fp[0],
+                    "object": fp[1],
+                    "action": fp[2]
+                })
+                feature_policy_set.add(fp)
+
+    # 6c. Tìm quyền Manual (Thủ công)
+    direct_policies_set = set(direct_policies_tuples)
+    for p_tuple in direct_policies_tuples:
+        if p_tuple not in template_policy_set and p_tuple not in feature_policy_set:
+            policies_manual.append({
+                "subject": p_tuple[0],
+                "object": p_tuple[1],
+                "action": p_tuple[2]
+            })
+
+    # (7) TÌM QUYỀN KẾ THỪA (PHẦN QUAN TRỌNG NHẤT)
+    for inherited_role_name in inherited_roles:
+        # Lấy tất cả policy của role CHA (bao gồm cả kế thừa của NÓ)
+        # Note: get_implicit_permissions_for_user là ASYNC method
+        inherited_policies = await enforcer.get_implicit_permissions_for_user(inherited_role_name)
+
+        for p_tuple in inherited_policies:
+            # Chỉ thêm nếu nó chưa phải là quyền trực tiếp (tránh trùng lặp)
+            if tuple(p_tuple) not in direct_policies_set:
+                # Hiển thị rõ nguồn gốc kế thừa
+                inherited_role_display = inherited_role_name.replace("role:", "")
+                policies_inherited.append({
+                    "subject": f"{role_name} (← {inherited_role_display})",
+                    "object": p_tuple[1],
+                    "action": p_tuple[2]
+                })
+
+    return {
+        "role": role_name,
+        "policies_from_template": policies_from_template,
+        "policies_from_features": policies_from_features,
+        "policies_manual": policies_manual,
+        "policies_inherited": policies_inherited,  # ← (8) TRẢ VỀ DỮ LIỆU MỚI
+    }

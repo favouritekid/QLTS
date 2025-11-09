@@ -145,7 +145,23 @@ async def lifespan(app: FastAPI):
                 "This should NOT happen in production if migrations are run correctly. "
                 "Please run: alembic upgrade head"
             )
+            # Admin policies (explicit paths due to keyMatch4 limitations)
             await enforcer.add_policy("role:admin", "/*", ".*")
+            await enforcer.add_policy("role:admin", "/api/*", ".*")
+            await enforcer.add_policy("role:admin", "/api/admin/*", ".*")
+            await enforcer.add_policy("role:admin", "/api/admin/users/*", ".*")
+            await enforcer.add_policy("role:admin", "/api/admin/roles/*", ".*")
+            await enforcer.add_policy("role:admin", "/api/admin/policies/*", ".*")
+
+            # ← PHASE 3 & 4: Very explicit sync endpoints (new paths to avoid route conflicts)
+            await enforcer.add_policy("role:admin", "/api/admin/sync/status", "GET")
+            await enforcer.add_policy("role:admin", "/api/admin/sync/users", "POST")
+            await enforcer.add_policy("role:admin", "/api/admin/sync/*", ".*")
+            await enforcer.add_policy("role:admin", "/api/admin/roles", "GET")
+            await enforcer.add_policy("role:admin", "/api/admin/policies", "GET")
+            await enforcer.add_policy("role:admin", "/api/admin/policies/statistics", "GET")
+            await enforcer.add_policy("role:admin", "/api/admin/policies/suggestions", "GET")
+
             await enforcer.add_policy("role:manager", "/api/admin/users", ".*")
             await enforcer.add_policy("role:manager", "/api/leads/*", ".*")
             await enforcer.add_policy("role:manager", "/api/leads", "GET")

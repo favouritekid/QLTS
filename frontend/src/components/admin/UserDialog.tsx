@@ -1,7 +1,7 @@
 // src/components/admin/UserDialog.tsx
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -36,10 +36,28 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { PasswordStrengthIndicator } from "./PasswordStrengthIndicator";
 import { useAdminCreateUser, useAdminUpdateUser } from "@/hooks/useAdminUsers";
+import { useRoles } from "@/hooks/usePolicies";
 import type { User } from "@/types/api.types";
 import { getAvatarUrl } from "@/lib/utils";
 
-// Validation schemas
+/**
+ * Extract role name from Casbin format (e.g., "role:admin" -> "admin")
+ * If no prefix, returns as-is
+ */
+function extractRoleName(roleWithPrefix: string): string {
+  return roleWithPrefix.startsWith("role:")
+    ? roleWithPrefix.substring(5)
+    : roleWithPrefix;
+}
+
+/**
+ * Capitalize first letter for display (e.g., "admin" -> "Admin")
+ */
+function capitalizeRole(role: string): string {
+  return role.charAt(0).toUpperCase() + role.slice(1);
+}
+
+// Validation schemas - Using string instead of enum to support dynamic roles
 const createUserSchema = z.object({
   username: z
     .string()
@@ -55,7 +73,7 @@ const createUserSchema = z.object({
     .regex(/\d/, "Password must contain at least one number")
     .regex(/[@$!%*?&]/, "Password must contain at least one special character"),
   full_name: z.string().max(120, "Full name must be less than 120 characters").optional(),
-  role: z.enum(["user", "admin", "manager", "officer"]).default("user"),
+  role: z.string().min(1, "Role is required").default("user"),
   status: z.enum(["active", "pending", "banned"]).default("active"),
   avatar: z.instanceof(File).optional(),
 });
@@ -64,7 +82,7 @@ const editUserSchema = z.object({
   full_name: z.string().max(120, "Full name must be less than 120 characters").optional(),
   email: z.string().email("Invalid email address"),
   phone_number: z.string().max(20, "Phone number must be less than 20 characters").optional(),
-  role: z.enum(["user", "admin", "manager", "officer"]),
+  role: z.string().min(1, "Role is required"),
   status: z.enum(["active", "pending", "banned"]),
   avatar: z.instanceof(File).optional(),
 });
@@ -86,9 +104,19 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
 
   const createUserMutation = useAdminCreateUser();
   const updateUserMutation = useAdminUpdateUser(user?.id || 0);
+  const { data: rolesData, isLoading: rolesLoading } = useRoles();
 
   const isCreate = mode === "create";
   const isEdit = mode === "edit";
+
+  // Extract available roles from Casbin roles (strip "role:" prefix)
+  const availableRoles = useMemo(() => {
+    if (!rolesData?.roles) return [];
+    return rolesData.roles
+      .map(role => extractRoleName(role.name))
+      .filter(role => role.length > 0) // Filter out empty strings
+      .sort(); // Sort alphabetically
+  }, [rolesData]);
 
   // Form setup - use conditional type based on mode
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -189,18 +217,27 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
   };
 
   // Handle form submission
+  // ✅ UX FIX (v17): Only close dialog on success, keep open on error
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  async function onSubmit(values: any) {
-    try {
-      if (isCreate) {
-        await createUserMutation.mutateAsync(values as CreateUserFormValues);
-      } else if (user) {
-        await updateUserMutation.mutateAsync(values as EditUserFormValues);
-      }
+  function onSubmit(values: any) {
+    // Define success callback - only close dialog when mutation succeeds
+    const onSuccessCallback = () => {
       handleDialogOpenChange(false);
       form.reset();
-    } catch {
-      // Error handling is done in the mutation hooks
+    };
+
+    // Use mutate with inline callbacks instead of mutateAsync
+    // This ensures dialog only closes on success
+    if (isCreate) {
+      createUserMutation.mutate(values as CreateUserFormValues, {
+        onSuccess: onSuccessCallback,
+        // onError is already handled in the hook (toast notification)
+      });
+    } else if (user) {
+      updateUserMutation.mutate(values as EditUserFormValues, {
+        onSuccess: onSuccessCallback,
+        // onError is already handled in the hook (toast notification)
+      });
     }
   }
 
@@ -379,22 +416,36 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                   <Select
                     onValueChange={field.onChange}
                     defaultValue={field.value}
-                    disabled={isPending}
+                    disabled={isPending || rolesLoading}
                   >
                     <FormControl>
                       <SelectTrigger>
-                        <SelectValue placeholder="Select a role" />
+                        <SelectValue placeholder={rolesLoading ? "Loading roles..." : "Select a role"} />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      <SelectItem value="user">User</SelectItem>
-                      <SelectItem value="officer">Officer</SelectItem>
-                      <SelectItem value="manager">Manager</SelectItem>
-                      <SelectItem value="admin">Admin</SelectItem>
+                      {rolesLoading ? (
+                        <SelectItem value="" disabled>
+                          Loading roles...
+                        </SelectItem>
+                      ) : availableRoles.length === 0 ? (
+                        <SelectItem value="" disabled>
+                          No roles available
+                        </SelectItem>
+                      ) : (
+                        availableRoles.map((role) => (
+                          <SelectItem key={role} value={role}>
+                            {capitalizeRole(role)}
+                          </SelectItem>
+                        ))
+                      )}
                     </SelectContent>
                   </Select>
                   <FormDescription>
                     Determines what the user can access in the system.
+                    {availableRoles.length > 0 && (
+                      <> ({availableRoles.length} roles available)</>
+                    )}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>

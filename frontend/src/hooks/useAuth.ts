@@ -318,9 +318,21 @@ export function useAuth() {
     },
     onSuccess: (updatedUser) => {
       toast.success("Profile updated successfully!");
-      // Cập nhật cache của React Query với user data mới
-      queryClient.setQueryData(["auth", "me"], updatedUser);
-      // Cập nhật Zustand store
+
+      // ✅ GIẢI PHÁP (Tinh chỉnh DX 1):
+      // Thay vì setQueryData, chúng ta invalidate ["auth", "me"].
+      // Điều này đảm bảo dữ liệu (avatar, tên) ở sidebar VÀ store
+      // được fetch lại 100% chính xác từ server.
+      queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
+
+      // ✅ GIẢI PHÁP (Vấn đề 2):
+      // Invalidate cache của trang Admin User List.
+      // Lần tới khi admin vào trang /admin/users, họ sẽ thấy tên mới.
+      queryClient.invalidateQueries({
+        queryKey: ["admin", "users", "list"],
+      });
+
+      // Cập nhật Zustand store (vẫn giữ để UI phản ứng ngay lập tức)
       useAuthStore.getState().setUser(updatedUser);
     },
     onError: (error) => {

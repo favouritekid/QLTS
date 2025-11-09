@@ -28,6 +28,13 @@ class RoleAssignment(BaseModel):
     role: str = Field(..., description="Vai trò (đã có tiền tố), vd: 'role:officer'")
 
 
+class GroupingPolicyCreate(BaseModel):
+    """Schema để tạo grouping policy (kế thừa role hoặc gán role)."""
+
+    subject: str = Field(..., description="Subject, vd: 'role:support' hoặc 'user:5'")
+    parent_role: str = Field(..., description="Parent role để kế thừa, vd: 'role:user'")
+
+
 # ============================================================================
 # NEW SCHEMAS FOR POLICY MANAGEMENT SYSTEM
 # ============================================================================
@@ -66,7 +73,7 @@ class PolicyBatchRequest(BaseModel):
     """Schema for batch policy operations."""
 
     policies: List[PolicyCreate] = Field(..., description="List of policies to add/remove")
-    validate: bool = Field(True, description="Whether to validate before applying")
+    run_validation: bool = Field(True, description="Whether to validate before applying")
     dry_run: bool = Field(False, description="Preview changes without applying")
 
 
@@ -105,7 +112,7 @@ class TemplateApplicationRequest(BaseModel):
 
     template_id: str = Field(..., description="Template identifier")
     role: str = Field(..., description="Role to apply template to (e.g., role:custom)")
-    validate: bool = Field(True, description="Whether to validate before applying")
+    run_validation: bool = Field(True, description="Whether to validate before applying")
 
 
 class PolicyStatistics(BaseModel):
@@ -126,3 +133,94 @@ class TemplatesListResponse(BaseModel):
     """Schema for templates list endpoint response."""
 
     templates: List[TemplateInfo]
+
+
+# ============================================================================
+# ADVANCED PERMISSION TOOLS SCHEMAS
+# ============================================================================
+
+
+class WhoCanAccessResponse(BaseModel):
+    """
+    ✅ PATCHED FOR DoS (v15):
+    Schema for reverse permission lookup response.
+
+    Now only checks ROLES (not individual users) to prevent DoS attacks.
+    """
+
+    object: str = Field(..., description="Resource path that was queried")
+    action: str = Field(..., description="Action that was queried")
+    allowed_subjects: List[str] = Field(
+        ..., description="List of roles with access (users no longer checked for DoS prevention)"
+    )
+    total_count: int = Field(..., description="Number of roles with access")
+    execution_time_ms: int = Field(..., description="Query execution time in milliseconds")
+    include_users: bool = Field(..., description="Always False - individual users not checked (DoS prevention)")
+    warning: Optional[str] = Field(None, description="Performance warning if applicable")
+
+
+class PermissionSimulateRequest(BaseModel):
+    """Schema for permission simulation request."""
+
+    subject: str = Field(..., description="Subject to test (e.g., role:manager, user:123)")
+    object: str = Field(..., description="Resource path (e.g., /api/leads)")
+    action: str = Field(..., description="HTTP method (e.g., GET, POST)")
+
+
+class PermissionSimulateResponse(BaseModel):
+    """Schema for permission simulation response."""
+
+    subject: str = Field(..., description="Subject that was tested")
+    object: str = Field(..., description="Resource that was tested")
+    action: str = Field(..., description="Action that was tested")
+    is_allowed: bool = Field(..., description="Whether permission is granted")
+    message: str = Field(..., description="Human-readable result message")
+
+
+class FeatureStatus(BaseModel):
+    """Schema for a single feature's status."""
+
+    feature_id: str = Field(..., description="Feature identifier")
+    display_name: str = Field(..., description="Human-readable feature name")
+    enabled: bool = Field(..., description="Whether feature is currently enabled")
+    policy_count: int = Field(..., description="Number of policies in this feature")
+
+
+class RoleFeaturesResponse(BaseModel):
+    """Schema for role features list response."""
+
+    role: str = Field(..., description="Role name (e.g., role:manager)")
+    features: List[FeatureStatus] = Field(..., description="List of feature statuses")
+
+
+class ToggleFeatureRequest(BaseModel):
+    """Schema for feature toggle request."""
+
+    feature_id: str = Field(..., description="Feature identifier to toggle")
+    enabled: bool = Field(..., description="Whether to enable or disable the feature")
+
+
+class PolicySuggestionsResponse(BaseModel):
+    """Schema for policy autocomplete suggestions."""
+
+    subjects: List[str] = Field(..., description="List of unique subjects in policies")
+    objects: List[str] = Field(..., description="List of unique objects/resources in policies")
+    actions: List[str] = Field(..., description="List of unique actions in policies")
+
+
+class PermissionExplainResponse(BaseModel):
+    """Schema for permission explanation (shows policy sources)."""
+
+    role: str = Field(..., description="Role name being explained")
+    policies_from_template: List[PolicyRule] = Field(
+        ..., description="Policies inherited from system templates"
+    )
+    policies_from_features: List[PolicyRule] = Field(
+        ..., description="Policies from enabled features"
+    )
+    policies_manual: List[PolicyRule] = Field(
+        ..., description="Policies added manually (not from templates/features)"
+    )
+    policies_inherited: List[PolicyRule] = Field(
+        default_factory=list, description="Policies inherited from other roles via grouping policies"
+    )
