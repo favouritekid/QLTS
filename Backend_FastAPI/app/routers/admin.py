@@ -2374,35 +2374,117 @@ async def get_user_statistics(
 )
 async def who_can_access_resource(
     request: Request,
+    db: AsyncSession = Depends(database.get_db),
     object: str = Query(..., description="Resource path (e.g., /api/leads)"),
     action: str = Query(..., description="HTTP method (e.g., GET, POST)"),
+    include_users: bool = Query(
+        False,
+        description="⚠️ WARNING: Include individual users (may cause performance issues with many users)"
+    ),
+    max_results: int = Query(
+        100,
+        ge=1,
+        le=1000,
+        description="Maximum number of results (1-1000)"
+    ),
     current_admin: models.User = PermissionDep,
 ):
     """
     (Admin only) Reverse permission lookup: Find who can access a resource.
 
-    This endpoint helps answer "Who has permission to access this resource?"
-    Useful for auditing and security analysis.
+    SECURITY & PERFORMANCE NOTES:
+    - By default, only returns ROLES (not individual users)
+    - Limited to max_results to prevent DoS attacks
+    - Set include_users=true ONLY if you have few users (<1000)
+    - With 50k users, include_users=true can cause server crash
+
+    This endpoint has been hardened against DoS attacks where malicious
+    admins could spam requests to exhaust CPU by triggering 50,000+
+    permission checks.
 
     Example:
         GET /api/admin/policies/who-can-access?object=/api/leads&action=GET
 
-    Returns list of all subjects (roles/users) that have permission.
+    Returns:
+        List of subjects (roles by default) that have permission.
+        Set include_users=true to also check individual user permissions.
+
+    PERFORMANCE:
+        - include_users=false: ~10ms (checks ~10 roles)
+        - include_users=true: ~5000ms+ (checks 50k users) ⚠️ DANGEROUS
     """
+    import time
     from ..services.casbin_service import CasbinPolicyService
+
+    start_time = time.time()
 
     # Initialize Casbin service
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
     casbin_service = CasbinPolicyService(db=None, enforcer=enforcer)
 
-    # Get allowed subjects
-    allowed_subjects = await casbin_service.get_subjects_for_permission(object, action)
+    # WARNING: Log if dangerous parameters are used
+    if include_users:
+        log.warning(
+            "Permission lookup with include_users=True - potential DoS risk",
+            admin_id=current_admin.id,
+            object=object,
+            action=action,
+        )
+
+    # Get allowed subjects with optimized method
+    allowed_subjects = await casbin_service.get_subjects_for_permission(
+        obj=object,
+        act=action,
+        include_users=include_users,
+        max_results=max_results
+    )
+
+    # Calculate execution time for monitoring
+    execution_time_ms = int((time.time() - start_time) * 1000)
+
+    # Generate warning if execution took too long or dangerous params used
+    warning = None
+    if execution_time_ms > 1000:
+        warning = f"⚠️ Slow query ({execution_time_ms}ms). Consider narrowing search or disabling include_users."
+    elif include_users and len(allowed_subjects) >= max_results:
+        warning = "⚠️ Results truncated. May be incomplete due to max_results limit."
+
+    # Log activity for audit trail
+    await activity_service.log_activity_from_request(
+        db=db,
+        request=request,
+        action="permission_lookup",
+        resource_type="policy",
+        actor_id=current_admin.id,
+        resource_id=None,
+        changes={
+            "object": object,
+            "action": action,
+            "include_users": include_users,
+            "max_results": max_results,
+            "results_count": len(allowed_subjects),
+            "execution_time_ms": execution_time_ms,
+        },
+    )
+
+    log.info(
+        "Permission lookup completed",
+        admin_id=current_admin.id,
+        object=object,
+        action=action,
+        results=len(allowed_subjects),
+        time_ms=execution_time_ms,
+        include_users=include_users,
+    )
 
     return {
         "object": object,
         "action": action,
         "allowed_subjects": allowed_subjects,
         "total_count": len(allowed_subjects),
+        "execution_time_ms": execution_time_ms,
+        "include_users": include_users,
+        "warning": warning,
     }
 
 

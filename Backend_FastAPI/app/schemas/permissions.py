@@ -149,6 +149,9 @@ class WhoCanAccessResponse(BaseModel):
         ..., description="List of subjects (roles/users) with access"
     )
     total_count: int = Field(..., description="Number of subjects with access")
+    execution_time_ms: int = Field(..., description="Query execution time in milliseconds")
+    include_users: bool = Field(..., description="Whether individual users were included")
+    warning: Optional[str] = Field(None, description="Performance warning if applicable")
 
 
 class PermissionSimulateRequest(BaseModel):
