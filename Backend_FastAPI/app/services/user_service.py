@@ -46,6 +46,70 @@ from . import activity_service
 log = structlog.get_logger(__name__)
 
 
+# =============================================================================
+# REAL-TIME DATA SYNC HELPER
+# =============================================================================
+
+async def emit_data_updated(
+    resource_type: str,
+    operation: str,
+    resource_id: Optional[int] = None,
+    data: Optional[Dict[str, Any]] = None
+):
+    """
+    ✅ REAL-TIME DATA SYNC (v16):
+    Emit 'data_updated' event to ALL connected admin clients for real-time sync.
+
+    This solves the stale data problem where:
+    - Admin A updates User C
+    - Admin B still sees old data until manual refresh
+
+    Args:
+        resource_type: Type of resource (e.g., "user", "lead", "organization")
+        operation: Operation performed (e.g., "create", "update", "delete")
+        resource_id: ID of the affected resource
+        data: Optional payload with updated data (e.g., updated user object)
+
+    Example:
+        await emit_data_updated("user", "update", resource_id=5, data={"full_name": "Johnny"})
+
+    Frontend will:
+    - Receive this event
+    - Invalidate React Query cache
+    - Automatically refetch fresh data
+    - Show toast notification
+    """
+    try:
+        event_data = {
+            "resource_type": resource_type,
+            "operation": operation,
+            "resource_id": resource_id,
+            "data": data,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+        # Broadcast to ALL connected clients (not just specific rooms)
+        # This ensures all admins see updates in real-time
+        await sio.emit("data_updated", event_data)
+
+        socket_events_emitted_total.labels(event_type="data_updated").inc()
+        log.info(
+            "Emitted real-time data_updated event",
+            resource_type=resource_type,
+            operation=operation,
+            resource_id=resource_id,
+        )
+    except Exception as e:
+        # Don't fail the main operation if socket emit fails
+        socket_emit_failures_total.labels(event_type="data_updated").inc()
+        log.error(
+            "Failed to emit data_updated event (non-critical)",
+            resource_type=resource_type,
+            operation=operation,
+            error=str(e),
+        )
+
+
 # --- Các hàm lấy User (Read-only, không cần rollback) ---
 
 
@@ -189,6 +253,15 @@ async def create_user_by_admin(
         db.add(db_user)
         await db.commit()
         await db.refresh(db_user)
+
+        # ✅ REAL-TIME SYNC: Notify all connected clients
+        await emit_data_updated(
+            resource_type="user",
+            operation="create",
+            resource_id=db_user.id,
+            data={"username": db_user.username, "role": db_user.role}
+        )
+
         return db_user
     except Exception as e:
         await db.rollback()
@@ -342,6 +415,19 @@ async def update_user(
                 # Note: DB already committed, but Casbin failed
                 # This mismatch will be fixed by Phase 2 auto-sync
 
+        # ✅ REAL-TIME SYNC: Notify all connected clients about the update
+        await emit_data_updated(
+            resource_type="user",
+            operation="update",
+            resource_id=db_user.id,
+            data={
+                "username": db_user.username,
+                "full_name": db_user.full_name,
+                "role": db_user.role,
+                "status": db_user.status
+            }
+        )
+
         return db_user
     except Exception as e:
         await db.rollback()
@@ -409,8 +495,21 @@ async def delete_user(db: AsyncSession, user_id: int):
         user_to_delete = await db.get(models.User, user_id)
         if not user_to_delete:
             raise ResourceNotFoundError(detail=f"User with id {user_id} not found.")
+
+        # Save data for emit before deletion
+        deleted_username = user_to_delete.username
+
         await db.delete(user_to_delete)
         await db.commit()
+
+        # ✅ REAL-TIME SYNC: Notify all connected clients about the deletion
+        await emit_data_updated(
+            resource_type="user",
+            operation="delete",
+            resource_id=user_id,
+            data={"username": deleted_username}
+        )
+
     except Exception as e:
         await db.rollback()
         log.error(
