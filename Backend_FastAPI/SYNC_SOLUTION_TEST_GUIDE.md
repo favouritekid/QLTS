@@ -55,7 +55,7 @@ echo "Token: $TOKEN"
 ```bash
 # 1. Get list of users to find a test user
 curl -X GET "http://localhost:8000/api/admin/users?page=1&page_size=10" \
-  -H "Authorization: Bearer $TOKEN" | jq '.items[0]'
+  -H "Authorization: Bearer $TOKEN" | jq '.users[0]'
 
 # Note the user_id and current role
 USER_ID=2  # Replace with actual user ID

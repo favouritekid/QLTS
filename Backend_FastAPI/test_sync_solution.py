@@ -63,7 +63,9 @@ class SyncTester:
             params={"page": 1, "page_size": 100}
         )
         response.raise_for_status()
-        return response.json()["items"]
+        data = response.json()
+        # API returns {"total_count": int, "users": [...]}
+        return data.get("users", data.get("items", []))
 
     async def update_user_role(self, user_id: int, new_role: str) -> Dict[str, Any]:
         """Update user role via PUT /users/{id}"""

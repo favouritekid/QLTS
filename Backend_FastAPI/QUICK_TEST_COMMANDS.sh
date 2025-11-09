@@ -66,9 +66,9 @@ test_phase_1() {
     USER_DATA=$(curl -s -X GET "$BASE_URL/api/admin/users?page=1&page_size=1" \
         -H "Authorization: Bearer $TOKEN")
 
-    USER_ID=$(echo $USER_DATA | jq -r '.items[0].id')
-    ORIGINAL_ROLE=$(echo $USER_DATA | jq -r '.items[0].role')
-    USERNAME=$(echo $USER_DATA | jq -r '.items[0].username')
+    USER_ID=$(echo $USER_DATA | jq -r '.users[0].id')
+    ORIGINAL_ROLE=$(echo $USER_DATA | jq -r '.users[0].role')
+    USERNAME=$(echo $USER_DATA | jq -r '.users[0].username')
 
     print_info "Test User: $USERNAME (ID: $USER_ID, Role: $ORIGINAL_ROLE)"
 
