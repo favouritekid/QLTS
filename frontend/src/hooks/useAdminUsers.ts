@@ -51,7 +51,10 @@ export function useAdminUsersList(params: UseAdminUsersListParams = {}) {
       });
       return response.data;
     },
-    staleTime: 0, // Always refetch to ensure fresh data including avatars
+    // ✅ PERFORMANCE FIX (v17): Set staleTime to Infinity - rely on Socket.IO data_updated events
+    // Data is fetched once, then only refetched when Socket.IO invalidates the cache
+    staleTime: Infinity, // Never mark as stale - real-time sync via Socket.IO
+    gcTime: 10 * 60 * 1000, // Garbage collect after 10 minutes of inactivity
   });
 }
 
@@ -138,17 +141,51 @@ export function useAdminUpdateUser(userId: number) {
     onSuccess: (updatedUser) => {
       toast.success("User updated successfully!");
 
-      // Force refetch to get fresh data including new avatar URL
-      queryClient.invalidateQueries({ queryKey: adminUsersKeys.lists(), refetchType: "active" });
-      queryClient.invalidateQueries({ queryKey: adminUsersKeys.detail(userId), refetchType: "active" });
+      // ✅ PERFORMANCE FIX (v17): Use setQueriesData for surgical cache update
+      // Instead of invalidating all lists (causing refetch), update the specific user in cache
 
-      // If updated user is the current user, update auth query to refresh sidebar avatar
+      // (1) Update user in ALL list queries (handles pagination)
+      queryClient.setQueriesData<{ pages: { users: User[] }[] } | { users: User[] }>(
+        { queryKey: adminUsersKeys.lists() },
+        (oldData) => {
+          if (!oldData) return oldData;
+
+          // Handle infinite query format (pages)
+          if ("pages" in oldData) {
+            const newPages = oldData.pages.map((page) => ({
+              ...page,
+              users: page.users.map((user) =>
+                user.id === updatedUser.id ? updatedUser : user
+              ),
+            }));
+            return { ...oldData, pages: newPages };
+          }
+
+          // Handle regular query format (flat list)
+          if ("users" in oldData) {
+            return {
+              ...oldData,
+              users: oldData.users.map((user) =>
+                user.id === updatedUser.id ? updatedUser : user
+              ),
+            };
+          }
+
+          return oldData;
+        }
+      );
+
+      // (2) Update detail cache
+      queryClient.setQueryData(adminUsersKeys.detail(userId), updatedUser);
+
+      // (3) If updated user is the current user, update auth query to refresh sidebar avatar
       const currentUser = queryClient.getQueryData<User>(["auth", "me"]);
       if (currentUser && currentUser.id === updatedUser.id) {
         queryClient.setQueryData(["auth", "me"], updatedUser);
-        // Force refetch auth query to ensure fresh avatar
-        queryClient.invalidateQueries({ queryKey: ["auth", "me"], refetchType: "active" });
       }
+
+      // (4) Optional: Still invalidate statistics (they may need recalculation)
+      queryClient.invalidateQueries({ queryKey: ["admin", "statistics"], refetchType: "active" });
     },
     onError: (error) => {
       const message = error.response?.data?.detail || "Failed to update user";

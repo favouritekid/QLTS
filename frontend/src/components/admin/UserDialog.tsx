@@ -217,18 +217,27 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
   };
 
   // Handle form submission
+  // ✅ UX FIX (v17): Only close dialog on success, keep open on error
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  async function onSubmit(values: any) {
-    try {
-      if (isCreate) {
-        await createUserMutation.mutateAsync(values as CreateUserFormValues);
-      } else if (user) {
-        await updateUserMutation.mutateAsync(values as EditUserFormValues);
-      }
+  function onSubmit(values: any) {
+    // Define success callback - only close dialog when mutation succeeds
+    const onSuccessCallback = () => {
       handleDialogOpenChange(false);
       form.reset();
-    } catch {
-      // Error handling is done in the mutation hooks
+    };
+
+    // Use mutate with inline callbacks instead of mutateAsync
+    // This ensures dialog only closes on success
+    if (isCreate) {
+      createUserMutation.mutate(values as CreateUserFormValues, {
+        onSuccess: onSuccessCallback,
+        // onError is already handled in the hook (toast notification)
+      });
+    } else if (user) {
+      updateUserMutation.mutate(values as EditUserFormValues, {
+        onSuccess: onSuccessCallback,
+        // onError is already handled in the hook (toast notification)
+      });
     }
   }
 

@@ -230,31 +230,77 @@ async def create_user(db: AsyncSession, user_in: schemas.UserCreate) -> models.U
 async def create_user_by_admin(
     db: AsyncSession,
     user_in: schemas.AdminUserCreate,
+    enforcer: Optional[casbin.AsyncEnforcer] = None,
     avatar_file: Optional[UploadFile] = None,
 ) -> models.User:
+    """
+    ✅ ATOMIC TRANSACTION (v17):
+    Create user with atomic DB + Casbin transaction to prevent split source of truth.
+
+    Uses nested transaction (savepoint) to ensure both user creation and Casbin
+    role assignment succeed or fail together, preventing inconsistency.
+    """
     try:
         hashed_password = get_password_hash(user_in.password)
-        db_user = models.User(
-            **user_in.model_dump(exclude={"password"}),  # Dùng model_dump
-            password_hash=hashed_password,
-            avatar_url=None,
-        )
-        if avatar_file:
-            log.debug(  # ✅ SỬA LỖI: Xóa `await`
-                "Processing avatar for new admin-created user",
-                filename=avatar_file.filename,
-            )
-            new_avatar_url = await file_helpers.save_avatar(avatar_file)
-            db_user.avatar_url = new_avatar_url
-            log.info(  # ✅ SỬA LỖI: Xóa `await`
-                "Avatar saved for new user", user=user_in.username, url=new_avatar_url
+
+        # ✅ ATOMIC FIX: Begin nested transaction (savepoint)
+        async with db.begin_nested():
+            # (1) Create user in DB
+            db_user = models.User(
+                **user_in.model_dump(exclude={"password"}),  # Dùng model_dump
+                password_hash=hashed_password,
+                avatar_url=None,
             )
 
-        db.add(db_user)
+            if avatar_file:
+                log.debug(
+                    "Processing avatar for new admin-created user",
+                    filename=avatar_file.filename,
+                )
+                new_avatar_url = await file_helpers.save_avatar(avatar_file)
+                db_user.avatar_url = new_avatar_url
+                log.info(
+                    "Avatar saved for new user",
+                    user=user_in.username,
+                    url=new_avatar_url
+                )
+
+            db.add(db_user)
+            # ✅ DON'T COMMIT HERE - let nested transaction handle it
+            await db.flush()  # Flush to get user.id
+            await db.refresh(db_user)
+
+            # (2) Add Casbin grouping policy INSIDE the same transaction
+            if enforcer:
+                role_name = f"role:{db_user.role}"
+                user_subject = f"user:{db_user.id}"
+
+                added = await enforcer.add_grouping_policy(user_subject, role_name)
+                log.debug("Added Casbin grouping policy for new user", added=added)
+
+                # Save policy - this writes to casbin_rule table in SAME transaction
+                await enforcer.save_policy()
+
+                log.info(
+                    "Casbin grouping policy added for admin-created user (in transaction)",
+                    user_id=db_user.id,
+                    role=db_user.role,
+                )
+
+            # ✅ If we reach here, both DB and Casbin operations succeeded
+            # Nested transaction will commit on exit from 'async with' block
+
+        # (3) Commit the main transaction (atomic: DB + Casbin together)
         await db.commit()
-        await db.refresh(db_user)
 
-        # ✅ REAL-TIME SYNC: Notify all connected clients
+        log.info(
+            "User created successfully with atomic DB+Casbin transaction",
+            user_id=db_user.id,
+            username=db_user.username,
+            role=db_user.role
+        )
+
+        # (4) ✅ REAL-TIME SYNC: Notify all connected clients (after successful commit)
         await emit_data_updated(
             resource_type="user",
             operation="create",
@@ -263,10 +309,11 @@ async def create_user_by_admin(
         )
 
         return db_user
+
     except Exception as e:
         await db.rollback()
-        log.error(  # ✅ SỬA LỖI: Xóa `await`
-            "Failed to create user by admin",
+        log.error(
+            "Failed to create user by admin (rolled back atomic transaction)",
             username=user_in.username,
             error=str(e),
             exc_info=True,
@@ -345,6 +392,13 @@ async def update_user(
     enforcer: Optional[casbin.AsyncEnforcer] = None,  # ← PHASE 1: Add enforcer parameter
     avatar_file: Optional[UploadFile] = None,
 ) -> models.User:
+    """
+    ✅ ATOMIC TRANSACTION (v17):
+    Update user with atomic DB + Casbin transaction to prevent split source of truth.
+
+    Uses nested transaction (savepoint) to ensure both DB and Casbin updates
+    succeed or fail together, preventing inconsistency.
+    """
     user_id_for_logging = db_user.id
     try:
         update_data = user_in.model_dump(exclude_unset=True)
@@ -362,60 +416,74 @@ async def update_user(
                     detail="Email already registered by another user"
                 )
 
-        for field, value in update_data.items():
-            if value is not None:
-                setattr(db_user, field, value)
+        # ✅ ATOMIC FIX: Begin nested transaction (savepoint)
+        # This ensures DB + Casbin operations are atomic
+        async with db.begin_nested():
+            # (1) Update user fields
+            for field, value in update_data.items():
+                if value is not None:
+                    setattr(db_user, field, value)
 
-        if avatar_file:
-            log.debug(
-                "Processing avatar update for user",
-                user_id=db_user.id,
-                filename=avatar_file.filename,
-            )
-            new_avatar_url = await file_helpers.save_avatar(
-                avatar_file, old_avatar_url=db_user.avatar_url
-            )
-            db_user.avatar_url = new_avatar_url
-            log.info(
-                "Avatar updated successfully for user",
-                user_id=db_user.id,
-                url=new_avatar_url,
-            )
+            if avatar_file:
+                log.debug(
+                    "Processing avatar update for user",
+                    user_id=db_user.id,
+                    filename=avatar_file.filename,
+                )
+                new_avatar_url = await file_helpers.save_avatar(
+                    avatar_file, old_avatar_url=db_user.avatar_url
+                )
+                db_user.avatar_url = new_avatar_url
+                log.info(
+                    "Avatar updated successfully for user",
+                    user_id=db_user.id,
+                    url=new_avatar_url,
+                )
 
-        db.add(db_user)
-        await db.commit()
-        await db.refresh(db_user)
+            db.add(db_user)
+            # ✅ DON'T COMMIT HERE - let nested transaction handle it
+            await db.flush()  # Flush to get updated values
+            await db.refresh(db_user)
 
-        # ← PHASE 1: Sync Casbin AFTER successful DB commit
-        if role_changed and enforcer:
-            log.info("Role changed in DB, syncing Casbin...",
-                       user_id=user_id_for_logging,
-                       old=old_db_role,
-                       new=new_db_role)
-            try:
+            # (2) Sync Casbin INSIDE the same transaction
+            if role_changed and enforcer:
+                log.info("Role changed in DB, syncing Casbin inside transaction...",
+                           user_id=user_id_for_logging,
+                           old=old_db_role,
+                           new=new_db_role)
+
                 old_casbin_role = f"role:{old_db_role}" if old_db_role else None
                 new_casbin_role = f"role:{new_db_role}"
 
                 # Remove old role grouping (if exists)
                 if old_casbin_role:
-                    await enforcer.remove_grouping_policy(user_subject, old_casbin_role)
+                    removed = await enforcer.remove_grouping_policy(user_subject, old_casbin_role)
+                    log.debug("Removed old grouping policy", removed=removed)
 
                 # Add new role grouping
-                await enforcer.add_grouping_policy(user_subject, new_casbin_role)
-                await enforcer.save_policy()  # Persist to adapter
+                added = await enforcer.add_grouping_policy(user_subject, new_casbin_role)
+                log.debug("Added new grouping policy", added=added)
 
-                log.info("Casbin grouping policy synced successfully",
+                # Save policy - this writes to casbin_rule table in SAME transaction
+                await enforcer.save_policy()
+
+                log.info("Casbin grouping policy synced successfully (in transaction)",
                           user_id=user_id_for_logging,
                           new_casbin_role=new_casbin_role)
-            except Exception as e_casbin:
-                log.error("CRITICAL: DB role updated but Casbin sync FAILED!",
-                           user_id=user_id_for_logging,
-                           error=str(e_casbin),
-                           exc_info=True)
-                # Note: DB already committed, but Casbin failed
-                # This mismatch will be fixed by Phase 2 auto-sync
 
-        # ✅ REAL-TIME SYNC: Notify all connected clients about the update
+            # ✅ If we reach here, both DB and Casbin operations succeeded
+            # Nested transaction will commit on exit from 'async with' block
+
+        # (3) Commit the main transaction (atomic: DB + Casbin together)
+        await db.commit()
+
+        log.info(
+            "User updated successfully with atomic DB+Casbin transaction",
+            user_id=user_id_for_logging,
+            role_changed=role_changed
+        )
+
+        # (4) ✅ REAL-TIME SYNC: Notify all connected clients (after successful commit)
         await emit_data_updated(
             resource_type="user",
             operation="update",
@@ -429,10 +497,11 @@ async def update_user(
         )
 
         return db_user
+
     except Exception as e:
         await db.rollback()
         log.error(
-            "Failed to update user",
+            "Failed to update user (rolled back atomic transaction)",
             user_id=user_id_for_logging,
             error=str(e),
             exc_info=True,

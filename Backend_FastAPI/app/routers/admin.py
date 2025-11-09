@@ -1067,30 +1067,15 @@ async def create_new_user(
     if await services.user_service.get_user_by_email(db, user_in.email):
         raise DuplicateResourceError(detail="Email already exists")
 
-    # Truyền avatar vào hàm service
+    # ✅ ATOMIC FIX (v17): Pass enforcer to service for atomic DB + Casbin transaction
+    enforcer = request.app.state.enforcer
     created_user = await services.user_service.create_user_by_admin(
-        db, user_in, avatar_file=avatar
+        db=db,
+        user_in=user_in,
+        enforcer=enforcer,
+        avatar_file=avatar
     )
-
-    # ✅ FIX: Automatically add Casbin grouping policy to map user to their role
-    try:
-        enforcer = request.app.state.enforcer
-        if enforcer:
-            role_name = f"role:{created_user.role}"
-            user_subject = f"user:{created_user.id}"
-            await enforcer.add_grouping_policy(user_subject, role_name)
-            log.info(
-                "Casbin grouping policy added for admin-created user",
-                user_id=created_user.id,
-                role=created_user.role,
-            )
-    except Exception as e:
-        log.error(
-            "Failed to add Casbin grouping policy for admin-created user",
-            user_id=created_user.id,
-            error=str(e),
-        )
-        # Don't fail user creation if Casbin update fails
+    # Casbin sync now happens inside create_user_by_admin atomically
 
     # Log activity
     await activity_service.log_activity_from_request(
