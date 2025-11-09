@@ -2549,8 +2549,8 @@ async def explain_role_permissions(
     # (7) TÌM QUYỀN KẾ THỪA (PHẦN QUAN TRỌNG NHẤT)
     for inherited_role_name in inherited_roles:
         # Lấy tất cả policy của role CHA (bao gồm cả kế thừa của NÓ)
-        # Note: get_implicit_permissions_for_user là SYNC method
-        inherited_policies = enforcer.get_implicit_permissions_for_user(inherited_role_name)
+        # Note: get_implicit_permissions_for_user là ASYNC method
+        inherited_policies = await enforcer.get_implicit_permissions_for_user(inherited_role_name)
 
         for p_tuple in inherited_policies:
             # Chỉ thêm nếu nó chưa phải là quyền trực tiếp (tránh trùng lặp)
