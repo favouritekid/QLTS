@@ -82,7 +82,8 @@ export function useAuth() {
   const logoutMutation = useMutation<void, AxiosError<ApiErrorResponse>>({
     mutationFn: async () => {
       // ✅ SECURITY FIX: Call backend logout (refresh token sent via HttpOnly cookie)
-      if (useAuthStore.getState().token) {
+      // Only call API if user is authenticated (has valid session)
+      if (useAuthStore.getState().isAuthenticated) {
         await api.post(API_ENDPOINTS.AUTH.LOGOUT, {}, { withCredentials: true });
       }
     },

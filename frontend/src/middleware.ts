@@ -16,6 +16,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { decodeJWT, isTokenExpired } from "@/lib/auth/jwt-decode";
+import { hasAdminAccess } from "@/lib/config/roles";
 
 // ============================================
 // 🛣️ ROUTE CONFIGURATION
@@ -106,13 +107,16 @@ export function middleware(request: NextRequest) {
   // ========================================
   // STEP 4: Role-based access control (RBAC)
   // ========================================
+  // NOTE: This is an early check for UX optimization (prevent flash of unauthorized content).
+  // Backend Casbin performs the FINAL authorization check. Always keep roles.ts in sync with backend.
 
   if (isAdminRoute) {
     const userRole = payload.role;
 
-    if (userRole !== "admin" && userRole !== "manager") {
+    // ✅ DYNAMIC ROLE CHECK: Use config instead of hard-coded roles
+    if (!hasAdminAccess(userRole)) {
       console.warn(
-        `[Middleware] ❌ Unauthorized role '${userRole}' for admin route: ${pathname}`
+        `[Middleware] ❌ Unauthorized role '${userRole || "undefined"}' for admin route: ${pathname}`
       );
 
       // Redirect to dashboard (unauthorized for admin pages)
