@@ -48,7 +48,8 @@ async def test_login_sets_both_cookies(
     Verifies:
     1. access_token cookie is set with correct attributes
     2. refresh_token cookie is set with correct attributes
-    3. Response still contains access_token in body (backwards compatibility)
+    3. Tokens are NOT in response body (httpOnly security)
+    4. Response contains user info only
     """
     log.info("--- Running: test_login_sets_both_cookies ---")
     username = regular_user_in_db["username"]
@@ -59,11 +60,12 @@ async def test_login_sets_both_cookies(
     login_res = await client.post(AuthURLs.LOGIN, data=login_data)
     assert login_res.status_code == 200, f"Login failed: {login_res.text}"
 
-    # Verify response body (backwards compatibility)
+    # ✅ FIX-5: Verify tokens are NOT in response body (httpOnly security)
     response_data = login_res.json()
-    assert "access_token" in response_data, "access_token missing from response"
+    assert "access_token" not in response_data or response_data.get("access_token") is None, \
+        "access_token should NOT be in response body (httpOnly cookie only)"
     assert "user" in response_data, "user info missing from response"
-    log.info("✅ Response contains access_token and user info")
+    log.info("✅ Response contains user info only (no tokens)")
 
     # Verify cookies are set
     cookies = login_res.cookies
@@ -306,8 +308,10 @@ async def test_expired_cookie_rejected(
     assert login_res.status_code == 200
     log.info("✅ Login successful")
 
-    # Step 2: Extract r_jti from access_token and invalidate session
-    access_token = login_res.json()["access_token"]
+    # Step 2: Extract r_jti from access_token cookie and invalidate session
+    # ✅ FIX-5: Token is now in cookie, not response body
+    access_token = login_res.cookies.get("access_token")
+    assert access_token, "access_token cookie not found"
     from jose import jwt
     payload = jwt.decode(
         access_token,
@@ -389,7 +393,9 @@ async def test_cookie_and_header_both_work(
     login_res = await client.post(AuthURLs.LOGIN, data=login_data)
     assert login_res.status_code == 200
 
-    access_token = login_res.json()["access_token"]
+    # ✅ FIX-5: Token is now in cookie, not response body
+    access_token = login_res.cookies.get("access_token")
+    assert access_token, "access_token cookie not found"
 
     # Test 1: Cookie-based auth (httpx client has cookies)
     profile_res_cookie = await client.get(ProfileURLs.PROFILE)
