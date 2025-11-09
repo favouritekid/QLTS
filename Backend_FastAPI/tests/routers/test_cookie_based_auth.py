@@ -402,12 +402,16 @@ async def test_cookie_and_header_both_work(
     assert profile_res_cookie.status_code == 200, "Cookie auth should work"
     log.info("✅ Cookie-based auth works")
 
-    # Test 2: Header-based auth (create new client without cookies)
-    async with AsyncClient(base_url=client.base_url) as new_client:
-        headers = {"Authorization": f"Bearer {access_token}"}
-        profile_res_header = await new_client.get(ProfileURLs.PROFILE, headers=headers)
-        assert profile_res_header.status_code == 200, "Header auth should work"
-        log.info("✅ Header-based auth works (backwards compatibility)")
+    # Test 2: Header-based auth (without cookies, using Authorization header)
+    # Pass empty cookies dict to override client's cookies
+    headers = {"Authorization": f"Bearer {access_token}"}
+    profile_res_header = await client.get(
+        ProfileURLs.PROFILE,
+        headers=headers,
+        cookies={}  # Override client cookies to test header-only auth
+    )
+    assert profile_res_header.status_code == 200, "Header auth should work"
+    log.info("✅ Header-based auth works (backwards compatibility)")
 
     log.info("--- Finished: test_cookie_and_header_both_work ---")
 
