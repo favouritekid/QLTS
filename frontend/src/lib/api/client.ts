@@ -60,16 +60,14 @@ function onRefreshFailed(error: unknown) {
 // 📤 REQUEST INTERCEPTOR
 // ============================================
 
+// ✅ SECURITY FIX: No longer need to manually set Authorization header
+// Tokens are sent automatically via httpOnly cookies by browser
+// withCredentials: true ensures cookies are included in requests
+
 api.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
-    // Get token from localStorage
-    const token =
-      typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
-
-    if (token && config.headers) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-
+    // No need to manually add Authorization header
+    // Browser automatically sends access_token cookie with all requests
     return config;
   },
   (error: AxiosError) => Promise.reject(error)
@@ -128,10 +126,9 @@ api.interceptors.response.use(
 
         return new Promise((resolve, reject) => {
           subscribeTokenRefresh(
-            (token: string) => {
-              if (originalRequest.headers) {
-                originalRequest.headers.Authorization = `Bearer ${token}`;
-              }
+            () => {
+              // ✅ SECURITY FIX: No need to set Authorization header
+              // Cookie is sent automatically
               resolve(api(originalRequest));
             },
             (error: unknown) => {
@@ -150,9 +147,9 @@ api.interceptors.response.use(
       try {
         console.log("[API Client] 🔄 Access token expired, refreshing...");
 
-        // ✅ Call /refresh endpoint (refresh_token sent via HttpOnly cookie automatically)
+        // ✅ SECURITY FIX: Call /refresh endpoint (tokens sent/received via httpOnly cookies)
         const { data } = await axios.post<{
-          access_token: string;
+          access_token: string; // Kept in response for backwards compatibility
           user: {
             id: number;
             username: string;
@@ -164,47 +161,25 @@ api.interceptors.response.use(
           `${API_BASE_URL}/api/auth/refresh`,
           {},
           {
-            withCredentials: true, // ✅ Important: Send HttpOnly cookie
+            withCredentials: true, // ✅ Important: Send refresh_token cookie
           }
         );
 
-        const newAccessToken = data.access_token;
+        // ✅ SECURITY FIX: No need to update localStorage
+        // New access_token is already set in httpOnly cookie by backend
 
-        // Update localStorage
-        localStorage.setItem("access_token", newAccessToken);
-
-        // Update Zustand store dynamically (avoid circular dependency)
-        // Note: We only update the token, not the user data, since refresh endpoint
-        // returns partial user data (missing status, avatar_url, etc.)
-        // The existing user data in store is still valid and will be refetched if needed
-        try {
-          const { useAuthStore } = await import("@/lib/stores/auth.store");
-          const currentState = useAuthStore.getState();
-          if (currentState.user) {
-            // Only update token if user exists in store
-            useAuthStore.setState({ token: newAccessToken });
-          }
-        } catch (importError) {
-          console.warn(
-            "[API Client] Failed to update auth store:",
-            importError
-          );
-        }
-
-        console.log("[API Client] ✅ Token refreshed successfully");
+        console.log("[API Client] ✅ Token refreshed successfully (via httpOnly cookie)");
 
         // ========================================
         // STEP 5: NOTIFY QUEUED REQUESTS
         // ========================================
         isRefreshing = false;
-        onRefreshed(newAccessToken);
+        onRefreshed(""); // Pass empty string since we don't use token value anymore
 
         // ========================================
         // STEP 6: RETRY ORIGINAL REQUEST
         // ========================================
-        if (originalRequest.headers) {
-          originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
-        }
+        // No need to set Authorization header - cookie is sent automatically
         return api(originalRequest);
       } catch (refreshError) {
         console.error("[API Client] ❌ Refresh failed:", refreshError);
@@ -215,9 +190,7 @@ api.interceptors.response.use(
         isRefreshing = false;
         onRefreshFailed(refreshError);
 
-        // Clear auth state
-        localStorage.removeItem("access_token");
-
+        // ✅ SECURITY FIX: Clear auth state (cookies are cleared by redirect/middleware)
         try {
           const { useAuthStore } = await import("@/lib/stores/auth.store");
           useAuthStore.getState().logout();

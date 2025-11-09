@@ -25,7 +25,6 @@ export function useAuth() {
 
   const {
     user: userFromStore,
-    token,
     isAuthenticated,
     setAuth,
     logout: logoutStore,
@@ -56,12 +55,12 @@ export function useAuth() {
       return loginRes.data;
     },
     onSuccess: async (loginResponse: LoginResponse) => {
-      // <-- Sửa 3: Nhận LoginResponse
+      // ✅ SECURITY FIX: Token is now in httpOnly cookie (set by backend)
+      // We only need to store user info in Zustand
 
-      // ✅ Sửa 4: Destructure trực tiếp
-      const { access_token, user } = loginResponse;
+      const { user } = loginResponse;
 
-      setAuth(user, access_token);
+      setAuth(user); // No longer pass token
 
       toast.success("Login successful!");
 
@@ -116,13 +115,11 @@ export function useAuth() {
   >({
     queryKey: ["auth", "me"],
     queryFn: async () => {
-      if (!useAuthStore.getState().token) {
-        throw new Error("No token available");
-      }
+      // ✅ SECURITY FIX: Token is in httpOnly cookie, no need to check localStorage
       const { data } = await api.get<MeResponse>(API_ENDPOINTS.USERS.ME);
       return data;
     },
-    enabled: isAuthenticated && !!token,
+    enabled: isAuthenticated, // Only check if user is marked as authenticated
     staleTime: 5 * 60 * 1000,
     gcTime: 15 * 60 * 1000,
     retry: 1,
@@ -387,7 +384,7 @@ export function useAuth() {
 
   return {
     user: currentUser ?? userFromStore,
-    isAuthenticated: isAuthenticated && !!token && !isUserError,
+    isAuthenticated: isAuthenticated && !isUserError, // ✅ SECURITY FIX: No longer check token from localStorage
     isLoading,
     login: loginMutation.mutate,
     loginAsync: loginMutation.mutateAsync,

@@ -1,33 +1,159 @@
 // src/middleware.ts
+/**
+ * 🔒 SERVER-SIDE AUTHENTICATION MIDDLEWARE
+ *
+ * ✅ SECURITY FIX: Prevents Client-Side Auth Guard vulnerability
+ *
+ * This middleware runs on the server BEFORE any page is rendered, ensuring:
+ * 1. Unauthorized users NEVER receive HTML/data from protected pages
+ * 2. Authentication is verified using httpOnly cookies (not localStorage)
+ * 3. Role-based access control (RBAC) is enforced server-side
+ *
+ * IMPORTANT: This middleware MUST run before Server Components render,
+ * otherwise sensitive data could leak to unauthorized users.
+ */
+
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { decodeJWT, isTokenExpired } from "@/lib/auth/jwt-decode";
 
-// ⚠️ NOTE: Middleware runs on the server and cannot access localStorage
-// Auth protection is handled by client-side guards in DashboardLayout
-// This middleware is kept for future cookie-based auth if needed
+// ============================================
+// 🛣️ ROUTE CONFIGURATION
+// ============================================
+
+/**
+ * Public routes that don't require authentication
+ */
+const PUBLIC_ROUTES = [
+  "/login",
+  "/register",
+  "/forgot-password",
+  "/reset-password",
+];
+
+/**
+ * Admin-only routes (requires admin or manager role)
+ */
+const ADMIN_ROUTES = ["/admin"];
+
+/**
+ * Protected routes that require authentication
+ */
+const PROTECTED_ROUTES = ["/dashboard", "/profile", "/settings"];
+
+// ============================================
+// 🔐 MIDDLEWARE LOGIC
+// ============================================
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // For now, we'll just allow all requests to pass through
-  // Client-side auth guards will handle redirects
-  console.log(
-    `[Middleware] Allowing access to ${pathname} (client-side auth guard will handle protection).`
-  );
+  // ========================================
+  // STEP 1: Check if route requires auth
+  // ========================================
+
+  const isPublicRoute = PUBLIC_ROUTES.some((route) => pathname.startsWith(route));
+  const isAdminRoute = ADMIN_ROUTES.some((route) => pathname.startsWith(route));
+  const isProtectedRoute =
+    PROTECTED_ROUTES.some((route) => pathname.startsWith(route)) || isAdminRoute;
+
+  // Allow public routes without auth check
+  if (isPublicRoute) {
+    console.log(`[Middleware] Public route: ${pathname}`);
+    return NextResponse.next();
+  }
+
+  // ========================================
+  // STEP 2: Get access_token from httpOnly cookie
+  // ========================================
+
+  const accessToken = request.cookies.get("access_token")?.value;
+
+  if (!accessToken) {
+    console.warn(`[Middleware] ❌ No access token for protected route: ${pathname}`);
+
+    // Redirect to login with return URL
+    const loginUrl = new URL("/login", request.url);
+    loginUrl.searchParams.set("redirect", pathname);
+    return NextResponse.redirect(loginUrl);
+  }
+
+  // ========================================
+  // STEP 3: Decode and validate token
+  // ========================================
+
+  const payload = decodeJWT(accessToken);
+
+  if (!payload) {
+    console.warn(`[Middleware] ❌ Invalid token format for: ${pathname}`);
+
+    // Clear invalid cookie and redirect
+    const response = NextResponse.redirect(new URL("/login", request.url));
+    response.cookies.delete("access_token");
+    return response;
+  }
+
+  // Check if token is expired
+  if (isTokenExpired(accessToken)) {
+    console.warn(`[Middleware] ❌ Expired token for: ${pathname}`);
+
+    // Clear expired cookie and redirect
+    const response = NextResponse.redirect(new URL("/login", request.url));
+    response.cookies.delete("access_token");
+    return response;
+  }
+
+  // ========================================
+  // STEP 4: Role-based access control (RBAC)
+  // ========================================
+
+  if (isAdminRoute) {
+    const userRole = payload.role;
+
+    if (userRole !== "admin" && userRole !== "manager") {
+      console.warn(
+        `[Middleware] ❌ Unauthorized role '${userRole}' for admin route: ${pathname}`
+      );
+
+      // Redirect to dashboard (unauthorized for admin pages)
+      return NextResponse.redirect(new URL("/dashboard", request.url));
+    }
+
+    console.log(`[Middleware] ✅ Admin access granted for role '${userRole}': ${pathname}`);
+  }
+
+  // ========================================
+  // STEP 5: Redirect authenticated users from public pages
+  // ========================================
+
+  // If user is logged in and tries to access login page, redirect to dashboard
+  if (pathname === "/login" || pathname === "/register") {
+    console.log(`[Middleware] Redirecting authenticated user from ${pathname} to /dashboard`);
+    return NextResponse.redirect(new URL("/dashboard", request.url));
+  }
+
+  // ========================================
+  // STEP 6: Allow access
+  // ========================================
+
+  console.log(`[Middleware] ✅ Access granted: ${pathname} (user: ${payload.sub})`);
   return NextResponse.next();
 }
 
-// Cấu hình Matcher: Áp dụng middleware cho các route nào
+// ============================================
+// 🎯 MATCHER CONFIGURATION
+// ============================================
+
 export const config = {
   matcher: [
     /*
      * Match all request paths except for the ones starting with:
-     * - api (API routes)
+     * - api (API routes - handled by backend)
      * - _next/static (static files)
      * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     * - public folder content (implicitly excluded by pattern)
+     * - favicon.ico, robots.txt, sitemap.xml (public files)
+     * - public folder content (images, etc.)
      */
-    "/((?!api|_next/static|_next/image|favicon.ico).*)",
+    "/((?!api|_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml|.*\\.png|.*\\.jpg|.*\\.jpeg|.*\\.svg|.*\\.gif).*)",
   ],
 };

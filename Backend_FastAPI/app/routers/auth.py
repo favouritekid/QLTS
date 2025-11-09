@@ -133,8 +133,10 @@ async def login_for_access_token(
         raise HTTPException(status_code=500, detail="Could not process tokens")
 
     # 2. Tạo Access Token, truyền refresh_jti vào
+    # ✅ SECURITY FIX: Embed user_id and role in JWT for middleware authorization
     access_token = security.create_access_token(
-        data={"sub": user.username}, refresh_jti=refresh_jti
+        data={"sub": user.username, "user_id": user.id, "role": user.role},
+        refresh_jti=refresh_jti,
     )
     access_jti, access_ttl = security.decode_token_for_invalidation(access_token)
 
@@ -255,7 +257,7 @@ async def login_for_access_token(
 
     response = JSONResponse(
         content={
-            "access_token": access_token,
+            "access_token": access_token,  # Keep for backwards compatibility
             "token_type": "bearer",
             "user": {
                 "id": user.id,
@@ -267,6 +269,18 @@ async def login_for_access_token(
         },
         status_code=200,
     )
+
+    # ✅ SECURITY FIX: Set access_token in httpOnly cookie
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        secure=settings.APP_ENV == "production",
+        samesite="lax",  # Allow cookie to be sent on navigation from external sites
+        max_age=int(access_ttl) if access_ttl else settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        path="/",  # Available to all routes (middleware needs to read it)
+    )
+
     response.set_cookie(
         key="refresh_token",
         value=refresh_token,
@@ -366,6 +380,12 @@ async def logout(
                 error=str(session_error),
             )
 
+    # ✅ SECURITY FIX: Delete both cookies
+    response.delete_cookie(
+        key="access_token",
+        path="/",
+        samesite="lax",
+    )
     response.delete_cookie(
         key="refresh_token",
         path="/api",  # ✅ FIX: Changed from "/api/auth" to "/api" to match set_cookie path
@@ -667,8 +687,10 @@ async def refresh_access_token(
                     )
 
                 # 2. Tạo Access Token MỚI, truyền new_refresh_jti vào
+                # ✅ SECURITY FIX: Embed user_id and role in JWT for middleware authorization
                 new_access_token = security.create_access_token(
-                    data={"sub": username}, refresh_jti=new_refresh_jti
+                    data={"sub": username, "user_id": user.id, "role": user.role},
+                    refresh_jti=new_refresh_jti,
                 )
                 new_access_jti, _ = security.decode_token_for_invalidation(
                     new_access_token
@@ -735,7 +757,7 @@ async def refresh_access_token(
                 # ✅ FIX-4: Add user info to refresh response for auto-refresh mechanism
                 response = JSONResponse(
                     content={
-                        "access_token": new_access_token,
+                        "access_token": new_access_token,  # Keep for backwards compatibility
                         "token_type": "bearer",
                         "user": {
                             "id": user.id,
@@ -747,6 +769,19 @@ async def refresh_access_token(
                     },
                     status_code=200,
                 )
+
+                # ✅ SECURITY FIX: Set new access_token in httpOnly cookie
+                new_access_ttl = settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+                response.set_cookie(
+                    key="access_token",
+                    value=new_access_token,
+                    httponly=True,
+                    secure=settings.APP_ENV == "production",
+                    samesite="lax",
+                    max_age=int(new_access_ttl),
+                    path="/",
+                )
+
                 response.set_cookie(
                     key="refresh_token",
                     value=new_refresh_token,
