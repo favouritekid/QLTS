@@ -497,7 +497,8 @@ class CasbinPolicyService:
 
         # CHỈ LẤY CÁC VAI TRÒ (VÀI CHỤC ROLES)
         # This returns only roles, not individual users - preventing DoS
-        all_roles = await self.enforcer.get_all_roles()
+        # Note: get_all_roles() is synchronous in pycasbin
+        all_roles = self.enforcer.get_all_roles()
 
         # CHỈ LẶP QUA CÁC VAI TRÒ
         # Casbin's enforce() automatically handles role inheritance
