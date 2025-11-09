@@ -95,6 +95,7 @@ from .user import (
     LoginSchema,
     RefreshTokenRequest,
     ResetPasswordSchema,
+    SyncUsersRequest,
     Token,
     TokenData,
     User,
