@@ -203,8 +203,10 @@ async def get_user_auth(client, username: str, password: str) -> tuple[str, dict
 
     Returns:
         tuple: (access_token, cookies) for backwards compatibility testing
-        - access_token: For auth dict method (legacy)
+        - access_token: For auth dict method (legacy) - extracted from cookie
         - cookies: For httpOnly cookie method (preferred, secure)
+
+    Note: After httpOnly cookie migration, tokens are ONLY in cookies, not in response body.
     """
     from httpx import AsyncClient
 
@@ -213,14 +215,15 @@ async def get_user_auth(client, username: str, password: str) -> tuple[str, dict
     if login_res.status_code != 200:
         pytest.fail(f"Login failed: {login_res.text}")
 
-    # Return both: token (for backwards compat tests) and cookies (for new tests)
-    # Note: After migration, access_token may not be in JSON response body
+    # Get cookies (tokens are here after httpOnly migration)
     cookies = dict(login_res.cookies)
 
-    # Try to get token from response body (backwards compatibility)
-    # If not there, extract from cookie (for auth dict tests)
-    response_data = login_res.json()
-    access_token = response_data.get("access_token") or cookies.get("access_token", "")
+    # ✅ FIX-5: After httpOnly cookie migration, tokens are ONLY in cookies
+    # Extract access_token from cookie for legacy auth dict tests
+    access_token = cookies.get("access_token", "")
+
+    if not access_token:
+        pytest.fail("access_token cookie not found after login")
 
     return access_token, cookies
 

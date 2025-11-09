@@ -255,9 +255,11 @@ async def login_for_access_token(
         )
         raise HTTPException(status_code=500, detail="Could not save session")
 
+    # ✅ SECURITY FIX: Tokens are ONLY in httpOnly cookies (not in response body)
+    # This prevents XSS attacks from stealing tokens via JavaScript
     response = JSONResponse(
         content={
-            "access_token": access_token,  # Keep for backwards compatibility
+            # "access_token": access_token,  # REMOVED - httpOnly cookies only
             "token_type": "bearer",
             "user": {
                 "id": user.id,
@@ -755,9 +757,10 @@ async def refresh_access_token(
                 log.info("✅ Token rotation completed successfully", user_id=user.id)
 
                 # ✅ FIX-4: Add user info to refresh response for auto-refresh mechanism
+                # ✅ FIX-5: Tokens are ONLY in httpOnly cookies (not in response body)
                 response = JSONResponse(
                     content={
-                        "access_token": new_access_token,  # Keep for backwards compatibility
+                        # "access_token": new_access_token,  # REMOVED - httpOnly cookies only
                         "token_type": "bearer",
                         "user": {
                             "id": user.id,
