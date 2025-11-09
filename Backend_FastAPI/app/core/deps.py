@@ -1,9 +1,9 @@
 # app/core/deps.py
-from typing import List
+from typing import List, Optional
 
 import casbin
 import structlog
-from fastapi import Depends, Path, Request
+from fastapi import Cookie, Depends, Header, Path, Request
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,19 +18,47 @@ from ..utils.exceptions import (
 
 log = structlog.get_logger(__name__)
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+# ✅ SECURITY FIX: Keep OAuth2 scheme for backwards compatibility, but make it optional
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
 
 async def get_current_user(
     request: Request,  # ← PHASE 2: Add request to access enforcer
-    token: str = Depends(oauth2_scheme),
+    access_token_cookie: Optional[str] = Cookie(None, alias="access_token"),
+    authorization: Optional[str] = Header(None),
+    token_from_oauth: Optional[str] = Depends(oauth2_scheme),
     db: AsyncSession = Depends(database.get_db)
 ) -> models.User:
     """
-    ✅ FIXED: Dependency để lấy user hiện tại từ JWT token.
-    Kiểm tra session (r_jti) và blacklist.
+    ✅ SECURITY FIX: Dependency to get current user from JWT token.
+
+    Priority for token source (most secure first):
+    1. httpOnly cookie (access_token) - RECOMMENDED for browser requests
+    2. Authorization header (fallback for API clients & backwards compatibility)
+
+    Checks: session validity (r_jti), blacklist, and user status.
     """
     credentials_exception = InvalidToken(detail="Could not validate credentials")
+
+    # === ✅ SECURITY FIX: Read token from httpOnly cookie first ===
+    token = None
+    token_source = None
+
+    if access_token_cookie:
+        token = access_token_cookie
+        token_source = "cookie"
+    elif authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ")[1]
+        token_source = "header"
+    elif token_from_oauth:
+        token = token_from_oauth
+        token_source = "oauth_scheme"
+
+    if not token:
+        log.warning("No authentication token provided (no cookie, header, or oauth)")
+        raise credentials_exception
+
+    log.debug(f"Token source: {token_source}")
 
     try:
         # ✅ BƯỚC 3: SỬA HÀM get_current_user

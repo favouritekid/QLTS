@@ -4,7 +4,6 @@
 import { useEffect, useRef } from "react";
 import { useAuthStore } from "@/lib/stores/auth.store";
 import { socketService } from "@/lib/socket/client";
-import { getRefreshJtiFromToken } from "@/lib/utils/jwt";
 import { toast } from "sonner";
 import { useAddNotification } from "@/hooks/useNotifications";
 import { useNotificationPreferences } from "@/hooks/useNotificationPreferences";
@@ -17,13 +16,10 @@ import { useQueryClient } from "@tanstack/react-query";
  * Quản lý kết nối Socket.IO và lắng nghe các sự kiện auth toàn cục.
  */
 export function SocketHandler() {
-  const { token, logout } = useAuthStore();
+  const { isAuthenticated, logout } = useAuthStore();
   const addNotification = useAddNotification();
   const { data: preferences } = useNotificationPreferences();
   const queryClient = useQueryClient();
-
-  // Lưu trữ JTI của trình duyệt hiện tại
-  const myJti = useRef<string | null>(null);
 
   // ✅ CẢI TIẾN: Dùng ref cho hàm logout để tránh "stale closure"
   const logoutRef = useRef(logout);
@@ -31,50 +27,51 @@ export function SocketHandler() {
     logoutRef.current = logout;
   }, [logout]);
 
-  // 1. Quản lý Kết nối / Ngắt kết nối
+  // ✅ SECURITY FIX: Manage Socket.io connection based on authentication state
+  // No longer tracks JTI or token - backend reads auth from httpOnly cookies
   useEffect(() => {
-    if (token) {
-      // Khi có token (đăng nhập)
-      myJti.current = getRefreshJtiFromToken(token);
-      console.log("[SocketHandler] My JTI:", myJti.current);
+    if (isAuthenticated) {
+      // When authenticated, connect Socket.io (cookies sent automatically)
+      console.log("[SocketHandler] User authenticated, connecting Socket.io...");
       socketService.connect();
     } else {
-      // Khi không có token (đăng xuất)
+      // When not authenticated, disconnect
+      console.log("[SocketHandler] User not authenticated, disconnecting Socket.io...");
       socketService.disconnect();
-      myJti.current = null;
     }
 
     // Cleanup khi component unmount
     return () => {
       socketService.disconnect();
     };
-  }, [token]); // Chỉ chạy lại khi `token` thay đổi
+  }, [isAuthenticated]); // Chạy lại khi `isAuthenticated` thay đổi
 
   // 2. Lắng nghe sự kiện
   useEffect(() => {
     const socket = socketService.getSocket();
     if (!socket) {
-      // Socket chưa sẵn sàng (ví dụ: token đến chậm),
-      // effect [token] ở trên sẽ chạy và kích hoạt lại effect này
+      // Socket chưa sẵn sàng
+      // effect [isAuthenticated] ở trên sẽ chạy và kích hoạt lại effect này
       return;
     }
 
-    // ✅ CẢI TIẾN: Vấn đề #6 - Dùng event `logout_confirmed`
-    // Lắng nghe sự kiện "thu hồi batch"
+    // ✅ SECURITY FIX: Simplified force logout handlers
+    // Backend emits to user_room_{user_id}, so all sessions receive the event
+    // No need to track JTI client-side - backend manages session invalidation
+
+    // Lắng nghe sự kiện "thu hồi batch" (specific sessions revoked)
     const handleForceLogoutBatch = (data: { revoked_jtis: string[] }) => {
       console.log("[SocketHandler] Received 'force_logout_batch'", data);
 
-      if (myJti.current && data.revoked_jtis.includes(myJti.current)) {
-        toast.error("Phiên của bạn đã bị thu hồi", {
-          description: "Đăng xuất tự động...",
-          duration: 5000,
-        });
+      toast.error("Phiên của bạn đã bị thu hồi", {
+        description: "Đăng xuất tự động...",
+        duration: 5000,
+      });
 
-        // Gửi xác nhận về server
-        socket.emit("logout_confirmed", { jti: myJti.current });
+      // Gửi xác nhận về server
+      socket.emit("logout_confirmed", {});
 
-        logoutRef.current(); // Dùng ref để gọi logout
-      }
+      logoutRef.current(); // Dùng ref để gọi logout
     };
 
     // Lắng nghe sự kiện "thu hồi tất cả" (ví dụ: đổi mật khẩu)
@@ -86,7 +83,7 @@ export function SocketHandler() {
       });
 
       // Gửi xác nhận về server
-      socket.emit("logout_confirmed", { jti: myJti.current, reason: data.reason });
+      socket.emit("logout_confirmed", { reason: data.reason });
 
       logoutRef.current(); // Dùng ref
     };
@@ -185,7 +182,8 @@ export function SocketHandler() {
       socket.off("notification", handleNewNotification);
       socket.off("data_updated", handleDataUpdated);
     };
-  }, [token, addNotification, preferences, queryClient]); // Chạy lại nếu `token`, `addNotification`, `preferences`, hoặc `queryClient` thay đổi
+    // ✅ SECURITY FIX: Removed 'token' from dependencies, now use 'isAuthenticated'
+  }, [isAuthenticated, addNotification, preferences, queryClient]);
 
   return null; // Không render gì cả
 }

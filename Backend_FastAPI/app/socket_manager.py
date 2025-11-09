@@ -94,6 +94,27 @@ def sanitize_token(token: str) -> str:
     return f"{token[:8]}..." if token and len(token) > 8 else "None"
 
 
+# === ✅ SECURITY FIX: Parse cookies from Socket.io environ ===
+def parse_cookies(cookie_string: str) -> dict[str, str]:
+    """
+    Parse HTTP Cookie header string into a dictionary.
+
+    Example: "access_token=abc123; refresh_token=xyz789"
+    Returns: {"access_token": "abc123", "refresh_token": "xyz789"}
+    """
+    cookies = {}
+    if not cookie_string:
+        return cookies
+
+    for cookie in cookie_string.split(";"):
+        cookie = cookie.strip()
+        if "=" in cookie:
+            key, value = cookie.split("=", 1)
+            cookies[key.strip()] = value.strip()
+
+    return cookies
+
+
 async def _get_user_from_token(token: str) -> models.User:
     """
     Hàm helper xác thực token cho WebSocket (V6 - with user blacklist check).
@@ -179,10 +200,29 @@ async def _get_user_from_token(token: str) -> models.User:
 
 @sio.event
 async def connect(sid, environ, auth):
-    """Sự kiện connect (V5) - Tích hợp Rate Limiting Redis LUA."""
+    """
+    Sự kiện connect (V6) - Cookie-based Authentication.
+
+    ✅ SECURITY FIX: Now reads access_token from httpOnly cookies instead of auth dict.
+    This ensures consistent authentication with HTTP requests and prevents XSS attacks.
+
+    Priority:
+    1. Read from httpOnly cookie (access_token) - RECOMMENDED
+    2. Fallback to auth dict (backwards compatibility during migration)
+    """
     async with track_event_latency("connect"):  # ✅ Theo dõi latency
         client_ip = environ.get("REMOTE_ADDR") or "unknown_ip"
-        token = auth.get("token")
+
+        # === ✅ SECURITY FIX: Read token from httpOnly cookie ===
+        cookie_string = environ.get("HTTP_COOKIE", "")
+        cookies = parse_cookies(cookie_string)
+        token = cookies.get("access_token")
+        token_source = "cookie"
+
+        # Fallback to auth dict for backwards compatibility
+        if not token:
+            token = auth.get("token")
+            token_source = "auth_dict"
 
         # === ✅ CẢI TIẾN: Rate Limiting bằng Redis LUA ===
         if not await check_rate_limit(client_ip):
@@ -192,7 +232,7 @@ async def connect(sid, environ, auth):
 
         try:
             if not token:
-                raise ConnectionRefusedError("Authentication failed: No token")
+                raise ConnectionRefusedError("Authentication failed: No token in cookie or auth")
 
             user = await _get_user_from_token(token)
 
@@ -208,6 +248,7 @@ async def connect(sid, environ, auth):
                 user_id=user.id,
                 username=user.username,
                 room=room_name,
+                token_source=token_source,  # ✅ Log source for monitoring
                 token=sanitize_token(token),  # ✅ Log an toàn
             )
 
