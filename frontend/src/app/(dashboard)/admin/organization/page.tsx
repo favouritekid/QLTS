@@ -141,13 +141,14 @@ export default function OrganizationManagementPage() {
   // COMPUTED DATA
   // =====================================================================
 
-  // Flatten and filter units
-  const flattenedUnits = flattenOrganizationTree(units);
+  // Flatten and filter units (only root units to avoid duplicates)
+  const rootUnits = units.filter(u => u.parent_id === null);
+  const flattenedUnits = flattenOrganizationTree(rootUnits);
   const filteredUnits = flattenedUnits.filter((item) =>
     item.unit.name.toLowerCase().includes(unitSearchQuery.toLowerCase())
   );
 
-  // Get all majors and filter
+  // Get all majors and filter (only from root units to avoid duplicates)
   const allMajors: Major[] = [];
   const collectMajors = (units: OrganizationUnit[]) => {
     units.forEach((unit) => {
@@ -159,7 +160,7 @@ export default function OrganizationManagementPage() {
       }
     });
   };
-  collectMajors(units);
+  collectMajors(rootUnits);
 
   const filteredMajors = allMajors.filter(
     (major) =>
