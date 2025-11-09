@@ -942,9 +942,12 @@ async def update_existing_user(
     # Tạo schema UserUpdate CHỈ với các dữ liệu đã được xác thực
     user_in = schemas.UserUpdate(**update_dict)
 
-    # Truyền avatar vào hàm service
+    # ← PHASE 1: Lấy enforcer từ app state để sync Casbin khi role thay đổi
+    enforcer = request.app.state.enforcer
+
+    # Truyền avatar và enforcer vào hàm service
     updated_user = await services.user_service.update_user(
-        db, db_user, user_in, avatar_file=avatar
+        db, db_user, user_in, enforcer=enforcer, avatar_file=avatar
     )
 
     # Log activity
@@ -1129,10 +1132,161 @@ async def stream_export_users_csv(
     
     # 3. Trả về StreamingResponse
     return StreamingResponse(
-        csv_streamer, 
-        headers=headers, 
+        csv_streamer,
+        headers=headers,
         media_type="text/csv"
     )
+
+
+# ← PHASE 3: Detection endpoint - check DB/Casbin sync status
+@router.get(
+    "/users/sync-status",
+    tags=["Admin - User Management"],
+    summary="Check sync status between DB and Casbin roles"
+)
+async def get_sync_status(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep
+):
+    """
+    (Admin only) Kiểm tra tình trạng đồng bộ giữa DB (user.role) và Casbin (grouping policies).
+    Trả về số lượng user đã sync, chưa sync, và chi tiết các user bị lệch.
+    """
+    enforcer = request.app.state.enforcer
+
+    # Get all users
+    result = await db.execute(select(models.User))
+    users = result.scalars().all()
+
+    mismatched_users = []
+    synced_count = 0
+
+    for user in users:
+        casbin_role = await services.user_service.get_highest_priority_role_from_casbin(
+            enforcer, user.id
+        )
+
+        if user.role != casbin_role:
+            casbin_roles = await enforcer.get_roles_for_user(f"user:{user.id}")
+            mismatched_users.append({
+                "user_id": user.id,
+                "username": user.username,
+                "db_role": user.role,
+                "casbin_role": casbin_role,
+                "all_casbin_roles": casbin_roles
+            })
+        else:
+            synced_count += 1
+
+    log.info(
+        "Sync status check completed",
+        admin_id=current_admin.id,
+        total=len(users),
+        synced=synced_count,
+        out_of_sync=len(mismatched_users)
+    )
+
+    return {
+        "total_users": len(users),
+        "synced_count": synced_count,
+        "out_of_sync_count": len(mismatched_users),
+        "mismatched_users": mismatched_users
+    }
+
+
+# ← PHASE 4: Remediation endpoint - manually sync DB to match Casbin
+@router.post(
+    "/users/sync",
+    tags=["Admin - User Management"],
+    summary="Manually sync DB roles to match Casbin (source of truth)"
+)
+async def sync_users(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+    user_ids: Optional[List[int]] = Body(None)  # None = sync all users
+):
+    """
+    (Admin only) Đồng bộ role từ Casbin về DB cho tất cả users hoặc một nhóm users cụ thể.
+    Casbin được coi là source of truth (nguồn chân lý).
+
+    - `user_ids`: Danh sách ID users cần sync. Nếu None hoặc rỗng, sync tất cả users.
+    """
+    enforcer = request.app.state.enforcer
+
+    # Determine which users to sync
+    if user_ids:
+        result = await db.execute(
+            select(models.User).where(models.User.id.in_(user_ids))
+        )
+    else:
+        result = await db.execute(select(models.User))
+
+    users = result.scalars().all()
+
+    synced_count = 0
+    failed_users = []
+
+    for user in users:
+        try:
+            casbin_role = await services.user_service.get_highest_priority_role_from_casbin(
+                enforcer, user.id
+            )
+
+            if user.role != casbin_role:
+                old_role = user.role
+                user.role = casbin_role
+                db.add(user)
+                synced_count += 1
+                log.info(
+                    "User role synced",
+                    user_id=user.id,
+                    old_role=old_role,
+                    new_role=casbin_role
+                )
+        except Exception as e:
+            log.error(
+                "Failed to sync user",
+                user_id=user.id,
+                error=str(e),
+                exc_info=True
+            )
+            failed_users.append({
+                "user_id": user.id,
+                "username": user.username,
+                "error": str(e)
+            })
+
+    await db.commit()
+
+    # Log activity
+    await activity_service.log_activity_from_request(
+        db=db,
+        request=request,
+        actor_id=current_admin.id,
+        action="sync_users",
+        entity_type="user",
+        entity_id=None,
+        details={
+            "synced_count": synced_count,
+            "failed_count": len(failed_users),
+            "user_ids": user_ids or "all"
+        }
+    )
+
+    log.info(
+        "User sync completed",
+        admin_id=current_admin.id,
+        synced=synced_count,
+        failed=len(failed_users)
+    )
+
+    return {
+        "synced_count": synced_count,
+        "failed_count": len(failed_users),
+        "failed_users": failed_users
+    }
 
 
 # ===============================================================

@@ -22,7 +22,9 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 
 async def get_current_user(
-    token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(database.get_db)
+    request: Request,  # ← PHASE 2: Add request to access enforcer
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(database.get_db)
 ) -> models.User:
     """
     ✅ FIXED: Dependency để lấy user hiện tại từ JWT token.
@@ -187,6 +189,39 @@ async def get_current_user(
                     error=str(db_error),
                 )
                 raise credentials_exception
+
+        # ← PHASE 2: Auto-sync DB role to match Casbin (source of truth)
+        try:
+            enforcer = request.app.state.enforcer
+            casbin_role = await services.user_service.get_highest_priority_role_from_casbin(
+                enforcer, user.id
+            )
+
+            if user.role != casbin_role:
+                log.warning(
+                    "DB/Casbin role mismatch detected! Auto-syncing DB to Casbin.",
+                    user_id=user.id,
+                    db_role=user.role,
+                    casbin_role=casbin_role
+                )
+                # Update DB to match Casbin (source of truth)
+                user.role = casbin_role
+                db.add(user)
+                await db.commit()
+                await db.refresh(user)
+                log.info(
+                    "DB role auto-synced successfully",
+                    user_id=user.id,
+                    new_role=casbin_role
+                )
+        except Exception as e_sync:
+            # Don't fail auth if sync fails, just log it
+            log.error(
+                "Auto-sync failed, but continuing with authentication",
+                user_id=user.id,
+                error=str(e_sync),
+                exc_info=True
+            )
 
         return user
 

@@ -2,7 +2,7 @@
 "use client";
 
 import { useState } from "react";
-import { Activity, HardHat, ShieldCheck } from "lucide-react";
+import { Activity, HardHat, ShieldCheck, Database } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -11,6 +11,7 @@ import { usePolicyStatistics } from "@/hooks/usePolicies";
 import { RoleManagementWorkflowTab } from "@/components/admin/policies/RoleManagementWorkflowTab";
 import { AdvancedToolsTab } from "@/components/admin/policies/AdvancedToolsTab";
 import { AuditLogTab } from "@/components/admin/policies/AuditLogTab";
+import { SyncDashboard } from "@/components/admin/policies/SyncDashboard";
 
 export default function PolicyManagementPage() {
   const [activeTab, setActiveTab] = useState("workflow");
@@ -73,7 +74,7 @@ export default function PolicyManagementPage() {
 
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="grid w-full grid-cols-3 gap-2">
+        <TabsList className="grid w-full grid-cols-4 gap-2">
           <TabsTrigger value="workflow">
             <ShieldCheck className="mr-2 h-4 w-4" />
             Quản lý Vai trò (Workflow)
@@ -81,6 +82,10 @@ export default function PolicyManagementPage() {
           <TabsTrigger value="tools">
             <HardHat className="mr-2 h-4 w-4" />
             Công cụ Nâng cao
+          </TabsTrigger>
+          <TabsTrigger value="sync">
+            <Database className="mr-2 h-4 w-4" />
+            Đồng bộ DB/Casbin
           </TabsTrigger>
           <TabsTrigger value="audit">
             <Activity className="mr-2 h-4 w-4" />
@@ -94,6 +99,10 @@ export default function PolicyManagementPage() {
 
         <TabsContent value="tools" className="space-y-4">
           <AdvancedToolsTab />
+        </TabsContent>
+
+        <TabsContent value="sync" className="space-y-4">
+          <SyncDashboard />
         </TabsContent>
 
         <TabsContent value="audit" className="space-y-4">

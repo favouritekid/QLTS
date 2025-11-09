@@ -9,6 +9,7 @@ from fastapi import HTTPException, UploadFile
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
+import casbin  # ← PHASE 1: Import casbin
 
 from .. import models, schemas
 from ..config import settings
@@ -78,6 +79,32 @@ async def get_user_by_id(db: AsyncSession, user_id: int) -> models.User:
         raise ResourceNotFoundError(detail=f"User with id {user_id} not found.")
     # await db.refresh(user)
     return user
+
+
+# ← PHASE 2: Helper function to get highest priority role from Casbin
+async def get_highest_priority_role_from_casbin(
+    enforcer: casbin.AsyncEnforcer,
+    user_id: int
+) -> str:
+    """
+    Lấy role có độ ưu tiên cao nhất từ Casbin cho user.
+    Returns: "admin" | "manager" | "officer" | "user"
+    """
+    ROLE_PRIORITY = {
+        "role:admin": 4,
+        "role:manager": 3,
+        "role:officer": 2,
+        "role:user": 1
+    }
+
+    user_subject = f"user:{user_id}"
+    casbin_roles = await enforcer.get_roles_for_user(user_subject)
+
+    if not casbin_roles:
+        return "user"  # Default fallback
+
+    highest_role = max(casbin_roles, key=lambda r: ROLE_PRIORITY.get(r, 0))
+    return highest_role.replace("role:", "")  # Return "admin", not "role:admin"
 
 
 async def authenticate_user(
@@ -242,11 +269,18 @@ async def update_user(
     db: AsyncSession,
     db_user: models.User,
     user_in: schemas.UserUpdate,
+    enforcer: Optional[casbin.AsyncEnforcer] = None,  # ← PHASE 1: Add enforcer parameter
     avatar_file: Optional[UploadFile] = None,
 ) -> models.User:
     user_id_for_logging = db_user.id
     try:
         update_data = user_in.model_dump(exclude_unset=True)
+
+        # ← PHASE 1: Track role change BEFORE updating
+        old_db_role = db_user.role
+        new_db_role = update_data.get("role")
+        user_subject = f"user:{db_user.id}"
+        role_changed = new_db_role and new_db_role != old_db_role
 
         if "email" in update_data and update_data["email"] != db_user.email:
             existing_user = await get_user_by_email(db, update_data["email"])
@@ -260,7 +294,7 @@ async def update_user(
                 setattr(db_user, field, value)
 
         if avatar_file:
-            log.debug(  # ✅ SỬA LỖI: Xóa `await`
+            log.debug(
                 "Processing avatar update for user",
                 user_id=db_user.id,
                 filename=avatar_file.filename,
@@ -269,7 +303,7 @@ async def update_user(
                 avatar_file, old_avatar_url=db_user.avatar_url
             )
             db_user.avatar_url = new_avatar_url
-            log.info(  # ✅ SỬA LỖI: Xóa `await`
+            log.info(
                 "Avatar updated successfully for user",
                 user_id=db_user.id,
                 url=new_avatar_url,
@@ -278,10 +312,40 @@ async def update_user(
         db.add(db_user)
         await db.commit()
         await db.refresh(db_user)
+
+        # ← PHASE 1: Sync Casbin AFTER successful DB commit
+        if role_changed and enforcer:
+            log.info("Role changed in DB, syncing Casbin...",
+                       user_id=user_id_for_logging,
+                       old=old_db_role,
+                       new=new_db_role)
+            try:
+                old_casbin_role = f"role:{old_db_role}" if old_db_role else None
+                new_casbin_role = f"role:{new_db_role}"
+
+                # Remove old role grouping (if exists)
+                if old_casbin_role:
+                    await enforcer.remove_grouping_policy(user_subject, old_casbin_role)
+
+                # Add new role grouping
+                await enforcer.add_grouping_policy(user_subject, new_casbin_role)
+                await enforcer.save_policy()  # Persist to adapter
+
+                log.info("Casbin grouping policy synced successfully",
+                          user_id=user_id_for_logging,
+                          new_casbin_role=new_casbin_role)
+            except Exception as e_casbin:
+                log.error("CRITICAL: DB role updated but Casbin sync FAILED!",
+                           user_id=user_id_for_logging,
+                           error=str(e_casbin),
+                           exc_info=True)
+                # Note: DB already committed, but Casbin failed
+                # This mismatch will be fixed by Phase 2 auto-sync
+
         return db_user
     except Exception as e:
         await db.rollback()
-        log.error(  # ✅ SỬA LỖI: Xóa `await`
+        log.error(
             "Failed to update user",
             user_id=user_id_for_logging,
             error=str(e),
