@@ -28,6 +28,13 @@ class RoleAssignment(BaseModel):
     role: str = Field(..., description="Vai trò (đã có tiền tố), vd: 'role:officer'")
 
 
+class GroupingPolicyCreate(BaseModel):
+    """Schema để tạo grouping policy (kế thừa role hoặc gán role)."""
+
+    subject: str = Field(..., description="Subject, vd: 'role:support' hoặc 'user:5'")
+    parent_role: str = Field(..., description="Parent role để kế thừa, vd: 'role:user'")
+
+
 # ============================================================================
 # NEW SCHEMAS FOR POLICY MANAGEMENT SYSTEM
 # ============================================================================

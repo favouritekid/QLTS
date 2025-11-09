@@ -32,7 +32,7 @@ from ..celery_utils import process_automatic_lead_assignment_task
 from ..core import deps
 from ..services import activity_service, notification_service
 from ..routers.notifications import send_realtime_notification
-from ..schemas.permissions import PolicyCreate, RoleAssignment
+from ..schemas.permissions import PolicyCreate, RoleAssignment, GroupingPolicyCreate
 from ..services import (
     config_service,
     lead_service,
@@ -407,6 +407,133 @@ async def remove_role_from_users(
         "reassigned_to_user_count": reassigned_count,
         "failed_count": len(failed_users),
         "failed_users": failed_users,
+    }
+
+
+@router.post(
+    "/grouping-policies",
+    status_code=status.HTTP_201_CREATED,
+    tags=["Admin - Permissions"],
+)
+async def add_grouping_policy(
+    grouping: GroupingPolicyCreate,
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Add a grouping policy for role inheritance or role assignment.
+
+    This endpoint supports two use cases:
+    1. Role-to-role inheritance: g, role:support, role:user
+    2. User-to-role assignment: g, user:5, role:manager
+
+    Examples:
+        - Make role:support inherit from role:user:
+          POST /grouping-policies
+          {"subject": "role:support", "parent_role": "role:user"}
+
+        - Assign role:manager to user:5:
+          POST /grouping-policies
+          {"subject": "user:5", "parent_role": "role:manager"}
+    """
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+
+    # Add the grouping policy (g rule)
+    added = await enforcer.add_grouping_policy(grouping.subject, grouping.parent_role)
+
+    if not added:
+        raise DuplicateResourceError(
+            f"Grouping policy already exists: {grouping.subject} → {grouping.parent_role}"
+        )
+
+    # Save to database
+    await enforcer.save_policy()
+
+    # Log activity
+    await activity_service.log_activity_from_request(
+        db=db,
+        request=request,
+        action="add_grouping_policy",
+        resource_type="policy",
+        actor_id=current_admin.id,
+        resource_id=None,
+        changes={
+            "subject": grouping.subject,
+            "parent_role": grouping.parent_role,
+            "type": "grouping_policy",
+        },
+    )
+
+    log.info(
+        "Grouping policy added",
+        admin_id=current_admin.id,
+        subject=grouping.subject,
+        parent_role=grouping.parent_role,
+    )
+
+    return {
+        "detail": f"Grouping policy added: {grouping.subject} → {grouping.parent_role}",
+        "subject": grouping.subject,
+        "parent_role": grouping.parent_role,
+    }
+
+
+@router.delete(
+    "/grouping-policies",
+    status_code=status.HTTP_200_OK,
+    tags=["Admin - Permissions"],
+)
+async def delete_grouping_policy(
+    grouping: GroupingPolicyCreate,
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Remove a grouping policy.
+
+    Removes a grouping policy for either:
+    1. Role-to-role inheritance
+    2. User-to-role assignment
+    """
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+
+    # Remove the grouping policy
+    removed = await enforcer.remove_grouping_policy(grouping.subject, grouping.parent_role)
+
+    if not removed:
+        raise ResourceNotFoundError(
+            f"Grouping policy not found: {grouping.subject} → {grouping.parent_role}"
+        )
+
+    # Save to database
+    await enforcer.save_policy()
+
+    # Log activity
+    await activity_service.log_activity_from_request(
+        db=db,
+        request=request,
+        action="remove_grouping_policy",
+        resource_type="policy",
+        actor_id=current_admin.id,
+        resource_id=None,
+        changes={
+            "subject": grouping.subject,
+            "parent_role": grouping.parent_role,
+            "type": "grouping_policy",
+        },
+    )
+
+    log.info(
+        "Grouping policy removed",
+        admin_id=current_admin.id,
+        subject=grouping.subject,
+        parent_role=grouping.parent_role,
+    )
+
+    return {
+        "detail": f"Grouping policy removed: {grouping.subject} → {grouping.parent_role}"
     }
 
 

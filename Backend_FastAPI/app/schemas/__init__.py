@@ -51,6 +51,7 @@ from .permissions import (
     PolicyCreate,
     PolicyRule,
     RoleAssignment,
+    GroupingPolicyCreate,
     RoleInfo,
     RolesListResponse,
     TemplateInfo,

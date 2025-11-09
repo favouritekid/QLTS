@@ -159,3 +159,37 @@ export function useApplyTemplate() {
     },
   });
 }
+
+// Add grouping policy (role inheritance or user-role assignment)
+export function useAddGroupingPolicy() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (request: { subject: string; parent_role: string }) => {
+      const response = await api.post("/api/admin/grouping-policies", request);
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: policyKeys.all });
+      queryClient.invalidateQueries({ queryKey: activityLogsKeys.all });
+    },
+  });
+}
+
+// Remove grouping policy
+export function useDeleteGroupingPolicy() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (request: { subject: string; parent_role: string }) => {
+      const response = await api.delete("/api/admin/grouping-policies", {
+        data: request,
+      });
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: policyKeys.all });
+      queryClient.invalidateQueries({ queryKey: activityLogsKeys.all });
+    },
+  });
+}

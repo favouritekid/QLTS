@@ -22,7 +22,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import { api } from "@/lib/api/client";
 
-import { useRoles, useAddPolicy, usePolicies, policyKeys } from "@/hooks/usePolicies";
+import { useRoles, useAddPolicy, useAddGroupingPolicy, usePolicies, policyKeys } from "@/hooks/usePolicies";
 import { useQueryClient } from "@tanstack/react-query";
 import { FeaturePolicyTab } from "./FeaturePolicyTab";
 import { RoleDetailView } from "./RoleDetailView";
@@ -99,6 +99,7 @@ export function RoleManagementWorkflowTab() {
   const { data: rolesData, isLoading } = useRoles();
   const { data: policies } = usePolicies();
   const addPolicyMutation = useAddPolicy();
+  const addGroupingPolicyMutation = useAddGroupingPolicy();
   const queryClient = useQueryClient();
 
   // Fetch users when delete dialog opens
@@ -164,7 +165,7 @@ export function RoleManagementWorkflowTab() {
     }
 
     try {
-      // Create the role by adding a basic policy
+      // STEP 1: Create the role by adding a basic policy
       // This will make the role appear in the roles list
       await addPolicyMutation.mutateAsync({
         subject: roleWithPrefix,
@@ -172,7 +173,20 @@ export function RoleManagementWorkflowTab() {
         action: "GET",
       });
 
-      toast.success(`Role "${newRoleName}" created successfully`);
+      // STEP 2: Add role inheritance from role:user
+      // This ensures the new role has basic permissions (notifications, logout, change password, etc.)
+      try {
+        await addGroupingPolicyMutation.mutateAsync({
+          subject: roleWithPrefix,
+          parent_role: "role:user",
+        });
+        console.log(`✅ Role ${roleWithPrefix} now inherits from role:user`);
+      } catch (inheritError) {
+        // Log but don't fail the whole operation if inheritance already exists
+        console.warn("Could not add role inheritance (may already exist):", inheritError);
+      }
+
+      toast.success(`Role "${newRoleName}" created successfully with basic permissions`);
 
       // Close dialog and reset form
       setCreateDialogOpen(false);
