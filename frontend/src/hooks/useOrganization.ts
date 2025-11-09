@@ -117,8 +117,6 @@ export function useMajor(id: number) {
  * Create a new organization unit
  */
 export function useCreateUnit() {
-  const queryClient = useQueryClient();
-
   return useMutation<
     OrganizationUnit,
     AxiosError<ApiErrorResponse>,
@@ -237,8 +235,6 @@ export function useUpdateUnit() {
  * Delete an organization unit
  */
 export function useDeleteUnit() {
-  const queryClient = useQueryClient();
-
   return useMutation<void, AxiosError<ApiErrorResponse>, number>({
     mutationFn: async (id) => {
       await api.delete(API_ENDPOINTS.ADMIN.ORGANIZATION.DELETE_UNIT(id));
@@ -269,8 +265,6 @@ export function useDeleteUnit() {
  * Create a new major
  */
 export function useCreateMajor() {
-  const queryClient = useQueryClient();
-
   return useMutation<Major, AxiosError<ApiErrorResponse>, MajorCreate>({
     mutationFn: async (data) => {
       const response = await api.post<Major>(
@@ -301,8 +295,6 @@ export function useCreateMajor() {
  * Update an existing major
  */
 export function useUpdateMajor() {
-  const queryClient = useQueryClient();
-
   return useMutation<
     Major,
     AxiosError<ApiErrorResponse>,
@@ -337,8 +329,6 @@ export function useUpdateMajor() {
  * Delete a major
  */
 export function useDeleteMajor() {
-  const queryClient = useQueryClient();
-
   return useMutation<void, AxiosError<ApiErrorResponse>, number>({
     mutationFn: async (id) => {
       await api.delete(API_ENDPOINTS.ADMIN.ORGANIZATION.DELETE_MAJOR(id));
