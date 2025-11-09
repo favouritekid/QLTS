@@ -141,16 +141,21 @@ class TemplatesListResponse(BaseModel):
 
 
 class WhoCanAccessResponse(BaseModel):
-    """Schema for reverse permission lookup response."""
+    """
+    ✅ PATCHED FOR DoS (v15):
+    Schema for reverse permission lookup response.
+
+    Now only checks ROLES (not individual users) to prevent DoS attacks.
+    """
 
     object: str = Field(..., description="Resource path that was queried")
     action: str = Field(..., description="Action that was queried")
     allowed_subjects: List[str] = Field(
-        ..., description="List of subjects (roles/users) with access"
+        ..., description="List of roles with access (users no longer checked for DoS prevention)"
     )
-    total_count: int = Field(..., description="Number of subjects with access")
+    total_count: int = Field(..., description="Number of roles with access")
     execution_time_ms: int = Field(..., description="Query execution time in milliseconds")
-    include_users: bool = Field(..., description="Whether individual users were included")
+    include_users: bool = Field(..., description="Always False - individual users not checked (DoS prevention)")
     warning: Optional[str] = Field(None, description="Performance warning if applicable")
 
 
