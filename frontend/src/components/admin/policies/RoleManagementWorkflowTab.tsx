@@ -29,6 +29,15 @@ import { RoleDetailView } from "./RoleDetailView";
 
 type WorkflowStep = "SELECT_ROLE" | "VIEW_DETAILS" | "MANAGE_FEATURES";
 
+interface UserWithRole {
+  id: number;
+  username: string;
+  email: string;
+  full_name: string;
+  role: string;
+  casbin_roles: string[];
+}
+
 interface StepIndicatorProps {
   currentStep: WorkflowStep;
 }
@@ -92,7 +101,7 @@ export function RoleManagementWorkflowTab() {
   const [isDeletingRole, setIsDeletingRole] = useState(false);
   const [newRoleName, setNewRoleName] = useState("");
   const [newRoleDescription, setNewRoleDescription] = useState("");
-  const [usersWithRole, setUsersWithRole] = useState<any[]>([]);
+  const [usersWithRole, setUsersWithRole] = useState<UserWithRole[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [forceDelete, setForceDelete] = useState(false);
 
@@ -247,7 +256,6 @@ export function RoleManagementWorkflowTab() {
           const multiRoleUsers = usersWithRole.filter(
             (u) => u.casbin_roles && u.casbin_roles.length > 1
           ).length;
-          const singleRoleUsers = userCount - multiRoleUsers;
 
           console.log(`✅ Removed role from ${removed_count} users`);
           console.log(`  - ${multiRoleUsers} users kept their other roles`);
@@ -610,7 +618,7 @@ export function RoleManagementWorkflowTab() {
                             </div>
                             {!forceDelete && (
                               <div className="mt-2 font-medium">
-                                Bạn cần check "Force delete" bên dưới để xác nhận.
+                                Bạn cần check &quot;Force delete&quot; bên dưới để xác nhận.
                               </div>
                             )}
                             {forceDelete && (

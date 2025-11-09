@@ -82,8 +82,11 @@ export function SyncDashboard() {
       refetchStatus();
       queryClient.invalidateQueries({ queryKey: ["users"] });
     },
-    onError: (error: any) => {
-      toast.error(`Sync failed: ${error.response?.data?.detail || error.message}`);
+    onError: (error: unknown) => {
+      const errorMessage = error instanceof Error
+        ? error.message
+        : (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail || "Unknown error";
+      toast.error(`Sync failed: ${errorMessage}`);
     },
   });
 
