@@ -156,12 +156,24 @@ async def main():
             print(f"  ✓ Exists: {policy[0]} | {policy[1]} | {policy[2]}")
 
     # ==========================================
-    # STEP 5: Fix admin user grouping
+    # STEP 5: Fix admin user grouping & DB role
     # ==========================================
     print("\n📝 Checking grouping policies...")
 
+    # Remove any incorrect role mappings for user:1
+    current_user_roles = await enforcer.get_roles_for_user("user:1")
+
+    if current_user_roles:
+        print(f"  Current roles for user:1: {current_user_roles}")
+        for role in current_user_roles:
+            if role != "role:admin":
+                success = enforcer.remove_grouping_policy("user:1", role)
+                if success:
+                    print(f"  ✅ Removed incorrect mapping: user:1 → {role}")
+                    changes_made = True
+
     # Ensure user:1 → role:admin exists
-    if not await enforcer.has_grouping_policy("user:1", "role:admin"):
+    if not enforcer.has_grouping_policy("user:1", "role:admin"):
         success = await enforcer.add_grouping_policy("user:1", "role:admin")
         if success:
             print("  ✅ Added: user:1 → role:admin")
@@ -170,6 +182,22 @@ async def main():
             print("  ❌ Failed to add: user:1 → role:admin")
     else:
         print("  ✓ Exists: user:1 → role:admin")
+
+    # Fix DB role if needed
+    if admin_user and admin_user.role != "admin":
+        print(f"\n📝 Fixing DB role (currently: {admin_user.role})...")
+        async with AsyncSession(engine) as session:
+            # Refetch user in new session
+            result = await session.execute(
+                select(models.User).where(models.User.id == 1)
+            )
+            user_to_update = result.scalar_one_or_none()
+            if user_to_update:
+                user_to_update.role = "admin"
+                session.add(user_to_update)
+                await session.commit()
+                print("  ✅ Updated DB role to 'admin'")
+                changes_made = True
 
     # ==========================================
     # STEP 6: Save changes
