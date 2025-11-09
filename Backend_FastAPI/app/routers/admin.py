@@ -2488,7 +2488,13 @@ async def explain_role_permissions(
     inherited_roles = await enforcer.get_roles_for_user(role_name)
 
     # (4) LẤY CÁC POLICY TRỰC TIẾP (DIRECT) CỦA ROLE NÀY
-    direct_policies_tuples = enforcer.get_policies_for_user(role_name)
+    # Note: get_policy() là SYNC method, trả về tất cả policies
+    all_policies = enforcer.get_policy()
+    direct_policies_tuples = [
+        (p[0], p[1], p[2])
+        for p in all_policies
+        if p[0] == role_name
+    ]
 
     policies_from_template = []
     policies_from_features = []
