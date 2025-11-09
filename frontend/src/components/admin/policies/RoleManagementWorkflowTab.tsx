@@ -216,110 +216,66 @@ export function RoleManagementWorkflowTab() {
   const handleDeleteRole = async () => {
     if (!selectedRole) return;
 
-    // Check if it's a system role
+    // Check if it's a system role (client-side validation)
     const role = rolesData?.roles.find(r => r.name === selectedRole);
     if (role?.is_system_role) {
       toast.error("Cannot delete system roles");
       return;
     }
 
+    // IMPORTANT: Only block if NO force delete
+    // If force delete is checked, we proceed directly
+    const userCount = usersWithRole.length;
+    if (userCount > 0 && !forceDelete) {
+      toast.error(
+        `Cannot delete role: ${userCount} user(s) still assigned. Check "Force delete" to reassign them.`,
+        { duration: 5000 }
+      );
+      return;
+    }
+
     setIsDeletingRole(true);
+
     try {
-      // STEP 1: Check if there are users with this role
-      const userCount = usersWithRole.length;
-      console.log("👥 Users with role:", userCount);
+      // NEW ATOMIC APPROACH:
+      // Single API call that handles EVERYTHING atomically on the backend
+      // This prevents race conditions from client-side orchestration
+      console.log("🗑️ Deleting role atomically:", selectedRole);
 
-      // STEP 2: Block deletion if users exist and no force delete
-      if (userCount > 0 && !forceDelete) {
-        toast.error(
-          `Cannot delete role: ${userCount} user(s) still assigned. Check "Force delete" to reassign them.`,
-          { duration: 5000 }
-        );
-        setIsDeletingRole(false);
-        return;
-      }
+      const response = await api.delete(`/api/admin/roles/${selectedRole}`);
 
-      // STEP 3: If force delete and users exist, remove role from them
-      if (userCount > 0 && forceDelete) {
-        console.log(`🔄 Removing ${selectedRole} from ${userCount} users`);
+      const {
+        users_reassigned,
+        permission_policies_removed,
+        user_grouping_policies_removed,
+        inheritance_grouping_policies_removed,
+        total_affected_users,
+      } = response.data;
 
-        try {
-          const userIds = usersWithRole.map((u) => u.id);
-          const response = await api.post("/api/admin/roles/remove-from-users", {
-            user_ids: userIds,
-            role_to_remove: selectedRole,
-          });
+      console.log("✅ Role deleted atomically:", {
+        users_reassigned,
+        permission_policies_removed,
+        user_grouping_policies_removed,
+        inheritance_grouping_policies_removed,
+        total_affected_users,
+      });
 
-          const { removed_count, reassigned_to_user_count } = response.data;
-
-          // Count users with multiple roles
-          const multiRoleUsers = usersWithRole.filter(
-            (u) => u.casbin_roles && u.casbin_roles.length > 1
-          ).length;
-
-          console.log(`✅ Removed role from ${removed_count} users`);
-          console.log(`  - ${multiRoleUsers} users kept their other roles`);
-          console.log(`  - ${reassigned_to_user_count} users reassigned to role:user`);
-
-          if (reassigned_to_user_count > 0) {
-            toast.success(
-              `Removed role from ${removed_count} user(s): ${multiRoleUsers} kept other roles, ${reassigned_to_user_count} reassigned to 'user'`
-            );
-          } else {
-            toast.success(`Removed role from ${removed_count} user(s) who kept their other roles`);
-          }
-        } catch (error) {
-          console.error("❌ Failed to remove role from users:", error);
-          toast.error("Failed to remove role from users. Aborting deletion.");
-          setIsDeletingRole(false);
-          return;
-        }
-      }
-
-      // STEP 4: Get all policies for this role - ONLY for the selected role
-      const rolePolicies = policies?.filter(p => p.subject === selectedRole) || [];
-
-      console.log("🔍 Deleting role:", selectedRole);
-      console.log("📋 Total policies in system:", policies?.length);
-      console.log("🎯 Policies to delete for this role:", rolePolicies.length);
-      console.log("📝 Policies:", rolePolicies);
-
-      if (rolePolicies.length === 0) {
-        toast.error("No policies found for this role");
-        setDeleteDialogOpen(false);
-        setIsDeletingRole(false);
-        return;
-      }
-
-      // STEP 5: Delete each policy for THIS role only
-      let deletedCount = 0;
-      for (const policy of rolePolicies) {
-        console.log(`🗑️ Deleting policy ${deletedCount + 1}/${rolePolicies.length}:`, {
-          subject: policy.subject,
-          object: policy.object,
-          action: policy.action,
-        });
-
-        await api.delete("/api/admin/policies", {
-          data: {
-            subject: policy.subject,
-            object: policy.object,
-            action: policy.action,
-          },
-        });
-        deletedCount++;
-      }
-
-      console.log(`✅ Successfully deleted ${deletedCount} policies for role: ${selectedRole}`);
-
-      // CRITICAL: Invalidate all policy-related caches to refresh UI
+      // Invalidate all policy-related caches to refresh UI
       await queryClient.invalidateQueries({ queryKey: policyKeys.all });
 
-      // Final success message (user reassignment message already shown above)
-      if (userCount === 0) {
-        toast.success(`Role "${selectedRoleDisplayName}" deleted successfully (${deletedCount} policies removed)`);
+      // Show success message with details
+      if (total_affected_users > 0) {
+        toast.success(
+          `Role "${selectedRoleDisplayName}" deleted successfully! ` +
+          `${users_reassigned} user(s) reassigned to 'user', ` +
+          `${permission_policies_removed} permission(s) removed.`,
+          { duration: 5000 }
+        );
       } else {
-        toast.success(`Role "${selectedRoleDisplayName}" deleted with ${deletedCount} policies removed`);
+        toast.success(
+          `Role "${selectedRoleDisplayName}" deleted successfully! ` +
+          `${permission_policies_removed} permission(s) removed.`
+        );
       }
 
       // Close dialog and return to role selection
@@ -331,7 +287,12 @@ export function RoleManagementWorkflowTab() {
       setCurrentStep("SELECT_ROLE");
     } catch (error) {
       console.error("❌ Error deleting role:", error);
-      toast.error("Failed to delete role");
+
+      // Extract error message from response
+      const errorMessage = (error as { response?: { data?: { detail?: string } } })
+        ?.response?.data?.detail || "Failed to delete role";
+
+      toast.error(errorMessage, { duration: 5000 });
     } finally {
       setIsDeletingRole(false);
     }
