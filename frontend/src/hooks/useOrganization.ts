@@ -25,6 +25,9 @@ export const organizationKeys = {
   details: () => [...organizationKeys.all, "detail"] as const,
   detail: (id: number) => [...organizationKeys.details(), id] as const,
 
+  // Unit types
+  unitTypes: () => [...organizationKeys.all, "unitTypes"] as const,
+
   // Major-specific keys
   majors: () => [...organizationKeys.all, "majors"] as const,
   majorsList: (unitId?: number, search?: string) =>
@@ -51,6 +54,24 @@ export function useOrganizationUnits() {
     },
     staleTime: Infinity, // Cache forever, invalidate via Socket.IO
     gcTime: 1000 * 60 * 30, // 30 minutes in cache
+  });
+}
+
+/**
+ * Get allowed organization unit types
+ * Uses: Public endpoint, cached for 24 hours (rarely changes)
+ */
+export function useOrganizationUnitTypes() {
+  return useQuery<string[], AxiosError<ApiErrorResponse>>({
+    queryKey: organizationKeys.unitTypes(),
+    queryFn: async () => {
+      const response = await api.get<string[]>(
+        API_ENDPOINTS.ORGANIZATION.UNIT_TYPES
+      );
+      return response.data;
+    },
+    staleTime: 1000 * 60 * 60 * 24, // 24 hours
+    gcTime: 1000 * 60 * 60 * 24, // 24 hours
   });
 }
 

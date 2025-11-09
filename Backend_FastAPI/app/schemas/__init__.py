@@ -42,6 +42,7 @@ from .organization import (
     OrganizationUnit,
     OrganizationUnitCreate,
     OrganizationUnitShallow,
+    OrganizationUnitType,
     OrganizationUnitUpdate,
 )
 

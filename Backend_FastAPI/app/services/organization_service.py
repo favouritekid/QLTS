@@ -72,12 +72,43 @@ async def emit_organization_updated(
             resource_id=resource_id
         )
     except Exception as e:
-        log.error(
-            "Failed to emit organization update",
-            resource_type=resource_type,
-            operation=operation,
-            resource_id=resource_id,
-            error=str(e)
+        log.error("Failed to emit organization update", exc_info=True, error=str(e))
+
+
+# --- ✅ Check Duplicate Unit Name ---
+async def check_duplicate_unit_name(
+    db: AsyncSession,
+    name: str,
+    parent_id: Optional[int],
+    exclude_unit_id: Optional[int] = None
+) -> None:
+    """
+    Kiểm tra xem đã có đơn vị cùng tên trong cùng parent_id chưa.
+
+    Args:
+        db: Database session
+        name: Tên đơn vị cần kiểm tra
+        parent_id: ID của đơn vị cha (None nếu là root)
+        exclude_unit_id: ID của đơn vị cần loại trừ (dùng cho update)
+
+    Raises:
+        DuplicateResourceError: Nếu đã tồn tại đơn vị cùng tên
+    """
+    query = select(models.OrganizationUnit).where(
+        models.OrganizationUnit.name == name.strip(),
+        models.OrganizationUnit.parent_id == parent_id
+    )
+
+    if exclude_unit_id is not None:
+        query = query.where(models.OrganizationUnit.id != exclude_unit_id)
+
+    result = await db.execute(query)
+    existing = result.scalar_one_or_none()
+
+    if existing:
+        parent_name = "cấp gốc" if parent_id is None else f"đơn vị cha #{parent_id}"
+        raise DuplicateResourceError(
+            detail=f"Đã tồn tại đơn vị '{name}' trong {parent_name}"
         )
 
 
@@ -191,6 +222,9 @@ async def create_organization_unit(
     db: AsyncSession, unit_in: schemas.OrganizationUnitCreate
 ) -> models.OrganizationUnit:
     try:
+        # Check duplicate name
+        await check_duplicate_unit_name(db, unit_in.name, unit_in.parent_id)
+
         if unit_in.parent_id:
             parent_unit = await db.get(models.OrganizationUnit, unit_in.parent_id)
             if not parent_unit:
@@ -232,6 +266,14 @@ async def update_organization_unit(
     try:
         db_unit = await get_organization_unit_by_id(db, unit_id)
         update_data = unit_in.model_dump(exclude_unset=True)
+
+        # Check duplicate name if name or parent_id is being changed
+        new_name = update_data.get("name", db_unit.name)
+        new_parent_id = update_data.get("parent_id", db_unit.parent_id)
+        if "name" in update_data or "parent_id" in update_data:
+            await check_duplicate_unit_name(
+                db, new_name, new_parent_id, exclude_unit_id=unit_id
+            )
 
         if "parent_id" in update_data:
             new_parent_id = update_data["parent_id"]

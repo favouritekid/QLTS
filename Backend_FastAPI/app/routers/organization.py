@@ -11,6 +11,12 @@ from ..services import organization_service
 router = APIRouter(tags=["Organization"])
 
 
+@router.get("/organization-unit-types", response_model=List[str])
+async def get_organization_unit_types():
+    """Lấy danh sách các loại đơn vị tổ chức cho phép."""
+    return schemas.OrganizationUnitType.values()
+
+
 @router.get("/organization-units", response_model=List[schemas.OrganizationUnit])
 async def get_all_organization_units(
     db: AsyncSession = Depends(database.get_db),

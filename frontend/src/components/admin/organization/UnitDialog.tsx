@@ -35,6 +35,7 @@ import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
 import {
   useOrganizationUnits,
+  useOrganizationUnitTypes,
   useCreateUnit,
   useUpdateUnit,
   wouldCreateCircularDependency,
@@ -84,6 +85,7 @@ export function UnitDialog({ open, onOpenChange, unit }: UnitDialogProps) {
 
   // Queries
   const { data: allUnits = [], isLoading: unitsLoading } = useOrganizationUnits();
+  const { data: unitTypes = [], isLoading: typesLoading } = useOrganizationUnitTypes();
 
   // Mutations
   const createMutation = useCreateUnit();
@@ -235,15 +237,36 @@ export function UnitDialog({ open, onOpenChange, unit }: UnitDialogProps) {
                   <FormLabel>
                     Loại đơn vị <span className="text-red-500">*</span>
                   </FormLabel>
-                  <FormControl>
-                    <Input
-                      placeholder="VD: Khoa, Phòng ban, Trung tâm"
-                      {...field}
-                      disabled={isSubmitting}
-                    />
-                  </FormControl>
+                  <Select
+                    onValueChange={field.onChange}
+                    defaultValue={field.value}
+                    disabled={isSubmitting || typesLoading}
+                  >
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Chọn loại đơn vị" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      {typesLoading ? (
+                        <SelectItem value="loading" disabled>
+                          Đang tải...
+                        </SelectItem>
+                      ) : unitTypes.length === 0 ? (
+                        <SelectItem value="empty" disabled>
+                          Không có dữ liệu
+                        </SelectItem>
+                      ) : (
+                        unitTypes.map((type) => (
+                          <SelectItem key={type} value={type}>
+                            {type}
+                          </SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
                   <FormDescription>
-                    Loại hình tổ chức (Khoa, Phòng, Trung tâm, v.v.)
+                    Chọn loại hình tổ chức phù hợp
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
