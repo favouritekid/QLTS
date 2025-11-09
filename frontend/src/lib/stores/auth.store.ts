@@ -1,7 +1,15 @@
 // src/lib/stores/auth.store.ts
 /**
  * Authentication state management using Zustand
- * Persists token and user info to localStorage
+ *
+ * ✅ SECURITY FIX: Removed localStorage token storage
+ *
+ * Tokens are now managed via httpOnly cookies (set by backend):
+ * - access_token: Used for API requests (httpOnly, path="/")
+ * - refresh_token: Used for token refresh (httpOnly, path="/api")
+ *
+ * This store only manages user info for UI purposes.
+ * Authentication state is derived from cookie presence (verified by middleware).
  */
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
@@ -9,9 +17,8 @@ import type { User } from "@/types/api.types";
 
 interface AuthState {
   user: User | null;
-  token: string | null;
   isAuthenticated: boolean;
-  setAuth: (user: User, token: string) => void;
+  setAuth: (user: User) => void;
   setUser: (user: User) => void;
   logout: () => void;
 }
@@ -20,53 +27,47 @@ export const useAuthStore = create<AuthState>()(
   persist(
     (set) => ({
       user: null,
-      token: null,
       isAuthenticated: false,
 
-      setAuth: (user: User, token: string) => {
-        // Store token in localStorage for axios interceptor
-        if (typeof window !== "undefined") {
-          localStorage.setItem("access_token", token);
-        }
+      setAuth: (user: User) => {
+        // ✅ SECURITY FIX: No longer store token in localStorage
+        // Token is managed via httpOnly cookies by backend
 
         set({
           user,
-          token,
           isAuthenticated: true,
         });
       },
 
       setUser: (user: User) => {
-        // Update only user info, keep token unchanged
+        // Update only user info
         set({ user });
       },
 
       logout: () => {
-        // Clear token from localStorage
-        if (typeof window !== "undefined") {
-          localStorage.removeItem("access_token");
-        }
+        // ✅ SECURITY FIX: No need to clear localStorage
+        // Cookies are cleared by backend /logout endpoint
 
         set({
           user: null,
-          token: null,
           isAuthenticated: false,
         });
       },
     }),
     {
-      name: "auth-storage", // localStorage key
+      name: "auth-storage", // localStorage key (only stores user info now)
       partialize: (state) => ({
-        // Only persist user and token (not isAuthenticated)
+        // ✅ SECURITY FIX: Only persist user info (not token)
         user: state.user,
-        token: state.token,
+        // isAuthenticated will be re-derived from cookies on page load
       }),
       onRehydrateStorage: () => (state) => {
-        // After rehydration, sync token to localStorage
-        if (state?.token && typeof window !== "undefined") {
-          localStorage.setItem("access_token", state.token);
-          // Update isAuthenticated based on token existence
-          state.isAuthenticated = !!state.token;
+        // ✅ SECURITY FIX: Check if cookies exist to set isAuthenticated
+        // This is a client-side hint only; real auth is verified by middleware
+        if (state && typeof window !== "undefined") {
+          // Check if access_token cookie exists (non-httpOnly check not possible)
+          // We'll rely on API calls to validate auth state
+          state.isAuthenticated = !!state.user;
         }
       },
     }

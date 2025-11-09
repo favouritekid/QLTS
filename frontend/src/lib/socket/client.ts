@@ -22,18 +22,18 @@ class SocketService {
       return;
     }
 
-    const token = useAuthStore.getState().token;
-    if (!token) {
-      console.error("[SocketService] No auth token, connection aborted.");
-      return;
-    }
+    // ✅ SECURITY FIX: No longer check token from store
+    // Authentication now uses httpOnly cookies (sent automatically by browser)
+    // Backend reads access_token from Cookie header
 
     console.log("[SocketService] Connecting to", env.NEXT_PUBLIC_API_URL);
     this.reconnectAttempts = 0;
 
     this.socket = io(env.NEXT_PUBLIC_API_URL, {
       path: "/socket.io",
-      auth: { token },
+      // ✅ SECURITY FIX: Removed auth dict - token comes from httpOnly cookie
+      // OLD: auth: { token }, // ❌ Token sent in auth dict (XSS risk)
+      withCredentials: true, // ✅ NEW: Browser sends httpOnly cookies automatically
       transports: ["websocket", "polling"],
       reconnection: true,
       reconnectionAttempts: this.maxReconnectAttempts,
