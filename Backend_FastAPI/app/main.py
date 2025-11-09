@@ -147,6 +147,11 @@ async def lifespan(app: FastAPI):
             )
             await enforcer.add_policy("role:admin", "/*", ".*")
             await enforcer.add_policy("role:manager", "/api/admin/users", ".*")
+
+            # ← PHASE 3 & 4: Sync endpoints for DB/Casbin role synchronization
+            await enforcer.add_policy("role:admin", "/api/admin/users/sync-status", "GET")
+            await enforcer.add_policy("role:admin", "/api/admin/users/sync", "POST")
+
             await enforcer.add_policy("role:manager", "/api/leads/*", ".*")
             await enforcer.add_policy("role:manager", "/api/leads", "GET")
             await enforcer.add_policy("role:officer", "/api/leads", "GET")
