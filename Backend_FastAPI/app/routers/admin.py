@@ -1140,7 +1140,7 @@ async def stream_export_users_csv(
 
 # ← PHASE 3: Detection endpoint - check DB/Casbin sync status
 @router.get(
-    "/users/sync-status",
+    "/sync/status",
     tags=["Admin - User Management"],
     summary="Check sync status between DB and Casbin roles"
 )
@@ -1197,7 +1197,7 @@ async def get_sync_status(
 
 # ← PHASE 4: Remediation endpoint - manually sync DB to match Casbin
 @router.post(
-    "/users/sync",
+    "/sync/users",
     tags=["Admin - User Management"],
     summary="Manually sync DB roles to match Casbin (source of truth)"
 )

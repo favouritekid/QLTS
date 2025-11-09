@@ -137,10 +137,10 @@ async def main():
         ("role:admin", "/api/admin/policies/*", ".*"),
         ("role:admin", "/api/admin/activity-logs/*", ".*"),
 
-        # Very explicit paths for sync endpoints
-        ("role:admin", "/api/admin/users/sync-status", "GET"),
-        ("role:admin", "/api/admin/users/sync", "POST"),
-        ("role:admin", "/api/admin/users/sync", ".*"),
+        # Very explicit paths for sync endpoints (updated paths to avoid route conflicts)
+        ("role:admin", "/api/admin/sync/status", "GET"),
+        ("role:admin", "/api/admin/sync/users", "POST"),
+        ("role:admin", "/api/admin/sync/*", ".*"),
         ("role:admin", "/api/admin/roles", "GET"),
         ("role:admin", "/api/admin/policies", "GET"),
         ("role:admin", "/api/admin/policies/statistics", "GET"),
@@ -225,8 +225,8 @@ async def main():
         ("user:1", "/api/admin/roles", "GET"),
         ("user:1", "/api/admin/policies", "GET"),
         ("user:1", "/api/admin/policies/statistics", "GET"),
-        ("user:1", "/api/admin/users/sync-status", "GET"),
-        ("user:1", "/api/admin/users/sync", "POST"),
+        ("user:1", "/api/admin/sync/status", "GET"),
+        ("user:1", "/api/admin/sync/users", "POST"),
         ("user:1", "/api/admin/activity-logs", "GET"),
     ]
 

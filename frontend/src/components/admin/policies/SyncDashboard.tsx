@@ -57,7 +57,7 @@ export function SyncDashboard() {
   } = useQuery<SyncStatus>({
     queryKey: ["sync-status"],
     queryFn: async () => {
-      const response = await api.get<SyncStatus>("/api/admin/users/sync-status");
+      const response = await api.get<SyncStatus>("/api/admin/sync/status");
       return response.data;
     },
   });
@@ -65,7 +65,7 @@ export function SyncDashboard() {
   // Sync mutation
   const syncMutation = useMutation({
     mutationFn: async (userIds: number[] | null) => {
-      const response = await api.post<SyncResult>("/api/admin/users/sync", {
+      const response = await api.post<SyncResult>("/api/admin/sync/users", {
         user_ids: userIds,
       });
       return response.data;

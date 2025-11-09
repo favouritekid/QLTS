@@ -153,9 +153,10 @@ async def lifespan(app: FastAPI):
             await enforcer.add_policy("role:admin", "/api/admin/roles/*", ".*")
             await enforcer.add_policy("role:admin", "/api/admin/policies/*", ".*")
 
-            # ← PHASE 3 & 4: Very explicit sync endpoints
-            await enforcer.add_policy("role:admin", "/api/admin/users/sync-status", "GET")
-            await enforcer.add_policy("role:admin", "/api/admin/users/sync", "POST")
+            # ← PHASE 3 & 4: Very explicit sync endpoints (new paths to avoid route conflicts)
+            await enforcer.add_policy("role:admin", "/api/admin/sync/status", "GET")
+            await enforcer.add_policy("role:admin", "/api/admin/sync/users", "POST")
+            await enforcer.add_policy("role:admin", "/api/admin/sync/*", ".*")
             await enforcer.add_policy("role:admin", "/api/admin/roles", "GET")
             await enforcer.add_policy("role:admin", "/api/admin/policies", "GET")
             await enforcer.add_policy("role:admin", "/api/admin/policies/statistics", "GET")

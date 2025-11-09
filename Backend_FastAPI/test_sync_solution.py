@@ -80,7 +80,7 @@ class SyncTester:
     async def get_sync_status(self) -> Dict[str, Any]:
         """Get sync status between DB and Casbin"""
         response = await self.client.get(
-            f"{API_BASE}/admin/users/sync-status",
+            f"{API_BASE}/admin/sync/status",
             headers=self.headers
         )
         response.raise_for_status()
@@ -89,7 +89,7 @@ class SyncTester:
     async def sync_users(self, user_ids: Optional[list] = None) -> Dict[str, Any]:
         """Manually sync users"""
         response = await self.client.post(
-            f"{API_BASE}/admin/users/sync",
+            f"{API_BASE}/admin/sync/users",
             headers=self.headers,
             json={"user_ids": user_ids}
         )
