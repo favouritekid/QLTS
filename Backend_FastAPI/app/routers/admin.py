@@ -1265,11 +1265,11 @@ async def sync_users(
     await activity_service.log_activity_from_request(
         db=db,
         request=request,
-        actor_id=current_admin.id,
         action="sync_users",
-        entity_type="user",
-        entity_id=None,
-        details={
+        resource_type="user",
+        actor_id=current_admin.id,
+        resource_id=None,
+        changes={
             "synced_count": synced_count,
             "failed_count": len(failed_users),
             "user_ids": user_ids or "all"
