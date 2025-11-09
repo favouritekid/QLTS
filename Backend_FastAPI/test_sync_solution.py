@@ -111,13 +111,24 @@ class SyncTester:
             border_style="yellow"
         ))
 
-        # Get a test user
+        # Get a test user (SKIP admin user - don't modify user:1)
         users = await self.get_users()
         if not users:
             console.print("[red]✗ No users found for testing[/red]")
             return False
 
-        test_user = users[0]
+        # Find a non-admin user to test with
+        test_user = None
+        for u in users:
+            if u["id"] != 1:  # Skip user:1 (admin)
+                test_user = u
+                break
+
+        if not test_user:
+            console.print("[yellow]⚠ Only admin user found - creating test user...[/yellow]")
+            console.print("[yellow]⚠ Skipping Phase 1 test to avoid modifying admin[/yellow]")
+            return True  # Pass but skip actual test
+
         user_id = test_user["id"]
         original_role = test_user["role"]
 

@@ -129,18 +129,23 @@ async def main():
         # Admin wildcard (should match everything)
         ("role:admin", "/*", ".*"),
 
-        # Explicit admin endpoints
+        # Explicit admin endpoints (needed because keyMatch4 doesn't match deep paths)
+        ("role:admin", "/api/*", ".*"),
         ("role:admin", "/api/admin/*", ".*"),
-        ("role:admin", "/api/admin/users", ".*"),
         ("role:admin", "/api/admin/users/*", ".*"),
+        ("role:admin", "/api/admin/roles/*", ".*"),
+        ("role:admin", "/api/admin/policies/*", ".*"),
+        ("role:admin", "/api/admin/activity-logs/*", ".*"),
+
+        # Very explicit paths for sync endpoints
         ("role:admin", "/api/admin/users/sync-status", "GET"),
         ("role:admin", "/api/admin/users/sync", "POST"),
-        ("role:admin", "/api/admin/roles", ".*"),
-        ("role:admin", "/api/admin/policies", ".*"),
-        ("role:admin", "/api/admin/policies/*", ".*"),
+        ("role:admin", "/api/admin/users/sync", ".*"),
+        ("role:admin", "/api/admin/roles", "GET"),
+        ("role:admin", "/api/admin/policies", "GET"),
         ("role:admin", "/api/admin/policies/statistics", "GET"),
         ("role:admin", "/api/admin/policies/suggestions", "GET"),
-        ("role:admin", "/api/admin/activity-logs", ".*"),
+        ("role:admin", "/api/admin/activity-logs", "GET"),
     ]
 
     print("\n📝 Checking permission policies...")
