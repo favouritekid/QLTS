@@ -12,6 +12,9 @@ import type {
   Major,
   MajorCreate,
   MajorUpdate,
+  MajorAcademicInfo,
+  MajorAcademicInfoCreate,
+  MajorAcademicInfoUpdate,
 } from "@/types/organization.types";
 
 // =====================================================================
@@ -33,6 +36,13 @@ export const organizationKeys = {
   majorsList: (unitId?: number, search?: string) =>
     [...organizationKeys.majors(), { unitId, search }] as const,
   majorDetail: (id: number) => [...organizationKeys.majors(), "detail", id] as const,
+
+  // Academic Info keys
+  academicInfo: () => [...organizationKeys.all, "academicInfo"] as const,
+  academicInfoHistory: (majorId: number, publishedOnly?: boolean) =>
+    [...organizationKeys.academicInfo(), "history", majorId, { publishedOnly }] as const,
+  academicInfoByYear: (majorId: number, year: number) =>
+    [...organizationKeys.academicInfo(), "year", majorId, year] as const,
 };
 
 // =====================================================================
@@ -127,6 +137,43 @@ export function useMajor(id: number) {
     },
     enabled: !!id,
     staleTime: Infinity,
+  });
+}
+
+/**
+ * Get academic info history for a major
+ */
+export function useAcademicInfoHistory(majorId: number, publishedOnly: boolean = false) {
+  return useQuery<MajorAcademicInfo[], AxiosError<ApiErrorResponse>>({
+    queryKey: organizationKeys.academicInfoHistory(majorId, publishedOnly),
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (publishedOnly) params.append("published_only", "true");
+
+      const response = await api.get<MajorAcademicInfo[]>(
+        `${API_ENDPOINTS.ORGANIZATION.ACADEMIC_INFO_HISTORY(majorId)}?${params.toString()}`
+      );
+      return response.data;
+    },
+    enabled: !!majorId,
+    staleTime: 1000 * 60 * 5, // 5 minutes
+  });
+}
+
+/**
+ * Get academic info for a specific year
+ */
+export function useAcademicInfoByYear(majorId: number, year: number) {
+  return useQuery<MajorAcademicInfo, AxiosError<ApiErrorResponse>>({
+    queryKey: organizationKeys.academicInfoByYear(majorId, year),
+    queryFn: async () => {
+      const response = await api.get<MajorAcademicInfo>(
+        API_ENDPOINTS.ORGANIZATION.ACADEMIC_INFO_BY_YEAR(majorId, year)
+      );
+      return response.data;
+    },
+    enabled: !!majorId && !!year,
+    staleTime: 1000 * 60 * 5, // 5 minutes
   });
 }
 
@@ -365,6 +412,124 @@ export function useDeleteMajor() {
         : Array.isArray(detail)
           ? detail.map(e => e.msg).join(', ')
           : "Xóa ngành học thất bại";
+      toast.error("Lỗi", { description: message });
+    },
+  });
+}
+
+// =====================================================================
+// MUTATIONS (CREATE, UPDATE, DELETE) - Academic Info
+// =====================================================================
+
+/**
+ * Create new academic info for a major
+ */
+export function useCreateAcademicInfo() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    MajorAcademicInfo,
+    AxiosError<ApiErrorResponse>,
+    MajorAcademicInfoCreate
+  >({
+    mutationFn: async (data) => {
+      const response = await api.post<MajorAcademicInfo>(
+        API_ENDPOINTS.ADMIN.ORGANIZATION.CREATE_ACADEMIC_INFO(data.major_id),
+        data
+      );
+      return response.data;
+    },
+    onSuccess: (newInfo) => {
+      toast.success("Thông tin học thuật đã được tạo!", {
+        description: `Năm học ${newInfo.academic_year}`,
+      });
+      // Invalidate history query
+      queryClient.invalidateQueries({
+        queryKey: organizationKeys.academicInfoHistory(newInfo.major_id),
+      });
+    },
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message = typeof detail === 'string'
+        ? detail
+        : Array.isArray(detail)
+          ? detail.map(e => e.msg).join(', ')
+          : "Tạo thông tin học thuật thất bại";
+      toast.error("Lỗi", { description: message });
+    },
+  });
+}
+
+/**
+ * Update existing academic info
+ */
+export function useUpdateAcademicInfo() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    MajorAcademicInfo,
+    AxiosError<ApiErrorResponse>,
+    { id: number; data: MajorAcademicInfoUpdate }
+  >({
+    mutationFn: async ({ id, data }) => {
+      const response = await api.patch<MajorAcademicInfo>(
+        API_ENDPOINTS.ADMIN.ORGANIZATION.UPDATE_ACADEMIC_INFO(id),
+        data
+      );
+      return response.data;
+    },
+    onSuccess: (updatedInfo) => {
+      toast.success("Thông tin học thuật đã được cập nhật!", {
+        description: `Năm học ${updatedInfo.academic_year}`,
+      });
+      // Invalidate history and specific year queries
+      queryClient.invalidateQueries({
+        queryKey: organizationKeys.academicInfoHistory(updatedInfo.major_id),
+      });
+      queryClient.invalidateQueries({
+        queryKey: organizationKeys.academicInfoByYear(updatedInfo.major_id, updatedInfo.academic_year),
+      });
+    },
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message = typeof detail === 'string'
+        ? detail
+        : Array.isArray(detail)
+          ? detail.map(e => e.msg).join(', ')
+          : "Cập nhật thông tin học thuật thất bại";
+      toast.error("Lỗi", { description: message });
+    },
+  });
+}
+
+/**
+ * Delete academic info
+ */
+export function useDeleteAcademicInfo() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    void,
+    AxiosError<ApiErrorResponse>,
+    { id: number; majorId: number }
+  >({
+    mutationFn: async ({ id }) => {
+      await api.delete(API_ENDPOINTS.ADMIN.ORGANIZATION.DELETE_ACADEMIC_INFO(id));
+    },
+    onSuccess: (_, variables) => {
+      toast.success("Thông tin học thuật đã được xóa!");
+      // Invalidate history query
+      queryClient.invalidateQueries({
+        queryKey: organizationKeys.academicInfoHistory(variables.majorId),
+      });
+    },
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message = typeof detail === 'string'
+        ? detail
+        : Array.isArray(detail)
+          ? detail.map(e => e.msg).join(', ')
+          : "Xóa thông tin học thuật thất bại";
       toast.error("Lỗi", { description: message });
     },
   });

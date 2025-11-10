@@ -35,6 +35,9 @@ export const API_ENDPOINTS = {
     UNIT_TYPES: "/api/organization-unit-types",
     LIST_MAJORS: "/api/majors",
     GET_MAJOR: (id: number) => `/api/majors/${id}`,
+    // Academic Info
+    ACADEMIC_INFO_HISTORY: (majorId: number) => `/api/majors/${majorId}/academic-info`,
+    ACADEMIC_INFO_BY_YEAR: (majorId: number, year: number) => `/api/majors/${majorId}/academic-info/${year}`,
   },
   ADMIN: {
     USERS: {
@@ -72,6 +75,10 @@ export const API_ENDPOINTS = {
       UPDATE_MAJOR: (id: number) => `/api/admin/majors/${id}`,
       DELETE_MAJOR: (id: number) => `/api/admin/majors/${id}`,
       GET_MAJOR: (id: number) => `/api/admin/majors/${id}`,
+      // Academic Info
+      CREATE_ACADEMIC_INFO: (majorId: number) => `/api/majors/${majorId}/academic-info`,
+      UPDATE_ACADEMIC_INFO: (academicInfoId: number) => `/api/academic-info/${academicInfoId}`,
+      DELETE_ACADEMIC_INFO: (academicInfoId: number) => `/api/academic-info/${academicInfoId}`,
     },
     ACTIVITY_LOGS: "/api/admin/activity-logs",
     STATISTICS: "/api/admin/statistics",

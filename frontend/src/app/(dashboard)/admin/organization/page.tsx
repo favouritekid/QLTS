@@ -41,6 +41,7 @@ import {
   Edit,
   Trash2,
   AlertCircle,
+  BookOpen,
 } from "lucide-react";
 import {
   useOrganizationUnits,
@@ -50,6 +51,7 @@ import {
 } from "@/hooks/useOrganization";
 import { UnitDialog } from "@/components/admin/organization/UnitDialog";
 import { MajorDialog } from "@/components/admin/organization/MajorDialog";
+import { AcademicInfoManagement } from "@/components/admin/organization/AcademicInfoManagement";
 import type { OrganizationUnit, Major } from "@/types/organization.types";
 
 export default function OrganizationManagementPage() {
@@ -62,8 +64,10 @@ export default function OrganizationManagementPage() {
   // Dialog states
   const [unitDialogOpen, setUnitDialogOpen] = useState(false);
   const [majorDialogOpen, setMajorDialogOpen] = useState(false);
+  const [academicInfoManagementOpen, setAcademicInfoManagementOpen] = useState(false);
   const [selectedUnit, setSelectedUnit] = useState<OrganizationUnit | null>(null);
   const [selectedMajor, setSelectedMajor] = useState<Major | null>(null);
+  const [selectedMajorForAcademicInfo, setSelectedMajorForAcademicInfo] = useState<Major | null>(null);
 
   // Delete confirmation states
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -117,6 +121,11 @@ export default function OrganizationManagementPage() {
   const handleDeleteMajorClick = (major: Major) => {
     setItemToDelete({ type: "major", id: major.id, name: major.name });
     setDeleteConfirmOpen(true);
+  };
+
+  const handleManageAcademicInfo = (major: Major) => {
+    setSelectedMajorForAcademicInfo(major);
+    setAcademicInfoManagementOpen(true);
   };
 
   const handleConfirmDelete = async () => {
@@ -399,6 +408,10 @@ export default function OrganizationManagementPage() {
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => handleManageAcademicInfo(major)}>
+                                <BookOpen className="w-4 h-4 mr-2" />
+                                Thông tin học thuật
+                              </DropdownMenuItem>
                               <DropdownMenuItem onClick={() => handleEditMajor(major)}>
                                 <Edit className="w-4 h-4 mr-2" />
                                 Chỉnh sửa
@@ -436,6 +449,15 @@ export default function OrganizationManagementPage() {
         onOpenChange={setMajorDialogOpen}
         major={selectedMajor}
       />
+
+      {/* Academic Info Management */}
+      {selectedMajorForAcademicInfo && (
+        <AcademicInfoManagement
+          open={academicInfoManagementOpen}
+          onOpenChange={setAcademicInfoManagementOpen}
+          major={selectedMajorForAcademicInfo}
+        />
+      )}
 
       {/* Delete Confirmation */}
       <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>

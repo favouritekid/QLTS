@@ -83,3 +83,47 @@ export interface FlattenedUnit {
   level: number;
   hasChildren: boolean;
 }
+
+/**
+ * Major Academic Info (Year-versioned data)
+ */
+export interface MajorAcademicInfo {
+  id: number;
+  major_id: number;
+  academic_year: number;
+  target_audience?: string | null;
+  detailed_info?: string | null;
+  current_year_benefits?: string | null;
+  tuition_fee_per_year?: number | null;
+  annual_admission_quota?: number | null;
+  is_published: boolean;
+  created_by_user_id?: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+/**
+ * Form data for creating major academic info
+ */
+export interface MajorAcademicInfoCreate {
+  major_id: number;
+  academic_year: number;
+  target_audience?: string | null;
+  detailed_info?: string | null;
+  current_year_benefits?: string | null;
+  tuition_fee_per_year?: number | null;
+  annual_admission_quota?: number | null;
+  is_published?: boolean;
+}
+
+/**
+ * Form data for updating major academic info
+ */
+export interface MajorAcademicInfoUpdate {
+  target_audience?: string | null;
+  detailed_info?: string | null;
+  current_year_benefits?: string | null;
+  tuition_fee_per_year?: number | null;
+  annual_admission_quota?: number | null;
+  is_published?: boolean;
+}
