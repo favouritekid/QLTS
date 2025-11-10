@@ -37,7 +37,7 @@ import structlog
 from sqlalchemy import text, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import async_session_maker, engine
+from app.database import AsyncSessionLocal, engine
 from app.models import User, UserUnitAssignment, Major, MajorAcademicInfo
 
 log = structlog.get_logger(__name__)
@@ -369,7 +369,7 @@ async def main():
 
     try:
         # Create database session
-        async with async_session_maker() as db:
+        async with AsyncSessionLocal() as db:
             # Step 1: Check if already run
             already_run = await check_migration_status(db)
             if already_run:
