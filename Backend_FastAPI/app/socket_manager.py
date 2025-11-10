@@ -392,14 +392,14 @@ async def emit_to_all(event: str, data: dict, namespace: str = "/"):
         await sio.emit(event, data, namespace=namespace)
         log.info(
             "Emitted event to all clients",
-            event=event,
+            socket_event=event,
             namespace=namespace,
             data_keys=list(data.keys())
         )
     except Exception as e:
         log.error(
             "Failed to emit event to all clients",
-            event=event,
+            socket_event=event,
             error=str(e),
             exc_info=True
         )
