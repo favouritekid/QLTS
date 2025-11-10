@@ -9,6 +9,9 @@ export interface OrganizationUnit {
   type: string;
   description?: string | null;
   parent_id: number | null;
+  is_active: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
   children: OrganizationUnit[];
   majors: Major[];
   // Relationship fields (computed)
