@@ -239,7 +239,7 @@ export function OrganizationTreeView({
     let totalUnits = 0;
     let totalMajors = 0;
     let totalQuota = 0;
-    let allTuitionFees: number[] = [];
+    const allTuitionFees: number[] = [];
 
     const countNode = (node: OrganizationTreeNodeWithAggregation) => {
       totalUnits++;
