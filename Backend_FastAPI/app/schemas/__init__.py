@@ -48,6 +48,10 @@ from .organization import (
     OrganizationUnitShallow,
     OrganizationUnitType,
     OrganizationUnitUpdate,
+    # Tree with aggregation schemas
+    MajorWithStats,
+    UnitAggregatedStats,
+    OrganizationTreeNodeWithAggregation,
 )
 
 # --- Từ permissions.py ---
