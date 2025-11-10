@@ -551,3 +551,230 @@ async def get_majors_by_unit_tree(
 
     majors_result = await db.execute(query.order_by(models.Major.name).limit(20))
     return majors_result.scalars().all()
+
+
+# =============================================================================
+# ✅ PHASE 2: MAJOR ACADEMIC INFO SERVICES (Year-Versioned Data)
+# =============================================================================
+
+async def get_academic_info_by_major_and_year(
+    db: AsyncSession,
+    major_id: int,
+    academic_year: int
+) -> Optional[models.MajorAcademicInfo]:
+    """
+    Get academic info for a specific major and academic year.
+
+    Args:
+        db: Database session
+        major_id: ID of the major
+        academic_year: Academic year (e.g., 2024)
+
+    Returns:
+        MajorAcademicInfo object or None if not found
+    """
+    query = select(models.MajorAcademicInfo).where(
+        models.MajorAcademicInfo.major_id == major_id,
+        models.MajorAcademicInfo.academic_year == academic_year
+    )
+    result = await db.execute(query)
+    return result.scalar_one_or_none()
+
+
+async def get_academic_info_history(
+    db: AsyncSession,
+    major_id: int,
+    published_only: bool = False
+) -> List[models.MajorAcademicInfo]:
+    """
+    Get all academic info history for a major, ordered by year descending.
+
+    Args:
+        db: Database session
+        major_id: ID of the major
+        published_only: If True, only return published info
+
+    Returns:
+        List of MajorAcademicInfo objects
+    """
+    query = (
+        select(models.MajorAcademicInfo)
+        .where(models.MajorAcademicInfo.major_id == major_id)
+        .order_by(models.MajorAcademicInfo.academic_year.desc())
+    )
+
+    if published_only:
+        query = query.where(models.MajorAcademicInfo.is_published == True)
+
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+async def create_academic_info(
+    db: AsyncSession,
+    academic_info_in: schemas.MajorAcademicInfoCreate,
+    created_by_user_id: Optional[int] = None
+) -> models.MajorAcademicInfo:
+    """
+    Create new academic info for a major and year.
+
+    Args:
+        db: Database session
+        academic_info_in: Academic info data
+        created_by_user_id: ID of user creating the info
+
+    Returns:
+        Created MajorAcademicInfo object
+
+    Raises:
+        ResourceNotFoundError: If major doesn't exist
+        DuplicateResourceError: If academic info already exists for this major/year
+    """
+    try:
+        # Verify major exists
+        major = await get_major_by_id(db, academic_info_in.major_id)
+
+        # Check for existing info for this major/year
+        existing = await get_academic_info_by_major_and_year(
+            db, academic_info_in.major_id, academic_info_in.academic_year
+        )
+        if existing:
+            raise DuplicateResourceError(
+                detail=f"Academic info for major {academic_info_in.major_id} "
+                       f"and year {academic_info_in.academic_year} already exists."
+            )
+
+        # Create new academic info
+        db_academic_info = models.MajorAcademicInfo(
+            **academic_info_in.model_dump(),
+            created_by_user_id=created_by_user_id
+        )
+        db.add(db_academic_info)
+        await db.commit()
+        await db.refresh(db_academic_info)
+
+        log.info(
+            "Major academic info created successfully",
+            major_id=academic_info_in.major_id,
+            academic_year=academic_info_in.academic_year,
+            created_by=created_by_user_id
+        )
+
+        await invalidate_org_cache()  # Invalidate cache (majors include academic info)
+
+        return db_academic_info
+
+    except Exception as e:
+        await db.rollback()
+        log.error(
+            "Failed to create major academic info",
+            major_id=academic_info_in.major_id,
+            year=academic_info_in.academic_year,
+            error=str(e),
+            exc_info=True
+        )
+        raise e
+
+
+async def update_academic_info(
+    db: AsyncSession,
+    academic_info_id: int,
+    academic_info_in: schemas.MajorAcademicInfoUpdate
+) -> models.MajorAcademicInfo:
+    """
+    Update existing academic info.
+
+    Args:
+        db: Database session
+        academic_info_id: ID of academic info to update
+        academic_info_in: Updated data
+
+    Returns:
+        Updated MajorAcademicInfo object
+
+    Raises:
+        ResourceNotFoundError: If academic info doesn't exist
+    """
+    try:
+        db_academic_info = await db.get(models.MajorAcademicInfo, academic_info_id)
+        if not db_academic_info:
+            raise ResourceNotFoundError(
+                detail=f"Academic info with id {academic_info_id} not found."
+            )
+
+        update_data = academic_info_in.model_dump(exclude_unset=True)
+
+        for key, value in update_data.items():
+            setattr(db_academic_info, key, value)
+
+        db.add(db_academic_info)
+        await db.commit()
+        await db.refresh(db_academic_info)
+
+        log.info(
+            "Major academic info updated successfully",
+            academic_info_id=academic_info_id,
+            major_id=db_academic_info.major_id,
+            academic_year=db_academic_info.academic_year
+        )
+
+        await invalidate_org_cache()
+
+        return db_academic_info
+
+    except Exception as e:
+        await db.rollback()
+        log.error(
+            "Failed to update major academic info",
+            academic_info_id=academic_info_id,
+            error=str(e),
+            exc_info=True
+        )
+        raise e
+
+
+async def delete_academic_info(db: AsyncSession, academic_info_id: int):
+    """
+    Delete academic info.
+
+    This is a hard delete since academic info is versioned per year.
+    If you need to preserve history, consider marking as unpublished instead.
+
+    Args:
+        db: Database session
+        academic_info_id: ID of academic info to delete
+
+    Raises:
+        ResourceNotFoundError: If academic info doesn't exist
+    """
+    try:
+        db_academic_info = await db.get(models.MajorAcademicInfo, academic_info_id)
+        if not db_academic_info:
+            raise ResourceNotFoundError(
+                detail=f"Academic info with id {academic_info_id} not found."
+            )
+
+        major_id = db_academic_info.major_id
+        academic_year = db_academic_info.academic_year
+
+        await db.delete(db_academic_info)
+        await db.commit()
+
+        log.info(
+            "Major academic info deleted successfully",
+            academic_info_id=academic_info_id,
+            major_id=major_id,
+            academic_year=academic_year
+        )
+
+        await invalidate_org_cache()
+
+    except Exception as e:
+        await db.rollback()
+        log.error(
+            "Failed to delete major academic info",
+            academic_info_id=academic_info_id,
+            error=str(e),
+            exc_info=True
+        )
+        raise e
