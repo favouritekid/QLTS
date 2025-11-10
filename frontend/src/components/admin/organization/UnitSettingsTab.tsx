@@ -21,7 +21,6 @@ import {
   Edit,
   Trash2,
   Calendar,
-  User,
   Building2,
 } from "lucide-react";
 import { useDeleteUnit } from "@/hooks/useOrganization";

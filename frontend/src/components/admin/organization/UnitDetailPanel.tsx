@@ -2,7 +2,6 @@
 "use client";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Card, CardContent } from "@/components/ui/card";
 import { Building2, GraduationCap, Users, Settings } from "lucide-react";
 import { MajorListTab } from "./MajorListTab";
 import { UserListTab } from "./UserListTab";

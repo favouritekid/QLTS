@@ -55,8 +55,6 @@ export function middleware(request: NextRequest) {
 
   const isPublicRoute = PUBLIC_ROUTES.some((route) => pathname.startsWith(route));
   const isAdminRoute = ADMIN_ROUTES.some((route) => pathname.startsWith(route));
-  const isProtectedRoute =
-    PROTECTED_ROUTES.some((route) => pathname.startsWith(route)) || isAdminRoute;
 
   // Allow public routes without auth check
   if (isPublicRoute) {

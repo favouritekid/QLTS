@@ -1,7 +1,7 @@
 // src/app/(dashboard)/admin/users/page.tsx
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import Link from "next/link";
 import {
   Plus,
@@ -110,6 +110,32 @@ export default function AdminUsersPage() {
 
   const deleteUserMutation = useAdminDeleteUser();
   const bulkActionMutation = useAdminBulkAction();
+
+  // Handle column sorting
+  const handleSort = useCallback((column: string) => {
+    if (sortBy === column) {
+      // Toggle order if same column
+      setSortOrder(sortOrder === "asc" ? "desc" : "asc");
+    } else {
+      // Set new column and default to ascending
+      setSortBy(column);
+      setSortOrder("asc");
+    }
+    // Reset to page 1 when sorting changes
+    setPage(1);
+  }, [sortBy, sortOrder]);
+
+  // Render sort icon for column header
+  const getSortIcon = useCallback((column: string) => {
+    if (sortBy !== column) {
+      return <ArrowUpDown className="ml-2 h-4 w-4" />;
+    }
+    return sortOrder === "asc" ? (
+      <ArrowUp className="ml-2 h-4 w-4" />
+    ) : (
+      <ArrowDown className="ml-2 h-4 w-4" />
+    );
+  }, [sortBy, sortOrder]);
 
   // Table columns definition
    
@@ -248,7 +274,7 @@ export default function AdminUsersPage() {
         },
       },
     ],
-    [sortBy, sortOrder]
+    [sortBy, sortOrder, getSortIcon, handleSort]
   );
 
   // Setup TanStack Table
@@ -323,32 +349,6 @@ export default function AdminUsersPage() {
 
     // Clear selection after successful status change
     setRowSelection({});
-  };
-
-  // Handle column sorting
-  const handleSort = (column: string) => {
-    if (sortBy === column) {
-      // Toggle order if same column
-      setSortOrder(sortOrder === "asc" ? "desc" : "asc");
-    } else {
-      // Set new column and default to ascending
-      setSortBy(column);
-      setSortOrder("asc");
-    }
-    // Reset to page 1 when sorting changes
-    setPage(1);
-  };
-
-  // Render sort icon for column header
-  const getSortIcon = (column: string) => {
-    if (sortBy !== column) {
-      return <ArrowUpDown className="ml-2 h-4 w-4" />;
-    }
-    return sortOrder === "asc" ? (
-      <ArrowUp className="ml-2 h-4 w-4" />
-    ) : (
-      <ArrowDown className="ml-2 h-4 w-4" />
-    );
   };
 
   const handleExportCSV = async () => {

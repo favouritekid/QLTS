@@ -148,7 +148,7 @@ api.interceptors.response.use(
         console.log("[API Client] 🔄 Access token expired, refreshing...");
 
         // ✅ SECURITY FIX: Call /refresh endpoint (tokens sent/received via httpOnly cookies)
-        const { data } = await axios.post<{
+        await axios.post<{
           access_token: string; // Kept in response for backwards compatibility
           user: {
             id: number;
