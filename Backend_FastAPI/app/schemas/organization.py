@@ -134,3 +134,44 @@ class OrganizationUnit(BaseModel):
     majors: List[Major] = []
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# =============================================================================
+# ✅ PHASE 2: MAJOR ACADEMIC INFO SCHEMAS (Year-Versioned Data)
+# =============================================================================
+
+class MajorAcademicInfoBase(BaseModel):
+    """Base schema for MajorAcademicInfo"""
+    major_id: int = Field(..., gt=0)
+    academic_year: int = Field(..., ge=2000, le=2100, description="Academic year (e.g., 2024)")
+    target_audience: Optional[str] = Field(None, max_length=1000, description="Target audience description")
+    detailed_info: Optional[str] = Field(None, description="Detailed major information")
+    current_year_benefits: Optional[str] = Field(None, description="Benefits for current year")
+    tuition_fee_per_year: Optional[float] = Field(None, ge=0, description="Tuition fee per year in VND")
+    annual_admission_quota: Optional[int] = Field(None, ge=0, description="Annual admission quota")
+    is_published: bool = Field(default=False, description="Whether this info is published")
+
+
+class MajorAcademicInfoCreate(MajorAcademicInfoBase):
+    """Schema for creating MajorAcademicInfo"""
+    pass
+
+
+class MajorAcademicInfoUpdate(BaseModel):
+    """Schema for updating MajorAcademicInfo (all fields optional)"""
+    target_audience: Optional[str] = Field(None, max_length=1000)
+    detailed_info: Optional[str] = None
+    current_year_benefits: Optional[str] = None
+    tuition_fee_per_year: Optional[float] = Field(None, ge=0)
+    annual_admission_quota: Optional[int] = Field(None, ge=0)
+    is_published: Optional[bool] = None
+
+
+class MajorAcademicInfo(MajorAcademicInfoBase):
+    """Schema for reading MajorAcademicInfo (with ID and timestamps)"""
+    id: int
+    created_by_user_id: Optional[int] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
