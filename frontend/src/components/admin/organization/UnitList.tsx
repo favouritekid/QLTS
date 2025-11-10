@@ -180,6 +180,9 @@ export function UnitList({
 
   const filteredUnits = filterUnits(units);
 
+  // ✅ CRITICAL FIX: Only render root units (children are rendered recursively by UnitTreeItem)
+  const rootUnits = filteredUnits.filter(unit => unit.parent_id === null);
+
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
@@ -230,7 +233,7 @@ export function UnitList({
               <Skeleton key={i} className="h-10 w-full" />
             ))}
           </div>
-        ) : filteredUnits.length === 0 ? (
+        ) : rootUnits.length === 0 ? (
           <div className="p-8 text-center text-sm text-muted-foreground">
             {searchQuery
               ? "Không tìm thấy đơn vị nào"
@@ -238,7 +241,7 @@ export function UnitList({
           </div>
         ) : (
           <div className="py-2">
-            {filteredUnits.map((unit) => (
+            {rootUnits.map((unit) => (
               <UnitTreeItem
                 key={unit.id}
                 unit={unit}

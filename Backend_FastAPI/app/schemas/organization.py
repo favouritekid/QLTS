@@ -57,6 +57,7 @@ class OrganizationUnitShallow(BaseModel):
     name: str
     type: str
     parent_id: Optional[int] = None
+    is_active: bool  # ✅ CRITICAL FIX: Expose is_active for soft delete
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -125,6 +126,7 @@ class OrganizationUnit(BaseModel):
     type: str
     description: Optional[str] = None
     parent_id: Optional[int] = None
+    is_active: bool  # ✅ CRITICAL FIX: Expose is_active for soft delete
 
     # === ĐÂY LÀ PHẦN SỬA LỖI QUAN TRỌNG NHẤT ===
     parent: Optional[OrganizationUnitShallow] = None
