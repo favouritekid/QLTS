@@ -141,9 +141,10 @@ async def get_all_organization_units(db: AsyncSession) -> List[dict]:
 
         log.debug("Cache miss (after lock), querying DB")
 
-        # 3. Query DB (Logic cũ)
+        # 3. Query DB - ✅ PHASE 2: Only fetch active units (soft delete support)
         query = (
             select(models.OrganizationUnit)
+            .where(models.OrganizationUnit.is_active == True)  # Only active units
             .options(
                 selectinload(models.OrganizationUnit.parent).options(
                     selectinload(models.OrganizationUnit.children),
@@ -322,20 +323,51 @@ async def update_organization_unit(
 
 
 async def delete_organization_unit(db: AsyncSession, unit_id: int):
+    """
+    ✅ PHASE 2: Soft delete organization unit.
+
+    Sets is_active=false instead of physical deletion to preserve historical data.
+    Prevents deletion if unit has active children or majors.
+    """
     try:
         db_unit = await get_organization_unit_by_id(db, unit_id)
-        unit_name = db_unit.name  # Lưu tên trước khi xóa
+        unit_name = db_unit.name  # Lưu tên trước khi "xóa"
 
-        if db_unit.children or db_unit.majors:
+        # Check for active children (only block if children are active)
+        active_children_query = select(models.OrganizationUnit).where(
+            models.OrganizationUnit.parent_id == unit_id,
+            models.OrganizationUnit.is_active == True
+        )
+        active_children_result = await db.execute(active_children_query)
+        active_children = active_children_result.scalars().all()
+
+        # Check for active majors
+        active_majors_query = select(models.Major).where(
+            models.Major.unit_id == unit_id,
+            models.Major.is_active == True
+        )
+        active_majors_result = await db.execute(active_majors_query)
+        active_majors = active_majors_result.scalars().all()
+
+        if active_children or active_majors:
             raise DuplicateResourceError(
-                detail="Cannot delete unit: It contains child units or majors."
+                detail="Cannot delete unit: It contains active child units or majors."
             )
-        await db.delete(db_unit)
+
+        # ✅ SOFT DELETE: Set is_active=false instead of physical delete
+        db_unit.is_active = False
+        db.add(db_unit)
         await db.commit()
 
-        await invalidate_org_cache()  # <-- THÊM HỦY CACHE
+        log.info(
+            "Organization unit soft-deleted successfully",
+            unit_id=unit_id,
+            unit_name=unit_name
+        )
 
-        # 🆕 THÊM EMIT
+        await invalidate_org_cache()  # <-- HỦY CACHE
+
+        # 🆕 EMIT
         await emit_organization_updated(
             operation="delete",
             resource_type="organization",
@@ -444,16 +476,30 @@ async def update_major(
 
 
 async def delete_major(db: AsyncSession, major_id: int):
+    """
+    ✅ PHASE 2: Soft delete major.
+
+    Sets is_active=false instead of physical deletion to preserve historical data.
+    This ensures major academic info history remains queryable.
+    """
     try:
         db_major = await get_major_by_id(db, major_id)
-        major_name = db_major.name  # Lưu tên trước khi xóa
+        major_name = db_major.name  # Lưu tên trước khi "xóa"
 
-        await db.delete(db_major)
+        # ✅ SOFT DELETE: Set is_active=false instead of physical delete
+        db_major.is_active = False
+        db.add(db_major)
         await db.commit()
 
-        await invalidate_org_cache()  # <-- THÊM HỦY CACHE
+        log.info(
+            "Major soft-deleted successfully",
+            major_id=major_id,
+            major_name=major_name
+        )
 
-        # 🆕 THÊM EMIT
+        await invalidate_org_cache()  # <-- HỦY CACHE
+
+        # 🆕 EMIT
         await emit_organization_updated(
             operation="delete",
             resource_type="major",
@@ -490,7 +536,11 @@ async def get_majors_by_unit_tree(
     result = await db.execute(sql, {"unit_id": unit_id})
     all_related_unit_ids = [row[0] for row in result]
 
-    query = select(models.Major).filter(models.Major.unit_id.in_(all_related_unit_ids))
+    # ✅ PHASE 2: Only fetch active majors (soft delete support)
+    query = select(models.Major).filter(
+        models.Major.unit_id.in_(all_related_unit_ids),
+        models.Major.is_active == True  # Only active majors
+    )
     if search_term:
         # 1. Làm sạch và tạo pattern an toàn
         safe_pattern = f"%{search_term.strip()}%"
