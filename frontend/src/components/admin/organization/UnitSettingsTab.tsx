@@ -117,9 +117,9 @@ export function UnitSettingsTab({ unit, onUnitDeleted }: UnitSettingsTabProps) {
                   <label className="text-sm font-medium text-muted-foreground">
                     Loại đơn vị
                   </label>
-                  <p className="text-sm mt-1">
+                  <div className="text-sm mt-1">
                     <Badge variant="outline">{unit.type}</Badge>
-                  </p>
+                  </div>
                 </div>
 
                 {unit.description && (
@@ -136,10 +136,10 @@ export function UnitSettingsTab({ unit, onUnitDeleted }: UnitSettingsTabProps) {
                     <label className="text-sm font-medium text-muted-foreground">
                       Đơn vị cha
                     </label>
-                    <p className="text-sm mt-1 flex items-center gap-2">
+                    <div className="text-sm mt-1 flex items-center gap-2">
                       <Building2 className="h-4 w-4 text-muted-foreground" />
                       ID: {unit.parent_id}
-                    </p>
+                    </div>
                   </div>
                 )}
               </div>
