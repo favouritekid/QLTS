@@ -68,21 +68,33 @@ export function MajorListTab({ unit }: MajorListTabProps) {
   const [majorToDelete, setMajorToDelete] = useState<Major | null>(null);
   const deleteMajorMutation = useDeleteMajor();
 
-  // ✅ Collect all majors from unit and its descendants
-  const getAllMajors = (unit: OrganizationUnit): Major[] => {
-    const majors: Major[] = [...(unit.majors || [])];
+  // ✅ FIX: Logic for displaying majors based on unit hierarchy
+  const getMajorsToDisplay = (unit: OrganizationUnit): Major[] => {
+    // If this is a root unit (parent_id is null), show all majors including descendants
+    const isRootUnit = unit.parent_id === null;
 
-    // Recursively collect majors from children
-    if (unit.children && unit.children.length > 0) {
-      unit.children.forEach((child) => {
-        majors.push(...getAllMajors(child));
-      });
+    if (isRootUnit) {
+      // Root unit: collect all majors from this unit and all descendants
+      const collectAllMajors = (u: OrganizationUnit): Major[] => {
+        const majors: Major[] = [...(u.majors || [])];
+
+        if (u.children && u.children.length > 0) {
+          u.children.forEach((child) => {
+            majors.push(...collectAllMajors(child));
+          });
+        }
+
+        return majors;
+      };
+
+      return collectAllMajors(unit);
+    } else {
+      // Non-root unit: only show direct majors (not descendants)
+      return unit.majors || [];
     }
-
-    return majors;
   };
 
-  const allMajors = getAllMajors(unit);
+  const allMajors = getMajorsToDisplay(unit);
 
   // Handlers
   const handleCreateMajor = () => {
@@ -123,6 +135,11 @@ export function MajorListTab({ unit }: MajorListTabProps) {
       major.code.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  // Check if this is root unit
+  const isRootUnit = unit.parent_id === null;
+  const directMajorsCount = (unit.majors || []).length;
+  const totalMajorsCount = allMajors.length;
+
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
@@ -131,7 +148,22 @@ export function MajorListTab({ unit }: MajorListTabProps) {
           <div>
             <h3 className="text-lg font-semibold">Ngành học</h3>
             <p className="text-sm text-muted-foreground">
-              Quản lý các ngành học thuộc đơn vị này
+              {isRootUnit ? (
+                <>
+                  Hiển thị tất cả {totalMajorsCount} ngành học{" "}
+                  {directMajorsCount > 0 && (
+                    <span className="font-medium">
+                      (bao gồm {directMajorsCount} ngành trực thuộc và{" "}
+                      {totalMajorsCount - directMajorsCount} ngành từ các đơn vị con)
+                    </span>
+                  )}
+                </>
+              ) : (
+                <>
+                  Hiển thị {totalMajorsCount} ngành học trực thuộc đơn vị này
+                  {totalMajorsCount === 0 && " - Chưa có ngành học nào"}
+                </>
+              )}
             </p>
           </div>
           <Button onClick={handleCreateMajor}>

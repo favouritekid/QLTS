@@ -57,7 +57,8 @@ function UnitTreeItem({
   const hasChildren = unit.children && unit.children.length > 0;
   const isExpanded = expandedUnits.has(unit.id);
   const isInactive = !unit.is_active;
-  const canExpand = hasChildren && level < 1; // Only allow expansion if level < 1
+  // ✅ FIX: Remove level limit - allow unlimited nesting
+  const canExpand = hasChildren;
 
   return (
     <div>
@@ -72,7 +73,7 @@ function UnitTreeItem({
         onClick={() => onSelectUnit(unit.id)}
       >
         {/* Expand/Collapse Icon */}
-        {canExpand && (
+        {canExpand ? (
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -86,6 +87,8 @@ function UnitTreeItem({
               <ChevronRight className="h-4 w-4" />
             )}
           </button>
+        ) : (
+          <div className="w-5 h-5" /> // Spacer for alignment when no children
         )}
 
         {/* Icon */}
@@ -111,8 +114,8 @@ function UnitTreeItem({
         </div>
       </div>
 
-      {/* Children - Only render if level < 2 (max 2 levels) */}
-      {hasChildren && isExpanded && level < 1 && (
+      {/* Children - ✅ FIX: Remove level limit to support unlimited nesting */}
+      {hasChildren && isExpanded && (
         <div>
           {unit.children
             .filter(child => showInactive ? true : child.is_active)
