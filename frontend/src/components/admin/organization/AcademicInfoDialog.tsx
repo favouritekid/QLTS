@@ -62,7 +62,7 @@ const academicInfoFormSchema = z.object({
     .int("Chỉ tiêu tuyển sinh phải là số nguyên")
     .min(0, "Chỉ tiêu tuyển sinh không thể âm")
     .nullish(),
-  is_published: z.boolean().default(false),
+  is_published: z.boolean(),
 });
 
 type AcademicInfoFormValues = z.infer<typeof academicInfoFormSchema>;
