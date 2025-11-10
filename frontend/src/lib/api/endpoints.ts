@@ -32,6 +32,7 @@ export const API_ENDPOINTS = {
   ORGANIZATION: {
     LIST_UNITS: "/api/organization-units",
     GET_UNIT: (id: number) => `/api/organization-units/${id}`,
+    TREE_WITH_AGGREGATION: "/api/organization-units/tree-with-aggregation",
     UNIT_TYPES: "/api/organization-unit-types",
     LIST_MAJORS: "/api/majors",
     GET_MAJOR: (id: number) => `/api/majors/${id}`,

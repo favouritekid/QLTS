@@ -130,3 +130,55 @@ export interface MajorAcademicInfoUpdate {
   annual_admission_quota?: number | null;
   is_published?: boolean;
 }
+
+// =============================================================================
+// ✅ TREE WITH AGGREGATION TYPES
+// =============================================================================
+
+/**
+ * Major with aggregated statistics
+ */
+export interface MajorWithStats {
+  id: number;
+  name: string;
+  code: string;
+  total_admission_quota?: number | null;
+  tuition_fee?: number | null;
+}
+
+/**
+ * Aggregated statistics for a unit (including descendants)
+ */
+export interface UnitAggregatedStats {
+  total_majors: number;
+  direct_majors: number;
+  total_admission_quota?: number | null;
+  avg_tuition_fee?: number | null;
+  min_tuition_fee?: number | null;
+  max_tuition_fee?: number | null;
+}
+
+/**
+ * Organization tree node with majors and aggregated data
+ */
+export interface OrganizationTreeNodeWithAggregation {
+  id: number;
+  name: string;
+  type: string;
+  description?: string | null;
+  parent_id: number | null;
+  is_active: boolean;
+  majors: MajorWithStats[];
+  stats: UnitAggregatedStats;
+  children: OrganizationTreeNodeWithAggregation[];
+}
+
+/**
+ * Flattened tree node for rendering
+ */
+export interface FlattenedTreeNode {
+  node: OrganizationTreeNodeWithAggregation;
+  level: number;
+  isExpanded: boolean;
+  hasChildren: boolean;
+}

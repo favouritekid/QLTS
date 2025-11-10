@@ -179,3 +179,53 @@ class MajorAcademicInfo(MajorAcademicInfoBase):
     updated_at: Optional[datetime] = None  # ✅ CRITICAL FIX: datetime instead of str
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# =============================================================================
+# ✅ PHASE 3: TREE WITH AGGREGATION SCHEMAS
+# =============================================================================
+
+class MajorWithStats(BaseModel):
+    """Major information with aggregated statistics"""
+    id: int
+    name: str
+    code: str
+    total_admission_quota: Optional[int] = Field(None, description="Total admission quota for current year")
+    tuition_fee: Optional[Decimal] = Field(None, description="Tuition fee per year")
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UnitAggregatedStats(BaseModel):
+    """Aggregated statistics for a unit (including descendants)"""
+    total_majors: int = Field(default=0, description="Total number of majors (direct + descendants)")
+    direct_majors: int = Field(default=0, description="Number of direct majors")
+    total_admission_quota: Optional[int] = Field(None, description="Total admission quota (sum of all majors)")
+    avg_tuition_fee: Optional[Decimal] = Field(None, description="Average tuition fee")
+    min_tuition_fee: Optional[Decimal] = Field(None, description="Minimum tuition fee")
+    max_tuition_fee: Optional[Decimal] = Field(None, description="Maximum tuition fee")
+
+
+class OrganizationTreeNodeWithAggregation(BaseModel):
+    """Organization unit tree node with majors and aggregated data"""
+    id: int
+    name: str
+    type: str
+    description: Optional[str] = None
+    parent_id: Optional[int] = None
+    is_active: bool
+
+    # Direct majors of this unit
+    majors: List[MajorWithStats] = Field(default_factory=list, description="Direct majors belonging to this unit")
+
+    # Aggregated statistics (includes descendants)
+    stats: UnitAggregatedStats = Field(default_factory=UnitAggregatedStats, description="Aggregated statistics")
+
+    # Children nodes
+    children: List['OrganizationTreeNodeWithAggregation'] = Field(default_factory=list, description="Child organization units")
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# Required for forward reference
+OrganizationTreeNodeWithAggregation.model_rebuild()

@@ -778,3 +778,169 @@ async def delete_academic_info(db: AsyncSession, academic_info_id: int):
             exc_info=True
         )
         raise e
+
+
+# =============================================================================
+# ✅ PHASE 4: TREE WITH AGGREGATION FUNCTIONS
+# =============================================================================
+
+async def get_organization_tree_with_aggregation(
+    db: AsyncSession,
+    academic_year: Optional[int] = None,
+    include_inactive: bool = False
+) -> List[schemas.OrganizationTreeNodeWithAggregation]:
+    """
+    Lấy cây tổ chức với thông tin ngành học và dữ liệu tổng hợp.
+
+    Args:
+        db: Database session
+        academic_year: Năm học cần lấy thông tin (mặc định là năm hiện tại)
+        include_inactive: Có bao gồm các đơn vị không hoạt động không
+
+    Returns:
+        List of root organization units with aggregated data
+    """
+    from decimal import Decimal
+
+    # 1. Xác định năm học
+    if academic_year is None:
+        academic_year = datetime.now().year
+
+    log.info(
+        "Building organization tree with aggregation",
+        academic_year=academic_year,
+        include_inactive=include_inactive
+    )
+
+    # 2. Query tất cả units với majors và academic info
+    query = (
+        select(models.OrganizationUnit)
+        .options(
+            selectinload(models.OrganizationUnit.majors).selectinload(
+                models.Major.academic_info_history
+            ),
+            selectinload(models.OrganizationUnit.children)
+        )
+        .order_by(models.OrganizationUnit.name)
+    )
+
+    if not include_inactive:
+        query = query.where(models.OrganizationUnit.is_active == True)
+
+    result = await db.execute(query)
+    all_units = result.scalars().unique().all()
+
+    # 3. Tạo map để dễ tìm kiếm
+    units_map = {unit.id: unit for unit in all_units}
+
+    # 4. Build tree với aggregation
+    def build_node_with_aggregation(unit: models.OrganizationUnit) -> schemas.OrganizationTreeNodeWithAggregation:
+        """Build a tree node with aggregated statistics"""
+
+        # Lấy majors của unit này với academic info
+        majors_with_stats = []
+        direct_total_quota = 0
+        tuition_fees = []
+
+        for major in unit.majors:
+            if not major.is_active:
+                continue
+
+            # Tìm academic info cho năm học này
+            academic_info = None
+            for info in major.academic_info_history:
+                if info.academic_year == academic_year and info.is_published:
+                    academic_info = info
+                    break
+
+            # Build MajorWithStats
+            major_stats = schemas.MajorWithStats(
+                id=major.id,
+                name=major.name,
+                code=major.code,
+                total_admission_quota=academic_info.annual_admission_quota if academic_info else None,
+                tuition_fee=academic_info.tuition_fee_per_year if academic_info else None
+            )
+            majors_with_stats.append(major_stats)
+
+            # Collect stats for aggregation
+            if academic_info:
+                if academic_info.annual_admission_quota:
+                    direct_total_quota += academic_info.annual_admission_quota
+                if academic_info.tuition_fee_per_year:
+                    tuition_fees.append(academic_info.tuition_fee_per_year)
+
+        # Recursively build children
+        children_nodes = []
+        for child_unit in all_units:
+            if child_unit.parent_id == unit.id:
+                if not include_inactive and not child_unit.is_active:
+                    continue
+                child_node = build_node_with_aggregation(child_unit)
+                children_nodes.append(child_node)
+
+        # Aggregate statistics from children
+        total_majors = len(majors_with_stats)
+        total_quota = direct_total_quota
+        all_tuition_fees = tuition_fees.copy()
+
+        for child in children_nodes:
+            total_majors += child.stats.total_majors
+            if child.stats.total_admission_quota:
+                total_quota += child.stats.total_admission_quota
+            # Collect tuition fees from children for avg/min/max calculation
+            if child.stats.min_tuition_fee:
+                all_tuition_fees.append(child.stats.min_tuition_fee)
+            if child.stats.max_tuition_fee:
+                all_tuition_fees.append(child.stats.max_tuition_fee)
+
+        # Calculate aggregated tuition fee stats
+        avg_tuition = None
+        min_tuition = None
+        max_tuition = None
+        if all_tuition_fees:
+            avg_tuition = sum(all_tuition_fees) / len(all_tuition_fees)
+            min_tuition = min(all_tuition_fees)
+            max_tuition = max(all_tuition_fees)
+
+        # Build aggregated stats
+        stats = schemas.UnitAggregatedStats(
+            total_majors=total_majors,
+            direct_majors=len(majors_with_stats),
+            total_admission_quota=total_quota if total_quota > 0 else None,
+            avg_tuition_fee=avg_tuition,
+            min_tuition_fee=min_tuition,
+            max_tuition_fee=max_tuition
+        )
+
+        # Build node
+        node = schemas.OrganizationTreeNodeWithAggregation(
+            id=unit.id,
+            name=unit.name,
+            type=unit.type,
+            description=unit.description,
+            parent_id=unit.parent_id,
+            is_active=unit.is_active,
+            majors=majors_with_stats,
+            stats=stats,
+            children=children_nodes
+        )
+
+        return node
+
+    # 5. Build root nodes (units without parent)
+    root_nodes = []
+    for unit in all_units:
+        if unit.parent_id is None:
+            if not include_inactive and not unit.is_active:
+                continue
+            root_node = build_node_with_aggregation(unit)
+            root_nodes.append(root_node)
+
+    log.info(
+        "Organization tree built successfully",
+        root_nodes_count=len(root_nodes),
+        total_units=len(all_units)
+    )
+
+    return root_nodes

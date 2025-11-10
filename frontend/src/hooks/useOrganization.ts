@@ -15,6 +15,7 @@ import type {
   MajorAcademicInfo,
   MajorAcademicInfoCreate,
   MajorAcademicInfoUpdate,
+  OrganizationTreeNodeWithAggregation,
 } from "@/types/organization.types";
 
 // =====================================================================
@@ -43,6 +44,10 @@ export const organizationKeys = {
     [...organizationKeys.academicInfo(), "history", majorId, { publishedOnly }] as const,
   academicInfoByYear: (majorId: number, year: number) =>
     [...organizationKeys.academicInfo(), "year", majorId, year] as const,
+
+  // Tree with aggregation
+  treeWithAggregation: (academicYear?: number, includeInactive?: boolean) =>
+    [...organizationKeys.all, "treeWithAggregation", { academicYear, includeInactive }] as const,
 };
 
 // =====================================================================
@@ -64,6 +69,34 @@ export function useOrganizationUnits() {
     },
     staleTime: Infinity, // Cache forever, invalidate via Socket.IO
     gcTime: 1000 * 60 * 30, // 30 minutes in cache
+  });
+}
+
+/**
+ * Get organization tree with majors and aggregated statistics
+ * @param academicYear - Academic year to fetch data for (defaults to current year)
+ * @param includeInactive - Whether to include inactive units (default: false)
+ */
+export function useOrganizationTreeWithAggregation(
+  academicYear?: number,
+  includeInactive: boolean = false
+) {
+  return useQuery<OrganizationTreeNodeWithAggregation[], AxiosError<ApiErrorResponse>>({
+    queryKey: organizationKeys.treeWithAggregation(academicYear, includeInactive),
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (academicYear) params.append("academic_year", academicYear.toString());
+      if (includeInactive) params.append("include_inactive", "true");
+
+      const url = `${API_ENDPOINTS.ORGANIZATION.TREE_WITH_AGGREGATION}${
+        params.toString() ? `?${params.toString()}` : ""
+      }`;
+
+      const response = await api.get<OrganizationTreeNodeWithAggregation[]>(url);
+      return response.data;
+    },
+    staleTime: 1000 * 60 * 5, // 5 minutes (data can change)
+    gcTime: 1000 * 60 * 10, // 10 minutes in cache
   });
 }
 

@@ -26,6 +26,29 @@ async def get_all_organization_units(
     return await organization_service.get_all_organization_units(db)
 
 
+@router.get("/organization-units/tree-with-aggregation", response_model=List[schemas.OrganizationTreeNodeWithAggregation])
+async def get_organization_tree_with_aggregation(
+    academic_year: Optional[int] = None,
+    include_inactive: bool = False,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: schemas.User = deps.CurrentUser,
+):
+    """
+    Lấy cây tổ chức với thông tin ngành học và dữ liệu tổng hợp.
+
+    - **academic_year**: Năm học cần lấy thông tin (mặc định là năm hiện tại)
+    - **include_inactive**: Có bao gồm các đơn vị không hoạt động không (mặc định là False)
+
+    Response bao gồm:
+    - Danh sách ngành học trực thuộc mỗi đơn vị
+    - Thống kê tổng hợp (số ngành học, chỉ tiêu tuyển sinh, học phí trung bình/min/max)
+    - Dữ liệu được tổng hợp từ các đơn vị con lên đơn vị cha
+    """
+    return await organization_service.get_organization_tree_with_aggregation(
+        db, academic_year=academic_year, include_inactive=include_inactive
+    )
+
+
 @router.get("/majors", response_model=List[schemas.Major])
 async def get_filtered_majors(
     unitId: int,
