@@ -57,6 +57,7 @@ function UnitTreeItem({
   const hasChildren = unit.children && unit.children.length > 0;
   const isExpanded = expandedUnits.has(unit.id);
   const isInactive = !unit.is_active;
+  const canExpand = hasChildren && level < 1; // Only allow expansion if level < 1
 
   return (
     <div>
@@ -71,7 +72,7 @@ function UnitTreeItem({
         onClick={() => onSelectUnit(unit.id)}
       >
         {/* Expand/Collapse Icon */}
-        {hasChildren && (
+        {canExpand && (
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -110,8 +111,8 @@ function UnitTreeItem({
         </div>
       </div>
 
-      {/* Children */}
-      {hasChildren && isExpanded && (
+      {/* Children - Only render if level < 2 (max 2 levels) */}
+      {hasChildren && isExpanded && level < 1 && (
         <div>
           {unit.children
             .filter(child => showInactive ? true : child.is_active)

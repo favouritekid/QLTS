@@ -8,12 +8,13 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
@@ -25,6 +26,7 @@ import {
   UserPlus,
 } from "lucide-react";
 import { useAdminUsersList } from "@/hooks/useAdminUsers";
+import { UserDialog } from "@/components/admin/UserDialog";
 import type { OrganizationUnit } from "@/types/organization.types";
 
 // =====================================================================
@@ -41,6 +43,7 @@ interface UserListTabProps {
 
 export function UserListTab({ unit }: UserListTabProps) {
   const [searchQuery, setSearchQuery] = useState("");
+  const [userDialogOpen, setUserDialogOpen] = useState(false);
 
   // Fetch users with unit filter
   const {
@@ -56,6 +59,11 @@ export function UserListTab({ unit }: UserListTabProps) {
 
   const users = usersData?.users || [];
   const total = usersData?.total || 0;
+
+  // Handle add user
+  const handleAddUser = () => {
+    setUserDialogOpen(true);
+  };
 
   // Get user initials for avatar
   const getUserInitials = (fullName: string) => {
@@ -89,7 +97,7 @@ export function UserListTab({ unit }: UserListTabProps) {
               {total} người dùng thuộc đơn vị này
             </p>
           </div>
-          <Button>
+          <Button onClick={handleAddUser}>
             <UserPlus className="h-4 w-4 mr-2" />
             Thêm người dùng
           </Button>
@@ -107,27 +115,8 @@ export function UserListTab({ unit }: UserListTabProps) {
         </div>
       </div>
 
-      {/* Users List */}
+      {/* Users Table */}
       <ScrollArea className="flex-1">
-        {/* Loading State */}
-        {isLoading && (
-          <div className="p-6 space-y-4">
-            {[1, 2, 3, 4].map((i) => (
-              <Card key={i}>
-                <CardHeader>
-                  <div className="flex items-center gap-3">
-                    <Skeleton className="h-10 w-10 rounded-full" />
-                    <div className="space-y-2 flex-1">
-                      <Skeleton className="h-4 w-40" />
-                      <Skeleton className="h-3 w-60" />
-                    </div>
-                  </div>
-                </CardHeader>
-              </Card>
-            ))}
-          </div>
-        )}
-
         {/* Error State */}
         {error && (
           <div className="p-6">
@@ -155,7 +144,7 @@ export function UserListTab({ unit }: UserListTabProps) {
                 : "Thêm người dùng vào đơn vị này"}
             </p>
             {!searchQuery && (
-              <Button size="sm">
+              <Button size="sm" onClick={handleAddUser}>
                 <UserPlus className="h-4 w-4 mr-2" />
                 Thêm người dùng
               </Button>
@@ -163,75 +152,141 @@ export function UserListTab({ unit }: UserListTabProps) {
           </div>
         )}
 
-        {/* Data List */}
+        {/* Data Table */}
         {!isLoading && !error && users.length > 0 && (
-          <div className="p-6 space-y-4">
-            {users.map((user) => (
-              <Card key={user.id}>
-                <CardHeader>
-                  <div className="flex items-start gap-4">
-                    {/* Avatar */}
-                    <Avatar className="h-10 w-10">
-                      <AvatarImage src={user.avatar_url || undefined} />
-                      <AvatarFallback>
-                        {getUserInitials(user.full_name)}
-                      </AvatarFallback>
-                    </Avatar>
-
-                    {/* User Info */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex-1">
-                          <CardTitle className="text-base">
-                            {user.full_name}
-                          </CardTitle>
-                          <CardDescription className="mt-1">
+          <div className="px-6">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[250px]">Người dùng</TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead className="w-[150px]">Số điện thoại</TableHead>
+                  <TableHead className="w-[120px]">Vai trò</TableHead>
+                  <TableHead className="w-[150px]">Trạng thái</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {users.map((user) => (
+                  <TableRow key={user.id}>
+                    <TableCell>
+                      <div className="flex items-center gap-3">
+                        <Avatar className="h-8 w-8">
+                          <AvatarImage src={user.avatar_url || undefined} />
+                          <AvatarFallback className="text-xs">
+                            {getUserInitials(user.full_name)}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div>
+                          <div className="font-medium">{user.full_name}</div>
+                          <div className="text-xs text-muted-foreground">
                             @{user.username}
-                          </CardDescription>
+                          </div>
                         </div>
-                        <Badge variant={getRoleBadgeVariant(user.role)}>
-                          {user.role}
-                        </Badge>
                       </div>
-
-                      {/* Contact Info */}
-                      <div className="mt-3 space-y-1">
-                        {user.email && (
-                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                            <Mail className="h-3.5 w-3.5" />
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2 text-sm">
+                        {user.email ? (
+                          <>
+                            <Mail className="h-3.5 w-3.5 text-muted-foreground" />
                             <span>{user.email}</span>
-                          </div>
-                        )}
-                        {user.phone_number && (
-                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                            <Phone className="h-3.5 w-3.5" />
-                            <span>{user.phone_number}</span>
-                          </div>
+                          </>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
                         )}
                       </div>
-
-                      {/* Status */}
-                      <div className="mt-2 flex items-center gap-2">
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2 text-sm">
+                        {user.phone_number ? (
+                          <>
+                            <Phone className="h-3.5 w-3.5 text-muted-foreground" />
+                            <span>{user.phone_number}</span>
+                          </>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={getRoleBadgeVariant(user.role)}>
+                        {user.role}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-col gap-1">
                         <Badge
                           variant={user.is_active ? "default" : "secondary"}
-                          className="text-xs"
+                          className="text-xs w-fit"
                         >
                           {user.is_active ? "Hoạt động" : "Không hoạt động"}
                         </Badge>
                         {user.is_email_verified && (
-                          <Badge variant="outline" className="text-xs">
-                            Email đã xác thực
+                          <Badge variant="outline" className="text-xs w-fit">
+                            ✓ Email
                           </Badge>
                         )}
                       </div>
-                    </div>
-                  </div>
-                </CardHeader>
-              </Card>
-            ))}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+
+        {/* Loading State (inside table for consistency) */}
+        {isLoading && (
+          <div className="px-6">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[250px]">Người dùng</TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead className="w-[150px]">Số điện thoại</TableHead>
+                  <TableHead className="w-[120px]">Vai trò</TableHead>
+                  <TableHead className="w-[150px]">Trạng thái</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {[1, 2, 3, 4].map((i) => (
+                  <TableRow key={i}>
+                    <TableCell>
+                      <div className="flex items-center gap-3">
+                        <Skeleton className="h-8 w-8 rounded-full" />
+                        <div className="space-y-2">
+                          <Skeleton className="h-4 w-32" />
+                          <Skeleton className="h-3 w-24" />
+                        </div>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-40" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-4 w-28" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-5 w-16" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-5 w-20" />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </div>
         )}
       </ScrollArea>
+
+      {/* User Dialog */}
+      <UserDialog
+        open={userDialogOpen}
+        onOpenChange={setUserDialogOpen}
+        user={null}
+        preselectedUnitId={unit.id}
+      />
     </div>
   );
 }

@@ -7,12 +7,13 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -68,6 +69,22 @@ export function MajorListTab({ unit }: MajorListTabProps) {
   const [majorToDelete, setMajorToDelete] = useState<Major | null>(null);
   const deleteMajorMutation = useDeleteMajor();
 
+  // ✅ Collect all majors from unit and its descendants
+  const getAllMajors = (unit: OrganizationUnit): Major[] => {
+    const majors: Major[] = [...(unit.majors || [])];
+
+    // Recursively collect majors from children
+    if (unit.children && unit.children.length > 0) {
+      unit.children.forEach((child) => {
+        majors.push(...getAllMajors(child));
+      });
+    }
+
+    return majors;
+  };
+
+  const allMajors = getAllMajors(unit);
+
   // Handlers
   const handleCreateMajor = () => {
     setSelectedMajor(null);
@@ -101,8 +118,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
   };
 
   // Filter majors
-  const majors = unit.majors || [];
-  const filteredMajors = majors.filter(
+  const filteredMajors = allMajors.filter(
     (major) =>
       major.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       major.code.toLowerCase().includes(searchQuery.toLowerCase())
@@ -137,7 +153,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
         </div>
       </div>
 
-      {/* Majors List */}
+      {/* Majors Table */}
       <ScrollArea className="flex-1">
         {filteredMajors.length === 0 ? (
           <div className="p-12 text-center">
@@ -158,59 +174,60 @@ export function MajorListTab({ unit }: MajorListTabProps) {
             )}
           </div>
         ) : (
-          <div className="p-6 grid gap-4">
-            {filteredMajors.map((major) => (
-              <Card key={major.id} className="overflow-hidden">
-                <CardHeader className="pb-3">
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1">
-                      <CardTitle className="text-base flex items-center gap-2">
-                        <GraduationCap className="h-4 w-4 text-muted-foreground" />
-                        {major.name}
-                      </CardTitle>
-                      <CardDescription className="mt-1">
-                        <code className="text-xs bg-muted px-2 py-0.5 rounded">
-                          {major.code}
-                        </code>
-                      </CardDescription>
-                    </div>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="sm">
-                          <MoreVertical className="h-4 w-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem
-                          onClick={() => handleManageAcademicInfo(major)}
-                        >
-                          <BookOpen className="h-4 w-4 mr-2" />
-                          Thông tin học thuật
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => handleEditMajor(major)}>
-                          <Edit className="h-4 w-4 mr-2" />
-                          Chỉnh sửa
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onClick={() => handleDeleteMajorClick(major)}
-                          className="text-red-600"
-                        >
-                          <Trash2 className="h-4 w-4 mr-2" />
-                          Xóa
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-                </CardHeader>
-                {major.description && (
-                  <CardContent className="pt-0">
-                    <p className="text-sm text-muted-foreground">
-                      {major.description}
-                    </p>
-                  </CardContent>
-                )}
-              </Card>
-            ))}
+          <div className="px-6">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[150px]">Mã ngành</TableHead>
+                  <TableHead>Tên ngành học</TableHead>
+                  <TableHead className="w-[400px]">Mô tả</TableHead>
+                  <TableHead className="text-right w-[100px]">Thao tác</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredMajors.map((major) => (
+                  <TableRow key={major.id}>
+                    <TableCell>
+                      <code className="text-xs bg-muted px-2 py-1 rounded font-mono">
+                        {major.code}
+                      </code>
+                    </TableCell>
+                    <TableCell className="font-medium">{major.name}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {major.description || "—"}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="sm">
+                            <MoreVertical className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem
+                            onClick={() => handleManageAcademicInfo(major)}
+                          >
+                            <BookOpen className="h-4 w-4 mr-2" />
+                            Thông tin học thuật
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleEditMajor(major)}>
+                            <Edit className="h-4 w-4 mr-2" />
+                            Chỉnh sửa
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => handleDeleteMajorClick(major)}
+                            className="text-red-600"
+                          >
+                            <Trash2 className="h-4 w-4 mr-2" />
+                            Xóa
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </div>
         )}
       </ScrollArea>
