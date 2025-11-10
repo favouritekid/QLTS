@@ -56,14 +56,12 @@ const academicInfoFormSchema = z.object({
   tuition_fee_per_year: z
     .number()
     .min(0, "Học phí không thể âm")
-    .optional()
-    .nullable(),
+    .nullish(),
   annual_admission_quota: z
     .number()
     .int("Chỉ tiêu tuyển sinh phải là số nguyên")
     .min(0, "Chỉ tiêu tuyển sinh không thể âm")
-    .optional()
-    .nullable(),
+    .nullish(),
   is_published: z.boolean().default(false),
 });
 

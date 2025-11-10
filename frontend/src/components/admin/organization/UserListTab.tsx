@@ -58,7 +58,7 @@ export function UserListTab({ unit }: UserListTabProps) {
   });
 
   const users = usersData?.users || [];
-  const total = usersData?.total || 0;
+  const total = usersData?.total_count || 0;
 
   // Handle add user
   const handleAddUser = () => {
@@ -66,7 +66,8 @@ export function UserListTab({ unit }: UserListTabProps) {
   };
 
   // Get user initials for avatar
-  const getUserInitials = (fullName: string) => {
+  const getUserInitials = (fullName: string | null | undefined) => {
+    if (!fullName) return "??";
     const words = fullName.trim().split(/\s+/);
     if (words.length >= 2) {
       return (words[0][0] + words[words.length - 1][0]).toUpperCase();
@@ -214,19 +215,12 @@ export function UserListTab({ unit }: UserListTabProps) {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      <div className="flex flex-col gap-1">
-                        <Badge
-                          variant={user.is_active ? "default" : "secondary"}
-                          className="text-xs w-fit"
-                        >
-                          {user.is_active ? "Hoạt động" : "Không hoạt động"}
-                        </Badge>
-                        {user.is_email_verified && (
-                          <Badge variant="outline" className="text-xs w-fit">
-                            ✓ Email
-                          </Badge>
-                        )}
-                      </div>
+                      <Badge
+                        variant={user.status === "active" ? "default" : "secondary"}
+                        className="text-xs w-fit"
+                      >
+                        {user.status === "active" ? "Hoạt động" : user.status === "banned" ? "Đã cấm" : "Chờ xử lý"}
+                      </Badge>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -285,7 +279,7 @@ export function UserListTab({ unit }: UserListTabProps) {
         open={userDialogOpen}
         onOpenChange={setUserDialogOpen}
         user={null}
-        preselectedUnitId={unit.id}
+        mode="create"
       />
     </div>
   );

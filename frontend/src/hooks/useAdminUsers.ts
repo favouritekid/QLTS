@@ -38,6 +38,7 @@ interface UseAdminUsersListParams {
   status?: string;
   sort?: string;
   order?: "asc" | "desc";
+  unit_id?: number; // Filter by organization unit
 }
 
 export function useAdminUsersList(params: UseAdminUsersListParams = {}) {
