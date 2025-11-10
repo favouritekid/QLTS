@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Building2,
   Plus,
@@ -40,6 +41,7 @@ interface UnitTreeItemProps {
   onSelectUnit: (id: number) => void;
   expandedUnits: Set<number>;
   onToggleExpand: (id: number) => void;
+  showInactive: boolean; // Filter inactive children
 }
 
 function UnitTreeItem({
@@ -49,6 +51,7 @@ function UnitTreeItem({
   onSelectUnit,
   expandedUnits,
   onToggleExpand,
+  showInactive,
 }: UnitTreeItemProps) {
   const isSelected = unit.id === selectedUnitId;
   const hasChildren = unit.children && unit.children.length > 0;
@@ -110,17 +113,20 @@ function UnitTreeItem({
       {/* Children */}
       {hasChildren && isExpanded && (
         <div>
-          {unit.children.map((child) => (
-            <UnitTreeItem
-              key={child.id}
-              unit={child}
-              level={level + 1}
-              selectedUnitId={selectedUnitId}
-              onSelectUnit={onSelectUnit}
-              expandedUnits={expandedUnits}
-              onToggleExpand={onToggleExpand}
-            />
-          ))}
+          {unit.children
+            .filter(child => showInactive ? true : child.is_active)
+            .map((child) => (
+              <UnitTreeItem
+                key={child.id}
+                unit={child}
+                level={level + 1}
+                selectedUnitId={selectedUnitId}
+                onSelectUnit={onSelectUnit}
+                expandedUnits={expandedUnits}
+                onToggleExpand={onToggleExpand}
+                showInactive={showInactive}
+              />
+            ))}
         </div>
       )}
     </div>
@@ -140,6 +146,7 @@ export function UnitList({
   const [searchQuery, setSearchQuery] = useState("");
   const [unitDialogOpen, setUnitDialogOpen] = useState(false);
   const [expandedUnits, setExpandedUnits] = useState<Set<number>>(new Set());
+  const [showInactive, setShowInactive] = useState(false);
 
   // Handle expand/collapse
   const handleToggleExpand = (id: number) => {
@@ -198,6 +205,21 @@ export function UnitList({
             className="pl-9 h-9"
           />
         </div>
+
+        {/* Show Inactive Checkbox */}
+        <div className="flex items-center space-x-2">
+          <Checkbox
+            id="show-inactive"
+            checked={showInactive}
+            onCheckedChange={(checked) => setShowInactive(checked === true)}
+          />
+          <label
+            htmlFor="show-inactive"
+            className="text-sm text-muted-foreground cursor-pointer select-none"
+          >
+            Hiển thị đơn vị đã lưu trữ
+          </label>
+        </div>
       </div>
 
       {/* Units Tree */}
@@ -225,6 +247,7 @@ export function UnitList({
                 onSelectUnit={onSelectUnit}
                 expandedUnits={expandedUnits}
                 onToggleExpand={handleToggleExpand}
+                showInactive={showInactive}
               />
             ))}
           </div>
