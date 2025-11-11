@@ -243,12 +243,19 @@ async def seed_data():
 
             # Get default status from consultation_status table
             result = await session.execute(
-                text("SELECT id, stage_id FROM consultation_status WHERE label ILIKE '%new%' OR label ILIKE '%initial%' LIMIT 1")
+                text("SELECT id, stage_id FROM consultation_status WHERE name ILIKE '%mới%' OR name ILIKE '%new%' OR name ILIKE '%initial%' LIMIT 1")
             )
             default_status = result.fetchone()
 
             if not default_status:
-                print("   ⚠️  No default consultation status found, skipping lead creation")
+                # Fallback: get first status
+                result = await session.execute(
+                    text("SELECT id, stage_id FROM consultation_status LIMIT 1")
+                )
+                default_status = result.fetchone()
+
+            if not default_status:
+                print("   ⚠️  No consultation status found in database, skipping lead creation")
             else:
                 status_id, stage_id = default_status
 
