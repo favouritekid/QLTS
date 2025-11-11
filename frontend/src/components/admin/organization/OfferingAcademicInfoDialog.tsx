@@ -165,10 +165,10 @@ export function OfferingAcademicInfoDialog({
         // Update existing
         const payload: OfferingAcademicInfoUpdate = {
           academic_year: values.academic_year,
-          tuition_fee_per_year: values.tuition_fee_per_year ?? null,
-          annual_admission_quota: values.annual_admission_quota ?? null,
+          tuition_fee_per_year: typeof values.tuition_fee_per_year === 'number' ? values.tuition_fee_per_year : null,
+          annual_admission_quota: typeof values.annual_admission_quota === 'number' ? values.annual_admission_quota : null,
           target_audience: values.target_audience || null,
-          cutoff_score_previous_year: values.cutoff_score_previous_year ?? null,
+          cutoff_score_previous_year: typeof values.cutoff_score_previous_year === 'number' ? values.cutoff_score_previous_year : null,
           admission_criteria: parsedAdmissionCriteria,
           is_published: values.is_published,
         };
@@ -181,10 +181,10 @@ export function OfferingAcademicInfoDialog({
         const payload: OfferingAcademicInfoCreate = {
           offering_id: offering.id,
           academic_year: values.academic_year,
-          tuition_fee_per_year: values.tuition_fee_per_year ?? null,
-          annual_admission_quota: values.annual_admission_quota ?? null,
+          tuition_fee_per_year: typeof values.tuition_fee_per_year === 'number' ? values.tuition_fee_per_year : null,
+          annual_admission_quota: typeof values.annual_admission_quota === 'number' ? values.annual_admission_quota : null,
           target_audience: values.target_audience || null,
-          cutoff_score_previous_year: values.cutoff_score_previous_year ?? null,
+          cutoff_score_previous_year: typeof values.cutoff_score_previous_year === 'number' ? values.cutoff_score_previous_year : null,
           admission_criteria: parsedAdmissionCriteria,
           is_published: values.is_published,
         };

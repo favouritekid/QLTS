@@ -55,10 +55,10 @@ export function UnitDetailPanel({ unit, onUnitDeleted }: UnitDetailPanelProps) {
             )}
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <span>Loại: {unit.type}</span>
-              {unit.majors && unit.majors.length > 0 && (
+              {unit.major_programs && unit.major_programs.length > 0 && (
                 <>
                   <span>•</span>
-                  <span>{unit.majors.length} ngành học</span>
+                  <span>{unit.major_programs.length} chương trình</span>
                 </>
               )}
               {unit.children && unit.children.length > 0 && (
@@ -78,10 +78,10 @@ export function UnitDetailPanel({ unit, onUnitDeleted }: UnitDetailPanelProps) {
           <TabsList className="h-12 bg-transparent">
             <TabsTrigger value="majors" className="gap-2">
               <GraduationCap className="h-4 w-4" />
-              Ngành học
-              {unit.majors && unit.majors.length > 0 && (
+              Chương trình
+              {unit.major_programs && unit.major_programs.length > 0 && (
                 <span className="ml-1 text-xs bg-muted px-1.5 py-0.5 rounded">
-                  {unit.majors.length}
+                  {unit.major_programs.length}
                 </span>
               )}
             </TabsTrigger>
