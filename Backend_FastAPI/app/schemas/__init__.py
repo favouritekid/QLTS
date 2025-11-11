@@ -35,6 +35,7 @@ from .lead import (
 
 # --- Từ organization.py ---
 from .organization import (
+    # Legacy schemas (for backward compatibility / aliases)
     Major,
     MajorBase,
     MajorCreate,
@@ -43,6 +44,21 @@ from .organization import (
     MajorAcademicInfoBase,
     MajorAcademicInfoCreate,
     MajorAcademicInfoUpdate,
+    # New 3-tier schemas
+    MajorProgram,
+    MajorProgramBase,
+    MajorProgramCreate,
+    MajorProgramUpdate,
+    ProgramOffering,
+    ProgramOfferingBase,
+    ProgramOfferingCreate,
+    ProgramOfferingUpdate,
+    OfferingAcademicInfo,
+    OfferingAcademicInfoBase,
+    OfferingAcademicInfoCreate,
+    OfferingAcademicInfoUpdate,
+    AdmissionCriterion,
+    # Organization Unit schemas
     OrganizationUnit,
     OrganizationUnitCreate,
     OrganizationUnitShallow,
