@@ -27,7 +27,7 @@ export const ADMIN_ROLES = ["admin", "manager"] as const;
  */
 export function hasAdminAccess(role: string | undefined): boolean {
   if (!role) return false;
-  return ADMIN_ROLES.includes(role as any);
+  return (ADMIN_ROLES as readonly string[]).includes(role);
 }
 
 /**

@@ -28,6 +28,18 @@ export const API_ENDPOINTS = {
     GET: "/api/profile",
     UPDATE: "/api/profile",
   },
+  // Organization (Public endpoints)
+  ORGANIZATION: {
+    LIST_UNITS: "/api/organization-units",
+    GET_UNIT: (id: number) => `/api/organization-units/${id}`,
+    TREE_WITH_AGGREGATION: "/api/organization-units/tree-with-aggregation",
+    UNIT_TYPES: "/api/organization-unit-types",
+    LIST_MAJORS: "/api/majors",
+    GET_MAJOR: (id: number) => `/api/majors/${id}`,
+    // Academic Info
+    ACADEMIC_INFO_HISTORY: (majorId: number) => `/api/majors/${majorId}/academic-info`,
+    ACADEMIC_INFO_BY_YEAR: (majorId: number, year: number) => `/api/majors/${majorId}/academic-info/${year}`,
+  },
   ADMIN: {
     USERS: {
       LIST: "/api/admin/users",
@@ -51,6 +63,23 @@ export const API_ENDPOINTS = {
       VALIDATE: "/api/admin/policies/validate",
       APPLY_TEMPLATE: "/api/admin/policies/apply-template",
       STATISTICS: "/api/admin/policies/statistics",
+    },
+    // Organization Management (Admin Only)
+    ORGANIZATION: {
+      // Units
+      CREATE_UNIT: "/api/admin/organization-units",
+      UPDATE_UNIT: (id: number) => `/api/admin/organization-units/${id}`,
+      DELETE_UNIT: (id: number) => `/api/admin/organization-units/${id}`,
+      GET_UNIT: (id: number) => `/api/admin/organization-units/${id}`,
+      // Majors
+      CREATE_MAJOR: "/api/admin/majors",
+      UPDATE_MAJOR: (id: number) => `/api/admin/majors/${id}`,
+      DELETE_MAJOR: (id: number) => `/api/admin/majors/${id}`,
+      GET_MAJOR: (id: number) => `/api/admin/majors/${id}`,
+      // Academic Info
+      CREATE_ACADEMIC_INFO: (majorId: number) => `/api/majors/${majorId}/academic-info`,
+      UPDATE_ACADEMIC_INFO: (academicInfoId: number) => `/api/academic-info/${academicInfoId}`,
+      DELETE_ACADEMIC_INFO: (academicInfoId: number) => `/api/academic-info/${academicInfoId}`,
     },
     ACTIVITY_LOGS: "/api/admin/activity-logs",
     STATISTICS: "/api/admin/statistics",

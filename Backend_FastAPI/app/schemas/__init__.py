@@ -39,10 +39,19 @@ from .organization import (
     MajorBase,
     MajorCreate,
     MajorUpdate,
+    MajorAcademicInfo,
+    MajorAcademicInfoBase,
+    MajorAcademicInfoCreate,
+    MajorAcademicInfoUpdate,
     OrganizationUnit,
     OrganizationUnitCreate,
     OrganizationUnitShallow,
+    OrganizationUnitType,
     OrganizationUnitUpdate,
+    # Tree with aggregation schemas
+    MajorWithStats,
+    UnitAggregatedStats,
+    OrganizationTreeNodeWithAggregation,
 )
 
 # --- Từ permissions.py ---

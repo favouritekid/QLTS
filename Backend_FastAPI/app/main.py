@@ -490,7 +490,7 @@ app.include_router(notification_preferences.router, prefix="/api/notifications",
 app.include_router(leads.router, prefix="/api/leads", tags=["Leads"])
 app.include_router(pipeline.router, prefix="/api/pipeline", tags=["Pipeline"])
 app.include_router(
-    organization.router, prefix="/api/organization", tags=["Organization"]
+    organization.router, prefix="/api", tags=["Organization"]
 )
 app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
 

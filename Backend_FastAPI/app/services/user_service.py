@@ -171,6 +171,112 @@ async def get_highest_priority_role_from_casbin(
     return highest_role.replace("role:", "")  # Return "admin", not "role:admin"
 
 
+# =============================================================================
+# PHASE 2: TEMPORAL ARCHITECTURE - USER ASSIGNMENT MANAGEMENT
+# =============================================================================
+
+async def _create_or_update_user_assignment(
+    db: AsyncSession,
+    user: models.User,
+    new_role: str,
+    new_unit_id: Optional[int],
+    assigned_by_user_id: Optional[int] = None
+) -> Optional[models.UserUnitAssignment]:
+    """
+    ✅ PHASE 2: Temporal Architecture Helper
+
+    Create or update user assignment with temporal history tracking.
+
+    This function implements the atomic transaction pattern for user role/unit changes:
+    1. Find old active assignment (if exists)
+    2. Deactivate old assignment (set is_active=false, end_date=now())
+    3. Create new assignment (with is_active=true)
+    4. Update user cache fields (role, unit_id, current_assignment_id)
+
+    Args:
+        db: Database session
+        user: User object to update
+        new_role: New role to assign
+        new_unit_id: New unit ID (can be None for non-unit users)
+        assigned_by_user_id: ID of admin who made the assignment (None = system/migration)
+
+    Returns:
+        New UserUnitAssignment object if assignment was created, None if skipped
+
+    Note:
+        - If user has no unit (new_unit_id is None), we don't create assignment
+        - This function must be called INSIDE a transaction
+        - Caller is responsible for commit/rollback
+    """
+    now = datetime.now(timezone.utc)
+
+    # Skip if user has no unit (regular users without unit assignment)
+    if new_unit_id is None:
+        log.debug(
+            "Skipping assignment creation - user has no unit",
+            user_id=user.id,
+            role=new_role
+        )
+        # Still update cache fields
+        user.role = new_role
+        user.unit_id = None
+        user.current_assignment_id = None
+        return None
+
+    # 1. Find and deactivate old active assignment (if exists)
+    old_assignment_query = select(models.UserUnitAssignment).where(
+        models.UserUnitAssignment.user_id == user.id,
+        models.UserUnitAssignment.is_active == True
+    )
+    result = await db.execute(old_assignment_query)
+    old_assignment = result.scalar_one_or_none()
+
+    if old_assignment:
+        log.debug(
+            "Deactivating old assignment",
+            user_id=user.id,
+            old_assignment_id=old_assignment.id,
+            old_role=old_assignment.role,
+            old_unit_id=old_assignment.unit_id
+        )
+        old_assignment.is_active = False
+        old_assignment.end_date = now
+        old_assignment.updated_at = now
+        db.add(old_assignment)
+
+    # 2. Create new active assignment
+    new_assignment = models.UserUnitAssignment(
+        user_id=user.id,
+        unit_id=new_unit_id,
+        role=new_role,
+        assigned_by_user_id=assigned_by_user_id,
+        start_date=now,
+        end_date=None,
+        is_active=True,
+        created_at=now,
+        updated_at=now
+    )
+    db.add(new_assignment)
+    await db.flush()  # Get new_assignment.id
+
+    log.info(
+        "Created new user assignment",
+        user_id=user.id,
+        assignment_id=new_assignment.id,
+        role=new_role,
+        unit_id=new_unit_id,
+        assigned_by=assigned_by_user_id
+    )
+
+    # 3. Update user cache fields (for Casbin performance)
+    user.role = new_role
+    user.unit_id = new_unit_id
+    user.current_assignment_id = new_assignment.id
+    db.add(user)
+
+    return new_assignment
+
+
 async def authenticate_user(
     db: AsyncSession, username: str, password: str
 ) -> models.User:
@@ -232,24 +338,31 @@ async def create_user_by_admin(
     user_in: schemas.AdminUserCreate,
     enforcer: Optional[casbin.AsyncEnforcer] = None,
     avatar_file: Optional[UploadFile] = None,
+    assigned_by_user_id: Optional[int] = None,  # ✅ PHASE 2: Add assigner tracking
 ) -> models.User:
     """
-    ✅ ATOMIC TRANSACTION (v17):
-    Create user with atomic DB + Casbin transaction to prevent split source of truth.
+    ✅ ATOMIC TRANSACTION (v17 + PHASE 2):
+    Create user with atomic DB + Casbin + UserUnitAssignment transaction.
 
-    Uses nested transaction (savepoint) to ensure both user creation and Casbin
-    role assignment succeed or fail together, preventing inconsistency.
+    PHASE 2 Enhancement:
+    - Automatically creates UserUnitAssignment if user has unit_id
+    - Tracks assignment history from the moment of user creation
+    - Maintains temporal data integrity
+
+    Uses nested transaction (savepoint) to ensure all operations
+    (DB, Casbin, Assignment) succeed or fail together.
     """
     try:
         hashed_password = get_password_hash(user_in.password)
 
         # ✅ ATOMIC FIX: Begin nested transaction (savepoint)
         async with db.begin_nested():
-            # (1) Create user in DB
+            # (1) Create user in DB (with initial cache values)
             db_user = models.User(
                 **user_in.model_dump(exclude={"password"}),  # Dùng model_dump
                 password_hash=hashed_password,
                 avatar_url=None,
+                current_assignment_id=None,  # Will be set by helper function
             )
 
             if avatar_file:
@@ -266,11 +379,26 @@ async def create_user_by_admin(
                 )
 
             db.add(db_user)
-            # ✅ DON'T COMMIT HERE - let nested transaction handle it
             await db.flush()  # Flush to get user.id
             await db.refresh(db_user)
 
-            # (2) Add Casbin grouping policy INSIDE the same transaction
+            # (2) ✅ PHASE 2: Create UserUnitAssignment if user has unit
+            if db_user.unit_id is not None:
+                await _create_or_update_user_assignment(
+                    db=db,
+                    user=db_user,
+                    new_role=db_user.role,
+                    new_unit_id=db_user.unit_id,
+                    assigned_by_user_id=assigned_by_user_id
+                )
+                log.info(
+                    "UserUnitAssignment created for new user",
+                    user_id=db_user.id,
+                    role=db_user.role,
+                    unit_id=db_user.unit_id
+                )
+
+            # (3) Add Casbin grouping policy INSIDE the same transaction
             if enforcer:
                 role_name = f"role:{db_user.role}"
                 user_subject = f"user:{db_user.id}"
@@ -287,20 +415,21 @@ async def create_user_by_admin(
                     role=db_user.role,
                 )
 
-            # ✅ If we reach here, both DB and Casbin operations succeeded
+            # ✅ If we reach here, all operations succeeded
             # Nested transaction will commit on exit from 'async with' block
 
-        # (3) Commit the main transaction (atomic: DB + Casbin together)
+        # (4) Commit the main transaction (atomic: DB + Assignment + Casbin together)
         await db.commit()
 
         log.info(
-            "User created successfully with atomic DB+Casbin transaction",
+            "User created successfully with atomic DB+Assignment+Casbin transaction",
             user_id=db_user.id,
             username=db_user.username,
-            role=db_user.role
+            role=db_user.role,
+            has_assignment=db_user.current_assignment_id is not None
         )
 
-        # (4) ✅ REAL-TIME SYNC: Notify all connected clients (after successful commit)
+        # (5) ✅ REAL-TIME SYNC: Notify all connected clients (after successful commit)
         await emit_data_updated(
             resource_type="user",
             operation="create",
@@ -389,25 +518,45 @@ async def update_user(
     db: AsyncSession,
     db_user: models.User,
     user_in: schemas.UserUpdate,
-    enforcer: Optional[casbin.AsyncEnforcer] = None,  # ← PHASE 1: Add enforcer parameter
+    enforcer: Optional[casbin.AsyncEnforcer] = None,
     avatar_file: Optional[UploadFile] = None,
+    assigned_by_user_id: Optional[int] = None,  # ✅ PHASE 2: Track who made the assignment
 ) -> models.User:
     """
-    ✅ ATOMIC TRANSACTION (v17):
-    Update user with atomic DB + Casbin transaction to prevent split source of truth.
+    ✅ ATOMIC TRANSACTION (v17 + PHASE 2):
+    Update user with atomic DB + Casbin + UserUnitAssignment transaction.
 
-    Uses nested transaction (savepoint) to ensure both DB and Casbin updates
+    PHASE 2 Enhancement:
+    - Detects role/unit_id changes and creates temporal history
+    - Deactivates old UserUnitAssignment and creates new one
+    - Maintains cache fields (user.role, user.unit_id) for Casbin performance
+    - Tracks who made the assignment (assigned_by_user_id)
+
+    This implements the 6-step atomic transaction pattern:
+    1. Find old UserUnitAssignment (is_active=true)
+    2. Set is_active=false, end_date=now() for old assignment
+    3. CREATE new UserUnitAssignment with new role/unit
+    4. Get new assignment ID
+    5. UPDATE user cache fields (role, unit_id, current_assignment_id)
+    6. Sync Casbin grouping policies
+
+    Uses nested transaction (savepoint) to ensure all operations
     succeed or fail together, preventing inconsistency.
     """
     user_id_for_logging = db_user.id
     try:
         update_data = user_in.model_dump(exclude_unset=True)
 
-        # ← PHASE 1: Track role change BEFORE updating
+        # ✅ PHASE 2: Track role AND unit_id changes BEFORE updating
         old_db_role = db_user.role
-        new_db_role = update_data.get("role")
+        old_db_unit_id = db_user.unit_id
+        new_db_role = update_data.get("role", old_db_role)  # Default to current if not changing
+        new_db_unit_id = update_data.get("unit_id", old_db_unit_id)  # Default to current
+
         user_subject = f"user:{db_user.id}"
-        role_changed = new_db_role and new_db_role != old_db_role
+        role_changed = new_db_role != old_db_role
+        unit_changed = new_db_unit_id != old_db_unit_id
+        assignment_changed = role_changed or unit_changed
 
         if "email" in update_data and update_data["email"] != db_user.email:
             existing_user = await get_user_by_email(db, update_data["email"])
@@ -417,11 +566,12 @@ async def update_user(
                 )
 
         # ✅ ATOMIC FIX: Begin nested transaction (savepoint)
-        # This ensures DB + Casbin operations are atomic
+        # This ensures DB + Assignment + Casbin operations are atomic
         async with db.begin_nested():
-            # (1) Update user fields
+            # (1) Update user fields (EXCEPT role/unit_id - handled by assignment helper)
             for field, value in update_data.items():
-                if value is not None:
+                # Skip role/unit_id - will be set by _create_or_update_user_assignment
+                if field not in ["role", "unit_id"] and value is not None:
                     setattr(db_user, field, value)
 
             if avatar_file:
@@ -440,17 +590,41 @@ async def update_user(
                     url=new_avatar_url,
                 )
 
+            # (2) ✅ PHASE 2: Handle role/unit assignment changes with temporal history
+            if assignment_changed:
+                log.info(
+                    "Assignment changed - creating temporal history",
+                    user_id=user_id_for_logging,
+                    old_role=old_db_role,
+                    new_role=new_db_role,
+                    old_unit=old_db_unit_id,
+                    new_unit=new_db_unit_id
+                )
+
+                # This function will:
+                # - Deactivate old assignment
+                # - Create new assignment
+                # - Update cache fields (user.role, user.unit_id, user.current_assignment_id)
+                await _create_or_update_user_assignment(
+                    db=db,
+                    user=db_user,
+                    new_role=new_db_role,
+                    new_unit_id=new_db_unit_id,
+                    assigned_by_user_id=assigned_by_user_id
+                )
+
             db.add(db_user)
-            # ✅ DON'T COMMIT HERE - let nested transaction handle it
             await db.flush()  # Flush to get updated values
             await db.refresh(db_user)
 
-            # (2) Sync Casbin INSIDE the same transaction
+            # (3) Sync Casbin INSIDE the same transaction (if role changed)
             if role_changed and enforcer:
-                log.info("Role changed in DB, syncing Casbin inside transaction...",
-                           user_id=user_id_for_logging,
-                           old=old_db_role,
-                           new=new_db_role)
+                log.info(
+                    "Role changed, syncing Casbin inside transaction",
+                    user_id=user_id_for_logging,
+                    old=old_db_role,
+                    new=new_db_role
+                )
 
                 old_casbin_role = f"role:{old_db_role}" if old_db_role else None
                 new_casbin_role = f"role:{new_db_role}"
@@ -458,32 +632,36 @@ async def update_user(
                 # Remove old role grouping (if exists)
                 if old_casbin_role:
                     removed = await enforcer.remove_grouping_policy(user_subject, old_casbin_role)
-                    log.debug("Removed old grouping policy", removed=removed)
+                    log.debug("Removed old Casbin grouping policy", removed=removed)
 
                 # Add new role grouping
                 added = await enforcer.add_grouping_policy(user_subject, new_casbin_role)
-                log.debug("Added new grouping policy", added=added)
+                log.debug("Added new Casbin grouping policy", added=added)
 
                 # Save policy - this writes to casbin_rule table in SAME transaction
                 await enforcer.save_policy()
 
-                log.info("Casbin grouping policy synced successfully (in transaction)",
-                          user_id=user_id_for_logging,
-                          new_casbin_role=new_casbin_role)
+                log.info(
+                    "Casbin grouping policy synced successfully (in transaction)",
+                    user_id=user_id_for_logging,
+                    new_casbin_role=new_casbin_role
+                )
 
-            # ✅ If we reach here, both DB and Casbin operations succeeded
+            # ✅ If we reach here, all operations succeeded
             # Nested transaction will commit on exit from 'async with' block
 
-        # (3) Commit the main transaction (atomic: DB + Casbin together)
+        # (4) Commit the main transaction (atomic: DB + Assignment + Casbin together)
         await db.commit()
 
         log.info(
-            "User updated successfully with atomic DB+Casbin transaction",
+            "User updated successfully with atomic DB+Assignment+Casbin transaction",
             user_id=user_id_for_logging,
-            role_changed=role_changed
+            role_changed=role_changed,
+            unit_changed=unit_changed,
+            assignment_changed=assignment_changed
         )
 
-        # (4) ✅ REAL-TIME SYNC: Notify all connected clients (after successful commit)
+        # (5) ✅ REAL-TIME SYNC: Notify all connected clients (after successful commit)
         await emit_data_updated(
             resource_type="user",
             operation="update",
@@ -492,6 +670,7 @@ async def update_user(
                 "username": db_user.username,
                 "full_name": db_user.full_name,
                 "role": db_user.role,
+                "unit_id": db_user.unit_id,
                 "status": db_user.status
             }
         )
