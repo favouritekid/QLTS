@@ -8,13 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Building2,
-  Plus,
-  Search,
-  ChevronRight,
-  ChevronDown,
-} from "lucide-react";
+import { Building2, Plus, Search, ChevronRight, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { UnitDialog } from "./UnitDialog";
 import type { OrganizationUnit } from "@/types/organization.types";
@@ -65,8 +59,8 @@ function UnitTreeItem({
       {/* Unit Item */}
       <div
         className={cn(
-          "flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-accent transition-colors",
-          isSelected && "bg-accent border-l-2 border-primary",
+          "hover:bg-accent flex cursor-pointer items-center gap-2 px-3 py-2 transition-colors",
+          isSelected && "bg-accent border-primary border-l-2",
           isInactive && "opacity-50"
         )}
         style={{ paddingLeft: `${level * 1.5 + 0.75}rem` }}
@@ -79,7 +73,7 @@ function UnitTreeItem({
               e.stopPropagation();
               onToggleExpand(unit.id);
             }}
-            className="p-0.5 hover:bg-muted rounded"
+            className="hover:bg-muted rounded p-0.5"
           >
             {isExpanded ? (
               <ChevronDown className="h-4 w-4" />
@@ -88,11 +82,11 @@ function UnitTreeItem({
             )}
           </button>
         ) : (
-          <div className="w-5 h-5" /> // Spacer for alignment when no children
+          <div className="h-5 w-5" /> // Spacer for alignment when no children
         )}
 
         {/* Icon */}
-        <Building2 className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+        <Building2 className="text-muted-foreground h-4 w-4 flex-shrink-0" />
 
         {/* Name */}
         <span className={cn("flex-1 truncate text-sm", isSelected && "font-medium")}>
@@ -118,7 +112,7 @@ function UnitTreeItem({
       {hasChildren && isExpanded && (
         <div>
           {unit.children
-            .filter(child => showInactive ? true : child.is_active)
+            .filter((child) => (showInactive ? true : child.is_active))
             .map((child) => (
               <UnitTreeItem
                 key={child.id}
@@ -141,12 +135,7 @@ function UnitTreeItem({
 // MAIN COMPONENT
 // =====================================================================
 
-export function UnitList({
-  units,
-  isLoading,
-  selectedUnitId,
-  onSelectUnit,
-}: UnitListProps) {
+export function UnitList({ units, isLoading, selectedUnitId, onSelectUnit }: UnitListProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [unitDialogOpen, setUnitDialogOpen] = useState(false);
   const [expandedUnits, setExpandedUnits] = useState<Set<number>>(new Set());
@@ -170,13 +159,10 @@ export function UnitList({
     if (!searchQuery) return units;
 
     return units.filter((unit) => {
-      const matchesSearch = unit.name
-        .toLowerCase()
-        .includes(searchQuery.toLowerCase());
+      const matchesSearch = unit.name.toLowerCase().includes(searchQuery.toLowerCase());
+      // Lỗi nằm ở đây: Logic này thêm cả cha và con vào flat list
       const hasMatchingChildren =
-        unit.children &&
-        unit.children.length > 0 &&
-        filterUnits(unit.children).length > 0;
+        unit.children && unit.children.length > 0 && filterUnits(unit.children).length > 0;
 
       return matchesSearch || hasMatchingChildren;
     });
@@ -185,31 +171,31 @@ export function UnitList({
   const filteredUnits = filterUnits(units);
 
   // ✅ CRITICAL FIX: Only render root units (children are rendered recursively by UnitTreeItem)
-  const rootUnits = filteredUnits.filter(unit => unit.parent_id === null);
+  const rootUnits = filteredUnits.filter((unit) => unit.parent_id === null);
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="flex h-full flex-col">
       {/* Header */}
-      <div className="p-4 border-b space-y-3">
+      <div className="space-y-3 border-b p-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
+          <h2 className="flex items-center gap-2 text-lg font-semibold">
             <Building2 className="h-5 w-5" />
             Đơn vị tổ chức
           </h2>
           <Button size="sm" onClick={() => setUnitDialogOpen(true)}>
-            <Plus className="h-4 w-4 mr-1" />
+            <Plus className="mr-1 h-4 w-4" />
             Tạo
           </Button>
         </div>
 
         {/* Search */}
         <div className="relative">
-          <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Search className="text-muted-foreground absolute top-2.5 left-3 h-4 w-4" />
           <Input
             placeholder="Tìm kiếm đơn vị..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9 h-9"
+            className="h-9 pl-9"
           />
         </div>
 
@@ -222,7 +208,7 @@ export function UnitList({
           />
           <label
             htmlFor="show-inactive"
-            className="text-sm text-muted-foreground cursor-pointer select-none"
+            className="text-muted-foreground cursor-pointer text-sm select-none"
           >
             Hiển thị đơn vị đã lưu trữ
           </label>
@@ -232,16 +218,14 @@ export function UnitList({
       {/* Units Tree */}
       <ScrollArea className="flex-1">
         {isLoading ? (
-          <div className="p-4 space-y-2">
+          <div className="space-y-2 p-4">
             {[1, 2, 3, 4, 5].map((i) => (
               <Skeleton key={i} className="h-10 w-full" />
             ))}
           </div>
         ) : rootUnits.length === 0 ? (
-          <div className="p-8 text-center text-sm text-muted-foreground">
-            {searchQuery
-              ? "Không tìm thấy đơn vị nào"
-              : "Chưa có đơn vị. Tạo đơn vị đầu tiên."}
+          <div className="text-muted-foreground p-8 text-center text-sm">
+            {searchQuery ? "Không tìm thấy đơn vị nào" : "Chưa có đơn vị. Tạo đơn vị đầu tiên."}
           </div>
         ) : (
           <div className="py-2">
@@ -262,11 +246,7 @@ export function UnitList({
       </ScrollArea>
 
       {/* Create Unit Dialog */}
-      <UnitDialog
-        open={unitDialogOpen}
-        onOpenChange={setUnitDialogOpen}
-        unit={null}
-      />
+      <UnitDialog open={unitDialogOpen} onOpenChange={setUnitDialogOpen} unit={null} />
     </div>
   );
 }

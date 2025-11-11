@@ -10,12 +10,13 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Skeleton } from "@/components/ui/skeleton"; // <-- 1. Import Skeleton
 
 type Theme = "light" | "dark" | "system";
 
 export function ThemeToggle() {
   const [theme, setTheme] = React.useState<Theme>("system");
-  const [mounted, setMounted] = React.useState(false);
+  const [mounted, setMounted] = React.useState(false); // <-- 2. Thêm state 'mounted'
 
   // Khai báo applyTheme TRƯỚC khi sử dụng trong useEffect
   const applyTheme = React.useCallback((newTheme: Theme) => {
@@ -30,10 +31,10 @@ export function ThemeToggle() {
     } else {
       root.classList.add(newTheme);
     }
-  }, []);
+  }, []); // <-- 4. Thêm mảng dependency rỗng
 
   React.useEffect(() => {
-    setMounted(true);
+    setMounted(true); // <-- 5. Set mounted thành true ngay khi component mount ở client
     // Lấy theme từ localStorage khi component mount
     const savedTheme = (localStorage.getItem("theme") as Theme) || "system";
     setTheme(savedTheme);
@@ -42,13 +43,17 @@ export function ThemeToggle() {
     // Lắng nghe thay đổi system theme
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
     const handleChange = () => {
-      if (theme === "system") {
-        applyTheme("system");
-      }
+      // ✅ SỬA LỖI: Lấy theme từ state hiện tại thay vì closure cũ
+      setTheme((currentTheme) => {
+        if (currentTheme === "system") {
+          applyTheme("system");
+        }
+        return currentTheme;
+      });
     };
     mediaQuery.addEventListener("change", handleChange);
     return () => mediaQuery.removeEventListener("change", handleChange);
-  }, [theme, applyTheme]);
+  }, [applyTheme]); // <-- 6. Chỉ phụ thuộc vào applyTheme
 
   const changeTheme = (newTheme: Theme) => {
     setTheme(newTheme);
@@ -56,10 +61,14 @@ export function ThemeToggle() {
     applyTheme(newTheme);
   };
 
+  // 7. Render Skeleton phía Server (khi chưa mounted)
+  if (!mounted) {
+    return <Skeleton className="h-9 w-9 rounded-full" />;
+  }
+
   // Hiển thị icon tương ứng với theme hiện tại
   const getCurrentIcon = () => {
-    if (!mounted) return <Sun className="h-5 w-5" />;
-
+    // (Không cần check mounted ở đây nữa)
     if (theme === "system") {
       return <Monitor className="h-5 w-5" />;
     }

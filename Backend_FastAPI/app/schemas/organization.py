@@ -59,8 +59,7 @@ class OrganizationUnitShallow(BaseModel):
     name: str
     type: str
     parent_id: Optional[int] = None
-    is_active: bool  # ✅ CRITICAL FIX: Expose is_active for soft delete
-
+    is_active: bool
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -128,16 +127,20 @@ class OrganizationUnit(BaseModel):
     type: str
     description: Optional[str] = None
     parent_id: Optional[int] = None
-    is_active: bool  # ✅ CRITICAL FIX: Expose is_active for soft delete
+    is_active: bool
 
-    # === ĐÂY LÀ PHẦN SỬA LỖI QUAN TRỌNG NHẤT ===
     parent: Optional[OrganizationUnitShallow] = None
-    children: List[OrganizationUnitShallow] = []
-    # === KẾT THÚC SỬA LỖI ===
+    
+    # ✅ ĐÃ SỬA: Dùng 'OrganizationUnit' (tham chiếu chuỗi)
+    children: List['OrganizationUnit'] = [] 
 
     majors: List[Major] = []
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ✅ ĐÃ THÊM: Gọi model_rebuild() để Pydantic xử lý đệ quy
+OrganizationUnit.model_rebuild()
 
 
 # =============================================================================

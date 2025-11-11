@@ -1,22 +1,40 @@
 // src/app/(dashboard)/admin/organization/page.tsx
-import { OrganizationClientPage } from "@/components/admin/organization/OrganizationClientPage";
+
+// 1. Thêm "use client" ở đầu file
+"use client";
+
+// 2. Import 'dynamic' và 'Skeleton'
+import dynamic from "next/dynamic";
+import { Skeleton } from "@/components/ui/skeleton";
+
+// 3. Dynamic import component 'OrganizationClientPage' và tắt SSR
+const OrganizationClientPage = dynamic(
+  () =>
+    import("@/components/admin/organization/OrganizationClientPage").then(
+      (mod) => mod.OrganizationClientPage
+    ),
+  {
+    ssr: false, // <-- Tắt Server-Side Rendering cho component này
+    loading: () => (
+      // Hiển thị skeleton loading
+      <div className="flex h-[calc(100vh-4rem)] overflow-hidden">
+        <Skeleton className="w-80 border-r" />
+        <div className="flex-1 p-6">
+          <Skeleton className="h-16 w-1/3" />
+        </div>
+      </div>
+    ),
+  }
+);
 
 /**
  * Organization Management Page
- *
- * Modern column-based layout:
- * - Left: Units tree (with search and create)
- * - Right: Unit details with 3 tabs (Majors, Users, Settings)
- *
- * Features:
- * - Temporal data architecture for MajorAcademicInfo
- * - Real-time updates via Socket.IO
- * - Optimistic UI updates
- * - Soft delete for Units and Majors
+ * (Mô tả giữ nguyên)
  */
 export default function OrganizationPage() {
   return (
     <div className="h-[calc(100vh-4rem)]">
+      {/* 4. Render component đã được dynamic import */}
       <OrganizationClientPage />
     </div>
   );

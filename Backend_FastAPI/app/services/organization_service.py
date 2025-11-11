@@ -7,7 +7,7 @@ from typing import List, Optional
 import structlog
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, raiseload
 
 from .. import models, schemas
 
@@ -114,10 +114,10 @@ async def check_duplicate_unit_name(
 
 # --- ✅ 6. Cập nhật hàm `get_all_organization_units` ---
 async def get_all_organization_units(db: AsyncSession) -> List[dict]:
-    """Lấy danh sách tất cả các đơn vị, hỗ trợ cache và chống cache stampede."""
+    """Lấy danh sách tất cả các đơn vị (dưới dạng CÂY), hỗ trợ cache."""
     log.debug("Fetching all organization units", cache_key=ORG_UNITS_CACHE_KEY)
 
-    # 1. Thử cache trước
+    # 1. Thử cache trước (Giữ nguyên)
     try:
         cached_data = await safe_redis_get(ORG_UNITS_CACHE_KEY)
         if cached_data:
@@ -128,63 +128,83 @@ async def get_all_organization_units(db: AsyncSession) -> List[dict]:
 
     log.debug("Cache miss for organization units, acquiring lock...")
 
-    # 2. Cache Miss -> Lấy Lock
+    # 2. Cache Miss -> Lấy Lock (Giữ nguyên)
     async with _org_cache_lock:
-        # 2a. Kiểm tra lại cache (phòng trường hợp request khác đã refresh)
         try:
             cached_data_after_lock = await safe_redis_get(ORG_UNITS_CACHE_KEY)
             if cached_data_after_lock:
                 log.debug("Cache hit (after lock) for organization units")
                 return json.loads(cached_data_after_lock)
         except Exception:
-            pass  # Bỏ qua, chúng ta sẽ query lại
+            pass
 
         log.debug("Cache miss (after lock), querying DB")
 
-        # 3. Query DB - ✅ PHASE 2: Only fetch active units (soft delete support)
+        # 3. Query DB (Giữ nguyên logic query của bạn, nó đã đúng)
+        recursive_loader = (
+            selectinload(models.OrganizationUnit.children) # Tải Cấp 2
+            .options(
+                selectinload(models.OrganizationUnit.majors), # Tải majors của Cấp 2
+                selectinload(models.OrganizationUnit.children) # Tải Cấp 3
+                .options(
+                    selectinload(models.OrganizationUnit.majors), # Tải majors của Cấp 3
+                    selectinload(models.OrganizationUnit.children) # Tải Cấp 4
+                    .options(
+                        selectinload(models.OrganizationUnit.majors) # Tải majors của Cấp 4
+                    )
+                )
+            )
+        )
         query = (
             select(models.OrganizationUnit)
-            .where(models.OrganizationUnit.is_active == True)  # Only active units
+            .where(models.OrganizationUnit.is_active == True)
             .options(
-                selectinload(models.OrganizationUnit.parent).options(
-                    selectinload(models.OrganizationUnit.children),
-                    selectinload(models.OrganizationUnit.majors),
-                ),
-                selectinload(models.OrganizationUnit.children),
-                selectinload(models.OrganizationUnit.majors),
+                selectinload(models.OrganizationUnit.majors), 
+                recursive_loader,                          
+                selectinload(models.OrganizationUnit.parent)   
             )
+            # === THAY ĐỔI QUAN TRỌNG NHẤT ===
+            # Chỉ query các ROOT UNITS (cấp cao nhất)
+            .where(models.OrganizationUnit.parent_id == None) 
+            # === KẾT THÚC THAY ĐỔI ===
             .order_by(models.OrganizationUnit.name)
         )
+        
         result = await db.execute(query)
-        all_units_models = result.scalars().unique().all()
+        # `root_units_models` giờ CHỈ chứa các root units (ví dụ: Unit ID 1)
+        # nhưng các children của nó đã được eager load.
+        root_units_models = result.scalars().unique().all()
+        
 
-        # 4. Serialize (Chuyển đổi models sang Pydantic rồi sang dict để cache)
-        # Bước này rất quan trọng để xử lý các object lồng nhau
+        # 4. Serialize CÂY (root_units) sang JSON
+        # BỎ toàn bộ logic "Bước 4" (xây dựng cây thủ công)
+        # Pydantic sẽ tự động serialize cây đã được eager load
         try:
-            schemas_list = [
-                schemas.OrganizationUnit.model_validate(unit)
-                for unit in all_units_models
+            units_data = [
+                schemas.OrganizationUnit.model_validate(unit, from_attributes=True).model_dump()
+                for unit in root_units_models
             ]
-            units_data = [s.model_dump() for s in schemas_list]
         except Exception as e_serialize:
             log.error(
-                "Failed to serialize organization units for cache",
+                "Failed to serialize organization units tree",
                 error=str(e_serialize),
+                exc_info=True
             )
-            # Trả về dữ liệu thô (không cache) nếu lỗi
-            return all_units_models
+            raise e_serialize # Ném lỗi
 
-        # 5. Lưu vào cache
+        # 5. Lưu vào cache (Giữ nguyên)
+        cache_ttl = settings.CONFIG_CACHE_TTL_SECONDS
         try:
             await safe_redis_set(
-                ORG_UNITS_CACHE_KEY, json.dumps(units_data), ex=CACHE_TTL
+                ORG_UNITS_CACHE_KEY, json.dumps(units_data), ex=cache_ttl
             )
-            log.debug("Stored organization units in cache", ttl=CACHE_TTL)
+            log.debug("Stored organization units tree in cache", ttl=cache_ttl)
         except Exception as e_redis_set:
             log.error(
                 "Failed to set organization units in cache", error=str(e_redis_set)
             )
 
+        # 6. Trả về CÂY
         return units_data
 
 
