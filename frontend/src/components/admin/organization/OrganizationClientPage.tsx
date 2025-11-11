@@ -3,6 +3,7 @@
 
 import { useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { AlertCircle } from "lucide-react";
 import { useOrganizationUnits } from "@/hooks/useOrganization";
 import { UnitList } from "./UnitList";
@@ -51,33 +52,35 @@ export function OrganizationClientPage() {
       <div className="p-6">
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
-          <AlertDescription>
-            Không thể tải dữ liệu tổ chức. Vui lòng thử lại sau.
-          </AlertDescription>
+          <AlertDescription>Không thể tải dữ liệu tổ chức. Vui lòng thử lại sau.</AlertDescription>
         </Alert>
       </div>
     );
   }
 
   return (
-    <div className="flex h-[calc(100vh-4rem)] overflow-hidden">
+    <ResizablePanelGroup direction="horizontal" className="h-[calc(100vh-4rem)] overflow-hidden">
       {/* Left Column: Units List */}
-      <div className="w-80 border-r bg-muted/10 flex-shrink-0">
-        <UnitList
-          units={units}
-          isLoading={unitsLoading}
-          selectedUnitId={selectedUnitId}
-          onSelectUnit={setSelectedUnitId}
-        />
-      </div>
+      <ResizablePanel defaultSize={25} minSize={20} maxSize={40} className="min-w-[280px]">
+        <div className="bg-muted/10 h-full border-r">
+          <UnitList
+            units={units}
+            isLoading={unitsLoading}
+            selectedUnitId={selectedUnitId}
+            onSelectUnit={setSelectedUnitId}
+          />
+        </div>
+      </ResizablePanel>
+
+      {/* Handle (Thanh kéo) */}
+      <ResizableHandle withHandle />
 
       {/* Right Column: Unit Details */}
-      <div className="flex-1 overflow-hidden">
-        <UnitDetailPanel
-          unit={selectedUnit}
-          onUnitDeleted={() => setSelectedUnitId(null)}
-        />
-      </div>
-    </div>
+      <ResizablePanel defaultSize={75} minSize={60}>
+        <div className="h-full overflow-hidden">
+          <UnitDetailPanel unit={selectedUnit} onUnitDeleted={() => setSelectedUnitId(null)} />
+        </div>
+      </ResizablePanel>
+    </ResizablePanelGroup>
   );
 }
