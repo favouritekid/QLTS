@@ -75,22 +75,19 @@ async def seed_data():
                     "name": "Công nghệ Thông tin",
                     "code": "7480201",
                     "degree_level": "Đại học",
-                    "unit_id": test_unit_id,
-                    "description": "Ngành Công nghệ Thông tin đào tạo kỹ sư có năng lực thiết kế, phát triển và quản trị hệ thống phần mềm"
+                    "unit_id": test_unit_id
                 },
                 {
                     "name": "Quản trị Kinh doanh",
                     "code": "7340101",
                     "degree_level": "Đại học",
-                    "unit_id": test_unit_id,
-                    "description": "Ngành Quản trị Kinh doanh đào tạo nhà quản lý có kiến thức toàn diện về kinh doanh"
+                    "unit_id": test_unit_id
                 },
                 {
                     "name": "Kế toán",
                     "code": "7340301",
                     "degree_level": "Đại học",
-                    "unit_id": test_unit_id,
-                    "description": "Ngành Kế toán đào tạo chuyên gia kế toán, kiểm toán cho doanh nghiệp"
+                    "unit_id": test_unit_id
                 }
             ]
 
@@ -110,8 +107,8 @@ async def seed_data():
                 else:
                     result = await session.execute(
                         text("""
-                            INSERT INTO major_program (name, code, degree_level, unit_id, description, is_active, created_at, updated_at)
-                            VALUES (:name, :code, :degree_level, :unit_id, :description, true, NOW(), NOW())
+                            INSERT INTO major_program (name, code, degree_level, unit_id, is_active, created_at, updated_at)
+                            VALUES (:name, :code, :degree_level, :unit_id, true, NOW(), NOW())
                             RETURNING id
                         """),
                         prog
