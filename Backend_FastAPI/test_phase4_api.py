@@ -42,6 +42,7 @@ class APITester:
         self.passed_tests = 0
         self.failed_tests = 0
         self.test_results = []
+        self.auth_token = None  # Will be set if authentication is available
 
         # Store IDs for testing
         self.unit_id = None
@@ -56,8 +57,16 @@ class APITester:
         print(f"{text}")
         print(f"{'=' * 80}{Colors.ENDC}\n")
 
-    def print_test(self, test_name: str, passed: bool, details: str = ""):
-        """Print test result"""
+    def print_test(self, test_name: str, passed: Optional[bool], details: str = ""):
+        """Print test result. If passed is None, it's a skipped test."""
+        if passed is None:
+            status = f"{Colors.WARNING}⚠️  SKIP{Colors.ENDC}"
+            print(f"{status} - {test_name}")
+            if details:
+                print(f"      {details}")
+            # Don't count skipped tests
+            return
+
         status = f"{Colors.OKGREEN}✅ PASS{Colors.ENDC}" if passed else f"{Colors.FAIL}❌ FAIL{Colors.ENDC}"
         print(f"{status} - {test_name}")
         if details:
@@ -74,11 +83,20 @@ class APITester:
             "details": details
         })
 
-    async def test_get(self, endpoint: str, test_name: str, expected_keys: List[str] = None) -> Optional[Dict]:
+    async def test_get(self, endpoint: str, test_name: str, expected_keys: List[str] = None, auth_required: bool = True) -> Optional[Dict]:
         """Generic GET request test"""
         try:
+            headers = {}
+            if auth_required and self.auth_token:
+                headers["Authorization"] = f"Bearer {self.auth_token}"
+
             async with httpx.AsyncClient() as client:
-                response = await client.get(f"{self.base_url}{endpoint}", timeout=10.0)
+                response = await client.get(f"{self.base_url}{endpoint}", headers=headers, timeout=10.0)
+
+                # If 401 and no token, skip test with warning
+                if response.status_code == 401 and not self.auth_token:
+                    self.print_test(test_name, None, "⚠️  SKIPPED - Requires authentication (no token provided)")
+                    return None
 
                 if response.status_code == 200:
                     data = response.json()
