@@ -1,7 +1,157 @@
 // src/types/organization.types.ts
 
+// =============================================================================
+// 3-TIER ARCHITECTURE TYPES (NEW)
+// =============================================================================
+
+/**
+ * AdmissionCriterion - JSON Schema validation cho admission_criteria
+ * Validation cho tiêu chí tuyển sinh trong OfferingAcademicInfo
+ */
+export interface AdmissionCriterion {
+  id: string; // vd: "hocba_2025"
+  method_name: string; // Tên phương thức (vd: "Xét học bạ")
+  program_type: string; // Loại hình (vd: "Chính quy")
+  subject_groups?: string[] | null; // Khối thi (vd: ["A00", "D07"])
+  min_score?: number | null; // Điểm tối thiểu
+  conditions?: string | null; // Điều kiện bổ sung
+  profile_requirements?: string | null; // Yêu cầu hồ sơ
+}
+
+/**
+ * TIER 3: OfferingAcademicInfo (Thông tin tuyển sinh theo năm)
+ * Thông tin động thay đổi theo năm học
+ */
+export interface OfferingAcademicInfo {
+  id: number;
+  offering_id: number; // Foreign key to ProgramOffering (Tier 2)
+  academic_year: number; // Năm học (vd: 2025)
+  tuition_fee_per_year?: number | null; // Học phí/năm
+  annual_admission_quota?: number | null; // Chỉ tiêu tuyển sinh
+  is_published: boolean; // Trạng thái công khai
+  admission_criteria?: AdmissionCriterion[] | null; // Tiêu chí tuyển sinh (JSON)
+  target_audience?: string | null; // Đối tượng tuyển sinh
+  cutoff_score_previous_year?: number | null; // Điểm chuẩn năm trước
+
+  // Audit trail
+  created_at?: string | null;
+  updated_at?: string | null;
+  created_by_user_id?: number | null;
+  updated_by_user_id?: number | null;
+}
+
+/**
+ * Form data for creating OfferingAcademicInfo (Tier 3)
+ */
+export interface OfferingAcademicInfoCreate {
+  offering_id: number;
+  academic_year: number;
+  tuition_fee_per_year?: number | null;
+  annual_admission_quota?: number | null;
+  is_published?: boolean;
+  admission_criteria?: AdmissionCriterion[] | null;
+  target_audience?: string | null;
+  cutoff_score_previous_year?: number | null;
+}
+
+/**
+ * Form data for updating OfferingAcademicInfo (Tier 3)
+ */
+export interface OfferingAcademicInfoUpdate {
+  academic_year?: number;
+  tuition_fee_per_year?: number | null;
+  annual_admission_quota?: number | null;
+  is_published?: boolean;
+  admission_criteria?: AdmissionCriterion[] | null;
+  target_audience?: string | null;
+  cutoff_score_previous_year?: number | null;
+}
+
+/**
+ * TIER 2: ProgramOffering (Loại hình đào tạo)
+ * Thông tin tĩnh về loại hình (vd: "Chính quy", "Liên thông")
+ */
+export interface ProgramOffering {
+  id: number;
+  program_id: number; // Foreign key to MajorProgram (Tier 1)
+  offering_type: string; // Tên loại hình (vd: "Chính quy")
+  duration_semesters?: number | null; // Số kỳ học
+  total_credits?: number | null; // Tổng số tín chỉ
+  is_active: boolean; // Soft delete flag
+
+  // Nested: Academic info history (Tier 3)
+  academic_info_history: OfferingAcademicInfo[];
+}
+
+/**
+ * Form data for creating ProgramOffering (Tier 2)
+ */
+export interface ProgramOfferingCreate {
+  program_id: number;
+  offering_type: string;
+  duration_semesters?: number | null;
+  total_credits?: number | null;
+  is_active?: boolean;
+}
+
+/**
+ * Form data for updating ProgramOffering (Tier 2)
+ */
+export interface ProgramOfferingUpdate {
+  offering_type?: string;
+  duration_semesters?: number | null;
+  total_credits?: number | null;
+  is_active?: boolean;
+}
+
+/**
+ * TIER 1: MajorProgram (Ngành/Trình độ)
+ * Định danh duy nhất bằng Mã ngành (code)
+ */
+export interface MajorProgram {
+  id: number;
+  name: string; // Tên hiển thị (vd: "Cao đẳng Công nghệ thông tin")
+  degree_level: string; // Trình độ (vd: "Cao đẳng")
+  code: string; // Mã ngành tuyển sinh (vd: "6480201") - UNIQUE
+  is_active: boolean; // Soft delete flag
+  unit_id: number; // Foreign key to OrganizationUnit
+
+  // Nested: Offerings (Tier 2)
+  offerings: ProgramOffering[];
+
+  // Relationship
+  unit?: OrganizationUnit;
+}
+
+/**
+ * Form data for creating MajorProgram (Tier 1)
+ */
+export interface MajorProgramCreate {
+  name: string;
+  degree_level: string;
+  code: string;
+  unit_id: number;
+  is_active?: boolean;
+}
+
+/**
+ * Form data for updating MajorProgram (Tier 1)
+ */
+export interface MajorProgramUpdate {
+  name?: string;
+  degree_level?: string;
+  unit_id?: number;
+  is_active?: boolean;
+  // Note: 'code' cannot be updated (business rule)
+}
+
+// =============================================================================
+// ORGANIZATION UNIT TYPES
+// =============================================================================
+
 /**
  * Organization Unit (Đơn vị tổ chức)
+ * Updated to use MajorProgram instead of Major
  */
 export interface OrganizationUnit {
   id: number;
@@ -13,21 +163,9 @@ export interface OrganizationUnit {
   created_at?: string | null;
   updated_at?: string | null;
   children: OrganizationUnit[];
-  majors: Major[];
+  major_programs: MajorProgram[]; // ⬅ Changed from 'majors'
   // Relationship fields (computed)
   parent?: OrganizationUnit | null;
-}
-
-/**
- * Major (Ngành học)
- */
-export interface Major {
-  id: number;
-  name: string;
-  code: string;
-  description?: string | null;
-  unit_id: number;
-  unit?: OrganizationUnit;
 }
 
 /**
@@ -51,26 +189,6 @@ export interface OrganizationUnitUpdate {
 }
 
 /**
- * Form data for creating major
- */
-export interface MajorCreate {
-  name: string;
-  code: string;
-  description?: string | null;
-  unit_id: number;
-}
-
-/**
- * Form data for updating major
- */
-export interface MajorUpdate {
-  name?: string;
-  code?: string;
-  description?: string | null;
-  unit_id?: number;
-}
-
-/**
  * API Response for organization list
  */
 export interface OrganizationListResponse {
@@ -87,8 +205,101 @@ export interface FlattenedUnit {
   hasChildren: boolean;
 }
 
+// =============================================================================
+// TREE WITH AGGREGATION TYPES (UPDATED FOR 3-TIER)
+// =============================================================================
+
 /**
- * Major Academic Info (Year-versioned data)
+ * MajorProgram with aggregated statistics (for tree view)
+ */
+export interface MajorProgramWithStats {
+  id: number;
+  name: string;
+  code: string;
+  degree_level: string;
+  total_admission_quota?: number | null; // Aggregated from all offerings
+  avg_tuition_fee?: number | null; // Average tuition across offerings
+  offerings_count?: number; // Number of active offerings
+}
+
+/**
+ * Aggregated statistics for a unit (including descendants)
+ */
+export interface UnitAggregatedStats {
+  total_programs: number; // Total MajorPrograms (including descendants)
+  direct_programs: number; // Direct MajorPrograms only
+  total_offerings: number; // Total ProgramOfferings
+  total_admission_quota?: number | null;
+  avg_tuition_fee?: number | null;
+  min_tuition_fee?: number | null;
+  max_tuition_fee?: number | null;
+}
+
+/**
+ * Organization tree node with majors and aggregated data
+ */
+export interface OrganizationTreeNodeWithAggregation {
+  id: number;
+  name: string;
+  type: string;
+  description?: string | null;
+  parent_id: number | null;
+  is_active: boolean;
+  major_programs: MajorProgramWithStats[]; // ⬅ Changed from 'majors'
+  stats: UnitAggregatedStats;
+  children: OrganizationTreeNodeWithAggregation[];
+}
+
+/**
+ * Flattened tree node for rendering
+ */
+export interface FlattenedTreeNode {
+  node: OrganizationTreeNodeWithAggregation;
+  level: number;
+  isExpanded: boolean;
+  hasChildren: boolean;
+}
+
+// =============================================================================
+// BACKWARD COMPATIBILITY (DEPRECATED - For gradual migration)
+// =============================================================================
+
+/**
+ * @deprecated Use MajorProgram instead
+ * Legacy Major type for backward compatibility
+ */
+export interface Major {
+  id: number;
+  name: string;
+  code: string;
+  description?: string | null;
+  unit_id: number;
+  unit?: OrganizationUnit;
+}
+
+/**
+ * @deprecated Use MajorProgramCreate instead
+ */
+export interface MajorCreate {
+  name: string;
+  code: string;
+  description?: string | null;
+  unit_id: number;
+}
+
+/**
+ * @deprecated Use MajorProgramUpdate instead
+ */
+export interface MajorUpdate {
+  name?: string;
+  code?: string;
+  description?: string | null;
+  unit_id?: number;
+}
+
+/**
+ * @deprecated Use OfferingAcademicInfo instead
+ * Legacy MajorAcademicInfo type for backward compatibility
  */
 export interface MajorAcademicInfo {
   id: number;
@@ -106,7 +317,7 @@ export interface MajorAcademicInfo {
 }
 
 /**
- * Form data for creating major academic info
+ * @deprecated Use OfferingAcademicInfoCreate instead
  */
 export interface MajorAcademicInfoCreate {
   major_id: number;
@@ -120,7 +331,7 @@ export interface MajorAcademicInfoCreate {
 }
 
 /**
- * Form data for updating major academic info
+ * @deprecated Use OfferingAcademicInfoUpdate instead
  */
 export interface MajorAcademicInfoUpdate {
   target_audience?: string | null;
@@ -131,12 +342,8 @@ export interface MajorAcademicInfoUpdate {
   is_published?: boolean;
 }
 
-// =============================================================================
-// ✅ TREE WITH AGGREGATION TYPES
-// =============================================================================
-
 /**
- * Major with aggregated statistics
+ * @deprecated Use MajorProgramWithStats instead
  */
 export interface MajorWithStats {
   id: number;
@@ -144,41 +351,4 @@ export interface MajorWithStats {
   code: string;
   total_admission_quota?: number | null;
   tuition_fee?: number | null;
-}
-
-/**
- * Aggregated statistics for a unit (including descendants)
- */
-export interface UnitAggregatedStats {
-  total_majors: number;
-  direct_majors: number;
-  total_admission_quota?: number | null;
-  avg_tuition_fee?: number | null;
-  min_tuition_fee?: number | null;
-  max_tuition_fee?: number | null;
-}
-
-/**
- * Organization tree node with majors and aggregated data
- */
-export interface OrganizationTreeNodeWithAggregation {
-  id: number;
-  name: string;
-  type: string;
-  description?: string | null;
-  parent_id: number | null;
-  is_active: boolean;
-  majors: MajorWithStats[];
-  stats: UnitAggregatedStats;
-  children: OrganizationTreeNodeWithAggregation[];
-}
-
-/**
- * Flattened tree node for rendering
- */
-export interface FlattenedTreeNode {
-  node: OrganizationTreeNodeWithAggregation;
-  level: number;
-  isExpanded: boolean;
-  hasChildren: boolean;
 }
