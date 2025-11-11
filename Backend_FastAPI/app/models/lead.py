@@ -36,7 +36,8 @@ class Lead(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
     assigned_at = Column(DateTime(timezone=True), nullable=True)
-    major_id = Column(Integer, ForeignKey("major.id"), nullable=True)
+    # NEW 3-TIER ARCHITECTURE: Link to ProgramOffering instead of Major
+    offering_id = Column(Integer, ForeignKey("program_offering.id", ondelete="SET NULL"), nullable=True, index=True)
     unit_id = Column(Integer, ForeignKey("organization_unit.id"), nullable=False)
     assigned_officer_id = Column(
         Integer, ForeignKey("user.id"), nullable=True, index=True
@@ -68,7 +69,8 @@ class Lead(Base):
     assignment_logs = relationship(
         "AssignmentLog", back_populates="lead", cascade="all, delete-orphan"
     )
-    major = relationship("Major", back_populates="leads")
+    # NEW 3-TIER ARCHITECTURE: Link to ProgramOffering instead of Major
+    offering = relationship("ProgramOffering", back_populates="leads")
     unit = relationship("OrganizationUnit", back_populates="leads")
     consultation_status = relationship("ConsultationStatus", back_populates="leads")
 
