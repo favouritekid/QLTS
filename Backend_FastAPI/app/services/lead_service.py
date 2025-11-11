@@ -103,11 +103,11 @@ async def get_lead_by_id(db: AsyncSession, lead_id: int) -> models.Lead:
     query = (
         select(models.Lead)
         .options(
-            selectinload(models.Lead.major),
+            selectinload(models.Lead.offering),
             selectinload(models.Lead.unit).options(
                 selectinload(models.OrganizationUnit.parent),
                 selectinload(models.OrganizationUnit.children),
-                selectinload(models.OrganizationUnit.majors),
+                selectinload(models.OrganizationUnit.major_programs),
             ),
             selectinload(models.Lead.assigned_officer),
             selectinload(models.Lead.pipeline_stage),
@@ -137,7 +137,7 @@ async def get_lead_by_id_shallow(db: AsyncSession, lead_id: int) -> models.Lead:
     query = (
         select(models.Lead)
         .options(
-            selectinload(models.Lead.major),
+            selectinload(models.Lead.offering),
             selectinload(models.Lead.unit), # <--- Load unit (thường là cần)
             selectinload(models.Lead.assigned_officer),
             selectinload(models.Lead.pipeline_stage),
@@ -158,7 +158,7 @@ async def get_leads(
     status: Optional[str] = None,
     assigned_officer_id: Optional[int] = None,
     unit_id: Optional[int] = None,
-    major_id: Optional[int] = None,
+    offering_id: Optional[int] = None,
     source: Optional[str] = None,
     search: Optional[str] = None,
     sort_by: str = "created_at",
@@ -182,8 +182,8 @@ async def get_leads(
         filters.append(models.Lead.assigned_officer_id == assigned_officer_id)
     if unit_id is not None:
         filters.append(models.Lead.unit_id == unit_id)
-    if major_id is not None:
-        filters.append(models.Lead.major_id == major_id)
+    if offering_id is not None:
+        filters.append(models.Lead.offering_id == offering_id)
     if source:
         sources = [s.strip() for s in source.split(",") if s.strip()]
         if sources:
@@ -221,10 +221,10 @@ async def get_leads(
     # === Áp dụng eager loading tối ưu và pagination ===
     leads_query = (
         leads_query.options(
-            selectinload(models.Lead.major),
+            selectinload(models.Lead.offering),
             selectinload(models.Lead.unit).options(
                 selectinload(models.OrganizationUnit.parent),
-                selectinload(models.OrganizationUnit.majors),
+                selectinload(models.OrganizationUnit.major_programs),
             ),
             selectinload(models.Lead.assigned_officer),
             selectinload(models.Lead.pipeline_stage),
