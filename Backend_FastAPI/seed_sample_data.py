@@ -28,7 +28,7 @@ try:
     DB_URL = settings.DATABASE_URL
 except:
     print("⚠️  Could not import settings. Using default DB URL.")
-    DB_URL = "postgresql+asyncpg://postgres:postgres@localhost/qlts_dev"
+    DB_URL = "postgresql+asyncpg://postgres:admin@192.168.88.125:5432/qlts_dev"
 
 print("=" * 80)
 print("SEEDING SAMPLE DATA FOR 3-TIER ARCHITECTURE")
