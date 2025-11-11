@@ -140,33 +140,32 @@ async def get_all_organization_units(db: AsyncSession) -> List[dict]:
 
         log.debug("Cache miss (after lock), querying DB")
 
-        # 3. Query DB (Giữ nguyên logic query của bạn, nó đã đúng)
-        recursive_loader = (
-            selectinload(models.OrganizationUnit.children) # Tải Cấp 2
-            .options(
-                selectinload(models.OrganizationUnit.majors), # Tải majors của Cấp 2
-                selectinload(models.OrganizationUnit.children) # Tải Cấp 3
-                .options(
-                    selectinload(models.OrganizationUnit.majors), # Tải majors của Cấp 3
-                    selectinload(models.OrganizationUnit.children) # Tải Cấp 4
-                    .options(
-                        selectinload(models.OrganizationUnit.majors) # Tải majors của Cấp 4
-                    )
-                )
+        # 3. Query DB - ✅ ENHANCED: Support deeper nesting (up to 10 levels)
+        # This ensures we load the full organizational hierarchy
+        def create_recursive_loader(depth: int):
+            """Create recursive loader for specified depth"""
+            if depth <= 0:
+                return selectinload(models.OrganizationUnit.majors)
+
+            return selectinload(models.OrganizationUnit.children).options(
+                selectinload(models.OrganizationUnit.majors),
+                create_recursive_loader(depth - 1)
             )
-        )
+
+        # ✅ Support up to 10 levels of nesting (should be enough for most organizational structures)
+        recursive_loader = create_recursive_loader(depth=9)
+
         query = (
             select(models.OrganizationUnit)
             .where(models.OrganizationUnit.is_active == True)
             .options(
-                selectinload(models.OrganizationUnit.majors), 
-                recursive_loader,                          
-                selectinload(models.OrganizationUnit.parent)   
+                selectinload(models.OrganizationUnit.majors),  # Load majors for root level
+                recursive_loader,  # Load children recursively up to 10 levels
+                selectinload(models.OrganizationUnit.parent)   # Load parent info
             )
-            # === THAY ĐỔI QUAN TRỌNG NHẤT ===
-            # Chỉ query các ROOT UNITS (cấp cao nhất)
-            .where(models.OrganizationUnit.parent_id == None) 
-            # === KẾT THÚC THAY ĐỔI ===
+            # ✅ Only query ROOT UNITS (parent_id is NULL)
+            # Children are loaded via recursive_loader
+            .where(models.OrganizationUnit.parent_id == None)
             .order_by(models.OrganizationUnit.name)
         )
         
