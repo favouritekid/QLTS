@@ -107,8 +107,8 @@ async def seed_data():
                 else:
                     result = await session.execute(
                         text("""
-                            INSERT INTO major_program (name, code, degree_level, unit_id, is_active, created_at, updated_at)
-                            VALUES (:name, :code, :degree_level, :unit_id, true, NOW(), NOW())
+                            INSERT INTO major_program (name, code, degree_level, unit_id, is_active)
+                            VALUES (:name, :code, :degree_level, :unit_id, true)
                             RETURNING id
                         """),
                         prog
@@ -150,8 +150,8 @@ async def seed_data():
                         result = await session.execute(
                             text("""
                                 INSERT INTO program_offering
-                                (offering_type, program_id, duration_semesters, total_credits, is_active, created_at, updated_at)
-                                VALUES (:offering_type, :program_id, :duration, :credits, true, NOW(), NOW())
+                                (offering_type, program_id, duration_semesters, total_credits, is_active)
+                                VALUES (:offering_type, :program_id, :duration, :credits, true)
                                 RETURNING id
                             """),
                             {
