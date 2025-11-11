@@ -599,36 +599,48 @@ export function flattenOrganizationTree(
 
 /**
  * Get all descendant IDs of a unit (for preventing circular dependencies)
+ * ✅ FIXED: Works with tree structure (nested children) instead of flat array
  */
-export function getAllDescendantIds(
-  unit: OrganizationUnit,
-  allUnits: OrganizationUnit[]
-): Set<number> {
+export function getAllDescendantIds(unit: OrganizationUnit): Set<number> {
   const descendants = new Set<number>([unit.id]);
 
-  const findChildren = (parentId: number) => {
-    const children = allUnits.filter(u => u.parent_id === parentId);
-    children.forEach(child => {
-      descendants.add(child.id);
-      findChildren(child.id); // Recursive
-    });
+  const collectDescendants = (currentUnit: OrganizationUnit) => {
+    if (currentUnit.children && currentUnit.children.length > 0) {
+      currentUnit.children.forEach(child => {
+        descendants.add(child.id);
+        collectDescendants(child); // Recursive
+      });
+    }
   };
 
-  findChildren(unit.id);
+  collectDescendants(unit);
   return descendants;
 }
 
 /**
  * Check if making unitId a parent of childId would create a circular dependency
+ * ✅ FIXED: Works with tree structure (nested children) instead of flat array
  */
 export function wouldCreateCircularDependency(
   parentId: number,
   childId: number,
   allUnits: OrganizationUnit[]
 ): boolean {
-  const childUnit = allUnits.find(u => u.id === childId);
+  // Helper function to find a unit in tree structure
+  const findUnitInTree = (units: OrganizationUnit[], id: number): OrganizationUnit | null => {
+    for (const unit of units) {
+      if (unit.id === id) return unit;
+      if (unit.children && unit.children.length > 0) {
+        const found = findUnitInTree(unit.children, id);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+
+  const childUnit = findUnitInTree(allUnits, childId);
   if (!childUnit) return false;
 
-  const descendants = getAllDescendantIds(childUnit, allUnits);
+  const descendants = getAllDescendantIds(childUnit);
   return descendants.has(parentId);
 }

@@ -154,13 +154,15 @@ export function UnitList({ units, isLoading, selectedUnitId, onSelectUnit }: Uni
     });
   };
 
-  // Filter units (simple name search - you can enhance this)
+  // ✅ Filter units with tree-aware search
+  // Shows parent units if they match OR if any of their children match
   const filterUnits = (units: OrganizationUnit[]): OrganizationUnit[] => {
     if (!searchQuery) return units;
 
     return units.filter((unit) => {
       const matchesSearch = unit.name.toLowerCase().includes(searchQuery.toLowerCase());
-      // Lỗi nằm ở đây: Logic này thêm cả cha và con vào flat list
+      // ✅ CORRECT: Show parent if any children match (tree filtering)
+      // This allows users to see the full hierarchy when searching
       const hasMatchingChildren =
         unit.children && unit.children.length > 0 && filterUnits(unit.children).length > 0;
 

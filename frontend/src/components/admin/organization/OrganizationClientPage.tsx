@@ -1,7 +1,7 @@
 // src/components/admin/organization/OrganizationClientPage.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { AlertCircle } from "lucide-react";
@@ -29,8 +29,8 @@ export function OrganizationClientPage() {
   // COMPUTED DATA
   // =====================================================================
 
-  // Get selected unit from units tree
-  const findUnit = (units: OrganizationUnit[], id: number): OrganizationUnit | null => {
+  // ✅ OPTIMIZED: Memoize findUnit function to prevent unnecessary re-creation
+  const findUnit = useCallback((units: OrganizationUnit[], id: number): OrganizationUnit | null => {
     for (const unit of units) {
       if (unit.id === id) return unit;
       if (unit.children && unit.children.length > 0) {
@@ -39,9 +39,13 @@ export function OrganizationClientPage() {
       }
     }
     return null;
-  };
+  }, []);
 
-  const selectedUnit = selectedUnitId ? findUnit(units, selectedUnitId) : null;
+  // ✅ OPTIMIZED: Memoize selectedUnit to prevent unnecessary tree traversal on re-renders
+  const selectedUnit = useMemo(() => {
+    if (!selectedUnitId) return null;
+    return findUnit(units, selectedUnitId);
+  }, [selectedUnitId, units, findUnit]);
 
   // =====================================================================
   // RENDER
