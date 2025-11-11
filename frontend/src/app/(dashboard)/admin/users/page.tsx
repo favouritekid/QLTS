@@ -274,7 +274,9 @@ export default function AdminUsersPage() {
         },
       },
     ],
-    [sortBy, sortOrder, getSortIcon, handleSort]
+    // ✅ sortBy and sortOrder are already in getSortIcon and handleSort dependencies
+    // No need to include them here to avoid unnecessary re-creation
+    [getSortIcon, handleSort]
   );
 
   // Setup TanStack Table

@@ -1,7 +1,7 @@
 // src/components/admin/organization/OrganizationClientPage.tsx
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { AlertCircle } from "lucide-react";
@@ -9,6 +9,21 @@ import { useOrganizationUnits } from "@/hooks/useOrganization";
 import { UnitList } from "./UnitList";
 import { UnitDetailPanel } from "./UnitDetailPanel";
 import type { OrganizationUnit } from "@/types/organization.types";
+
+/**
+ * Helper function to find a unit by ID in tree structure
+ * ✅ Moved outside component to support recursion and prevent re-creation
+ */
+function findUnitInTree(units: OrganizationUnit[], id: number): OrganizationUnit | null {
+  for (const unit of units) {
+    if (unit.id === id) return unit;
+    if (unit.children && unit.children.length > 0) {
+      const found = findUnitInTree(unit.children, id);
+      if (found) return found;
+    }
+  }
+  return null;
+}
 
 /**
  * Main client component for organization management
@@ -29,23 +44,11 @@ export function OrganizationClientPage() {
   // COMPUTED DATA
   // =====================================================================
 
-  // ✅ OPTIMIZED: Memoize findUnit function to prevent unnecessary re-creation
-  const findUnit = useCallback((units: OrganizationUnit[], id: number): OrganizationUnit | null => {
-    for (const unit of units) {
-      if (unit.id === id) return unit;
-      if (unit.children && unit.children.length > 0) {
-        const found = findUnit(unit.children, id);
-        if (found) return found;
-      }
-    }
-    return null;
-  }, []);
-
   // ✅ OPTIMIZED: Memoize selectedUnit to prevent unnecessary tree traversal on re-renders
   const selectedUnit = useMemo(() => {
     if (!selectedUnitId) return null;
-    return findUnit(units, selectedUnitId);
-  }, [selectedUnitId, units, findUnit]);
+    return findUnitInTree(units, selectedUnitId);
+  }, [selectedUnitId, units]);
 
   // =====================================================================
   // RENDER

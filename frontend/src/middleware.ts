@@ -39,8 +39,10 @@ const ADMIN_ROUTES = ["/admin"];
 
 /**
  * Protected routes that require authentication
+ * Note: Currently not used - all non-public routes are treated as protected by default
+ * Kept for potential future use if specific route handling is needed
  */
-const PROTECTED_ROUTES = ["/dashboard", "/profile", "/settings"];
+// const PROTECTED_ROUTES = ["/dashboard", "/profile", "/settings"];
 
 // ============================================
 // 🔐 MIDDLEWARE LOGIC
