@@ -15,6 +15,7 @@ Usage:
 """
 
 import asyncio
+import json
 import sys
 from datetime import datetime
 
@@ -216,7 +217,7 @@ async def seed_data():
                                 INSERT INTO offering_academic_info
                                 (offering_id, academic_year, tuition_fee_per_year, annual_admission_quota,
                                  admission_criteria, is_published, created_at, updated_at)
-                                VALUES (:offering_id, :year, :tuition, :quota, :criteria::jsonb, :published, NOW(), NOW())
+                                VALUES (:offering_id, :year, :tuition, :quota, CAST(:criteria AS jsonb), :published, NOW(), NOW())
                                 RETURNING id
                             """),
                             {
@@ -224,7 +225,7 @@ async def seed_data():
                                 "year": year,
                                 "tuition": tuition,
                                 "quota": quota,
-                                "criteria": str(admission_criteria).replace("'", '"'),
+                                "criteria": json.dumps(admission_criteria),
                                 "published": is_published
                             }
                         )
