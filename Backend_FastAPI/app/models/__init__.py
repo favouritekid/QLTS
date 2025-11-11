@@ -17,7 +17,14 @@ from .notification_preference import NotificationPreference
 
 # Organization models (includes temporal models)
 from .organization import Major, OrganizationUnit
-from .major_academic_info import MajorAcademicInfo  # NEW: Year-versioned academic data
+
+# NEW: 3-tier architecture models
+from .major_program import MajorProgram  # Level 1
+from .program_offering import ProgramOffering  # Level 2
+from .offering_academic_info import OfferingAcademicInfo  # Level 3
+
+# OLD: Legacy models (will be removed after migration)
+from .major_academic_info import MajorAcademicInfo
 
 # Pipeline models
 from .pipeline import ConsultationStatus, PipelineStage
@@ -47,16 +54,20 @@ __all__ = [
     # Notification
     "Notification",
     "NotificationPreference",
-    # Organization
+    # Organization (Legacy)
     "Major",
-    "MajorAcademicInfo",  # NEW
+    "MajorAcademicInfo",
     "OrganizationUnit",
+    # Organization (NEW 3-tier)
+    "MajorProgram",
+    "ProgramOffering",
+    "OfferingAcademicInfo",
     # Pipeline
     "ConsultationStatus",
     "PipelineStage",
     # User
     "User",
-    "UserUnitAssignment",  # NEW
+    "UserUnitAssignment",
     "UserActivityLog",
     "UserSession",
 ]

@@ -1,13 +1,20 @@
 # app/schemas/organization.py
+"""
+Organization Schemas - Refactored for 3-tier architecture.
+
+Hierarchy:
+    MajorProgram (Level 1) -> ProgramOffering (Level 2) -> OfferingAcademicInfo (Level 3)
+"""
 from enum import Enum
 from typing import List, Optional
 from datetime import datetime
 from decimal import Decimal
+import re
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-# --- Enum cho các loại đơn vị (có thể mở rộng) ---
+# --- Enum cho các loại đơn vị (không đổi) ---
 class OrganizationUnitType(str, Enum):
     """
     Các loại đơn vị tổ chức.
@@ -26,34 +33,132 @@ class OrganizationUnitType(str, Enum):
         return [item.value for item in cls]
 
 
-# --- Schemas cho Major (Không đổi) ---
-class MajorBase(BaseModel):
-    name: str
-    code: str
-    unit_id: int
+# =============================================================================
+# SCHEMA VALIDATION CHO JSON (CẤP 3)
+# =============================================================================
+
+class AdmissionCriterion(BaseModel):
+    """Schema validation cho admission_criteria JSON field"""
+    id: str = Field(..., description="Unique ID (e.g., 'hocba_2025')")
+    method_name: str = Field(..., max_length=100, description="Tên phương thức tuyển sinh")
+    program_type: str = Field(..., max_length=100, description="Loại hình (e.g., 'Chính quy')")
+    subject_groups: Optional[List[str]] = Field(None, max_items=10, description="Tổ hợp môn (e.g., ['A00', 'D07'])")
+    min_score: Optional[float] = Field(None, ge=0, description="Điểm tối thiểu")
+    conditions: Optional[str] = Field(None, max_length=1000, description="Điều kiện")
+    profile_requirements: Optional[str] = Field(None, max_length=1000, description="Yêu cầu hồ sơ")
+
+    @field_validator('subject_groups')
+    @classmethod
+    def validate_subject_groups(cls, v):
+        if v:
+            for group in v:
+                if not re.match(r'^[A-Z0-9]{2,3}$', group):
+                    raise ValueError(f'Invalid subject group format: {group}. Must be like A00, D07')
+        return v
 
 
-class MajorCreate(MajorBase):
-    pass
+# =============================================================================
+# CẤP 3: OfferingAcademicInfo
+# =============================================================================
+
+class OfferingAcademicInfoBase(BaseModel):
+    academic_year: int = Field(..., ge=2000, le=2100, description="Năm học")
+    tuition_fee_per_year: Optional[Decimal] = Field(None, ge=0, description="Học phí một năm (VND)")
+    annual_admission_quota: Optional[int] = Field(None, ge=0, description="Chỉ tiêu tuyển sinh")
+    is_published: bool = Field(default=False, description="Đã công bố?")
+    admission_criteria: Optional[List[AdmissionCriterion]] = Field(None, description="Tiêu chí tuyển sinh")
+    target_audience: Optional[str] = Field(None, max_length=1000, description="Đối tượng phù hợp")
+    cutoff_score_previous_year: Optional[Decimal] = Field(None, ge=0, description="Điểm chuẩn năm trước")
 
 
-class MajorUpdate(BaseModel):
-    name: Optional[str] = None
-    code: Optional[str] = None
-    unit_id: Optional[int] = None
+class OfferingAcademicInfoCreate(OfferingAcademicInfoBase):
+    offering_id: int = Field(..., gt=0)
 
 
-class Major(MajorBase):
+class OfferingAcademicInfoUpdate(BaseModel):
+    academic_year: Optional[int] = Field(None, ge=2000, le=2100)
+    tuition_fee_per_year: Optional[Decimal] = Field(None, ge=0)
+    annual_admission_quota: Optional[int] = Field(None, ge=0)
+    is_published: Optional[bool] = None
+    admission_criteria: Optional[List[AdmissionCriterion]] = None
+    target_audience: Optional[str] = Field(None, max_length=1000)
+    cutoff_score_previous_year: Optional[Decimal] = Field(None, ge=0)
+
+
+class OfferingAcademicInfo(OfferingAcademicInfoBase):
     id: int
-
+    offering_id: int
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    created_by_user_id: Optional[int] = None
+    updated_by_user_id: Optional[int] = None
     model_config = ConfigDict(from_attributes=True)
 
 
-# --- TÁI CẤU TRÚC HOÀN TOÀN SCHEMAS CHO ORGANIZATIONUNIT ---
+# =============================================================================
+# CẤP 2: ProgramOffering
+# =============================================================================
+
+class ProgramOfferingBase(BaseModel):
+    offering_type: str = Field(..., max_length=100, description="Loại hình (e.g., 'Chính quy')")
+    duration_semesters: Optional[int] = Field(None, ge=0, description="Số học kỳ")
+    total_credits: Optional[int] = Field(None, ge=0, description="Tổng số tín chỉ")
+    is_active: bool = Field(default=True)
 
 
-# Bước 1: Tạo một schema "Nông" (Shallow) không có bất kỳ quan hệ nào.
-# Schema này sẽ được sử dụng bên trong các quan hệ lồng nhau để phá vỡ vòng lặp.
+class ProgramOfferingCreate(ProgramOfferingBase):
+    program_id: int = Field(..., gt=0)
+
+
+class ProgramOfferingUpdate(BaseModel):
+    offering_type: Optional[str] = Field(None, max_length=100)
+    duration_semesters: Optional[int] = Field(None, ge=0)
+    total_credits: Optional[int] = Field(None, ge=0)
+    is_active: Optional[bool] = None
+
+
+class ProgramOffering(ProgramOfferingBase):
+    id: int
+    program_id: int
+    academic_info_history: List[OfferingAcademicInfo] = Field(default_factory=list)
+    model_config = ConfigDict(from_attributes=True)
+
+
+# =============================================================================
+# CẤP 1: MajorProgram
+# =============================================================================
+
+class MajorProgramBase(BaseModel):
+    name: str = Field(..., max_length=255, description="Tên ngành (e.g., 'Cao đẳng CNTT')")
+    degree_level: str = Field(..., max_length=50, description="Trình độ (e.g., 'Cao đẳng')")
+    code: str = Field(..., max_length=50, description="Mã ngành (e.g., '6480201')")
+    unit_id: int = Field(..., gt=0)
+    is_active: bool = Field(default=True)
+
+
+class MajorProgramCreate(MajorProgramBase):
+    pass
+
+
+class MajorProgramUpdate(BaseModel):
+    name: Optional[str] = Field(None, max_length=255)
+    degree_level: Optional[str] = Field(None, max_length=50)
+    unit_id: Optional[int] = Field(None, gt=0)
+    is_active: Optional[bool] = None
+    # 'code' (Mã ngành) không cho phép cập nhật
+
+
+class MajorProgram(MajorProgramBase):
+    id: int
+    offerings: List[ProgramOffering] = Field(default_factory=list)
+    model_config = ConfigDict(from_attributes=True)
+
+
+# =============================================================================
+# ORGANIZATION UNIT SCHEMAS (Cập nhật để sử dụng MajorProgram)
+# =============================================================================
+
+# Bước 1: Schema "Nông" (Shallow) không có bất kỳ quan hệ nào
 class OrganizationUnitShallow(BaseModel):
     id: int
     name: str
@@ -63,7 +168,7 @@ class OrganizationUnitShallow(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-# Bước 2: Tạo schema Create/Update không cần quan hệ lồng nhau.
+# Bước 2: Create/Update schemas
 class OrganizationUnitCreate(BaseModel):
     name: str = Field(..., min_length=3, max_length=200)
     type: str
@@ -119,8 +224,7 @@ class OrganizationUnitUpdate(BaseModel):
         return v
 
 
-# Bước 3: Tạo schema "Sâu" (Deep) để trả về cho API.
-# Schema này sẽ sử dụng schema "Nông" cho các thuộc tính đệ quy.
+# Bước 3: Schema "Sâu" (Deep) để trả về cho API
 class OrganizationUnit(BaseModel):
     id: int
     name: str
@@ -130,62 +234,18 @@ class OrganizationUnit(BaseModel):
     is_active: bool
 
     parent: Optional[OrganizationUnitShallow] = None
-    
-    # ✅ ĐÃ SỬA: Dùng 'OrganizationUnit' (tham chiếu chuỗi)
-    children: List['OrganizationUnit'] = [] 
-
-    majors: List[Major] = []
+    children: List['OrganizationUnit'] = Field(default_factory=list)
+    major_programs: List[MajorProgram] = Field(default_factory=list)  # Cập nhật từ 'majors' sang 'major_programs'
 
     model_config = ConfigDict(from_attributes=True)
 
 
-# ✅ ĐÃ THÊM: Gọi model_rebuild() để Pydantic xử lý đệ quy
+# Required for forward reference
 OrganizationUnit.model_rebuild()
 
 
 # =============================================================================
-# ✅ PHASE 2: MAJOR ACADEMIC INFO SCHEMAS (Year-Versioned Data)
-# =============================================================================
-
-class MajorAcademicInfoBase(BaseModel):
-    """Base schema for MajorAcademicInfo"""
-    major_id: int = Field(..., gt=0)
-    academic_year: int = Field(..., ge=2000, le=2100, description="Academic year (e.g., 2024)")
-    target_audience: Optional[str] = Field(None, max_length=1000, description="Target audience description")
-    detailed_info: Optional[str] = Field(None, description="Detailed major information")
-    current_year_benefits: Optional[str] = Field(None, description="Benefits for current year")
-    tuition_fee_per_year: Optional[Decimal] = Field(None, ge=0, description="Tuition fee per year in VND")
-    annual_admission_quota: Optional[int] = Field(None, ge=0, description="Annual admission quota")
-    is_published: bool = Field(default=False, description="Whether this info is published")
-
-
-class MajorAcademicInfoCreate(MajorAcademicInfoBase):
-    """Schema for creating MajorAcademicInfo"""
-    pass
-
-
-class MajorAcademicInfoUpdate(BaseModel):
-    """Schema for updating MajorAcademicInfo (all fields optional)"""
-    target_audience: Optional[str] = Field(None, max_length=1000)
-    detailed_info: Optional[str] = None
-    current_year_benefits: Optional[str] = None
-    tuition_fee_per_year: Optional[Decimal] = Field(None, ge=0)
-    annual_admission_quota: Optional[int] = Field(None, ge=0)
-    is_published: Optional[bool] = None
-
-
-class MajorAcademicInfo(MajorAcademicInfoBase):
-    """Schema for reading MajorAcademicInfo (with ID and timestamps)"""
-    id: int
-    created_by_user_id: Optional[int] = None
-    created_at: Optional[datetime] = None  # ✅ CRITICAL FIX: datetime instead of str
-    updated_at: Optional[datetime] = None  # ✅ CRITICAL FIX: datetime instead of str
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-# =============================================================================
-# ✅ PHASE 3: TREE WITH AGGREGATION SCHEMAS
+# TREE WITH AGGREGATION SCHEMAS (Cập nhật cho 3-tier)
 # =============================================================================
 
 class MajorWithStats(BaseModel):
@@ -193,6 +253,7 @@ class MajorWithStats(BaseModel):
     id: int
     name: str
     code: str
+    degree_level: str
     total_admission_quota: Optional[int] = Field(None, description="Total admission quota for current year")
     tuition_fee: Optional[Decimal] = Field(None, description="Tuition fee per year")
 
@@ -218,7 +279,7 @@ class OrganizationTreeNodeWithAggregation(BaseModel):
     parent_id: Optional[int] = None
     is_active: bool
 
-    # Direct majors of this unit
+    # Direct majors of this unit (3-tier structure)
     majors: List[MajorWithStats] = Field(default_factory=list, description="Direct majors belonging to this unit")
 
     # Aggregated statistics (includes descendants)
@@ -232,3 +293,21 @@ class OrganizationTreeNodeWithAggregation(BaseModel):
 
 # Required for forward reference
 OrganizationTreeNodeWithAggregation.model_rebuild()
+
+
+# =============================================================================
+# BACKWARD COMPATIBILITY (Optional - for gradual migration)
+# =============================================================================
+# These old schemas can be removed after full migration
+
+# Deprecated: Use MajorProgram instead
+Major = MajorProgram
+MajorCreate = MajorProgramCreate
+MajorUpdate = MajorProgramUpdate
+MajorBase = MajorProgramBase
+
+# Deprecated: Use OfferingAcademicInfo instead
+MajorAcademicInfo = OfferingAcademicInfo
+MajorAcademicInfoCreate = OfferingAcademicInfoCreate
+MajorAcademicInfoUpdate = OfferingAcademicInfoUpdate
+MajorAcademicInfoBase = OfferingAcademicInfoBase
