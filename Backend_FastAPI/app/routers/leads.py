@@ -37,7 +37,7 @@ async def get_all_leads(
         None, description="Filter by assigned officer ID"
     ),
     unit_id: Optional[int] = Query(None, description="Filter by organization unit ID"),
-    major_id: Optional[int] = Query(None, description="Filter by major ID"),
+    offering_id: Optional[int] = Query(None, description="Filter by program offering ID"),
     source: Optional[str] = Query(
         None, description="Filter by source (comma-separated)"
     ),
@@ -58,7 +58,7 @@ async def get_all_leads(
         status=status,
         assigned_officer_id=assigned_officer_id,
         unit_id=unit_id,
-        major_id=major_id,
+        offering_id=offering_id,
         source=source,
         search=search,
         sort_by=sort_by,

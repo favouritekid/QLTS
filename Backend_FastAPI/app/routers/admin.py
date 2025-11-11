@@ -1649,58 +1649,139 @@ async def delete_existing_organization_unit(
     return None
 
 
+# =============================================================================
+# ✅ NEW 3-TIER ARCHITECTURE: MAJOR PROGRAM & OFFERING CRUD ENDPOINTS
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# MAJOR PROGRAM (Level 1) CRUD
+# -----------------------------------------------------------------------------
+
 @router.post(
-    "/majors",
-    response_model=schemas.Major,
+    "/programs",
+    response_model=schemas.MajorProgram,
     status_code=status.HTTP_201_CREATED,
     tags=["Admin - Organization"],
 )
-async def create_new_major(
-    major_in: schemas.MajorCreate,
+async def create_new_program(
+    program_in: schemas.MajorProgramCreate,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
-    """(Admin only) Tạo một ngành học mới."""
-    return await organization_service.create_major(db, major_in)
+    """(Admin only) Tạo chương trình đào tạo mới (Level 1)."""
+    return await organization_service.create_major_program(db, program_in)
 
 
 @router.get(
-    "/majors/{major_id}", response_model=schemas.Major, tags=["Admin - Organization"]
+    "/programs/{program_id}",
+    response_model=schemas.MajorProgram,
+    tags=["Admin - Organization"]
 )
-async def get_major_details(
-    major_id: int,
+async def get_program_details(
+    program_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
-    """(Admin only) Lấy chi tiết một ngành học."""
-    return await organization_service.get_major_by_id(db, major_id)
+    """(Admin only) Lấy chi tiết chương trình đào tạo."""
+    return await organization_service.get_major_program_by_id(db, program_id)
 
 
 @router.put(
-    "/majors/{major_id}", response_model=schemas.Major, tags=["Admin - Organization"]
+    "/programs/{program_id}",
+    response_model=schemas.MajorProgram,
+    tags=["Admin - Organization"]
 )
-async def update_existing_major(
-    major_id: int,
-    major_in: schemas.MajorUpdate,
+async def update_existing_program(
+    program_id: int,
+    program_in: schemas.MajorProgramUpdate,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
-    """(Admin only) Cập nhật một ngành học."""
-    return await organization_service.update_major(db, major_id, major_in)
+    """(Admin only) Cập nhật chương trình đào tạo."""
+    return await organization_service.update_major_program(db, program_id, program_in)
 
 
 @router.delete(
-    "/majors/{major_id}",
+    "/programs/{program_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["Admin - Organization"],
 )
-async def delete_existing_major(
-    major_id: int,
+async def delete_existing_program(
+    program_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
-    """(Admin only) Xóa một ngành học."""
-    await organization_service.delete_major(db, major_id)
+    """(Admin only) Xóa chương trình đào tạo (soft delete)."""
+    await organization_service.delete_major_program(db, program_id)
+    return None
+
+
+# -----------------------------------------------------------------------------
+# PROGRAM OFFERING (Level 2) CRUD
+# -----------------------------------------------------------------------------
+
+@router.post(
+    "/programs/{program_id}/offerings",
+    response_model=schemas.ProgramOffering,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Admin - Organization"],
+)
+async def create_new_offering(
+    program_id: int,
+    offering_in: schemas.ProgramOfferingCreate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Tạo loại hình đào tạo mới cho chương trình (Level 2)."""
+    # Ensure program_id in path matches program_id in body
+    if offering_in.program_id != program_id:
+        from ..utils.exceptions import BadRequest
+        raise BadRequest(detail="program_id in path must match program_id in request body")
+
+    return await organization_service.create_program_offering(db, offering_in)
+
+
+@router.get(
+    "/offerings/{offering_id}",
+    response_model=schemas.ProgramOffering,
+    tags=["Admin - Organization"]
+)
+async def get_offering_details(
+    offering_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Lấy chi tiết loại hình đào tạo."""
+    return await organization_service.get_program_offering_by_id(db, offering_id)
+
+
+@router.put(
+    "/offerings/{offering_id}",
+    response_model=schemas.ProgramOffering,
+    tags=["Admin - Organization"]
+)
+async def update_existing_offering(
+    offering_id: int,
+    offering_in: schemas.ProgramOfferingUpdate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Cập nhật loại hình đào tạo."""
+    return await organization_service.update_program_offering(db, offering_id, offering_in)
+
+
+@router.delete(
+    "/offerings/{offering_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["Admin - Organization"],
+)
+async def delete_existing_offering(
+    offering_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Xóa loại hình đào tạo (soft delete)."""
+    await organization_service.delete_program_offering(db, offering_id)
     return None
 
 
@@ -2044,7 +2125,7 @@ async def import_leads_from_file(
 ):
     """
     (Admin only) Import leads từ file CSV hoặc Excel.
-    File cần có các cột: 'full_name', 'email', 'phone', 'source', 'unit_id', 'major_id' (tùy chọn).
+    File cần có các cột: 'full_name', 'email', 'phone', 'source', 'unit_id', 'offering_id' (tùy chọn).
     Endpoint sẽ tạo leads trong DB nhưng **không** tự động phân công.
     Trả về kết quả import bao gồm ID các lead đã tạo và danh sách lỗi.
     """
@@ -2104,7 +2185,7 @@ async def import_leads_from_file(
 
     # --- 3. Xử lý dữ liệu và Tạo Leads ---
     required_columns = {"full_name", "email", "phone", "source", "unit_id"}
-    # optional_columns = {"major_id"}  # Các cột tùy chọn
+    # optional_columns = {"offering_id"}  # Các cột tùy chọn
     # Chuẩn hóa tên cột (viết thường, bỏ dấu cách)
     df.columns = df.columns.str.lower().str.strip().str.replace(" ", "_")
 
@@ -2177,17 +2258,17 @@ async def import_leads_from_file(
             # Lỗi cơ bản khi ép kiểu (ví dụ: unit_id là "abc")
             validation_errors_for_row.append(f"Type conversion error: {e}")
 
-        # 2. Ép kiểu trường tùy chọn 'major_id'
-        major_id_val = row_data.get("major_id")
-        if pd.notna(major_id_val):
+        # 2. Ép kiểu trường tùy chọn 'offering_id'
+        offering_id_val = row_data.get("offering_id")
+        if pd.notna(offering_id_val):
             try:
-                cleaned_data["major_id"] = int(float(major_id_val))
+                cleaned_data["offering_id"] = int(float(offering_id_val))
             except (ValueError, TypeError):
                 validation_errors_for_row.append(
-                    "Invalid format for 'major_id', expected a number."
+                    "Invalid format for 'offering_id', expected a number."
                 )
         else:
-            cleaned_data["major_id"] = None
+            cleaned_data["offering_id"] = None
 
         # --- KẾT THÚC SỬA LỖI ÉP KIỂU ---
 

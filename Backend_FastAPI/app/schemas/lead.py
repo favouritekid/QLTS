@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from .organization import Major, OrganizationUnitShallow
+from .organization import ProgramOffering, OrganizationUnitShallow
 from .pipeline import ConsultationStatus, PipelineStage
 
 # Import các schema cần thiết để lồng vào
@@ -86,7 +86,7 @@ class LeadBase(BaseModel):
     phone: str = Field(..., min_length=1, max_length=20, strip_whitespace=True)
     source: str = Field(..., min_length=1, max_length=50, strip_whitespace=True)
     unit_id: int
-    major_id: Optional[int] = None
+    offering_id: Optional[int] = None
 
 
 class LeadCreate(LeadBase):
@@ -99,7 +99,7 @@ class LeadUpdate(BaseModel):
     phone: Optional[str] = None
     source: Optional[str] = None
     unit_id: Optional[int] = None
-    major_id: Optional[int] = None
+    offering_id: Optional[int] = None
     consultation_status_id: Optional[str] = None
     education_level: Optional[str] = None
     gpa: Optional[float] = None
@@ -119,7 +119,7 @@ class Lead(LeadBase):
     consultation_status_id: Optional[str] = None
     pipeline_stage_id: Optional[str] = None
 
-    major: Optional[Major] = None
+    offering: Optional[ProgramOffering] = None
     # THAY ĐỔI Ở ĐÂY: Sử dụng OrganizationUnitShallow
     unit: Optional[OrganizationUnitShallow] = None
     assigned_officer: Optional[User] = None

@@ -48,7 +48,8 @@ class OrganizationUnit(Base):
     )
 
     # === Other relationships ===
-    majors = relationship("Major", back_populates="unit")
+    majors = relationship("Major", back_populates="unit")  # Legacy - to be removed
+    major_programs = relationship("MajorProgram", back_populates="unit")  # NEW: 3-tier architecture
     leads = relationship("Lead", back_populates="unit")
 
     # Configuration
