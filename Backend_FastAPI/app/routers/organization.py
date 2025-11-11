@@ -22,7 +22,7 @@ async def get_all_organization_units(
     db: AsyncSession = Depends(database.get_db),
     current_user: schemas.User = deps.CurrentUser,
 ):
-    """Lấy danh sách tất cả các đơn vị."""
+    """Lấy danh sách tất cả các đơn vị với cấu trúc 3-tier."""
     return await organization_service.get_all_organization_units(db)
 
 
@@ -34,98 +34,149 @@ async def get_organization_tree_with_aggregation(
     current_user: schemas.User = deps.CurrentUser,
 ):
     """
-    Lấy cây tổ chức với thông tin ngành học và dữ liệu tổng hợp.
+    Lấy cây tổ chức với thông tin chương trình đào tạo và dữ liệu tổng hợp (3-tier).
 
     - **academic_year**: Năm học cần lấy thông tin (mặc định là năm hiện tại)
     - **include_inactive**: Có bao gồm các đơn vị không hoạt động không (mặc định là False)
 
-    Response bao gồm:
-    - Danh sách ngành học trực thuộc mỗi đơn vị
-    - Thống kê tổng hợp (số ngành học, chỉ tiêu tuyển sinh, học phí trung bình/min/max)
-    - Dữ liệu được tổng hợp từ các đơn vị con lên đơn vị cha
+    Response bao gồm (3-tier architecture):
+    - Danh sách chương trình (MajorProgram) trực thuộc mỗi đơn vị
+    - Mỗi chương trình có nhiều loại hình đào tạo (ProgramOffering)
+    - Mỗi loại hình đào tạo có thông tin học thuật theo năm (OfferingAcademicInfo)
+    - Thống kê tổng hợp được tổng hợp từ các đơn vị con lên đơn vị cha
     """
     return await organization_service.get_organization_tree_with_aggregation(
         db, academic_year=academic_year, include_inactive=include_inactive
     )
 
 
-@router.get("/majors", response_model=List[schemas.Major])
-async def get_filtered_majors(
+@router.get("/programs", response_model=List[schemas.MajorProgram])
+async def get_filtered_programs(
     unitId: int,
     search: Optional[str] = None,
     db: AsyncSession = Depends(database.get_db),
     current_user: schemas.User = deps.CurrentUser,
 ):
-    """Lấy danh sách ngành học, lọc theo unitId và tìm kiếm."""
-    return await organization_service.get_majors_by_unit_tree(
+    """
+    Lấy danh sách chương trình đào tạo (MajorProgram - Level 1), lọc theo unitId và tìm kiếm.
+
+    Đây là endpoint mới thay thế cho /majors trong kiến trúc 3-tier.
+    """
+    return await organization_service.get_programs_by_unit_tree(
         db, unit_id=unitId, search_term=search
     )
 
 
 # =============================================================================
-# ✅ PHASE 3: MAJOR ACADEMIC INFO API ENDPOINTS (Year-Versioned Data)
+# ✅ NEW 3-TIER API ENDPOINTS
 # =============================================================================
 
-@router.get("/majors/{major_id}/academic-info", response_model=List[schemas.MajorAcademicInfo])
-async def get_major_academic_history(
-    major_id: int,
+# -----------------------------------------------------------------------------
+# PROGRAM OFFERING (Level 2) ENDPOINTS
+# -----------------------------------------------------------------------------
+
+@router.get("/programs/{program_id}/offerings", response_model=List[schemas.ProgramOffering])
+async def get_program_offerings(
+    program_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: schemas.User = deps.CurrentUser,
+):
+    """
+    Lấy danh sách các loại hình đào tạo (offerings) của một chương trình.
+
+    Ví dụ: Chương trình "Công nghệ Thông tin" có thể có:
+    - Chính quy
+    - Liên thông
+    - Từ xa
+    """
+    return await organization_service.get_offerings_by_program(db, program_id=program_id)
+
+
+# -----------------------------------------------------------------------------
+# OFFERING ACADEMIC INFO (Level 3) ENDPOINTS - Year-Versioned Data
+# -----------------------------------------------------------------------------
+
+@router.get("/offerings/{offering_id}/academic-info", response_model=List[schemas.OfferingAcademicInfo])
+async def get_offering_academic_history(
+    offering_id: int,
     published_only: bool = False,
     db: AsyncSession = Depends(database.get_db),
     current_user: schemas.User = deps.CurrentUser,
 ):
     """
-    Get all academic info history for a major, ordered by year descending.
+    Lấy lịch sử thông tin học thuật (academic info) của một loại hình đào tạo theo từng năm.
 
     Query params:
-    - published_only: If true, only return published info (default: false)
+    - published_only: Nếu true, chỉ trả về thông tin đã xuất bản (default: false)
 
-    Returns list of academic info sorted by year (newest first).
+    Returns: Danh sách academic info theo năm (mới nhất trước).
     """
     return await organization_service.get_academic_info_history(
-        db, major_id=major_id, published_only=published_only
+        db, offering_id=offering_id, published_only=published_only
     )
 
 
-@router.get("/majors/{major_id}/academic-info/{year}", response_model=schemas.MajorAcademicInfo)
-async def get_major_academic_info_by_year(
-    major_id: int,
+@router.get("/offerings/{offering_id}/academic-info/{year}", response_model=schemas.OfferingAcademicInfo)
+async def get_offering_academic_info_by_year(
+    offering_id: int,
     year: int,
     db: AsyncSession = Depends(database.get_db),
     current_user: schemas.User = deps.CurrentUser,
 ):
     """
-    Get academic info for a specific major and academic year.
+    Lấy thông tin học thuật của một loại hình đào tạo cho năm học cụ thể.
 
-    Returns 404 if no info exists for that year.
+    Returns 404 nếu không có thông tin cho năm đó.
     """
-    info = await organization_service.get_academic_info_by_major_and_year(
-        db, major_id=major_id, academic_year=year
+    info = await organization_service.get_academic_info_by_offering_and_year(
+        db, offering_id=offering_id, academic_year=year
     )
     if not info:
         from ..utils.exceptions import ResourceNotFoundError
         raise ResourceNotFoundError(
-            detail=f"Academic info for major {major_id} and year {year} not found."
+            detail=f"Academic info for offering {offering_id} and year {year} not found."
         )
     return info
 
 
-@router.post("/majors/{major_id}/academic-info", response_model=schemas.MajorAcademicInfo)
-async def create_major_academic_info(
-    major_id: int,
-    academic_info_in: schemas.MajorAcademicInfoCreate,
+@router.get("/offerings/{offering_id}/academic-info/current", response_model=schemas.OfferingAcademicInfo)
+async def get_offering_current_academic_info(
+    offering_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_user: schemas.User = deps.CurrentUser,
 ):
     """
-    Create new academic info for a major and year.
+    Lấy thông tin học thuật hiện tại (năm hiện hành, đã xuất bản) của một loại hình đào tạo.
 
-    Requires admin role. Automatically sets created_by_user_id.
-    Returns 400 if info already exists for that major/year.
+    Đây là endpoint tiện lợi để lấy thông tin tuyển sinh hiện tại mà không cần chỉ định năm.
+    Returns 404 nếu không có thông tin xuất bản cho năm hiện tại.
     """
-    # Ensure major_id in path matches major_id in body
-    if academic_info_in.major_id != major_id:
+    info = await organization_service.get_current_academic_info(db, offering_id=offering_id)
+    if not info:
+        from ..utils.exceptions import ResourceNotFoundError
+        raise ResourceNotFoundError(
+            detail=f"No published academic info found for offering {offering_id} in current year."
+        )
+    return info
+
+
+@router.post("/offerings/{offering_id}/academic-info", response_model=schemas.OfferingAcademicInfo)
+async def create_offering_academic_info(
+    offering_id: int,
+    academic_info_in: schemas.OfferingAcademicInfoCreate,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: schemas.User = deps.CurrentUser,
+):
+    """
+    Tạo thông tin học thuật mới cho một loại hình đào tạo và năm học.
+
+    Requires admin role. Tự động gán created_by_user_id.
+    Returns 400 nếu thông tin đã tồn tại cho offering/year này.
+    """
+    # Ensure offering_id in path matches offering_id in body
+    if academic_info_in.offering_id != offering_id:
         from ..utils.exceptions import BadRequest
-        raise BadRequest(detail="major_id in path must match major_id in request body")
+        raise BadRequest(detail="offering_id in path must match offering_id in request body")
 
     return await organization_service.create_academic_info(
         db,
@@ -134,38 +185,39 @@ async def create_major_academic_info(
     )
 
 
-@router.patch("/academic-info/{academic_info_id}", response_model=schemas.MajorAcademicInfo)
-async def update_major_academic_info(
+@router.patch("/academic-info/{academic_info_id}", response_model=schemas.OfferingAcademicInfo)
+async def update_offering_academic_info(
     academic_info_id: int,
-    academic_info_in: schemas.MajorAcademicInfoUpdate,
+    academic_info_in: schemas.OfferingAcademicInfoUpdate,
     db: AsyncSession = Depends(database.get_db),
     current_user: schemas.User = deps.CurrentUser,
 ):
     """
-    Update existing academic info.
+    Cập nhật thông tin học thuật hiện có.
 
-    Requires admin role. Supports partial updates.
-    Returns 404 if academic info doesn't exist.
+    Requires admin role. Hỗ trợ partial updates.
+    Returns 404 nếu academic info không tồn tại.
     """
     return await organization_service.update_academic_info(
         db,
         academic_info_id=academic_info_id,
-        academic_info_in=academic_info_in
+        academic_info_in=academic_info_in,
+        updated_by_user_id=current_user.id
     )
 
 
 @router.delete("/academic-info/{academic_info_id}", status_code=204)
-async def delete_major_academic_info(
+async def delete_offering_academic_info(
     academic_info_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_user: schemas.User = deps.CurrentUser,
 ):
     """
-    Delete academic info (hard delete).
+    Xóa thông tin học thuật (hard delete).
 
     Requires admin role.
-    Note: This is a hard delete. Consider marking as unpublished instead.
-    Returns 404 if academic info doesn't exist.
+    Note: Đây là hard delete. Nên cân nhắc đánh dấu unpublished thay vì xóa.
+    Returns 404 nếu academic info không tồn tại.
     """
     await organization_service.delete_academic_info(db, academic_info_id=academic_info_id)
     return None  # 204 No Content
