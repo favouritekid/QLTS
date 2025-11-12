@@ -11,7 +11,7 @@ from datetime import datetime
 from decimal import Decimal
 import re
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 # --- Enum cho các loại đơn vị (không đổi) ---
@@ -69,6 +69,21 @@ class OfferingAcademicInfoBase(BaseModel):
     admission_criteria: Optional[List[AdmissionCriterion]] = Field(None, description="Tiêu chí tuyển sinh")
     target_audience: Optional[str] = Field(None, max_length=1000, description="Đối tượng phù hợp")
     cutoff_score_previous_year: Optional[Decimal] = Field(None, ge=0, description="Điểm chuẩn năm trước")
+
+    @model_validator(mode='before')
+    @classmethod
+    def normalize_admission_criteria(cls, data):
+        """
+        Normalize admission_criteria to handle both formats:
+        - Old format: {"criteria": [...]}  (from migration)
+        - New format: [...]  (direct list)
+        """
+        if isinstance(data, dict) and 'admission_criteria' in data:
+            criteria = data['admission_criteria']
+            # If it's a dict with 'criteria' key, extract the list
+            if isinstance(criteria, dict) and 'criteria' in criteria:
+                data['admission_criteria'] = criteria['criteria']
+        return data
 
 
 class OfferingAcademicInfoCreate(OfferingAcademicInfoBase):
