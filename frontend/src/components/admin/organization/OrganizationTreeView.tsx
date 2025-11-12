@@ -7,6 +7,7 @@ import {
   GraduationCap,
   Users,
   DollarSign,
+  UserPlus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { useOrganizationTreeWithAggregation } from "@/hooks/useOrganization";
+import { UserAssignmentDialog } from "./UserAssignmentDialog";
 import type { OrganizationTreeNodeWithAggregation } from "@/types/organization.types";
 
 interface OrganizationTreeViewProps {
@@ -49,6 +51,7 @@ interface TreeNodeProps {
 
 function TreeNode({ node, level, onNodeClick }: TreeNodeProps) {
   const [isExpanded, setIsExpanded] = useState(level === 0); // Root nodes expanded by default
+  const [userDialogOpen, setUserDialogOpen] = useState(false);
   const hasChildren = node.children && node.children.length > 0;
   const hasMajors = node.major_programs && node.major_programs.length > 0;
 
@@ -125,6 +128,19 @@ function TreeNode({ node, level, onNodeClick }: TreeNodeProps) {
                   Không hoạt động
                 </Badge>
               )}
+              {/* User Management Button */}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 text-xs"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setUserDialogOpen(true);
+                }}
+              >
+                <UserPlus className="h-3 w-3 mr-1" />
+                Quản lý người dùng
+              </Button>
             </div>
 
             {/* Statistics */}
@@ -212,6 +228,13 @@ function TreeNode({ node, level, onNodeClick }: TreeNodeProps) {
           </CollapsibleContent>
         )}
       </Collapsible>
+
+      {/* User Assignment Dialog */}
+      <UserAssignmentDialog
+        open={userDialogOpen}
+        onOpenChange={setUserDialogOpen}
+        unit={node}
+      />
     </div>
   );
 }
