@@ -735,6 +735,35 @@ async def get_current_academic_info(
     return result.scalar_one_or_none()
 
 
+async def get_academic_info_history(
+    db: AsyncSession,
+    offering_id: int,
+    published_only: bool = False
+) -> List[models.OfferingAcademicInfo]:
+    """
+    Get all academic info history for an offering, ordered by year (newest first).
+
+    Args:
+        db: Database session
+        offering_id: ID of the program offering
+        published_only: If True, only return published academic info
+
+    Returns:
+        List of academic info records ordered by academic_year descending
+    """
+    query = select(models.OfferingAcademicInfo).where(
+        models.OfferingAcademicInfo.offering_id == offering_id
+    )
+
+    if published_only:
+        query = query.where(models.OfferingAcademicInfo.is_published == True)
+
+    query = query.order_by(models.OfferingAcademicInfo.academic_year.desc())
+
+    result = await db.execute(query)
+    return list(result.scalars().all())
+
+
 async def create_academic_info(
     db: AsyncSession,
     academic_info_in: schemas.OfferingAcademicInfoCreate,
