@@ -37,6 +37,7 @@ import {
   useOrganizationUnits,
   useCreateMajorProgram,
   useUpdateMajorProgram,
+  useDegreeLevels,
 } from "@/hooks/useOrganization";
 import type {
   MajorProgram,
@@ -95,6 +96,7 @@ export function MajorProgramDialog({
 
   // Queries
   const { data: allUnits = [], isLoading: unitsLoading } = useOrganizationUnits();
+  const { data: degreeLevels = [], isLoading: degreeLevelsLoading } = useDegreeLevels(true); // Only active
 
   // Mutations
   const createMutation = useCreateMajorProgram();
@@ -178,15 +180,6 @@ export function MajorProgramDialog({
     form.setValue("code", formatted, { shouldValidate: true });
   };
 
-  // Common degree levels
-  const commonDegreeLevels = [
-    "Cao đẳng",
-    "Đại học",
-    "Thạc sĩ",
-    "Tiến sĩ",
-    "Liên thông",
-  ];
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[550px]">
@@ -236,17 +229,19 @@ export function MajorProgramDialog({
                   <Select
                     onValueChange={field.onChange}
                     value={field.value}
-                    disabled={isSubmitting}
+                    disabled={isSubmitting || degreeLevelsLoading}
                   >
                     <FormControl>
                       <SelectTrigger>
-                        <SelectValue placeholder="Chọn trình độ đào tạo" />
+                        <SelectValue placeholder={
+                          degreeLevelsLoading ? "Đang tải..." : "Chọn trình độ đào tạo"
+                        } />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      {commonDegreeLevels.map((level) => (
-                        <SelectItem key={level} value={level}>
-                          {level}
+                      {degreeLevels.map((level) => (
+                        <SelectItem key={level.id} value={level.name}>
+                          {level.name}
                         </SelectItem>
                       ))}
                     </SelectContent>

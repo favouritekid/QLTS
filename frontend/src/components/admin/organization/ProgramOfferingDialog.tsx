@@ -23,12 +23,20 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Loader2 } from "lucide-react";
 import {
   useCreateProgramOffering,
   useUpdateProgramOffering,
+  useOfferingTypes,
 } from "@/hooks/useOrganization";
 import type {
   ProgramOffering,
@@ -87,6 +95,9 @@ export function ProgramOfferingDialog({
   offering,
 }: ProgramOfferingDialogProps) {
   const isEditMode = !!offering;
+
+  // Queries
+  const { data: offeringTypes = [], isLoading: offeringTypesLoading } = useOfferingTypes(true); // Only active
 
   // Mutations
   const createMutation = useCreateProgramOffering();
@@ -185,15 +196,28 @@ export function ProgramOfferingDialog({
                   <FormLabel>
                     Loại hình đào tạo <span className="text-red-500">*</span>
                   </FormLabel>
-                  <FormControl>
-                    <Input
-                      placeholder="VD: Chính quy, Liên thông, Vừa làm vừa học"
-                      {...field}
-                      disabled={isSubmitting}
-                    />
-                  </FormControl>
+                  <Select
+                    onValueChange={field.onChange}
+                    value={field.value}
+                    disabled={isSubmitting || offeringTypesLoading}
+                  >
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue placeholder={
+                          offeringTypesLoading ? "Đang tải..." : "Chọn loại hình đào tạo"
+                        } />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      {offeringTypes.map((type) => (
+                        <SelectItem key={type.id} value={type.name}>
+                          {type.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   <FormDescription>
-                    Tên loại hình đào tạo (vd: Chính quy, Liên thông)
+                    Loại hình đào tạo (vd: Chính quy, Liên thông)
                   </FormDescription>
                   <FormMessage />
                 </FormItem>

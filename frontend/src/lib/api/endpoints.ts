@@ -109,6 +109,20 @@ export const API_ENDPOINTS = {
       DELETE_MAJOR: (id: number) => `/api/admin/majors/${id}`,
       GET_MAJOR: (id: number) => `/api/admin/majors/${id}`,
     },
+    // System Configuration
+    CONFIG: {
+      // Degree Levels
+      LIST_DEGREE_LEVELS: "/api/admin/config/degree-levels",
+      CREATE_DEGREE_LEVEL: "/api/admin/config/degree-levels",
+      UPDATE_DEGREE_LEVEL: (id: number) => `/api/admin/config/degree-levels/${id}`,
+      DELETE_DEGREE_LEVEL: (id: number) => `/api/admin/config/degree-levels/${id}`,
+
+      // Offering Types
+      LIST_OFFERING_TYPES: "/api/admin/config/offering-types",
+      CREATE_OFFERING_TYPE: "/api/admin/config/offering-types",
+      UPDATE_OFFERING_TYPE: (id: number) => `/api/admin/config/offering-types/${id}`,
+      DELETE_OFFERING_TYPE: (id: number) => `/api/admin/config/offering-types/${id}`,
+    },
     ACTIVITY_LOGS: "/api/admin/activity-logs",
     STATISTICS: "/api/admin/statistics",
   },

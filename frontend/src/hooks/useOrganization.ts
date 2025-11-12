@@ -23,6 +23,10 @@ import type {
   OfferingAcademicInfoCreate,
   OfferingAcademicInfoUpdate,
 
+  // System Configuration
+  ConfigDegreeLevel,
+  ConfigOfferingType,
+
   // Legacy (Deprecated)
   Major,
   MajorCreate,
@@ -1157,4 +1161,50 @@ export function wouldCreateCircularDependency(
 
   const descendants = getAllDescendantIds(childUnit);
   return descendants.has(parentId);
+}
+
+// =====================================================================
+// CONFIGURATION HOOKS
+// =====================================================================
+
+/**
+ * Fetch degree level configurations
+ */
+export function useDegreeLevels(activeOnly: boolean = true) {
+  return useQuery<ConfigDegreeLevel[], AxiosError<ApiErrorResponse>>({
+    queryKey: ['config', 'degree-levels', activeOnly],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (activeOnly) params.append("active_only", "true");
+
+      const response = await api.get<ConfigDegreeLevel[]>(
+        `${API_ENDPOINTS.ADMIN.CONFIG.LIST_DEGREE_LEVELS}${
+          params.toString() ? `?${params.toString()}` : ""
+        }`
+      );
+      return response.data;
+    },
+    staleTime: 1000 * 60 * 30, // Cache for 30 minutes (config changes infrequently)
+  });
+}
+
+/**
+ * Fetch offering type configurations
+ */
+export function useOfferingTypes(activeOnly: boolean = true) {
+  return useQuery<ConfigOfferingType[], AxiosError<ApiErrorResponse>>({
+    queryKey: ['config', 'offering-types', activeOnly],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (activeOnly) params.append("active_only", "true");
+
+      const response = await api.get<ConfigOfferingType[]>(
+        `${API_ENDPOINTS.ADMIN.CONFIG.LIST_OFFERING_TYPES}${
+          params.toString() ? `?${params.toString()}` : ""
+        }`
+      );
+      return response.data;
+    },
+    staleTime: 1000 * 60 * 30, // Cache for 30 minutes (config changes infrequently)
+  });
 }

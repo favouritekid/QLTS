@@ -352,3 +352,59 @@ export interface MajorWithStats {
   total_admission_quota?: number | null;
   tuition_fee?: number | null;
 }
+
+// =============================================================================
+// SYSTEM CONFIGURATION TYPES
+// =============================================================================
+
+/**
+ * ConfigDegreeLevel - Degree level configuration (Trình độ đào tạo)
+ * Used for MajorProgram creation dropdown
+ */
+export interface ConfigDegreeLevel {
+  id: number;
+  code: string; // e.g., "cao_dang", "dai_hoc"
+  name: string; // e.g., "Cao đẳng", "Đại học"
+  display_order: number;
+  is_active: boolean;
+}
+
+export interface ConfigDegreeLevelCreate {
+  code: string;
+  name: string;
+  display_order?: number;
+  is_active?: boolean;
+}
+
+export interface ConfigDegreeLevelUpdate {
+  code?: string;
+  name?: string;
+  display_order?: number;
+  is_active?: boolean;
+}
+
+/**
+ * ConfigOfferingType - Offering type configuration (Loại hình đào tạo)
+ * Used for ProgramOffering creation dropdown
+ */
+export interface ConfigOfferingType {
+  id: number;
+  code: string; // e.g., "chinh_quy", "lien_thong"
+  name: string; // e.g., "Chính quy", "Liên thông"
+  display_order: number;
+  is_active: boolean;
+}
+
+export interface ConfigOfferingTypeCreate {
+  code: string;
+  name: string;
+  display_order?: number;
+  is_active?: boolean;
+}
+
+export interface ConfigOfferingTypeUpdate {
+  code?: string;
+  name?: string;
+  display_order?: number;
+  is_active?: boolean;
+}
