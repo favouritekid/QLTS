@@ -475,13 +475,13 @@ export function OfferingAcademicInfoDialog({
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <FormLabel className="text-base">
+                  <label className="text-base font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
                     Tiêu chí tuyển sinh
-                  </FormLabel>
-                  <FormDescription>
+                  </label>
+                  <p className="text-sm text-muted-foreground">
                     Thêm các phương thức xét tuyển (học bạ, thi THPT, tuyển
                     thẳng...)
-                  </FormDescription>
+                  </p>
                 </div>
                 <Button
                   type="button"
