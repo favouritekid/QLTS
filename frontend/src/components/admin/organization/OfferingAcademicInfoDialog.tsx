@@ -287,7 +287,7 @@ export function OfferingAcademicInfoDialog({
                   <FormLabel>Học phí/năm</FormLabel>
                   <FormControl>
                     <CurrencyInput
-                      value={field.value ?? null}
+                      value={typeof field.value === 'number' ? field.value : null}
                       onChange={field.onChange}
                       placeholder="VD: 15.000.000"
                       disabled={isSubmitting}
