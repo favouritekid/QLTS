@@ -70,20 +70,24 @@ class OfferingAcademicInfoBase(BaseModel):
     target_audience: Optional[str] = Field(None, max_length=1000, description="Đối tượng phù hợp")
     cutoff_score_previous_year: Optional[Decimal] = Field(None, ge=0, description="Điểm chuẩn năm trước")
 
-    @model_validator(mode='before')
+    @field_validator('admission_criteria', mode='before')
     @classmethod
-    def normalize_admission_criteria(cls, data):
+    def normalize_admission_criteria(cls, value):
         """
         Normalize admission_criteria to handle both formats:
         - Old format: {"criteria": [...]}  (from migration)
         - New format: [...]  (direct list)
+
+        This validator runs BEFORE Pydantic tries to parse the field,
+        and works with from_attributes=True when loading from ORM models.
         """
-        if isinstance(data, dict) and 'admission_criteria' in data:
-            criteria = data['admission_criteria']
-            # If it's a dict with 'criteria' key, extract the list
-            if isinstance(criteria, dict) and 'criteria' in criteria:
-                data['admission_criteria'] = criteria['criteria']
-        return data
+        if value is None:
+            return None
+        # If it's a dict with 'criteria' key, extract the list
+        if isinstance(value, dict) and 'criteria' in value:
+            return value['criteria']
+        # Otherwise return as-is (should be a list already)
+        return value
 
 
 class OfferingAcademicInfoCreate(OfferingAcademicInfoBase):
