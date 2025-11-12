@@ -804,6 +804,12 @@ async def create_academic_info(
         )
 
         await invalidate_org_cache()
+        await emit_organization_updated(
+            operation="create",
+            resource_type="academic_info",
+            resource_id=db_academic_info.id,
+            resource_name=f"Năm {academic_info_in.academic_year}"
+        )
 
         return db_academic_info
 
@@ -843,6 +849,12 @@ async def update_academic_info(
         )
 
         await invalidate_org_cache()
+        await emit_organization_updated(
+            operation="update",
+            resource_type="academic_info",
+            resource_id=academic_info_id,
+            resource_name=f"Năm {db_academic_info.academic_year}"
+        )
 
         return db_academic_info
 
@@ -874,6 +886,12 @@ async def delete_academic_info(db: AsyncSession, academic_info_id: int):
         )
 
         await invalidate_org_cache()
+        await emit_organization_updated(
+            operation="delete",
+            resource_type="academic_info",
+            resource_id=academic_info_id,
+            resource_name=f"Năm {academic_year}"
+        )
 
     except Exception as e:
         await db.rollback()

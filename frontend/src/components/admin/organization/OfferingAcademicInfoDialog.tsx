@@ -23,6 +23,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { CurrencyInput } from "@/components/ui/currency-input";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
@@ -283,21 +284,19 @@ export function OfferingAcademicInfoDialog({
               name="tuition_fee_per_year"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Học phí/năm (VND)</FormLabel>
+                  <FormLabel>Học phí/năm</FormLabel>
                   <FormControl>
-                    <Input
-                      type="number"
-                      placeholder="VD: 15000000"
-                      {...field}
-                      value={field.value ?? ""}
-                      onChange={(e) =>
-                        field.onChange(e.target.value ? parseFloat(e.target.value) : null)
-                      }
+                    <CurrencyInput
+                      value={field.value ?? null}
+                      onChange={field.onChange}
+                      placeholder="VD: 15.000.000"
                       disabled={isSubmitting}
+                      currency="VND"
+                      locale="vi-VN"
                     />
                   </FormControl>
                   <FormDescription>
-                    Học phí một năm học (đơn vị: VND)
+                    Học phí một năm học (tự động định dạng với dấu phân cách hàng nghìn)
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
