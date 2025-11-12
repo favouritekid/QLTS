@@ -24,7 +24,7 @@ from .. import models, schemas
 from ..config import settings
 from ..database import safe_redis_delete, safe_redis_get, safe_redis_set
 from ..socket_manager import emit_to_all
-from ..utils.exceptions import DuplicateResourceError, ResourceNotFoundError
+from ..utils.exceptions import BadRequest, DuplicateResourceError, ResourceNotFoundError
 
 log = structlog.get_logger(__name__)
 
@@ -1044,11 +1044,23 @@ async def delete_academic_info(db: AsyncSession, academic_info_id: int):
     - Compliance and legal requirements
 
     NEVER hard delete academic info - use is_deleted flag instead.
+
+    IMPORTANT: Blocks deletion of past academic year data to prevent
+    historical data loss (immutable financial history).
     """
     try:
         db_academic_info = await get_academic_info_by_id(db, academic_info_id)
         offering_id = db_academic_info.offering_id
         academic_year = db_academic_info.academic_year
+
+        # ✅ FIX: Prevent deletion of past academic year data
+        current_year = datetime.now().year
+        if academic_year < current_year:
+            raise BadRequest(
+                detail=f"Không thể xóa dữ liệu tuyển sinh của năm học {academic_year} "
+                       f"(năm trong quá khứ). Dữ liệu lịch sử phải được bảo toàn "
+                       f"để đảm bảo tính toàn vẹn của báo cáo tài chính và thống kê."
+            )
 
         # Soft delete - set flag instead of removing from database
         db_academic_info.is_deleted = True
