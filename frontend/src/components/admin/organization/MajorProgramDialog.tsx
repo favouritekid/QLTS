@@ -43,6 +43,7 @@ import type {
   MajorProgram,
   MajorProgramCreate,
   MajorProgramUpdate,
+  OrganizationUnit,
 } from "@/types/organization.types";
 
 // =====================================================================
@@ -174,6 +175,27 @@ export function MajorProgramDialog({
   // Check if mutation is in progress
   const isSubmitting = createMutation.isPending || updateMutation.isPending;
 
+  // Flatten organization tree for dropdown
+  const flattenUnits = (units: OrganizationUnit[], level = 0): Array<OrganizationUnit & { displayName: string }> => {
+    const result: Array<OrganizationUnit & { displayName: string }> = [];
+    const indent = "└─ ".repeat(level);
+
+    for (const unit of units) {
+      result.push({
+        ...unit,
+        displayName: `${indent}${unit.name}`,
+      });
+
+      if (unit.children && unit.children.length > 0) {
+        result.push(...flattenUnits(unit.children, level + 1));
+      }
+    }
+
+    return result;
+  };
+
+  const flattenedUnits = flattenUnits(allUnits);
+
   // Helper to format code as user types (uppercase, no spaces)
   const handleCodeChange = (value: string) => {
     const formatted = value.toUpperCase().replace(/\s+/g, "_");
@@ -301,9 +323,9 @@ export function MajorProgramDialog({
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      {allUnits.map((unit) => (
+                      {flattenedUnits.map((unit) => (
                         <SelectItem key={unit.id} value={String(unit.id)}>
-                          {unit.name} ({unit.type})
+                          {unit.displayName} ({unit.type})
                         </SelectItem>
                       ))}
                     </SelectContent>

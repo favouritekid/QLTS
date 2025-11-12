@@ -171,8 +171,56 @@ export function SocketHandler() {
           });
           break;
 
+        case "program":
+          // Invalidate all major program queries (3-tier Tier 1)
+          queryClient.invalidateQueries({ queryKey: ["organization"] });
+          queryClient.invalidateQueries({ queryKey: ["organization", "major-programs"] });
+
+          const programOperation =
+            data.operation === "create" ? "đã tạo" :
+            data.operation === "update" ? "đã cập nhật" :
+            "đã xóa";
+
+          toast.info(`Chương trình đào tạo ${programOperation}`, {
+            description: "Dữ liệu đã được làm mới tự động",
+            duration: 3000,
+          });
+          break;
+
+        case "offering":
+          // Invalidate program offering queries (3-tier Tier 2)
+          queryClient.invalidateQueries({ queryKey: ["organization"] });
+          queryClient.invalidateQueries({ queryKey: ["organization", "offerings"] });
+
+          const offeringOperation =
+            data.operation === "create" ? "đã tạo" :
+            data.operation === "update" ? "đã cập nhật" :
+            "đã xóa";
+
+          toast.info(`Loại hình đào tạo ${offeringOperation}`, {
+            description: "Dữ liệu đã được làm mới tự động",
+            duration: 3000,
+          });
+          break;
+
+        case "academic_info":
+          // Invalidate academic info queries (3-tier Tier 3)
+          queryClient.invalidateQueries({ queryKey: ["organization"] });
+          queryClient.invalidateQueries({ queryKey: ["organization", "academic-info"] });
+
+          const academicOperation =
+            data.operation === "create" ? "đã tạo" :
+            data.operation === "update" ? "đã cập nhật" :
+            "đã xóa";
+
+          toast.info(`Thông tin tuyển sinh ${academicOperation}`, {
+            description: "Dữ liệu đã được làm mới tự động",
+            duration: 3000,
+          });
+          break;
+
         case "major":
-          // Invalidate all major-related queries
+          // Legacy support - Invalidate all major-related queries
           queryClient.invalidateQueries({ queryKey: ["organization", "majors"] });
           queryClient.invalidateQueries({ queryKey: ["organization", "list"] });
 

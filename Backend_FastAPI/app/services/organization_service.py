@@ -12,6 +12,7 @@ Handles:
 import asyncio
 import json
 from datetime import datetime
+from decimal import Decimal
 from typing import List, Optional
 
 import structlog
@@ -26,6 +27,18 @@ from ..socket_manager import emit_to_all
 from ..utils.exceptions import DuplicateResourceError, ResourceNotFoundError
 
 log = structlog.get_logger(__name__)
+
+
+# =============================================================================
+# JSON ENCODER FOR DECIMAL
+# =============================================================================
+
+class DecimalEncoder(json.JSONEncoder):
+    """Custom JSON encoder that converts Decimal to float."""
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return float(obj)
+        return super().default(obj)
 
 # Cache configuration
 ORG_UNITS_CACHE_KEY = "org:all_units_tree"
@@ -202,7 +215,7 @@ async def get_all_organization_units(db: AsyncSession) -> List[dict]:
         try:
             await safe_redis_set(
                 ORG_UNITS_CACHE_KEY,
-                json.dumps(units_data),
+                json.dumps(units_data, cls=DecimalEncoder),
                 ex=CACHE_TTL
             )
             log.debug("Cached organization tree", ttl=CACHE_TTL)
