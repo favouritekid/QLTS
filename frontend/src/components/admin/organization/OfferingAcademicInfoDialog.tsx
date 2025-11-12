@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import {
@@ -27,7 +27,8 @@ import { CurrencyInput } from "@/components/ui/currency-input";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
-import { Loader2 } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Loader2, Plus, Trash } from "lucide-react";
 import {
   useCreateOfferingAcademicInfo,
   useUpdateOfferingAcademicInfo,
@@ -38,6 +39,23 @@ import type {
   OfferingAcademicInfoUpdate,
   ProgramOffering,
 } from "@/types/organization.types";
+
+// =====================================================================
+// ADMISSION CRITERION TYPE
+// =====================================================================
+
+const admissionCriterionSchema = z.object({
+  id: z.string().min(1, "Mã phương thức là bắt buộc"),
+  method_name: z.string().min(1, "Tên phương thức là bắt buộc"),
+  subject_groups: z.string().optional(), // Comma-separated string
+  min_score: z
+    .number()
+    .min(0, "Điểm phải lớn hơn hoặc bằng 0")
+    .max(30, "Điểm không được vượt quá 30")
+    .nullish()
+    .or(z.literal("")),
+  program_type: z.string().optional(),
+});
 
 // =====================================================================
 // FORM VALIDATION SCHEMA
@@ -70,11 +88,12 @@ const academicInfoFormSchema = z.object({
     .max(30, "Điểm chuẩn không được vượt quá 30")
     .nullish()
     .or(z.literal("")),
-  admission_criteria: z.string().optional(), // JSON as string for simplicity
+  admission_criteria: z.array(admissionCriterionSchema).default([]), // ✅ Changed from string to array
   is_published: z.boolean(),
 });
 
 type AcademicInfoFormValues = z.infer<typeof academicInfoFormSchema>;
+type AdmissionCriterion = z.infer<typeof admissionCriterionSchema>;
 
 // =====================================================================
 // COMPONENT PROPS
@@ -112,24 +131,46 @@ export function OfferingAcademicInfoDialog({
       annual_admission_quota: null,
       target_audience: "",
       cutoff_score_previous_year: null,
-      admission_criteria: "",
+      admission_criteria: [], // ✅ Default empty array
       is_published: false,
     },
+  });
+
+  // ✅ useFieldArray for dynamic admission criteria
+  const { fields, append, remove } = useFieldArray({
+    control: form.control,
+    name: "admission_criteria",
   });
 
   // Populate form when editing
   useEffect(() => {
     if (open) {
       if (isEditMode && academicInfo) {
+        // ✅ Parse admission_criteria from JSON string/object to array
+        let parsedCriteria: AdmissionCriterion[] = [];
+        if (academicInfo.admission_criteria) {
+          try {
+            // If it's a string, parse it
+            if (typeof academicInfo.admission_criteria === "string") {
+              parsedCriteria = JSON.parse(academicInfo.admission_criteria);
+            }
+            // If it's already an array/object, use it directly
+            else if (Array.isArray(academicInfo.admission_criteria)) {
+              parsedCriteria = academicInfo.admission_criteria;
+            }
+          } catch (e) {
+            console.error("Failed to parse admission criteria:", e);
+            parsedCriteria = [];
+          }
+        }
+
         form.reset({
           academic_year: academicInfo.academic_year,
           tuition_fee_per_year: academicInfo.tuition_fee_per_year ?? null,
           annual_admission_quota: academicInfo.annual_admission_quota ?? null,
           target_audience: academicInfo.target_audience || "",
           cutoff_score_previous_year: academicInfo.cutoff_score_previous_year ?? null,
-          admission_criteria: academicInfo.admission_criteria
-            ? JSON.stringify(academicInfo.admission_criteria, null, 2)
-            : "",
+          admission_criteria: parsedCriteria,
           is_published: academicInfo.is_published,
         });
       } else {
@@ -139,7 +180,7 @@ export function OfferingAcademicInfoDialog({
           annual_admission_quota: null,
           target_audience: "",
           cutoff_score_previous_year: null,
-          admission_criteria: "",
+          admission_criteria: [],
           is_published: false,
         });
       }
@@ -148,29 +189,45 @@ export function OfferingAcademicInfoDialog({
 
   // Handle form submission
   const onSubmit = async (values: AcademicInfoFormValues) => {
-    // Parse admission_criteria JSON
-    let parsedAdmissionCriteria = null;
-    if (values.admission_criteria && values.admission_criteria.trim()) {
-      try {
-        parsedAdmissionCriteria = JSON.parse(values.admission_criteria);
-      } catch (e) {
-        form.setError("admission_criteria", {
-          message: "JSON không hợp lệ. Vui lòng kiểm tra lại.",
-        });
-        return;
-      }
-    }
-
     try {
+      // ✅ Convert subject_groups from comma-separated string to array
+      const processedCriteria = values.admission_criteria.map((criterion) => {
+        let subjectGroupsArray: string[] | undefined;
+        if (criterion.subject_groups) {
+          // Split by comma and trim whitespace
+          subjectGroupsArray = criterion.subject_groups
+            .split(",")
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0);
+        }
+
+        return {
+          id: criterion.id,
+          method_name: criterion.method_name,
+          subject_groups: subjectGroupsArray,
+          min_score: typeof criterion.min_score === "number" ? criterion.min_score : null,
+          program_type: criterion.program_type || undefined,
+        };
+      });
+
       if (isEditMode && academicInfo) {
         // Update existing
         const payload: OfferingAcademicInfoUpdate = {
           academic_year: values.academic_year,
-          tuition_fee_per_year: typeof values.tuition_fee_per_year === 'number' ? values.tuition_fee_per_year : null,
-          annual_admission_quota: typeof values.annual_admission_quota === 'number' ? values.annual_admission_quota : null,
+          tuition_fee_per_year:
+            typeof values.tuition_fee_per_year === "number"
+              ? values.tuition_fee_per_year
+              : null,
+          annual_admission_quota:
+            typeof values.annual_admission_quota === "number"
+              ? values.annual_admission_quota
+              : null,
           target_audience: values.target_audience || null,
-          cutoff_score_previous_year: typeof values.cutoff_score_previous_year === 'number' ? values.cutoff_score_previous_year : null,
-          admission_criteria: parsedAdmissionCriteria,
+          cutoff_score_previous_year:
+            typeof values.cutoff_score_previous_year === "number"
+              ? values.cutoff_score_previous_year
+              : null,
+          admission_criteria: processedCriteria.length > 0 ? processedCriteria : null, // ✅ Send as array
           is_published: values.is_published,
         };
         await updateMutation.mutateAsync({
@@ -182,11 +239,20 @@ export function OfferingAcademicInfoDialog({
         const payload: OfferingAcademicInfoCreate = {
           offering_id: offering.id,
           academic_year: values.academic_year,
-          tuition_fee_per_year: typeof values.tuition_fee_per_year === 'number' ? values.tuition_fee_per_year : null,
-          annual_admission_quota: typeof values.annual_admission_quota === 'number' ? values.annual_admission_quota : null,
+          tuition_fee_per_year:
+            typeof values.tuition_fee_per_year === "number"
+              ? values.tuition_fee_per_year
+              : null,
+          annual_admission_quota:
+            typeof values.annual_admission_quota === "number"
+              ? values.annual_admission_quota
+              : null,
           target_audience: values.target_audience || null,
-          cutoff_score_previous_year: typeof values.cutoff_score_previous_year === 'number' ? values.cutoff_score_previous_year : null,
-          admission_criteria: parsedAdmissionCriteria,
+          cutoff_score_previous_year:
+            typeof values.cutoff_score_previous_year === "number"
+              ? values.cutoff_score_previous_year
+              : null,
+          admission_criteria: processedCriteria.length > 0 ? processedCriteria : null, // ✅ Send as array
           is_published: values.is_published,
         };
         await createMutation.mutateAsync({
@@ -209,7 +275,7 @@ export function OfferingAcademicInfoDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[700px] max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-[800px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
             {isEditMode
@@ -287,7 +353,7 @@ export function OfferingAcademicInfoDialog({
                   <FormLabel>Học phí/năm</FormLabel>
                   <FormControl>
                     <CurrencyInput
-                      value={typeof field.value === 'number' ? field.value : null}
+                      value={typeof field.value === "number" ? field.value : null}
                       onChange={field.onChange}
                       placeholder="VD: 15.000.000"
                       disabled={isSubmitting}
@@ -358,28 +424,183 @@ export function OfferingAcademicInfoDialog({
               )}
             />
 
-            {/* Admission Criteria (JSON) */}
-            <FormField
-              control={form.control}
-              name="admission_criteria"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Tiêu chí tuyển sinh (JSON)</FormLabel>
-                  <FormControl>
-                    <Textarea
-                      placeholder={`Ví dụ:\n[\n  {\n    "id": "hocba_2025",\n    "method_name": "Xét học bạ",\n    "program_type": "Chính quy",\n    "subject_groups": ["A00", "D07"],\n    "min_score": 18.0\n  }\n]`}
-                      className="resize-none font-mono text-xs min-h-[150px]"
-                      {...field}
-                      disabled={isSubmitting}
-                    />
-                  </FormControl>
+            {/* ✅ DYNAMIC ADMISSION CRITERIA BUILDER */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <FormLabel className="text-base">Tiêu chí tuyển sinh</FormLabel>
                   <FormDescription>
-                    Nhập tiêu chí tuyển sinh dưới dạng JSON (tùy chọn)
+                    Thêm các phương thức xét tuyển (học bạ, thi THPT, tuyển thẳng...)
                   </FormDescription>
-                  <FormMessage />
-                </FormItem>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    append({
+                      id: "",
+                      method_name: "",
+                      subject_groups: "",
+                      min_score: null,
+                      program_type: "",
+                    })
+                  }
+                  disabled={isSubmitting}
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Thêm phương thức xét tuyển
+                </Button>
+              </div>
+
+              {/* Dynamic Cards for each criterion */}
+              {fields.length === 0 && (
+                <div className="text-center py-8 text-muted-foreground border-2 border-dashed rounded-lg">
+                  <p>Chưa có phương thức xét tuyển nào</p>
+                  <p className="text-sm mt-1">
+                    Nhấn nút &quot;Thêm phương thức xét tuyển&quot; để bắt đầu
+                  </p>
+                </div>
               )}
-            />
+
+              <div className="space-y-3">
+                {fields.map((field, index) => (
+                  <Card key={field.id} className="relative">
+                    <CardHeader className="pb-3">
+                      <div className="flex items-center justify-between">
+                        <CardTitle className="text-sm font-medium">
+                          Phương thức #{index + 1}
+                        </CardTitle>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => remove(index)}
+                          disabled={isSubmitting}
+                          className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                        >
+                          <Trash className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* ID Field */}
+                      <FormField
+                        control={form.control}
+                        name={`admission_criteria.${index}.id`}
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>
+                              Mã phương thức <span className="text-red-500">*</span>
+                            </FormLabel>
+                            <FormControl>
+                              <Input
+                                placeholder="VD: HB2025"
+                                {...field}
+                                disabled={isSubmitting}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      {/* Method Name Field */}
+                      <FormField
+                        control={form.control}
+                        name={`admission_criteria.${index}.method_name`}
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>
+                              Tên phương thức <span className="text-red-500">*</span>
+                            </FormLabel>
+                            <FormControl>
+                              <Input
+                                placeholder="VD: Xét học bạ"
+                                {...field}
+                                disabled={isSubmitting}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      {/* Subject Groups Field */}
+                      <FormField
+                        control={form.control}
+                        name={`admission_criteria.${index}.subject_groups`}
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Khối thi</FormLabel>
+                            <FormControl>
+                              <Input
+                                placeholder="VD: A00, A01, D07"
+                                {...field}
+                                disabled={isSubmitting}
+                              />
+                            </FormControl>
+                            <FormDescription className="text-xs">
+                              Các khối thi, phân cách bằng dấu phẩy
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      {/* Min Score Field */}
+                      <FormField
+                        control={form.control}
+                        name={`admission_criteria.${index}.min_score`}
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Điểm chuẩn</FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                step="0.01"
+                                placeholder="VD: 18.0"
+                                {...field}
+                                value={field.value ?? ""}
+                                onChange={(e) =>
+                                  field.onChange(
+                                    e.target.value ? parseFloat(e.target.value) : null
+                                  )
+                                }
+                                disabled={isSubmitting}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      {/* Program Type Field (full width) */}
+                      <FormField
+                        control={form.control}
+                        name={`admission_criteria.${index}.program_type`}
+                        render={({ field }) => (
+                          <FormItem className="md:col-span-2">
+                            <FormLabel>Loại chương trình</FormLabel>
+                            <FormControl>
+                              <Input
+                                placeholder="VD: Chính quy, Liên thông..."
+                                {...field}
+                                disabled={isSubmitting}
+                              />
+                            </FormControl>
+                            <FormDescription className="text-xs">
+                              Loại chương trình áp dụng phương thức này (tùy chọn)
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </div>
 
             {/* Is Published Switch */}
             <FormField

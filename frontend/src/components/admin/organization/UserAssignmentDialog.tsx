@@ -31,17 +31,26 @@ import { API_ENDPOINTS } from "@/lib/api/endpoints";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { adminUsersKeys } from "@/hooks/useAdminUsers";
-import type { OrganizationUnit } from "@/types/organization.types";
 import type { User } from "@/types/api.types";
 
 // =====================================================================
 // COMPONENT PROPS
 // =====================================================================
 
+// Minimal unit interface for user assignment - compatible with both
+// OrganizationUnit and OrganizationTreeNodeWithAggregation
+interface MinimalOrganizationUnit {
+  id: number;
+  name: string;
+  type: string;
+  parent_id: number | null;
+  is_active: boolean;
+}
+
 interface UserAssignmentDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  unit: OrganizationUnit;
+  unit: MinimalOrganizationUnit;
 }
 
 // =====================================================================
