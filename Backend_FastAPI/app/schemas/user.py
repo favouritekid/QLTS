@@ -137,6 +137,7 @@ class UserUpdate(BaseModel):
     status: Optional[str] = None
     max_capacity: Optional[int] = None
     skills: Optional[List[str]] = None
+    unit_id: Optional[int] = None  # Organizational unit assignment
 
 
 class UsersPage(BaseModel):

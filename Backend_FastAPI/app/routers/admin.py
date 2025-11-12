@@ -3009,3 +3009,102 @@ async def delete_offering_type(
     """(Admin only) Delete an offering type configuration."""
     from ..services import config_service
     await config_service.delete_offering_type(db, type_id, soft_delete)
+
+
+
+# =============================================================================
+# USER MANAGEMENT ENDPOINTS
+# =============================================================================
+
+@router.get(
+    "/users",
+    response_model=List[schemas.User],
+    tags=["Admin - Users"]
+)
+async def list_users(
+    unit_id: Optional[int] = Query(None, description="Filter by organization unit ID"),
+    is_active: Optional[bool] = Query(None, description="Filter by active status"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) List all users with optional filtering.
+    
+    Filters:
+    - unit_id: Show only users belonging to specific organizational unit
+    - is_active: Show only active or inactive users
+    """
+    query = select(models.User).options(
+        selectinload(models.User.unit)
+    )
+    
+    # Apply filters
+    if unit_id is not None:
+        query = query.where(models.User.unit_id == unit_id)
+    if is_active is not None:
+        query = query.where(models.User.is_active == is_active)
+    
+    # Apply pagination
+    query = query.offset(skip).limit(limit).order_by(models.User.id)
+    
+    result = await db.execute(query)
+    users = result.scalars().unique().all()
+    
+    return users
+
+
+@router.put(
+    "/users/{user_id}",
+    response_model=schemas.User,
+    tags=["Admin - Users"]
+)
+async def update_user_unit(
+    user_id: int,
+    user_update: schemas.UserUpdate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Update user information, including unit assignment.
+    
+    This endpoint allows admins to:
+    - Assign user to organizational unit (unit_id)
+    - Update other user fields
+    """
+    # Get user
+    user = await db.get(models.User, user_id)
+    if not user:
+        raise ResourceNotFoundError(detail=f"User with id {user_id} not found.")
+    
+    # Update fields
+    update_data = user_update.model_dump(exclude_unset=True)
+    
+    # If updating unit_id, verify unit exists
+    if "unit_id" in update_data and update_data["unit_id"] is not None:
+        unit = await db.get(models.OrganizationUnit, update_data["unit_id"])
+        if not unit:
+            raise ResourceNotFoundError(
+                detail=f"Organization unit with id {update_data[\"unit_id\"]} not found."
+            )
+    
+    for key, value in update_data.items():
+        setattr(user, key, value)
+    
+    await db.commit()
+    await db.refresh(user)
+    
+    # Emit real-time update
+    from ..services.user_service import emit_data_updated
+    await emit_data_updated(
+        resource_type="user",
+        operation="update",
+        resource_id=user.id,
+        data={"unit_id": user.unit_id}
+    )
+    
+    log.info("User updated", user_id=user.id, admin_id=current_admin.id)
+    
+    return user
+
