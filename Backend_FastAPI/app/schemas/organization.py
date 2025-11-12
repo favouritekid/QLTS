@@ -253,6 +253,10 @@ class OrganizationUnit(BaseModel):
     parent_id: Optional[int] = None
     is_active: bool
 
+    # Audit trail
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
     parent: Optional[OrganizationUnitShallow] = None
     children: List['OrganizationUnit'] = Field(default_factory=list)
     major_programs: List[MajorProgram] = Field(default_factory=list)  # Cập nhật từ 'majors' sang 'major_programs'
