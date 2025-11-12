@@ -41,7 +41,7 @@ class AdmissionCriterion(BaseModel):
     """Schema validation cho admission_criteria JSON field"""
     id: str = Field(..., description="Unique ID (e.g., 'hocba_2025')")
     method_name: str = Field(..., max_length=100, description="Tên phương thức tuyển sinh")
-    program_type: str = Field(..., max_length=100, description="Loại hình (e.g., 'Chính quy')")
+    program_type: Optional[str] = Field(None, max_length=100, description="Loại hình (e.g., 'Chính quy')")
     subject_groups: Optional[List[str]] = Field(None, max_items=10, description="Tổ hợp môn (e.g., ['A00', 'D07'])")
     min_score: Optional[float] = Field(None, ge=0, description="Điểm tối thiểu")
     conditions: Optional[str] = Field(None, max_length=1000, description="Điều kiện")
