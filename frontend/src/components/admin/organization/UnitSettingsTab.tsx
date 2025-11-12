@@ -165,10 +165,10 @@ export function UnitSettingsTab({ unit, onUnitDeleted }: UnitSettingsTabProps) {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-sm font-medium text-muted-foreground">
-                    Số ngành học
+                    Số chương trình
                   </label>
                   <p className="text-2xl font-bold mt-1">
-                    {unit.majors?.length || 0}
+                    {unit.major_programs?.length || 0}
                   </p>
                 </div>
 
@@ -239,7 +239,7 @@ export function UnitSettingsTab({ unit, onUnitDeleted }: UnitSettingsTabProps) {
                   onClick={handleDeleteClick}
                   disabled={
                     (unit.children && unit.children.length > 0) ||
-                    (unit.majors && unit.majors.length > 0)
+                    (unit.major_programs && unit.major_programs.length > 0)
                   }
                 >
                   <Trash2 className="h-4 w-4 mr-2" />
@@ -248,9 +248,9 @@ export function UnitSettingsTab({ unit, onUnitDeleted }: UnitSettingsTabProps) {
               </div>
 
               {((unit.children && unit.children.length > 0) ||
-                (unit.majors && unit.majors.length > 0)) && (
+                (unit.major_programs && unit.major_programs.length > 0)) && (
                 <div className="text-sm text-muted-foreground bg-muted p-3 rounded">
-                  ⚠️ Không thể xóa đơn vị có đơn vị con hoặc ngành học. Vui lòng
+                  ⚠️ Không thể xóa đơn vị có đơn vị con hoặc chương trình. Vui lòng
                   xóa hoặc di chuyển chúng trước.
                 </div>
               )}

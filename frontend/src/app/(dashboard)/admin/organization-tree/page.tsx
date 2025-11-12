@@ -108,11 +108,11 @@ export default function OrganizationTreePage() {
                   </>
                 )}
 
-                <div className="font-medium">Số ngành trực thuộc:</div>
-                <div>{selectedNode.stats.direct_majors}</div>
+                <div className="font-medium">Số chương trình trực thuộc:</div>
+                <div>{selectedNode.stats.direct_programs}</div>
 
-                <div className="font-medium">Tổng số ngành (bao gồm con):</div>
-                <div>{selectedNode.stats.total_majors}</div>
+                <div className="font-medium">Tổng số chương trình (bao gồm con):</div>
+                <div>{selectedNode.stats.total_programs}</div>
 
                 {selectedNode.stats.total_admission_quota && (
                   <>

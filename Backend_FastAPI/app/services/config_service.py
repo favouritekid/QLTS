@@ -212,3 +212,378 @@ async def delete_skill_rule(db: AsyncSession, rule_id: int):
             "Failed to delete skill rule", rule_id=rule_id, error=str(e), exc_info=True
         )
         raise e
+
+
+# =============================================================================
+# DEGREE LEVEL CONFIGURATION
+# =============================================================================
+
+async def get_degree_levels(
+    db: AsyncSession,
+    active_only: bool = True
+) -> List[models.ConfigDegreeLevel]:
+    """
+    Get all degree levels, ordered by display_order.
+
+    Args:
+        db: Database session
+        active_only: If True, only return active levels
+
+    Returns:
+        List of ConfigDegreeLevel models
+    """
+    query = select(models.ConfigDegreeLevel)
+
+    if active_only:
+        query = query.where(models.ConfigDegreeLevel.is_active == True)
+
+    query = query.order_by(models.ConfigDegreeLevel.display_order)
+
+    result = await db.execute(query)
+    return list(result.scalars().all())
+
+
+async def get_degree_level_by_id(
+    db: AsyncSession,
+    level_id: int
+) -> models.ConfigDegreeLevel:
+    """Get a degree level by ID."""
+    result = await db.execute(
+        select(models.ConfigDegreeLevel).where(models.ConfigDegreeLevel.id == level_id)
+    )
+    level = result.scalar_one_or_none()
+
+    if not level:
+        raise ResourceNotFoundError(detail=f"Degree level with ID {level_id} not found")
+
+    return level
+
+
+async def create_degree_level(
+    db: AsyncSession,
+    level_in: schemas.ConfigDegreeLevelCreate
+) -> models.ConfigDegreeLevel:
+    """
+    Create a new degree level.
+
+    Validates:
+    - Code uniqueness
+    - Name uniqueness
+    """
+    from ..utils.exceptions import BadRequest
+
+    # Check for duplicate code
+    existing_code = await db.execute(
+        select(models.ConfigDegreeLevel).where(
+            models.ConfigDegreeLevel.code == level_in.code
+        )
+    )
+    if existing_code.scalar_one_or_none():
+        raise BadRequest(detail=f"Degree level with code '{level_in.code}' already exists")
+
+    # Check for duplicate name
+    existing_name = await db.execute(
+        select(models.ConfigDegreeLevel).where(
+            models.ConfigDegreeLevel.name == level_in.name
+        )
+    )
+    if existing_name.scalar_one_or_none():
+        raise BadRequest(detail=f"Degree level with name '{level_in.name}' already exists")
+
+    # Create new level
+    db_level = models.ConfigDegreeLevel(**level_in.model_dump())
+    db.add(db_level)
+    await db.commit()
+    await db.refresh(db_level)
+
+    log.info("Degree level created", level_id=db_level.id, code=db_level.code)
+    return db_level
+
+
+async def update_degree_level(
+    db: AsyncSession,
+    level_id: int,
+    level_in: schemas.ConfigDegreeLevelUpdate
+) -> models.ConfigDegreeLevel:
+    """Update a degree level."""
+    from ..utils.exceptions import BadRequest
+
+    db_level = await get_degree_level_by_id(db, level_id)
+
+    update_data = level_in.model_dump(exclude_unset=True)
+
+    # Validate uniqueness if code is being updated
+    if "code" in update_data and update_data["code"] != db_level.code:
+        existing_code = await db.execute(
+            select(models.ConfigDegreeLevel).where(
+                models.ConfigDegreeLevel.code == update_data["code"],
+                models.ConfigDegreeLevel.id != level_id
+            )
+        )
+        if existing_code.scalar_one_or_none():
+            raise BadRequest(detail=f"Degree level with code '{update_data['code']}' already exists")
+
+    # Validate uniqueness if name is being updated
+    if "name" in update_data and update_data["name"] != db_level.name:
+        existing_name = await db.execute(
+            select(models.ConfigDegreeLevel).where(
+                models.ConfigDegreeLevel.name == update_data["name"],
+                models.ConfigDegreeLevel.id != level_id
+            )
+        )
+        if existing_name.scalar_one_or_none():
+            raise BadRequest(detail=f"Degree level with name '{update_data['name']}' already exists")
+
+    # Apply updates
+    for field, value in update_data.items():
+        setattr(db_level, field, value)
+
+    await db.commit()
+    await db.refresh(db_level)
+
+    log.info("Degree level updated", level_id=level_id)
+    return db_level
+
+
+async def delete_degree_level(
+    db: AsyncSession,
+    level_id: int,
+    soft_delete: bool = True
+) -> None:
+    """
+    Delete a degree level.
+
+    Args:
+        db: Database session
+        level_id: ID of the level to delete
+        soft_delete: If True, set is_active=False; if False, hard delete
+
+    Raises:
+        ResourceNotFoundError: If level doesn't exist
+        BadRequest: If level is being used by MajorPrograms
+    """
+    from ..utils.exceptions import BadRequest
+
+    db_level = await get_degree_level_by_id(db, level_id)
+
+    # Check if any MajorProgram is using this degree level
+    programs_using = await db.execute(
+        select(models.MajorProgram).where(
+            models.MajorProgram.degree_level == db_level.name
+        ).limit(1)
+    )
+    if programs_using.scalar_one_or_none():
+        raise BadRequest(
+            detail=f"Cannot delete degree level '{db_level.name}' - it is being used by one or more programs"
+        )
+
+    if soft_delete:
+        db_level.is_active = False
+        await db.commit()
+        log.info("Degree level soft deleted", level_id=level_id)
+    else:
+        await db.delete(db_level)
+        await db.commit()
+        log.info("Degree level hard deleted", level_id=level_id)
+
+
+# =============================================================================
+# OFFERING TYPE CONFIGURATION
+# =============================================================================
+
+async def get_offering_types(
+    db: AsyncSession,
+    active_only: bool = True
+) -> List[models.ConfigOfferingType]:
+    """
+    Get all offering types, ordered by display_order.
+
+    Args:
+        db: Database session
+        active_only: If True, only return active types
+
+    Returns:
+        List of ConfigOfferingType models
+    """
+    query = select(models.ConfigOfferingType)
+
+    if active_only:
+        query = query.where(models.ConfigOfferingType.is_active == True)
+
+    query = query.order_by(models.ConfigOfferingType.display_order)
+
+    result = await db.execute(query)
+    return list(result.scalars().all())
+
+
+async def get_offering_type_by_id(
+    db: AsyncSession,
+    type_id: int
+) -> models.ConfigOfferingType:
+    """Get an offering type by ID."""
+    result = await db.execute(
+        select(models.ConfigOfferingType).where(models.ConfigOfferingType.id == type_id)
+    )
+    offering_type = result.scalar_one_or_none()
+
+    if not offering_type:
+        raise ResourceNotFoundError(detail=f"Offering type with ID {type_id} not found")
+
+    return offering_type
+
+
+async def create_offering_type(
+    db: AsyncSession,
+    type_in: schemas.ConfigOfferingTypeCreate
+) -> models.ConfigOfferingType:
+    """
+    Create a new offering type.
+
+    Validates:
+    - Code uniqueness
+    - Name uniqueness
+    """
+    from ..utils.exceptions import BadRequest
+
+    # Check for duplicate code
+    existing_code = await db.execute(
+        select(models.ConfigOfferingType).where(
+            models.ConfigOfferingType.code == type_in.code
+        )
+    )
+    if existing_code.scalar_one_or_none():
+        raise BadRequest(detail=f"Offering type with code '{type_in.code}' already exists")
+
+    # Check for duplicate name
+    existing_name = await db.execute(
+        select(models.ConfigOfferingType).where(
+            models.ConfigOfferingType.name == type_in.name
+        )
+    )
+    if existing_name.scalar_one_or_none():
+        raise BadRequest(detail=f"Offering type with name '{type_in.name}' already exists")
+
+    # Create new type
+    db_type = models.ConfigOfferingType(**type_in.model_dump())
+    db.add(db_type)
+    await db.commit()
+    await db.refresh(db_type)
+
+    log.info("Offering type created", type_id=db_type.id, code=db_type.code)
+    return db_type
+
+
+async def update_offering_type(
+    db: AsyncSession,
+    type_id: int,
+    type_in: schemas.ConfigOfferingTypeUpdate
+) -> models.ConfigOfferingType:
+    """Update an offering type."""
+    from ..utils.exceptions import BadRequest
+
+    db_type = await get_offering_type_by_id(db, type_id)
+
+    update_data = type_in.model_dump(exclude_unset=True)
+
+    # Validate uniqueness if code is being updated
+    if "code" in update_data and update_data["code"] != db_type.code:
+        existing_code = await db.execute(
+            select(models.ConfigOfferingType).where(
+                models.ConfigOfferingType.code == update_data["code"],
+                models.ConfigOfferingType.id != type_id
+            )
+        )
+        if existing_code.scalar_one_or_none():
+            raise BadRequest(detail=f"Offering type with code '{update_data['code']}' already exists")
+
+    # Validate uniqueness if name is being updated
+    if "name" in update_data and update_data["name"] != db_type.name:
+        existing_name = await db.execute(
+            select(models.ConfigOfferingType).where(
+                models.ConfigOfferingType.name == update_data["name"],
+                models.ConfigOfferingType.id != type_id
+            )
+        )
+        if existing_name.scalar_one_or_none():
+            raise BadRequest(detail=f"Offering type with name '{update_data['name']}' already exists")
+
+        # ✅ FIX: Cascade update to ProgramOffering when name changes
+        # Without this, ProgramOfferings would keep the old name and become inconsistent
+        old_name = db_type.name
+        new_name = update_data["name"]
+
+        log.info(
+            "Cascading offering type name update to ProgramOfferings",
+            old_name=old_name,
+            new_name=new_name
+        )
+
+        # Update all ProgramOfferings that use the old name
+        result = await db.execute(
+            select(models.ProgramOffering).where(
+                models.ProgramOffering.offering_type == old_name
+            )
+        )
+        affected_offerings = result.scalars().all()
+
+        for offering in affected_offerings:
+            offering.offering_type = new_name
+
+        log.info(
+            "Updated offering type references",
+            old_name=old_name,
+            new_name=new_name,
+            affected_count=len(affected_offerings)
+        )
+
+    # Apply updates
+    for field, value in update_data.items():
+        setattr(db_type, field, value)
+
+    await db.commit()
+    await db.refresh(db_type)
+
+    log.info("Offering type updated", type_id=type_id)
+    return db_type
+
+
+async def delete_offering_type(
+    db: AsyncSession,
+    type_id: int,
+    soft_delete: bool = True
+) -> None:
+    """
+    Delete an offering type.
+
+    Args:
+        db: Database session
+        type_id: ID of the type to delete
+        soft_delete: If True, set is_active=False; if False, hard delete
+
+    Raises:
+        ResourceNotFoundError: If type doesn't exist
+        BadRequest: If type is being used by ProgramOfferings
+    """
+    from ..utils.exceptions import BadRequest
+
+    db_type = await get_offering_type_by_id(db, type_id)
+
+    # Check if any ProgramOffering is using this offering type
+    offerings_using = await db.execute(
+        select(models.ProgramOffering).where(
+            models.ProgramOffering.offering_type == db_type.name
+        ).limit(1)
+    )
+    if offerings_using.scalar_one_or_none():
+        raise BadRequest(
+            detail=f"Cannot delete offering type '{db_type.name}' - it is being used by one or more program offerings"
+        )
+
+    if soft_delete:
+        db_type.is_active = False
+        await db.commit()
+        log.info("Offering type soft deleted", type_id=type_id)
+    else:
+        await db.delete(db_type)
+        await db.commit()
+        log.info("Offering type hard deleted", type_id=type_id)

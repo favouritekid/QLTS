@@ -1,6 +1,7 @@
 # app/models/organization.py
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
 
 from .base import Base
 
@@ -30,6 +31,21 @@ class OrganizationUnit(Base):
         comment="Soft delete flag - never hard delete organizational units"
     )
 
+    # Audit trail timestamps
+    created_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        comment="Timestamp when unit was created"
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+        comment="Timestamp when unit was last updated"
+    )
+
     # === Hierarchical structure ===
     parent = relationship(
         "OrganizationUnit", back_populates="children", remote_side=[id]
@@ -48,7 +64,7 @@ class OrganizationUnit(Base):
     )
 
     # === Other relationships ===
-    majors = relationship("Major", back_populates="unit")  # Legacy - to be removed
+    # OLD 2-TIER: majors = relationship("Major", back_populates="unit") - REMOVED after migration
     major_programs = relationship("MajorProgram", back_populates="unit")  # NEW: 3-tier architecture
     leads = relationship("Lead", back_populates="unit")
 
@@ -60,42 +76,30 @@ class OrganizationUnit(Base):
         "LeadScoringConfig", back_populates="unit", uselist=False
     )
 
-
-class Major(Base):
-    """
-    Major/Program Model with Soft Delete and Year-versioned Academic Info.
-
-    Static fields (name, code) are stored here.
-    Dynamic fields (tuition fees, admission quotas) are in MajorAcademicInfo.
-    """
-
-    __tablename__ = "major"
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(255), nullable=False)
-    code = Column(String(50), unique=True, nullable=False)
-    description = Column(Text, nullable=True, comment="General description (static)")
-
-    unit_id = Column(Integer, ForeignKey("organization_unit.id"), nullable=False)
-
-    # NEW: Soft delete support
-    is_active = Column(
-        Boolean,
-        nullable=False,
-        default=True,
-        server_default="true",
-        index=True,
-        comment="Soft delete flag - preserve historical major data"
+    # Database constraints
+    __table_args__ = (
+        UniqueConstraint(
+            'parent_id',
+            'name',
+            name='uq_unit_parent_name',
+            # Note: NULL parent_id values are treated as distinct in PostgreSQL
+            # This allows multiple root units with same name (different parent=NULL)
+            # but prevents duplicate names within same parent
+        ),
     )
 
-    # Relationships
-    unit = relationship("OrganizationUnit", back_populates="majors")
-    leads = relationship("Lead", back_populates="major")
 
-    # NEW: Year-versioned academic information
-    academic_info_history = relationship(
-        "MajorAcademicInfo",
-        back_populates="major",
-        cascade="all, delete-orphan",
-        order_by="MajorAcademicInfo.academic_year.desc()"
-    )
+# ============================================================================
+# OLD 2-TIER MODEL - REMOVED AFTER MIGRATION k6l7m8n9o0p1
+# ============================================================================
+# class Major(Base):
+#     """
+#     [DEPRECATED] Old 2-tier model - replaced by 3-tier architecture:
+#     MajorProgram (Tier 1) -> ProgramOffering (Tier 2) -> OfferingAcademicInfo (Tier 3)
+#
+#     This model and its table were removed in migration k6l7m8n9o0p1.
+#     DO NOT UNCOMMENT - kept for reference only.
+#     """
+#     __tablename__ = "major"  # Table dropped in migration
+#     # ... fields removed ...
+# ============================================================================

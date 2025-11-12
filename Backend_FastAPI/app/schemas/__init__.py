@@ -68,6 +68,15 @@ from .organization import (
     MajorWithStats,
     UnitAggregatedStats,
     OrganizationTreeNodeWithAggregation,
+    # System Configuration schemas
+    ConfigDegreeLevel,
+    ConfigDegreeLevelBase,
+    ConfigDegreeLevelCreate,
+    ConfigDegreeLevelUpdate,
+    ConfigOfferingType,
+    ConfigOfferingTypeBase,
+    ConfigOfferingTypeCreate,
+    ConfigOfferingTypeUpdate,
 )
 
 # --- Từ permissions.py ---

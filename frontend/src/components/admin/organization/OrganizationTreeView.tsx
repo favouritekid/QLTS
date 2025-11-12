@@ -7,6 +7,7 @@ import {
   GraduationCap,
   Users,
   DollarSign,
+  UserPlus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { useOrganizationTreeWithAggregation } from "@/hooks/useOrganization";
+import { UserAssignmentDialog } from "./UserAssignmentDialog";
 import type { OrganizationTreeNodeWithAggregation } from "@/types/organization.types";
 
 interface OrganizationTreeViewProps {
@@ -49,8 +51,9 @@ interface TreeNodeProps {
 
 function TreeNode({ node, level, onNodeClick }: TreeNodeProps) {
   const [isExpanded, setIsExpanded] = useState(level === 0); // Root nodes expanded by default
+  const [userDialogOpen, setUserDialogOpen] = useState(false);
   const hasChildren = node.children && node.children.length > 0;
-  const hasMajors = node.majors && node.majors.length > 0;
+  const hasMajors = node.major_programs && node.major_programs.length > 0;
 
   // Determine the type icon
   const getTypeIcon = (type: string) => {
@@ -125,24 +128,37 @@ function TreeNode({ node, level, onNodeClick }: TreeNodeProps) {
                   Không hoạt động
                 </Badge>
               )}
+              {/* User Management Button */}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 text-xs"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setUserDialogOpen(true);
+                }}
+              >
+                <UserPlus className="h-3 w-3 mr-1" />
+                Quản lý người dùng
+              </Button>
             </div>
 
             {/* Statistics */}
             <div className="flex items-center gap-4 mt-1 text-xs text-muted-foreground flex-wrap">
-              {/* Direct Majors */}
-              {node.stats.direct_majors > 0 && (
+              {/* Direct Programs */}
+              {node.stats.direct_programs > 0 && (
                 <div className="flex items-center gap-1">
                   <GraduationCap className="h-3 w-3" />
-                  <span>{node.stats.direct_majors} ngành</span>
+                  <span>{node.stats.direct_programs} chương trình</span>
                 </div>
               )}
 
-              {/* Total Majors (including descendants) */}
-              {node.stats.total_majors > node.stats.direct_majors && (
+              {/* Total Programs (including descendants) */}
+              {node.stats.total_programs > node.stats.direct_programs && (
                 <div className="flex items-center gap-1">
                   <GraduationCap className="h-3 w-3" />
                   <span className="font-medium">
-                    {node.stats.total_majors} ngành (tổng)
+                    {node.stats.total_programs} chương trình (tổng)
                   </span>
                 </div>
               )}
@@ -164,27 +180,29 @@ function TreeNode({ node, level, onNodeClick }: TreeNodeProps) {
               )}
             </div>
 
-            {/* Major List (if direct majors exist) */}
+            {/* Program List (if direct programs exist) */}
             {hasMajors && isExpanded && (
               <div className="mt-2 space-y-1">
-                {node.majors.map((major) => (
+                {node.major_programs.map((program) => (
                   <div
-                    key={major.id}
+                    key={program.id}
                     className="flex items-center gap-2 p-2 rounded bg-muted/50 text-xs"
                   >
                     <GraduationCap className="h-3 w-3 text-muted-foreground flex-shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <div className="font-medium truncate">{major.name}</div>
-                      <div className="text-muted-foreground">Mã: {major.code}</div>
+                      <div className="font-medium truncate">{program.name}</div>
+                      <div className="text-muted-foreground">
+                        Mã: {program.code} | {program.degree_level}
+                      </div>
                     </div>
-                    {major.total_admission_quota && (
+                    {program.total_admission_quota && (
                       <Badge variant="secondary" className="text-xs flex-shrink-0">
-                        {major.total_admission_quota} chỉ tiêu
+                        {program.total_admission_quota} chỉ tiêu
                       </Badge>
                     )}
-                    {major.tuition_fee && (
+                    {program.avg_tuition_fee && (
                       <div className="text-muted-foreground flex-shrink-0">
-                        {formatCurrency(Number(major.tuition_fee))}
+                        {formatCurrency(Number(program.avg_tuition_fee))}
                       </div>
                     )}
                   </div>
@@ -210,6 +228,13 @@ function TreeNode({ node, level, onNodeClick }: TreeNodeProps) {
           </CollapsibleContent>
         )}
       </Collapsible>
+
+      {/* User Assignment Dialog */}
+      <UserAssignmentDialog
+        open={userDialogOpen}
+        onOpenChange={setUserDialogOpen}
+        unit={node}
+      />
     </div>
   );
 }
@@ -239,15 +264,15 @@ export function OrganizationTreeView({
 
     const countNode = (node: OrganizationTreeNodeWithAggregation) => {
       totalUnits++;
-      totalMajors += node.stats.direct_majors;
+      totalMajors += node.stats.direct_programs;
       if (node.stats.total_admission_quota) {
         totalQuota += node.stats.total_admission_quota;
       }
 
-      // Collect tuition fees from direct majors
-      node.majors.forEach((major) => {
-        if (major.tuition_fee) {
-          allTuitionFees.push(Number(major.tuition_fee));
+      // Collect tuition fees from direct programs
+      node.major_programs.forEach((program) => {
+        if (program.avg_tuition_fee) {
+          allTuitionFees.push(Number(program.avg_tuition_fee));
         }
       });
 

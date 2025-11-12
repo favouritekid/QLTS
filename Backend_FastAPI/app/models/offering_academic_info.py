@@ -49,6 +49,14 @@ class OfferingAcademicInfo(Base):
         index=True,
         comment="Đã công bố thông tin ra public chưa?"
     )
+    is_deleted = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+        index=True,
+        comment="Soft delete flag - NEVER hard delete academic info (financial/historical data)"
+    )
     admission_criteria = Column(
         JSON,
         nullable=True,

@@ -220,7 +220,7 @@ async def connect(sid, environ, auth):
         token_source = "cookie"
 
         # Fallback to auth dict for backwards compatibility
-        if not token:
+        if not token and auth:
             token = auth.get("token")
             token_source = "auth_dict"
 

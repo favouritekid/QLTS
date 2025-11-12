@@ -100,9 +100,9 @@ function UnitTreeItem({
               Đã xóa
             </Badge>
           )}
-          {unit.majors && unit.majors.length > 0 && (
+          {unit.major_programs && unit.major_programs.length > 0 && (
             <Badge variant="secondary" className="text-xs">
-              {unit.majors.length}
+              {unit.major_programs.length}
             </Badge>
           )}
         </div>

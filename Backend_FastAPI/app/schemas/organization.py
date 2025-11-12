@@ -11,7 +11,7 @@ from datetime import datetime
 from decimal import Decimal
 import re
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 # --- Enum cho các loại đơn vị (không đổi) ---
@@ -41,7 +41,7 @@ class AdmissionCriterion(BaseModel):
     """Schema validation cho admission_criteria JSON field"""
     id: str = Field(..., description="Unique ID (e.g., 'hocba_2025')")
     method_name: str = Field(..., max_length=100, description="Tên phương thức tuyển sinh")
-    program_type: str = Field(..., max_length=100, description="Loại hình (e.g., 'Chính quy')")
+    program_type: Optional[str] = Field(None, max_length=100, description="Loại hình (e.g., 'Chính quy')")
     subject_groups: Optional[List[str]] = Field(None, max_items=10, description="Tổ hợp môn (e.g., ['A00', 'D07'])")
     min_score: Optional[float] = Field(None, ge=0, description="Điểm tối thiểu")
     conditions: Optional[str] = Field(None, max_length=1000, description="Điều kiện")
@@ -70,6 +70,25 @@ class OfferingAcademicInfoBase(BaseModel):
     target_audience: Optional[str] = Field(None, max_length=1000, description="Đối tượng phù hợp")
     cutoff_score_previous_year: Optional[Decimal] = Field(None, ge=0, description="Điểm chuẩn năm trước")
 
+    @field_validator('admission_criteria', mode='before')
+    @classmethod
+    def normalize_admission_criteria(cls, value):
+        """
+        Normalize admission_criteria to handle both formats:
+        - Old format: {"criteria": [...]}  (from migration)
+        - New format: [...]  (direct list)
+
+        This validator runs BEFORE Pydantic tries to parse the field,
+        and works with from_attributes=True when loading from ORM models.
+        """
+        if value is None:
+            return None
+        # If it's a dict with 'criteria' key, extract the list
+        if isinstance(value, dict) and 'criteria' in value:
+            return value['criteria']
+        # Otherwise return as-is (should be a list already)
+        return value
+
 
 class OfferingAcademicInfoCreate(OfferingAcademicInfoBase):
     offering_id: int = Field(..., gt=0)
@@ -88,6 +107,7 @@ class OfferingAcademicInfoUpdate(BaseModel):
 class OfferingAcademicInfo(OfferingAcademicInfoBase):
     id: int
     offering_id: int
+    is_deleted: bool = Field(default=False, description="Soft delete flag")
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     created_by_user_id: Optional[int] = None
@@ -120,7 +140,9 @@ class ProgramOfferingUpdate(BaseModel):
 class ProgramOffering(ProgramOfferingBase):
     id: int
     program_id: int
-    academic_info_history: List[OfferingAcademicInfo] = Field(default_factory=list)
+    # ✅ Removed academic_info_history to prevent MissingGreenlet error
+    # Frontend should load academic info on-demand using dedicated endpoints
+    # This avoids loading 30,000+ historical records unnecessarily
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -233,6 +255,10 @@ class OrganizationUnit(BaseModel):
     parent_id: Optional[int] = None
     is_active: bool
 
+    # Audit trail
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
     parent: Optional[OrganizationUnitShallow] = None
     children: List['OrganizationUnit'] = Field(default_factory=list)
     major_programs: List[MajorProgram] = Field(default_factory=list)  # Cập nhật từ 'majors' sang 'major_programs'
@@ -311,3 +337,67 @@ MajorAcademicInfo = OfferingAcademicInfo
 MajorAcademicInfoCreate = OfferingAcademicInfoCreate
 MajorAcademicInfoUpdate = OfferingAcademicInfoUpdate
 MajorAcademicInfoBase = OfferingAcademicInfoBase
+
+
+# =============================================================================
+# SYSTEM CONFIGURATION SCHEMAS
+# =============================================================================
+
+# --- ConfigDegreeLevel (Trình độ đào tạo) ---
+
+class ConfigDegreeLevelBase(BaseModel):
+    """Base schema for degree level configuration."""
+    code: str = Field(..., min_length=1, max_length=50, description="Unique code (e.g., 'cao_dang')")
+    name: str = Field(..., min_length=1, max_length=100, description="Display name (e.g., 'Cao đẳng')")
+    display_order: int = Field(default=0, description="Display order in dropdown (lower = higher priority)")
+    is_active: bool = Field(default=True, description="Soft delete flag")
+
+
+class ConfigDegreeLevelCreate(ConfigDegreeLevelBase):
+    """Schema for creating a new degree level."""
+    pass
+
+
+class ConfigDegreeLevelUpdate(BaseModel):
+    """Schema for updating a degree level."""
+    code: Optional[str] = Field(None, min_length=1, max_length=50)
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    display_order: Optional[int] = None
+    is_active: Optional[bool] = None
+
+
+class ConfigDegreeLevel(ConfigDegreeLevelBase):
+    """Full schema for degree level (includes ID)."""
+    id: int = Field(..., description="Primary key")
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# --- ConfigOfferingType (Loại hình đào tạo) ---
+
+class ConfigOfferingTypeBase(BaseModel):
+    """Base schema for offering type configuration."""
+    code: str = Field(..., min_length=1, max_length=50, description="Unique code (e.g., 'chinh_quy')")
+    name: str = Field(..., min_length=1, max_length=100, description="Display name (e.g., 'Chính quy')")
+    display_order: int = Field(default=0, description="Display order in dropdown (lower = higher priority)")
+    is_active: bool = Field(default=True, description="Soft delete flag")
+
+
+class ConfigOfferingTypeCreate(ConfigOfferingTypeBase):
+    """Schema for creating a new offering type."""
+    pass
+
+
+class ConfigOfferingTypeUpdate(BaseModel):
+    """Schema for updating an offering type."""
+    code: Optional[str] = Field(None, min_length=1, max_length=50)
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    display_order: Optional[int] = None
+    is_active: Optional[bool] = None
+
+
+class ConfigOfferingType(ConfigOfferingTypeBase):
+    """Full schema for offering type (includes ID)."""
+    id: int = Field(..., description="Primary key")
+
+    model_config = ConfigDict(from_attributes=True)

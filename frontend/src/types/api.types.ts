@@ -103,6 +103,7 @@ export interface AdminUserUpdate {
   avatar?: File;
   skills?: string[];
   max_capacity?: number;
+  unit_id?: number | null; // Organizational unit assignment
 }
 
 export interface AdminSetPassword {

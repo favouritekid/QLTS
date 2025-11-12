@@ -12,6 +12,7 @@ Handles:
 import asyncio
 import json
 from datetime import datetime
+from decimal import Decimal
 from typing import List, Optional
 
 import structlog
@@ -23,9 +24,36 @@ from .. import models, schemas
 from ..config import settings
 from ..database import safe_redis_delete, safe_redis_get, safe_redis_set
 from ..socket_manager import emit_to_all
-from ..utils.exceptions import DuplicateResourceError, ResourceNotFoundError
+from ..utils.exceptions import BadRequest, DuplicateResourceError, ResourceNotFoundError
 
 log = structlog.get_logger(__name__)
+
+
+# =============================================================================
+# BUSINESS LOGIC CONSTANTS
+# =============================================================================
+
+# Unit types that are allowed to manage academic programs (major/degree)
+# Only academic units (Khoa, Bộ môn, Trung tâm) can have major programs
+ALLOWED_ACADEMIC_UNIT_TYPES = {
+    schemas.OrganizationUnitType.KHOA.value,        # "Khoa"
+    schemas.OrganizationUnitType.BO_MON.value,      # "Bộ môn"
+    schemas.OrganizationUnitType.TRUNG_TAM.value,   # "Trung tâm"
+}
+
+
+# =============================================================================
+# JSON ENCODER FOR DECIMAL
+# =============================================================================
+
+class DecimalEncoder(json.JSONEncoder):
+    """Custom JSON encoder that converts Decimal to float and datetime to ISO format."""
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return float(obj)
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return super().default(obj)
 
 # Cache configuration
 ORG_UNITS_CACHE_KEY = "org:all_units_tree"
@@ -92,10 +120,17 @@ async def check_duplicate_unit_name(
     parent_id: Optional[int],
     exclude_unit_id: Optional[int] = None
 ) -> None:
-    """Check for duplicate unit name within the same parent."""
+    """
+    Check for duplicate unit name within the same parent.
+
+    IMPORTANT: Only checks active units (is_active=True) to avoid
+    the "Zombie Data Problem" where soft-deleted units prevent
+    creating new units with the same name.
+    """
     query = select(models.OrganizationUnit).where(
         models.OrganizationUnit.name == name.strip(),
-        models.OrganizationUnit.parent_id == parent_id
+        models.OrganizationUnit.parent_id == parent_id,
+        models.OrganizationUnit.is_active == True  # ✅ FIX: Only check active units
     )
 
     if exclude_unit_id is not None:
@@ -144,23 +179,21 @@ async def get_all_organization_units(db: AsyncSession) -> List[dict]:
 
         log.debug("Querying database for organization tree")
 
-        # Create recursive loader for 3-tier hierarchy
-        # OrganizationUnit → MajorProgram → ProgramOffering → OfferingAcademicInfo
+        # ✅ FIX: Performance optimization - don't load academic_info_history
+        # This function returns the basic tree structure. Academic info should be
+        # loaded on-demand when user clicks on a specific program/offering.
+        # Loading all history for all offerings can result in 30,000+ records.
         def create_recursive_unit_loader(depth: int):
             """Create recursive loader for organization units"""
             if depth <= 0:
                 return selectinload(models.OrganizationUnit.major_programs).selectinload(
                     models.MajorProgram.offerings
-                ).selectinload(
-                    models.ProgramOffering.academic_info_history
-                )
+                )  # Removed: academic_info_history loading
 
             return selectinload(models.OrganizationUnit.children).options(
                 selectinload(models.OrganizationUnit.major_programs).selectinload(
                     models.MajorProgram.offerings
-                ).selectinload(
-                    models.ProgramOffering.academic_info_history
-                ),
+                ),  # Removed: academic_info_history loading
                 create_recursive_unit_loader(depth - 1)
             )
 
@@ -176,9 +209,7 @@ async def get_all_organization_units(db: AsyncSession) -> List[dict]:
             .options(
                 selectinload(models.OrganizationUnit.major_programs).selectinload(
                     models.MajorProgram.offerings
-                ).selectinload(
-                    models.ProgramOffering.academic_info_history
-                ),
+                ),  # Removed: academic_info_history loading
                 recursive_loader,
                 selectinload(models.OrganizationUnit.parent)
             )
@@ -202,7 +233,7 @@ async def get_all_organization_units(db: AsyncSession) -> List[dict]:
         try:
             await safe_redis_set(
                 ORG_UNITS_CACHE_KEY,
-                json.dumps(units_data),
+                json.dumps(units_data, cls=DecimalEncoder),
                 ex=CACHE_TTL
             )
             log.debug("Cached organization tree", ttl=CACHE_TTL)
@@ -278,6 +309,64 @@ async def create_organization_unit(
         raise
 
 
+async def check_circular_dependency(
+    db: AsyncSession,
+    unit_id: int,
+    new_parent_id: int
+) -> None:
+    """
+    Check if setting new_parent_id as parent of unit_id would create a circular dependency.
+
+    Algorithm: Traverse up the parent chain from new_parent_id. If we encounter unit_id,
+    it means setting this relationship would create a cycle.
+
+    Args:
+        db: Database session
+        unit_id: ID of the unit being updated
+        new_parent_id: ID of the proposed new parent
+
+    Raises:
+        DuplicateResourceError: If circular dependency detected
+    """
+    if new_parent_id is None:
+        return  # No parent = no cycle possible
+
+    if unit_id == new_parent_id:
+        raise DuplicateResourceError(
+            detail="Một đơn vị không thể là đơn vị cha của chính nó."
+        )
+
+    # Traverse up from new_parent to check if we hit unit_id
+    current_id = new_parent_id
+    visited = set()  # Prevent infinite loop in case DB already has cycles
+
+    while current_id is not None:
+        if current_id in visited:
+            # Already visited this node - existing cycle in DB (should not happen)
+            log.warning(
+                "Detected existing cycle in organization tree",
+                current_id=current_id,
+                visited=list(visited)
+            )
+            break
+
+        visited.add(current_id)
+
+        # If we encounter the unit being updated, this would create a cycle
+        if current_id == unit_id:
+            raise DuplicateResourceError(
+                detail="Không thể tạo mối quan hệ vòng lặp trong cây đơn vị. "
+                       "Đơn vị cha được chọn là con/cháu của đơn vị hiện tại."
+            )
+
+        # Get parent of current node
+        parent = await db.get(models.OrganizationUnit, current_id)
+        if not parent:
+            break
+
+        current_id = parent.parent_id
+
+
 async def update_organization_unit(
     db: AsyncSession,
     unit_id: int,
@@ -300,10 +389,10 @@ async def update_organization_unit(
         if "parent_id" in update_data:
             new_parent_id = update_data["parent_id"]
             if new_parent_id is not None:
-                if new_parent_id == unit_id:
-                    raise DuplicateResourceError(
-                        detail="A unit cannot be its own parent."
-                    )
+                # Check for circular dependency (includes self-parent check)
+                await check_circular_dependency(db, unit_id, new_parent_id)
+
+                # Verify parent exists
                 parent_unit = await db.get(models.OrganizationUnit, new_parent_id)
                 if not parent_unit:
                     raise ResourceNotFoundError(
@@ -360,9 +449,27 @@ async def delete_organization_unit(db: AsyncSession, unit_id: int):
         active_programs_result = await db.execute(active_programs_query)
         active_programs = active_programs_result.scalars().all()
 
-        if active_children or active_programs:
+        # Check for assigned users (prevent orphaned users)
+        assigned_users_query = select(models.User).where(
+            models.User.unit_id == unit_id
+        )
+        assigned_users_result = await db.execute(assigned_users_query)
+        assigned_users = assigned_users_result.scalars().all()
+
+        # Build error message based on what's blocking deletion
+        blocking_reasons = []
+        if active_children:
+            blocking_reasons.append(f"{len(active_children)} đơn vị con đang hoạt động")
+        if active_programs:
+            blocking_reasons.append(f"{len(active_programs)} chương trình đào tạo đang hoạt động")
+        if assigned_users:
+            blocking_reasons.append(f"{len(assigned_users)} người dùng đang thuộc đơn vị này")
+
+        if blocking_reasons:
+            reasons_str = ", ".join(blocking_reasons)
             raise DuplicateResourceError(
-                detail="Cannot delete unit: It contains active child units or programs."
+                detail=f"Không thể xóa đơn vị '{unit_name}': {reasons_str}. "
+                       "Vui lòng chuyển hoặc xóa các mục này trước khi xóa đơn vị."
             )
 
         # Soft delete
@@ -438,6 +545,14 @@ async def create_major_program(
                 detail=f"Organization unit with id {program_in.unit_id} not found."
             )
 
+        # Validate unit type - only academic units can manage major programs
+        if unit.type not in ALLOWED_ACADEMIC_UNIT_TYPES:
+            allowed_types_str = ", ".join(ALLOWED_ACADEMIC_UNIT_TYPES)
+            raise DuplicateResourceError(
+                detail=f"Đơn vị loại '{unit.type}' không được phép quản lý chương trình đào tạo. "
+                       f"Chỉ các đơn vị sau mới có thể quản lý ngành học: {allowed_types_str}"
+            )
+
         db_program = models.MajorProgram(**program_in.model_dump())
         db.add(db_program)
         await db.commit()
@@ -503,20 +618,53 @@ async def update_major_program(
 
 async def delete_major_program(db: AsyncSession, program_id: int):
     """
-    Soft delete a major program.
+    Soft delete a major program with CASCADE to child offerings and academic info.
 
-    Sets is_active=False. Cascade will soft-delete associated offerings.
+    Sets is_active=False on the program and all child offerings.
+    Sets is_deleted=True on all child academic info (preserves financial history).
+
+    This ensures orphaned offerings/academic_info are not visible when the parent
+    program is deleted.
     """
     try:
         db_program = await get_major_program_by_id(db, program_id)
         program_name = db_program.name
 
-        # Soft delete
+        # CASCADE SOFT DELETE: Mark all child offerings as inactive
+        offerings_query = select(models.ProgramOffering).where(
+            models.ProgramOffering.program_id == program_id
+        )
+        offerings_result = await db.execute(offerings_query)
+        offerings = offerings_result.scalars().all()
+
+        offerings_count = 0
+        academic_info_count = 0
+
+        for offering in offerings:
+            if offering.is_active:
+                offering.is_active = False
+                db.add(offering)
+                offerings_count += 1
+
+                # CASCADE SOFT DELETE: Mark all academic info as deleted
+                for academic_info in offering.academic_info_history:
+                    if not academic_info.is_deleted:
+                        academic_info.is_deleted = True
+                        db.add(academic_info)
+                        academic_info_count += 1
+
+        # Soft delete the program itself
         db_program.is_active = False
         db.add(db_program)
         await db.commit()
 
-        log.info("Major program soft-deleted", program_id=program_id, program_name=program_name)
+        log.info(
+            "Major program soft-deleted with cascade",
+            program_id=program_id,
+            program_name=program_name,
+            offerings_deleted=offerings_count,
+            academic_info_deleted=academic_info_count
+        )
 
         await invalidate_org_cache()
         await emit_organization_updated(
@@ -735,6 +883,35 @@ async def get_current_academic_info(
     return result.scalar_one_or_none()
 
 
+async def get_academic_info_history(
+    db: AsyncSession,
+    offering_id: int,
+    published_only: bool = False
+) -> List[models.OfferingAcademicInfo]:
+    """
+    Get all academic info history for an offering, ordered by year (newest first).
+
+    Args:
+        db: Database session
+        offering_id: ID of the program offering
+        published_only: If True, only return published academic info
+
+    Returns:
+        List of academic info records ordered by academic_year descending
+    """
+    query = select(models.OfferingAcademicInfo).where(
+        models.OfferingAcademicInfo.offering_id == offering_id
+    )
+
+    if published_only:
+        query = query.where(models.OfferingAcademicInfo.is_published == True)
+
+    query = query.order_by(models.OfferingAcademicInfo.academic_year.desc())
+
+    result = await db.execute(query)
+    return list(result.scalars().all())
+
+
 async def create_academic_info(
     db: AsyncSession,
     academic_info_in: schemas.OfferingAcademicInfoCreate,
@@ -775,6 +952,12 @@ async def create_academic_info(
         )
 
         await invalidate_org_cache()
+        await emit_organization_updated(
+            operation="create",
+            resource_type="academic_info",
+            resource_id=db_academic_info.id,
+            resource_name=f"Năm {academic_info_in.academic_year}"
+        )
 
         return db_academic_info
 
@@ -790,10 +973,29 @@ async def update_academic_info(
     academic_info_in: schemas.OfferingAcademicInfoUpdate,
     updated_by_user_id: Optional[int] = None
 ) -> models.OfferingAcademicInfo:
-    """Update existing academic info."""
+    """
+    Update existing academic info.
+
+    IMPORTANT: Blocks editing of tuition fees for past academic years
+    to prevent financial history rewriting (immutable financial data).
+    """
     try:
         db_academic_info = await get_academic_info_by_id(db, academic_info_id)
         update_data = academic_info_in.model_dump(exclude_unset=True)
+
+        # ✅ FIX: Prevent editing financial data for past academic years
+        current_year = datetime.now().year
+        if db_academic_info.academic_year < current_year:
+            # Check if trying to modify tuition fee
+            if "tuition_fee_per_year" in update_data:
+                old_fee = db_academic_info.tuition_fee_per_year
+                new_fee = update_data["tuition_fee_per_year"]
+                if old_fee != new_fee:
+                    raise BadRequest(
+                        detail=f"Không thể thay đổi học phí của năm học {db_academic_info.academic_year} "
+                               f"(năm trong quá khứ). Dữ liệu tài chính lịch sử phải bất biến (immutable) "
+                               f"để đảm bảo tính toàn vẹn của báo cáo tài chính."
+                    )
 
         # Apply updates
         for key, value in update_data.items():
@@ -814,6 +1016,12 @@ async def update_academic_info(
         )
 
         await invalidate_org_cache()
+        await emit_organization_updated(
+            operation="update",
+            resource_type="academic_info",
+            resource_id=academic_info_id,
+            resource_name=f"Năm {db_academic_info.academic_year}"
+        )
 
         return db_academic_info
 
@@ -825,26 +1033,53 @@ async def update_academic_info(
 
 async def delete_academic_info(db: AsyncSession, academic_info_id: int):
     """
-    Delete academic info.
+    Soft delete academic info.
 
-    This is a hard delete since academic info is versioned per year.
+    CRITICAL: This is a SOFT DELETE, not hard delete. Academic info contains
+    financial data (tuition fees) and historical enrollment data that must be
+    preserved for:
+    - Financial reporting and audits
+    - Historical statistics and analytics
+    - Lead references and student records
+    - Compliance and legal requirements
+
+    NEVER hard delete academic info - use is_deleted flag instead.
+
+    IMPORTANT: Blocks deletion of past academic year data to prevent
+    historical data loss (immutable financial history).
     """
     try:
         db_academic_info = await get_academic_info_by_id(db, academic_info_id)
         offering_id = db_academic_info.offering_id
         academic_year = db_academic_info.academic_year
 
-        await db.delete(db_academic_info)
+        # ✅ FIX: Prevent deletion of past academic year data
+        current_year = datetime.now().year
+        if academic_year < current_year:
+            raise BadRequest(
+                detail=f"Không thể xóa dữ liệu tuyển sinh của năm học {academic_year} "
+                       f"(năm trong quá khứ). Dữ liệu lịch sử phải được bảo toàn "
+                       f"để đảm bảo tính toàn vẹn của báo cáo tài chính và thống kê."
+            )
+
+        # Soft delete - set flag instead of removing from database
+        db_academic_info.is_deleted = True
         await db.commit()
 
         log.info(
-            "Academic info deleted",
+            "Academic info soft deleted (is_deleted=True)",
             academic_info_id=academic_info_id,
             offering_id=offering_id,
             academic_year=academic_year
         )
 
         await invalidate_org_cache()
+        await emit_organization_updated(
+            operation="delete",
+            resource_type="academic_info",
+            resource_id=academic_info_id,
+            resource_name=f"Năm {academic_year}"
+        )
 
     except Exception as e:
         await db.rollback()
@@ -884,15 +1119,17 @@ async def get_organization_tree_with_aggregation(
         include_inactive=include_inactive
     )
 
-    # Query all units with full 3-tier hierarchy loaded
+    # ✅ FIX: Performance optimization - only load academic info for the specified year
+    # Instead of loading ALL academic_info_history (which could be 30,000+ records),
+    # we query only the academic info for the specified year separately.
+
+    # Step 1: Query all units with programs and offerings (without academic info history)
     query = (
         select(models.OrganizationUnit)
         .options(
             selectinload(models.OrganizationUnit.major_programs).selectinload(
                 models.MajorProgram.offerings
-            ).selectinload(
-                models.ProgramOffering.academic_info_history
-            ),
+            ),  # Removed: academic_info_history loading
             selectinload(models.OrganizationUnit.children)
         )
         .order_by(models.OrganizationUnit.name)
@@ -903,6 +1140,22 @@ async def get_organization_tree_with_aggregation(
 
     result = await db.execute(query)
     all_units = result.scalars().unique().all()
+
+    # Step 2: Query academic info for ONLY the specified year (much more efficient)
+    academic_info_query = (
+        select(models.OfferingAcademicInfo)
+        .where(
+            models.OfferingAcademicInfo.academic_year == academic_year,
+            models.OfferingAcademicInfo.is_published == True
+        )
+    )
+    academic_info_result = await db.execute(academic_info_query)
+    all_academic_info = academic_info_result.scalars().all()
+
+    # Build lookup dict: offering_id -> academic_info
+    academic_info_by_offering = {
+        info.offering_id: info for info in all_academic_info
+    }
 
     # Build tree with aggregation
     def build_node_with_aggregation(
@@ -924,12 +1177,8 @@ async def get_organization_tree_with_aggregation(
                 if not offering.is_active and not include_inactive:
                     continue
 
-                # Find academic info for the specified year
-                academic_info = None
-                for info in offering.academic_info_history:
-                    if info.academic_year == academic_year and info.is_published:
-                        academic_info = info
-                        break
+                # ✅ FIX: Use lookup dict instead of looping (O(1) vs O(n))
+                academic_info = academic_info_by_offering.get(offering.id)
 
                 # Build MajorWithStats (represents program at offering level)
                 major_stats = schemas.MajorWithStats(

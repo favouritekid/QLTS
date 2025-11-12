@@ -1168,6 +1168,7 @@ async def update_existing_user(
     avatar: Optional[UploadFile] = File(None),
     skills: Optional[str] = Form(None),  # Nhận JSON string từ form-data
     max_capacity: Optional[int] = Form(None),
+    unit_id: Optional[int] = Form(None),  # Organizational unit assignment
 ):
     """(Admin only) Cập nhật người dùng, có hỗ trợ upload avatar."""
     db_user = await services.user_service.get_user_by_id(db, user_id)
@@ -1186,6 +1187,19 @@ async def update_existing_user(
         update_dict["status"] = status.strip()
     if max_capacity is not None and max_capacity >= 0:
         update_dict["max_capacity"] = max_capacity
+
+    # Handle unit_id assignment - validate unit exists
+    if unit_id is not None:
+        if unit_id > 0:  # Assigning to a unit
+            unit = await db.get(models.OrganizationUnit, unit_id)
+            if not unit:
+                raise ResourceNotFoundError(
+                    detail=f"Organization unit with id {unit_id} not found."
+                )
+            update_dict["unit_id"] = unit_id
+        else:  # Remove unit assignment (set to None)
+            update_dict["unit_id"] = None
+
     if skills is not None:
         try:
             # Chuyển đổi chuỗi JSON 'skills' từ Form thành đối tượng Python (list)
@@ -2875,3 +2889,182 @@ async def explain_role_permissions(
         "policies_manual": policies_manual,
         "policies_inherited": policies_inherited,  # ← (8) TRẢ VỀ DỮ LIỆU MỚI
     }
+
+
+# =============================================================================
+# SYSTEM CONFIGURATION - DEGREE LEVELS
+# =============================================================================
+
+@router.get(
+    "/config/degree-levels",
+    response_model=List[schemas.ConfigDegreeLevel],
+    tags=["Admin - Configuration"]
+)
+async def list_degree_levels(
+    active_only: bool = True,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Get all degree level configurations."""
+    from ..services import config_service
+    return await config_service.get_degree_levels(db, active_only=active_only)
+
+
+@router.post(
+    "/config/degree-levels",
+    response_model=schemas.ConfigDegreeLevel,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Admin - Configuration"]
+)
+async def create_degree_level(
+    level_in: schemas.ConfigDegreeLevelCreate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Create a new degree level configuration."""
+    from ..services import config_service
+    return await config_service.create_degree_level(db, level_in)
+
+
+@router.put(
+    "/config/degree-levels/{level_id}",
+    response_model=schemas.ConfigDegreeLevel,
+    tags=["Admin - Configuration"]
+)
+async def update_degree_level(
+    level_id: int,
+    level_in: schemas.ConfigDegreeLevelUpdate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Update a degree level configuration."""
+    from ..services import config_service
+    return await config_service.update_degree_level(db, level_id, level_in)
+
+
+@router.delete(
+    "/config/degree-levels/{level_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["Admin - Configuration"]
+)
+async def delete_degree_level(
+    level_id: int,
+    soft_delete: bool = True,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Delete a degree level configuration."""
+    from ..services import config_service
+    await config_service.delete_degree_level(db, level_id, soft_delete)
+
+
+# =============================================================================
+# SYSTEM CONFIGURATION - OFFERING TYPES
+# =============================================================================
+
+@router.get(
+    "/config/offering-types",
+    response_model=List[schemas.ConfigOfferingType],
+    tags=["Admin - Configuration"]
+)
+async def list_offering_types(
+    active_only: bool = True,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Get all offering type configurations."""
+    from ..services import config_service
+    return await config_service.get_offering_types(db, active_only=active_only)
+
+
+@router.post(
+    "/config/offering-types",
+    response_model=schemas.ConfigOfferingType,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Admin - Configuration"]
+)
+async def create_offering_type(
+    type_in: schemas.ConfigOfferingTypeCreate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Create a new offering type configuration."""
+    from ..services import config_service
+    return await config_service.create_offering_type(db, type_in)
+
+
+@router.put(
+    "/config/offering-types/{type_id}",
+    response_model=schemas.ConfigOfferingType,
+    tags=["Admin - Configuration"]
+)
+async def update_offering_type(
+    type_id: int,
+    type_in: schemas.ConfigOfferingTypeUpdate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Update an offering type configuration."""
+    from ..services import config_service
+    return await config_service.update_offering_type(db, type_id, type_in)
+
+
+@router.delete(
+    "/config/offering-types/{type_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["Admin - Configuration"]
+)
+async def delete_offering_type(
+    type_id: int,
+    soft_delete: bool = True,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Delete an offering type configuration."""
+    from ..services import config_service
+    await config_service.delete_offering_type(db, type_id, soft_delete)
+
+
+
+# =============================================================================
+# USER MANAGEMENT ENDPOINTS
+# =============================================================================
+
+@router.get(
+    "/users",
+    response_model=List[schemas.User],
+    tags=["Admin - Users"]
+)
+async def list_users(
+    unit_id: Optional[int] = Query(None, description="Filter by organization unit ID"),
+    is_active: Optional[bool] = Query(None, description="Filter by active status"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) List all users with optional filtering.
+    
+    Filters:
+    - unit_id: Show only users belonging to specific organizational unit
+    - is_active: Show only active or inactive users
+    """
+    query = select(models.User).options(
+        selectinload(models.User.unit)
+    )
+    
+    # Apply filters
+    if unit_id is not None:
+        query = query.where(models.User.unit_id == unit_id)
+    if is_active is not None:
+        query = query.where(models.User.is_active == is_active)
+    
+    # Apply pagination
+    query = query.offset(skip).limit(limit).order_by(models.User.id)
+    
+    result = await db.execute(query)
+    users = result.scalars().unique().all()
+    
+    return users
+

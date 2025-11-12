@@ -165,25 +165,56 @@ export function UnitDialog({ open, onOpenChange, unit }: UnitDialogProps) {
   };
 
   // Get units available as parent (exclude self and descendants in edit mode)
-  const getAvailableParentUnits = (): OrganizationUnit[] => {
-    if (!isEditMode || !unit) return allUnits;
+  // Also flatten hierarchy for better display
+  const getAvailableParentUnits = (): Array<OrganizationUnit & { displayName: string; level: number }> => {
+    // First, filter to only active units
+    const activeUnits = allUnits.filter(u => u.is_active);
 
-    // Get all descendant IDs
-    const excludedIds = new Set<number>([unit.id]);
+    // In edit mode, exclude self and descendants
+    let filteredUnits = activeUnits;
+    if (isEditMode && unit) {
+      const excludedIds = new Set<number>([unit.id]);
 
-    const collectDescendants = (unitId: number) => {
-      allUnits.forEach((u) => {
-        if (u.parent_id === unitId) {
-          excludedIds.add(u.id);
-          collectDescendants(u.id); // Recursive
-        }
+      const collectDescendants = (unitId: number) => {
+        activeUnits.forEach((u) => {
+          if (u.parent_id === unitId) {
+            excludedIds.add(u.id);
+            collectDescendants(u.id); // Recursive
+          }
+        });
+      };
+
+      collectDescendants(unit.id);
+      filteredUnits = activeUnits.filter((u) => !excludedIds.has(u.id));
+    }
+
+    // Build hierarchy tree
+    const buildTree = (parentId: number | null): Array<OrganizationUnit & { displayName: string; level: number }> => {
+      const children = filteredUnits.filter(u => u.parent_id === parentId);
+      const result: Array<OrganizationUnit & { displayName: string; level: number }> = [];
+
+      children.forEach(child => {
+        const level = getUnitLevel(child.id, filteredUnits);
+        const indent = "└─ ".repeat(level);
+        result.push({
+          ...child,
+          displayName: `${indent}${child.name}`,
+          level,
+        });
+        result.push(...buildTree(child.id));
       });
+
+      return result;
     };
 
-    collectDescendants(unit.id);
+    // Get level of a unit (distance from root)
+    const getUnitLevel = (unitId: number, units: OrganizationUnit[]): number => {
+      const currentUnit = units.find(u => u.id === unitId);
+      if (!currentUnit || !currentUnit.parent_id) return 0;
+      return 1 + getUnitLevel(currentUnit.parent_id, units);
+    };
 
-    // Filter out excluded units
-    return allUnits.filter((u) => !excludedIds.has(u.id));
+    return buildTree(null);
   };
 
   const availableParentUnits = getAvailableParentUnits();
@@ -290,13 +321,34 @@ export function UnitDialog({ open, onOpenChange, unit }: UnitDialogProps) {
                         <SelectValue placeholder="Chọn đơn vị cha (nếu có)" />
                       </SelectTrigger>
                     </FormControl>
-                    <SelectContent>
-                      <SelectItem value="none">Không có (cấp cao nhất)</SelectItem>
-                      {availableParentUnits.map((parentUnit) => (
-                        <SelectItem key={parentUnit.id} value={String(parentUnit.id)}>
-                          {parentUnit.name} ({parentUnit.type})
+                    <SelectContent className="max-h-[300px]">
+                      <SelectItem value="none">
+                        <span className="font-semibold">📍 Không có (cấp cao nhất)</span>
+                      </SelectItem>
+                      {unitsLoading ? (
+                        <SelectItem value="loading" disabled>
+                          Đang tải danh sách đơn vị...
                         </SelectItem>
-                      ))}
+                      ) : availableParentUnits.length === 0 ? (
+                        <SelectItem value="empty" disabled>
+                          Không có đơn vị khả dụng
+                        </SelectItem>
+                      ) : (
+                        availableParentUnits.map((parentUnit) => (
+                          <SelectItem
+                            key={parentUnit.id}
+                            value={String(parentUnit.id)}
+                            className="font-mono text-sm"
+                          >
+                            <span className={parentUnit.level === 0 ? "font-semibold" : ""}>
+                              {parentUnit.displayName}
+                            </span>
+                            <span className="ml-2 text-xs text-muted-foreground">
+                              ({parentUnit.type})
+                            </span>
+                          </SelectItem>
+                        ))
+                      )}
                     </SelectContent>
                   </Select>
                   <FormDescription>
