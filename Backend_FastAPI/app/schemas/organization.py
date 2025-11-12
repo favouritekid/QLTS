@@ -330,3 +330,67 @@ MajorAcademicInfo = OfferingAcademicInfo
 MajorAcademicInfoCreate = OfferingAcademicInfoCreate
 MajorAcademicInfoUpdate = OfferingAcademicInfoUpdate
 MajorAcademicInfoBase = OfferingAcademicInfoBase
+
+
+# =============================================================================
+# SYSTEM CONFIGURATION SCHEMAS
+# =============================================================================
+
+# --- ConfigDegreeLevel (Trình độ đào tạo) ---
+
+class ConfigDegreeLevelBase(BaseModel):
+    """Base schema for degree level configuration."""
+    code: str = Field(..., min_length=1, max_length=50, description="Unique code (e.g., 'cao_dang')")
+    name: str = Field(..., min_length=1, max_length=100, description="Display name (e.g., 'Cao đẳng')")
+    display_order: int = Field(default=0, description="Display order in dropdown (lower = higher priority)")
+    is_active: bool = Field(default=True, description="Soft delete flag")
+
+
+class ConfigDegreeLevelCreate(ConfigDegreeLevelBase):
+    """Schema for creating a new degree level."""
+    pass
+
+
+class ConfigDegreeLevelUpdate(BaseModel):
+    """Schema for updating a degree level."""
+    code: Optional[str] = Field(None, min_length=1, max_length=50)
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    display_order: Optional[int] = None
+    is_active: Optional[bool] = None
+
+
+class ConfigDegreeLevel(ConfigDegreeLevelBase):
+    """Full schema for degree level (includes ID)."""
+    id: int = Field(..., description="Primary key")
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# --- ConfigOfferingType (Loại hình đào tạo) ---
+
+class ConfigOfferingTypeBase(BaseModel):
+    """Base schema for offering type configuration."""
+    code: str = Field(..., min_length=1, max_length=50, description="Unique code (e.g., 'chinh_quy')")
+    name: str = Field(..., min_length=1, max_length=100, description="Display name (e.g., 'Chính quy')")
+    display_order: int = Field(default=0, description="Display order in dropdown (lower = higher priority)")
+    is_active: bool = Field(default=True, description="Soft delete flag")
+
+
+class ConfigOfferingTypeCreate(ConfigOfferingTypeBase):
+    """Schema for creating a new offering type."""
+    pass
+
+
+class ConfigOfferingTypeUpdate(BaseModel):
+    """Schema for updating an offering type."""
+    code: Optional[str] = Field(None, min_length=1, max_length=50)
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    display_order: Optional[int] = None
+    is_active: Optional[bool] = None
+
+
+class ConfigOfferingType(ConfigOfferingTypeBase):
+    """Full schema for offering type (includes ID)."""
+    id: int = Field(..., description="Primary key")
+
+    model_config = ConfigDict(from_attributes=True)

@@ -5,7 +5,13 @@
 from .base import Base
 
 # Config models
-from .config import LeadScoringConfig, OfficerAssignmentConfig, SkillRequirementRule
+from .config import (
+    ConfigDegreeLevel,
+    ConfigOfferingType,
+    LeadScoringConfig,
+    OfficerAssignmentConfig,
+    SkillRequirementRule,
+)
 
 # Lead management models
 from .lead import Application, AssignmentLog, Consultation, CRMInteraction, Lead
@@ -42,6 +48,8 @@ from .user_session import UserSession
 __all__ = [
     "Base",
     # Config
+    "ConfigDegreeLevel",
+    "ConfigOfferingType",
     "LeadScoringConfig",
     "OfficerAssignmentConfig",
     "SkillRequirementRule",

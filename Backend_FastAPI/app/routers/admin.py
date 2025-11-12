@@ -2875,3 +2875,137 @@ async def explain_role_permissions(
         "policies_manual": policies_manual,
         "policies_inherited": policies_inherited,  # ← (8) TRẢ VỀ DỮ LIỆU MỚI
     }
+
+
+# =============================================================================
+# SYSTEM CONFIGURATION - DEGREE LEVELS
+# =============================================================================
+
+@router.get(
+    "/config/degree-levels",
+    response_model=List[schemas.ConfigDegreeLevel],
+    tags=["Admin - Configuration"]
+)
+async def list_degree_levels(
+    active_only: bool = True,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Get all degree level configurations."""
+    from ..services import config_service
+    return await config_service.get_degree_levels(db, active_only=active_only)
+
+
+@router.post(
+    "/config/degree-levels",
+    response_model=schemas.ConfigDegreeLevel,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Admin - Configuration"]
+)
+async def create_degree_level(
+    level_in: schemas.ConfigDegreeLevelCreate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Create a new degree level configuration."""
+    from ..services import config_service
+    return await config_service.create_degree_level(db, level_in)
+
+
+@router.put(
+    "/config/degree-levels/{level_id}",
+    response_model=schemas.ConfigDegreeLevel,
+    tags=["Admin - Configuration"]
+)
+async def update_degree_level(
+    level_id: int,
+    level_in: schemas.ConfigDegreeLevelUpdate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Update a degree level configuration."""
+    from ..services import config_service
+    return await config_service.update_degree_level(db, level_id, level_in)
+
+
+@router.delete(
+    "/config/degree-levels/{level_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["Admin - Configuration"]
+)
+async def delete_degree_level(
+    level_id: int,
+    soft_delete: bool = True,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Delete a degree level configuration."""
+    from ..services import config_service
+    await config_service.delete_degree_level(db, level_id, soft_delete)
+
+
+# =============================================================================
+# SYSTEM CONFIGURATION - OFFERING TYPES
+# =============================================================================
+
+@router.get(
+    "/config/offering-types",
+    response_model=List[schemas.ConfigOfferingType],
+    tags=["Admin - Configuration"]
+)
+async def list_offering_types(
+    active_only: bool = True,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Get all offering type configurations."""
+    from ..services import config_service
+    return await config_service.get_offering_types(db, active_only=active_only)
+
+
+@router.post(
+    "/config/offering-types",
+    response_model=schemas.ConfigOfferingType,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Admin - Configuration"]
+)
+async def create_offering_type(
+    type_in: schemas.ConfigOfferingTypeCreate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Create a new offering type configuration."""
+    from ..services import config_service
+    return await config_service.create_offering_type(db, type_in)
+
+
+@router.put(
+    "/config/offering-types/{type_id}",
+    response_model=schemas.ConfigOfferingType,
+    tags=["Admin - Configuration"]
+)
+async def update_offering_type(
+    type_id: int,
+    type_in: schemas.ConfigOfferingTypeUpdate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Update an offering type configuration."""
+    from ..services import config_service
+    return await config_service.update_offering_type(db, type_id, type_in)
+
+
+@router.delete(
+    "/config/offering-types/{type_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["Admin - Configuration"]
+)
+async def delete_offering_type(
+    type_id: int,
+    soft_delete: bool = True,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Delete an offering type configuration."""
+    from ..services import config_service
+    await config_service.delete_offering_type(db, type_id, soft_delete)

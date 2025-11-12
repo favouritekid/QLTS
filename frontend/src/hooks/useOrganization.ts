@@ -583,7 +583,7 @@ export function useCreateProgramOffering() {
     mutationFn: async ({ programId, ...data }) => {
       const response = await api.post<ProgramOffering>(
         API_ENDPOINTS.ADMIN.ORGANIZATION.CREATE_OFFERING(programId),
-        data
+        { ...data, program_id: programId } // Include program_id in body for backend validation
       );
       return response.data;
     },
