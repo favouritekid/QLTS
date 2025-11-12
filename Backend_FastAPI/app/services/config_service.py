@@ -507,6 +507,35 @@ async def update_offering_type(
         if existing_name.scalar_one_or_none():
             raise BadRequest(detail=f"Offering type with name '{update_data['name']}' already exists")
 
+        # ✅ FIX: Cascade update to ProgramOffering when name changes
+        # Without this, ProgramOfferings would keep the old name and become inconsistent
+        old_name = db_type.name
+        new_name = update_data["name"]
+
+        log.info(
+            "Cascading offering type name update to ProgramOfferings",
+            old_name=old_name,
+            new_name=new_name
+        )
+
+        # Update all ProgramOfferings that use the old name
+        result = await db.execute(
+            select(models.ProgramOffering).where(
+                models.ProgramOffering.offering_type == old_name
+            )
+        )
+        affected_offerings = result.scalars().all()
+
+        for offering in affected_offerings:
+            offering.offering_type = new_name
+
+        log.info(
+            "Updated offering type references",
+            old_name=old_name,
+            new_name=new_name,
+            affected_count=len(affected_offerings)
+        )
+
     # Apply updates
     for field, value in update_data.items():
         setattr(db_type, field, value)

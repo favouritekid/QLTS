@@ -120,10 +120,17 @@ async def check_duplicate_unit_name(
     parent_id: Optional[int],
     exclude_unit_id: Optional[int] = None
 ) -> None:
-    """Check for duplicate unit name within the same parent."""
+    """
+    Check for duplicate unit name within the same parent.
+
+    IMPORTANT: Only checks active units (is_active=True) to avoid
+    the "Zombie Data Problem" where soft-deleted units prevent
+    creating new units with the same name.
+    """
     query = select(models.OrganizationUnit).where(
         models.OrganizationUnit.name == name.strip(),
-        models.OrganizationUnit.parent_id == parent_id
+        models.OrganizationUnit.parent_id == parent_id,
+        models.OrganizationUnit.is_active == True  # ✅ FIX: Only check active units
     )
 
     if exclude_unit_id is not None:
@@ -172,23 +179,21 @@ async def get_all_organization_units(db: AsyncSession) -> List[dict]:
 
         log.debug("Querying database for organization tree")
 
-        # Create recursive loader for 3-tier hierarchy
-        # OrganizationUnit → MajorProgram → ProgramOffering → OfferingAcademicInfo
+        # ✅ FIX: Performance optimization - don't load academic_info_history
+        # This function returns the basic tree structure. Academic info should be
+        # loaded on-demand when user clicks on a specific program/offering.
+        # Loading all history for all offerings can result in 30,000+ records.
         def create_recursive_unit_loader(depth: int):
             """Create recursive loader for organization units"""
             if depth <= 0:
                 return selectinload(models.OrganizationUnit.major_programs).selectinload(
                     models.MajorProgram.offerings
-                ).selectinload(
-                    models.ProgramOffering.academic_info_history
-                )
+                )  # Removed: academic_info_history loading
 
             return selectinload(models.OrganizationUnit.children).options(
                 selectinload(models.OrganizationUnit.major_programs).selectinload(
                     models.MajorProgram.offerings
-                ).selectinload(
-                    models.ProgramOffering.academic_info_history
-                ),
+                ),  # Removed: academic_info_history loading
                 create_recursive_unit_loader(depth - 1)
             )
 
@@ -204,9 +209,7 @@ async def get_all_organization_units(db: AsyncSession) -> List[dict]:
             .options(
                 selectinload(models.OrganizationUnit.major_programs).selectinload(
                     models.MajorProgram.offerings
-                ).selectinload(
-                    models.ProgramOffering.academic_info_history
-                ),
+                ),  # Removed: academic_info_history loading
                 recursive_loader,
                 selectinload(models.OrganizationUnit.parent)
             )
@@ -970,10 +973,29 @@ async def update_academic_info(
     academic_info_in: schemas.OfferingAcademicInfoUpdate,
     updated_by_user_id: Optional[int] = None
 ) -> models.OfferingAcademicInfo:
-    """Update existing academic info."""
+    """
+    Update existing academic info.
+
+    IMPORTANT: Blocks editing of tuition fees for past academic years
+    to prevent financial history rewriting (immutable financial data).
+    """
     try:
         db_academic_info = await get_academic_info_by_id(db, academic_info_id)
         update_data = academic_info_in.model_dump(exclude_unset=True)
+
+        # ✅ FIX: Prevent editing financial data for past academic years
+        current_year = datetime.now().year
+        if db_academic_info.academic_year < current_year:
+            # Check if trying to modify tuition fee
+            if "tuition_fee_per_year" in update_data:
+                old_fee = db_academic_info.tuition_fee_per_year
+                new_fee = update_data["tuition_fee_per_year"]
+                if old_fee != new_fee:
+                    raise BadRequest(
+                        detail=f"Không thể thay đổi học phí của năm học {db_academic_info.academic_year} "
+                               f"(năm trong quá khứ). Dữ liệu tài chính lịch sử phải bất biến (immutable) "
+                               f"để đảm bảo tính toàn vẹn của báo cáo tài chính."
+                    )
 
         # Apply updates
         for key, value in update_data.items():
@@ -1085,15 +1107,17 @@ async def get_organization_tree_with_aggregation(
         include_inactive=include_inactive
     )
 
-    # Query all units with full 3-tier hierarchy loaded
+    # ✅ FIX: Performance optimization - only load academic info for the specified year
+    # Instead of loading ALL academic_info_history (which could be 30,000+ records),
+    # we query only the academic info for the specified year separately.
+
+    # Step 1: Query all units with programs and offerings (without academic info history)
     query = (
         select(models.OrganizationUnit)
         .options(
             selectinload(models.OrganizationUnit.major_programs).selectinload(
                 models.MajorProgram.offerings
-            ).selectinload(
-                models.ProgramOffering.academic_info_history
-            ),
+            ),  # Removed: academic_info_history loading
             selectinload(models.OrganizationUnit.children)
         )
         .order_by(models.OrganizationUnit.name)
@@ -1104,6 +1128,22 @@ async def get_organization_tree_with_aggregation(
 
     result = await db.execute(query)
     all_units = result.scalars().unique().all()
+
+    # Step 2: Query academic info for ONLY the specified year (much more efficient)
+    academic_info_query = (
+        select(models.OfferingAcademicInfo)
+        .where(
+            models.OfferingAcademicInfo.academic_year == academic_year,
+            models.OfferingAcademicInfo.is_published == True
+        )
+    )
+    academic_info_result = await db.execute(academic_info_query)
+    all_academic_info = academic_info_result.scalars().all()
+
+    # Build lookup dict: offering_id -> academic_info
+    academic_info_by_offering = {
+        info.offering_id: info for info in all_academic_info
+    }
 
     # Build tree with aggregation
     def build_node_with_aggregation(
@@ -1125,12 +1165,8 @@ async def get_organization_tree_with_aggregation(
                 if not offering.is_active and not include_inactive:
                     continue
 
-                # Find academic info for the specified year
-                academic_info = None
-                for info in offering.academic_info_history:
-                    if info.academic_year == academic_year and info.is_published:
-                        academic_info = info
-                        break
+                # ✅ FIX: Use lookup dict instead of looping (O(1) vs O(n))
+                academic_info = academic_info_by_offering.get(offering.id)
 
                 # Build MajorWithStats (represents program at offering level)
                 major_stats = schemas.MajorWithStats(
