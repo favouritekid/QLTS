@@ -95,7 +95,7 @@ const academicInfoFormSchema = z.object({
     .min(0, "Điểm chuẩn không thể âm")
     .max(30, "Điểm chuẩn không được vượt quá 30")
     .nullish(),
-  admission_criteria: z.array(admissionCriterionSchema).default([]),
+  admission_criteria: z.array(admissionCriterionSchema),
   is_published: z.boolean(),
 });
 

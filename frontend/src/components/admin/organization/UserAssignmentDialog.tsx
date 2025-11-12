@@ -124,9 +124,6 @@ export function UserAssignmentDialog({
     });
   };
 
-  // Update hook (we'll call this for each user that changed)
-  const updateUserMutation = useAdminUpdateUser(0); // userId will be set per call
-
   // Handle save - assign/unassign users
   const handleSave = async () => {
     setIsAssigning(true);
