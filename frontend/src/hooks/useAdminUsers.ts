@@ -129,6 +129,8 @@ export function useAdminUpdateUser(userId: number) {
       if (data.skills) formData.append("skills", JSON.stringify(data.skills));
       if (data.max_capacity !== undefined)
         formData.append("max_capacity", data.max_capacity.toString());
+      if (data.unit_id !== undefined)
+        formData.append("unit_id", data.unit_id !== null ? data.unit_id.toString() : "0");
 
       const response = await api.put<User>(
         API_ENDPOINTS.ADMIN.USERS.UPDATE(userId),

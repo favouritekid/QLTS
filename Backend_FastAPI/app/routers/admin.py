@@ -1168,6 +1168,7 @@ async def update_existing_user(
     avatar: Optional[UploadFile] = File(None),
     skills: Optional[str] = Form(None),  # Nhận JSON string từ form-data
     max_capacity: Optional[int] = Form(None),
+    unit_id: Optional[int] = Form(None),  # Organizational unit assignment
 ):
     """(Admin only) Cập nhật người dùng, có hỗ trợ upload avatar."""
     db_user = await services.user_service.get_user_by_id(db, user_id)
@@ -1186,6 +1187,19 @@ async def update_existing_user(
         update_dict["status"] = status.strip()
     if max_capacity is not None and max_capacity >= 0:
         update_dict["max_capacity"] = max_capacity
+
+    # Handle unit_id assignment - validate unit exists
+    if unit_id is not None:
+        if unit_id > 0:  # Assigning to a unit
+            unit = await db.get(models.OrganizationUnit, unit_id)
+            if not unit:
+                raise ResourceNotFoundError(
+                    detail=f"Organization unit with id {unit_id} not found."
+                )
+            update_dict["unit_id"] = unit_id
+        else:  # Remove unit assignment (set to None)
+            update_dict["unit_id"] = None
+
     if skills is not None:
         try:
             # Chuyển đổi chuỗi JSON 'skills' từ Form thành đối tượng Python (list)
@@ -3053,58 +3067,4 @@ async def list_users(
     users = result.scalars().unique().all()
     
     return users
-
-
-@router.put(
-    "/users/{user_id}",
-    response_model=schemas.User,
-    tags=["Admin - Users"]
-)
-async def update_user_unit(
-    user_id: int,
-    user_update: schemas.UserUpdate,
-    db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
-):
-    """
-    (Admin only) Update user information, including unit assignment.
-    
-    This endpoint allows admins to:
-    - Assign user to organizational unit (unit_id)
-    - Update other user fields
-    """
-    # Get user
-    user = await db.get(models.User, user_id)
-    if not user:
-        raise ResourceNotFoundError(detail=f"User with id {user_id} not found.")
-    
-    # Update fields
-    update_data = user_update.model_dump(exclude_unset=True)
-    
-    # If updating unit_id, verify unit exists
-    if "unit_id" in update_data and update_data["unit_id"] is not None:
-        unit = await db.get(models.OrganizationUnit, update_data["unit_id"])
-        if not unit:
-            raise ResourceNotFoundError(
-                detail=f"Organization unit with id {update_data[\"unit_id\"]} not found."
-            )
-    
-    for key, value in update_data.items():
-        setattr(user, key, value)
-    
-    await db.commit()
-    await db.refresh(user)
-    
-    # Emit real-time update
-    from ..services.user_service import emit_data_updated
-    await emit_data_updated(
-        resource_type="user",
-        operation="update",
-        resource_id=user.id,
-        data={"unit_id": user.unit_id}
-    )
-    
-    log.info("User updated", user_id=user.id, admin_id=current_admin.id)
-    
-    return user
 
