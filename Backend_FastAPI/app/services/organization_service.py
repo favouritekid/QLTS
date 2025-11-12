@@ -34,10 +34,12 @@ log = structlog.get_logger(__name__)
 # =============================================================================
 
 class DecimalEncoder(json.JSONEncoder):
-    """Custom JSON encoder that converts Decimal to float."""
+    """Custom JSON encoder that converts Decimal to float and datetime to ISO format."""
     def default(self, obj):
         if isinstance(obj, Decimal):
             return float(obj)
+        if isinstance(obj, datetime):
+            return obj.isoformat()
         return super().default(obj)
 
 # Cache configuration

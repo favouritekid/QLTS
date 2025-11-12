@@ -476,11 +476,11 @@ export function useCreateMajorProgram() {
   return useMutation<
     MajorProgram,
     AxiosError<ApiErrorResponse>,
-    MajorProgramCreate & { unitId: number }
+    MajorProgramCreate
   >({
-    mutationFn: async ({ unitId, ...data }) => {
+    mutationFn: async (data) => {
       const response = await api.post<MajorProgram>(
-        API_ENDPOINTS.ADMIN.ORGANIZATION.CREATE_MAJOR_PROGRAM(unitId),
+        API_ENDPOINTS.ADMIN.ORGANIZATION.CREATE_MAJOR_PROGRAM,
         data
       );
       return response.data;

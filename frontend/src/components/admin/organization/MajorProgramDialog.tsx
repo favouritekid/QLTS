@@ -157,10 +157,7 @@ export function MajorProgramDialog({
           data: updatePayload as MajorProgramUpdate,
         });
       } else {
-        await createMutation.mutateAsync({
-          ...payload,
-          unitId: Number(values.unit_id),
-        } as MajorProgramCreate & { unitId: number });
+        await createMutation.mutateAsync(payload as MajorProgramCreate);
       }
 
       // Close dialog on success
@@ -175,19 +172,23 @@ export function MajorProgramDialog({
   // Check if mutation is in progress
   const isSubmitting = createMutation.isPending || updateMutation.isPending;
 
-  // Flatten organization tree for dropdown
+  // Flatten organization tree for dropdown (only active units)
   const flattenUnits = (units: OrganizationUnit[], level = 0): Array<OrganizationUnit & { displayName: string }> => {
     const result: Array<OrganizationUnit & { displayName: string }> = [];
     const indent = "└─ ".repeat(level);
 
     for (const unit of units) {
-      result.push({
-        ...unit,
-        displayName: `${indent}${unit.name}`,
-      });
+      // Only include active units
+      if (unit.is_active) {
+        result.push({
+          ...unit,
+          displayName: `${indent}${unit.name}`,
+        });
 
-      if (unit.children && unit.children.length > 0) {
-        result.push(...flattenUnits(unit.children, level + 1));
+        // Recursively process active children
+        if (unit.children && unit.children.length > 0) {
+          result.push(...flattenUnits(unit.children, level + 1));
+        }
       }
     }
 

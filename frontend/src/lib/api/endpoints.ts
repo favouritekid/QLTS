@@ -89,7 +89,7 @@ export const API_ENDPOINTS = {
 
       // === 3-TIER ARCHITECTURE (NEW) ===
       // Tier 1: MajorProgram
-      CREATE_MAJOR_PROGRAM: (unitId: number) => `/api/admin/organization-units/${unitId}/major-programs`,
+      CREATE_MAJOR_PROGRAM: "/api/admin/programs",
       UPDATE_MAJOR_PROGRAM: (programId: number) => `/api/admin/programs/${programId}`,
       DELETE_MAJOR_PROGRAM: (programId: number) => `/api/admin/programs/${programId}`,
 
