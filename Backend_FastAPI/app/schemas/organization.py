@@ -107,6 +107,7 @@ class OfferingAcademicInfoUpdate(BaseModel):
 class OfferingAcademicInfo(OfferingAcademicInfoBase):
     id: int
     offering_id: int
+    is_deleted: bool = Field(default=False, description="Soft delete flag")
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     created_by_user_id: Optional[int] = None

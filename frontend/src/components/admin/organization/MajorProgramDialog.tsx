@@ -287,17 +287,27 @@ export function MajorProgramDialog({
                     Mã ngành <span className="text-red-500">*</span>
                   </FormLabel>
                   <FormControl>
-                    <Input
-                      placeholder="VD: 6480201"
-                      {...field}
-                      onChange={(e) => handleCodeChange(e.target.value)}
-                      disabled={isSubmitting || isEditMode} // Disable in edit mode
-                      className="uppercase"
-                    />
+                    {isEditMode ? (
+                      <div className="flex items-center gap-2 py-2 px-3 bg-muted rounded-md border border-input">
+                        <span className="text-sm font-mono font-semibold tracking-wide">
+                          {field.value}
+                        </span>
+                        <span className="text-xs text-muted-foreground ml-auto">
+                          (Không thể thay đổi)
+                        </span>
+                      </div>
+                    ) : (
+                      <Input
+                        placeholder="VD: 6480201"
+                        {...field}
+                        onChange={(e) => handleCodeChange(e.target.value)}
+                        disabled={isSubmitting}
+                        className="uppercase"
+                      />
+                    )}
                   </FormControl>
                   <FormDescription>
-                    Mã ngành tuyển sinh (chữ in hoa, số, gạch ngang hoặc gạch dưới)
-                    {isEditMode && " - Không thể thay đổi"}
+                    Mã ngành tuyển sinh - Định danh duy nhất (chữ in hoa, số, gạch ngang hoặc gạch dưới)
                   </FormDescription>
                   <FormMessage />
                 </FormItem>

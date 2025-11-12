@@ -29,6 +29,7 @@ export interface OfferingAcademicInfo {
   tuition_fee_per_year?: number | null; // Học phí/năm
   annual_admission_quota?: number | null; // Chỉ tiêu tuyển sinh
   is_published: boolean; // Trạng thái công khai
+  is_deleted: boolean; // Soft delete flag - NEVER hard delete financial/historical data
   admission_criteria?: AdmissionCriterion[] | null; // Tiêu chí tuyển sinh (JSON)
   target_audience?: string | null; // Đối tượng tuyển sinh
   cutoff_score_previous_year?: number | null; // Điểm chuẩn năm trước

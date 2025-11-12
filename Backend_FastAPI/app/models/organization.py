@@ -1,5 +1,5 @@
 # app/models/organization.py
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from .base import Base
@@ -58,6 +58,18 @@ class OrganizationUnit(Base):
     )
     scoring_config = relationship(
         "LeadScoringConfig", back_populates="unit", uselist=False
+    )
+
+    # Database constraints
+    __table_args__ = (
+        UniqueConstraint(
+            'parent_id',
+            'name',
+            name='uq_unit_parent_name',
+            # Note: NULL parent_id values are treated as distinct in PostgreSQL
+            # This allows multiple root units with same name (different parent=NULL)
+            # but prevents duplicate names within same parent
+        ),
     )
 
 

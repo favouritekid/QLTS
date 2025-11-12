@@ -30,6 +30,19 @@ log = structlog.get_logger(__name__)
 
 
 # =============================================================================
+# BUSINESS LOGIC CONSTANTS
+# =============================================================================
+
+# Unit types that are allowed to manage academic programs (major/degree)
+# Only academic units (Khoa, Bộ môn, Trung tâm) can have major programs
+ALLOWED_ACADEMIC_UNIT_TYPES = {
+    schemas.OrganizationUnitType.KHOA.value,        # "Khoa"
+    schemas.OrganizationUnitType.BO_MON.value,      # "Bộ môn"
+    schemas.OrganizationUnitType.TRUNG_TAM.value,   # "Trung tâm"
+}
+
+
+# =============================================================================
 # JSON ENCODER FOR DECIMAL
 # =============================================================================
 
@@ -293,6 +306,64 @@ async def create_organization_unit(
         raise
 
 
+async def check_circular_dependency(
+    db: AsyncSession,
+    unit_id: int,
+    new_parent_id: int
+) -> None:
+    """
+    Check if setting new_parent_id as parent of unit_id would create a circular dependency.
+
+    Algorithm: Traverse up the parent chain from new_parent_id. If we encounter unit_id,
+    it means setting this relationship would create a cycle.
+
+    Args:
+        db: Database session
+        unit_id: ID of the unit being updated
+        new_parent_id: ID of the proposed new parent
+
+    Raises:
+        DuplicateResourceError: If circular dependency detected
+    """
+    if new_parent_id is None:
+        return  # No parent = no cycle possible
+
+    if unit_id == new_parent_id:
+        raise DuplicateResourceError(
+            detail="Một đơn vị không thể là đơn vị cha của chính nó."
+        )
+
+    # Traverse up from new_parent to check if we hit unit_id
+    current_id = new_parent_id
+    visited = set()  # Prevent infinite loop in case DB already has cycles
+
+    while current_id is not None:
+        if current_id in visited:
+            # Already visited this node - existing cycle in DB (should not happen)
+            log.warning(
+                "Detected existing cycle in organization tree",
+                current_id=current_id,
+                visited=list(visited)
+            )
+            break
+
+        visited.add(current_id)
+
+        # If we encounter the unit being updated, this would create a cycle
+        if current_id == unit_id:
+            raise DuplicateResourceError(
+                detail="Không thể tạo mối quan hệ vòng lặp trong cây đơn vị. "
+                       "Đơn vị cha được chọn là con/cháu của đơn vị hiện tại."
+            )
+
+        # Get parent of current node
+        parent = await db.get(models.OrganizationUnit, current_id)
+        if not parent:
+            break
+
+        current_id = parent.parent_id
+
+
 async def update_organization_unit(
     db: AsyncSession,
     unit_id: int,
@@ -315,10 +386,10 @@ async def update_organization_unit(
         if "parent_id" in update_data:
             new_parent_id = update_data["parent_id"]
             if new_parent_id is not None:
-                if new_parent_id == unit_id:
-                    raise DuplicateResourceError(
-                        detail="A unit cannot be its own parent."
-                    )
+                # Check for circular dependency (includes self-parent check)
+                await check_circular_dependency(db, unit_id, new_parent_id)
+
+                # Verify parent exists
                 parent_unit = await db.get(models.OrganizationUnit, new_parent_id)
                 if not parent_unit:
                     raise ResourceNotFoundError(
@@ -375,9 +446,27 @@ async def delete_organization_unit(db: AsyncSession, unit_id: int):
         active_programs_result = await db.execute(active_programs_query)
         active_programs = active_programs_result.scalars().all()
 
-        if active_children or active_programs:
+        # Check for assigned users (prevent orphaned users)
+        assigned_users_query = select(models.User).where(
+            models.User.unit_id == unit_id
+        )
+        assigned_users_result = await db.execute(assigned_users_query)
+        assigned_users = assigned_users_result.scalars().all()
+
+        # Build error message based on what's blocking deletion
+        blocking_reasons = []
+        if active_children:
+            blocking_reasons.append(f"{len(active_children)} đơn vị con đang hoạt động")
+        if active_programs:
+            blocking_reasons.append(f"{len(active_programs)} chương trình đào tạo đang hoạt động")
+        if assigned_users:
+            blocking_reasons.append(f"{len(assigned_users)} người dùng đang thuộc đơn vị này")
+
+        if blocking_reasons:
+            reasons_str = ", ".join(blocking_reasons)
             raise DuplicateResourceError(
-                detail="Cannot delete unit: It contains active child units or programs."
+                detail=f"Không thể xóa đơn vị '{unit_name}': {reasons_str}. "
+                       "Vui lòng chuyển hoặc xóa các mục này trước khi xóa đơn vị."
             )
 
         # Soft delete
@@ -453,6 +542,14 @@ async def create_major_program(
                 detail=f"Organization unit with id {program_in.unit_id} not found."
             )
 
+        # Validate unit type - only academic units can manage major programs
+        if unit.type not in ALLOWED_ACADEMIC_UNIT_TYPES:
+            allowed_types_str = ", ".join(ALLOWED_ACADEMIC_UNIT_TYPES)
+            raise DuplicateResourceError(
+                detail=f"Đơn vị loại '{unit.type}' không được phép quản lý chương trình đào tạo. "
+                       f"Chỉ các đơn vị sau mới có thể quản lý ngành học: {allowed_types_str}"
+            )
+
         db_program = models.MajorProgram(**program_in.model_dump())
         db.add(db_program)
         await db.commit()
@@ -518,20 +615,53 @@ async def update_major_program(
 
 async def delete_major_program(db: AsyncSession, program_id: int):
     """
-    Soft delete a major program.
+    Soft delete a major program with CASCADE to child offerings and academic info.
 
-    Sets is_active=False. Cascade will soft-delete associated offerings.
+    Sets is_active=False on the program and all child offerings.
+    Sets is_deleted=True on all child academic info (preserves financial history).
+
+    This ensures orphaned offerings/academic_info are not visible when the parent
+    program is deleted.
     """
     try:
         db_program = await get_major_program_by_id(db, program_id)
         program_name = db_program.name
 
-        # Soft delete
+        # CASCADE SOFT DELETE: Mark all child offerings as inactive
+        offerings_query = select(models.ProgramOffering).where(
+            models.ProgramOffering.program_id == program_id
+        )
+        offerings_result = await db.execute(offerings_query)
+        offerings = offerings_result.scalars().all()
+
+        offerings_count = 0
+        academic_info_count = 0
+
+        for offering in offerings:
+            if offering.is_active:
+                offering.is_active = False
+                db.add(offering)
+                offerings_count += 1
+
+                # CASCADE SOFT DELETE: Mark all academic info as deleted
+                for academic_info in offering.academic_info_history:
+                    if not academic_info.is_deleted:
+                        academic_info.is_deleted = True
+                        db.add(academic_info)
+                        academic_info_count += 1
+
+        # Soft delete the program itself
         db_program.is_active = False
         db.add(db_program)
         await db.commit()
 
-        log.info("Major program soft-deleted", program_id=program_id, program_name=program_name)
+        log.info(
+            "Major program soft-deleted with cascade",
+            program_id=program_id,
+            program_name=program_name,
+            offerings_deleted=offerings_count,
+            academic_info_deleted=academic_info_count
+        )
 
         await invalidate_org_cache()
         await emit_organization_updated(
@@ -881,20 +1011,29 @@ async def update_academic_info(
 
 async def delete_academic_info(db: AsyncSession, academic_info_id: int):
     """
-    Delete academic info.
+    Soft delete academic info.
 
-    This is a hard delete since academic info is versioned per year.
+    CRITICAL: This is a SOFT DELETE, not hard delete. Academic info contains
+    financial data (tuition fees) and historical enrollment data that must be
+    preserved for:
+    - Financial reporting and audits
+    - Historical statistics and analytics
+    - Lead references and student records
+    - Compliance and legal requirements
+
+    NEVER hard delete academic info - use is_deleted flag instead.
     """
     try:
         db_academic_info = await get_academic_info_by_id(db, academic_info_id)
         offering_id = db_academic_info.offering_id
         academic_year = db_academic_info.academic_year
 
-        await db.delete(db_academic_info)
+        # Soft delete - set flag instead of removing from database
+        db_academic_info.is_deleted = True
         await db.commit()
 
         log.info(
-            "Academic info deleted",
+            "Academic info soft deleted (is_deleted=True)",
             academic_info_id=academic_info_id,
             offering_id=offering_id,
             academic_year=academic_year
