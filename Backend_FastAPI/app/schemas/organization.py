@@ -140,7 +140,9 @@ class ProgramOfferingUpdate(BaseModel):
 class ProgramOffering(ProgramOfferingBase):
     id: int
     program_id: int
-    academic_info_history: List[OfferingAcademicInfo] = Field(default_factory=list)
+    # ✅ Removed academic_info_history to prevent MissingGreenlet error
+    # Frontend should load academic info on-demand using dedicated endpoints
+    # This avoids loading 30,000+ historical records unnecessarily
     model_config = ConfigDict(from_attributes=True)
 
 

@@ -430,11 +430,6 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                                       {offering.total_credits} tín chỉ
                                     </span>
                                   )}
-                                  {offering.academic_info_history?.length > 0 && (
-                                    <span className="text-xs text-muted-foreground">
-                                      {offering.academic_info_history.length} năm học
-                                    </span>
-                                  )}
                                 </div>
                               </div>
                             </div>

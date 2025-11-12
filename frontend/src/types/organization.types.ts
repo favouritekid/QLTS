@@ -80,8 +80,8 @@ export interface ProgramOffering {
   total_credits?: number | null; // Tổng số tín chỉ
   is_active: boolean; // Soft delete flag
 
-  // Nested: Academic info history (Tier 3)
-  academic_info_history: OfferingAcademicInfo[];
+  // ✅ Removed academic_info_history - should be loaded on-demand
+  // Use dedicated endpoints to fetch academic info when needed
 }
 
 /**
