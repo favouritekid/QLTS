@@ -38,28 +38,38 @@ import type {
   OfferingAcademicInfoCreate,
   OfferingAcademicInfoUpdate,
   ProgramOffering,
+  AdmissionCriterion,
 } from "@/types/organization.types";
 
 // =====================================================================
-// ADMISSION CRITERION TYPE
+// FORM-SPECIFIC TYPES (differs from API types)
+// =====================================================================
+
+// Form uses string for subject_groups (comma-separated input)
+// API uses string[] (array)
+interface AdmissionCriterionFormData {
+  id: string;
+  method_name: string;
+  program_type?: string;
+  subject_groups?: string; // ✅ String in form (comma-separated)
+  min_score?: number | null;
+}
+
+// =====================================================================
+// FORM VALIDATION SCHEMA
 // =====================================================================
 
 const admissionCriterionSchema = z.object({
   id: z.string().min(1, "Mã phương thức là bắt buộc"),
   method_name: z.string().min(1, "Tên phương thức là bắt buộc"),
-  subject_groups: z.string().optional(), // Comma-separated string
+  program_type: z.string().optional(),
+  subject_groups: z.string().optional(), // Comma-separated string in form
   min_score: z
     .number()
     .min(0, "Điểm phải lớn hơn hoặc bằng 0")
     .max(30, "Điểm không được vượt quá 30")
-    .nullish()
-    .or(z.literal("")),
-  program_type: z.string().optional(),
+    .nullish(),
 });
-
-// =====================================================================
-// FORM VALIDATION SCHEMA
-// =====================================================================
 
 const academicInfoFormSchema = z.object({
   academic_year: z
@@ -70,14 +80,12 @@ const academicInfoFormSchema = z.object({
   tuition_fee_per_year: z
     .number()
     .min(0, "Học phí không thể âm")
-    .nullish()
-    .or(z.literal("")),
+    .nullish(),
   annual_admission_quota: z
     .number()
     .int("Chỉ tiêu tuyển sinh phải là số nguyên")
     .min(0, "Chỉ tiêu tuyển sinh không thể âm")
-    .nullish()
-    .or(z.literal("")),
+    .nullish(),
   target_audience: z
     .string()
     .max(1000, "Đối tượng tuyển sinh không được vượt quá 1000 ký tự")
@@ -86,14 +94,12 @@ const academicInfoFormSchema = z.object({
     .number()
     .min(0, "Điểm chuẩn không thể âm")
     .max(30, "Điểm chuẩn không được vượt quá 30")
-    .nullish()
-    .or(z.literal("")),
-  admission_criteria: z.array(admissionCriterionSchema).default([]), // ✅ Changed from string to array
+    .nullish(),
+  admission_criteria: z.array(admissionCriterionSchema).default([]),
   is_published: z.boolean(),
 });
 
 type AcademicInfoFormValues = z.infer<typeof academicInfoFormSchema>;
-type AdmissionCriterion = z.infer<typeof admissionCriterionSchema>;
 
 // =====================================================================
 // COMPONENT PROPS
@@ -102,8 +108,51 @@ type AdmissionCriterion = z.infer<typeof admissionCriterionSchema>;
 interface OfferingAcademicInfoDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  offering: ProgramOffering; // Parent ProgramOffering (Tier 2)
-  academicInfo?: OfferingAcademicInfo | null; // null = create mode
+  offering: ProgramOffering;
+  academicInfo?: OfferingAcademicInfo | null;
+}
+
+// =====================================================================
+// HELPER FUNCTIONS
+// =====================================================================
+
+/**
+ * Convert API data (AdmissionCriterion[]) to form data
+ * - subject_groups: string[] → comma-separated string
+ */
+function convertApiToFormData(
+  apiCriteria: AdmissionCriterion[]
+): AdmissionCriterionFormData[] {
+  return apiCriteria.map((criterion) => ({
+    id: criterion.id,
+    method_name: criterion.method_name,
+    program_type: criterion.program_type || undefined,
+    subject_groups: criterion.subject_groups
+      ? criterion.subject_groups.join(", ")
+      : undefined,
+    min_score: criterion.min_score ?? null,
+  }));
+}
+
+/**
+ * Convert form data to API data (AdmissionCriterion[])
+ * - subject_groups: comma-separated string → string[]
+ */
+function convertFormToApiData(
+  formCriteria: AdmissionCriterionFormData[]
+): AdmissionCriterion[] {
+  return formCriteria.map((criterion) => ({
+    id: criterion.id,
+    method_name: criterion.method_name,
+    program_type: criterion.program_type || "",
+    subject_groups: criterion.subject_groups
+      ? criterion.subject_groups
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0)
+      : null,
+    min_score: criterion.min_score ?? null,
+  }));
 }
 
 // =====================================================================
@@ -131,12 +180,12 @@ export function OfferingAcademicInfoDialog({
       annual_admission_quota: null,
       target_audience: "",
       cutoff_score_previous_year: null,
-      admission_criteria: [], // ✅ Default empty array
+      admission_criteria: [],
       is_published: false,
     },
   });
 
-  // ✅ useFieldArray for dynamic admission criteria
+  // useFieldArray for dynamic admission criteria
   const { fields, append, remove } = useFieldArray({
     control: form.control,
     name: "admission_criteria",
@@ -146,18 +195,23 @@ export function OfferingAcademicInfoDialog({
   useEffect(() => {
     if (open) {
       if (isEditMode && academicInfo) {
-        // ✅ Parse admission_criteria from JSON string/object to array
-        let parsedCriteria: AdmissionCriterion[] = [];
+        // ✅ Parse admission_criteria from JSON string/array to form data
+        let parsedCriteria: AdmissionCriterionFormData[] = [];
         if (academicInfo.admission_criteria) {
           try {
+            let apiCriteria: AdmissionCriterion[] = [];
+
             // If it's a string, parse it
             if (typeof academicInfo.admission_criteria === "string") {
-              parsedCriteria = JSON.parse(academicInfo.admission_criteria);
+              apiCriteria = JSON.parse(academicInfo.admission_criteria);
             }
-            // If it's already an array/object, use it directly
+            // If it's already an array, use it directly
             else if (Array.isArray(academicInfo.admission_criteria)) {
-              parsedCriteria = academicInfo.admission_criteria;
+              apiCriteria = academicInfo.admission_criteria;
             }
+
+            // Convert API format to form format
+            parsedCriteria = convertApiToFormData(apiCriteria);
           } catch (e) {
             console.error("Failed to parse admission criteria:", e);
             parsedCriteria = [];
@@ -169,7 +223,8 @@ export function OfferingAcademicInfoDialog({
           tuition_fee_per_year: academicInfo.tuition_fee_per_year ?? null,
           annual_admission_quota: academicInfo.annual_admission_quota ?? null,
           target_audience: academicInfo.target_audience || "",
-          cutoff_score_previous_year: academicInfo.cutoff_score_previous_year ?? null,
+          cutoff_score_previous_year:
+            academicInfo.cutoff_score_previous_year ?? null,
           admission_criteria: parsedCriteria,
           is_published: academicInfo.is_published,
         });
@@ -190,25 +245,8 @@ export function OfferingAcademicInfoDialog({
   // Handle form submission
   const onSubmit = async (values: AcademicInfoFormValues) => {
     try {
-      // ✅ Convert subject_groups from comma-separated string to array
-      const processedCriteria = values.admission_criteria.map((criterion) => {
-        let subjectGroupsArray: string[] | undefined;
-        if (criterion.subject_groups) {
-          // Split by comma and trim whitespace
-          subjectGroupsArray = criterion.subject_groups
-            .split(",")
-            .map((s) => s.trim())
-            .filter((s) => s.length > 0);
-        }
-
-        return {
-          id: criterion.id,
-          method_name: criterion.method_name,
-          subject_groups: subjectGroupsArray,
-          min_score: typeof criterion.min_score === "number" ? criterion.min_score : null,
-          program_type: criterion.program_type || undefined,
-        };
-      });
+      // ✅ Convert form data to API format
+      const apiCriteria = convertFormToApiData(values.admission_criteria);
 
       if (isEditMode && academicInfo) {
         // Update existing
@@ -227,7 +265,7 @@ export function OfferingAcademicInfoDialog({
             typeof values.cutoff_score_previous_year === "number"
               ? values.cutoff_score_previous_year
               : null,
-          admission_criteria: processedCriteria.length > 0 ? processedCriteria : null, // ✅ Send as array
+          admission_criteria: apiCriteria.length > 0 ? apiCriteria : null,
           is_published: values.is_published,
         };
         await updateMutation.mutateAsync({
@@ -252,7 +290,7 @@ export function OfferingAcademicInfoDialog({
             typeof values.cutoff_score_previous_year === "number"
               ? values.cutoff_score_previous_year
               : null,
-          admission_criteria: processedCriteria.length > 0 ? processedCriteria : null, // ✅ Send as array
+          admission_criteria: apiCriteria.length > 0 ? apiCriteria : null,
           is_published: values.is_published,
         };
         await createMutation.mutateAsync({
@@ -308,7 +346,9 @@ export function OfferingAcademicInfoDialog({
                         type="number"
                         placeholder="VD: 2025"
                         {...field}
-                        onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}
+                        onChange={(e) =>
+                          field.onChange(parseInt(e.target.value) || 0)
+                        }
                         disabled={isSubmitting}
                       />
                     </FormControl>
@@ -353,7 +393,9 @@ export function OfferingAcademicInfoDialog({
                   <FormLabel>Học phí/năm</FormLabel>
                   <FormControl>
                     <CurrencyInput
-                      value={typeof field.value === "number" ? field.value : null}
+                      value={
+                        typeof field.value === "number" ? field.value : null
+                      }
                       onChange={field.onChange}
                       placeholder="VD: 15.000.000"
                       disabled={isSubmitting}
@@ -362,7 +404,8 @@ export function OfferingAcademicInfoDialog({
                     />
                   </FormControl>
                   <FormDescription>
-                    Học phí một năm học (tự động định dạng với dấu phân cách hàng nghìn)
+                    Học phí một năm học (tự động định dạng với dấu phân cách
+                    hàng nghìn)
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -383,7 +426,9 @@ export function OfferingAcademicInfoDialog({
                       {...field}
                       value={field.value ?? ""}
                       onChange={(e) =>
-                        field.onChange(e.target.value ? parseInt(e.target.value) : null)
+                        field.onChange(
+                          e.target.value ? parseInt(e.target.value) : null
+                        )
                       }
                       disabled={isSubmitting}
                     />
@@ -411,7 +456,9 @@ export function OfferingAcademicInfoDialog({
                       {...field}
                       value={field.value ?? ""}
                       onChange={(e) =>
-                        field.onChange(e.target.value ? parseFloat(e.target.value) : null)
+                        field.onChange(
+                          e.target.value ? parseFloat(e.target.value) : null
+                        )
                       }
                       disabled={isSubmitting}
                     />
@@ -428,9 +475,12 @@ export function OfferingAcademicInfoDialog({
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <FormLabel className="text-base">Tiêu chí tuyển sinh</FormLabel>
+                  <FormLabel className="text-base">
+                    Tiêu chí tuyển sinh
+                  </FormLabel>
                   <FormDescription>
-                    Thêm các phương thức xét tuyển (học bạ, thi THPT, tuyển thẳng...)
+                    Thêm các phương thức xét tuyển (học bạ, thi THPT, tuyển
+                    thẳng...)
                   </FormDescription>
                 </div>
                 <Button
@@ -441,9 +491,9 @@ export function OfferingAcademicInfoDialog({
                     append({
                       id: "",
                       method_name: "",
+                      program_type: "",
                       subject_groups: "",
                       min_score: null,
-                      program_type: "",
                     })
                   }
                   disabled={isSubmitting}
@@ -491,7 +541,8 @@ export function OfferingAcademicInfoDialog({
                         render={({ field }) => (
                           <FormItem>
                             <FormLabel>
-                              Mã phương thức <span className="text-red-500">*</span>
+                              Mã phương thức{" "}
+                              <span className="text-red-500">*</span>
                             </FormLabel>
                             <FormControl>
                               <Input
@@ -512,7 +563,8 @@ export function OfferingAcademicInfoDialog({
                         render={({ field }) => (
                           <FormItem>
                             <FormLabel>
-                              Tên phương thức <span className="text-red-500">*</span>
+                              Tên phương thức{" "}
+                              <span className="text-red-500">*</span>
                             </FormLabel>
                             <FormControl>
                               <Input
@@ -564,7 +616,9 @@ export function OfferingAcademicInfoDialog({
                                 value={field.value ?? ""}
                                 onChange={(e) =>
                                   field.onChange(
-                                    e.target.value ? parseFloat(e.target.value) : null
+                                    e.target.value
+                                      ? parseFloat(e.target.value)
+                                      : null
                                   )
                                 }
                                 disabled={isSubmitting}
@@ -590,7 +644,8 @@ export function OfferingAcademicInfoDialog({
                               />
                             </FormControl>
                             <FormDescription className="text-xs">
-                              Loại chương trình áp dụng phương thức này (tùy chọn)
+                              Loại chương trình áp dụng phương thức này (tùy
+                              chọn)
                             </FormDescription>
                             <FormMessage />
                           </FormItem>
@@ -635,7 +690,9 @@ export function OfferingAcademicInfoDialog({
                 Hủy
               </Button>
               <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {isSubmitting && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
                 {isEditMode ? "Cập nhật" : "Tạo mới"}
               </Button>
             </DialogFooter>
