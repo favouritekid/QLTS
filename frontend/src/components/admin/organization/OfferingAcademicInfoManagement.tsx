@@ -87,6 +87,9 @@ export function OfferingAcademicInfoManagement({
     isLoading,
     error,
   } = useOfferingAcademicInfoList(offering.id, false);
+
+  const hasData = academicInfos.length > 0;
+
   const deleteAcademicInfoMutation = useDeleteOfferingAcademicInfo();
 
   // ✨ Tính toán danh sách các năm đã tồn tại
@@ -162,12 +165,14 @@ export function OfferingAcademicInfoManagement({
           </DialogHeader>
 
           <div className="space-y-4">
-            <div className="flex justify-end">
-              <Button onClick={handleCreate} size="sm">
-                <Plus className="mr-2 h-4 w-4" />
-                Thêm năm học mới
-              </Button>
-            </div>
+            {hasData && (
+              <div className="flex justify-end">
+                <Button onClick={handleCreate} size="sm">
+                  <Plus className="mr-2 h-4 w-4" />
+                  Thêm năm học mới
+                </Button>
+              </div>
+            )}
 
             {isLoading && (
               <div className="space-y-2">
@@ -184,14 +189,17 @@ export function OfferingAcademicInfoManagement({
               </Alert>
             )}
 
-            {!isLoading && !error && academicInfos.length === 0 && (
-              <div className="text-muted-foreground rounded-lg border-2 border-dashed py-12 text-center">
-                <BookOpen className="mx-auto mb-4 h-12 w-12 opacity-50" />
+            {!isLoading && !error && !hasData && (
+              <div className="text-muted-foreground flex flex-col items-center justify-center rounded-lg border-2 border-dashed py-12 text-center">
+                <BookOpen className="mb-4 h-12 w-12 opacity-50" />
                 <p className="text-lg font-medium">Chưa có thông tin tuyển sinh</p>
-                <p className="mt-2 text-sm">Thêm thông tin tuyển sinh cho năm học đầu tiên</p>
-                <Button onClick={handleCreate} className="mt-4" size="sm">
+                <p className="mx-auto mt-2 max-w-xs text-sm">
+                  Thiết lập thông tin học phí, chỉ tiêu và phương thức xét tuyển cho năm học đầu
+                  tiên.
+                </p>
+                <Button onClick={handleCreate} className="mt-6">
                   <Plus className="mr-2 h-4 w-4" />
-                  Thêm ngay
+                  Bắt đầu tạo mới
                 </Button>
               </div>
             )}

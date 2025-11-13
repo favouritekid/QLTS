@@ -28,6 +28,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Loader2, Plus, Trash, Save, SaveAll } from "lucide-react";
 import {
   useCreateOfferingAcademicInfo,
@@ -439,7 +440,7 @@ export function OfferingAcademicInfoDialog({
                   <FormControl>
                     <Textarea
                       placeholder="Mô tả đối tượng tuyển sinh phù hợp..."
-                      className="resize-none"
+                      className="min-h-[100px] resize-y"
                       {...field}
                       disabled={isSubmitting}
                     />
@@ -509,9 +510,9 @@ export function OfferingAcademicInfoDialog({
                   <Card key={field.id} className="relative">
                     <CardHeader className="pt-4 pb-2">
                       <div className="flex items-center justify-between">
-                        <CardTitle className="text-sm font-medium">
-                          Phương thức #{index + 1}
-                        </CardTitle>
+                        <Badge variant="secondary" className="px-3 py-1 text-sm font-medium">
+                          Phương thức {index + 1}
+                        </Badge>
                         <Button
                           type="button"
                           variant="ghost"
