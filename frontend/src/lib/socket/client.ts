@@ -16,6 +16,9 @@ class SocketService {
   private shutdownReconnectTimer: NodeJS.Timeout | null = null;
   private REVALIDATE_INTERVAL_MS = 5 * 60 * 1000; // ✅ FIX-3: 5 minutes
 
+  // ✅ PRIORITY 3 (Deep Dive Audit): Reconnect callback for cache invalidation
+  private onReconnectCallback: (() => void) | null = null;
+
   connect() {
     if (this.socket && this.socket.connected) {
       console.log("[SocketService] Already connected.");
@@ -57,6 +60,13 @@ class SocketService {
       }
       this.startHeartbeat();
       this.startRevalidation(); // ✅ FIX-3: Start periodic auth revalidation
+
+      // ✅ PRIORITY 3 FIX (Deep Dive Audit): Invalidate cache on reconnect
+      // Solves: Stale data issue when socket disconnects and data changes on server
+      if (this.onReconnectCallback) {
+        console.log("[SocketService] 🔄 Triggering cache invalidation after reconnect...");
+        this.onReconnectCallback();
+      }
     });
 
     this.socket.on("disconnect", (reason) => {
@@ -200,6 +210,35 @@ class SocketService {
 
   getSocket() {
     return this.socket;
+  }
+
+  /**
+   * ✅ PRIORITY 3 (Deep Dive Audit): Register callback for cache invalidation
+   *
+   * This method allows React Query (or other cache systems) to register a callback
+   * that will be invoked whenever the socket reconnects. This ensures fresh data
+   * is fetched after connection loss.
+   *
+   * Problem Solved:
+   * - When socket disconnects for extended period, server data may change
+   * - With staleTime: Infinity, React Query never auto-refetches
+   * - User sees stale data until manual refresh (F5)
+   *
+   * Solution:
+   * - On reconnect, trigger invalidation of critical queries
+   * - React Query automatically refetches invalidated data
+   * - UI stays fresh without user intervention
+   *
+   * Usage (in providers.tsx):
+   * ```tsx
+   * socketService.onReconnect(() => {
+   *   queryClient.invalidateQueries({ queryKey: ['users'] });
+   *   queryClient.invalidateQueries({ queryKey: ['leads'] });
+   * });
+   * ```
+   */
+  onReconnect(callback: () => void) {
+    this.onReconnectCallback = callback;
   }
 }
 
