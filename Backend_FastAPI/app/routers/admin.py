@@ -3099,7 +3099,7 @@ async def create_offering_academic_info(
         db, academic_info_in, created_by_user_id=current_admin.id
     )
 
-@router.put(
+@router.patch(
     "/academic-info/{academic_info_id}",
     response_model=schemas.OfferingAcademicInfo,
     tags=["Admin - Organization"],
