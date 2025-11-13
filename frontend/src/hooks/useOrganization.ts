@@ -94,7 +94,11 @@ export const organizationKeys = {
  * Get all organization units (tree structure)
  * Uses: Public endpoint, automatic cache invalidation via Socket.IO
  */
-export function useOrganizationUnits() {
+/**
+ * ⚡ PERFORMANCE: Hook to fetch organization units
+ * @param initialData - Optional initial data from Server Component (Next.js 15 SSR)
+ */
+export function useOrganizationUnits(initialData?: OrganizationUnit[]) {
   return useQuery<OrganizationUnit[], AxiosError<ApiErrorResponse>>({
     queryKey: organizationKeys.list(),
     queryFn: async () => {
@@ -103,6 +107,7 @@ export function useOrganizationUnits() {
       );
       return response.data;
     },
+    initialData, // ⚡ Use server-fetched data if available
     staleTime: Infinity, // Cache forever, invalidate via Socket.IO
     gcTime: 1000 * 60 * 30, // 30 minutes in cache
   });
