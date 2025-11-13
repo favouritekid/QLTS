@@ -1,7 +1,7 @@
 // src/components/admin/organization/OfferingAcademicInfoDialog.tsx
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useForm, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -28,7 +28,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, Plus, Trash } from "lucide-react";
+import { Loader2, Plus, Trash, Save, SaveAll } from "lucide-react";
 import {
   useCreateOfferingAcademicInfo,
   useUpdateOfferingAcademicInfo,
@@ -85,6 +85,7 @@ interface OfferingAcademicInfoDialogProps {
   offering: ProgramOffering;
   academicInfo?: OfferingAcademicInfo | null;
   existingYears?: number[]; // Danh sách các năm đã có dữ liệu (để check trùng)
+  onSaveSuccess?: (data: OfferingAcademicInfo, shouldClose: boolean) => void;
 }
 
 // =====================================================================
@@ -137,6 +138,7 @@ export function OfferingAcademicInfoDialog({
   offering,
   academicInfo,
   existingYears = [],
+  onSaveSuccess,
 }: OfferingAcademicInfoDialogProps) {
   const isEditMode = !!academicInfo;
   const currentYear = new Date().getFullYear();
@@ -230,6 +232,8 @@ export function OfferingAcademicInfoDialog({
     }
   }, [open, isEditMode, academicInfo, form, existingYears, currentYear]);
 
+  const [saveAction, setSaveAction] = useState<"close" | "continue">("close");
+
   const onSubmit = async (values: AcademicInfoFormValues) => {
     // 🛡️ CLIENT-SIDE VALIDATION: Unique Year Constraint
     if (!isEditMode && existingYears.includes(values.academic_year)) {
@@ -242,10 +246,11 @@ export function OfferingAcademicInfoDialog({
 
     try {
       const apiCriteria = convertFormToApiData(values.admission_criteria);
+      let resultData: OfferingAcademicInfo;
 
       if (isEditMode && academicInfo) {
         // Update logic
-        await updateMutation.mutateAsync({
+        resultData = await updateMutation.mutateAsync({
           id: academicInfo.id,
           data: {
             ...values,
@@ -254,7 +259,7 @@ export function OfferingAcademicInfoDialog({
         });
       } else {
         // Create logic
-        await createMutation.mutateAsync({
+        resultData = await createMutation.mutateAsync({
           offeringId: offering.id,
           offering_id: offering.id,
           ...values,
@@ -262,7 +267,19 @@ export function OfferingAcademicInfoDialog({
         });
       }
 
-      onOpenChange(false);
+      // ✅ Gọi callback thay vì tự đóng
+      if (onSaveSuccess) {
+        onSaveSuccess(resultData, saveAction === "close");
+      } else {
+        // Fallback nếu không có callback (logic cũ)
+        onOpenChange(false);
+      }
+      // Nếu "Lưu & Tiếp tục", ta reset form với dữ liệu mới nhất từ Server
+      // để đảm bảo form clean (isDirty = false)
+      if (saveAction === "continue") {
+        // Logic reset form sẽ được useEffect xử lý khi prop `academicInfo` thay đổi
+        // nhờ hàm handleSaveSuccess ở component cha.
+      }
     } catch (error) {
       console.error("Form submission failed:", error);
       // Error toast handled in hooks
@@ -565,7 +582,7 @@ export function OfferingAcademicInfoDialog({
               )}
             />
 
-            <DialogFooter>
+            <DialogFooter className="gap-2 sm:gap-0">
               <Button
                 type="button"
                 variant="outline"
@@ -574,9 +591,30 @@ export function OfferingAcademicInfoDialog({
               >
                 Hủy
               </Button>
-              <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                {isEditMode ? "Lưu thay đổi" : "Tạo mới"}
+
+              {/* Nút 1: Lưu & Đóng */}
+              <Button type="submit" disabled={isSubmitting} onClick={() => setSaveAction("close")}>
+                {isSubmitting && saveAction === "close" ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Save className="mr-2 h-4 w-4" />
+                )}
+                {isEditMode ? "Lưu thay đổi" : "Tạo & Đóng"}
+              </Button>
+
+              {/* Nút 2: Lưu & Tiếp tục (Chỉ hiện khi Tạo mới hoặc muốn giữ form) */}
+              <Button
+                type="submit"
+                variant="secondary"
+                disabled={isSubmitting}
+                onClick={() => setSaveAction("continue")}
+              >
+                {isSubmitting && saveAction === "continue" ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <SaveAll className="mr-2 h-4 w-4" />
+                )}
+                {isEditMode ? "Lưu và Tiếp tục" : "Tạo & Tiếp tục sửa"}
               </Button>
             </DialogFooter>
           </form>

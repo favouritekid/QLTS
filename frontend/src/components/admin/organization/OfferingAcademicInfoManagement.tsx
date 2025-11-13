@@ -132,6 +132,19 @@ export function OfferingAcademicInfoManagement({
     }).format(Number(amount)); // Đảm bảo ép kiểu Number trước khi format
   };
 
+  // ✅ AUDIT: Hàm này đảm bảo tính nhất quán dữ liệu Frontend-Backend.
+  // Khi lưu thành công, dữ liệu từ Backend (newData) sẽ được set ngay vào state,
+  // giúp Form hiển thị đúng dữ liệu mới nhất (bao gồm ID vừa sinh ra).
+  const handleSaveSuccess = (newData: OfferingAcademicInfo, shouldClose: boolean) => {
+    if (shouldClose) {
+      setAcademicInfoDialogOpen(false);
+      setSelectedAcademicInfo(null);
+    } else {
+      // Giữ dialog mở và chuyển sang chế độ Edit với dữ liệu mới
+      setSelectedAcademicInfo(newData);
+    }
+  };
+
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
@@ -272,7 +285,8 @@ export function OfferingAcademicInfoManagement({
         onOpenChange={setAcademicInfoDialogOpen}
         offering={offering}
         academicInfo={selectedAcademicInfo}
-        existingYears={existingYears} // Prop mới
+        existingYears={existingYears}
+        onSaveSuccess={handleSaveSuccess} // Prop mới
       />
 
       <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
