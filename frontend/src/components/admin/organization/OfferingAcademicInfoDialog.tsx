@@ -51,6 +51,7 @@ interface AdmissionCriterionFormData {
   min_score?: number | null;
 }
 
+// 1. Schema cho từng item (giữ nguyên)
 const admissionCriterionSchema = z.object({
   id: z.string().min(1, "Mã phương thức là bắt buộc"),
   method_name: z.string().min(1, "Tên phương thức là bắt buộc"),
@@ -59,6 +60,7 @@ const admissionCriterionSchema = z.object({
   min_score: z.number().min(0).max(30).nullish(),
 });
 
+// 2. Schema tổng thể (CẬP NHẬT THÊM superRefine)
 const academicInfoFormSchema = z.object({
   academic_year: z
     .number()
@@ -69,7 +71,43 @@ const academicInfoFormSchema = z.object({
   annual_admission_quota: z.number().int().min(0, "Chỉ tiêu không được âm").nullish(),
   target_audience: z.string().max(1000).optional(),
   cutoff_score_previous_year: z.number().min(0).max(30).nullish(),
-  admission_criteria: z.array(admissionCriterionSchema),
+
+  // 👇 VALIDATE DANH SÁCH: Không cho phép trùng ID hoặc Tên
+  admission_criteria: z.array(admissionCriterionSchema).superRefine((items, ctx) => {
+    const seenIds = new Set();
+    const seenNames = new Set();
+
+    items.forEach((item, index) => {
+      // Kiểm tra trùng Mã (ID)
+      const id = item.id?.trim().toUpperCase(); // Chuẩn hóa để so sánh
+      if (id) {
+        if (seenIds.has(id)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "Mã phương thức bị trùng lặp",
+            path: [index, "id"], // Đánh dấu lỗi vào đúng dòng index, trường id
+          });
+        } else {
+          seenIds.add(id);
+        }
+      }
+
+      // Kiểm tra trùng Tên (Method Name)
+      const name = item.method_name?.trim().toLowerCase();
+      if (name) {
+        if (seenNames.has(name)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "Tên phương thức bị trùng lặp",
+            path: [index, "method_name"], // Đánh dấu lỗi vào đúng dòng index, trường name
+          });
+        } else {
+          seenNames.add(name);
+        }
+      }
+    });
+  }),
+
   is_published: z.boolean(),
 });
 
@@ -599,7 +637,7 @@ export function OfferingAcademicInfoDialog({
                 ) : (
                   <Save className="mr-2 h-4 w-4" />
                 )}
-                {isEditMode ? "Lưu thay đổi" : "Tạo & Đóng"}
+                {isEditMode ? "Lưu thay đổi" : "Tạo và Đóng"}
               </Button>
 
               {/* Nút 2: Lưu & Tiếp tục (Chỉ hiện khi Tạo mới hoặc muốn giữ form) */}
@@ -614,7 +652,7 @@ export function OfferingAcademicInfoDialog({
                 ) : (
                   <SaveAll className="mr-2 h-4 w-4" />
                 )}
-                {isEditMode ? "Lưu và Tiếp tục" : "Tạo & Tiếp tục sửa"}
+                {isEditMode ? "Lưu và Tiếp tục" : "Tạo và Tiếp tục"}
               </Button>
             </DialogFooter>
           </form>
