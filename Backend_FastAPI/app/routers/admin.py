@@ -3074,3 +3074,57 @@ async def list_users(
     
     return users
 
+
+# =============================================================================
+# OFFERING ACADEMIC INFO (LEVEL 3) - ADMIN ENDPOINTS
+# =============================================================================
+
+@router.post(
+    "/offerings/{offering_id}/academic-info",
+    response_model=schemas.OfferingAcademicInfo,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Admin - Organization"],
+    summary="Create academic info for an offering"
+)
+async def create_offering_academic_info(
+    offering_id: int,
+    academic_info_in: schemas.OfferingAcademicInfoCreate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Tạo thông tin tuyển sinh mới."""
+    if academic_info_in.offering_id != offering_id:
+        raise BadRequest(detail="offering_id mismatch")
+    return await organization_service.create_academic_info(
+        db, academic_info_in, created_by_user_id=current_admin.id
+    )
+
+@router.put(
+    "/academic-info/{academic_info_id}",
+    response_model=schemas.OfferingAcademicInfo,
+    tags=["Admin - Organization"],
+)
+async def update_offering_academic_info(
+    academic_info_id: int,
+    academic_info_in: schemas.OfferingAcademicInfoUpdate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Cập nhật thông tin tuyển sinh."""
+    return await organization_service.update_academic_info(
+        db, academic_info_id, academic_info_in, updated_by_user_id=current_admin.id
+    )
+
+@router.delete(
+    "/academic-info/{academic_info_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["Admin - Organization"],
+)
+async def delete_offering_academic_info(
+    academic_info_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Xóa thông tin tuyển sinh."""
+    await organization_service.delete_academic_info(db, academic_info_id)
+    return None
