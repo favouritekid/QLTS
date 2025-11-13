@@ -13,6 +13,7 @@ import casbin  # ← PHASE 1: Import casbin
 
 from .. import models, schemas
 from ..config import settings
+from ..utils.csv_helpers import sanitize_csv_row  # ✅ SECURITY FIX: CSV Injection Prevention
 
 # ✅ 1. SỬA LỖI: Thêm import `safe_redis_pipeline` (sửa NameError)
 from ..database import (
@@ -1231,7 +1232,7 @@ async def stream_users_csv(
             # Reset string_io cho mỗi dòng
             string_io = io.StringIO()
             writer = csv.writer(string_io)
-            
+
             row = [
                 user.id,
                 user.username,
@@ -1244,8 +1245,13 @@ async def stream_users_csv(
                 ",".join(user.skills) if user.skills else "",
                 user.max_capacity or 0,
             ]
-            writer.writerow(row)
-            
+
+            # ✅ SECURITY FIX: Sanitize row to prevent CSV injection
+            # This prevents formula injection attacks when CSV is opened in Excel/LibreOffice
+            # See: OWASP CSV Injection, CWE-1236
+            sanitized_row = sanitize_csv_row(row)
+            writer.writerow(sanitized_row)
+
             # Gửi (yield) dòng dữ liệu
             yield string_io.getvalue()
             
