@@ -148,6 +148,121 @@ async def safe_redis_pipeline(transaction: bool = True):
 
 
 # ===============================================================
+# === ✅ REDIS DISTRIBUTED LOCK (PRIORITY 2 - Deep Dive Audit) ===
+# ===============================================================
+
+
+@asynccontextmanager
+async def redis_distributed_lock(lock_name: str, timeout: int = 10, retry_delay: float = 0.1):
+    """
+    ✅ PRIORITY 2 FIX (Deep Dive Audit): Redis Distributed Lock
+
+    Replaces asyncio.Lock() to support multi-worker/multi-process deployments.
+
+    This lock works across multiple:
+    - uvicorn workers (--workers 4)
+    - Kubernetes pods (replicas > 1)
+    - Docker containers (scale > 1)
+    - Servers behind load balancer
+
+    Args:
+        lock_name: Unique lock identifier (e.g., "org_cache_rebuild")
+        timeout: Lock auto-expiry in seconds (prevents deadlock if holder crashes)
+        retry_delay: Sleep duration between lock acquisition attempts
+
+    Usage:
+        async with redis_distributed_lock("org_cache_rebuild"):
+            # Critical section - only ONE worker across entire cluster enters here
+            cache_data = await rebuild_expensive_cache()
+            await redis_client.set("cache_key", cache_data)
+
+    Pattern:
+        - Uses Redis SET NX EX (atomic set-if-not-exists with expiry)
+        - Auto-releases lock on context exit
+        - Auto-expires after timeout (prevents deadlock)
+        - Retries acquisition if lock held by another worker
+
+    Refs:
+        - Redis SETNX: https://redis.io/commands/setnx/
+        - Distributed Locks: https://redis.io/docs/manual/patterns/distributed-locks/
+    """
+    import asyncio
+    import uuid
+
+    lock_key = f"lock:{lock_name}"
+    # Unique lock value to prevent accidental release by wrong holder
+    lock_value = str(uuid.uuid4())
+    acquired = False
+
+    try:
+        # Try to acquire lock with retries
+        while True:
+            # SET NX EX: Set if Not eXists with EXpiry (atomic operation)
+            acquired = await redis_breaker.call_async(
+                redis_client.set,
+                lock_key,
+                lock_value,
+                nx=True,  # Only set if key doesn't exist
+                ex=timeout  # Auto-expire after timeout seconds
+            )
+
+            if acquired:
+                log.debug(
+                    "Distributed lock acquired",
+                    lock_name=lock_name,
+                    lock_value=lock_value,
+                    timeout=timeout
+                )
+                break
+
+            # Lock held by another worker - wait and retry
+            log.debug(
+                "Distributed lock held by another worker, retrying...",
+                lock_name=lock_name,
+                retry_delay=retry_delay
+            )
+            await asyncio.sleep(retry_delay)
+
+        # Critical section - caller's code runs here
+        yield
+
+    finally:
+        # Release lock only if we acquired it (check value to prevent wrong release)
+        if acquired:
+            try:
+                # LUA script ensures atomic check-and-delete
+                release_script = """
+                if redis.call("get", KEYS[1]) == ARGV[1] then
+                    return redis.call("del", KEYS[1])
+                else
+                    return 0
+                end
+                """
+                released = await redis_breaker.call_async(
+                    redis_client.eval,
+                    release_script,
+                    1,
+                    lock_key,
+                    lock_value
+                )
+
+                if released:
+                    log.debug("Distributed lock released", lock_name=lock_name)
+                else:
+                    log.warning(
+                        "Lock already expired or released by timeout",
+                        lock_name=lock_name
+                    )
+            except REDIS_BREAKER_EXCEPTIONS:
+                log.error(
+                    "Failed to release distributed lock (will auto-expire)",
+                    lock_name=lock_name,
+                    timeout=timeout,
+                    exc_info=True
+                )
+
+
+# ===============================================================
 
 
 async def get_db() -> AsyncSession:
