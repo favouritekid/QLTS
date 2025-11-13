@@ -61,10 +61,26 @@ async def load_rate_limit_script():
 
 
 async def check_rate_limit(client_ip: str) -> bool:
-    """Kiểm tra rate limit bằng Redis LUA Script (atomic và hiệu quả)."""
+    """
+    Kiểm tra rate limit bằng Redis LUA Script (atomic và hiệu quả).
+
+    ✅ SECURITY FIX (Phase 2): Fail-closed strategy
+    - If Redis is unavailable, DENY connection (return False)
+    - This prevents rate limit bypass during Redis outage (CVSS 5.3 MEDIUM)
+    - Trade-off: Temporary service disruption vs. security
+
+    VULNERABILITY: Socket Rate Limit Bypass
+    - Old behavior: return True when Redis fails (fail-open)
+    - Attack: Crash Redis → unlimited Socket.IO connections → DoS
+    - Fix: return False when Redis fails (fail-closed)
+    """
     if not redis_client or not RATE_LIMIT_SCRIPT_SHA:
-        log.warning("Redis or LUA script not ready, skipping rate limit (fail-open).")
-        return True
+        log.error(
+            "🔒 SECURITY: Redis or LUA script not ready, DENYING connection (fail-closed)",
+            client_ip=client_ip
+        )
+        # ✅ FIX: Return False to deny connection (fail-closed for security)
+        return False
 
     key = f"socket_rate_limit:{client_ip}"
     try:
@@ -75,7 +91,9 @@ async def check_rate_limit(client_ip: str) -> bool:
         return bool(result)
     except Exception as e:
         log.error(
-            "Redis LUA script (evalsha) failed, falling back to eval", error=str(e)
+            "Redis LUA script (evalsha) failed, falling back to eval",
+            error=str(e),
+            client_ip=client_ip
         )
         # Fallback: Thử load và chạy lại script (chỉ 1 lần)
         try:
@@ -85,8 +103,13 @@ async def check_rate_limit(client_ip: str) -> bool:
             )
             return bool(result)
         except Exception as e2:
-            log.error("Redis rate limit check totally failed", error=str(e2))
-            return True  # Fail-open
+            log.error(
+                "🔒 SECURITY: Redis rate limit check totally failed, DENYING connection (fail-closed)",
+                error=str(e2),
+                client_ip=client_ip
+            )
+            # ✅ FIX: Return False to deny connection (fail-closed for security)
+            return False
 
 
 # === ✅ CẢI TIẾN: Vấn đề #3 - Sanitize Token Log ===

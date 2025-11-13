@@ -54,29 +54,49 @@ log = structlog.get_logger(__name__)
 @router.post(
     "/register", response_model=schemas.User, status_code=status.HTTP_201_CREATED
 )
-@limiter.limit(RATE_LIMITS["auth"])
+@limiter.limit(RATE_LIMITS["register"])  # ✅ Use stricter rate limit for registration
 async def register_user(
     request: Request,
     user_in: schemas.UserCreate,
     db: AsyncSession = Depends(database.get_db),
 ):
-    # (Giữ nguyên logic)
+    """
+    User registration endpoint.
+
+    ✅ SECURITY FIX (Phase 2): User Enumeration Prevention (CVSS 5.3 MEDIUM)
+    - Returns generic error message to prevent username/email enumeration
+    - Logs specific details internally for admin monitoring
+    - Prevents attackers from discovering valid usernames/emails
+    - Stricter rate limit (3/minute vs 5/minute for other auth endpoints)
+
+    VULNERABILITY: User Enumeration
+    - Old behavior: "Username 'john' already registered" → Attacker knows username exists
+    - Attack: Enumerate all usernames/emails in database
+    - Fix: Generic message "Username or email already registered" + stricter rate limit
+    """
     db_user_by_username = await services.user_service.get_user_by_username(
         db, username=user_in.username
     )
-    if db_user_by_username:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Username '{user_in.username}' already registered",
-        )
     db_user_by_email = await services.user_service.get_user_by_email(
         db, email=user_in.email
     )
-    if db_user_by_email:
+
+    # ✅ FIX: Check both conditions together and return generic message
+    if db_user_by_username or db_user_by_email:
+        # Log specific details for admin monitoring (internal only)
+        log.warning(
+            "🔒 SECURITY: Registration failed - duplicate credential",
+            username=user_in.username if db_user_by_username else None,
+            email=user_in.email if db_user_by_email else None,
+            client_ip=request.client.host if request.client else "unknown"
+        )
+
+        # Return generic message to client (prevents enumeration)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Email '{user_in.email}' already registered",
+            detail="Username or email already registered",  # ✅ Generic message
         )
+
     created_user = await services.user_service.create_user(db=db, user_in=user_in)
 
     # ✅ FIX: Automatically add Casbin grouping policy to map user to their role
