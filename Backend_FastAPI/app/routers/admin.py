@@ -1139,6 +1139,48 @@ async def export_all_users(
     return users
 
 
+# ✅ FIX: Move /users/export-csv BEFORE /users/{user_id} to prevent route conflict
+# FastAPI matches routes in order, so specific paths must come before path parameters
+@router.get(
+    "/users/export-csv",
+    tags=["Admin - User Management"],
+    summary="Stream all users matching filters to a CSV file",
+)
+async def stream_export_users_csv(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Stream export users ra file CSV.
+    Endpoint này sử dụng StreamingResponse để xử lý lượng dữ liệu lớn
+    mà không tốn bộ nhớ server.
+
+    ✅ SECURITY FIX: Uses CSV sanitization to prevent CSV injection attacks
+    ✅ PERFORMANCE FIX: Uses full-text search to prevent Search DoS attacks
+    """
+    # Lấy các query params (filters) từ request
+    query_params = dict(request.query_params)
+    log.info("CSV export stream requested by admin", admin_id=current_admin.id, filters=query_params)
+
+    # 1. Gọi service (là một async generator)
+    csv_streamer = services.user_service.stream_users_csv(db, query_params)
+
+    # 2. Đặt tên file và headers
+    filename = f"users_export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
+    headers = {
+        "Content-Disposition": f"attachment; filename=\"{filename}\"",
+        "Content-Type": "text/csv; charset=utf-8",
+    }
+
+    # 3. Trả về StreamingResponse
+    return StreamingResponse(
+        csv_streamer,
+        headers=headers,
+        media_type="text/csv"
+    )
+
+
 @router.get(
     "/users/{user_id}", response_model=schemas.User, tags=["Admin - User Management"]
 )
@@ -1409,42 +1451,6 @@ async def bulk_user_action(
     )
 
     return {"detail": message}
-
-@router.get(
-    "/users/export-csv",
-    tags=["Admin - User Management"],
-    summary="Stream all users matching filters to a CSV file",
-)
-async def stream_export_users_csv(
-    request: Request,
-    db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
-):
-    """
-    (Admin only) Stream export users ra file CSV.
-    Endpoint này sử dụng StreamingResponse để xử lý lượng dữ liệu lớn
-    mà không tốn bộ nhớ server.
-    """
-    # Lấy các query params (filters) từ request
-    query_params = dict(request.query_params)
-    log.info("CSV export stream requested by admin", admin_id=current_admin.id, filters=query_params)
-    
-    # 1. Gọi service (là một async generator)
-    csv_streamer = services.user_service.stream_users_csv(db, query_params)
-    
-    # 2. Đặt tên file và headers
-    filename = f"users_export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
-    headers = {
-        "Content-Disposition": f"attachment; filename=\"{filename}\"",
-        "Content-Type": "text/csv; charset=utf-8",
-    }
-    
-    # 3. Trả về StreamingResponse
-    return StreamingResponse(
-        csv_streamer,
-        headers=headers,
-        media_type="text/csv"
-    )
 
 
 # ← PHASE 3: Detection endpoint - check DB/Casbin sync status
