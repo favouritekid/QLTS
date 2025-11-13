@@ -194,6 +194,37 @@ async def lifespan(app: FastAPI):
             await enforcer.add_policy("role:manager", "/api/notifications/mark-all-as-read", "POST")
             await enforcer.add_policy("role:manager", "/api/notifications/{notification_id}", "DELETE")
 
+            # ✅ SECURITY FIX: Organization policies - all authenticated users can read, admin can write
+            # READ operations - accessible by all authenticated users
+            await enforcer.add_policy("role:user", "/api/organization-units", "GET")
+            await enforcer.add_policy("role:user", "/api/organization-units/tree-with-aggregation", "GET")
+            await enforcer.add_policy("role:user", "/api/programs", "GET")
+            await enforcer.add_policy("role:user", "/api/programs/{program_id}/offerings", "GET")
+            await enforcer.add_policy("role:user", "/api/offerings/{offering_id}/academic-info", "GET")
+            await enforcer.add_policy("role:user", "/api/offerings/{offering_id}/academic-info/{year}", "GET")
+            await enforcer.add_policy("role:user", "/api/offerings/{offering_id}/academic-info/current", "GET")
+
+            await enforcer.add_policy("role:officer", "/api/organization-units", "GET")
+            await enforcer.add_policy("role:officer", "/api/organization-units/tree-with-aggregation", "GET")
+            await enforcer.add_policy("role:officer", "/api/programs", "GET")
+            await enforcer.add_policy("role:officer", "/api/programs/{program_id}/offerings", "GET")
+            await enforcer.add_policy("role:officer", "/api/offerings/{offering_id}/academic-info", "GET")
+            await enforcer.add_policy("role:officer", "/api/offerings/{offering_id}/academic-info/{year}", "GET")
+            await enforcer.add_policy("role:officer", "/api/offerings/{offering_id}/academic-info/current", "GET")
+
+            await enforcer.add_policy("role:manager", "/api/organization-units", "GET")
+            await enforcer.add_policy("role:manager", "/api/organization-units/tree-with-aggregation", "GET")
+            await enforcer.add_policy("role:manager", "/api/programs", "GET")
+            await enforcer.add_policy("role:manager", "/api/programs/{program_id}/offerings", "GET")
+            await enforcer.add_policy("role:manager", "/api/offerings/{offering_id}/academic-info", "GET")
+            await enforcer.add_policy("role:manager", "/api/offerings/{offering_id}/academic-info/{year}", "GET")
+            await enforcer.add_policy("role:manager", "/api/offerings/{offering_id}/academic-info/current", "GET")
+
+            # WRITE operations - admin only (CREATE/UPDATE/DELETE academic info)
+            await enforcer.add_policy("role:admin", "/api/offerings/{offering_id}/academic-info", "POST")
+            await enforcer.add_policy("role:admin", "/api/academic-info/{academic_info_id}", "PATCH")
+            await enforcer.add_policy("role:admin", "/api/academic-info/{academic_info_id}", "DELETE")
+
             log.warning("⚠️ Fallback default policies added. Please run migrations!")
 
     except Exception as e:
