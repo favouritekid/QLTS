@@ -18,7 +18,7 @@ Use Cases:
 """
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Index
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Index, text
 from sqlalchemy.orm import relationship
 
 from .base import Base
@@ -48,6 +48,8 @@ class UserUnitAssignment(Base):
     id = Column(Integer, primary_key=True, index=True)
 
     # Foreign Keys
+    # Note: No explicit names needed - use_alter=True on user.current_assignment_id
+    # breaks the circular dependency automatically
     user_id = Column(
         Integer,
         ForeignKey("user.id", ondelete="CASCADE"),
@@ -78,7 +80,7 @@ class UserUnitAssignment(Base):
         DateTime(timezone=True),
         nullable=False,
         default=datetime.utcnow,
-        server_default="CURRENT_TIMESTAMP"
+        server_default=text("CURRENT_TIMESTAMP")  # ✅ FIXED: Use text() wrapper
     )
     end_date = Column(
         DateTime(timezone=True),
@@ -90,7 +92,7 @@ class UserUnitAssignment(Base):
         Boolean,
         nullable=False,
         default=True,
-        server_default="true",
+        server_default=text("true"),  # ✅ FIXED: Use text() wrapper
         index=True  # Critical for fast "current assignment" queries
     )
 
@@ -99,14 +101,14 @@ class UserUnitAssignment(Base):
         DateTime(timezone=True),
         nullable=False,
         default=datetime.utcnow,
-        server_default="CURRENT_TIMESTAMP"
+        server_default=text("CURRENT_TIMESTAMP")  # ✅ FIXED: Use text() wrapper
     )
     updated_at = Column(
         DateTime(timezone=True),
         nullable=False,
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
-        server_default="CURRENT_TIMESTAMP"
+        server_default=text("CURRENT_TIMESTAMP")  # ✅ FIXED: Use text() wrapper
     )
 
     # Relationships

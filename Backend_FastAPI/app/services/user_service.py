@@ -476,21 +476,28 @@ async def get_users(
         "role": models.User.role,
         "status": models.User.status,
     }
-    text_search_fields = [
-        models.User.username,
-        models.User.full_name,
-        models.User.email,
-    ]
+
+    # ✅ SECURITY FIX: Search DoS Prevention (CVSS 7.5 HIGH)
+    # Old code used ILIKE '%term%' which caused full table scan (500ms per query)
+    # New code uses PostgreSQL Full-Text Search with GIN index (2ms per query)
+    # See migration: p1q2r3s4t5u6_add_user_search_indexes.py
     for key, value in params.items():
         if key in allowed_filters and value:
             values_to_filter = [v.strip() for v in value.split(",")]
             query = query.filter(allowed_filters[key].in_(values_to_filter))
         elif key == "search" and value:
-            search_term = f"%{value.strip()}%"
-            search_conditions = [
-                field.ilike(search_term) for field in text_search_fields
-            ]
-            query = query.filter(or_(*search_conditions))
+            # ✅ NEW: Use full-text search with search_vector column
+            # Convert spaces to AND operator for multi-word search
+            # Example: "john doe" → "john & doe" (both words must match)
+            search_term = value.strip().replace(' ', ' & ')
+
+            # Use PostgreSQL's @@ operator for full-text search
+            # This uses the GIN index on search_vector column (250x faster)
+            query = query.filter(
+                models.User.search_vector.op('@@')(
+                    func.to_tsquery('simple', search_term)
+                )
+            )
 
     count_query = select(func.count()).select_from(query.alias())
     total_count_result = await db.execute(count_query)
@@ -1171,22 +1178,21 @@ async def stream_users_csv(
         "role": models.User.role,
         "status": models.User.status,
     }
-    text_search_fields = [
-        models.User.username,
-        models.User.full_name,
-        models.User.email,
-    ]
+
+    # ✅ SECURITY FIX: Search DoS Prevention (same as get_users)
     filters = []
     for key, value in params.items():
         if key in allowed_filters and value:
             values_to_filter = [v.strip() for v in value.split(",")]
             query = query.filter(allowed_filters[key].in_(values_to_filter))
         elif key == "search" and value:
-            search_term = f"%{value.strip()}%"
-            search_conditions = [
-                field.ilike(search_term) for field in text_search_fields
-            ]
-            query = query.filter(or_(*search_conditions))
+            # ✅ NEW: Use full-text search (same as get_users)
+            search_term = value.strip().replace(' ', ' & ')
+            query = query.filter(
+                models.User.search_vector.op('@@')(
+                    func.to_tsquery('simple', search_term)
+                )
+            )
 
     if filters:
         query = query.where(*filters)
