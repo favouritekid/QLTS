@@ -307,11 +307,9 @@ export function useAuth() {
         formData.append("avatar", data.avatar);
       }
 
-      const response = await api.put<User>(API_ENDPOINTS.PROFILE.UPDATE, formData, {
-        headers: {
-          "Content-Type": "multipart/form-data",
-        },
-      });
+      // ✅ OPTIONAL ENHANCEMENT (Deep Dive Audit): Removed manual header setting
+      // API client now auto-detects FormData and sets multipart/form-data headers
+      const response = await api.put<User>(API_ENDPOINTS.PROFILE.UPDATE, formData);
       return response.data;
     },
     onSuccess: (updatedUser) => {

@@ -92,9 +92,9 @@ export function useAdminCreateUser() {
       if (data.status) formData.append("status", data.status);
       if (data.avatar) formData.append("avatar", data.avatar);
 
-      const response = await api.post<User>(API_ENDPOINTS.ADMIN.USERS.CREATE, formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+      // ✅ OPTIONAL ENHANCEMENT (Deep Dive Audit): Removed manual header setting
+      // API client now auto-detects FormData and sets multipart/form-data headers
+      const response = await api.post<User>(API_ENDPOINTS.ADMIN.USERS.CREATE, formData);
       return response.data;
     },
     onSuccess: () => {
@@ -132,12 +132,11 @@ export function useAdminUpdateUser(userId: number) {
       if (data.unit_id !== undefined)
         formData.append("unit_id", data.unit_id !== null ? data.unit_id.toString() : "0");
 
+      // ✅ OPTIONAL ENHANCEMENT (Deep Dive Audit): Removed manual header setting
+      // API client now auto-detects FormData and sets multipart/form-data headers
       const response = await api.put<User>(
         API_ENDPOINTS.ADMIN.USERS.UPDATE(userId),
-        formData,
-        {
-          headers: { "Content-Type": "multipart/form-data" },
-        }
+        formData
       );
       return response.data;
     },

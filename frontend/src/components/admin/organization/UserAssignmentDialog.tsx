@@ -155,10 +155,10 @@ export function UserAssignmentDialog({
       toAssign.forEach((userId) => {
         const formData = new FormData();
         formData.append("unit_id", unit.id.toString());
+        // ✅ OPTIONAL ENHANCEMENT (Deep Dive Audit): Removed manual header setting
+        // API client now auto-detects FormData and sets multipart/form-data headers
         updatePromises.push(
-          api.put(API_ENDPOINTS.ADMIN.USERS.UPDATE(userId), formData, {
-            headers: { "Content-Type": "multipart/form-data" },
-          })
+          api.put(API_ENDPOINTS.ADMIN.USERS.UPDATE(userId), formData)
         );
       });
 
@@ -166,10 +166,10 @@ export function UserAssignmentDialog({
       toUnassign.forEach((userId) => {
         const formData = new FormData();
         formData.append("unit_id", "0"); // 0 means unassign
+        // ✅ OPTIONAL ENHANCEMENT (Deep Dive Audit): Removed manual header setting
+        // API client now auto-detects FormData and sets multipart/form-data headers
         updatePromises.push(
-          api.put(API_ENDPOINTS.ADMIN.USERS.UPDATE(userId), formData, {
-            headers: { "Content-Type": "multipart/form-data" },
-          })
+          api.put(API_ENDPOINTS.ADMIN.USERS.UPDATE(userId), formData)
         );
       });
 

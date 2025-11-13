@@ -68,6 +68,19 @@ api.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
     // No need to manually add Authorization header
     // Browser automatically sends access_token cookie with all requests
+
+    // ✅ OPTIONAL ENHANCEMENT (Deep Dive Audit): Auto-detect FormData
+    // Automatically sets correct Content-Type for multipart/form-data uploads
+    // Eliminates repetitive manual header setting in mutation functions
+    if (config.data instanceof FormData) {
+      // Delete Content-Type to let browser set it automatically with boundary
+      // Example: multipart/form-data; boundary=----WebKitFormBoundary...
+      delete config.headers["Content-Type"];
+
+      console.log("[API Client] 📤 FormData detected - Auto-setting multipart headers");
+    }
+    // else: Keep default "application/json" for regular requests
+
     return config;
   },
   (error: AxiosError) => Promise.reject(error)
