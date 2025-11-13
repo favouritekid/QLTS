@@ -59,9 +59,42 @@ async def save_avatar(file: UploadFile, old_avatar_url: str = None) -> str:
             detail=f"Unsupported file format. Allowed: {', '.join(sorted(list(ALLOWED_EXTENSIONS)))}.",
         )
 
-    # 2. Đọc file vào bộ nhớ (an toàn hơn file.size, tránh TOCTOU)
+    # 2. Đọc file theo chunks để tránh DoS (Security Fix: CVSS 7.5 HIGH)
+    # OLD CODE: await file.read() - Đọc toàn bộ vào RAM trước khi check size
+    # NEW CODE: Đọc từng chunk 8KB, check size mỗi lần để reject sớm
     try:
-        content = await file.read()
+        content_chunks = []
+        total_size = 0
+        CHUNK_SIZE = 8192  # 8KB chunks
+
+        while True:
+            chunk = await file.read(CHUNK_SIZE)
+            if not chunk:
+                break
+
+            total_size += len(chunk)
+
+            # ✅ SECURITY FIX: Check size NGAY sau mỗi chunk
+            # Attacker upload 2GB → Bị reject sau 5MB → Không crash server
+            if total_size > MAX_CONTENT_LENGTH:
+                log.warning(
+                    "Upload rejected: File size exceeded limit (detected during chunked read)",
+                    filename=file.filename,
+                    size=total_size,
+                    limit=MAX_CONTENT_LENGTH,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                    detail=f"File size cannot exceed {settings.MAX_AVATAR_SIZE_MB}MB.",
+                )
+
+            content_chunks.append(chunk)
+
+        # Gộp tất cả chunks lại
+        content = b''.join(content_chunks)
+
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions (413, etc.)
     except Exception as e:
         log.error(
             "Failed to read uploaded file content", filename=file.filename, error=str(e)
@@ -71,7 +104,7 @@ async def save_avatar(file: UploadFile, old_avatar_url: str = None) -> str:
             detail="Could not read file content.",
         )
 
-    # 3. Kiểm tra kích thước thật của nội dung đã đọc
+    # 3. Kiểm tra kích thước thật của nội dung đã đọc (double-check)
     if len(content) == 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file uploaded."

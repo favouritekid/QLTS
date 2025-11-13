@@ -23,6 +23,112 @@ from .geoip_service import get_geoip_service  # ✅ Import GeoIP service
 log = structlog.get_logger(__name__)
 
 
+async def _revoke_previous_sessions_on_device(
+    db: AsyncSession,
+    user_id: int,
+    device_type: str,
+    browser: str,
+    os: str
+):
+    """
+    ✅ SECURITY FIX: Auto-revoke old sessions on same device to prevent session leak.
+
+    VULNERABILITY: Session Leak (CVSS 6.5 MEDIUM)
+    - Old behavior: Create new session every login → hundreds of zombie sessions
+    - Attack: Memory exhaustion, audit log pollution, anomaly detection bypass
+    - Fix: Auto-revoke previous sessions on same device before creating new one
+
+    This prevents:
+    - Session table bloat (38+ sessions per user)
+    - Redis memory leak (session: keys never cleaned)
+    - Anomaly detection false positives (legitimate re-login looks suspicious)
+    - Audit trail pollution (can't distinguish real vs. ghost sessions)
+
+    Args:
+        db: Database session (must be in transaction)
+        user_id: User ID
+        device_type: Device type (mobile, desktop, tablet)
+        browser: Browser name and version
+        os: Operating system name and version
+
+    Returns:
+        None (modifies database state)
+    """
+    try:
+        # Find all active sessions on same device
+        stmt = select(models.UserSession).where(
+            and_(
+                models.UserSession.user_id == user_id,
+                models.UserSession.device_type == device_type,
+                models.UserSession.browser == browser,
+                models.UserSession.os == os,
+                models.UserSession.revoked_at.is_(None)
+            )
+        )
+        result = await db.execute(stmt)
+        old_sessions = result.scalars().all()
+
+        if not old_sessions:
+            log.debug(
+                "No previous sessions on this device to revoke",
+                user_id=user_id,
+                device_type=device_type
+            )
+            return
+
+        # Revoke all old sessions
+        now = datetime.now(timezone.utc)
+        revoked_count = 0
+
+        for session in old_sessions:
+            # Mark as revoked in DB
+            session.revoked_at = now
+            db.add(session)
+
+            # Clean up Redis keys
+            try:
+                await safe_redis_delete(f"session:{session.refresh_jti}")
+
+                # Add to blacklist so old tokens can't be used
+                ttl = int((session.expires_at - now).total_seconds())
+                if ttl > 0:
+                    await safe_redis_set(
+                        f"blacklist:{session.refresh_jti}",
+                        "auto_revoked_on_relogin",
+                        ex=ttl
+                    )
+            except Exception as redis_error:
+                log.warning(
+                    "Failed to clean Redis for old session (continuing anyway)",
+                    session_id=session.id,
+                    error=str(redis_error)
+                )
+
+            revoked_count += 1
+
+        # Flush to DB (will be committed by parent transaction)
+        await db.flush()
+
+        log.info(
+            "Auto-revoked previous sessions on same device",
+            user_id=user_id,
+            device_type=device_type,
+            browser=browser[:20],  # Truncate for log
+            os=os[:20],
+            revoked_count=revoked_count
+        )
+
+    except Exception as e:
+        # Log error but don't fail the login process
+        # Session leak is better than login failure
+        log.error(
+            "Failed to auto-revoke old sessions (non-critical, continuing)",
+            user_id=user_id,
+            error=str(e),
+            exc_info=True
+        )
+
+
 async def create_session(
     db: AsyncSession,
     user_id: int,
@@ -100,6 +206,16 @@ async def create_session(
                 )
         except Exception as e:
             log.warning("GeoIP lookup failed", ip_address=ip_address, error=str(e))
+
+    # ✅ SECURITY FIX: Auto-revoke old sessions on same device before creating new one
+    # This prevents session leak (38+ zombie sessions per user)
+    await _revoke_previous_sessions_on_device(
+        db=db,
+        user_id=user_id,
+        device_type=device_type,
+        browser=browser,
+        os=os
+    )
 
     # Create session record
     session = models.UserSession(
