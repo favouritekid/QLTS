@@ -9,7 +9,7 @@ Handles:
 - OfferingAcademicInfo (Level 3) CRUD
 - Tree aggregation with nested statistics
 """
-import asyncio
+# ✅ REMOVED (Priority 2): import asyncio (no longer needed - using redis_distributed_lock)
 import json
 from datetime import datetime
 from decimal import Decimal
@@ -22,7 +22,7 @@ from sqlalchemy.orm import selectinload
 
 from .. import models, schemas
 from ..config import settings
-from ..database import safe_redis_delete, safe_redis_get, safe_redis_set
+from ..database import safe_redis_delete, safe_redis_get, safe_redis_set, redis_distributed_lock
 from ..socket_manager import emit_to_all
 from ..utils.exceptions import BadRequest, DuplicateResourceError, ResourceNotFoundError
 
@@ -58,7 +58,9 @@ class DecimalEncoder(json.JSONEncoder):
 # Cache configuration
 ORG_UNITS_CACHE_KEY = "org:all_units_tree"
 CACHE_TTL = settings.CONFIG_CACHE_TTL_SECONDS
-_org_cache_lock = asyncio.Lock()
+# ✅ REMOVED (Priority 2 - Deep Dive Audit): asyncio.Lock() replaced with redis_distributed_lock
+# OLD: _org_cache_lock = asyncio.Lock()  # Only works within ONE process!
+# NEW: Using redis_distributed_lock() for multi-worker support
 
 
 # =============================================================================
@@ -164,10 +166,11 @@ async def get_all_organization_units(db: AsyncSession) -> List[dict]:
     except Exception as e:
         log.error("Failed to get from cache", error=str(e))
 
-    log.debug("Cache miss, acquiring lock...")
+    log.debug("Cache miss, acquiring distributed lock...")
 
-    # Cache miss - acquire lock and query database
-    async with _org_cache_lock:
+    # ✅ PRIORITY 2 FIX (Deep Dive Audit): Use Redis distributed lock
+    # Replaces asyncio.Lock() to support multi-worker deployments (uvicorn --workers, K8s, Docker)
+    async with redis_distributed_lock("org_cache_rebuild", timeout=30):
         # Double-check cache after acquiring lock
         try:
             cached_data = await safe_redis_get(ORG_UNITS_CACHE_KEY)

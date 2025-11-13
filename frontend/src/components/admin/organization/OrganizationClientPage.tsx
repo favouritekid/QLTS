@@ -28,8 +28,15 @@ function findUnitInTree(units: OrganizationUnit[], id: number): OrganizationUnit
 /**
  * Main client component for organization management
  * Implements column-based layout with Units (left) → Details (right)
+ *
+ * ⚡ PERFORMANCE: Accepts initialData from Server Component
+ * to avoid duplicate fetch and improve FCP
  */
-export function OrganizationClientPage() {
+interface OrganizationClientPageProps {
+  initialData?: OrganizationUnit[] | null;
+}
+
+export function OrganizationClientPage({ initialData }: OrganizationClientPageProps) {
   // =====================================================================
   // STATE
   // =====================================================================
@@ -38,7 +45,10 @@ export function OrganizationClientPage() {
   // =====================================================================
   // QUERIES
   // =====================================================================
-  const { data: units = [], isLoading: unitsLoading, error: unitsError } = useOrganizationUnits();
+  // ⚡ PERFORMANCE: Use initialData from Server Component if available
+  const { data: units = [], isLoading: unitsLoading, error: unitsError } = useOrganizationUnits(
+    initialData ?? undefined
+  );
 
   // =====================================================================
   // COMPUTED DATA

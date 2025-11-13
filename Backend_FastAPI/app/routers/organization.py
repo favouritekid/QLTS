@@ -10,6 +10,9 @@ from ..services import organization_service
 
 router = APIRouter(tags=["Organization"])
 
+# ✅ SECURITY FIX: Use Casbin RBAC enforcement for consistent authorization
+PermissionDep = Depends(deps.check_permission)
+
 
 @router.get("/organization-unit-types", response_model=List[str])
 async def get_organization_unit_types():
@@ -20,7 +23,7 @@ async def get_organization_unit_types():
 @router.get("/organization-units", response_model=List[schemas.OrganizationUnit])
 async def get_all_organization_units(
     db: AsyncSession = Depends(database.get_db),
-    current_user: schemas.User = deps.CurrentUser,
+    current_user: schemas.User = PermissionDep,  # ✅ SECURITY FIX: Casbin RBAC enforcement
 ):
     """Lấy danh sách tất cả các đơn vị với cấu trúc 3-tier."""
     return await organization_service.get_all_organization_units(db)
@@ -31,7 +34,7 @@ async def get_organization_tree_with_aggregation(
     academic_year: Optional[int] = None,
     include_inactive: bool = False,
     db: AsyncSession = Depends(database.get_db),
-    current_user: schemas.User = deps.CurrentUser,
+    current_user: schemas.User = PermissionDep  # ✅ SECURITY FIX: Casbin RBAC enforcement,
 ):
     """
     Lấy cây tổ chức với thông tin chương trình đào tạo và dữ liệu tổng hợp (3-tier).
@@ -55,7 +58,7 @@ async def get_filtered_programs(
     unitId: int,
     search: Optional[str] = None,
     db: AsyncSession = Depends(database.get_db),
-    current_user: schemas.User = deps.CurrentUser,
+    current_user: schemas.User = PermissionDep  # ✅ SECURITY FIX: Casbin RBAC enforcement,
 ):
     """
     Lấy danh sách chương trình đào tạo (MajorProgram - Level 1), lọc theo unitId và tìm kiếm.
@@ -79,7 +82,7 @@ async def get_filtered_programs(
 async def get_program_offerings(
     program_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_user: schemas.User = deps.CurrentUser,
+    current_user: schemas.User = PermissionDep  # ✅ SECURITY FIX: Casbin RBAC enforcement,
 ):
     """
     Lấy danh sách các loại hình đào tạo (offerings) của một chương trình.
@@ -101,7 +104,7 @@ async def get_offering_academic_history(
     offering_id: int,
     published_only: bool = False,
     db: AsyncSession = Depends(database.get_db),
-    current_user: schemas.User = deps.CurrentUser,
+    current_user: schemas.User = PermissionDep  # ✅ SECURITY FIX: Casbin RBAC enforcement,
 ):
     """
     Lấy lịch sử thông tin học thuật (academic info) của một loại hình đào tạo theo từng năm.
@@ -121,7 +124,7 @@ async def get_offering_academic_info_by_year(
     offering_id: int,
     year: int,
     db: AsyncSession = Depends(database.get_db),
-    current_user: schemas.User = deps.CurrentUser,
+    current_user: schemas.User = PermissionDep  # ✅ SECURITY FIX: Casbin RBAC enforcement,
 ):
     """
     Lấy thông tin học thuật của một loại hình đào tạo cho năm học cụ thể.
@@ -143,7 +146,7 @@ async def get_offering_academic_info_by_year(
 async def get_offering_current_academic_info(
     offering_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_user: schemas.User = deps.CurrentUser,
+    current_user: schemas.User = PermissionDep  # ✅ SECURITY FIX: Casbin RBAC enforcement,
 ):
     """
     Lấy thông tin học thuật hiện tại (năm hiện hành, đã xuất bản) của một loại hình đào tạo.
@@ -165,7 +168,7 @@ async def create_offering_academic_info(
     offering_id: int,
     academic_info_in: schemas.OfferingAcademicInfoCreate,
     db: AsyncSession = Depends(database.get_db),
-    current_user: schemas.User = deps.CurrentUser,
+    current_user: schemas.User = PermissionDep  # ✅ SECURITY FIX: Casbin RBAC enforcement,
 ):
     """
     Tạo thông tin học thuật mới cho một loại hình đào tạo và năm học.
@@ -190,7 +193,7 @@ async def update_offering_academic_info(
     academic_info_id: int,
     academic_info_in: schemas.OfferingAcademicInfoUpdate,
     db: AsyncSession = Depends(database.get_db),
-    current_user: schemas.User = deps.CurrentUser,
+    current_user: schemas.User = PermissionDep  # ✅ SECURITY FIX: Casbin RBAC enforcement,
 ):
     """
     Cập nhật thông tin học thuật hiện có.
@@ -210,7 +213,7 @@ async def update_offering_academic_info(
 async def delete_offering_academic_info(
     academic_info_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_user: schemas.User = deps.CurrentUser,
+    current_user: schemas.User = PermissionDep  # ✅ SECURITY FIX: Casbin RBAC enforcement,
 ):
     """
     Xóa thông tin học thuật (hard delete).

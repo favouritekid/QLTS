@@ -194,6 +194,37 @@ async def lifespan(app: FastAPI):
             await enforcer.add_policy("role:manager", "/api/notifications/mark-all-as-read", "POST")
             await enforcer.add_policy("role:manager", "/api/notifications/{notification_id}", "DELETE")
 
+            # ✅ SECURITY FIX: Organization policies - all authenticated users can read, admin can write
+            # READ operations - accessible by all authenticated users
+            await enforcer.add_policy("role:user", "/api/organization-units", "GET")
+            await enforcer.add_policy("role:user", "/api/organization-units/tree-with-aggregation", "GET")
+            await enforcer.add_policy("role:user", "/api/programs", "GET")
+            await enforcer.add_policy("role:user", "/api/programs/{program_id}/offerings", "GET")
+            await enforcer.add_policy("role:user", "/api/offerings/{offering_id}/academic-info", "GET")
+            await enforcer.add_policy("role:user", "/api/offerings/{offering_id}/academic-info/{year}", "GET")
+            await enforcer.add_policy("role:user", "/api/offerings/{offering_id}/academic-info/current", "GET")
+
+            await enforcer.add_policy("role:officer", "/api/organization-units", "GET")
+            await enforcer.add_policy("role:officer", "/api/organization-units/tree-with-aggregation", "GET")
+            await enforcer.add_policy("role:officer", "/api/programs", "GET")
+            await enforcer.add_policy("role:officer", "/api/programs/{program_id}/offerings", "GET")
+            await enforcer.add_policy("role:officer", "/api/offerings/{offering_id}/academic-info", "GET")
+            await enforcer.add_policy("role:officer", "/api/offerings/{offering_id}/academic-info/{year}", "GET")
+            await enforcer.add_policy("role:officer", "/api/offerings/{offering_id}/academic-info/current", "GET")
+
+            await enforcer.add_policy("role:manager", "/api/organization-units", "GET")
+            await enforcer.add_policy("role:manager", "/api/organization-units/tree-with-aggregation", "GET")
+            await enforcer.add_policy("role:manager", "/api/programs", "GET")
+            await enforcer.add_policy("role:manager", "/api/programs/{program_id}/offerings", "GET")
+            await enforcer.add_policy("role:manager", "/api/offerings/{offering_id}/academic-info", "GET")
+            await enforcer.add_policy("role:manager", "/api/offerings/{offering_id}/academic-info/{year}", "GET")
+            await enforcer.add_policy("role:manager", "/api/offerings/{offering_id}/academic-info/current", "GET")
+
+            # WRITE operations - admin only (CREATE/UPDATE/DELETE academic info)
+            await enforcer.add_policy("role:admin", "/api/offerings/{offering_id}/academic-info", "POST")
+            await enforcer.add_policy("role:admin", "/api/academic-info/{academic_info_id}", "PATCH")
+            await enforcer.add_policy("role:admin", "/api/academic-info/{academic_info_id}", "DELETE")
+
             log.warning("⚠️ Fallback default policies added. Please run migrations!")
 
     except Exception as e:
@@ -450,14 +481,62 @@ async def request_id_tracking_middleware(request: Request, call_next):
     return response
 
 
-# (Giữ nguyên CORS Middleware)
+# ===============================================================
+# === CORS MIDDLEWARE (✅ SECURITY FIX: Prevent wildcard fallback)
+# ===============================================================
+
+# Validate CORS_ORIGINS at startup - fail-fast if misconfigured
+_cors_origins = (
+    [origin.strip() for origin in settings.CORS_ORIGINS.split(",")]
+    if settings.CORS_ORIGINS
+    else []
+)
+
+# 🔒 SECURITY: Fail-fast in production if wildcard or empty
+if settings.APP_ENV == "production":
+    if "*" in _cors_origins or not _cors_origins:
+        log.critical(
+            "🚨 CRITICAL SECURITY ERROR: CORS wildcard or empty origins not allowed in production!",
+            cors_origins=settings.CORS_ORIGINS or "NOT SET",
+            app_env=settings.APP_ENV,
+        )
+        raise RuntimeError(
+            "CRITICAL SECURITY ERROR: CORS_ORIGINS environment variable must be set in production. "
+            "Wildcard (*) origins are not allowed with credentials. "
+            f"Current CORS_ORIGINS: {settings.CORS_ORIGINS or 'NOT SET'}. "
+            "Set CORS_ORIGINS in your .env file (e.g., CORS_ORIGINS=https://app.example.com)"
+        )
+
+    # Additional check: Ensure all origins use HTTPS in production
+    for origin in _cors_origins:
+        if not origin.startswith("https://"):
+            log.critical(
+                "🚨 SECURITY ERROR: All CORS origins must use HTTPS in production",
+                invalid_origin=origin,
+            )
+            raise RuntimeError(
+                f"SECURITY ERROR: All CORS origins must use HTTPS in production. "
+                f"Invalid origin: {origin}"
+            )
+
+    log.info("✅ CORS configuration validated for production", origins=_cors_origins)
+
+# In development, default to localhost if not set
+if settings.APP_ENV == "development" and not _cors_origins:
+    _cors_origins = ["http://localhost:5173", "http://localhost:3000"]
+    log.warning(
+        "⚠️ CORS_ORIGINS not set in development. Using default localhost origins",
+        default_origins=_cors_origins,
+    )
+
+# In test environment, allow test origins
+if settings.APP_ENV == "test" and not _cors_origins:
+    _cors_origins = ["http://testserver", "http://localhost"]
+    log.info("Test environment: Using test CORS origins", origins=_cors_origins)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=(
-        [origin.strip() for origin in settings.CORS_ORIGINS.split(",")]
-        if settings.CORS_ORIGINS
-        else ["*"]
-    ),
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

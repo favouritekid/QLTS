@@ -14,7 +14,18 @@ class SocketService {
   private reconnectDelay = 1000;
   private maxReconnectDelay = 30000;
   private shutdownReconnectTimer: NodeJS.Timeout | null = null;
-  private REVALIDATE_INTERVAL_MS = 5 * 60 * 1000; // ✅ FIX-3: 5 minutes
+
+  // ✅ OPTIONAL ENHANCEMENT (Deep Dive Audit): Optimized revalidation interval
+  // Changed from 5 minutes to 15 minutes for better performance
+  // Rationale:
+  // - Priority 3 fix handles reconnect scenarios (immediate invalidation)
+  // - Server-side enforcement is robust (force_logout_all on password change)
+  // - 5 min too frequent → unnecessary socket traffic
+  // - 15 min is good balance between security and performance
+  private REVALIDATE_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+
+  // ✅ PRIORITY 3 (Deep Dive Audit): Reconnect callback for cache invalidation
+  private onReconnectCallback: (() => void) | null = null;
 
   connect() {
     if (this.socket && this.socket.connected) {
@@ -57,6 +68,13 @@ class SocketService {
       }
       this.startHeartbeat();
       this.startRevalidation(); // ✅ FIX-3: Start periodic auth revalidation
+
+      // ✅ PRIORITY 3 FIX (Deep Dive Audit): Invalidate cache on reconnect
+      // Solves: Stale data issue when socket disconnects and data changes on server
+      if (this.onReconnectCallback) {
+        console.log("[SocketService] 🔄 Triggering cache invalidation after reconnect...");
+        this.onReconnectCallback();
+      }
     });
 
     this.socket.on("disconnect", (reason) => {
@@ -200,6 +218,35 @@ class SocketService {
 
   getSocket() {
     return this.socket;
+  }
+
+  /**
+   * ✅ PRIORITY 3 (Deep Dive Audit): Register callback for cache invalidation
+   *
+   * This method allows React Query (or other cache systems) to register a callback
+   * that will be invoked whenever the socket reconnects. This ensures fresh data
+   * is fetched after connection loss.
+   *
+   * Problem Solved:
+   * - When socket disconnects for extended period, server data may change
+   * - With staleTime: Infinity, React Query never auto-refetches
+   * - User sees stale data until manual refresh (F5)
+   *
+   * Solution:
+   * - On reconnect, trigger invalidation of critical queries
+   * - React Query automatically refetches invalidated data
+   * - UI stays fresh without user intervention
+   *
+   * Usage (in providers.tsx):
+   * ```tsx
+   * socketService.onReconnect(() => {
+   *   queryClient.invalidateQueries({ queryKey: ['users'] });
+   *   queryClient.invalidateQueries({ queryKey: ['leads'] });
+   * });
+   * ```
+   */
+  onReconnect(callback: () => void) {
+    this.onReconnectCallback = callback;
   }
 }
 

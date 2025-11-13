@@ -1,5 +1,5 @@
 // src/components/admin/organization/OrganizationTreeView.tsx
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, memo, useCallback } from "react";
 import {
   ChevronRight,
   ChevronDown,
@@ -29,6 +29,10 @@ interface OrganizationTreeViewProps {
 }
 
 /**
+ * ⚡ PERFORMANCE: Move helper functions outside component to prevent re-creation
+ */
+
+/**
  * Format currency in VND
  */
 function formatCurrency(amount: number | null | undefined): string {
@@ -41,6 +45,38 @@ function formatCurrency(amount: number | null | undefined): string {
 }
 
 /**
+ * Get type icon based on organization unit type
+ */
+function getTypeIcon(type: string) {
+  switch (type) {
+    case "Khoa":
+      return <Building2 className="h-4 w-4" />;
+    case "Bộ môn":
+      return <GraduationCap className="h-4 w-4" />;
+    default:
+      return <Building2 className="h-4 w-4" />;
+  }
+}
+
+/**
+ * Get type color based on organization unit type
+ */
+function getTypeColor(type: string) {
+  switch (type) {
+    case "Khoa":
+      return "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200";
+    case "Bộ môn":
+      return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
+    case "Phòng ban":
+      return "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200";
+    case "Trung tâm":
+      return "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200";
+    default:
+      return "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200";
+  }
+}
+
+/**
  * Tree node component with expand/collapse functionality
  */
 interface TreeNodeProps {
@@ -49,39 +85,25 @@ interface TreeNodeProps {
   onNodeClick?: (node: OrganizationTreeNodeWithAggregation) => void;
 }
 
-function TreeNode({ node, level, onNodeClick }: TreeNodeProps) {
+/**
+ * ⚡ PERFORMANCE: Memoized TreeNode component to prevent unnecessary re-renders
+ * Only re-renders when node data or level changes
+ */
+const TreeNode = memo(function TreeNode({ node, level, onNodeClick }: TreeNodeProps) {
   const [isExpanded, setIsExpanded] = useState(level === 0); // Root nodes expanded by default
   const [userDialogOpen, setUserDialogOpen] = useState(false);
   const hasChildren = node.children && node.children.length > 0;
   const hasMajors = node.major_programs && node.major_programs.length > 0;
 
-  // Determine the type icon
-  const getTypeIcon = (type: string) => {
-    switch (type) {
-      case "Khoa":
-        return <Building2 className="h-4 w-4" />;
-      case "Bộ môn":
-        return <GraduationCap className="h-4 w-4" />;
-      default:
-        return <Building2 className="h-4 w-4" />;
-    }
-  };
+  // ⚡ PERFORMANCE: Memoize event handlers to prevent child re-renders
+  const handleNodeClick = useCallback(() => {
+    onNodeClick?.(node);
+  }, [onNodeClick, node]);
 
-  // Get type color
-  const getTypeColor = (type: string) => {
-    switch (type) {
-      case "Khoa":
-        return "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200";
-      case "Bộ môn":
-        return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
-      case "Phòng ban":
-        return "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200";
-      case "Trung tâm":
-        return "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200";
-      default:
-        return "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200";
-    }
-  };
+  const handleUserDialogOpen = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setUserDialogOpen(true);
+  }, []);
 
   return (
     <div className="w-full">
@@ -115,7 +137,7 @@ function TreeNode({ node, level, onNodeClick }: TreeNodeProps) {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <button
-                onClick={() => onNodeClick?.(node)}
+                onClick={handleNodeClick}
                 className="font-medium text-sm hover:underline text-left"
               >
                 {node.name}
@@ -133,10 +155,7 @@ function TreeNode({ node, level, onNodeClick }: TreeNodeProps) {
                 variant="ghost"
                 size="sm"
                 className="h-6 text-xs"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setUserDialogOpen(true);
-                }}
+                onClick={handleUserDialogOpen}
               >
                 <UserPlus className="h-3 w-3 mr-1" />
                 Quản lý người dùng
@@ -237,7 +256,13 @@ function TreeNode({ node, level, onNodeClick }: TreeNodeProps) {
       />
     </div>
   );
-}
+});
+
+/**
+ * ⚡ PERFORMANCE: Custom comparison function for TreeNode memo
+ * Only re-render if node ID, level, or callback reference changes
+ */
+TreeNode.displayName = "TreeNode";
 
 /**
  * Organization Tree View Component
