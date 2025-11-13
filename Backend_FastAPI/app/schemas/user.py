@@ -35,8 +35,17 @@ PasswordStr = constr(min_length=8, strip_whitespace=True)
 
 
 class UserBase(BaseModel):
-    # ✅ SỬA: Thêm validation
-    username: str = Field(..., min_length=1, strip_whitespace=True)
+    # ✅ SECURITY FIX (Deep Dive Audit): Strict regex validation to prevent injection attacks
+    # Only allow: letters, numbers, hyphens, underscores
+    # Pattern prevents: path traversal (../, ..\), special chars (@, =, +, etc.)
+    username: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-zA-Z0-9_-]+$",
+        strip_whitespace=True,
+        description="Username must contain only letters, numbers, hyphens, and underscores"
+    )
     email: EmailStr  # EmailStr tự động chuẩn hóa
     full_name: Optional[str] = Field(None, strip_whitespace=True)
     role: str
@@ -48,8 +57,15 @@ class UserCreate(BaseModel):
     Schema cho user registration.
     """
 
-    # ✅ SỬA: Thêm validation
-    username: str = Field(..., min_length=3, max_length=64, strip_whitespace=True)
+    # ✅ SECURITY FIX (Deep Dive Audit): Strict regex validation
+    username: str = Field(
+        ...,
+        min_length=3,
+        max_length=64,
+        pattern=r"^[a-zA-Z0-9_-]+$",
+        strip_whitespace=True,
+        description="Username must contain only letters, numbers, hyphens, and underscores"
+    )
     email: EmailStr
     password: PasswordStr
     full_name: Optional[str] = Field(None, max_length=120, strip_whitespace=True)

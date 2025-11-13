@@ -1,6 +1,7 @@
 # app/schemas/permissions.py
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+import re
 
 
 class Policy(BaseModel):
@@ -26,6 +27,27 @@ class RoleAssignment(BaseModel):
 
     user_id: int = Field(..., gt=0)
     role: str = Field(..., description="Vai trò (đã có tiền tố), vd: 'role:officer'")
+
+    @field_validator("role")
+    @classmethod
+    def validate_role_format(cls, v: str) -> str:
+        """
+        ✅ SECURITY FIX (Deep Dive Audit): Strict role validation
+
+        Prevents Casbin policy injection attacks by validating role format.
+        Only allows: role:alphanumeric_with_underscores_and_hyphens
+
+        Blocks malicious patterns like:
+        - role:manager/../admin (path traversal)
+        - role:user\nrole:admin (multi-line injection)
+        - role:officer{evil} (template injection)
+        """
+        if not re.match(r'^role:[a-zA-Z0-9_-]+$', v):
+            raise ValueError(
+                "Role must follow format 'role:name' where name contains only "
+                "letters, numbers, hyphens, and underscores"
+            )
+        return v
 
 
 class GroupingPolicyCreate(BaseModel):
@@ -113,6 +135,21 @@ class TemplateApplicationRequest(BaseModel):
     template_id: str = Field(..., description="Template identifier")
     role: str = Field(..., description="Role to apply template to (e.g., role:custom)")
     run_validation: bool = Field(True, description="Whether to validate before applying")
+
+    @field_validator("role")
+    @classmethod
+    def validate_role_format(cls, v: str) -> str:
+        """
+        ✅ SECURITY FIX (Deep Dive Audit): Strict role validation
+
+        Prevents template injection attacks during policy template application.
+        """
+        if not re.match(r'^role:[a-zA-Z0-9_-]+$', v):
+            raise ValueError(
+                "Role must follow format 'role:name' where name contains only "
+                "letters, numbers, hyphens, and underscores"
+            )
+        return v
 
 
 class PolicyStatistics(BaseModel):
