@@ -4,6 +4,7 @@
 
 import { http, HttpResponse } from "msw";
 import { mockPipelineStages, mockFullPipeline } from "../data/pipeline";
+import type { PipelineStageCreate, PipelineStageUpdate } from "@/types/pipeline.types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
@@ -20,7 +21,7 @@ export const pipelineHandlers = [
 
   // Create pipeline stage (admin only)
   http.post(`${API_BASE_URL}/api/admin/pipeline-stages`, async ({ request }) => {
-    const body = (await request.json()) as Record<string, any>;
+    const body = (await request.json()) as PipelineStageCreate;
     const newStage = {
       id: `stage_${Date.now()}`,
       ...body,
@@ -32,7 +33,7 @@ export const pipelineHandlers = [
   // Update pipeline stage (admin only)
   http.put(`${API_BASE_URL}/api/admin/pipeline-stages/:stageId`, async ({ params, request }) => {
     const { stageId } = params;
-    const body = (await request.json()) as Record<string, any>;
+    const body = (await request.json()) as PipelineStageUpdate;
 
     const stage = mockPipelineStages.find((s) => s.id === stageId);
 

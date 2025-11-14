@@ -100,14 +100,6 @@ export function ConsultationDialog({
 
   const isSubmitting = addMutation.isPending;
 
-  // Get default datetime (tomorrow at 10 AM)
-  const getDefaultDateTime = () => {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    tomorrow.setHours(10, 0, 0, 0);
-    return tomorrow.toISOString().slice(0, 16);
-  };
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[500px]">

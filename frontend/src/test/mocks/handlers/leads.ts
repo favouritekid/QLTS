@@ -3,7 +3,8 @@
  */
 
 import { http, HttpResponse } from "msw";
-import { mockLeads, mockLead, mockTimeline, mockInsights } from "../data/leads";
+import { mockLeads, mockTimeline, mockInsights } from "../data/leads";
+import type { LeadCreate, LeadUpdate, ConsultationCreate } from "@/types/lead.types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
@@ -51,7 +52,7 @@ export const leadHandlers = [
 
   // Create lead
   http.post(`${API_BASE_URL}/api/leads`, async ({ request }) => {
-    const body = (await request.json()) as Record<string, any>;
+    const body = (await request.json()) as LeadCreate;
     const newLead = {
       id: Math.max(...mockLeads.map((l) => l.id)) + 1,
       ...body,
@@ -67,7 +68,7 @@ export const leadHandlers = [
   // Update lead
   http.put(`${API_BASE_URL}/api/leads/:leadId`, async ({ params, request }) => {
     const { leadId } = params;
-    const body = (await request.json()) as Record<string, any>;
+    const body = (await request.json()) as LeadUpdate;
     const lead = mockLeads.find((l) => l.id === parseInt(leadId as string));
 
     if (!lead) {
@@ -106,7 +107,7 @@ export const leadHandlers = [
   // Add consultation
   http.post(`${API_BASE_URL}/api/leads/:leadId/consultations`, async ({ params, request }) => {
     const { leadId } = params;
-    const body = (await request.json()) as Record<string, any>;
+    const body = (await request.json()) as ConsultationCreate;
 
     const consultation = {
       id: Math.floor(Math.random() * 10000),
@@ -119,14 +120,12 @@ export const leadHandlers = [
   }),
 
   // Get lead timeline
-  http.get(`${API_BASE_URL}/api/leads/:leadId/timeline`, async ({ params }) => {
-    const { leadId } = params;
+  http.get(`${API_BASE_URL}/api/leads/:leadId/timeline`, async () => {
     return HttpResponse.json(mockTimeline);
   }),
 
   // Get lead insights
-  http.get(`${API_BASE_URL}/api/leads/:leadId/insights`, async ({ params }) => {
-    const { leadId } = params;
+  http.get(`${API_BASE_URL}/api/leads/:leadId/insights`, async () => {
     return HttpResponse.json(mockInsights);
   }),
 
@@ -140,7 +139,7 @@ export const leadHandlers = [
   }),
 
   // Import leads
-  http.post(`${API_BASE_URL}/api/admin/leads/import`, async ({ request }) => {
+  http.post(`${API_BASE_URL}/api/admin/leads/import`, async () => {
     return HttpResponse.json({
       message: "Import successful",
       total_rows: 10,

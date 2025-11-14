@@ -21,7 +21,7 @@ const eventTypeColors: Record<string, string> = {
   note_added: "bg-gray-100 text-gray-800",
 };
 
-export function LeadTimelineTab({ leadId, timeline }: LeadTimelineTabProps) {
+export function LeadTimelineTab({ timeline }: LeadTimelineTabProps) {
   if (!timeline) {
     return (
       <Card>
