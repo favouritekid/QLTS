@@ -196,7 +196,9 @@ export default function PipelinePage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {pipeline.conversion_rate.toFixed(1)}%
+              {pipeline.conversion_rate !== undefined
+                ? `${(pipeline.conversion_rate * 100).toFixed(1)}%`
+                : "N/A"}
             </div>
             <p className="text-xs text-muted-foreground">Overall conversion</p>
           </CardContent>
@@ -207,7 +209,9 @@ export default function PipelinePage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {Math.round(pipeline.avg_time_in_pipeline_days)} days
+              {pipeline.avg_time_in_pipeline_days !== undefined
+                ? `${Math.round(pipeline.avg_time_in_pipeline_days)} days`
+                : "N/A"}
             </div>
             <p className="text-xs text-muted-foreground">From new lead to enrolled</p>
           </CardContent>

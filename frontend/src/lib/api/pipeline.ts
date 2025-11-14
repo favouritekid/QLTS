@@ -316,8 +316,8 @@ export async function getPipelineStats(
   params?: PipelineQueryParams
 ): Promise<{
   total_leads: number
-  conversion_rate: number
-  avg_time_in_pipeline_days: number
+  conversion_rate?: number
+  avg_time_in_pipeline_days?: number
   stage_statistics: Array<{
     stage_id: string
     stage_name: string

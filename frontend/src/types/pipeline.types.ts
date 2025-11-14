@@ -99,8 +99,8 @@ export interface PipelineStageWithStats extends PipelineStage {
 export interface FullPipeline {
   stages: PipelineStageWithStats[]
   total_leads: number
-  conversion_rate: number // Overall conversion rate
-  avg_time_in_pipeline_days: number
+  conversion_rate?: number // Overall conversion rate (optional)
+  avg_time_in_pipeline_days?: number // Average time across all stages (optional)
 }
 
 // ============================================
