@@ -16,8 +16,6 @@ import {
   ArrowUpDown,
   Filter,
   X,
-  CheckSquare,
-  Square,
 } from "lucide-react";
 import {
   useReactTable,
@@ -58,7 +56,7 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -69,11 +67,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 
 import {
   useLeads,
@@ -158,7 +151,6 @@ export default function LeadsPage() {
   // Fetch leads
   const { data: leadsPage, isLoading, isError, error } = useLeads(filters);
   const deleteMutation = useDeleteLead();
-  const bulkAssignMutation = useBulkAssignLeads();
   const exportMutation = useExportLeads();
   const importMutation = useImportLeads();
 

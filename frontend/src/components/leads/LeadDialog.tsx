@@ -36,7 +36,7 @@ import {
 
 import { useCreateLead, useUpdateLead } from "@/hooks/useLeads";
 import { useOrganizationUnits } from "@/hooks/useOrganization";
-import type { Lead, LeadSource, EducationLevel } from "@/types/lead.types";
+import type { Lead } from "@/types/lead.types";
 
 // Validation schema
 const leadSchema = z.object({

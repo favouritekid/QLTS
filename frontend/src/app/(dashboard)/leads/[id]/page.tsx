@@ -14,9 +14,6 @@ import {
   Mail,
   Phone,
   MapPin,
-  Building,
-  GraduationCap,
-  Loader2,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -24,7 +21,6 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Separator } from "@/components/ui/separator";
 
 import { useLead, useLeadTimeline, useLeadInsights } from "@/hooks/useLeads";
 import { LeadDialog } from "@/components/leads/LeadDialog";
@@ -34,7 +30,7 @@ import { LeadInfoTab } from "@/components/leads/LeadInfoTab";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { LeadConsultationsTab } from "@/components/leads/LeadConsultationsTab";
 import { LeadInsightsTab } from "@/components/leads/LeadInsightsTab";
-import type { LeadStatus, LeadSource } from "@/types/lead.types";
+import type { LeadStatus } from "@/types/lead.types";
 
 // Status badge variants (same as list page)
 const getStatusBadgeVariant = (status: LeadStatus) => {

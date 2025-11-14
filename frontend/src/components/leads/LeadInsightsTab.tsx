@@ -11,7 +11,6 @@ import {
   CheckCircle,
   Target,
   Activity,
-  MessageSquare,
 } from "lucide-react";
 import type { LeadInsights } from "@/types/lead.types";
 
@@ -20,7 +19,7 @@ interface LeadInsightsTabProps {
   insights?: LeadInsights;
 }
 
-export function LeadInsightsTab({ leadId, insights }: LeadInsightsTabProps) {
+export function LeadInsightsTab({ insights }: LeadInsightsTabProps) {
   if (!insights) {
     return (
       <div className="grid gap-6 md:grid-cols-2">
