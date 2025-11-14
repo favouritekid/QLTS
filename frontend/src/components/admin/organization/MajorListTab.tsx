@@ -29,7 +29,6 @@ import {
   MoreVertical,
   Edit,
   Trash2,
-  BookOpen,
   GraduationCap,
   ChevronRight,
   ChevronDown,
@@ -44,11 +43,7 @@ import {
 import { MajorProgramDialog } from "./MajorProgramDialog";
 import { ProgramOfferingDialog } from "./ProgramOfferingDialog";
 import { OfferingAcademicInfoManagement } from "./OfferingAcademicInfoManagement";
-import type {
-  OrganizationUnit,
-  MajorProgram,
-  ProgramOffering,
-} from "@/types/organization.types";
+import type { OrganizationUnit, MajorProgram, ProgramOffering } from "@/types/organization.types";
 
 // =====================================================================
 // COMPONENT PROPS
@@ -93,8 +88,9 @@ export function MajorListTab({ unit }: MajorListTabProps) {
   // Dialog states - Tier 2 (ProgramOffering)
   const [offeringDialogOpen, setOfferingDialogOpen] = useState(false);
   const [selectedOffering, setSelectedOffering] = useState<ProgramOffering | null>(null);
-  const [selectedProgramForOffering, setSelectedProgramForOffering] =
-    useState<MajorProgram | null>(null);
+  const [selectedProgramForOffering, setSelectedProgramForOffering] = useState<MajorProgram | null>(
+    null
+  );
   const [offeringToDelete, setOfferingToDelete] = useState<ProgramOffering | null>(null);
   const [deleteOfferingConfirmOpen, setDeleteOfferingConfirmOpen] = useState(false);
 
@@ -115,9 +111,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
 
   // Get programs to display
   const isRootUnit = unit.parent_id === null;
-  const allPrograms = isRootUnit
-    ? collectAllMajorPrograms(unit)
-    : unit.major_programs || [];
+  const allPrograms = isRootUnit ? collectAllMajorPrograms(unit) : unit.major_programs || [];
 
   // Filter programs
   const filteredPrograms = allPrograms.filter((program) => {
@@ -227,13 +221,13 @@ export function MajorListTab({ unit }: MajorListTabProps) {
   const totalProgramsCount = allPrograms.length;
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="flex h-full flex-col">
       {/* Header */}
-      <div className="p-6 border-b space-y-4">
+      <div className="space-y-4 border-b p-6">
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-lg font-semibold">Chương trình đào tạo</h3>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-muted-foreground text-sm">
               {isRootUnit ? (
                 <>
                   Hiển thị tất cả {totalProgramsCount} chương trình{" "}
@@ -253,14 +247,14 @@ export function MajorListTab({ unit }: MajorListTabProps) {
             </p>
           </div>
           <Button onClick={handleCreateProgram}>
-            <Plus className="h-4 w-4 mr-2" />
+            <Plus className="mr-2 h-4 w-4" />
             Tạo chương trình
           </Button>
         </div>
 
         {/* Search */}
         <div className="relative">
-          <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Search className="text-muted-foreground absolute top-2.5 left-3 h-4 w-4" />
           <Input
             placeholder="Tìm kiếm chương trình, loại hình..."
             value={searchQuery}
@@ -274,7 +268,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
       <ScrollArea className="flex-1">
         {isLoading ? (
           // Loading state
-          <div className="p-6 space-y-3">
+          <div className="space-y-3 p-6">
             {[1, 2, 3, 4].map((i) => (
               <Skeleton key={i} className="h-20 w-full" />
             ))}
@@ -282,38 +276,35 @@ export function MajorListTab({ unit }: MajorListTabProps) {
         ) : filteredPrograms.length === 0 ? (
           // Empty state
           <div className="p-12 text-center">
-            <GraduationCap className="h-16 w-16 mx-auto text-muted-foreground/50 mb-4" />
-            <h4 className="text-lg font-medium mb-2">
+            <GraduationCap className="text-muted-foreground/50 mx-auto mb-4 h-16 w-16" />
+            <h4 className="mb-2 text-lg font-medium">
               {searchQuery ? "Không tìm thấy chương trình" : "Chưa có chương trình"}
             </h4>
-            <p className="text-sm text-muted-foreground mb-4">
+            <p className="text-muted-foreground mb-4 text-sm">
               {searchQuery
                 ? "Thử tìm kiếm với từ khóa khác"
                 : "Tạo chương trình đào tạo đầu tiên cho đơn vị này"}
             </p>
             {!searchQuery && (
               <Button onClick={handleCreateProgram} size="sm">
-                <Plus className="h-4 w-4 mr-2" />
+                <Plus className="mr-2 h-4 w-4" />
                 Tạo chương trình
               </Button>
             )}
           </div>
         ) : (
           // Programs list (3-tier tree)
-          <div className="p-6 space-y-3">
+          <div className="space-y-3 p-6">
             {filteredPrograms.map((program) => {
               const isExpanded = expandedPrograms.has(program.id);
               const hasOfferings = program.offerings && program.offerings.length > 0;
 
               return (
-                <div
-                  key={program.id}
-                  className="border rounded-lg overflow-hidden bg-card"
-                >
+                <div key={program.id} className="bg-card overflow-hidden rounded-lg border">
                   {/* TIER 1: MajorProgram Header */}
-                  <div className="p-4 bg-muted/30">
+                  <div className="bg-muted/30 p-4">
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3 flex-1">
+                      <div className="flex flex-1 items-center gap-3">
                         {/* Expand/Collapse button */}
                         <Button
                           variant="ghost"
@@ -333,7 +324,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                           )}
                         </Button>
 
-                        <GraduationCap className="h-5 w-5 text-primary" />
+                        <GraduationCap className="text-primary h-5 w-5" />
 
                         <div className="flex-1">
                           <div className="flex items-center gap-2">
@@ -347,11 +338,11 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                               </Badge>
                             )}
                           </div>
-                          <div className="flex items-center gap-4 mt-1">
-                            <code className="text-xs bg-muted px-2 py-0.5 rounded font-mono">
+                          <div className="mt-1 flex items-center gap-4">
+                            <code className="bg-muted rounded px-2 py-0.5 font-mono text-xs">
                               {program.code}
                             </code>
-                            <span className="text-xs text-muted-foreground">
+                            <span className="text-muted-foreground text-xs">
                               {hasOfferings
                                 ? `${program.offerings.length} loại hình`
                                 : "Chưa có loại hình"}
@@ -367,7 +358,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                           size="sm"
                           onClick={() => handleCreateOffering(program)}
                         >
-                          <Plus className="h-4 w-4 mr-1" />
+                          <Plus className="mr-1 h-4 w-4" />
                           Thêm loại hình
                         </Button>
 
@@ -379,14 +370,14 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem onClick={() => handleEditProgram(program)}>
-                              <Edit className="h-4 w-4 mr-2" />
+                              <Edit className="mr-2 h-4 w-4" />
                               Chỉnh sửa
                             </DropdownMenuItem>
                             <DropdownMenuItem
                               onClick={() => handleDeleteProgramClick(program)}
                               className="text-red-600"
                             >
-                              <Trash2 className="h-4 w-4 mr-2" />
+                              <Trash2 className="mr-2 h-4 w-4" />
                               Xóa
                             </DropdownMenuItem>
                           </DropdownMenuContent>
@@ -401,16 +392,15 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                       {program.offerings.map((offering) => (
                         <div
                           key={offering.id}
-                          className="p-4 border-b last:border-b-0 hover:bg-muted/20 transition-colors"
+                          className="hover:bg-muted/20 border-b p-4 transition-colors last:border-b-0"
                         >
                           <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-3 flex-1">
+                            <div className="flex flex-1 items-center gap-3">
                               <div className="ml-10" /> {/* Indent */}
                               <Layers className="h-4 w-4 text-blue-500" />
-
                               <div className="flex-1">
                                 <div className="flex items-center gap-2">
-                                  <span className="font-medium text-sm">
+                                  <span className="text-sm font-medium">
                                     {offering.offering_type}
                                   </span>
                                   {!offering.is_active && (
@@ -419,14 +409,14 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                                     </Badge>
                                   )}
                                 </div>
-                                <div className="flex items-center gap-4 mt-1">
+                                <div className="mt-1 flex items-center gap-4">
                                   {offering.duration_semesters && (
-                                    <span className="text-xs text-muted-foreground">
+                                    <span className="text-muted-foreground text-xs">
                                       {offering.duration_semesters} kỳ
                                     </span>
                                   )}
                                   {offering.total_credits && (
-                                    <span className="text-xs text-muted-foreground">
+                                    <span className="text-muted-foreground text-xs">
                                       {offering.total_credits} tín chỉ
                                     </span>
                                   )}
@@ -441,7 +431,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                                 size="sm"
                                 onClick={() => handleManageAcademicInfo(offering)}
                               >
-                                <CalendarCheck className="h-4 w-4 mr-1" />
+                                <CalendarCheck className="mr-1 h-4 w-4" />
                                 Thông tin tuyển sinh
                               </Button>
 
@@ -455,14 +445,14 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                                   <DropdownMenuItem
                                     onClick={() => handleEditOffering(program, offering)}
                                   >
-                                    <Edit className="h-4 w-4 mr-2" />
+                                    <Edit className="mr-2 h-4 w-4" />
                                     Chỉnh sửa
                                   </DropdownMenuItem>
                                   <DropdownMenuItem
                                     onClick={() => handleDeleteOfferingClick(offering)}
                                     className="text-red-600"
                                   >
-                                    <Trash2 className="h-4 w-4 mr-2" />
+                                    <Trash2 className="mr-2 h-4 w-4" />
                                     Xóa
                                   </DropdownMenuItem>
                                 </DropdownMenuContent>
@@ -512,10 +502,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
       )}
 
       {/* Delete Program Confirmation */}
-      <AlertDialog
-        open={deleteProgramConfirmOpen}
-        onOpenChange={setDeleteProgramConfirmOpen}
-      >
+      <AlertDialog open={deleteProgramConfirmOpen} onOpenChange={setDeleteProgramConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Xác nhận xóa chương trình</AlertDialogTitle>
@@ -524,9 +511,8 @@ export function MajorListTab({ unit }: MajorListTabProps) {
               <strong>&quot;{programToDelete?.name}&quot;</strong>?
               <br />
               <br />
-              <span className="text-red-600 font-medium">
-                Cảnh báo: Tất cả loại hình đào tạo và thông tin tuyển sinh liên quan sẽ
-                bị xóa theo!
+              <span className="font-medium text-red-600">
+                Cảnh báo: Tất cả loại hình đào tạo và thông tin tuyển sinh liên quan sẽ bị xóa theo!
               </span>
               <br />
               Hành động này không thể hoàn tác.
@@ -545,10 +531,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
       </AlertDialog>
 
       {/* Delete Offering Confirmation */}
-      <AlertDialog
-        open={deleteOfferingConfirmOpen}
-        onOpenChange={setDeleteOfferingConfirmOpen}
-      >
+      <AlertDialog open={deleteOfferingConfirmOpen} onOpenChange={setDeleteOfferingConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Xác nhận xóa loại hình</AlertDialogTitle>
@@ -557,7 +540,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
               <strong>&quot;{offeringToDelete?.offering_type}&quot;</strong>?
               <br />
               <br />
-              <span className="text-red-600 font-medium">
+              <span className="font-medium text-red-600">
                 Cảnh báo: Tất cả thông tin tuyển sinh liên quan sẽ bị xóa theo!
               </span>
               <br />
