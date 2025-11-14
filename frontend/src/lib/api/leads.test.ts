@@ -9,16 +9,16 @@ import { http, HttpResponse } from 'msw'
 import { leadsApi } from './leads'
 import type { LeadCreate, LeadUpdate } from '@/types/lead.types'
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
-describe('Leads API Client', () => {
+describe("Leads API Client", () => {
   beforeEach(() => {
     // Reset handlers before each test
-    server.resetHandlers()
-  })
+    server.resetHandlers();
+  });
 
-  describe('GET /api/leads', () => {
-    it('should fetch leads successfully', async () => {
+  describe("GET /api/leads", () => {
+    it("should fetch leads successfully", async () => {
       // Arrange: Mock API response
       server.use(
         http.get(`${API_BASE_URL}/api/leads`, () => {
@@ -27,26 +27,26 @@ describe('Leads API Client', () => {
             leads: [
               {
                 id: 1,
-                full_name: 'Test Lead 1',
-                email: 'test1@example.com',
-                phone: '0901234567',
-                source: 'website',
-                status: 'new',
+                full_name: "Test Lead 1",
+                email: "test1@example.com",
+                phone: "0901234567",
+                source: "website",
+                status: "new",
                 lead_score: 75,
               },
               {
                 id: 2,
-                full_name: 'Test Lead 2',
-                email: 'test2@example.com',
-                phone: '0907654321',
-                source: 'referral',
-                status: 'assigned',
+                full_name: "Test Lead 2",
+                email: "test2@example.com",
+                phone: "0907654321",
+                source: "referral",
+                status: "assigned",
                 lead_score: 85,
               },
             ],
-          })
+          });
         })
-      )
+      );
 
       // Act: Make API call
       const result = await leadsApi.getLeads()
@@ -57,44 +57,42 @@ describe('Leads API Client', () => {
       expect(result.leads[0].full_name).toBe('Test Lead 1')
     })
 
-    it('should handle API errors', async () => {
+
+    it("should handle API errors", async () => {
       // Arrange: Mock API error
       server.use(
         http.get(`${API_BASE_URL}/api/leads`, () => {
-          return HttpResponse.json(
-            { detail: 'Internal server error' },
-            { status: 500 }
-          )
+          return HttpResponse.json({ detail: "Internal server error" }, { status: 500 });
         })
-      )
+      );
 
       // Act & Assert: Verify error is thrown
       await expect(leadsApi.getLeads()).rejects.toThrow()
     })
 
-    it('should filter leads by status', async () => {
+    it("should filter leads by status", async () => {
       // Arrange: Mock filtered response
       server.use(
         http.get(`${API_BASE_URL}/api/leads`, ({ request }) => {
-          const url = new URL(request.url)
-          const status = url.searchParams.get('status')
+          const url = new URL(request.url);
+          const status = url.searchParams.get("status");
 
           return HttpResponse.json({
             total_count: 1,
             leads: [
               {
                 id: 1,
-                full_name: 'New Lead',
-                email: 'new@example.com',
-                phone: '0901234567',
-                source: 'website',
-                status: status || 'new',
+                full_name: "New Lead",
+                email: "new@example.com",
+                phone: "0901234567",
+                source: "website",
+                status: status || "new",
                 lead_score: 75,
               },
             ],
-          })
+          });
         })
-      )
+      );
 
       // Act: Make filtered API call
       const result = await leadsApi.getLeads({ status: 'new' })
@@ -105,33 +103,36 @@ describe('Leads API Client', () => {
     })
   })
 
-  describe('POST /api/leads', () => {
-    it('should create a new lead', async () => {
+
+  describe("POST /api/leads", () => {
+    it("should create a new lead", async () => {
       // Arrange: Mock create response
+
       const newLeadData: LeadCreate = {
         full_name: 'New Lead',
         email: 'newlead@example.com',
         phone: '0909876543',
         source: 'website',
+
         unit_id: 1,
-      }
+      };
 
       server.use(
         http.post(`${API_BASE_URL}/api/leads`, async ({ request }) => {
-          const body = await request.json()
+          const body = (await request.json()) as Record<string, any>;
           return HttpResponse.json(
             {
               id: 999,
               ...body,
-              status: 'new',
+              status: "new",
               lead_score: 0,
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString(),
             },
             { status: 201 }
-          )
+          );
         })
-      )
+      );
 
       // Act: Create lead
       const result = await leadsApi.createLead(newLeadData)
@@ -142,7 +143,8 @@ describe('Leads API Client', () => {
       expect(result.status).toBe('new')
     })
 
-    it('should validate required fields', async () => {
+
+    it("should validate required fields", async () => {
       // Arrange: Mock validation error
       server.use(
         http.post(`${API_BASE_URL}/api/leads`, () => {
@@ -150,16 +152,16 @@ describe('Leads API Client', () => {
             {
               detail: [
                 {
-                  loc: ['body', 'email'],
-                  msg: 'field required',
-                  type: 'value_error.missing',
+                  loc: ["body", "email"],
+                  msg: "field required",
+                  type: "value_error.missing",
                 },
               ],
             },
             { status: 422 }
-          )
+          );
         })
-      )
+      );
 
       // Act & Assert: Verify validation error
       await expect(

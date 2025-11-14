@@ -66,7 +66,8 @@ export const organizationKeys = {
   offeringsList: (programId: number) =>
     [...organizationKeys.offerings(), "list", programId] as const,
   offeringDetail: (id: number) => [...organizationKeys.offerings(), "detail", id] as const,
-  offeringCurrentInfo: (id: number) => [...organizationKeys.offerings(), "currentInfo", id] as const,
+  offeringCurrentInfo: (id: number) =>
+    [...organizationKeys.offerings(), "currentInfo", id] as const,
 
   // Tier 3: OfferingAcademicInfo
   academicInfo: () => [...organizationKeys.all, "academicInfo"] as const,
@@ -102,9 +103,7 @@ export function useOrganizationUnits(initialData?: OrganizationUnit[]) {
   return useQuery<OrganizationUnit[], AxiosError<ApiErrorResponse>>({
     queryKey: organizationKeys.list(),
     queryFn: async () => {
-      const response = await api.get<OrganizationUnit[]>(
-        API_ENDPOINTS.ORGANIZATION.LIST_UNITS
-      );
+      const response = await api.get<OrganizationUnit[]>(API_ENDPOINTS.ORGANIZATION.LIST_UNITS);
       return response.data;
     },
     initialData, // ⚡ Use server-fetched data if available
@@ -149,9 +148,7 @@ export function useOrganizationUnitTypes() {
   return useQuery<string[], AxiosError<ApiErrorResponse>>({
     queryKey: organizationKeys.unitTypes(),
     queryFn: async () => {
-      const response = await api.get<string[]>(
-        API_ENDPOINTS.ORGANIZATION.UNIT_TYPES
-      );
+      const response = await api.get<string[]>(API_ENDPOINTS.ORGANIZATION.UNIT_TYPES);
       return response.data;
     },
     staleTime: 1000 * 60 * 60 * 24, // 24 hours
@@ -166,9 +163,7 @@ export function useOrganizationUnit(id: number) {
   return useQuery<OrganizationUnit, AxiosError<ApiErrorResponse>>({
     queryKey: organizationKeys.detail(id),
     queryFn: async () => {
-      const response = await api.get<OrganizationUnit>(
-        API_ENDPOINTS.ORGANIZATION.GET_UNIT(id)
-      );
+      const response = await api.get<OrganizationUnit>(API_ENDPOINTS.ORGANIZATION.GET_UNIT(id));
       return response.data;
     },
     enabled: !!id,
@@ -247,9 +242,7 @@ export function useProgramOffering(id: number) {
   return useQuery<ProgramOffering, AxiosError<ApiErrorResponse>>({
     queryKey: organizationKeys.offeringDetail(id),
     queryFn: async () => {
-      const response = await api.get<ProgramOffering>(
-        API_ENDPOINTS.ORGANIZATION.GET_OFFERING(id)
-      );
+      const response = await api.get<ProgramOffering>(API_ENDPOINTS.ORGANIZATION.GET_OFFERING(id));
       return response.data;
     },
     enabled: !!id,
@@ -281,10 +274,7 @@ export function useOfferingCurrentInfo(id: number) {
 /**
  * Get academic info history for an offering
  */
-export function useOfferingAcademicInfoList(
-  offeringId: number,
-  publishedOnly: boolean = false
-) {
+export function useOfferingAcademicInfoList(offeringId: number, publishedOnly: boolean = false) {
   return useQuery<OfferingAcademicInfo[], AxiosError<ApiErrorResponse>>({
     queryKey: organizationKeys.academicInfoList(offeringId, publishedOnly),
     queryFn: async () => {
@@ -328,11 +318,7 @@ export function useOfferingAcademicInfoByYear(offeringId: number, year: number) 
  * Create a new organization unit
  */
 export function useCreateUnit() {
-  return useMutation<
-    OrganizationUnit,
-    AxiosError<ApiErrorResponse>,
-    OrganizationUnitCreate
-  >({
+  return useMutation<OrganizationUnit, AxiosError<ApiErrorResponse>, OrganizationUnitCreate>({
     mutationFn: async (data) => {
       const response = await api.post<OrganizationUnit>(
         API_ENDPOINTS.ADMIN.ORGANIZATION.CREATE_UNIT,
@@ -348,11 +334,12 @@ export function useCreateUnit() {
     },
     onError: (error) => {
       const detail = error.response?.data?.detail;
-      const message = typeof detail === 'string'
-        ? detail
-        : Array.isArray(detail)
-          ? detail.map(e => e.msg).join(', ')
-          : "Tạo đơn vị thất bại";
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Tạo đơn vị thất bại";
       toast.error("Lỗi", { description: message });
     },
   });
@@ -385,21 +372,19 @@ export function useUpdateUnit() {
       await queryClient.cancelQueries({ queryKey: organizationKeys.list() });
 
       // Snapshot the previous value
-      const previousUnits = queryClient.getQueryData<OrganizationUnit[]>(
-        organizationKeys.list()
-      );
+      const previousUnits = queryClient.getQueryData<OrganizationUnit[]>(organizationKeys.list());
 
       // Optimistically update the cache
       if (previousUnits) {
         const updateUnitInTree = (units: OrganizationUnit[]): OrganizationUnit[] => {
-          return units.map(unit => {
+          return units.map((unit) => {
             if (unit.id === id) {
               return { ...unit, ...data };
             }
             if (unit.children && unit.children.length > 0) {
               return {
                 ...unit,
-                children: updateUnitInTree(unit.children)
+                children: updateUnitInTree(unit.children),
               };
             }
             return unit;
@@ -418,18 +403,16 @@ export function useUpdateUnit() {
     // Rollback on error
     onError: (err, variables, context) => {
       if (context?.previousUnits) {
-        queryClient.setQueryData(
-          organizationKeys.list(),
-          context.previousUnits
-        );
+        queryClient.setQueryData(organizationKeys.list(), context.previousUnits);
       }
 
       const detail = err.response?.data?.detail;
-      const message = typeof detail === 'string'
-        ? detail
-        : Array.isArray(detail)
-          ? detail.map(e => e.msg).join(', ')
-          : "Cập nhật đơn vị thất bại";
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Cập nhật đơn vị thất bại";
       toast.error("Lỗi", { description: message });
     },
 
@@ -458,11 +441,12 @@ export function useDeleteUnit() {
 
     onError: (error) => {
       const detail = error.response?.data?.detail;
-      const message = typeof detail === 'string'
-        ? detail
-        : Array.isArray(detail)
-          ? detail.map(e => e.msg).join(', ')
-          : "Xóa đơn vị thất bại";
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Xóa đơn vị thất bại";
       toast.error("Lỗi", { description: message });
     },
   });
@@ -478,11 +462,7 @@ export function useDeleteUnit() {
 export function useCreateMajorProgram() {
   const queryClient = useQueryClient();
 
-  return useMutation<
-    MajorProgram,
-    AxiosError<ApiErrorResponse>,
-    MajorProgramCreate
-  >({
+  return useMutation<MajorProgram, AxiosError<ApiErrorResponse>, MajorProgramCreate>({
     mutationFn: async (data) => {
       const response = await api.post<MajorProgram>(
         API_ENDPOINTS.ADMIN.ORGANIZATION.CREATE_MAJOR_PROGRAM,
@@ -500,11 +480,12 @@ export function useCreateMajorProgram() {
     },
     onError: (error) => {
       const detail = error.response?.data?.detail;
-      const message = typeof detail === 'string'
-        ? detail
-        : Array.isArray(detail)
-          ? detail.map(e => e.msg).join(', ')
-          : "Tạo chương trình thất bại";
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Tạo chương trình thất bại";
       toast.error("Lỗi", { description: message });
     },
   });
@@ -537,11 +518,12 @@ export function useUpdateMajorProgram() {
     },
     onError: (error) => {
       const detail = error.response?.data?.detail;
-      const message = typeof detail === 'string'
-        ? detail
-        : Array.isArray(detail)
-          ? detail.map(e => e.msg).join(', ')
-          : "Cập nhật chương trình thất bại";
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Cập nhật chương trình thất bại";
       toast.error("Lỗi", { description: message });
     },
   });
@@ -564,11 +546,12 @@ export function useDeleteMajorProgram() {
     },
     onError: (error) => {
       const detail = error.response?.data?.detail;
-      const message = typeof detail === 'string'
-        ? detail
-        : Array.isArray(detail)
-          ? detail.map(e => e.msg).join(', ')
-          : "Xóa chương trình thất bại";
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Xóa chương trình thất bại";
       toast.error("Lỗi", { description: message });
     },
   });
@@ -602,19 +585,20 @@ export function useCreateProgramOffering() {
       });
       // Invalidate offerings list and major program detail
       queryClient.invalidateQueries({
-        queryKey: organizationKeys.offeringsList(variables.programId)
+        queryKey: organizationKeys.offeringsList(variables.programId),
       });
       queryClient.invalidateQueries({
-        queryKey: organizationKeys.majorProgramDetail(variables.programId)
+        queryKey: organizationKeys.majorProgramDetail(variables.programId),
       });
     },
     onError: (error) => {
       const detail = error.response?.data?.detail;
-      const message = typeof detail === 'string'
-        ? detail
-        : Array.isArray(detail)
-          ? detail.map(e => e.msg).join(', ')
-          : "Tạo loại hình thất bại";
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Tạo loại hình thất bại";
       toast.error("Lỗi", { description: message });
     },
   });
@@ -647,11 +631,12 @@ export function useUpdateProgramOffering() {
     },
     onError: (error) => {
       const detail = error.response?.data?.detail;
-      const message = typeof detail === 'string'
-        ? detail
-        : Array.isArray(detail)
-          ? detail.map(e => e.msg).join(', ')
-          : "Cập nhật loại hình thất bại";
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Cập nhật loại hình thất bại";
       toast.error("Lỗi", { description: message });
     },
   });
@@ -674,11 +659,12 @@ export function useDeleteProgramOffering() {
     },
     onError: (error) => {
       const detail = error.response?.data?.detail;
-      const message = typeof detail === 'string'
-        ? detail
-        : Array.isArray(detail)
-          ? detail.map(e => e.msg).join(', ')
-          : "Xóa loại hình thất bại";
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Xóa loại hình thất bại";
       toast.error("Lỗi", { description: message });
     },
   });
@@ -712,7 +698,7 @@ export function useCreateOfferingAcademicInfo() {
       });
       // Invalidate academic info list
       queryClient.invalidateQueries({
-        queryKey: organizationKeys.academicInfoList(variables.offeringId),
+        queryKey: [...organizationKeys.academicInfo(), "list", variables.offeringId],
       });
       queryClient.invalidateQueries({
         queryKey: organizationKeys.offeringDetail(variables.offeringId),
@@ -720,11 +706,12 @@ export function useCreateOfferingAcademicInfo() {
     },
     onError: (error) => {
       const detail = error.response?.data?.detail;
-      const message = typeof detail === 'string'
-        ? detail
-        : Array.isArray(detail)
-          ? detail.map(e => e.msg).join(', ')
-          : "Tạo thông tin tuyển sinh thất bại";
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Tạo thông tin tuyển sinh thất bại";
       toast.error("Lỗi", { description: message });
     },
   });
@@ -754,19 +741,23 @@ export function useUpdateOfferingAcademicInfo() {
       });
       // Invalidate queries
       queryClient.invalidateQueries({
-        queryKey: organizationKeys.academicInfoList(updatedInfo.offering_id),
+        queryKey: [...organizationKeys.academicInfo(), "list", updatedInfo.offering_id],
       });
       queryClient.invalidateQueries({
-        queryKey: organizationKeys.academicInfoByYear(updatedInfo.offering_id, updatedInfo.academic_year),
+        queryKey: organizationKeys.academicInfoByYear(
+          updatedInfo.offering_id,
+          updatedInfo.academic_year
+        ),
       });
     },
     onError: (error) => {
       const detail = error.response?.data?.detail;
-      const message = typeof detail === 'string'
-        ? detail
-        : Array.isArray(detail)
-          ? detail.map(e => e.msg).join(', ')
-          : "Cập nhật thông tin tuyển sinh thất bại";
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Cập nhật thông tin tuyển sinh thất bại";
       toast.error("Lỗi", { description: message });
     },
   });
@@ -778,11 +769,7 @@ export function useUpdateOfferingAcademicInfo() {
 export function useDeleteOfferingAcademicInfo() {
   const queryClient = useQueryClient();
 
-  return useMutation<
-    void,
-    AxiosError<ApiErrorResponse>,
-    { id: number; offeringId: number }
-  >({
+  return useMutation<void, AxiosError<ApiErrorResponse>, { id: number; offeringId: number }>({
     mutationFn: async ({ id }) => {
       await api.delete(API_ENDPOINTS.ADMIN.ORGANIZATION.DELETE_ACADEMIC_INFO(id));
     },
@@ -795,11 +782,12 @@ export function useDeleteOfferingAcademicInfo() {
     },
     onError: (error) => {
       const detail = error.response?.data?.detail;
-      const message = typeof detail === 'string'
-        ? detail
-        : Array.isArray(detail)
-          ? detail.map(e => e.msg).join(', ')
-          : "Xóa thông tin tuyển sinh thất bại";
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Xóa thông tin tuyển sinh thất bại";
       toast.error("Lỗi", { description: message });
     },
   });
@@ -839,9 +827,7 @@ export function useMajor(id: number) {
   return useQuery<Major, AxiosError<ApiErrorResponse>>({
     queryKey: organizationKeys.majorDetail(id),
     queryFn: async () => {
-      const response = await api.get<Major>(
-        API_ENDPOINTS.ORGANIZATION.GET_MAJOR(id)
-      );
+      const response = await api.get<Major>(API_ENDPOINTS.ORGANIZATION.GET_MAJOR(id));
       return response.data;
     },
     enabled: !!id,
@@ -856,10 +842,7 @@ export function useMajor(id: number) {
 export function useCreateMajor() {
   return useMutation<Major, AxiosError<ApiErrorResponse>, MajorCreate>({
     mutationFn: async (data) => {
-      const response = await api.post<Major>(
-        API_ENDPOINTS.ADMIN.ORGANIZATION.CREATE_MAJOR,
-        data
-      );
+      const response = await api.post<Major>(API_ENDPOINTS.ADMIN.ORGANIZATION.CREATE_MAJOR, data);
       return response.data;
     },
     onSuccess: (newMajor) => {
@@ -869,11 +852,12 @@ export function useCreateMajor() {
     },
     onError: (error) => {
       const detail = error.response?.data?.detail;
-      const message = typeof detail === 'string'
-        ? detail
-        : Array.isArray(detail)
-          ? detail.map(e => e.msg).join(', ')
-          : "Tạo ngành học thất bại";
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Tạo ngành học thất bại";
       toast.error("Lỗi", { description: message });
     },
   });
@@ -884,11 +868,7 @@ export function useCreateMajor() {
  * Update an existing major
  */
 export function useUpdateMajor() {
-  return useMutation<
-    Major,
-    AxiosError<ApiErrorResponse>,
-    { id: number; data: MajorUpdate }
-  >({
+  return useMutation<Major, AxiosError<ApiErrorResponse>, { id: number; data: MajorUpdate }>({
     mutationFn: async ({ id, data }) => {
       const response = await api.put<Major>(
         API_ENDPOINTS.ADMIN.ORGANIZATION.UPDATE_MAJOR(id),
@@ -903,11 +883,12 @@ export function useUpdateMajor() {
     },
     onError: (error) => {
       const detail = error.response?.data?.detail;
-      const message = typeof detail === 'string'
-        ? detail
-        : Array.isArray(detail)
-          ? detail.map(e => e.msg).join(', ')
-          : "Cập nhật ngành học thất bại";
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Cập nhật ngành học thất bại";
       toast.error("Lỗi", { description: message });
     },
   });
@@ -927,11 +908,12 @@ export function useDeleteMajor() {
     },
     onError: (error) => {
       const detail = error.response?.data?.detail;
-      const message = typeof detail === 'string'
-        ? detail
-        : Array.isArray(detail)
-          ? detail.map(e => e.msg).join(', ')
-          : "Xóa ngành học thất bại";
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Xóa ngành học thất bại";
       toast.error("Lỗi", { description: message });
     },
   });
@@ -983,11 +965,7 @@ export function useAcademicInfoByYear(majorId: number, year: number) {
 export function useCreateAcademicInfo() {
   const queryClient = useQueryClient();
 
-  return useMutation<
-    MajorAcademicInfo,
-    AxiosError<ApiErrorResponse>,
-    MajorAcademicInfoCreate
-  >({
+  return useMutation<MajorAcademicInfo, AxiosError<ApiErrorResponse>, MajorAcademicInfoCreate>({
     mutationFn: async (data) => {
       const response = await api.post<MajorAcademicInfo>(
         API_ENDPOINTS.ADMIN.ORGANIZATION.CREATE_ACADEMIC_INFO(data.major_id),
@@ -1006,11 +984,12 @@ export function useCreateAcademicInfo() {
     },
     onError: (error) => {
       const detail = error.response?.data?.detail;
-      const message = typeof detail === 'string'
-        ? detail
-        : Array.isArray(detail)
-          ? detail.map(e => e.msg).join(', ')
-          : "Tạo thông tin học thuật thất bại";
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Tạo thông tin học thuật thất bại";
       toast.error("Lỗi", { description: message });
     },
   });
@@ -1044,16 +1023,20 @@ export function useUpdateAcademicInfo() {
         queryKey: organizationKeys.academicInfoHistory(updatedInfo.major_id),
       });
       queryClient.invalidateQueries({
-        queryKey: organizationKeys.academicInfoByYearLegacy(updatedInfo.major_id, updatedInfo.academic_year),
+        queryKey: organizationKeys.academicInfoByYearLegacy(
+          updatedInfo.major_id,
+          updatedInfo.academic_year
+        ),
       });
     },
     onError: (error) => {
       const detail = error.response?.data?.detail;
-      const message = typeof detail === 'string'
-        ? detail
-        : Array.isArray(detail)
-          ? detail.map(e => e.msg).join(', ')
-          : "Cập nhật thông tin học thuật thất bại";
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Cập nhật thông tin học thuật thất bại";
       toast.error("Lỗi", { description: message });
     },
   });
@@ -1066,11 +1049,7 @@ export function useUpdateAcademicInfo() {
 export function useDeleteAcademicInfo() {
   const queryClient = useQueryClient();
 
-  return useMutation<
-    void,
-    AxiosError<ApiErrorResponse>,
-    { id: number; majorId: number }
-  >({
+  return useMutation<void, AxiosError<ApiErrorResponse>, { id: number; majorId: number }>({
     mutationFn: async ({ id }) => {
       await api.delete(API_ENDPOINTS.ADMIN.ORGANIZATION.DELETE_ACADEMIC_INFO(id));
     },
@@ -1083,11 +1062,12 @@ export function useDeleteAcademicInfo() {
     },
     onError: (error) => {
       const detail = error.response?.data?.detail;
-      const message = typeof detail === 'string'
-        ? detail
-        : Array.isArray(detail)
-          ? detail.map(e => e.msg).join(', ')
-          : "Xóa thông tin học thuật thất bại";
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Xóa thông tin học thuật thất bại";
       toast.error("Lỗi", { description: message });
     },
   });
@@ -1130,7 +1110,7 @@ export function getAllDescendantIds(unit: OrganizationUnit): Set<number> {
 
   const collectDescendants = (currentUnit: OrganizationUnit) => {
     if (currentUnit.children && currentUnit.children.length > 0) {
-      currentUnit.children.forEach(child => {
+      currentUnit.children.forEach((child) => {
         descendants.add(child.id);
         collectDescendants(child); // Recursive
       });
@@ -1177,7 +1157,7 @@ export function wouldCreateCircularDependency(
  */
 export function useDegreeLevels(activeOnly: boolean = true) {
   return useQuery<ConfigDegreeLevel[], AxiosError<ApiErrorResponse>>({
-    queryKey: ['config', 'degree-levels', activeOnly],
+    queryKey: ["config", "degree-levels", activeOnly],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (activeOnly) params.append("active_only", "true");
@@ -1198,7 +1178,7 @@ export function useDegreeLevels(activeOnly: boolean = true) {
  */
 export function useOfferingTypes(activeOnly: boolean = true) {
   return useQuery<ConfigOfferingType[], AxiosError<ApiErrorResponse>>({
-    queryKey: ['config', 'offering-types', activeOnly],
+    queryKey: ["config", "offering-types", activeOnly],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (activeOnly) params.append("active_only", "true");

@@ -1,7 +1,7 @@
 // src/components/admin/organization/OfferingAcademicInfoManagement.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import {
   Dialog,
   DialogContent,
@@ -75,22 +75,28 @@ export function OfferingAcademicInfoManagement({
   onOpenChange,
   offering,
 }: OfferingAcademicInfoManagementProps) {
-  // States
   const [academicInfoDialogOpen, setAcademicInfoDialogOpen] = useState(false);
-  const [selectedAcademicInfo, setSelectedAcademicInfo] =
-    useState<OfferingAcademicInfo | null>(null);
+  const [selectedAcademicInfo, setSelectedAcademicInfo] = useState<OfferingAcademicInfo | null>(
+    null
+  );
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<OfferingAcademicInfo | null>(null);
 
-  // Queries & Mutations
   const {
     data: academicInfos = [],
     isLoading,
     error,
   } = useOfferingAcademicInfoList(offering.id, false);
+
+  const hasData = academicInfos.length > 0;
+
   const deleteAcademicInfoMutation = useDeleteOfferingAcademicInfo();
 
-  // Handlers
+  // ✨ Tính toán danh sách các năm đã tồn tại
+  const existingYears = useMemo(() => {
+    return academicInfos.map((info) => info.academic_year);
+  }, [academicInfos]);
+
   const handleCreate = () => {
     setSelectedAcademicInfo(null);
     setAcademicInfoDialogOpen(true);
@@ -121,19 +127,31 @@ export function OfferingAcademicInfoManagement({
     }
   };
 
-  // Format currency
   const formatCurrency = (amount: number | null | undefined) => {
     if (amount === null || amount === undefined) return "—";
     return new Intl.NumberFormat("vi-VN", {
       style: "currency",
       currency: "VND",
-    }).format(amount);
+    }).format(Number(amount)); // Đảm bảo ép kiểu Number trước khi format
+  };
+
+  // ✅ AUDIT: Hàm này đảm bảo tính nhất quán dữ liệu Frontend-Backend.
+  // Khi lưu thành công, dữ liệu từ Backend (newData) sẽ được set ngay vào state,
+  // giúp Form hiển thị đúng dữ liệu mới nhất (bao gồm ID vừa sinh ra).
+  const handleSaveSuccess = (newData: OfferingAcademicInfo, shouldClose: boolean) => {
+    if (shouldClose) {
+      setAcademicInfoDialogOpen(false);
+      setSelectedAcademicInfo(null);
+    } else {
+      // Giữ dialog mở và chuyển sang chế độ Edit với dữ liệu mới
+      setSelectedAcademicInfo(newData);
+    }
   };
 
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="sm:max-w-[900px] max-h-[90vh]">
+        <DialogContent className="max-h-[90vh] sm:max-w-[900px]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <BookOpen className="h-5 w-5" />
@@ -147,15 +165,15 @@ export function OfferingAcademicInfoManagement({
           </DialogHeader>
 
           <div className="space-y-4">
-            {/* Create Button */}
-            <div className="flex justify-end">
-              <Button onClick={handleCreate} size="sm">
-                <Plus className="w-4 h-4 mr-2" />
-                Thêm năm học mới
-              </Button>
-            </div>
+            {hasData && (
+              <div className="flex justify-end">
+                <Button onClick={handleCreate} size="sm">
+                  <Plus className="mr-2 h-4 w-4" />
+                  Thêm năm học mới
+                </Button>
+              </div>
+            )}
 
-            {/* Loading State */}
             {isLoading && (
               <div className="space-y-2">
                 {[1, 2, 3].map((i) => (
@@ -164,34 +182,30 @@ export function OfferingAcademicInfoManagement({
               </div>
             )}
 
-            {/* Error State */}
             {error && (
               <Alert variant="destructive">
                 <AlertCircle className="h-4 w-4" />
-                <AlertDescription>
-                  Không thể tải dữ liệu. Vui lòng thử lại sau.
-                </AlertDescription>
+                <AlertDescription>Không thể tải dữ liệu. Vui lòng thử lại sau.</AlertDescription>
               </Alert>
             )}
 
-            {/* Empty State */}
-            {!isLoading && !error && academicInfos.length === 0 && (
-              <div className="text-center py-12 text-muted-foreground border-2 border-dashed rounded-lg">
-                <BookOpen className="h-12 w-12 mx-auto mb-4 opacity-50" />
+            {!isLoading && !error && !hasData && (
+              <div className="text-muted-foreground flex flex-col items-center justify-center rounded-lg border-2 border-dashed py-12 text-center">
+                <BookOpen className="mb-4 h-12 w-12 opacity-50" />
                 <p className="text-lg font-medium">Chưa có thông tin tuyển sinh</p>
-                <p className="text-sm mt-2">
-                  Thêm thông tin tuyển sinh cho năm học đầu tiên
+                <p className="mx-auto mt-2 max-w-xs text-sm">
+                  Thiết lập thông tin học phí, chỉ tiêu và phương thức xét tuyển cho năm học đầu
+                  tiên.
                 </p>
-                <Button onClick={handleCreate} className="mt-4" size="sm">
-                  <Plus className="w-4 h-4 mr-2" />
-                  Thêm ngay
+                <Button onClick={handleCreate} className="mt-6">
+                  <Plus className="mr-2 h-4 w-4" />
+                  Bắt đầu tạo mới
                 </Button>
               </div>
             )}
 
-            {/* Data Table */}
             {!isLoading && !error && academicInfos.length > 0 && (
-              <div className="border rounded-lg overflow-hidden">
+              <div className="overflow-hidden rounded-lg border">
                 <div className="max-h-[500px] overflow-y-auto">
                   <Table>
                     <TableHeader>
@@ -209,20 +223,18 @@ export function OfferingAcademicInfoManagement({
                         <TableRow key={info.id}>
                           <TableCell>
                             <div className="flex items-center gap-2">
-                              <Calendar className="h-4 w-4 text-muted-foreground" />
+                              <Calendar className="text-muted-foreground h-4 w-4" />
                               <span className="font-medium">{info.academic_year}</span>
                             </div>
                           </TableCell>
                           <TableCell>
-                            <Badge
-                              variant={info.is_published ? "default" : "secondary"}
-                            >
+                            <Badge variant={info.is_published ? "default" : "secondary"}>
                               {info.is_published ? "Công khai" : "Nháp"}
                             </Badge>
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-2">
-                              <DollarSign className="h-4 w-4 text-muted-foreground" />
+                              <DollarSign className="text-muted-foreground h-4 w-4" />
                               <span className="text-sm">
                                 {formatCurrency(info.tuition_fee_per_year)}
                               </span>
@@ -230,15 +242,13 @@ export function OfferingAcademicInfoManagement({
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-2">
-                              <Users className="h-4 w-4 text-muted-foreground" />
-                              <span className="text-sm">
-                                {info.annual_admission_quota ?? "—"}
-                              </span>
+                              <Users className="text-muted-foreground h-4 w-4" />
+                              <span className="text-sm">{info.annual_admission_quota ?? "—"}</span>
                             </div>
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-2">
-                              <TrendingUp className="h-4 w-4 text-muted-foreground" />
+                              <TrendingUp className="text-muted-foreground h-4 w-4" />
                               <span className="text-sm">
                                 {info.cutoff_score_previous_year ?? "—"}
                               </span>
@@ -248,19 +258,19 @@ export function OfferingAcademicInfoManagement({
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
                                 <Button variant="ghost" size="sm">
-                                  <MoreVertical className="w-4 h-4" />
+                                  <MoreVertical className="h-4 w-4" />
                                 </Button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
                                 <DropdownMenuItem onClick={() => handleEdit(info)}>
-                                  <Edit className="w-4 h-4 mr-2" />
+                                  <Edit className="mr-2 h-4 w-4" />
                                   Chỉnh sửa
                                 </DropdownMenuItem>
                                 <DropdownMenuItem
                                   onClick={() => handleDeleteClick(info)}
                                   className="text-red-600"
                                 >
-                                  <Trash2 className="w-4 h-4 mr-2" />
+                                  <Trash2 className="mr-2 h-4 w-4" />
                                   Xóa
                                 </DropdownMenuItem>
                               </DropdownMenuContent>
@@ -277,15 +287,16 @@ export function OfferingAcademicInfoManagement({
         </DialogContent>
       </Dialog>
 
-      {/* Academic Info Dialog (Create/Edit) */}
+      {/* ✅ Cập nhật: Truyền existingYears vào Dialog */}
       <OfferingAcademicInfoDialog
         open={academicInfoDialogOpen}
         onOpenChange={setAcademicInfoDialogOpen}
         offering={offering}
         academicInfo={selectedAcademicInfo}
+        existingYears={existingYears}
+        onSaveSuccess={handleSaveSuccess} // Prop mới
       />
 
-      {/* Delete Confirmation */}
       <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
