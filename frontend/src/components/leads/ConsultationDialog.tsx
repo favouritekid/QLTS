@@ -41,7 +41,7 @@ import { useConsultationStatuses } from "@/hooks/usePipeline";
 // Validation schema
 const consultationSchema = z.object({
   scheduled_at: z.string().min(1, "Scheduled date/time is required"),
-  consultation_status_id: z.number({ required_error: "Status is required" }),
+  consultation_status_id: z.string({ message: "Status is required" }),
   notes: z
     .string()
     .max(1000, "Notes must be less than 1000 characters")
@@ -160,7 +160,7 @@ export function ConsultationDialog({
                             <div className="flex items-center gap-2">
                               <div
                                 className="w-3 h-3 rounded-full"
-                                style={{ backgroundColor: status.color }}
+                                style={{ backgroundColor: status.color_code }}
                               />
                               {status.name}
                             </div>
