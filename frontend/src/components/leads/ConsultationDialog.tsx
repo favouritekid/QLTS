@@ -41,7 +41,7 @@ import { useConsultationStatuses } from "@/hooks/usePipeline";
 // Validation schema
 const consultationSchema = z.object({
   scheduled_at: z.string().min(1, "Scheduled date/time is required"),
-  consultation_status_id: z.number({ required_error: "Status is required" }),
+  consultation_status_id: z.string().min(1, "Status is required"),
   notes: z
     .string()
     .max(1000, "Notes must be less than 1000 characters")
@@ -140,8 +140,8 @@ export function ConsultationDialog({
                 <FormItem>
                   <FormLabel>Status *</FormLabel>
                   <Select
-                    onValueChange={(value) => field.onChange(Number(value))}
-                    value={field.value?.toString()}
+                    onValueChange={field.onChange}
+                    value={field.value}
                     disabled={statusesLoading}
                   >
                     <FormControl>
@@ -156,11 +156,11 @@ export function ConsultationDialog({
                         </div>
                       ) : (
                         statuses?.map((status) => (
-                          <SelectItem key={status.id} value={status.id.toString()}>
+                          <SelectItem key={status.id} value={status.id}>
                             <div className="flex items-center gap-2">
                               <div
                                 className="w-3 h-3 rounded-full"
-                                style={{ backgroundColor: status.color }}
+                                style={{ backgroundColor: status.color || status.color_code }}
                               />
                               {status.name}
                             </div>

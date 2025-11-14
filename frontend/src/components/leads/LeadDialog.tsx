@@ -63,7 +63,7 @@ const leadSchema = z.object({
   education_level: z
     .enum([
       "high_school",
-      "diploma",
+      "associate",
       "bachelor",
       "master",
       "phd",
@@ -79,7 +79,9 @@ const leadSchema = z.object({
     .nullable(),
   location: z.string().max(255, "Location must be less than 255 characters").optional().nullable(),
   offering_id: z.number().optional().nullable(),
-  unit_id: z.number({ required_error: "Organization unit is required" }),
+  unit_id: z
+    .string()
+    .min(1, "Organization unit is required"),
 });
 
 type LeadFormValues = z.infer<typeof leadSchema>;
@@ -111,7 +113,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
           gpa: lead.gpa,
           location: lead.location,
           offering_id: lead.offering_id,
-          unit_id: lead.unit_id,
+          unit_id: lead.unit_id?.toString() || "",
         }
       : {
           full_name: "",
@@ -122,7 +124,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
           gpa: null,
           location: null,
           offering_id: null,
-          unit_id: undefined,
+          unit_id: "",
         },
   });
 
@@ -143,7 +145,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
         gpa: lead.gpa,
         location: lead.location,
         offering_id: lead.offering_id,
-        unit_id: lead.unit_id,
+        unit_id: lead.unit_id?.toString() || "",
       });
     } else if (isCreate) {
       form.reset({
@@ -155,21 +157,27 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
         gpa: null,
         location: null,
         offering_id: null,
-        unit_id: undefined,
+        unit_id: "",
       });
     }
   }, [open, lead, isEdit, isCreate, form]);
 
   const onSubmit = async (data: LeadFormValues) => {
+    // Convert unit_id string to number for API
+    const apiData = {
+      ...data,
+      unit_id: parseInt(data.unit_id, 10),
+    };
+
     if (isCreate) {
-      createMutation.mutate(data, {
+      createMutation.mutate(apiData, {
         onSuccess: () => {
           onOpenChange(false);
         },
       });
     } else if (isEdit && lead) {
       updateMutation.mutate(
-        { id: lead.id, data },
+        { id: lead.id, data: apiData },
         {
           onSuccess: () => {
             onOpenChange(false);
@@ -279,8 +287,8 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                     <FormItem>
                       <FormLabel>Organization Unit *</FormLabel>
                       <Select
-                        onValueChange={(value) => field.onChange(Number(value))}
-                        value={field.value?.toString()}
+                        onValueChange={field.onChange}
+                        value={field.value}
                         disabled={unitsLoading}
                       >
                         <FormControl>
@@ -325,7 +333,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                         </FormControl>
                         <SelectContent>
                           <SelectItem value="high_school">High School</SelectItem>
-                          <SelectItem value="diploma">Diploma</SelectItem>
+                          <SelectItem value="associate">Associate</SelectItem>
                           <SelectItem value="bachelor">Bachelor</SelectItem>
                           <SelectItem value="master">Master</SelectItem>
                           <SelectItem value="phd">PhD</SelectItem>

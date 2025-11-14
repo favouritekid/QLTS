@@ -164,6 +164,7 @@ export interface BulkAssignLeads {
   lead_ids: number[]
   officer_id?: number // If not provided, use auto-assignment
   method?: AssignmentMethod
+  reason?: string // Optional reason for bulk assignment
 }
 
 /**
@@ -186,6 +187,8 @@ export interface Consultation {
   id: number
   lead_id: number
   consultation_date: string // ISO datetime
+  scheduled_at?: string | null // ISO datetime - when consultation is scheduled
+  created_at?: string | null // ISO datetime - when record was created
   method: ConsultationMethod
   notes?: string | null
   outcome?: ConsultationOutcome | null
@@ -202,8 +205,9 @@ export interface Consultation {
  * Consultation creation payload
  */
 export interface ConsultationCreate {
-  consultation_date: string // ISO datetime
-  method: ConsultationMethod
+  consultation_date?: string // ISO datetime (optional if scheduled_at is provided)
+  scheduled_at?: string // ISO datetime (alternative to consultation_date)
+  method?: ConsultationMethod
   notes?: string
   outcome?: ConsultationOutcome
   duration_minutes?: number
@@ -298,12 +302,15 @@ export type TimelineItemType =
 export interface TimelineItem {
   id: number
   type: TimelineItemType
+  event_type?: TimelineItemType // Alias for type (for backward compatibility)
   timestamp: string // ISO datetime
+  created_at?: string // Alias for timestamp (for backward compatibility)
   description: string
   actor?: {
     id: number
     full_name: string
   } | null
+  actor_id?: number | null // Direct actor ID (alternative to actor object)
   metadata?: Record<string, unknown>
 }
 
@@ -331,6 +338,11 @@ export interface EngagementMetrics {
   response_rate: number
   avg_response_time_hours: number
   last_interaction_date?: string | null
+  email_opens?: number
+  email_clicks?: number
+  website_visits?: number
+  form_submissions?: number
+  last_activity_days?: number
 }
 
 /**

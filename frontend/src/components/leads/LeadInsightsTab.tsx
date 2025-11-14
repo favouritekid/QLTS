@@ -109,31 +109,31 @@ export function LeadInsightsTab({ insights }: LeadInsightsTabProps) {
             <div className="flex justify-between items-center">
               <span className="text-sm text-muted-foreground">Email Opens</span>
               <span className="font-semibold">
-                {insights.engagement_metrics.email_opens}
+                {insights.engagement_metrics.email_opens ?? 0}
               </span>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-sm text-muted-foreground">Email Clicks</span>
               <span className="font-semibold">
-                {insights.engagement_metrics.email_clicks}
+                {insights.engagement_metrics.email_clicks ?? 0}
               </span>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-sm text-muted-foreground">Website Visits</span>
               <span className="font-semibold">
-                {insights.engagement_metrics.website_visits}
+                {insights.engagement_metrics.website_visits ?? 0}
               </span>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-sm text-muted-foreground">Form Submissions</span>
               <span className="font-semibold">
-                {insights.engagement_metrics.form_submissions}
+                {insights.engagement_metrics.form_submissions ?? 0}
               </span>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-sm text-muted-foreground">Last Activity</span>
               <span className="font-semibold">
-                {insights.engagement_metrics.last_activity_days} days ago
+                {insights.engagement_metrics.last_activity_days ?? 0} days ago
               </span>
             </div>
           </CardContent>
