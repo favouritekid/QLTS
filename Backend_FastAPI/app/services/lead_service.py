@@ -21,6 +21,117 @@ from ..utils.exceptions import (
 log = structlog.get_logger(__name__)
 
 
+async def calculate_lead_score(
+    db: AsyncSession,
+    lead_education_level: Optional[str] = None,
+    lead_gpa: Optional[float] = None,
+    lead_source: Optional[str] = None,
+    lead_location: Optional[str] = None,
+    unit_id: Optional[int] = None,
+) -> int:
+    """
+    Calculate lead score based on configurable rules from LeadScoringConfig.
+
+    Args:
+        db: Database session
+        lead_education_level: Education level of lead (high_school, bachelor, master, phd)
+        lead_gpa: GPA of lead (0.0-4.0)
+        lead_source: Source of lead (website, referral, social_media, etc.)
+        lead_location: Location of lead
+        unit_id: Organization unit ID (for unit-specific scoring config)
+
+    Returns:
+        int: Calculated lead score (0-100)
+    """
+    try:
+        # Default scoring weights (used if no config found)
+        default_education_scores = {
+            "high_school": 20,
+            "bachelor": 40,
+            "master": 60,
+            "phd": 80,
+        }
+        default_source_scores = {
+            "referral": 30,
+            "website": 20,
+            "social_media": 15,
+            "walk_in": 10,
+            "email": 15,
+            "phone": 15,
+            "event": 25,
+            "other": 5,
+        }
+        default_gpa_multiplier = 10  # 4.0 GPA = 40 points
+        default_location_bonus = 20
+
+        score = 0
+
+        # Try to load scoring config from database
+        scoring_config = None
+        if unit_id:
+            scoring_config_query = (
+                select(models.LeadScoringConfig)
+                .where(models.LeadScoringConfig.unit_id == unit_id)
+            )
+            scoring_config_result = await db.execute(scoring_config_query)
+            scoring_config = scoring_config_result.scalar_one_or_none()
+
+        # Extract config params or use defaults
+        if scoring_config and scoring_config.params:
+            params = scoring_config.params
+            education_scores = params.get("education_scores", default_education_scores)
+            source_scores = params.get("source_scores", default_source_scores)
+            gpa_multiplier = params.get("gpa_multiplier", default_gpa_multiplier)
+            priority_locations = params.get("priority_locations", [])
+            location_bonus = params.get("location_bonus", default_location_bonus)
+        else:
+            education_scores = default_education_scores
+            source_scores = default_source_scores
+            gpa_multiplier = default_gpa_multiplier
+            priority_locations = []
+            location_bonus = default_location_bonus
+
+        # Calculate education score
+        if lead_education_level:
+            score += education_scores.get(lead_education_level.lower(), 0)
+
+        # Calculate GPA score (0-4.0 scale)
+        if lead_gpa is not None and lead_gpa > 0:
+            gpa_score = min(int(lead_gpa * gpa_multiplier), 40)  # Cap at 40 points
+            score += gpa_score
+
+        # Calculate source score
+        if lead_source:
+            score += source_scores.get(lead_source.lower(), 0)
+
+        # Calculate location bonus
+        if lead_location and priority_locations:
+            if lead_location.lower() in [loc.lower() for loc in priority_locations]:
+                score += location_bonus
+
+        # Cap score at 100
+        final_score = min(score, 100)
+
+        log.debug(
+            "Lead score calculated",
+            education_level=lead_education_level,
+            gpa=lead_gpa,
+            source=lead_source,
+            location=lead_location,
+            score=final_score,
+        )
+
+        return final_score
+
+    except Exception as e:
+        log.error(
+            "Error calculating lead score, returning default 0",
+            error=str(e),
+            exc_info=True,
+        )
+        return 0
+
+
 async def _log_lead_state_change(
     db: AsyncSession,
     lead: models.Lead,
@@ -264,6 +375,19 @@ async def create_lead(db: AsyncSession, lead_in: schemas.LeadCreate) -> models.L
 
         # Chuẩn bị dữ liệu và tạo đối tượng Lead
         create_data = lead_in.model_dump()
+
+        # Calculate lead score before creating the lead
+        calculated_score = await calculate_lead_score(
+            db,
+            lead_education_level=create_data.get("education_level"),
+            lead_gpa=create_data.get("gpa"),
+            lead_source=create_data.get("source"),
+            lead_location=create_data.get("location"),
+            unit_id=create_data.get("unit_id"),
+        )
+
+        # Set the calculated score
+        create_data["lead_score"] = calculated_score
         db_lead = models.Lead(**create_data)
 
         # Lấy trạng thái ban đầu từ DB
@@ -378,11 +502,33 @@ async def update_lead(
                         detail="Another lead with this email already exists in the unit."
                     )
 
+            # Check if scoring-related fields are being updated
+            scoring_fields = ["education_level", "gpa", "source", "location"]
+            should_recalculate_score = any(field in update_data for field in scoring_fields)
+
             # Cập nhật các trường thông thường
             for key, value in update_data.items():
                 # Xử lý consultation_status_id riêng
                 if key != "consultation_status_id":
                     setattr(db_lead, key, value)
+
+            # Recalculate lead score if relevant fields changed
+            if should_recalculate_score:
+                recalculated_score = await calculate_lead_score(
+                    db,
+                    lead_education_level=db_lead.education_level,
+                    lead_gpa=db_lead.gpa,
+                    lead_source=db_lead.source,
+                    lead_location=db_lead.location,
+                    unit_id=db_lead.unit_id,
+                )
+                db_lead.lead_score = recalculated_score
+                log.info(
+                    "Lead score recalculated on update",
+                    lead_id=lead_id,
+                    old_score=db_lead.lead_score if not should_recalculate_score else "N/A",
+                    new_score=recalculated_score,
+                )
 
             # Xử lý cập nhật consultation_status_id (nếu có)
             if "consultation_status_id" in update_data:

@@ -1,6 +1,10 @@
+import csv
+import io
+from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, models, schemas
@@ -165,3 +169,110 @@ async def delete_a_consultation(
     """(Admin only) Xóa một ghi chú tư vấn (Đã xác thực 2 lớp)."""
     await lead_service.delete_consultation(db, lead.id, consultation_id, current_user)
     return None
+
+
+@router.get("/export")
+async def export_leads(
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = PermissionDep,
+    format: str = Query("csv", description="Export format (csv or xlsx)"),
+    # Apply same filters as get_all_leads
+    status: Optional[str] = Query(
+        None, description="Filter by status (comma-separated)"
+    ),
+    assigned_officer_id: Optional[int] = Query(
+        None, description="Filter by assigned officer ID"
+    ),
+    unit_id: Optional[int] = Query(None, description="Filter by organization unit ID"),
+    offering_id: Optional[int] = Query(None, description="Filter by program offering ID"),
+    source: Optional[str] = Query(
+        None, description="Filter by source (comma-separated)"
+    ),
+    search: Optional[str] = Query(
+        None, description="Search term for name, email, phone"
+    ),
+    sort_by: str = Query("created_at", description="Field to sort by"),
+    order: str = Query("desc", description="Sort order (asc or desc)"),
+):
+    """
+    Export leads to CSV or Excel file.
+
+    Apply same filters as the list endpoint to allow exporting filtered results.
+    Maximum 10,000 leads per export to prevent performance issues.
+    """
+    # Get filtered leads (no pagination, but limit to 10,000)
+    total, leads = await lead_service.get_leads(
+        db,
+        skip=0,
+        limit=10000,  # Export limit
+        status=status,
+        assigned_officer_id=assigned_officer_id,
+        unit_id=unit_id,
+        offering_id=offering_id,
+        source=source,
+        search=search,
+        sort_by=sort_by,
+        order=order,
+    )
+
+    if format.lower() == "csv":
+        # Generate CSV
+        output = io.StringIO()
+        fieldnames = [
+            "id",
+            "full_name",
+            "email",
+            "phone",
+            "status",
+            "lead_score",
+            "source",
+            "education_level",
+            "gpa",
+            "location",
+            "assigned_officer_id",
+            "pipeline_stage_id",
+            "consultation_status_id",
+            "created_at",
+            "updated_at",
+        ]
+        writer = csv.DictWriter(output, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for lead in leads:
+            writer.writerow({
+                "id": lead.id,
+                "full_name": lead.full_name,
+                "email": lead.email,
+                "phone": lead.phone,
+                "status": lead.status,
+                "lead_score": lead.lead_score,
+                "source": lead.source,
+                "education_level": lead.education_level or "",
+                "gpa": lead.gpa or "",
+                "location": lead.location or "",
+                "assigned_officer_id": lead.assigned_officer_id or "",
+                "pipeline_stage_id": lead.pipeline_stage_id or "",
+                "consultation_status_id": lead.consultation_status_id or "",
+                "created_at": lead.created_at.isoformat() if lead.created_at else "",
+                "updated_at": lead.updated_at.isoformat() if lead.updated_at else "",
+            })
+
+        output.seek(0)
+
+        # Generate filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"leads_export_{timestamp}.csv"
+
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
+    else:
+        # For now, only CSV is supported
+        # Excel support can be added later with openpyxl
+        return {
+            "error": "Only CSV format is currently supported. Excel support coming soon."
+        }
