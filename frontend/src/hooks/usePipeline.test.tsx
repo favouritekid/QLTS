@@ -23,6 +23,9 @@ import {
 import type {
   PipelineStage,
   ConsultationStatus,
+  PipelineStageCreate,
+  PipelineStageUpdate,
+  ConsultationStatusUpdate,
 } from "@/types/pipeline.types";
 import type { Lead } from "@/types/lead.types";
 
@@ -379,6 +382,7 @@ describe("usePipeline Hook", () => {
 
         result.current.mutate({
           lead_id: 1,
+          from_stage_id: "new_lead",
           to_stage_id: "contacted",
         });
 
@@ -412,11 +416,7 @@ describe("usePipeline Hook", () => {
           wrapper: createWrapper(),
         });
 
-        result.current.mutate({
-          leadId: 1,
-          toStageId: "new_lead",
-          reason: "Consultation cancelled",
-        });
+        result.current.mutate(1);
 
         await waitFor(() => expect(result.current.isSuccess).toBe(true));
 

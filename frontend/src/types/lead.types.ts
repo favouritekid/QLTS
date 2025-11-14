@@ -205,8 +205,9 @@ export interface Consultation {
  * Consultation creation payload
  */
 export interface ConsultationCreate {
-  consultation_date: string // ISO datetime
-  method: ConsultationMethod
+  consultation_date?: string // ISO datetime (optional if scheduled_at is provided)
+  scheduled_at?: string // ISO datetime (alternative to consultation_date)
+  method?: ConsultationMethod
   notes?: string
   outcome?: ConsultationOutcome
   duration_minutes?: number

@@ -41,9 +41,7 @@ import { useConsultationStatuses } from "@/hooks/usePipeline";
 // Validation schema
 const consultationSchema = z.object({
   scheduled_at: z.string().min(1, "Scheduled date/time is required"),
-  consultation_status_id: z.string({
-    required_error: "Status is required",
-  }).min(1, "Status is required"),
+  consultation_status_id: z.string().min(1, "Status is required"),
   notes: z
     .string()
     .max(1000, "Notes must be less than 1000 characters")
