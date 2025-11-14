@@ -119,7 +119,7 @@ describe("Leads API Client", () => {
 
       server.use(
         http.post(`${API_BASE_URL}/api/leads`, async ({ request }) => {
-          const body = (await request.json()) as Record<string, any>;
+          const body = (await request.json()) as Record<string, unknown>;
           return HttpResponse.json(
             {
               id: 999,

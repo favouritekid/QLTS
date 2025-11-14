@@ -63,7 +63,7 @@ const leadSchema = z.object({
   education_level: z
     .enum([
       "high_school",
-      "diploma",
+      "associate",
       "bachelor",
       "master",
       "phd",
@@ -79,7 +79,9 @@ const leadSchema = z.object({
     .nullable(),
   location: z.string().max(255, "Location must be less than 255 characters").optional().nullable(),
   offering_id: z.number().optional().nullable(),
-  unit_id: z.number({ required_error: "Organization unit is required" }),
+  unit_id: z.coerce.number({
+    invalid_type_error: "Organization unit is required",
+  }).min(1, "Organization unit is required"),
 });
 
 type LeadFormValues = z.infer<typeof leadSchema>;
@@ -325,7 +327,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                         </FormControl>
                         <SelectContent>
                           <SelectItem value="high_school">High School</SelectItem>
-                          <SelectItem value="diploma">Diploma</SelectItem>
+                          <SelectItem value="associate">Associate</SelectItem>
                           <SelectItem value="bachelor">Bachelor</SelectItem>
                           <SelectItem value="master">Master</SelectItem>
                           <SelectItem value="phd">PhD</SelectItem>

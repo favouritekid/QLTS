@@ -52,6 +52,7 @@ export interface ConsultationStatus {
   id: string
   name: string
   color_code: string // Hex color (e.g., '#4CAF50')
+  color?: string // Alias for color_code (for backward compatibility)
   stage_id: string // Foreign key to PipelineStage
 
   // Relationship
