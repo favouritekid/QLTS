@@ -1,0 +1,493 @@
+/**
+ * Lead Management - TypeScript Type Definitions
+ * Based on Backend Models (verified in BACKEND_VERIFICATION_REPORT.md)
+ */
+
+// ============================================
+// CORE LEAD TYPES
+// ============================================
+
+/**
+ * Lead Status Enum
+ * Represents the current status of a lead in the system
+ */
+export type LeadStatus =
+  | 'new'
+  | 'assigned'
+  | 'contacted'
+  | 'qualified'
+  | 'unqualified'
+  | 'converted'
+  | 'rejected'
+
+/**
+ * Lead Source Enum
+ * Where the lead came from
+ */
+export type LeadSource =
+  | 'website'
+  | 'referral'
+  | 'social_media'
+  | 'walk_in'
+  | 'email'
+  | 'phone'
+  | 'event'
+  | 'other'
+
+/**
+ * Education Level Enum
+ */
+export type EducationLevel =
+  | 'high_school'
+  | 'associate'
+  | 'bachelor'
+  | 'master'
+  | 'phd'
+  | 'other'
+
+/**
+ * Consultation Method Enum
+ */
+export type ConsultationMethod =
+  | 'phone'
+  | 'email'
+  | 'in_person'
+  | 'online'
+  | 'video_call'
+
+/**
+ * Consultation Outcome Enum
+ */
+export type ConsultationOutcome =
+  | 'interested'
+  | 'not_interested'
+  | 'follow_up'
+  | 'converted'
+  | 'no_show'
+
+/**
+ * Assignment Method Enum
+ */
+export type AssignmentMethod =
+  | 'manual'
+  | 'automatic'
+  | 'round_robin'
+  | 'skill_based'
+
+// ============================================
+// MAIN LEAD INTERFACE
+// ============================================
+
+/**
+ * Complete Lead object from backend
+ */
+export interface Lead {
+  id: number
+  full_name: string
+  email: string
+  phone: string
+  source: LeadSource
+  status: LeadStatus
+  lead_score: number
+  education_level?: EducationLevel | null
+  gpa?: number | null
+  location?: string | null
+  officer_rating?: number | null
+  officer_summary?: string | null
+  created_at: string // ISO datetime
+  updated_at: string // ISO datetime
+  assigned_at?: string | null // ISO datetime
+
+  // Foreign Keys
+  offering_id?: number | null
+  unit_id: number
+  assigned_officer_id?: number | null
+  consultation_status_id?: string | null
+  pipeline_stage_id?: string | null
+
+  // Relationships (optional, loaded with joins)
+  offering?: ProgramOffering | null
+  unit?: OrganizationUnit | null
+  assigned_officer?: User | null
+  consultation_status?: ConsultationStatus | null
+  pipeline_stage?: PipelineStage | null
+  consultations?: Consultation[]
+  application?: Application | null
+}
+
+/**
+ * Lead creation payload
+ */
+export interface LeadCreate {
+  full_name: string
+  email: string
+  phone: string
+  source: LeadSource
+  education_level?: EducationLevel | null
+  gpa?: number | null
+  location?: string | null
+  offering_id?: number | null
+  unit_id: number
+}
+
+/**
+ * Lead update payload
+ */
+export interface LeadUpdate {
+  full_name?: string
+  email?: string
+  phone?: string
+  source?: LeadSource
+  status?: LeadStatus
+  education_level?: EducationLevel | null
+  gpa?: number | null
+  location?: string | null
+  officer_rating?: number | null
+  officer_summary?: string | null
+  offering_id?: number | null
+  unit_id?: number
+  pipeline_stage_id?: string | null
+}
+
+/**
+ * Lead assignment payload
+ */
+export interface AssignLead {
+  officer_id: number
+  reason?: string
+}
+
+/**
+ * Bulk assignment payload
+ */
+export interface BulkAssignLeads {
+  lead_ids: number[]
+  officer_id?: number // If not provided, use auto-assignment
+  method?: AssignmentMethod
+}
+
+/**
+ * Lead action payload
+ */
+export interface LeadAction {
+  action: 'reject' | 'reassign' | 'convert'
+  reason?: string
+  new_officer_id?: number // For reassign
+}
+
+// ============================================
+// CONSULTATION TYPES
+// ============================================
+
+/**
+ * Consultation object
+ */
+export interface Consultation {
+  id: number
+  lead_id: number
+  consultation_date: string // ISO datetime
+  method: ConsultationMethod
+  notes?: string | null
+  outcome?: ConsultationOutcome | null
+  duration_minutes?: number | null
+  officer_id: number
+  consultation_status_id?: string | null
+
+  // Relationships
+  officer?: User | null
+  consultation_status?: ConsultationStatus | null
+}
+
+/**
+ * Consultation creation payload
+ */
+export interface ConsultationCreate {
+  consultation_date: string // ISO datetime
+  method: ConsultationMethod
+  notes?: string
+  outcome?: ConsultationOutcome
+  duration_minutes?: number
+  consultation_status_id?: string
+}
+
+/**
+ * Consultation update payload
+ */
+export interface ConsultationUpdate {
+  consultation_date?: string
+  method?: ConsultationMethod
+  notes?: string
+  outcome?: ConsultationOutcome
+  duration_minutes?: number
+  consultation_status_id?: string
+}
+
+// ============================================
+// APPLICATION TYPES
+// ============================================
+
+/**
+ * Application object
+ */
+export interface Application {
+  id: number
+  lead_id: number
+  documents?: Record<string, unknown> | null // JSON field
+  status: string
+  officer_id: number
+
+  // Relationships
+  officer?: User | null
+  lead?: Lead | null
+}
+
+// ============================================
+// CRM INTERACTION TYPES
+// ============================================
+
+/**
+ * CRM Interaction object
+ */
+export interface CRMInteraction {
+  id: number
+  lead_id: number
+  type: string
+  details?: Record<string, unknown> | null // JSON field
+  created_at: string // ISO datetime
+}
+
+// ============================================
+// ASSIGNMENT LOG TYPES
+// ============================================
+
+/**
+ * Assignment Log object
+ */
+export interface AssignmentLog {
+  id: number
+  lead_id: number
+  method: AssignmentMethod
+  timestamp: string // ISO datetime
+  reason?: string | null
+  officer_id: number
+
+  // Relationships
+  officer?: User | null
+}
+
+// ============================================
+// TIMELINE TYPES
+// ============================================
+
+/**
+ * Timeline item type enum
+ */
+export type TimelineItemType =
+  | 'lead_created'
+  | 'status_changed'
+  | 'assigned'
+  | 'consultation_added'
+  | 'consultation_updated'
+  | 'application_submitted'
+  | 'pipeline_moved'
+  | 'note_added'
+
+/**
+ * Timeline item for lead history
+ */
+export interface TimelineItem {
+  id: number
+  type: TimelineItemType
+  timestamp: string // ISO datetime
+  description: string
+  actor?: {
+    id: number
+    full_name: string
+  } | null
+  metadata?: Record<string, unknown>
+}
+
+// ============================================
+// INSIGHTS TYPES
+// ============================================
+
+/**
+ * Lead score breakdown
+ */
+export interface LeadScoreBreakdown {
+  education_level: number
+  gpa: number
+  source: number
+  location: number
+  total: number
+}
+
+/**
+ * Engagement metrics
+ */
+export interface EngagementMetrics {
+  consultations_count: number
+  interactions_count: number
+  response_rate: number
+  avg_response_time_hours: number
+  last_interaction_date?: string | null
+}
+
+/**
+ * Recommended action
+ */
+export interface RecommendedAction {
+  action: string
+  priority: 'low' | 'medium' | 'high' | 'urgent'
+  description: string
+  reason: string
+}
+
+/**
+ * Lead insights (360-degree view)
+ */
+export interface LeadInsights {
+  lead_score_breakdown: LeadScoreBreakdown
+  engagement_metrics: EngagementMetrics
+  conversion_probability: number
+  recommended_actions: RecommendedAction[]
+  risk_factors: string[]
+}
+
+// ============================================
+// PAGINATION & FILTERING
+// ============================================
+
+/**
+ * Pagination parameters
+ */
+export interface PaginationParams {
+  page?: number
+  page_size?: number
+}
+
+/**
+ * Lead list filter parameters
+ */
+export interface LeadListParams extends PaginationParams {
+  status?: string // Comma-separated
+  assigned_officer_id?: number
+  unit_id?: number
+  offering_id?: number
+  source?: string // Comma-separated
+  search?: string
+  sort_by?: string
+  order?: 'asc' | 'desc'
+}
+
+/**
+ * Paginated leads response
+ */
+export interface LeadsPage {
+  total_count: number
+  leads: Lead[]
+}
+
+// ============================================
+// IMPORT/EXPORT TYPES
+// ============================================
+
+/**
+ * Lead import result
+ */
+export interface LeadImportResult {
+  message: string
+  total_rows: number
+  successful_imports: number
+  failed_imports: number
+  errors: Array<{
+    row: number
+    error: string
+  }>
+}
+
+/**
+ * Export format options
+ */
+export type ExportFormat = 'csv' | 'excel'
+
+// ============================================
+// SUPPORTING TYPES
+// ============================================
+
+/**
+ * User (minimal for relationships)
+ */
+export interface User {
+  id: number
+  username: string
+  email: string
+  full_name: string
+  role: string
+  availability_status?: string
+  max_capacity?: number
+}
+
+/**
+ * Organization Unit
+ */
+export interface OrganizationUnit {
+  id: number
+  name: string
+  code: string
+  type: string
+  parent_id?: number | null
+}
+
+/**
+ * Program Offering
+ */
+export interface ProgramOffering {
+  id: number
+  name: string
+  code: string
+  major_id: number
+  level: string
+  duration_months: number
+}
+
+/**
+ * Consultation Status
+ */
+export interface ConsultationStatus {
+  id: string
+  name: string
+  color_code: string
+  stage_id: string
+}
+
+/**
+ * Pipeline Stage
+ */
+export interface PipelineStage {
+  id: string
+  name: string
+  order: number
+}
+
+// ============================================
+// UTILITY TYPES
+// ============================================
+
+/**
+ * API Error response
+ */
+export interface APIError {
+  detail: string | Array<{
+    loc: string[]
+    msg: string
+    type: string
+  }>
+}
+
+/**
+ * Success message response
+ */
+export interface SuccessResponse {
+  message: string
+}

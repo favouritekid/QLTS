@@ -1,12 +1,13 @@
 /**
- * Example Test for API Client
- * This demonstrates how to test API functions with MSW
+ * Leads API Client Tests
+ * Tests for lead management API functions
  */
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import { server } from '@/test/mocks/server'
 import { http, HttpResponse } from 'msw'
-import { api } from './client'
+import { leadsApi } from './leads'
+import type { LeadCreate, LeadUpdate } from '@/types/lead.types'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000'
 
@@ -48,13 +49,12 @@ describe('Leads API Client', () => {
       )
 
       // Act: Make API call
-      const response = await api.get('/api/leads')
+      const result = await leadsApi.getLeads()
 
       // Assert: Verify response
-      expect(response.status).toBe(200)
-      expect(response.data.total_count).toBe(2)
-      expect(response.data.leads).toHaveLength(2)
-      expect(response.data.leads[0].full_name).toBe('Test Lead 1')
+      expect(result.total_count).toBe(2)
+      expect(result.leads).toHaveLength(2)
+      expect(result.leads[0].full_name).toBe('Test Lead 1')
     })
 
     it('should handle API errors', async () => {
@@ -69,7 +69,7 @@ describe('Leads API Client', () => {
       )
 
       // Act & Assert: Verify error is thrown
-      await expect(api.get('/api/leads')).rejects.toThrow()
+      await expect(leadsApi.getLeads()).rejects.toThrow()
     })
 
     it('should filter leads by status', async () => {
@@ -97,20 +97,18 @@ describe('Leads API Client', () => {
       )
 
       // Act: Make filtered API call
-      const response = await api.get('/api/leads', {
-        params: { status: 'new' },
-      })
+      const result = await leadsApi.getLeads({ status: 'new' })
 
       // Assert: Verify filtered response
-      expect(response.data.total_count).toBe(1)
-      expect(response.data.leads[0].status).toBe('new')
+      expect(result.total_count).toBe(1)
+      expect(result.leads[0].status).toBe('new')
     })
   })
 
   describe('POST /api/leads', () => {
     it('should create a new lead', async () => {
       // Arrange: Mock create response
-      const newLeadData = {
+      const newLeadData: LeadCreate = {
         full_name: 'New Lead',
         email: 'newlead@example.com',
         phone: '0909876543',
@@ -128,6 +126,7 @@ describe('Leads API Client', () => {
               status: 'new',
               lead_score: 0,
               created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
             },
             { status: 201 }
           )
@@ -135,13 +134,12 @@ describe('Leads API Client', () => {
       )
 
       // Act: Create lead
-      const response = await api.post('/api/leads', newLeadData)
+      const result = await leadsApi.createLead(newLeadData)
 
       // Assert: Verify creation
-      expect(response.status).toBe(201)
-      expect(response.data.id).toBe(999)
-      expect(response.data.full_name).toBe(newLeadData.full_name)
-      expect(response.data.status).toBe('new')
+      expect(result.id).toBe(999)
+      expect(result.full_name).toBe(newLeadData.full_name)
+      expect(result.status).toBe('new')
     })
 
     it('should validate required fields', async () => {
@@ -165,11 +163,71 @@ describe('Leads API Client', () => {
 
       // Act & Assert: Verify validation error
       await expect(
-        api.post('/api/leads', {
+        leadsApi.createLead({
           full_name: 'Incomplete Lead',
-          // Missing email and phone
+          // @ts-expect-error - Testing validation error
+          email: undefined,
+          phone: undefined,
+          source: 'website',
+          unit_id: 1,
         })
       ).rejects.toThrow()
+    })
+  })
+
+  describe('PUT /api/leads/:id', () => {
+    it('should update a lead', async () => {
+      // Arrange
+      const updateData: LeadUpdate = {
+        full_name: 'Updated Name',
+        status: 'contacted',
+      }
+
+      server.use(
+        http.put(`${API_BASE_URL}/api/leads/1`, async ({ request }) => {
+          const body = await request.json()
+          return HttpResponse.json({
+            id: 1,
+            ...body,
+            updated_at: new Date().toISOString(),
+          })
+        })
+      )
+
+      // Act
+      const result = await leadsApi.updateLead(1, updateData)
+
+      // Assert
+      expect(result.full_name).toBe('Updated Name')
+      expect(result.status).toBe('contacted')
+    })
+  })
+
+  describe('POST /api/leads/:id/assign', () => {
+    it('should assign lead to officer', async () => {
+      // Arrange
+      server.use(
+        http.post(`${API_BASE_URL}/api/leads/1/assign`, async ({ request }) => {
+          const body = await request.json()
+          return HttpResponse.json({
+            id: 1,
+            assigned_officer_id: body.officer_id,
+            status: 'assigned',
+            assigned_at: new Date().toISOString(),
+          })
+        })
+      )
+
+      // Act
+      const result = await leadsApi.assignLead(1, {
+        officer_id: 5,
+        reason: 'Has expertise',
+      })
+
+      // Assert
+      expect(result.assigned_officer_id).toBe(5)
+      expect(result.status).toBe('assigned')
+      expect(result.assigned_at).toBeDefined()
     })
   })
 })
