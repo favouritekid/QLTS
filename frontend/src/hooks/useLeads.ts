@@ -1,0 +1,647 @@
+// src/hooks/useLeads.ts
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AxiosError } from "axios";
+import { toast } from "sonner";
+import { leadsApi } from "@/lib/api/leads";
+import type { ApiErrorResponse } from "@/types/api.types";
+import type {
+  Lead,
+  LeadCreate,
+  LeadUpdate,
+  LeadsPage,
+  LeadListParams,
+  AssignLead,
+  BulkAssignLeads,
+  LeadAction,
+  LeadImportResult,
+  TimelineItem,
+  LeadInsights,
+  Consultation,
+  ConsultationCreate,
+} from "@/types/lead.types";
+
+// =====================================================================
+// QUERY KEYS
+// =====================================================================
+
+export const leadsKeys = {
+  all: ["leads"] as const,
+  lists: () => [...leadsKeys.all, "list"] as const,
+  list: (params?: LeadListParams) => [...leadsKeys.lists(), params] as const,
+  details: () => [...leadsKeys.all, "detail"] as const,
+  detail: (id: number) => [...leadsKeys.details(), id] as const,
+  timeline: (id: number) => [...leadsKeys.all, "timeline", id] as const,
+  insights: (id: number) => [...leadsKeys.all, "insights", id] as const,
+};
+
+// =====================================================================
+// QUERIES (READ) - LEADS
+// =====================================================================
+
+/**
+ * Get paginated leads list with optional filters
+ *
+ * @example
+ * ```tsx
+ * const { data, isLoading } = useLeads({
+ *   page: 1,
+ *   page_size: 20,
+ *   status: 'new',
+ *   search: 'John',
+ * });
+ * ```
+ */
+export function useLeads(params?: LeadListParams) {
+  return useQuery<LeadsPage, AxiosError<ApiErrorResponse>>({
+    queryKey: leadsKeys.list(params),
+    queryFn: async () => {
+      return await leadsApi.getLeads(params);
+    },
+    staleTime: 1000 * 30, // 30 seconds
+    gcTime: 1000 * 60 * 5, // 5 minutes in cache
+  });
+}
+
+/**
+ * Get a single lead by ID
+ *
+ * @example
+ * ```tsx
+ * const { data: lead, isLoading } = useLead(123);
+ * ```
+ */
+export function useLead(id: number, enabled: boolean = true) {
+  return useQuery<Lead, AxiosError<ApiErrorResponse>>({
+    queryKey: leadsKeys.detail(id),
+    queryFn: async () => {
+      return await leadsApi.getLead(id);
+    },
+    enabled: enabled && !!id,
+    staleTime: 1000 * 60, // 1 minute
+    gcTime: 1000 * 60 * 5, // 5 minutes in cache
+  });
+}
+
+/**
+ * Get timeline events for a lead
+ *
+ * @example
+ * ```tsx
+ * const { data: timeline } = useLeadTimeline(123);
+ * ```
+ */
+export function useLeadTimeline(leadId: number) {
+  return useQuery<TimelineItem[], AxiosError<ApiErrorResponse>>({
+    queryKey: leadsKeys.timeline(leadId),
+    queryFn: async () => {
+      return await leadsApi.getLeadTimeline(leadId);
+    },
+    enabled: !!leadId,
+    staleTime: 1000 * 30, // 30 seconds
+  });
+}
+
+/**
+ * Get AI-powered insights for a lead
+ *
+ * @example
+ * ```tsx
+ * const { data: insights } = useLeadInsights(123);
+ * ```
+ */
+export function useLeadInsights(leadId: number) {
+  return useQuery<LeadInsights, AxiosError<ApiErrorResponse>>({
+    queryKey: leadsKeys.insights(leadId),
+    queryFn: async () => {
+      return await leadsApi.getLeadInsights(leadId);
+    },
+    enabled: !!leadId,
+    staleTime: 1000 * 60 * 5, // 5 minutes (insights don't change frequently)
+    gcTime: 1000 * 60 * 10, // 10 minutes in cache
+  });
+}
+
+// =====================================================================
+// MUTATIONS (CREATE, UPDATE, DELETE) - LEADS
+// =====================================================================
+
+/**
+ * Create a new lead
+ *
+ * @example
+ * ```tsx
+ * const createLead = useCreateLead();
+ *
+ * createLead.mutate({
+ *   full_name: 'John Doe',
+ *   email: 'john@example.com',
+ *   phone: '0909123456',
+ *   source: 'website',
+ *   unit_id: 1,
+ * });
+ * ```
+ */
+export function useCreateLead() {
+  const queryClient = useQueryClient();
+
+  return useMutation<Lead, AxiosError<ApiErrorResponse>, LeadCreate>({
+    mutationFn: async (data) => {
+      return await leadsApi.createLead(data);
+    },
+    onSuccess: (newLead) => {
+      toast.success("Lead created successfully!", {
+        description: newLead.full_name,
+      });
+
+      // Invalidate all lead lists to refetch with new data
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+
+      // Also invalidate pipeline queries as new lead affects pipeline stats
+      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+    },
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg || "Validation error").join(", ")
+            : error.response?.data?.message || "Failed to create lead";
+      toast.error("Error", { description: message });
+    },
+  });
+}
+
+/**
+ * Update an existing lead
+ *
+ * @example
+ * ```tsx
+ * const updateLead = useUpdateLead();
+ *
+ * updateLead.mutate({
+ *   id: 123,
+ *   data: { full_name: 'Jane Doe' }
+ * });
+ * ```
+ */
+export function useUpdateLead() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    Lead,
+    AxiosError<ApiErrorResponse>,
+    { id: number; data: LeadUpdate },
+    { previousLead: Lead | undefined }
+  >({
+    mutationFn: async ({ id, data }) => {
+      return await leadsApi.updateLead(id, data);
+    },
+
+    // Optimistic update
+    onMutate: async ({ id, data }) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: leadsKeys.detail(id) });
+
+      // Snapshot the previous value
+      const previousLead = queryClient.getQueryData<Lead>(leadsKeys.detail(id));
+
+      // Optimistically update the cache
+      if (previousLead) {
+        queryClient.setQueryData<Lead>(leadsKeys.detail(id), {
+          ...previousLead,
+          ...data,
+        });
+      }
+
+      return { previousLead };
+    },
+
+    // Rollback on error
+    onError: (err, { id }, context) => {
+      if (context?.previousLead) {
+        queryClient.setQueryData(leadsKeys.detail(id), context.previousLead);
+      }
+
+      const detail = err.response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Failed to update lead";
+      toast.error("Error", { description: message });
+    },
+
+    onSuccess: (updatedLead) => {
+      toast.success("Lead updated successfully!", {
+        description: updatedLead.full_name,
+      });
+
+      // Invalidate queries
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(updatedLead.id) });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(updatedLead.id) });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+    },
+  });
+}
+
+/**
+ * Delete a lead
+ *
+ * @example
+ * ```tsx
+ * const deleteLead = useDeleteLead();
+ * deleteLead.mutate(123);
+ * ```
+ */
+export function useDeleteLead() {
+  const queryClient = useQueryClient();
+
+  return useMutation<void, AxiosError<ApiErrorResponse>, number>({
+    mutationFn: async (id) => {
+      await leadsApi.deleteLead(id);
+    },
+
+    onSuccess: () => {
+      toast.success("Lead deleted successfully!");
+
+      // Invalidate lists
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+    },
+
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Failed to delete lead";
+      toast.error("Error", { description: message });
+    },
+  });
+}
+
+// =====================================================================
+// MUTATIONS - LEAD ASSIGNMENT
+// =====================================================================
+
+/**
+ * Assign a lead to an officer
+ *
+ * @example
+ * ```tsx
+ * const assignLead = useAssignLead();
+ *
+ * assignLead.mutate({
+ *   leadId: 123,
+ *   data: {
+ *     officer_id: 5,
+ *     reason: 'Has expertise in this field',
+ *   }
+ * });
+ * ```
+ */
+export function useAssignLead() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    Lead,
+    AxiosError<ApiErrorResponse>,
+    { leadId: number; data: AssignLead }
+  >({
+    mutationFn: async ({ leadId, data }) => {
+      return await leadsApi.assignLead(leadId, data);
+    },
+
+    onSuccess: (updatedLead) => {
+      toast.success("Lead assigned successfully!", {
+        description: `Assigned to officer #${updatedLead.assigned_officer_id}`,
+      });
+
+      // Invalidate queries
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(updatedLead.id) });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(updatedLead.id) });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+    },
+
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Failed to assign lead";
+      toast.error("Error", { description: message });
+    },
+  });
+}
+
+/**
+ * Bulk assign multiple leads to officers
+ *
+ * @example
+ * ```tsx
+ * const bulkAssign = useBulkAssignLeads();
+ *
+ * bulkAssign.mutate({
+ *   lead_ids: [1, 2, 3],
+ *   officer_id: 5,
+ *   reason: 'Batch assignment',
+ * });
+ * ```
+ */
+export function useBulkAssignLeads() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    { message: string; assigned_count: number },
+    AxiosError<ApiErrorResponse>,
+    BulkAssignLeads
+  >({
+    mutationFn: async (data) => {
+      return await leadsApi.bulkAssignLeads(data);
+    },
+
+    onSuccess: (result) => {
+      toast.success("Bulk assignment successful!", {
+        description: `${result.assigned_count} leads assigned`,
+      });
+
+      // Invalidate all lead-related queries
+      queryClient.invalidateQueries({ queryKey: leadsKeys.all });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+    },
+
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Failed to bulk assign leads";
+      toast.error("Error", { description: message });
+    },
+  });
+}
+
+// =====================================================================
+// MUTATIONS - LEAD ACTIONS
+// =====================================================================
+
+/**
+ * Perform an action on a lead (reject, convert, mark_lost, etc.)
+ *
+ * @example
+ * ```tsx
+ * const performAction = usePerformLeadAction();
+ *
+ * performAction.mutate({
+ *   leadId: 123,
+ *   action: 'reject',
+ *   reason: 'Not qualified',
+ * });
+ * ```
+ */
+export function usePerformLeadAction() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    Lead,
+    AxiosError<ApiErrorResponse>,
+    { leadId: number; action: LeadAction; reason?: string }
+  >({
+    mutationFn: async ({ leadId, action, reason }) => {
+      return await leadsApi.performLeadAction(leadId, action, reason);
+    },
+
+    onSuccess: (updatedLead, variables) => {
+      const actionMessages: Record<LeadAction, string> = {
+        reject: "Lead rejected",
+        convert: "Lead converted successfully!",
+        mark_lost: "Lead marked as lost",
+        reopen: "Lead reopened",
+      };
+
+      toast.success(actionMessages[variables.action], {
+        description: updatedLead.full_name,
+      });
+
+      // Invalidate queries
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(updatedLead.id) });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(updatedLead.id) });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+    },
+
+    onError: (error, variables) => {
+      const detail = error.response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : `Failed to ${variables.action} lead`;
+      toast.error("Error", { description: message });
+    },
+  });
+}
+
+// =====================================================================
+// MUTATIONS - CONSULTATIONS
+// =====================================================================
+
+/**
+ * Add a consultation to a lead
+ *
+ * @example
+ * ```tsx
+ * const addConsultation = useAddConsultation();
+ *
+ * addConsultation.mutate({
+ *   leadId: 123,
+ *   data: {
+ *     scheduled_at: '2025-01-15T10:00:00',
+ *     notes: 'Initial consultation',
+ *     consultation_status_id: 1,
+ *   }
+ * });
+ * ```
+ */
+export function useAddConsultation() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    Consultation,
+    AxiosError<ApiErrorResponse>,
+    { leadId: number; data: ConsultationCreate }
+  >({
+    mutationFn: async ({ leadId, data }) => {
+      return await leadsApi.addConsultation(leadId, data);
+    },
+
+    onSuccess: (consultation, { leadId }) => {
+      toast.success("Consultation added successfully!");
+
+      // Invalidate lead detail and timeline
+      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(leadId) });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(leadId) });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+    },
+
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Failed to add consultation";
+      toast.error("Error", { description: message });
+    },
+  });
+}
+
+/**
+ * Delete a consultation
+ *
+ * @example
+ * ```tsx
+ * const deleteConsultation = useDeleteConsultation();
+ * deleteConsultation.mutate({ leadId: 123, consultationId: 456 });
+ * ```
+ */
+export function useDeleteConsultation() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    void,
+    AxiosError<ApiErrorResponse>,
+    { leadId: number; consultationId: number }
+  >({
+    mutationFn: async ({ leadId, consultationId }) => {
+      await leadsApi.deleteConsultation(leadId, consultationId);
+    },
+
+    onSuccess: (_, { leadId }) => {
+      toast.success("Consultation deleted successfully!");
+
+      // Invalidate lead detail and timeline
+      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(leadId) });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(leadId) });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+    },
+
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Failed to delete consultation";
+      toast.error("Error", { description: message });
+    },
+  });
+}
+
+// =====================================================================
+// MUTATIONS - IMPORT/EXPORT
+// =====================================================================
+
+/**
+ * Import leads from CSV/Excel file
+ *
+ * @example
+ * ```tsx
+ * const importLeads = useImportLeads();
+ *
+ * importLeads.mutate(file);
+ * ```
+ */
+export function useImportLeads() {
+  const queryClient = useQueryClient();
+
+  return useMutation<LeadImportResult, AxiosError<ApiErrorResponse>, File>({
+    mutationFn: async (file) => {
+      return await leadsApi.importLeads(file);
+    },
+
+    onSuccess: (result) => {
+      toast.success("Import completed!", {
+        description: `${result.successful_imports} leads imported, ${result.failed_imports} failed`,
+      });
+
+      // Invalidate all lead lists
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+    },
+
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Failed to import leads";
+      toast.error("Error", { description: message });
+    },
+  });
+}
+
+/**
+ * Export leads to CSV/Excel
+ *
+ * @example
+ * ```tsx
+ * const exportLeads = useExportLeads();
+ *
+ * exportLeads.mutate({
+ *   format: 'csv',
+ *   status: 'new',
+ * });
+ * ```
+ */
+export function useExportLeads() {
+  return useMutation<
+    Blob,
+    AxiosError<ApiErrorResponse>,
+    { format?: "csv" | "xlsx"; filters?: LeadListParams }
+  >({
+    mutationFn: async ({ format = "csv", filters }) => {
+      return await leadsApi.exportLeads(format, filters);
+    },
+
+    onSuccess: (blob, variables) => {
+      // Create download link
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `leads_export_${new Date().toISOString().split("T")[0]}.${variables.format || "csv"}`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      toast.success("Export successful!", {
+        description: "File downloaded",
+      });
+    },
+
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : "Failed to export leads";
+      toast.error("Error", { description: message });
+    },
+  });
+}
