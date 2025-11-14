@@ -168,10 +168,15 @@ export interface BulkAssignLeads {
 }
 
 /**
+ * Lead action type enum
+ */
+export type LeadActionType = 'reject' | 'reassign' | 'convert'
+
+/**
  * Lead action payload
  */
 export interface LeadAction {
-  action: 'reject' | 'reassign' | 'convert'
+  action: LeadActionType
   reason?: string
   new_officer_id?: number // For reassign
 }

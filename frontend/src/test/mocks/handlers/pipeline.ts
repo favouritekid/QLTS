@@ -23,7 +23,6 @@ export const pipelineHandlers = [
   http.post(`${API_BASE_URL}/api/admin/pipeline-stages`, async ({ request }) => {
     const body = (await request.json()) as PipelineStageCreate;
     const newStage = {
-      id: `stage_${Date.now()}`,
       ...body,
     };
 

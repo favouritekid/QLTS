@@ -119,7 +119,7 @@ describe("Leads API Client", () => {
 
       server.use(
         http.post(`${API_BASE_URL}/api/leads`, async ({ request }) => {
-          const body = (await request.json()) as Record<string, any>;
+          const body = (await request.json()) as Record<string, unknown>;
           return HttpResponse.json(
             {
               id: 999,
@@ -167,8 +167,9 @@ describe("Leads API Client", () => {
       await expect(
         leadsApi.createLead({
           full_name: 'Incomplete Lead',
-          // @ts-expect-error - Testing validation error
+          // @ts-expect-error - Testing validation error with undefined required fields
           email: undefined,
+          // @ts-expect-error - Testing validation error with undefined required fields
           phone: undefined,
           source: 'website',
           unit_id: 1,
@@ -187,7 +188,7 @@ describe("Leads API Client", () => {
 
       server.use(
         http.put(`${API_BASE_URL}/api/leads/1`, async ({ request }) => {
-          const body = await request.json()
+          const body = (await request.json()) as Record<string, unknown>
           return HttpResponse.json({
             id: 1,
             ...body,
@@ -210,7 +211,7 @@ describe("Leads API Client", () => {
       // Arrange
       server.use(
         http.post(`${API_BASE_URL}/api/leads/1/assign`, async ({ request }) => {
-          const body = await request.json()
+          const body = (await request.json()) as { officer_id: number; reason?: string }
           return HttpResponse.json({
             id: 1,
             assigned_officer_id: body.officer_id,

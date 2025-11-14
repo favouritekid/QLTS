@@ -25,9 +25,6 @@ import type {
   Lead,
   LeadCreate,
   LeadUpdate,
-  LeadsPage,
-  TimelineItem,
-  LeadInsights,
   Consultation,
 } from "@/types/lead.types";
 
@@ -36,9 +33,11 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000
 // Test wrapper
 function createWrapper() {
   const queryClient = createTestQueryClient();
-  return ({ children }: { children: React.ReactNode }) => (
+  const Wrapper = ({ children }: { children: React.ReactNode }) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
+  Wrapper.displayName = "TestQueryClientWrapper";
+  return Wrapper;
 }
 
 describe("useLeads Hook", () => {
@@ -318,8 +317,10 @@ describe("useLeads Hook", () => {
 
         result.current.mutate({
           leadId: 1,
-          action: "reject",
-          reason: "Not qualified",
+          data: {
+            action: "reject",
+            reason: "Not qualified",
+          },
         });
 
         await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -336,9 +337,12 @@ describe("useLeads Hook", () => {
             return HttpResponse.json({
               id: 1,
               lead_id: 1,
+              consultation_date: "2025-01-15T10:00:00",
               scheduled_at: "2025-01-15T10:00:00",
+              method: "in_person",
+              officer_id: 1,
               notes: "Initial consultation",
-              consultation_status_id: 1,
+              consultation_status_id: "scheduled",
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString(),
             } as Consultation);
@@ -354,7 +358,7 @@ describe("useLeads Hook", () => {
           data: {
             scheduled_at: "2025-01-15T10:00:00",
             notes: "Initial consultation",
-            consultation_status_id: 1,
+            consultation_status_id: "scheduled",
           },
         });
 

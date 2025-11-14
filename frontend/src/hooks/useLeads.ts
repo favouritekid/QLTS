@@ -415,21 +415,22 @@ export function usePerformLeadAction() {
   return useMutation<
     Lead,
     AxiosError<ApiErrorResponse>,
-    { leadId: number; action: LeadAction; reason?: string }
+    { leadId: number; data: LeadAction }
   >({
-    mutationFn: async ({ leadId, action, reason }) => {
-      return await leadsApi.performLeadAction(leadId, action, reason);
+    mutationFn: async ({ leadId, data }) => {
+      return await leadsApi.performLeadAction(leadId, data);
     },
 
     onSuccess: (updatedLead, variables) => {
-      const actionMessages: Record<LeadAction, string> = {
+      const actionMessages: Record<string, string> = {
         reject: "Lead rejected",
         convert: "Lead converted successfully!",
+        reassign: "Lead reassigned successfully!",
         mark_lost: "Lead marked as lost",
         reopen: "Lead reopened",
       };
 
-      toast.success(actionMessages[variables.action], {
+      toast.success(actionMessages[variables.data.action] || "Action performed successfully", {
         description: updatedLead.full_name,
       });
 
@@ -447,7 +448,7 @@ export function usePerformLeadAction() {
           ? detail
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
-            : `Failed to ${variables.action} lead`;
+            : `Failed to ${variables.data.action} lead`;
       toast.error("Error", { description: message });
     },
   });
@@ -615,8 +616,8 @@ export function useExportLeads() {
     AxiosError<ApiErrorResponse>,
     { format?: "csv" | "xlsx"; filters?: LeadListParams }
   >({
-    mutationFn: async ({ format = "csv", filters }) => {
-      return await leadsApi.exportLeads(format, filters);
+    mutationFn: async ({ filters }) => {
+      return await leadsApi.exportLeads(filters);
     },
 
     onSuccess: (blob, variables) => {

@@ -359,7 +359,7 @@ export function useUpdateConsultationStatus() {
   return useMutation<
     ConsultationStatus,
     AxiosError<ApiErrorResponse>,
-    { id: number; data: ConsultationStatusUpdate }
+    { id: string; data: ConsultationStatusUpdate }
   >({
     mutationFn: async ({ id, data }) => {
       return await pipelineApi.updateConsultationStatus(id, data);
@@ -399,7 +399,7 @@ export function useUpdateConsultationStatus() {
 export function useDeleteConsultationStatus() {
   const queryClient = useQueryClient();
 
-  return useMutation<void, AxiosError<ApiErrorResponse>, number>({
+  return useMutation<void, AxiosError<ApiErrorResponse>, string>({
     mutationFn: async (id) => {
       await pipelineApi.deleteConsultationStatus(id);
     },
@@ -581,15 +581,15 @@ export function useRevertLeadStatus() {
   return useMutation<
     Lead,
     AxiosError<ApiErrorResponse>,
-    { leadId: number; toStageId: string; reason?: string }
+    { leadId: number }
   >({
-    mutationFn: async ({ leadId, toStageId, reason }) => {
-      return await pipelineApi.revertLeadStatus(leadId, toStageId, reason);
+    mutationFn: async ({ leadId }) => {
+      return await pipelineApi.revertLeadStatus(leadId);
     },
 
-    onSuccess: (updatedLead, { toStageId }) => {
+    onSuccess: (updatedLead) => {
       toast.success("Lead status reverted!", {
-        description: `Moved back to ${toStageId.replace(/_/g, " ")}`,
+        description: updatedLead.full_name,
       });
 
       // Invalidate queries

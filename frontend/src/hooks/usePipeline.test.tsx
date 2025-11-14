@@ -27,7 +27,6 @@ import type {
   ConsultationStatus,
   ConsultationStatusCreate,
   ConsultationStatusUpdate,
-  FullPipeline,
 } from "@/types/pipeline.types";
 import type { Lead } from "@/types/lead.types";
 
@@ -36,9 +35,11 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000
 // Test wrapper
 function createWrapper() {
   const queryClient = createTestQueryClient();
-  return ({ children }: { children: React.ReactNode }) => (
+  const Wrapper = ({ children }: { children: React.ReactNode }) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
+  Wrapper.displayName = "TestQueryClientWrapper";
+  return Wrapper;
 }
 
 describe("usePipeline Hook", () => {
@@ -244,16 +245,17 @@ describe("usePipeline Hook", () => {
     describe("useCreateConsultationStatus", () => {
       it("should create a new consultation status", async () => {
         const newStatusData: ConsultationStatusCreate = {
+          id: "rescheduled",
           name: "Rescheduled",
-          color: "#FFA500",
-          order: 5,
+          color_code: "#FFA500",
+          stage_id: "consultation_scheduled",
         };
 
         server.use(
           http.post(`${API_BASE_URL}/api/admin/consultation-statuses`, async () => {
             return HttpResponse.json({
-              id: 999,
               ...newStatusData,
+              order: 5,
             } as ConsultationStatus);
           })
         );
@@ -279,11 +281,12 @@ describe("usePipeline Hook", () => {
 
         server.use(
           http.put(`${API_BASE_URL}/api/admin/consultation-statuses/:id`, async ({ params }) => {
-            const id = Number(params.id);
+            const id = params.id as string;
             return HttpResponse.json({
               id,
               ...updateData,
-              color: "#FFA500",
+              color_code: "#FFA500",
+              stage_id: "consultation_scheduled",
               order: 5,
             } as ConsultationStatus);
           })
@@ -293,7 +296,7 @@ describe("usePipeline Hook", () => {
           wrapper: createWrapper(),
         });
 
-        result.current.mutate({ id: 123, data: updateData });
+        result.current.mutate({ id: "rescheduled", data: updateData });
 
         await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
@@ -314,7 +317,7 @@ describe("usePipeline Hook", () => {
           wrapper: createWrapper(),
         });
 
-        result.current.mutate(123);
+        result.current.mutate("rescheduled");
 
         await waitFor(() => expect(result.current.isSuccess).toBe(true));
       });
@@ -384,6 +387,7 @@ describe("usePipeline Hook", () => {
 
         result.current.mutate({
           lead_id: 1,
+          from_stage_id: "new_lead",
           to_stage_id: "contacted",
         });
 
@@ -419,8 +423,6 @@ describe("usePipeline Hook", () => {
 
         result.current.mutate({
           leadId: 1,
-          toStageId: "new_lead",
-          reason: "Consultation cancelled",
         });
 
         await waitFor(() => expect(result.current.isSuccess).toBe(true));
