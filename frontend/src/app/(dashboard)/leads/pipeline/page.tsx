@@ -18,6 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 import { PipelineBoard } from "@/components/leads/PipelineBoard";
 import { useFullPipeline } from "@/hooks/usePipeline";
+import { useExportLeads } from "@/hooks/useLeads";
 import type { PipelineQueryParams } from "@/types/pipeline.types";
 
 export default function PipelinePage() {
@@ -28,6 +29,11 @@ export default function PipelinePage() {
   const [showFilters, setShowFilters] = useState(false);
 
   const { data: pipeline, isLoading, isError, error, refetch } = useFullPipeline(filters);
+  const exportLeads = useExportLeads();
+
+  const handleExport = () => {
+    exportLeads.mutate({ filters });
+  };
 
   if (isLoading) {
     return (
@@ -95,9 +101,14 @@ export default function PipelinePage() {
             <RefreshCw className="mr-2 h-4 w-4" />
             Refresh
           </Button>
-          <Button variant="outline" size="sm">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExport}
+            disabled={exportLeads.isPending}
+          >
             <Download className="mr-2 h-4 w-4" />
-            Export
+            {exportLeads.isPending ? "Exporting..." : "Export"}
           </Button>
         </div>
       </div>
@@ -158,8 +169,8 @@ export default function PipelinePage() {
                 </label>
                 <Select
                   defaultValue="all"
-                  onValueChange={(value) => {
-                    // Implement date range logic
+                  onValueChange={() => {
+                    // TODO: Implement date range logic
                   }}
                 >
                   <SelectTrigger>
