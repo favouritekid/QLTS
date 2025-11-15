@@ -40,7 +40,7 @@ import type { Lead } from "@/types/lead.types";
 
 // Validation schema
 const assignSchema = z.object({
-  officer_id: z.number({ message: "Please select an officer" }),
+  officer_id: z.string().min(1, "Please select an officer"),
   reason: z
     .string()
     .max(500, "Reason must be less than 500 characters")

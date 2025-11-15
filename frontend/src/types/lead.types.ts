@@ -312,7 +312,6 @@ export interface TimelineItem {
   timestamp: string // ISO datetime
   created_at?: string | null // ISO datetime
   description: string
-  actor_id?: number | null
   actor?: {
     id: number
     full_name: string

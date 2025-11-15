@@ -25,6 +25,7 @@ import type {
   ConsultationStatus,
   PipelineStageCreate,
   PipelineStageUpdate,
+  ConsultationStatusCreate,
   ConsultationStatusUpdate,
 } from "@/types/pipeline.types";
 import type { Lead } from "@/types/lead.types";
