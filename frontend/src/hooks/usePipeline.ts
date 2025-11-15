@@ -109,8 +109,8 @@ export function usePipelineStats(params?: PipelineQueryParams) {
   return useQuery<
     {
       total_leads: number;
-      conversion_rate: number;
-      avg_time_in_pipeline_days: number;
+      conversion_rate?: number;
+      avg_time_in_pipeline_days?: number;
       stage_statistics: Array<{
         stage_id: string;
         stage_name: string;
@@ -581,15 +581,15 @@ export function useRevertLeadStatus() {
   return useMutation<
     Lead,
     AxiosError<ApiErrorResponse>,
-    number
+    { leadId: number }
   >({
-    mutationFn: async (leadId) => {
+    mutationFn: async ({ leadId }) => {
       return await pipelineApi.revertLeadStatus(leadId);
     },
 
     onSuccess: (updatedLead) => {
       toast.success("Lead status reverted!", {
-        description: `Lead ${updatedLead.full_name} reverted to previous status`,
+        description: updatedLead.full_name,
       });
 
       // Invalidate queries

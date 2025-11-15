@@ -25,8 +25,7 @@ export const pipelineHandlers = [
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { id, ...bodyWithoutId } = body as PipelineStageCreate & { id?: string };
     const newStage = {
-      id: `stage_${Date.now()}`,
-      ...bodyWithoutId,
+      ...body,
     };
 
     return HttpResponse.json(newStage, { status: 201 });

@@ -39,7 +39,7 @@ export type LeadSource =
  */
 export type EducationLevel =
   | 'high_school'
-  | 'associate'
+  | 'diploma'
   | 'bachelor'
   | 'master'
   | 'phd'
@@ -164,14 +164,19 @@ export interface BulkAssignLeads {
   lead_ids: number[]
   officer_id?: number // If not provided, use auto-assignment
   method?: AssignmentMethod
-  reason?: string // Optional reason for bulk assignment
+  reason?: string
 }
+
+/**
+ * Lead action type enum
+ */
+export type LeadActionType = 'reject' | 'reassign' | 'convert'
 
 /**
  * Lead action payload
  */
 export interface LeadAction {
-  action: 'reject' | 'reassign' | 'convert'
+  action: LeadActionType
   reason?: string
   new_officer_id?: number // For reassign
 }
@@ -187,14 +192,15 @@ export interface Consultation {
   id: number
   lead_id: number
   consultation_date: string // ISO datetime
-  scheduled_at?: string | null // ISO datetime - when consultation is scheduled
-  created_at?: string | null // ISO datetime - when record was created
+  scheduled_at?: string | null // ISO datetime
   method: ConsultationMethod
   notes?: string | null
   outcome?: ConsultationOutcome | null
   duration_minutes?: number | null
   officer_id: number
   consultation_status_id?: string | null
+  created_at?: string | null // ISO datetime
+  updated_at?: string | null // ISO datetime
 
   // Relationships
   officer?: User | null
@@ -205,8 +211,8 @@ export interface Consultation {
  * Consultation creation payload
  */
 export interface ConsultationCreate {
-  consultation_date?: string // ISO datetime (optional if scheduled_at is provided)
-  scheduled_at?: string // ISO datetime (alternative to consultation_date)
+  consultation_date?: string // ISO datetime
+  scheduled_at?: string // ISO datetime
   method?: ConsultationMethod
   notes?: string
   outcome?: ConsultationOutcome
@@ -302,10 +308,11 @@ export type TimelineItemType =
 export interface TimelineItem {
   id: number
   type: TimelineItemType
-  event_type?: TimelineItemType // Alias for type (for backward compatibility)
+  event_type: TimelineItemType
   timestamp: string // ISO datetime
-  created_at?: string // Alias for timestamp (for backward compatibility)
+  created_at?: string | null // ISO datetime
   description: string
+  actor_id?: number | null
   actor?: {
     id: number
     full_name: string

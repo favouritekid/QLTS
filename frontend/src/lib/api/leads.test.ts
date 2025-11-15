@@ -167,8 +167,10 @@ describe("Leads API Client", () => {
       await expect(
         leadsApi.createLead({
           full_name: 'Incomplete Lead',
-          email: '', // Empty email (invalid)
-          phone: '', // Empty phone (invalid)
+          // @ts-expect-error - Testing validation error with undefined required fields
+          email: undefined,
+          // @ts-expect-error - Testing validation error with undefined required fields
+          phone: undefined,
           source: 'website',
           unit_id: 1,
         })
@@ -209,7 +211,7 @@ describe("Leads API Client", () => {
       // Arrange
       server.use(
         http.post(`${API_BASE_URL}/api/leads/1/assign`, async ({ request }) => {
-          const body = (await request.json()) as { officer_id?: number; reason?: string }
+          const body = (await request.json()) as { officer_id: number; reason?: string }
           return HttpResponse.json({
             id: 1,
             assigned_officer_id: body?.officer_id,

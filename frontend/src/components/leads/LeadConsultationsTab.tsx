@@ -106,9 +106,7 @@ export function LeadConsultationsTab({
                     <TableCell>
                       <div className="flex items-center gap-2">
                         <Calendar className="h-4 w-4 text-muted-foreground" />
-                        {consultation.scheduled_at
-                          ? new Date(consultation.scheduled_at).toLocaleString()
-                          : new Date(consultation.consultation_date).toLocaleString()}
+                        {consultation.scheduled_at ? new Date(consultation.scheduled_at).toLocaleString() : "Not scheduled"}
                       </div>
                     </TableCell>
                     <TableCell>
@@ -125,9 +123,7 @@ export function LeadConsultationsTab({
                       </div>
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
-                      {consultation.created_at
-                        ? new Date(consultation.created_at).toLocaleDateString()
-                        : "N/A"}
+                      {consultation.created_at ? new Date(consultation.created_at).toLocaleDateString() : "N/A"}
                     </TableCell>
                     <TableCell className="text-right">
                       <Button

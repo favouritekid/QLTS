@@ -80,7 +80,7 @@ export function LeadTimelineTab({ timeline }: LeadTimelineTabProps) {
                       {(event.event_type || event.type).replace(/_/g, " ")}
                     </Badge>
                     <span className="text-sm text-muted-foreground">
-                      {new Date(event.created_at || event.timestamp).toLocaleString()}
+                      {event.created_at ? new Date(event.created_at).toLocaleString() : new Date(event.timestamp).toLocaleString()}
                     </span>
                   </div>
                   <p className="text-sm text-muted-foreground">{event.description}</p>

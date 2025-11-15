@@ -415,20 +415,23 @@ export function usePerformLeadAction() {
   return useMutation<
     Lead,
     AxiosError<ApiErrorResponse>,
-    { leadId: number; action: LeadAction }
+    { leadId: number; data: LeadAction }
   >({
-    mutationFn: async ({ leadId, action }) => {
-      return await leadsApi.performLeadAction(leadId, action);
+    mutationFn: async ({ leadId, data }) => {
+      return await leadsApi.performLeadAction(leadId, data);
     },
 
     onSuccess: (updatedLead, variables) => {
-      const actionMessages: Record<'reject' | 'reassign' | 'convert', string> = {
+      const actionMessages: Record<string, string> = {
         reject: "Lead rejected",
         reassign: "Lead reassigned",
         convert: "Lead converted successfully!",
+        reassign: "Lead reassigned successfully!",
+        mark_lost: "Lead marked as lost",
+        reopen: "Lead reopened",
       };
 
-      toast.success(actionMessages[variables.action.action] || "Action completed", {
+      toast.success(actionMessages[variables.data.action] || "Action performed successfully", {
         description: updatedLead.full_name,
       });
 
@@ -446,7 +449,7 @@ export function usePerformLeadAction() {
           ? detail
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
-            : `Failed to ${variables.action.action} lead`;
+            : `Failed to ${variables.data.action} lead`;
       toast.error("Error", { description: message });
     },
   });
