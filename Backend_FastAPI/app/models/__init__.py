@@ -34,7 +34,7 @@ from .offering_academic_info import OfferingAcademicInfo  # Level 3
 # from .major_academic_info import MajorAcademicInfo  # Table dropped, references Major model
 
 # Pipeline models
-from .pipeline import ConsultationStatus, PipelineStage
+from .pipeline import AllowedTransition, ConsultationStatus, OutcomeTypeEnum, PipelineStage
 
 # User models (includes temporal models)
 from .user import User
@@ -72,7 +72,9 @@ __all__ = [
     "ProgramOffering",
     "OfferingAcademicInfo",
     # Pipeline
+    "AllowedTransition",
     "ConsultationStatus",
+    "OutcomeTypeEnum",
     "PipelineStage",
     # User
     "User",

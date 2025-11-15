@@ -12,11 +12,16 @@ import type { Lead } from './lead.types'
 /**
  * Pipeline Stage
  * Represents a stage in the lead conversion pipeline
+ *
+ * CRM Standards (Salesforce/HubSpot):
+ * - Stages represent major milestones in the funnel
+ * - Final stages (Won/Lost) are marked with is_final_stage=true
  */
 export interface PipelineStage {
   id: string
   name: string
   order: number
+  is_final_stage: boolean // Whether this is a final stage (Won/Lost/Closed)
 
   // Statistics (when loaded with full pipeline)
   lead_count?: number
@@ -29,7 +34,8 @@ export interface PipelineStage {
 export interface PipelineStageCreate {
   id: string // e.g., 'new_lead', 'contacted'
   name: string // e.g., 'New Lead', 'Contacted'
-  order: number // Position in pipeline (1, 2, 3...)
+  order: number // Position in pipeline (0-based)
+  is_final_stage?: boolean // Default: false
 }
 
 /**
@@ -38,6 +44,7 @@ export interface PipelineStageCreate {
 export interface PipelineStageUpdate {
   name?: string
   order?: number
+  is_final_stage?: boolean
 }
 
 // ============================================
@@ -45,8 +52,23 @@ export interface PipelineStageUpdate {
 // ============================================
 
 /**
+ * Outcome Type (CRM Standard)
+ * Classification of consultation status outcome
+ */
+export enum OutcomeType {
+  POSITIVE = "positive", // Lead is moving forward (e.g., "Agreed", "Enrolled")
+  NEUTRAL = "neutral", // In progress, no clear outcome (e.g., "Contacted", "Waiting")
+  NEGATIVE = "negative", // Rejected or failed (e.g., "Refused", "Wrong number")
+}
+
+/**
  * Consultation Status
  * Status for consultations within a pipeline stage
+ *
+ * CRM Standards:
+ * - Each status belongs to one stage
+ * - Status has outcome_type: positive/neutral/negative
+ * - Final statuses (end of lifecycle) marked with is_final_status=true
  */
 export interface ConsultationStatus {
   id: string
@@ -54,9 +76,14 @@ export interface ConsultationStatus {
   color_code: string // Hex color (e.g., '#4CAF50')
   color?: string // Alias for color_code (for backward compatibility)
   stage_id: string // Foreign key to PipelineStage
+  outcome_type: OutcomeType // Outcome classification
+  is_final_status: boolean // Whether this status marks end of lead lifecycle
 
   // Relationship
   stage?: PipelineStage
+
+  // Optional computed fields
+  lead_count?: number
 }
 
 /**
@@ -67,6 +94,8 @@ export interface ConsultationStatusCreate {
   name: string
   color_code: string
   stage_id: string
+  outcome_type?: OutcomeType // Default: neutral
+  is_final_status?: boolean // Default: false
 }
 
 /**
@@ -76,6 +105,44 @@ export interface ConsultationStatusUpdate {
   name?: string
   color_code?: string
   stage_id?: string
+  outcome_type?: OutcomeType
+  is_final_status?: boolean
+}
+
+// ============================================
+// ALLOWED TRANSITION TYPES
+// ============================================
+
+/**
+ * Allowed Status Transition
+ * Workflow rules for status changes (HubSpot standard)
+ */
+export interface AllowedTransition {
+  id: number
+  from_status_id: string
+  to_status_id: string
+  created_at: string
+  updated_at: string
+
+  // Optional relationships
+  from_status?: ConsultationStatus
+  to_status?: ConsultationStatus
+}
+
+/**
+ * Allowed transition creation payload
+ */
+export interface AllowedTransitionCreate {
+  from_status_id: string
+  to_status_id: string
+}
+
+/**
+ * Allowed transition update payload
+ */
+export interface AllowedTransitionUpdate {
+  from_status_id?: string
+  to_status_id?: string
 }
 
 // ============================================

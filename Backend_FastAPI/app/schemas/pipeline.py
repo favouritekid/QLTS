@@ -1,60 +1,180 @@
 # app/schemas/pipeline.py
-from typing import List, Optional  # <-- THÊM Optional
+from datetime import datetime
+from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-# --- Schemas cho PipelineStage ---
+from ..models.pipeline import OutcomeTypeEnum
+
+
+# =====================================================================
+# PIPELINE STAGE SCHEMAS
+# =====================================================================
 
 
 class PipelineStageBase(BaseModel):
-    name: str = Field(..., min_length=3, max_length=255)
-    order: int = Field(..., gt=0)
+    """Base schema for PipelineStage (common fields)."""
+    name: str = Field(..., min_length=3, max_length=255, description="Stage display name")
+    order: int = Field(..., ge=0, description="Position in pipeline (0-based)")
+    is_final_stage: bool = Field(
+        default=False,
+        description="Whether this is a final stage (Won/Lost/Closed)"
+    )
 
 
 class PipelineStageCreate(PipelineStageBase):
-    id: str = Field(..., min_length=3, max_length=50)
+    """Schema for creating a new pipeline stage."""
+    id: str = Field(
+        ...,
+        min_length=3,
+        max_length=50,
+        pattern=r"^[a-z0-9_]+$",
+        description="Unique stage identifier (lowercase, numbers, underscores only)"
+    )
 
 
 class PipelineStageUpdate(BaseModel):
+    """Schema for updating an existing pipeline stage."""
     name: Optional[str] = Field(None, min_length=3, max_length=255)
-    order: Optional[int] = Field(None, gt=0)
+    order: Optional[int] = Field(None, ge=0)
+    is_final_stage: Optional[bool] = None
 
 
 class PipelineStage(PipelineStageBase):
+    """Schema for returning a pipeline stage (with ID)."""
     id: str
+
+    # Optional computed fields (for analytics)
+    lead_count: Optional[int] = Field(
+        None,
+        description="Number of leads in this stage (computed)"
+    )
+    conversion_rate: Optional[float] = Field(
+        None,
+        description="Conversion rate from this stage (computed)"
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
 
-# --- Schemas cho ConsultationStatus ---
+# =====================================================================
+# CONSULTATION STATUS SCHEMAS
+# =====================================================================
 
 
 class ConsultationStatusBase(BaseModel):
-    name: str = Field(..., min_length=3, max_length=255)
-    color_code: str = Field(..., pattern=r"^#[0-9a-fA-F]{6}$")  # Validate mã màu HEX
-    stage_id: str
+    """Base schema for ConsultationStatus (common fields)."""
+    name: str = Field(..., min_length=3, max_length=255, description="Status display name")
+    color_code: str = Field(
+        ...,
+        pattern=r"^#[0-9a-fA-F]{6}$",
+        description="Hex color code for UI (e.g., #FF5733)"
+    )
+    stage_id: str = Field(..., description="Parent pipeline stage ID")
+    outcome_type: OutcomeTypeEnum = Field(
+        default=OutcomeTypeEnum.NEUTRAL,
+        description="Outcome classification: positive/neutral/negative"
+    )
+    is_final_status: bool = Field(
+        default=False,
+        description="Whether this status marks end of lead lifecycle"
+    )
 
 
 class ConsultationStatusCreate(ConsultationStatusBase):
-    id: str = Field(..., min_length=3, max_length=50)
+    """Schema for creating a new consultation status."""
+    id: str = Field(
+        ...,
+        min_length=3,
+        max_length=50,
+        pattern=r"^[a-z0-9_]+$",
+        description="Unique status identifier (lowercase, numbers, underscores only)"
+    )
 
 
 class ConsultationStatusUpdate(BaseModel):
+    """Schema for updating an existing consultation status."""
     name: Optional[str] = Field(None, min_length=3, max_length=255)
     color_code: Optional[str] = Field(None, pattern=r"^#[0-9a-fA-F]{6}$")
     stage_id: Optional[str] = None
+    outcome_type: Optional[OutcomeTypeEnum] = None
+    is_final_status: Optional[bool] = None
 
 
 class ConsultationStatus(ConsultationStatusBase):
+    """Schema for returning a consultation status (with ID)."""
     id: str
+
+    # Optional computed fields
+    lead_count: Optional[int] = Field(
+        None,
+        description="Number of leads with this status (computed)"
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
 
-# --- Schema chung ---
+# =====================================================================
+# ALLOWED TRANSITION SCHEMAS
+# =====================================================================
+
+
+class AllowedTransitionBase(BaseModel):
+    """Base schema for AllowedTransition."""
+    from_status_id: str = Field(..., description="Source status ID")
+    to_status_id: str = Field(..., description="Destination status ID")
+
+
+class AllowedTransitionCreate(AllowedTransitionBase):
+    """Schema for creating a new allowed transition."""
+    pass
+
+
+class AllowedTransitionUpdate(BaseModel):
+    """Schema for updating an allowed transition (rarely used)."""
+    from_status_id: Optional[str] = None
+    to_status_id: Optional[str] = None
+
+
+class AllowedTransition(AllowedTransitionBase):
+    """Schema for returning an allowed transition."""
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+    # Optional nested objects
+    from_status: Optional[ConsultationStatus] = None
+    to_status: Optional[ConsultationStatus] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# =====================================================================
+# FULL PIPELINE SCHEMA
+# =====================================================================
 
 
 class FullPipeline(BaseModel):
-    # Dùng schema PipelineStage và ConsultationStatus
-    stages: List[PipelineStage]
-    statuses: List[ConsultationStatus]
+    """
+    Complete pipeline structure with all stages and statuses.
+
+    Used for rendering pipeline board and analytics.
+    """
+    stages: List[PipelineStage] = Field(
+        ...,
+        description="All pipeline stages (ordered)"
+    )
+    statuses: List[ConsultationStatus] = Field(
+        ...,
+        description="All consultation statuses (grouped by stage)"
+    )
+
+    # Optional analytics data
+    total_leads: Optional[int] = Field(
+        None,
+        description="Total number of leads in pipeline"
+    )
+    conversion_rate: Optional[float] = Field(
+        None,
+        description="Overall pipeline conversion rate"
+    )
