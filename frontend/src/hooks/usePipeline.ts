@@ -32,7 +32,6 @@ export const pipelineKeys = {
   consultationStatuses: () => [...pipelineKeys.all, "consultationStatuses"] as const,
   allowedTransitions: () => [...pipelineKeys.all, "allowedTransitions"] as const,
   stats: (params?: PipelineQueryParams) => [...pipelineKeys.all, "stats", params] as const,
-  allowedTransitions: () => [...pipelineKeys.all, "allowedTransitions"] as const,
 };
 
 // =====================================================================
