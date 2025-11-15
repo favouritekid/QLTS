@@ -153,7 +153,7 @@ export function ActionableLists({ lists }: ActionableListsProps) {
         <CardHeader>
           <div className="flex items-center gap-2">
             <Calendar className="h-5 w-5 text-blue-600" />
-            <CardTitle>Today's Schedule</CardTitle>
+            <CardTitle>Today&apos;s Schedule</CardTitle>
           </div>
           <CardDescription>
             {lists.upcoming.length} consultation{lists.upcoming.length !== 1 ? "s" : ""} scheduled

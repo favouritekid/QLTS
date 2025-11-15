@@ -1,7 +1,7 @@
 // src/components/officer/WorkloadCard.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -47,10 +47,23 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
         description: `You are now ${data.availability_status}`,
       });
     },
-    onError: (error: any) => {
+    onError: (error: unknown) => {
+      const errorMessage =
+        error &&
+        typeof error === "object" &&
+        "response" in error &&
+        error.response &&
+        typeof error.response === "object" &&
+        "data" in error.response &&
+        error.response.data &&
+        typeof error.response.data === "object" &&
+        "detail" in error.response.data
+          ? String(error.response.data.detail)
+          : "Failed to update availability";
+
       toast({
         title: "Error",
-        description: error.response?.data?.detail || "Failed to update availability",
+        description: errorMessage,
         variant: "destructive",
       });
       // Revert toggle on error
@@ -80,6 +93,14 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
 
   const currentBadge = statusBadge[statusOverview.availability_status];
   const StatusIcon = currentBadge.icon;
+
+  // Calculate minutes ago for last assignment (memoized to avoid purity issues)
+  const minutesAgo = useMemo(() => {
+    if (!statusOverview.last_assigned_at) return null;
+    return Math.floor(
+      (Date.now() - new Date(statusOverview.last_assigned_at).getTime()) / 60000
+    );
+  }, [statusOverview.last_assigned_at]);
 
   return (
     <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
@@ -160,11 +181,7 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
         </CardHeader>
         <CardContent>
           <p className="text-xs text-muted-foreground">
-            {statusOverview.last_assigned_at
-              ? `${Math.floor(
-                  (Date.now() - new Date(statusOverview.last_assigned_at).getTime()) / 60000
-                )} minutes ago`
-              : "No assignments yet"}
+            {minutesAgo !== null ? `${minutesAgo} minutes ago` : "No assignments yet"}
           </p>
         </CardContent>
       </Card>

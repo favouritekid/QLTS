@@ -56,22 +56,25 @@ export function useAppNavigation(): UseAppNavigationReturn {
    */
   const filterNavItems = useCallback(
     (items: NavItem[]): NavItem[] => {
-      return items
-        .filter((item) => hasAccess(item.roles))
-        .map((item) => {
-          // If item has children, filter them recursively
-          if (item.children && item.children.length > 0) {
-            const filteredChildren = filterNavItems(item.children);
-            // Only include parent if it has accessible children
-            if (filteredChildren.length > 0) {
-              return { ...item, children: filteredChildren };
+      const filter = (itemsToFilter: NavItem[]): NavItem[] => {
+        return itemsToFilter
+          .filter((item) => hasAccess(item.roles))
+          .map((item) => {
+            // If item has children, filter them recursively
+            if (item.children && item.children.length > 0) {
+              const filteredChildren = filter(item.children);
+              // Only include parent if it has accessible children
+              if (filteredChildren.length > 0) {
+                return { ...item, children: filteredChildren };
+              }
+              // If no children are accessible, exclude parent
+              return null;
             }
-            // If no children are accessible, exclude parent
-            return null;
-          }
-          return item;
-        })
-        .filter((item): item is NavItem => item !== null);
+            return item;
+          })
+          .filter((item): item is NavItem => item !== null);
+      };
+      return filter(items);
     },
     [hasAccess]
   );
