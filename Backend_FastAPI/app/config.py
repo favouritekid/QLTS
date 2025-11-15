@@ -103,7 +103,7 @@ class Settings(BaseSettings):
     AVATAR_UPLOAD_FOLDER: str = _AVATAR_UPLOAD_FOLDER
 
     # -- Lead Assignment Defaults (Không từ env) --
-    ACTIVE_LEAD_STATUSES_FOR_WORKLOAD: List[str] = ["assigned", "in_progress"]
+    # ✅ REMOVED: ACTIVE_LEAD_STATUSES_FOR_WORKLOAD (now using ConsultationStatus.is_final_status)
     DEFAULT_INITIAL_LEAD_STATUS_ID: str = "TTHV000"
     DEFAULT_LOST_LEAD_STATUS_ID: str = "TTHV004"
     DEFAULT_UNASSIGNED_LEAD_STATUS: str = "unassigned_pending"

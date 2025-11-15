@@ -43,7 +43,7 @@ class Lead(Base):
         Integer, ForeignKey("user.id"), nullable=True, index=True
     )
     consultation_status_id = Column(
-        String(50), ForeignKey("consultation_status.id"), nullable=True
+        String(50), ForeignKey("consultation_status.id"), nullable=True, index=True
     )
     pipeline_stage_id = Column(
         String(50), ForeignKey("pipeline_stage.id"), nullable=True, index=True
