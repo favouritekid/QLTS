@@ -384,17 +384,19 @@ async def create_consultation_status(
             db, status_in.stage_id
         )  # Sẽ ném 404 nếu stage_id không tồn tại
 
-        # ✅ FIX MẠNH TAY: Ép kiểu outcome_type về chuỗi thường (value)
-        # Bất kể đầu vào là Enum object hay string "NEUTRAL", ta đều đưa về "neutral"
-        create_data = status_in.model_dump()
-        
+        # ✅ FIX: Force Pydantic to use enum values (not names)
+        # mode='python' ensures enums are serialized as their values
+        create_data = status_in.model_dump(mode='python')
+
+        # ✅ Additional safety: Explicitly convert outcome_type to lowercase string
         if "outcome_type" in create_data:
             val = create_data["outcome_type"]
-            # Nếu là Enum object, lấy .value
-            if hasattr(val, "value"):
+            # Handle all possible formats
+            if isinstance(val, models.OutcomeTypeEnum):
+                # If it's an enum object, get its value
                 create_data["outcome_type"] = val.value
-            # Nếu là string, chuyển về chữ thường
             elif isinstance(val, str):
+                # If it's already a string, ensure lowercase
                 create_data["outcome_type"] = val.lower()
 
         # 4. Tạo model với dữ liệu đã làm sạch
@@ -429,7 +431,15 @@ async def update_consultation_status(
 ) -> models.ConsultationStatus:
     try:
         db_status = await _get_status_by_id(db, status_id)
-        update_data = status_in.model_dump(exclude_unset=True)
+        update_data = status_in.model_dump(exclude_unset=True, mode='python')
+
+        # ✅ FIX: Convert outcome_type to lowercase string if present
+        if "outcome_type" in update_data:
+            val = update_data["outcome_type"]
+            if isinstance(val, models.OutcomeTypeEnum):
+                update_data["outcome_type"] = val.value
+            elif isinstance(val, str):
+                update_data["outcome_type"] = val.lower()
 
         # 1. Kiểm tra 'name' (nếu thay đổi)
         if "name" in update_data and update_data["name"] != db_status.name:
