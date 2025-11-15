@@ -15,9 +15,9 @@ class OutcomeTypeEnum(str, enum.Enum):
     - neutral: Lead is in progress, no clear outcome yet (e.g., "Contacted", "Waiting")
     - negative: Lead rejected or failed (e.g., "Refused", "Wrong number")
     """
-    POSITIVE = "positive"
-    NEUTRAL = "neutral"
-    NEGATIVE = "negative"
+    positive = "positive"
+    neutral = "neutral"
+    negative = "negative"
 
 
 class PipelineStage(Base):
@@ -74,7 +74,7 @@ class ConsultationStatus(Base):
     outcome_type = Column(
         Enum(OutcomeTypeEnum, name="outcome_type_enum", create_type=False),
         nullable=False,
-        default=OutcomeTypeEnum.NEUTRAL,
+        default=OutcomeTypeEnum.neutral,
         server_default="neutral",
         comment="Outcome classification: positive/neutral/negative"
     )

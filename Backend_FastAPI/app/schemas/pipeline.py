@@ -77,7 +77,7 @@ class ConsultationStatusBase(BaseModel):
     )
     stage_id: str = Field(..., description="Parent pipeline stage ID")
     outcome_type: OutcomeTypeEnum = Field(
-        default=OutcomeTypeEnum.NEUTRAL,
+        default=OutcomeTypeEnum.neutral,
         description="Outcome classification: positive/neutral/negative"
     )
     is_final_status: bool = Field(

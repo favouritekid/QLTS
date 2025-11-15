@@ -616,7 +616,19 @@ async def create_allowed_transition(
         db_transition = models.AllowedTransition(**transition_in.model_dump())
         db.add(db_transition)
         await db.commit()
-        await db.refresh(db_transition)
+        
+        # ✅ FIX: Thay thế db.refresh bằng query có selectinload
+        # Điều này nạp trước các quan hệ (from_status, to_status) để tránh lỗi MissingGreenlet
+        query = (
+            select(models.AllowedTransition)
+            .options(
+                selectinload(models.AllowedTransition.from_status),
+                selectinload(models.AllowedTransition.to_status),
+            )
+            .where(models.AllowedTransition.id == db_transition.id)
+        )
+        result = await db.execute(query)
+        db_transition = result.scalar_one()
 
         log.info(
             "Created allowed transition",
