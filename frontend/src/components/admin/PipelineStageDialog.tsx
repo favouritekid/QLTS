@@ -40,15 +40,7 @@ import { Checkbox as ShadcnCheckbox } from "@/components/ui/checkbox";
 // FORM VALIDATION SCHEMA
 // =====================================================================
 
-// Define type first for better type safety
-type StageFormValues = {
-  id: string;
-  name: string;
-  order: number;
-  is_final_stage: boolean;
-};
-
-const stageFormSchema: z.ZodType<StageFormValues> = z.object({
+const stageFormSchema = z.object({
   id: z
     .string()
     .min(1, "Stage ID is required")
@@ -65,6 +57,8 @@ const stageFormSchema: z.ZodType<StageFormValues> = z.object({
     .min(0, "Order must be 0 or greater"),
   is_final_stage: z.boolean(),
 });
+
+type StageFormValues = z.infer<typeof stageFormSchema>;
 
 // =====================================================================
 // COMPONENT PROPS

@@ -49,17 +49,7 @@ import { Checkbox as ShadcnCheckbox } from "@/components/ui/checkbox";
 // FORM VALIDATION SCHEMA
 // =====================================================================
 
-// Define type first for better type safety
-type StatusFormValues = {
-  id: string;
-  name: string;
-  color_code: string;
-  stage_id: string;
-  outcome_type: "positive" | "neutral" | "negative";
-  is_final_status: boolean;
-};
-
-const statusFormSchema: z.ZodType<StatusFormValues> = z.object({
+const statusFormSchema = z.object({
   id: z
     .string()
     .min(1, "Status ID is required")
@@ -80,6 +70,8 @@ const statusFormSchema: z.ZodType<StatusFormValues> = z.object({
   outcome_type: z.enum(["positive", "neutral", "negative"]),
   is_final_status: z.boolean(),
 });
+
+type StatusFormValues = z.infer<typeof statusFormSchema>;
 
 // =====================================================================
 // COMPONENT PROPS
