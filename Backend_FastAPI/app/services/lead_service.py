@@ -17,7 +17,7 @@ from ..utils.exceptions import (
     PermissionDeniedError,
     ResourceNotFoundError,
 )
-from ..services import pipeline_service
+from ..services import pipeline_service, distribution_service
 log = structlog.get_logger(__name__)
 
 
@@ -376,6 +376,28 @@ async def create_lead(db: AsyncSession, lead_in: schemas.LeadCreate) -> models.L
         # Chuẩn bị dữ liệu và tạo đối tượng Lead
         create_data = lead_in.model_dump()
 
+        # === NEW FEATURE: Shared Offering Distribution ===
+        # If Lead has offering_id, determine target unit via distribution config
+        # This overrides the unit_id provided by user (if any offering-based routing exists)
+        if create_data.get("offering_id"):
+            original_unit_id = create_data.get("unit_id")
+            target_unit_id = await distribution_service.get_target_unit_for_offering(
+                db,
+                offering_id=create_data["offering_id"],
+                fallback_unit_id=original_unit_id  # Use provided unit as fallback
+            )
+
+            # Override unit_id with distribution result
+            if target_unit_id != original_unit_id:
+                log.info(
+                    "Lead unit routed via Offering Distribution",
+                    offering_id=create_data["offering_id"],
+                    original_unit_id=original_unit_id,
+                    routed_unit_id=target_unit_id,
+                    routing_rule="WeightedRoundRobin"
+                )
+                create_data["unit_id"] = target_unit_id
+
         # Calculate lead score before creating the lead
         calculated_score = await calculate_lead_score(
             db,
@@ -503,14 +525,20 @@ async def update_lead(
                         detail="Another lead with this email already exists in the unit."
                     )
 
+            # === NEW FEATURE: Auto-Reassign on Offering Change ===
+            # Track offering_id change before applying updates
+            old_offering_id = db_lead.offering_id
+            offering_changed = "offering_id" in update_data and update_data["offering_id"] != old_offering_id
+
             # Check if scoring-related fields are being updated
             scoring_fields = ["education_level", "gpa", "source", "location"]
             should_recalculate_score = any(field in update_data for field in scoring_fields)
 
             # Cập nhật các trường thông thường
             for key, value in update_data.items():
-                # Xử lý consultation_status_id riêng
-                if key != "consultation_status_id":
+                # Xử lý consultation_status_id riêng (processed separately below)
+                # Xử lý offering_id riêng (processed for auto-reassign below)
+                if key not in ["consultation_status_id", "offering_id"]:
                     setattr(db_lead, key, value)
 
             # Recalculate lead score if relevant fields changed
@@ -566,6 +594,83 @@ async def update_lead(
                      db_lead.consultation_status_id = None
                      db_lead.pipeline_stage_id = None  # Hoặc một trạng thái mặc định khác
 
+            # === NEW FEATURE: Auto-Reassign when Offering Changes ===
+            # If offering_id changed, re-route Lead to new Unit and reset assignment
+            reassignment_triggered = False
+            if offering_changed:
+                new_offering_id = update_data["offering_id"]
+
+                log.info(
+                    "Offering changed on Lead update - checking for unit change",
+                    lead_id=lead_id,
+                    old_offering_id=old_offering_id,
+                    new_offering_id=new_offering_id,
+                    current_unit_id=db_lead.unit_id
+                )
+
+                # Apply offering_id update
+                db_lead.offering_id = new_offering_id
+
+                # Determine new target unit via distribution
+                if new_offering_id:
+                    new_target_unit_id = await distribution_service.get_target_unit_for_offering(
+                        db,
+                        offering_id=new_offering_id,
+                        fallback_unit_id=db_lead.unit_id  # Current unit as fallback
+                    )
+                else:
+                    # Offering removed - keep current unit
+                    new_target_unit_id = db_lead.unit_id
+
+                # Check if unit actually changed (territory conflict)
+                if new_target_unit_id != db_lead.unit_id:
+                    old_unit_id = db_lead.unit_id
+                    old_officer_id = db_lead.assigned_officer_id
+
+                    log.warning(
+                        "Offering change causes Unit change - Auto-reassigning Lead",
+                        lead_id=lead_id,
+                        old_offering_id=old_offering_id,
+                        new_offering_id=new_offering_id,
+                        old_unit_id=old_unit_id,
+                        new_unit_id=new_target_unit_id,
+                        old_officer_id=old_officer_id,
+                        reason="territorial_conflict"
+                    )
+
+                    # === ATOMIC REASSIGNMENT TRANSACTION ===
+                    # 1. Update unit_id
+                    db_lead.unit_id = new_target_unit_id
+
+                    # 2. Reset assignment fields
+                    db_lead.assigned_officer_id = None
+                    db_lead.assigned_at = None
+
+                    # 3. Set status to unassigned
+                    db_lead.status = settings.DEFAULT_UNASSIGNED_LEAD_STATUS
+
+                    # 4. Create system AssignmentLog
+                    reassignment_log = models.AssignmentLog(
+                        lead_id=lead_id,
+                        officer_id=updated_by.id,  # Log who triggered the change
+                        method="system_auto_reassign",
+                        reason=f"Offering changed from #{old_offering_id} to #{new_offering_id}. "
+                               f"Unit changed from #{old_unit_id} to #{new_target_unit_id}. "
+                               f"Previous officer: {old_officer_id}",
+                        timestamp=datetime.now(timezone.utc)
+                    )
+                    db.add(reassignment_log)
+
+                    reassignment_triggered = True
+
+                    log.info(
+                        "Lead auto-reassignment completed",
+                        lead_id=lead_id,
+                        new_unit_id=new_target_unit_id,
+                        old_officer_id=old_officer_id,
+                        new_status=settings.DEFAULT_UNASSIGNED_LEAD_STATUS
+                    )
+
             # Lấy trạng thái mới sau khi cập nhật
             new_state = _get_current_lead_state(db_lead)
 
@@ -594,6 +699,50 @@ async def update_lead(
                 exc_info=True,
             )
             raise e  # Ném lại lỗi để router xử lý
+
+        # === POST-COMMIT ACTIONS (Only if transaction succeeded) ===
+
+        # 1. Dispatch Celery task for auto-assignment if reassignment was triggered
+        if reassignment_triggered:
+            try:
+                from ..celery_utils import process_automatic_lead_assignment_task
+                process_automatic_lead_assignment_task.delay(lead_id)
+                log.info(
+                    "Auto-assignment task dispatched after offering change",
+                    lead_id=lead_id
+                )
+            except Exception as e:
+                log.error(
+                    "Failed to dispatch auto-assignment task after offering change",
+                    lead_id=lead_id,
+                    error=str(e),
+                    exc_info=True
+                )
+                # Don't fail the request - assignment can be done manually
+
+            # 2. Emit Socket.IO events for real-time UI updates
+            try:
+                from ..socket_manager import emit_lead_reassigned
+                # Note: Variables old_unit_id, old_officer_id captured in auto-reassign block above
+                await emit_lead_reassigned(
+                    lead_id=lead_id,
+                    old_officer_id=old_officer_id,  # type: ignore
+                    old_unit_id=old_unit_id,  # type: ignore
+                    new_unit_id=new_target_unit_id,  # type: ignore
+                    reason=f"Offering changed from #{old_offering_id} to #{new_offering_id}"  # type: ignore
+                )
+                log.info(
+                    "Socket.IO reassignment events emitted",
+                    lead_id=lead_id
+                )
+            except Exception as e:
+                log.error(
+                    "Failed to emit Socket.IO reassignment events",
+                    lead_id=lead_id,
+                    error=str(e),
+                    exc_info=True
+                )
+                # Don't fail the request - real-time updates are non-critical
 
         # Trả về lead đã được tải đầy đủ (bao gồm relations)
         # Gọi lại get_lead_by_id để đảm bảo dữ liệu mới nhất và relations
