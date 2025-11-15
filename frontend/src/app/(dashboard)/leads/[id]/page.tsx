@@ -30,6 +30,8 @@ import { LeadInfoTab } from "@/components/leads/LeadInfoTab";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { LeadConsultationsTab } from "@/components/leads/LeadConsultationsTab";
 import { LeadInsightsTab } from "@/components/leads/LeadInsightsTab";
+import { BackButton } from "@/components/common/BackButton";
+import { Breadcrumbs } from "@/components/common/Breadcrumbs";
 import type { LeadStatus } from "@/types/lead.types";
 
 // Status badge variants (same as list page)
@@ -93,10 +95,7 @@ export default function LeadDetailPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Button onClick={() => router.push("/leads")}>
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              Back to Leads
-            </Button>
+            <BackButton showLabel={true} />
           </CardContent>
         </Card>
       </div>
@@ -108,13 +107,9 @@ export default function LeadDetailPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" asChild>
-              <Link href="/leads">
-                <ArrowLeft className="mr-2 h-4 w-4" />
-                Back to Leads
-              </Link>
-            </Button>
+          <div className="flex items-center gap-4">
+            <BackButton size="sm" />
+            <Breadcrumbs />
           </div>
           <div className="flex items-center gap-3">
             <h1 className="text-3xl font-bold tracking-tight">{lead.full_name}</h1>

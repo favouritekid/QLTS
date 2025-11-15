@@ -4,8 +4,9 @@ import json  # ✅ Thêm import
 from typing import List
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import func, select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from .. import models, schemas
 from ..config import settings  # ✅ Thêm import
@@ -383,8 +384,22 @@ async def create_consultation_status(
             db, status_in.stage_id
         )  # Sẽ ném 404 nếu stage_id không tồn tại
 
-        # 4. Tạo
-        db_status = models.ConsultationStatus(**status_in.model_dump())
+        # ✅ FIX MẠNH TAY: Ép kiểu outcome_type về chuỗi thường (value)
+        # Bất kể đầu vào là Enum object hay string "NEUTRAL", ta đều đưa về "neutral"
+        create_data = status_in.model_dump()
+        
+        if "outcome_type" in create_data:
+            val = create_data["outcome_type"]
+            # Nếu là Enum object, lấy .value
+            if hasattr(val, "value"):
+                create_data["outcome_type"] = val.value
+            # Nếu là string, chuyển về chữ thường
+            elif isinstance(val, str):
+                create_data["outcome_type"] = val.lower()
+
+        # 4. Tạo model với dữ liệu đã làm sạch
+        db_status = models.ConsultationStatus(**create_data)
+        
         db.add(db_status)
         await db.commit()
         await db.refresh(db_status)
@@ -503,3 +518,128 @@ async def delete_consultation_status(db: AsyncSession, status_id: str):
             exc_info=True,
         )
         raise e
+
+
+# ===============================================================
+# ALLOWED TRANSITIONS CRUD
+# ===============================================================
+
+
+async def get_all_allowed_transitions(db: AsyncSession) -> List[models.AllowedTransition]:
+    """Lấy tất cả các allowed transitions với thông tin statuses."""
+    query = (
+        select(models.AllowedTransition)
+        .options(
+            # Eager load related statuses
+            selectinload(models.AllowedTransition.from_status),
+            selectinload(models.AllowedTransition.to_status),
+        )
+        .order_by(models.AllowedTransition.from_status_id)
+    )
+    result = await db.execute(query)
+    return list(result.scalars().all())
+
+
+async def create_allowed_transition(
+    db: AsyncSession, transition_in: schemas.AllowedTransitionCreate
+) -> models.AllowedTransition:
+    """Tạo một allowed transition mới."""
+    try:
+        # 1. Kiểm tra from_status và to_status có tồn tại
+        from_status = await _get_status_by_id(db, transition_in.from_status_id)
+        to_status = await _get_status_by_id(db, transition_in.to_status_id)
+
+        # 2. Kiểm tra không cho phép chuyển từ status sang chính nó
+        if transition_in.from_status_id == transition_in.to_status_id:
+            raise DuplicateResourceError(
+                "Cannot create transition from a status to itself."
+            )
+
+        # 3. Kiểm tra transition đã tồn tại chưa
+        existing = await db.scalar(
+            select(models.AllowedTransition).where(
+                models.AllowedTransition.from_status_id == transition_in.from_status_id,
+                models.AllowedTransition.to_status_id == transition_in.to_status_id,
+            )
+        )
+        if existing:
+            raise DuplicateResourceError(
+                f"Transition from '{transition_in.from_status_id}' to '{transition_in.to_status_id}' already exists."
+            )
+
+        # 4. Tạo transition
+        db_transition = models.AllowedTransition(**transition_in.model_dump())
+        db.add(db_transition)
+        await db.commit()
+        await db.refresh(db_transition)
+
+        log.info(
+            "Created allowed transition",
+            from_status=transition_in.from_status_id,
+            to_status=transition_in.to_status_id,
+        )
+
+        return db_transition
+
+    except Exception as e:
+        await db.rollback()
+        log.error("Failed to create allowed transition", error=str(e), exc_info=True)
+        raise e
+
+
+async def delete_allowed_transition(db: AsyncSession, transition_id: int):
+    """Xóa một allowed transition."""
+    try:
+        db_transition = await db.get(models.AllowedTransition, transition_id)
+        if not db_transition:
+            raise ResourceNotFoundError(
+                f"Allowed transition with ID {transition_id} not found."
+            )
+
+        await db.delete(db_transition)
+        await db.commit()
+
+        log.info("Deleted allowed transition", transition_id=transition_id)
+
+    except Exception as e:
+        await db.rollback()
+        log.error(
+            "Failed to delete allowed transition",
+            transition_id=transition_id,
+            error=str(e),
+            exc_info=True,
+        )
+        raise e
+
+async def validate_status_transition(
+    db: AsyncSession, 
+    from_status_id: str, 
+    to_status_id: str
+) -> bool:
+    """
+    Kiểm tra xem việc chuyển từ trạng thái A sang B có hợp lệ không.
+    
+    Logic:
+    1. Nếu from == to: Luôn đúng (cập nhật thông tin khác của lead).
+    2. Nếu from là None (Lead mới): Luôn đúng (hoặc check rule init tùy logic).
+    3. Query bảng allowed_transitions.
+    """
+    if from_status_id == to_status_id:
+        return True
+        
+    if not from_status_id: 
+        # Trường hợp Lead chưa có status (hiếm), cho phép gán status đầu tiên
+        return True
+
+    # TODO: Performance Opt - Có thể cache danh sách allowed_transitions vào Redis
+    # Hiện tại query DB trực tiếp để đảm bảo tính đúng đắn (Consistency)
+    query = select(models.AllowedTransition).where(
+        and_(
+            models.AllowedTransition.from_status_id == from_status_id,
+            models.AllowedTransition.to_status_id == to_status_id
+        )
+    )
+    result = await db.execute(query)
+    transition = result.scalar_one_or_none()
+    
+    return transition is not None

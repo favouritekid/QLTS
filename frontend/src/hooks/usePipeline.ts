@@ -16,6 +16,8 @@ import type {
   FullPipeline,
   PipelineQueryParams,
   MoveLeadPayload,
+  AllowedTransition, // ✅ Import mới
+  AllowedTransitionCreate,
 } from "@/types/pipeline.types";
 
 // =====================================================================
@@ -25,11 +27,12 @@ import type {
 export const pipelineKeys = {
   all: ["pipeline"] as const,
   stages: () => [...pipelineKeys.all, "stages"] as const,
-  fullPipeline: (params?: PipelineQueryParams) =>
-    [...pipelineKeys.all, "full", params] as const,
+  fullPipeline: (params?: PipelineQueryParams) => [...pipelineKeys.all, "full", params] as const,
   stageLeads: (stageId: string) => [...pipelineKeys.all, "stageLeads", stageId] as const,
   consultationStatuses: () => [...pipelineKeys.all, "consultationStatuses"] as const,
+  allowedTransitions: () => [...pipelineKeys.all, "allowedTransitions"] as const,
   stats: (params?: PipelineQueryParams) => [...pipelineKeys.all, "stats", params] as const,
+  allowedTransitions: () => [...pipelineKeys.all, "allowedTransitions"] as const,
 };
 
 // =====================================================================
@@ -173,11 +176,7 @@ export function useConsultationStatuses() {
 export function useCreatePipelineStage() {
   const queryClient = useQueryClient();
 
-  return useMutation<
-    PipelineStage,
-    AxiosError<ApiErrorResponse>,
-    PipelineStageCreate
-  >({
+  return useMutation<PipelineStage, AxiosError<ApiErrorResponse>, PipelineStageCreate>({
     mutationFn: async (data) => {
       return await pipelineApi.createStage(data);
     },
@@ -315,11 +314,7 @@ export function useDeletePipelineStage() {
 export function useCreateConsultationStatus() {
   const queryClient = useQueryClient();
 
-  return useMutation<
-    ConsultationStatus,
-    AxiosError<ApiErrorResponse>,
-    ConsultationStatusCreate
-  >({
+  return useMutation<ConsultationStatus, AxiosError<ApiErrorResponse>, ConsultationStatusCreate>({
     mutationFn: async (data) => {
       return await pipelineApi.createConsultationStatus(data);
     },
@@ -590,11 +585,7 @@ export function useMoveLeadToStage() {
 export function useRevertLeadStatus() {
   const queryClient = useQueryClient();
 
-  return useMutation<
-    Lead,
-    AxiosError<ApiErrorResponse>,
-    { leadId: number }
-  >({
+  return useMutation<Lead, AxiosError<ApiErrorResponse>, { leadId: number }>({
     mutationFn: async ({ leadId }) => {
       return await pipelineApi.revertLeadStatus(leadId);
     },
@@ -619,6 +610,115 @@ export function useRevertLeadStatus() {
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
             : "Failed to revert lead status";
+      toast.error("Error", { description: message });
+    },
+  });
+}
+
+// =====================================================================
+// QUERIES (READ) - ALLOWED TRANSITIONS
+// =====================================================================
+
+/**
+ * Get all allowed transitions
+ *
+ * @example
+ * ```tsx
+ * const { data: transitions } = useAllowedTransitions();
+ * ```
+ */
+export function useAllowedTransitions() {
+  return useQuery<AllowedTransition[], AxiosError<ApiErrorResponse>>({
+    queryKey: pipelineKeys.allowedTransitions(),
+    queryFn: async () => {
+      return await pipelineApi.getAllowedTransitions();
+    },
+    staleTime: 1000 * 60 * 5, // 5 minutes
+    gcTime: 1000 * 60 * 10, // 10 minutes in cache
+  });
+}
+
+// =====================================================================
+// MUTATIONS (CREATE, DELETE) - ALLOWED TRANSITIONS
+// =====================================================================
+
+/**
+ * Create a new allowed transition (admin only)
+ *
+ * @example
+ * ```tsx
+ * const createTransition = useCreateAllowedTransition();
+ *
+ * createTransition.mutate({
+ *   from_status_id: 'contacted',
+ *   to_status_id: 'qualified',
+ * });
+ * ```
+ */
+export function useCreateAllowedTransition() {
+  const queryClient = useQueryClient();
+
+  return useMutation<AllowedTransition, AxiosError<ApiErrorResponse>, AllowedTransitionCreate>({
+    mutationFn: async (data) => {
+      return await pipelineApi.createAllowedTransition(data);
+    },
+
+    onSuccess: (newTransition) => {
+      toast.success("Allowed transition created!", {
+        description: `${newTransition.from_status_id} → ${newTransition.to_status_id}`,
+      });
+
+      // Invalidate and refetch allowed transitions queries
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.allowedTransitions() });
+      queryClient.refetchQueries({ queryKey: pipelineKeys.allowedTransitions() });
+    },
+
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg || "Validation error").join(", ")
+            : "Failed to create allowed transition";
+      toast.error("Error", { description: message });
+    },
+  });
+}
+
+/**
+ * Delete an allowed transition (admin only)
+ *
+ * @example
+ * ```tsx
+ * const deleteTransition = useDeleteAllowedTransition();
+ * deleteTransition.mutate(123);
+ * ```
+ */
+export function useDeleteAllowedTransition() {
+  const queryClient = useQueryClient();
+
+  return useMutation<void, AxiosError<ApiErrorResponse>, number>({
+    mutationFn: async (id) => {
+      await pipelineApi.deleteAllowedTransition(id);
+    },
+
+    onSuccess: () => {
+      toast.success("Allowed transition deleted!");
+
+      // Invalidate and refetch allowed transitions queries
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.allowedTransitions() });
+      queryClient.refetchQueries({ queryKey: pipelineKeys.allowedTransitions() });
+    },
+
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Failed to delete allowed transition";
       toast.error("Error", { description: message });
     },
   });

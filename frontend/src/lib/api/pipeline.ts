@@ -341,6 +341,77 @@ export async function getPipelineStats(
 }
 
 // ============================================
+// ALLOWED TRANSITIONS OPERATIONS (Admin Only)
+// ============================================
+
+export interface AllowedTransition {
+  id: number
+  from_status_id: string
+  to_status_id: string
+  created_at: string
+  updated_at: string
+  from_status?: ConsultationStatus
+  to_status?: ConsultationStatus
+}
+
+export interface AllowedTransitionCreate {
+  from_status_id: string
+  to_status_id: string
+}
+
+/**
+ * Get all allowed transitions
+ * Admin only
+ *
+ * @throws {AxiosError} 403 if not admin
+ */
+export async function getAllowedTransitions(): Promise<AllowedTransition[]> {
+  const response = await api.get<AllowedTransition[]>(
+    '/api/admin/allowed-transitions'
+  )
+  return response.data
+}
+
+/**
+ * Create new allowed transition
+ * Admin only
+ *
+ * @throws {AxiosError} 403 if not admin, 422 for validation errors
+ *
+ * @example
+ * ```ts
+ * const transition = await pipelineApi.createAllowedTransition({
+ *   from_status_id: 'contacted',
+ *   to_status_id: 'qualified'
+ * })
+ * ```
+ */
+export async function createAllowedTransition(
+  data: AllowedTransitionCreate
+): Promise<AllowedTransition> {
+  const response = await api.post<AllowedTransition>(
+    '/api/admin/allowed-transitions',
+    data
+  )
+  return response.data
+}
+
+/**
+ * Delete allowed transition
+ * Admin only
+ *
+ * @throws {AxiosError} 404 if not found, 403 if not admin
+ */
+export async function deleteAllowedTransition(
+  transitionId: number
+): Promise<SuccessResponse> {
+  const response = await api.delete<SuccessResponse>(
+    `/api/admin/allowed-transitions/${transitionId}`
+  )
+  return response.data
+}
+
+// ============================================
 // CACHE INVALIDATION
 // ============================================
 
@@ -381,6 +452,11 @@ export const pipelineApi = {
   createConsultationStatus,
   updateConsultationStatus,
   deleteConsultationStatus,
+
+  // Admin: Allowed Transitions Management
+  getAllowedTransitions,
+  createAllowedTransition,
+  deleteAllowedTransition,
 
   // Lead Pipeline Operations
   moveLeadToStage,
