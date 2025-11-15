@@ -38,6 +38,7 @@ from .routers import (
     leads,
     notification_preferences,
     notifications,
+    officer,
     organization,
     pipeline,
     profile,
@@ -571,6 +572,7 @@ app.include_router(pipeline.router, prefix="/api/pipeline", tags=["Pipeline"])
 app.include_router(
     organization.router, prefix="/api", tags=["Organization"]
 )
+app.include_router(officer.router, prefix="/api", tags=["Officer Dashboard"])
 app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
 
 # ===============================================================
