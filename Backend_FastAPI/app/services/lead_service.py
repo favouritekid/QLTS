@@ -17,7 +17,7 @@ from ..utils.exceptions import (
     PermissionDeniedError,
     ResourceNotFoundError,
 )
-
+from ..services import pipeline_service
 log = structlog.get_logger(__name__)
 
 
@@ -534,22 +534,37 @@ async def update_lead(
             # Xử lý cập nhật consultation_status_id (nếu có)
             if "consultation_status_id" in update_data:
                 new_status_id = update_data["consultation_status_id"]
-                if new_status_id:  # Nếu có status ID mới
-                    # Lấy đối tượng ConsultationStatus từ DB
-                    new_status = await db.get(models.ConsultationStatus, new_status_id)
-                    if not new_status:
-                        raise BadRequest(
-                            detail=f"Consultation status with id '{new_status_id}' not found."
+                current_status_id = db_lead.consultation_status_id
+                
+                # Chỉ kiểm tra nếu trạng thái thực sự thay đổi
+                if new_status_id and new_status_id != current_status_id:
+                    # Nếu current_status là None (Lead mới), thường cho phép gán bất kỳ
+                    if current_status_id:
+                        # Gọi service để kiểm tra trong bảng AllowedTransition
+                        is_valid = await pipeline_service.validate_status_transition(
+                            db, from_status_id=current_status_id, to_status_id=new_status_id
                         )
-                    # Cập nhật consultation_status_id và pipeline_stage_id
-                    db_lead.consultation_status_id = new_status.id
-                    db_lead.pipeline_stage_id = new_status.stage_id
-                    # Giữ nguyên status hoặc update theo logic nghiệp vụ
-                    # (không gán status = consultation_status_id vì đây là 2 field khác nhau)
-                else:  # Nếu status ID mới là None (hiếm khi xảy ra khi update)
-                    db_lead.consultation_status_id = None
-                    db_lead.pipeline_stage_id = None
-                    db_lead.status = "unknown"  # Hoặc một trạng thái mặc định khác
+                        
+                        if not is_valid:
+                            # Chỉ cho phép Admin bypass quy tắc này (Tùy chọn)
+                            if updated_by.role != "admin":
+                                raise BadRequest(
+                                    detail=f"Không thể chuyển trạng thái từ '{current_status_id}' sang '{new_status_id}'. Quy trình không cho phép (Allowed Transitions)."
+                                )
+                            else:
+                                log.warning(f"Admin {updated_by.username} bypassed transition rule: {current_status_id} -> {new_status_id}")
+
+                    # Logic gán status mới (Giữ nguyên)
+                    new_status_obj = await db.get(models.ConsultationStatus, new_status_id)
+                    if not new_status_obj:
+                        raise BadRequest(detail=f"Consultation status '{new_status_id}' not found.")
+                    
+                    db_lead.consultation_status_id = new_status_id
+                    db_lead.pipeline_stage_id = new_status_obj.stage_id
+                elif new_status_id is None:
+                     # Trường hợp clear status (hiếm)
+                     db_lead.consultation_status_id = None
+                     db_lead.pipeline_stage_id = None  # Hoặc một trạng thái mặc định khác
 
             # Lấy trạng thái mới sau khi cập nhật
             new_state = _get_current_lead_state(db_lead)

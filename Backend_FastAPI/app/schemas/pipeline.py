@@ -2,6 +2,7 @@
 from datetime import datetime
 from typing import List, Optional
 
+# ✅ 1. Thêm import ConfigDict
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..models.pipeline import OutcomeTypeEnum
@@ -20,6 +21,8 @@ class PipelineStageBase(BaseModel):
         default=False,
         description="Whether this is a final stage (Won/Lost/Closed)"
     )
+    # ✅ 2. Thêm config để ép Pydantic dùng value của Enum
+    model_config = ConfigDict(use_enum_values=True, from_attributes=True)
 
 
 class PipelineStageCreate(PipelineStageBase):
@@ -38,6 +41,8 @@ class PipelineStageUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=3, max_length=255)
     order: Optional[int] = Field(None, ge=0)
     is_final_stage: Optional[bool] = None
+    
+    model_config = ConfigDict(use_enum_values=True)
 
 
 class PipelineStage(PipelineStageBase):
@@ -54,7 +59,7 @@ class PipelineStage(PipelineStageBase):
         description="Conversion rate from this stage (computed)"
     )
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, use_enum_values=True)
 
 
 # =====================================================================
@@ -79,6 +84,9 @@ class ConsultationStatusBase(BaseModel):
         default=False,
         description="Whether this status marks end of lead lifecycle"
     )
+    
+    # ✅ QUAN TRỌNG NHẤT: Fix lỗi "invalid input value ... NEUTRAL"
+    model_config = ConfigDict(use_enum_values=True, from_attributes=True)
 
 
 class ConsultationStatusCreate(ConsultationStatusBase):
@@ -99,6 +107,8 @@ class ConsultationStatusUpdate(BaseModel):
     stage_id: Optional[str] = None
     outcome_type: Optional[OutcomeTypeEnum] = None
     is_final_status: Optional[bool] = None
+    
+    model_config = ConfigDict(use_enum_values=True)
 
 
 class ConsultationStatus(ConsultationStatusBase):
@@ -111,7 +121,7 @@ class ConsultationStatus(ConsultationStatusBase):
         description="Number of leads with this status (computed)"
     )
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, use_enum_values=True)
 
 
 # =====================================================================
@@ -123,6 +133,8 @@ class AllowedTransitionBase(BaseModel):
     """Base schema for AllowedTransition."""
     from_status_id: str = Field(..., description="Source status ID")
     to_status_id: str = Field(..., description="Destination status ID")
+    
+    model_config = ConfigDict(from_attributes=True, use_enum_values=True)
 
 
 class AllowedTransitionCreate(AllowedTransitionBase):
@@ -134,6 +146,8 @@ class AllowedTransitionUpdate(BaseModel):
     """Schema for updating an allowed transition (rarely used)."""
     from_status_id: Optional[str] = None
     to_status_id: Optional[str] = None
+    
+    model_config = ConfigDict(use_enum_values=True)
 
 
 class AllowedTransition(AllowedTransitionBase):
@@ -146,7 +160,7 @@ class AllowedTransition(AllowedTransitionBase):
     from_status: Optional[ConsultationStatus] = None
     to_status: Optional[ConsultationStatus] = None
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, use_enum_values=True)
 
 
 # =====================================================================
@@ -168,6 +182,11 @@ class FullPipeline(BaseModel):
         ...,
         description="All consultation statuses (grouped by stage)"
     )
+    # Thêm transitions vào FullPipeline (nếu cần thiết cho UI sau này)
+    allowed_transitions: List[AllowedTransition] = Field(
+        default=[],
+        description="All configured allowed transitions"
+    )
 
     # Optional analytics data
     total_leads: Optional[int] = Field(
@@ -178,3 +197,9 @@ class FullPipeline(BaseModel):
         None,
         description="Overall pipeline conversion rate"
     )
+    avg_time_in_pipeline_days: Optional[float] = Field(
+        None,
+        description="Average time in pipeline"
+    )
+    
+    model_config = ConfigDict(use_enum_values=True)

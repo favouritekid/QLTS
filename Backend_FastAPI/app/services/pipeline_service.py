@@ -4,7 +4,7 @@ import json  # ✅ Thêm import
 from typing import List
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import func, select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -384,8 +384,22 @@ async def create_consultation_status(
             db, status_in.stage_id
         )  # Sẽ ném 404 nếu stage_id không tồn tại
 
-        # 4. Tạo
-        db_status = models.ConsultationStatus(**status_in.model_dump())
+        # ✅ FIX MẠNH TAY: Ép kiểu outcome_type về chuỗi thường (value)
+        # Bất kể đầu vào là Enum object hay string "NEUTRAL", ta đều đưa về "neutral"
+        create_data = status_in.model_dump()
+        
+        if "outcome_type" in create_data:
+            val = create_data["outcome_type"]
+            # Nếu là Enum object, lấy .value
+            if hasattr(val, "value"):
+                create_data["outcome_type"] = val.value
+            # Nếu là string, chuyển về chữ thường
+            elif isinstance(val, str):
+                create_data["outcome_type"] = val.lower()
+
+        # 4. Tạo model với dữ liệu đã làm sạch
+        db_status = models.ConsultationStatus(**create_data)
+        
         db.add(db_status)
         await db.commit()
         await db.refresh(db_status)
@@ -596,3 +610,36 @@ async def delete_allowed_transition(db: AsyncSession, transition_id: int):
             exc_info=True,
         )
         raise e
+
+async def validate_status_transition(
+    db: AsyncSession, 
+    from_status_id: str, 
+    to_status_id: str
+) -> bool:
+    """
+    Kiểm tra xem việc chuyển từ trạng thái A sang B có hợp lệ không.
+    
+    Logic:
+    1. Nếu from == to: Luôn đúng (cập nhật thông tin khác của lead).
+    2. Nếu from là None (Lead mới): Luôn đúng (hoặc check rule init tùy logic).
+    3. Query bảng allowed_transitions.
+    """
+    if from_status_id == to_status_id:
+        return True
+        
+    if not from_status_id: 
+        # Trường hợp Lead chưa có status (hiếm), cho phép gán status đầu tiên
+        return True
+
+    # TODO: Performance Opt - Có thể cache danh sách allowed_transitions vào Redis
+    # Hiện tại query DB trực tiếp để đảm bảo tính đúng đắn (Consistency)
+    query = select(models.AllowedTransition).where(
+        and_(
+            models.AllowedTransition.from_status_id == from_status_id,
+            models.AllowedTransition.to_status_id == to_status_id
+        )
+    )
+    result = await db.execute(query)
+    transition = result.scalar_one_or_none()
+    
+    return transition is not None

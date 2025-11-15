@@ -16,8 +16,9 @@ import type {
   FullPipeline,
   PipelineQueryParams,
   MoveLeadPayload,
+  AllowedTransition, // ✅ Import mới
+  AllowedTransitionCreate,
 } from "@/types/pipeline.types";
-import type { AllowedTransition, AllowedTransitionCreate } from "@/lib/api/pipeline";
 
 // =====================================================================
 // QUERY KEYS
@@ -26,12 +27,12 @@ import type { AllowedTransition, AllowedTransitionCreate } from "@/lib/api/pipel
 export const pipelineKeys = {
   all: ["pipeline"] as const,
   stages: () => [...pipelineKeys.all, "stages"] as const,
-  fullPipeline: (params?: PipelineQueryParams) =>
-    [...pipelineKeys.all, "full", params] as const,
+  fullPipeline: (params?: PipelineQueryParams) => [...pipelineKeys.all, "full", params] as const,
   stageLeads: (stageId: string) => [...pipelineKeys.all, "stageLeads", stageId] as const,
   consultationStatuses: () => [...pipelineKeys.all, "consultationStatuses"] as const,
   allowedTransitions: () => [...pipelineKeys.all, "allowedTransitions"] as const,
   stats: (params?: PipelineQueryParams) => [...pipelineKeys.all, "stats", params] as const,
+  allowedTransitions: () => [...pipelineKeys.all, "allowedTransitions"] as const,
 };
 
 // =====================================================================
@@ -175,11 +176,7 @@ export function useConsultationStatuses() {
 export function useCreatePipelineStage() {
   const queryClient = useQueryClient();
 
-  return useMutation<
-    PipelineStage,
-    AxiosError<ApiErrorResponse>,
-    PipelineStageCreate
-  >({
+  return useMutation<PipelineStage, AxiosError<ApiErrorResponse>, PipelineStageCreate>({
     mutationFn: async (data) => {
       return await pipelineApi.createStage(data);
     },
@@ -317,11 +314,7 @@ export function useDeletePipelineStage() {
 export function useCreateConsultationStatus() {
   const queryClient = useQueryClient();
 
-  return useMutation<
-    ConsultationStatus,
-    AxiosError<ApiErrorResponse>,
-    ConsultationStatusCreate
-  >({
+  return useMutation<ConsultationStatus, AxiosError<ApiErrorResponse>, ConsultationStatusCreate>({
     mutationFn: async (data) => {
       return await pipelineApi.createConsultationStatus(data);
     },
@@ -592,11 +585,7 @@ export function useMoveLeadToStage() {
 export function useRevertLeadStatus() {
   const queryClient = useQueryClient();
 
-  return useMutation<
-    Lead,
-    AxiosError<ApiErrorResponse>,
-    { leadId: number }
-  >({
+  return useMutation<Lead, AxiosError<ApiErrorResponse>, { leadId: number }>({
     mutationFn: async ({ leadId }) => {
       return await pipelineApi.revertLeadStatus(leadId);
     },
@@ -669,11 +658,7 @@ export function useAllowedTransitions() {
 export function useCreateAllowedTransition() {
   const queryClient = useQueryClient();
 
-  return useMutation<
-    AllowedTransition,
-    AxiosError<ApiErrorResponse>,
-    AllowedTransitionCreate
-  >({
+  return useMutation<AllowedTransition, AxiosError<ApiErrorResponse>, AllowedTransitionCreate>({
     mutationFn: async (data) => {
       return await pipelineApi.createAllowedTransition(data);
     },
