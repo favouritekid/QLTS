@@ -384,20 +384,38 @@ async def create_consultation_status(
             db, status_in.stage_id
         )  # Sẽ ném 404 nếu stage_id không tồn tại
 
-        # ✅ FIX: Force Pydantic to use enum values (not names)
-        # mode='python' ensures enums are serialized as their values
+        # ✅ CRITICAL FIX: Convert Pydantic model to dict with proper enum handling
         create_data = status_in.model_dump(mode='python')
 
-        # ✅ Additional safety: Explicitly convert outcome_type to lowercase string
+        # ✅ FORCE outcome_type to lowercase (handle ALL possible formats)
         if "outcome_type" in create_data:
             val = create_data["outcome_type"]
-            # Handle all possible formats
+
+            # Log for debugging
+            log.debug(
+                "Converting outcome_type",
+                original_value=val,
+                original_type=type(val).__name__
+            )
+
+            # Force to lowercase string regardless of input type
             if isinstance(val, models.OutcomeTypeEnum):
-                # If it's an enum object, get its value
-                create_data["outcome_type"] = val.value
+                # Enum object -> get .value
+                create_data["outcome_type"] = val.value.lower()
             elif isinstance(val, str):
-                # If it's already a string, ensure lowercase
+                # String -> force lowercase
                 create_data["outcome_type"] = val.lower()
+            elif hasattr(val, 'value'):
+                # Any object with .value attribute
+                create_data["outcome_type"] = str(val.value).lower()
+            else:
+                # Last resort: stringify and lowercase
+                create_data["outcome_type"] = str(val).lower()
+
+            log.debug(
+                "Converted outcome_type",
+                converted_value=create_data["outcome_type"]
+            )
 
         # 4. Tạo model với dữ liệu đã làm sạch
         db_status = models.ConsultationStatus(**create_data)
@@ -433,13 +451,30 @@ async def update_consultation_status(
         db_status = await _get_status_by_id(db, status_id)
         update_data = status_in.model_dump(exclude_unset=True, mode='python')
 
-        # ✅ FIX: Convert outcome_type to lowercase string if present
+        # ✅ FORCE outcome_type to lowercase if present
         if "outcome_type" in update_data:
             val = update_data["outcome_type"]
+
+            log.debug(
+                "Converting outcome_type for update",
+                original_value=val,
+                original_type=type(val).__name__
+            )
+
+            # Force to lowercase string regardless of input type
             if isinstance(val, models.OutcomeTypeEnum):
-                update_data["outcome_type"] = val.value
+                update_data["outcome_type"] = val.value.lower()
             elif isinstance(val, str):
                 update_data["outcome_type"] = val.lower()
+            elif hasattr(val, 'value'):
+                update_data["outcome_type"] = str(val.value).lower()
+            else:
+                update_data["outcome_type"] = str(val).lower()
+
+            log.debug(
+                "Converted outcome_type for update",
+                converted_value=update_data["outcome_type"]
+            )
 
         # 1. Kiểm tra 'name' (nếu thay đổi)
         if "name" in update_data and update_data["name"] != db_status.name:
