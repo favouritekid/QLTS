@@ -7,4 +7,6 @@ export type NavigationLink = {
   icon?: LucideIcon;
   children?: NavigationLink[];
   badge?: string | number;
+  matchPath?: string[]; // Additional paths that should activate this item
+  excludePaths?: string[]; // Paths to exclude from parent active state
 };

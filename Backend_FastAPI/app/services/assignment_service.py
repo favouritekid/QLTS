@@ -13,8 +13,6 @@ from ..config import settings
 # Lấy logger chuẩn ở đây, dùng làm fallback
 default_log = logging.getLogger(__name__)
 
-ACTIVE_LEAD_STATUSES_FOR_WORKLOAD = settings.ACTIVE_LEAD_STATUSES_FOR_WORKLOAD
-
 
 # Thêm tham số logger=None
 async def automatically_assign_lead(
@@ -94,16 +92,23 @@ async def automatically_assign_lead(
                 )
 
                 # === BƯỚC 3: TÍNH TOÁN WORKLOAD (Chỉ cho các officer lấy được) ===
+                # ✅ REFACTORED: Sử dụng JOIN với ConsultationStatus thay vì danh sách hard-coded
                 officer_ids = [o.id for o in available_officers]
                 workload_stmt = (
                     select(
                         models.Lead.assigned_officer_id,
                         func.count(models.Lead.id).label("workload"),
                     )
+                    .join(
+                        models.ConsultationStatus,
+                        models.Lead.consultation_status_id == models.ConsultationStatus.id,
+                        isouter=True,  # LEFT JOIN để bao gồm cả lead chưa có status
+                    )
                     .where(
                         models.Lead.assigned_officer_id.in_(officer_ids),
-                        # Chỉ đếm các lead đang thực sự "active" trong workload
-                        models.Lead.status.in_(ACTIVE_LEAD_STATUSES_FOR_WORKLOAD),
+                        # Chỉ đếm lead chưa kết thúc (is_final_status = False hoặc NULL)
+                        (models.ConsultationStatus.is_final_status == False) |
+                        (models.ConsultationStatus.is_final_status.is_(None))
                     )
                     .group_by(models.Lead.assigned_officer_id)
                 )
@@ -112,7 +117,7 @@ async def automatically_assign_lead(
                     row.assigned_officer_id: row.workload for row in workload_results
                 }
                 log.debug(
-                    f"[Lead ID: {lead_id}] Calculated workloads for available officers: {workload_map}"
+                    f"[Lead ID: {lead_id}] Calculated workloads (non-final leads only) for available officers: {workload_map}"
                 )
 
                 # === BƯỚC 4: Xây dựng Danh sách Officer Hợp lệ (còn capacity) ===
@@ -156,20 +161,17 @@ async def automatically_assign_lead(
                     # await db.commit()
                     return  # Kết thúc task
 
-                # === BƯỚC 5: Sắp xếp và Chọn Officer ===
+                # === BƯỚC 5: Sắp xếp và Chọn Officer (HYBRID THRESHOLD ROUND ROBIN) ===
+                # ✅ REFACTORED: Thuật toán mới chống "Flooding" cho nhân viên mới
+                # Ngưỡng an toàn: 80% utilization
                 # Ưu tiên:
-                # 1. Utilization thấp nhất (ít % đầy nhất)
-                # 2. Capacity còn lại nhiều nhất (nếu utilization bằng nhau)
-                # 3. Được gán lần cuối xa nhất (nếu cả 2 trên bằng nhau)
+                # 1. Nhóm chưa quá tải (utilization < 0.8) trước nhóm sắp quá tải (>= 0.8)
+                # 2. Trong cùng nhóm, ưu tiên người được gán lâu nhất (Round Robin công bằng)
+                SAFETY_THRESHOLD = 0.8
                 officer_loads.sort(
                     key=lambda x: (
-                        x["utilization"],
-                        (
-                            -(x["officer"].max_capacity - x["workload"])
-                            if x["officer"].max_capacity is not None
-                            else 0
-                        ),  # Ưu tiên người còn nhiều slot trống hơn
-                        x["last_assigned"],  # Sắp xếp theo datetime object
+                        x["utilization"] >= SAFETY_THRESHOLD,  # False (nhóm an toàn) < True (nhóm quá tải)
+                        x["last_assigned"],  # Sắp xếp theo datetime - người gán lâu nhất được ưu tiên
                     )
                 )
 

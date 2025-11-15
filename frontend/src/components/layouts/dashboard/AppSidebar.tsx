@@ -3,14 +3,14 @@
 
 import { useUIStore } from "@/lib/stores/ui.store";
 import { cn } from "@/lib/utils";
-import { Bell, BookMarked, Settings, LayoutDashboard, Database, Users, ShieldCheck, Building2, Workflow, Trello } from "lucide-react";
+import { BookMarked } from "lucide-react";
 import { NavUser } from "./NavUser";
 import { NavGroup } from "./NavGroup";
 import type { NavigationLink } from "@/types/layout.types";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useNotifications } from "@/hooks/useNotifications";
-import { useAuth } from "@/hooks/useAuth";
+import { useAppNavigation } from "@/hooks/useAppNavigation";
 
 const AppTitle = ({ isCollapsed }: { isCollapsed: boolean }) => (
   <TooltipProvider delayDuration={0}>
@@ -50,7 +50,7 @@ const AppTitle = ({ isCollapsed }: { isCollapsed: boolean }) => (
 
 export function AppSidebar() {
   const { isSidebarCollapsed } = useUIStore();
-  const { user } = useAuth();
+  const { navigation } = useAppNavigation();
 
   // Fetch unread notification count for badge
   const { data: notificationsData } = useNotifications({
@@ -61,44 +61,28 @@ export function AppSidebar() {
 
   const unreadCount = notificationsData?.unread_count || 0;
 
-  // Check if user is admin or manager
-  const isAdmin = user?.role === "admin" || user?.role === "manager";
-
-  // Main navigation links - filtered by role
-  const mainNavLinks: NavigationLink[] = [
-    { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-    {
-      label: "Lead Management",
-      href: "/leads",
-      icon: Database,
-      children: [
-        { label: "Lead List", href: "/leads", icon: Database },
-        { label: "Pipeline Board", href: "/leads/pipeline", icon: Trello },
-        // Only show Pipeline Settings for admin/manager
-        ...(isAdmin
-          ? [{ label: "Pipeline Settings", href: "/admin/pipeline", icon: Workflow }]
-          : []),
-      ]
-    },
-    // Only show admin links for admin/manager
-    ...(isAdmin
-      ? [
-          { label: "Users", href: "/admin/users", icon: Users },
-          { label: "Organization", href: "/admin/organization", icon: Building2 },
-          { label: "Policy Management", href: "/admin/policies", icon: ShieldCheck },
-        ]
-      : []),
-  ];
-
-  const settingsLinks: NavigationLink[] = [
-    { label: "Settings", href: "/settings", icon: Settings },
-    {
-      label: "Notifications",
-      href: "/notifications",
-      icon: Bell,
-      badge: unreadCount > 0 ? unreadCount : undefined,
-    },
-  ];
+  // Add notification badge dynamically to the navigation
+  // Find the "System" group and add badge to "Notifications" item
+  const navigationWithBadges = navigation.map((group) => {
+    if (group.title === "System") {
+      return {
+        ...group,
+        items: group.items.map((item) => {
+          if (item.href === "/notifications") {
+            return {
+              ...item,
+              badge: unreadCount > 0 ? unreadCount : undefined,
+            } as NavigationLink;
+          }
+          return item as NavigationLink;
+        }),
+      };
+    }
+    return {
+      ...group,
+      items: group.items as NavigationLink[],
+    };
+  });
 
   return (
     <aside
@@ -117,11 +101,19 @@ export function AppSidebar() {
       {/* App Title with Tooltip */}
       <AppTitle isCollapsed={isSidebarCollapsed} />
 
-      {/* Navigation */}
+      {/* Navigation - Config-driven */}
       <nav className="scrollbar-thin flex-1 space-y-1 overflow-y-auto px-3 py-4">
-        <NavGroup links={mainNavLinks} isCollapsed={isSidebarCollapsed} title="Overview" />
-        <div className="bg-border my-4 h-px w-full" />
-        <NavGroup links={settingsLinks} isCollapsed={isSidebarCollapsed} title="Management" />
+        {navigationWithBadges.map((group, index) => (
+          <div key={group.title}>
+            {/* Add divider between groups (except before first group) */}
+            {index > 0 && <div className="bg-border my-4 h-px w-full" />}
+            <NavGroup
+              links={group.items}
+              isCollapsed={isSidebarCollapsed}
+              title={group.title}
+            />
+          </div>
+        ))}
       </nav>
 
       {/* User Section */}

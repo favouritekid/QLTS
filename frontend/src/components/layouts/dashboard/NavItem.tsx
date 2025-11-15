@@ -22,18 +22,49 @@ export function NavItem({ link, isCollapsed }: NavItemProps) {
   const hasChildren = link.children && link.children.length > 0;
 
   // Helper function to check if a path matches the current pathname
-  // Only matches exact path or child paths (with trailing slash check)
-  const isPathActive = (href: string) => {
+  // Supports excludePaths and matchPath for advanced active state logic
+  const isPathActive = (href: string, matchPath?: string[], excludePaths?: string[]) => {
+    // First, check if current path is in excludePaths
+    if (excludePaths && excludePaths.length > 0) {
+      const isExcluded = excludePaths.some((excludePath) => {
+        if (pathname === excludePath) return true;
+        // Also check if pathname starts with excludePath (for nested routes)
+        if (excludePath !== "/" && pathname.startsWith(excludePath + "/")) {
+          return true;
+        }
+        return false;
+      });
+      // If current path is excluded, return false immediately
+      if (isExcluded) return false;
+    }
+
+    // Exact match
     if (pathname === href) return true;
-    if (href === "/") return false; // Never match root with startsWith
+
+    // Check custom matchPath
+    if (matchPath && matchPath.length > 0) {
+      const isMatched = matchPath.some((path) => {
+        if (pathname === path) return true;
+        // Match child paths
+        if (path !== "/" && pathname.startsWith(path + "/")) {
+          return true;
+        }
+        return false;
+      });
+      if (isMatched) return true;
+    }
+
+    // Never match root with startsWith
+    if (href === "/") return false;
+
     // Only match if pathname starts with href followed by a slash
     return pathname.startsWith(href + "/");
   };
 
   // Check if current path matches this link or any of its children
   const isActive = hasChildren
-    ? link.children?.some(child => isPathActive(child.href))
-    : isPathActive(link.href);
+    ? link.children?.some(child => isPathActive(child.href, child.matchPath, child.excludePaths))
+    : isPathActive(link.href, link.matchPath, link.excludePaths);
 
   // If collapsed, show icon with tooltip
   if (isCollapsed) {
