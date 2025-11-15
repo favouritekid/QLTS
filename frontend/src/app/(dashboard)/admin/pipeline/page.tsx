@@ -123,6 +123,9 @@ export default function AdminPipelinePage() {
                       <div className="flex items-center gap-2">
                         <Badge variant="outline">{stage.order}</Badge>
                         <CardTitle className="text-lg">{stage.name}</CardTitle>
+                        {stage.is_final_stage && (
+                          <Badge variant="destructive">Final Stage</Badge>
+                        )}
                       </div>
                       <div className="flex gap-2">
                         <Button size="sm" variant="outline" onClick={() => handleEditStage(stage)}>
@@ -168,6 +171,29 @@ export default function AdminPipelinePage() {
                           style={{ backgroundColor: status.color_code }}
                         />
                         <CardTitle className="text-lg">{status.name}</CardTitle>
+
+                        {/* Outcome Type Badge */}
+                        <Badge
+                          variant={
+                            status.outcome_type === "positive"
+                              ? "default"
+                              : status.outcome_type === "negative"
+                              ? "destructive"
+                              : "secondary"
+                          }
+                          className={
+                            status.outcome_type === "positive"
+                              ? "bg-green-500 hover:bg-green-600"
+                              : ""
+                          }
+                        >
+                          {status.outcome_type}
+                        </Badge>
+
+                        {/* Final Status Badge */}
+                        {status.is_final_status && (
+                          <Badge variant="outline">Final</Badge>
+                        )}
                       </div>
                       <div className="flex gap-2">
                         <Button

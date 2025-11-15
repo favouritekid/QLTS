@@ -41,7 +41,9 @@ import type {
   ConsultationStatus,
   ConsultationStatusCreate,
   ConsultationStatusUpdate,
+  OutcomeType,
 } from "@/types/pipeline.types";
+import { Checkbox as ShadcnCheckbox } from "@/components/ui/checkbox";
 
 // =====================================================================
 // FORM VALIDATION SCHEMA
@@ -65,6 +67,8 @@ const statusFormSchema = z.object({
   stage_id: z
     .string()
     .min(1, "Stage is required"),
+  outcome_type: z.enum(["positive", "neutral", "negative"]).default("neutral"),
+  is_final_status: z.boolean().default(false),
 });
 
 type StatusFormValues = z.infer<typeof statusFormSchema>;
@@ -120,6 +124,8 @@ export function ConsultationStatusDialog({
       name: "",
       color_code: "#3B82F6",
       stage_id: "",
+      outcome_type: "neutral",
+      is_final_status: false,
     },
   });
 
@@ -132,6 +138,8 @@ export function ConsultationStatusDialog({
           name: status.name,
           color_code: status.color_code,
           stage_id: status.stage_id,
+          outcome_type: status.outcome_type || "neutral",
+          is_final_status: status.is_final_status || false,
         });
       } else {
         form.reset({
@@ -139,6 +147,8 @@ export function ConsultationStatusDialog({
           name: "",
           color_code: "#3B82F6",
           stage_id: "",
+          outcome_type: "neutral",
+          is_final_status: false,
         });
       }
     }
@@ -154,6 +164,8 @@ export function ConsultationStatusDialog({
             name: values.name,
             color_code: values.color_code,
             stage_id: values.stage_id,
+            outcome_type: values.outcome_type as OutcomeType,
+            is_final_status: values.is_final_status,
           } as ConsultationStatusUpdate,
         });
       } else {
@@ -162,6 +174,8 @@ export function ConsultationStatusDialog({
           name: values.name,
           color_code: values.color_code,
           stage_id: values.stage_id,
+          outcome_type: values.outcome_type as OutcomeType,
+          is_final_status: values.is_final_status,
         } as ConsultationStatusCreate);
       }
 
@@ -331,6 +345,76 @@ export function ConsultationStatusDialog({
                     ))}
                   </div>
                   <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {/* Outcome Type Field */}
+            <FormField
+              control={form.control}
+              name="outcome_type"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>
+                    Outcome Type <span className="text-red-500">*</span>
+                  </FormLabel>
+                  <Select
+                    onValueChange={field.onChange}
+                    value={field.value}
+                    disabled={isSubmitting}
+                  >
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select outcome type" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      <SelectItem value="positive">
+                        <span className="flex items-center gap-2">
+                          <span className="text-green-500">●</span> Positive
+                        </span>
+                      </SelectItem>
+                      <SelectItem value="neutral">
+                        <span className="flex items-center gap-2">
+                          <span className="text-gray-500">●</span> Neutral
+                        </span>
+                      </SelectItem>
+                      <SelectItem value="negative">
+                        <span className="flex items-center gap-2">
+                          <span className="text-red-500">●</span> Negative
+                        </span>
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <FormDescription>
+                    Classify this status outcome (used for reporting and analytics)
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {/* Is Final Status Field */}
+            <FormField
+              control={form.control}
+              name="is_final_status"
+              render={({ field }) => (
+                <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
+                  <FormControl>
+                    <ShadcnCheckbox
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                  <div className="space-y-1 leading-none">
+                    <FormLabel>
+                      Final Status
+                    </FormLabel>
+                    <FormDescription>
+                      Mark this as end of lead lifecycle (e.g., "Enrolled", "Rejected").
+                      Leads with final status won&apos;t be counted in active pipeline.
+                    </FormDescription>
+                  </div>
                 </FormItem>
               )}
             />

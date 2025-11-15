@@ -40,13 +40,20 @@ export function TransitionMatrix() {
     if (fromId === toId) return;
 
     if (currentState) {
-      deleteMutation.mutate(
-        { from_status_id: fromId, to_status_id: toId },
-        {
-          onSuccess: () => toast.success("Đã chặn luồng chuyển đổi"),
-          onError: (err) => toast.error("Lỗi: " + err.message),
-        }
+      // ✅ FIX: Find transition ID first before deleting
+      const transition = transitions.find(
+        (t) => t.from_status_id === fromId && t.to_status_id === toId
       );
+
+      if (!transition) {
+        toast.error("Không tìm thấy transition để xóa");
+        return;
+      }
+
+      deleteMutation.mutate(transition.id, {
+        onSuccess: () => toast.success("Đã chặn luồng chuyển đổi"),
+        onError: (err) => toast.error("Lỗi: " + err.message),
+      });
     } else {
       createMutation.mutate(
         { from_status_id: fromId, to_status_id: toId },
