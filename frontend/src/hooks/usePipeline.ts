@@ -187,8 +187,10 @@ export function useCreatePipelineStage() {
         description: newStage.name,
       });
 
-      // Invalidate pipeline queries
+      // Invalidate and refetch pipeline queries immediately
       queryClient.invalidateQueries({ queryKey: pipelineKeys.all });
+      queryClient.refetchQueries({ queryKey: pipelineKeys.stages() });
+      queryClient.refetchQueries({ queryKey: pipelineKeys.fullPipeline() });
     },
 
     onError: (error) => {
@@ -234,8 +236,10 @@ export function useUpdatePipelineStage() {
         description: updatedStage.name,
       });
 
-      // Invalidate pipeline queries
+      // Invalidate and refetch pipeline queries immediately
       queryClient.invalidateQueries({ queryKey: pipelineKeys.all });
+      queryClient.refetchQueries({ queryKey: pipelineKeys.stages() });
+      queryClient.refetchQueries({ queryKey: pipelineKeys.fullPipeline() });
     },
 
     onError: (error) => {
@@ -271,8 +275,10 @@ export function useDeletePipelineStage() {
     onSuccess: () => {
       toast.success("Pipeline stage deleted!");
 
-      // Invalidate pipeline queries
+      // Invalidate and refetch pipeline queries immediately
       queryClient.invalidateQueries({ queryKey: pipelineKeys.all });
+      queryClient.refetchQueries({ queryKey: pipelineKeys.stages() });
+      queryClient.refetchQueries({ queryKey: pipelineKeys.fullPipeline() });
     },
 
     onError: (error) => {
@@ -323,8 +329,10 @@ export function useCreateConsultationStatus() {
         description: newStatus.name,
       });
 
-      // Invalidate consultation status queries
-      queryClient.invalidateQueries({ queryKey: pipelineKeys.consultationStatuses() });
+      // Invalidate and refetch consultation status queries immediately
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.all });
+      queryClient.refetchQueries({ queryKey: pipelineKeys.consultationStatuses() });
+      queryClient.refetchQueries({ queryKey: pipelineKeys.fullPipeline() });
     },
 
     onError: (error) => {
@@ -370,8 +378,10 @@ export function useUpdateConsultationStatus() {
         description: updatedStatus.name,
       });
 
-      // Invalidate consultation status queries
-      queryClient.invalidateQueries({ queryKey: pipelineKeys.consultationStatuses() });
+      // Invalidate and refetch consultation status queries immediately
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.all });
+      queryClient.refetchQueries({ queryKey: pipelineKeys.consultationStatuses() });
+      queryClient.refetchQueries({ queryKey: pipelineKeys.fullPipeline() });
     },
 
     onError: (error) => {
@@ -407,8 +417,10 @@ export function useDeleteConsultationStatus() {
     onSuccess: () => {
       toast.success("Consultation status deleted!");
 
-      // Invalidate consultation status queries
-      queryClient.invalidateQueries({ queryKey: pipelineKeys.consultationStatuses() });
+      // Invalidate and refetch consultation status queries immediately
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.all });
+      queryClient.refetchQueries({ queryKey: pipelineKeys.consultationStatuses() });
+      queryClient.refetchQueries({ queryKey: pipelineKeys.fullPipeline() });
     },
 
     onError: (error) => {

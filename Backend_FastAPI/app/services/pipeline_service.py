@@ -67,9 +67,15 @@ async def get_all_pipeline_stages(db: AsyncSession) -> List[dict]:
         result = await db.execute(query)
         stages_models = result.scalars().all()
 
-        # 4. Chuyển đổi models sang list[dict]
+        # 4. Chuyển đổi models sang list[dict] (include CRM fields)
         stages_data = [
-            {"id": s.id, "name": s.name, "order": s.order} for s in stages_models
+            {
+                "id": s.id,
+                "name": s.name,
+                "order": s.order,
+                "is_final_stage": s.is_final_stage,
+            }
+            for s in stages_models
         ]
 
         # 5. Lưu vào cache
@@ -130,13 +136,15 @@ async def get_all_consultation_statuses(
         result = await db.execute(query)
         statuses_models = result.scalars().all()
 
-        # 4. Chuyển đổi models sang list[dict]
+        # 4. Chuyển đổi models sang list[dict] (include CRM fields)
         statuses_data = [
             {
                 "id": s.id,
                 "name": s.name,
                 "color_code": s.color_code,
                 "stage_id": s.stage_id,
+                "outcome_type": s.outcome_type.value,  # Convert enum to string
+                "is_final_status": s.is_final_status,
             }
             for s in statuses_models
         ]
@@ -210,7 +218,18 @@ async def create_pipeline_stage(
                 f"Pipeline Stage ID '{stage_in.id}' already exists."
             )
 
-        # 2. Kiểm tra 'order' đã tồn tại
+        # 2. Kiểm tra 'name' đã tồn tại
+        existing_name = await db.scalar(
+            select(models.PipelineStage).where(
+                models.PipelineStage.name == stage_in.name
+            )
+        )
+        if existing_name:
+            raise DuplicateResourceError(
+                f"Pipeline Stage name '{stage_in.name}' already exists."
+            )
+
+        # 3. Kiểm tra 'order' đã tồn tại
         existing_order = await db.scalar(
             select(models.PipelineStage).where(
                 models.PipelineStage.order == stage_in.order
@@ -221,13 +240,13 @@ async def create_pipeline_stage(
                 f"Pipeline Stage order '{stage_in.order}' already exists."
             )
 
-        # 3. Tạo
+        # 4. Tạo
         db_stage = models.PipelineStage(**stage_in.model_dump())
         db.add(db_stage)
         await db.commit()
         await db.refresh(db_stage)
 
-        # 4. Hủy cache
+        # 5. Hủy cache
         await invalidate_pipeline_cache()
         log.info("Created new pipeline stage, cache invalidated", stage_id=db_stage.id)
 
@@ -250,7 +269,19 @@ async def update_pipeline_stage(
         db_stage = await _get_stage_by_id(db, stage_id)
         update_data = stage_in.model_dump(exclude_unset=True)
 
-        # 1. Kiểm tra 'order' (nếu thay đổi)
+        # 1. Kiểm tra 'name' (nếu thay đổi)
+        if "name" in update_data and update_data["name"] != db_stage.name:
+            existing_name = await db.scalar(
+                select(models.PipelineStage).where(
+                    models.PipelineStage.name == update_data["name"]
+                )
+            )
+            if existing_name:
+                raise DuplicateResourceError(
+                    f"Pipeline Stage name '{update_data['name']}' already in use."
+                )
+
+        # 2. Kiểm tra 'order' (nếu thay đổi)
         if "order" in update_data and update_data["order"] != db_stage.order:
             existing_order = await db.scalar(
                 select(models.PipelineStage).where(
@@ -262,7 +293,7 @@ async def update_pipeline_stage(
                     f"Pipeline Stage order '{update_data['order']}' already in use."
                 )
 
-        # 2. Cập nhật
+        # 3. Cập nhật
         for key, value in update_data.items():
             setattr(db_stage, key, value)
 
@@ -270,7 +301,7 @@ async def update_pipeline_stage(
         await db.commit()
         await db.refresh(db_stage)
 
-        # 3. Hủy cache
+        # 4. Hủy cache
         await invalidate_pipeline_cache()
         log.info("Updated pipeline stage, cache invalidated", stage_id=db_stage.id)
 
@@ -336,18 +367,29 @@ async def create_consultation_status(
                 f"Consultation Status ID '{status_in.id}' already exists."
             )
 
-        # 2. Kiểm tra Stage cha
+        # 2. Kiểm tra 'name' đã tồn tại
+        existing_name = await db.scalar(
+            select(models.ConsultationStatus).where(
+                models.ConsultationStatus.name == status_in.name
+            )
+        )
+        if existing_name:
+            raise DuplicateResourceError(
+                f"Consultation Status name '{status_in.name}' already exists."
+            )
+
+        # 3. Kiểm tra Stage cha
         await _get_stage_by_id(
             db, status_in.stage_id
         )  # Sẽ ném 404 nếu stage_id không tồn tại
 
-        # 3. Tạo
+        # 4. Tạo
         db_status = models.ConsultationStatus(**status_in.model_dump())
         db.add(db_status)
         await db.commit()
         await db.refresh(db_status)
 
-        # 4. Hủy cache
+        # 5. Hủy cache
         await invalidate_pipeline_cache()
         log.info(
             "Created new consultation status, cache invalidated", status_id=db_status.id
@@ -374,13 +416,25 @@ async def update_consultation_status(
         db_status = await _get_status_by_id(db, status_id)
         update_data = status_in.model_dump(exclude_unset=True)
 
-        # 1. Kiểm tra Stage cha (nếu thay đổi)
+        # 1. Kiểm tra 'name' (nếu thay đổi)
+        if "name" in update_data and update_data["name"] != db_status.name:
+            existing_name = await db.scalar(
+                select(models.ConsultationStatus).where(
+                    models.ConsultationStatus.name == update_data["name"]
+                )
+            )
+            if existing_name:
+                raise DuplicateResourceError(
+                    f"Consultation Status name '{update_data['name']}' already in use."
+                )
+
+        # 2. Kiểm tra Stage cha (nếu thay đổi)
         if "stage_id" in update_data and update_data["stage_id"] != db_status.stage_id:
             await _get_stage_by_id(
                 db, update_data["stage_id"]
             )  # Ném 404 nếu không tìm thấy
 
-        # 2. Cập nhật
+        # 3. Cập nhật
         for key, value in update_data.items():
             setattr(db_status, key, value)
 
@@ -388,7 +442,7 @@ async def update_consultation_status(
         await db.commit()
         await db.refresh(db_status)
 
-        # 3. Hủy cache
+        # 4. Hủy cache
         await invalidate_pipeline_cache()
         log.info(
             "Updated consultation status, cache invalidated", status_id=db_status.id

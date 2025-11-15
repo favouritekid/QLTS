@@ -67,14 +67,24 @@ export function AppSidebar() {
   // Main navigation links - filtered by role
   const mainNavLinks: NavigationLink[] = [
     { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-    { label: "Leads", href: "/leads", icon: Database },
-    { label: "Pipeline Board", href: "/leads/pipeline", icon: Trello },
+    {
+      label: "Lead Management",
+      href: "/leads",
+      icon: Database,
+      children: [
+        { label: "Lead List", href: "/leads", icon: Database },
+        { label: "Pipeline Board", href: "/leads/pipeline", icon: Trello },
+        // Only show Pipeline Settings for admin/manager
+        ...(isAdmin
+          ? [{ label: "Pipeline Settings", href: "/admin/pipeline", icon: Workflow }]
+          : []),
+      ]
+    },
     // Only show admin links for admin/manager
     ...(isAdmin
       ? [
           { label: "Users", href: "/admin/users", icon: Users },
           { label: "Organization", href: "/admin/organization", icon: Building2 },
-          { label: "Pipeline Settings", href: "/admin/pipeline", icon: Workflow },
           { label: "Policy Management", href: "/admin/policies", icon: ShieldCheck },
         ]
       : []),
