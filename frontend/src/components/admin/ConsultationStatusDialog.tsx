@@ -53,7 +53,10 @@ const statusFormSchema = z.object({
   id: z
     .string()
     .min(1, "Status ID is required")
-    .regex(/^[a-z0-9_]+$/, "Status ID must contain only lowercase letters, numbers, and underscores")
+    .regex(
+      /^[a-z0-9_]+$/,
+      "Status ID must contain only lowercase letters, numbers, and underscores"
+    )
     .max(50, "Status ID must not exceed 50 characters"),
   name: z
     .string()
@@ -64,9 +67,7 @@ const statusFormSchema = z.object({
     .string()
     .min(1, "Color is required")
     .regex(/^#[0-9A-Fa-f]{6}$/, "Color must be a valid hex color (e.g., #FF5733)"),
-  stage_id: z
-    .string()
-    .min(1, "Stage is required"),
+  stage_id: z.string().min(1, "Stage is required"),
   outcome_type: z.enum(["positive", "neutral", "negative"]),
   is_final_status: z.boolean(),
 });
@@ -218,11 +219,7 @@ export function ConsultationStatusDialog({
                       Status ID <span className="text-red-500">*</span>
                     </FormLabel>
                     <FormControl>
-                      <Input
-                        placeholder="e.g., rescheduled"
-                        {...field}
-                        disabled={isSubmitting}
-                      />
+                      <Input placeholder="e.g., rescheduled" {...field} disabled={isSubmitting} />
                     </FormControl>
                     <FormDescription>
                       Unique identifier (lowercase, numbers, underscores only)
@@ -243,15 +240,9 @@ export function ConsultationStatusDialog({
                     Status Name <span className="text-red-500">*</span>
                   </FormLabel>
                   <FormControl>
-                    <Input
-                      placeholder="e.g., Rescheduled"
-                      {...field}
-                      disabled={isSubmitting}
-                    />
+                    <Input placeholder="e.g., Rescheduled" {...field} disabled={isSubmitting} />
                   </FormControl>
-                  <FormDescription>
-                    Display name for this status
-                  </FormDescription>
+                  <FormDescription>Display name for this status</FormDescription>
                   <FormMessage />
                 </FormItem>
               )}
@@ -294,9 +285,7 @@ export function ConsultationStatusDialog({
                       )}
                     </SelectContent>
                   </Select>
-                  <FormDescription>
-                    Which pipeline stage this status applies to
-                  </FormDescription>
+                  <FormDescription>Which pipeline stage this status applies to</FormDescription>
                   <FormMessage />
                 </FormItem>
               )}
@@ -321,20 +310,18 @@ export function ConsultationStatusDialog({
                       />
                     </FormControl>
                     <div
-                      className="w-10 h-10 rounded border"
+                      className="h-10 w-10 rounded border"
                       style={{ backgroundColor: field.value }}
                     />
                   </div>
-                  <FormDescription>
-                    Hex color code for this status
-                  </FormDescription>
+                  <FormDescription>Hex color code for this status</FormDescription>
                   {/* Color Presets */}
-                  <div className="flex gap-2 mt-2">
+                  <div className="mt-2 flex gap-2">
                     {PRESET_COLORS.map((color) => (
                       <button
                         key={color.value}
                         type="button"
-                        className="w-6 h-6 rounded border-2 hover:scale-110 transition-transform"
+                        className="h-6 w-6 rounded border-2 transition-transform hover:scale-110"
                         style={{
                           backgroundColor: color.value,
                           borderColor: field.value === color.value ? "#000" : "transparent",
@@ -399,20 +386,16 @@ export function ConsultationStatusDialog({
               control={form.control}
               name="is_final_status"
               render={({ field }) => (
-                <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
+                <FormItem className="flex flex-row items-start space-y-0 space-x-3 rounded-md border p-4">
                   <FormControl>
-                    <ShadcnCheckbox
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                    />
+                    <ShadcnCheckbox checked={field.value} onCheckedChange={field.onChange} />
                   </FormControl>
                   <div className="space-y-1 leading-none">
-                    <FormLabel>
-                      Final Status
-                    </FormLabel>
+                    <FormLabel>Final Status</FormLabel>
                     <FormDescription>
-                      Mark this as end of lead lifecycle (e.g., "Enrolled", "Rejected").
-                      Leads with final status won&apos;t be counted in active pipeline.
+                      Mark this as end of lead lifecycle (e.g., &apos;Enrolled&apos;,
+                      &apos;Rejected&apos;). Leads with final status won&apos;t be counted in active
+                      pipeline.
                     </FormDescription>
                   </div>
                 </FormItem>

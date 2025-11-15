@@ -80,7 +80,7 @@ export function TransitionMatrix() {
         <Info className="text-muted-foreground/50 h-10 w-10" />
         <p className="text-muted-foreground font-medium">Chưa có trạng thái tư vấn nào.</p>
         <p className="text-muted-foreground text-xs">
-          Vui lòng tạo Status trong tab "Consultation Statuses" trước.
+          Vui lòng tạo Status trong tab &apos;Consultation Statuses&apos; trước.
         </p>
       </div>
     );
