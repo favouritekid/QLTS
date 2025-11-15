@@ -6,6 +6,7 @@ from typing import List
 import structlog
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from .. import models, schemas
 from ..config import settings  # ✅ Thêm import
@@ -499,6 +500,98 @@ async def delete_consultation_status(db: AsyncSession, status_id: str):
         log.error(
             "Failed to delete consultation status",
             status_id=status_id,
+            error=str(e),
+            exc_info=True,
+        )
+        raise e
+
+
+# ===============================================================
+# ALLOWED TRANSITIONS CRUD
+# ===============================================================
+
+
+async def get_all_allowed_transitions(db: AsyncSession) -> List[models.AllowedTransition]:
+    """Lấy tất cả các allowed transitions với thông tin statuses."""
+    query = (
+        select(models.AllowedTransition)
+        .options(
+            # Eager load related statuses
+            selectinload(models.AllowedTransition.from_status),
+            selectinload(models.AllowedTransition.to_status),
+        )
+        .order_by(models.AllowedTransition.from_status_id)
+    )
+    result = await db.execute(query)
+    return list(result.scalars().all())
+
+
+async def create_allowed_transition(
+    db: AsyncSession, transition_in: schemas.AllowedTransitionCreate
+) -> models.AllowedTransition:
+    """Tạo một allowed transition mới."""
+    try:
+        # 1. Kiểm tra from_status và to_status có tồn tại
+        from_status = await _get_status_by_id(db, transition_in.from_status_id)
+        to_status = await _get_status_by_id(db, transition_in.to_status_id)
+
+        # 2. Kiểm tra không cho phép chuyển từ status sang chính nó
+        if transition_in.from_status_id == transition_in.to_status_id:
+            raise DuplicateResourceError(
+                "Cannot create transition from a status to itself."
+            )
+
+        # 3. Kiểm tra transition đã tồn tại chưa
+        existing = await db.scalar(
+            select(models.AllowedTransition).where(
+                models.AllowedTransition.from_status_id == transition_in.from_status_id,
+                models.AllowedTransition.to_status_id == transition_in.to_status_id,
+            )
+        )
+        if existing:
+            raise DuplicateResourceError(
+                f"Transition from '{transition_in.from_status_id}' to '{transition_in.to_status_id}' already exists."
+            )
+
+        # 4. Tạo transition
+        db_transition = models.AllowedTransition(**transition_in.model_dump())
+        db.add(db_transition)
+        await db.commit()
+        await db.refresh(db_transition)
+
+        log.info(
+            "Created allowed transition",
+            from_status=transition_in.from_status_id,
+            to_status=transition_in.to_status_id,
+        )
+
+        return db_transition
+
+    except Exception as e:
+        await db.rollback()
+        log.error("Failed to create allowed transition", error=str(e), exc_info=True)
+        raise e
+
+
+async def delete_allowed_transition(db: AsyncSession, transition_id: int):
+    """Xóa một allowed transition."""
+    try:
+        db_transition = await db.get(models.AllowedTransition, transition_id)
+        if not db_transition:
+            raise ResourceNotFoundError(
+                f"Allowed transition with ID {transition_id} not found."
+            )
+
+        await db.delete(db_transition)
+        await db.commit()
+
+        log.info("Deleted allowed transition", transition_id=transition_id)
+
+    except Exception as e:
+        await db.rollback()
+        log.error(
+            "Failed to delete allowed transition",
+            transition_id=transition_id,
             error=str(e),
             exc_info=True,
         )

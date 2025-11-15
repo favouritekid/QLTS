@@ -1,4 +1,6 @@
 # app/routers/pipeline.py
+from typing import List
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,6 +11,16 @@ from ..services import pipeline_service
 router = APIRouter(tags=["Pipeline"])
 
 PermissionDep = Depends(deps.check_permission)
+
+
+@router.get("/stages", response_model=List[schemas.PipelineStage])
+async def get_pipeline_stages(
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = PermissionDep,
+):
+    """Lấy danh sách tất cả các giai đoạn Pipeline (chỉ đọc)."""
+    stages = await pipeline_service.get_all_pipeline_stages(db)
+    return stages
 
 
 @router.get("/all", response_model=schemas.FullPipeline)

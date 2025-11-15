@@ -21,12 +21,19 @@ export function NavItem({ link, isCollapsed }: NavItemProps) {
 
   const hasChildren = link.children && link.children.length > 0;
 
+  // Helper function to check if a path matches the current pathname
+  // Only matches exact path or child paths (with trailing slash check)
+  const isPathActive = (href: string) => {
+    if (pathname === href) return true;
+    if (href === "/") return false; // Never match root with startsWith
+    // Only match if pathname starts with href followed by a slash
+    return pathname.startsWith(href + "/");
+  };
+
   // Check if current path matches this link or any of its children
-  const isActive = pathname === link.href ||
-    (link.href !== "/" && pathname.startsWith(link.href)) ||
-    (hasChildren && link.children?.some(child =>
-      pathname === child.href || (child.href !== "/" && pathname.startsWith(child.href))
-    ));
+  const isActive = hasChildren
+    ? link.children?.some(child => isPathActive(child.href))
+    : isPathActive(link.href);
 
   // If collapsed, show icon with tooltip
   if (isCollapsed) {
@@ -86,28 +93,31 @@ export function NavItem({ link, isCollapsed }: NavItemProps) {
           />
         </button>
 
-        {/* Children */}
+        {/* Children - Improved mobile hierarchy */}
         {isExpanded && (
-          <div className="ml-6 flex flex-col gap-0.5 mt-1">
-            {link.children?.map((child) => (
-              <Link
-                key={child.href}
-                href={child.href}
-                className={cn(
-                  "text-muted-foreground hover:bg-muted hover:text-primary flex items-center gap-3 rounded-lg px-3 py-2 transition-all text-sm",
-                  (pathname === child.href || (child.href !== "/" && pathname.startsWith(child.href))) &&
-                    "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground"
-                )}
-              >
-                {child.icon && <child.icon className="h-3.5 w-3.5" />}
-                <span className="flex-1">{child.label}</span>
-                {child.badge && (
-                  <Badge className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs">
-                    {child.badge}
-                  </Badge>
-                )}
-              </Link>
-            ))}
+          <div className="ml-4 lg:ml-6 flex flex-col gap-0.5 mt-1 border-l-2 border-border pl-2 lg:pl-4">
+            {link.children?.map((child) => {
+              const isChildActive = isPathActive(child.href);
+              return (
+                <Link
+                  key={child.href}
+                  href={child.href}
+                  className={cn(
+                    "text-muted-foreground hover:bg-muted hover:text-primary flex items-center gap-2 lg:gap-3 rounded-lg px-2 lg:px-3 py-2 transition-all text-sm",
+                    isChildActive &&
+                      "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground font-medium"
+                  )}
+                >
+                  {child.icon && <child.icon className="h-3.5 w-3.5 flex-shrink-0" />}
+                  <span className="flex-1 truncate">{child.label}</span>
+                  {child.badge && (
+                    <Badge className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs">
+                      {child.badge}
+                    </Badge>
+                  )}
+                </Link>
+              );
+            })}
           </div>
         )}
       </div>

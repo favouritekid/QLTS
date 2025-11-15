@@ -1965,6 +1965,22 @@ async def delete_existing_pipeline_stage(
     return None
 
 
+@router.get(
+    "/consultation-statuses",
+    response_model=List[schemas.ConsultationStatus],
+    tags=["Admin - Pipeline Management"],
+)
+async def get_all_consultation_statuses_list(
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Lấy danh sách tất cả Trạng thái tư vấn (Consultation Statuses)."""
+    # Gọi service function đã có (trả về List[dict] từ cache/DB)
+    # Pydantic sẽ tự động chuyển đổi List[dict] -> List[schemas.ConsultationStatus]
+    statuses_data = await pipeline_service.get_all_consultation_statuses(db)
+    return statuses_data
+
+
 @router.post(
     "/consultation-statuses",
     response_model=schemas.ConsultationStatus,
@@ -2021,6 +2037,55 @@ async def delete_existing_consultation_status(
 ):
     """(Admin only) Xóa một Trạng thái tư vấn (Status). (Chỉ thành công nếu không có Lead nào sử dụng)"""
     await pipeline_service.delete_consultation_status(db, status_id)
+    return None
+
+
+# ===============================================================
+# ALLOWED TRANSITIONS ROUTES
+# ===============================================================
+
+
+@router.get(
+    "/allowed-transitions",
+    response_model=List[schemas.AllowedTransition],
+    tags=["Admin - Pipeline Management"],
+)
+async def get_all_allowed_transitions(
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Lấy danh sách tất cả Allowed Transitions (workflow rules)."""
+    transitions = await pipeline_service.get_all_allowed_transitions(db)
+    return transitions
+
+
+@router.post(
+    "/allowed-transitions",
+    response_model=schemas.AllowedTransition,
+    status_code=status.HTTP_201_CREATED,
+    tags=["Admin - Pipeline Management"],
+)
+async def create_new_allowed_transition(
+    transition_in: schemas.AllowedTransitionCreate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Tạo một Allowed Transition mới."""
+    return await pipeline_service.create_allowed_transition(db, transition_in)
+
+
+@router.delete(
+    "/allowed-transitions/{transition_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["Admin - Pipeline Management"],
+)
+async def delete_existing_allowed_transition(
+    transition_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Xóa một Allowed Transition."""
+    await pipeline_service.delete_allowed_transition(db, transition_id)
     return None
 
 

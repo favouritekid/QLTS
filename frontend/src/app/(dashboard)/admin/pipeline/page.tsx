@@ -13,6 +13,8 @@ import { Badge } from "@/components/ui/badge";
 import { PipelineStageDialog } from "@/components/admin/PipelineStageDialog";
 import { ConsultationStatusDialog } from "@/components/admin/ConsultationStatusDialog";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { BackButton } from "@/components/common/BackButton";
+import { Breadcrumbs } from "@/components/common/Breadcrumbs";
 import type { PipelineStage, ConsultationStatus } from "@/types/pipeline.types";
 
 export default function AdminPipelinePage() {
@@ -76,12 +78,11 @@ export default function AdminPipelinePage() {
     <div className="container mx-auto py-6 space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" asChild>
-            <Link href="/admin">
-              <ArrowLeft className="h-5 w-5" />
-            </Link>
-          </Button>
+        <div className="space-y-2">
+          <div className="flex items-center gap-4">
+            <BackButton size="icon" showLabel={false} />
+            <Breadcrumbs />
+          </div>
           <div>
             <h1 className="text-3xl font-bold">Pipeline Settings</h1>
             <p className="text-muted-foreground">
