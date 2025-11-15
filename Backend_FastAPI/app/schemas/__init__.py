@@ -118,6 +118,10 @@ from .pipeline import (
     PipelineStageBase,
     PipelineStageCreate,
     PipelineStageUpdate,
+    AllowedTransition,
+    AllowedTransitionBase,
+    AllowedTransitionCreate,
+    AllowedTransitionUpdate,
 )
 
 # --- Từ user.py ---
