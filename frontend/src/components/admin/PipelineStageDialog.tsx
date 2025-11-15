@@ -34,6 +34,7 @@ import type {
   PipelineStageCreate,
   PipelineStageUpdate,
 } from "@/types/pipeline.types";
+import { Checkbox as ShadcnCheckbox } from "@/components/ui/checkbox";
 
 // =====================================================================
 // FORM VALIDATION SCHEMA
@@ -54,6 +55,7 @@ const stageFormSchema = z.object({
     .number()
     .int("Order must be an integer")
     .min(0, "Order must be 0 or greater"),
+  is_final_stage: z.boolean(),
 });
 
 type StageFormValues = z.infer<typeof stageFormSchema>;
@@ -92,6 +94,7 @@ export function PipelineStageDialog({
       id: "",
       name: "",
       order: maxOrder + 1,
+      is_final_stage: false,
     },
   });
 
@@ -103,12 +106,14 @@ export function PipelineStageDialog({
           id: stage.id,
           name: stage.name,
           order: stage.order,
+          is_final_stage: stage.is_final_stage || false,
         });
       } else {
         form.reset({
           id: "",
           name: "",
           order: maxOrder + 1,
+          is_final_stage: false,
         });
       }
     }
@@ -123,6 +128,7 @@ export function PipelineStageDialog({
           data: {
             name: values.name,
             order: values.order,
+            is_final_stage: values.is_final_stage,
           } as PipelineStageUpdate,
         });
       } else {
@@ -130,6 +136,7 @@ export function PipelineStageDialog({
           id: values.id,
           name: values.name,
           order: values.order,
+          is_final_stage: values.is_final_stage,
         } as PipelineStageCreate);
       }
 
@@ -233,6 +240,31 @@ export function PipelineStageDialog({
                     Position in the pipeline (0 = first)
                   </FormDescription>
                   <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {/* Is Final Stage Field */}
+            <FormField
+              control={form.control}
+              name="is_final_stage"
+              render={({ field }) => (
+                <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
+                  <FormControl>
+                    <ShadcnCheckbox
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                  <div className="space-y-1 leading-none">
+                    <FormLabel>
+                      Final Stage
+                    </FormLabel>
+                    <FormDescription>
+                      Mark this as a final stage (Won/Lost/Closed).
+                      Final stages represent end of the conversion funnel.
+                    </FormDescription>
+                  </div>
                 </FormItem>
               )}
             />

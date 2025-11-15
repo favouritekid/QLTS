@@ -384,18 +384,38 @@ async def create_consultation_status(
             db, status_in.stage_id
         )  # Sẽ ném 404 nếu stage_id không tồn tại
 
-        # ✅ FIX MẠNH TAY: Ép kiểu outcome_type về chuỗi thường (value)
-        # Bất kể đầu vào là Enum object hay string "NEUTRAL", ta đều đưa về "neutral"
-        create_data = status_in.model_dump()
-        
+        # ✅ CRITICAL FIX: Convert Pydantic model to dict with proper enum handling
+        create_data = status_in.model_dump(mode='python')
+
+        # ✅ FORCE outcome_type to lowercase (handle ALL possible formats)
         if "outcome_type" in create_data:
             val = create_data["outcome_type"]
-            # Nếu là Enum object, lấy .value
-            if hasattr(val, "value"):
-                create_data["outcome_type"] = val.value
-            # Nếu là string, chuyển về chữ thường
+
+            # Log for debugging
+            log.debug(
+                "Converting outcome_type",
+                original_value=val,
+                original_type=type(val).__name__
+            )
+
+            # Force to lowercase string regardless of input type
+            if isinstance(val, models.OutcomeTypeEnum):
+                # Enum object -> get .value
+                create_data["outcome_type"] = val.value.lower()
             elif isinstance(val, str):
+                # String -> force lowercase
                 create_data["outcome_type"] = val.lower()
+            elif hasattr(val, 'value'):
+                # Any object with .value attribute
+                create_data["outcome_type"] = str(val.value).lower()
+            else:
+                # Last resort: stringify and lowercase
+                create_data["outcome_type"] = str(val).lower()
+
+            log.debug(
+                "Converted outcome_type",
+                converted_value=create_data["outcome_type"]
+            )
 
         # 4. Tạo model với dữ liệu đã làm sạch
         db_status = models.ConsultationStatus(**create_data)
@@ -429,7 +449,32 @@ async def update_consultation_status(
 ) -> models.ConsultationStatus:
     try:
         db_status = await _get_status_by_id(db, status_id)
-        update_data = status_in.model_dump(exclude_unset=True)
+        update_data = status_in.model_dump(exclude_unset=True, mode='python')
+
+        # ✅ FORCE outcome_type to lowercase if present
+        if "outcome_type" in update_data:
+            val = update_data["outcome_type"]
+
+            log.debug(
+                "Converting outcome_type for update",
+                original_value=val,
+                original_type=type(val).__name__
+            )
+
+            # Force to lowercase string regardless of input type
+            if isinstance(val, models.OutcomeTypeEnum):
+                update_data["outcome_type"] = val.value.lower()
+            elif isinstance(val, str):
+                update_data["outcome_type"] = val.lower()
+            elif hasattr(val, 'value'):
+                update_data["outcome_type"] = str(val.value).lower()
+            else:
+                update_data["outcome_type"] = str(val).lower()
+
+            log.debug(
+                "Converted outcome_type for update",
+                converted_value=update_data["outcome_type"]
+            )
 
         # 1. Kiểm tra 'name' (nếu thay đổi)
         if "name" in update_data and update_data["name"] != db_status.name:
@@ -571,7 +616,19 @@ async def create_allowed_transition(
         db_transition = models.AllowedTransition(**transition_in.model_dump())
         db.add(db_transition)
         await db.commit()
-        await db.refresh(db_transition)
+        
+        # ✅ FIX: Thay thế db.refresh bằng query có selectinload
+        # Điều này nạp trước các quan hệ (from_status, to_status) để tránh lỗi MissingGreenlet
+        query = (
+            select(models.AllowedTransition)
+            .options(
+                selectinload(models.AllowedTransition.from_status),
+                selectinload(models.AllowedTransition.to_status),
+            )
+            .where(models.AllowedTransition.id == db_transition.id)
+        )
+        result = await db.execute(query)
+        db_transition = result.scalar_one()
 
         log.info(
             "Created allowed transition",
