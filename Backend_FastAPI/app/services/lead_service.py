@@ -398,9 +398,9 @@ async def create_lead(db: AsyncSession, lead_in: schemas.LeadCreate) -> models.L
         old_state = _get_current_lead_state(models.Lead())  # Trạng thái rỗng
 
         # Gán trạng thái ban đầu cho Lead mới
-        db_lead.status = initial_status_id
-        db_lead.consultation_status_id = initial_status_id
+        db_lead.status = "new"  # Trạng thái text mặc định
         if initial_status:
+            db_lead.consultation_status_id = initial_status_id
             db_lead.pipeline_stage_id = initial_status.stage_id
         else:
             # Ghi log cảnh báo nếu không tìm thấy status mặc định
@@ -408,8 +408,9 @@ async def create_lead(db: AsyncSession, lead_in: schemas.LeadCreate) -> models.L
                 "Initial consultation status not found during lead creation.",
                 status_id=initial_status_id,
             )
-            # Có thể gán giá trị mặc định an toàn hơn ở đây hoặc ném lỗi nếu cần
-            db_lead.pipeline_stage_id = None  # Hoặc một stage_id mặc định khác
+            # Gán giá trị mặc định an toàn
+            db_lead.consultation_status_id = None
+            db_lead.pipeline_stage_id = None
 
         # Trạng thái "sau khi gán"
         new_state = _get_current_lead_state(db_lead)
@@ -540,10 +541,11 @@ async def update_lead(
                         raise BadRequest(
                             detail=f"Consultation status with id '{new_status_id}' not found."
                         )
-                    # Cập nhật cả 3 trường liên quan
+                    # Cập nhật consultation_status_id và pipeline_stage_id
                     db_lead.consultation_status_id = new_status.id
                     db_lead.pipeline_stage_id = new_status.stage_id
-                    db_lead.status = new_status.id  # Đồng bộ status chính
+                    # Giữ nguyên status hoặc update theo logic nghiệp vụ
+                    # (không gán status = consultation_status_id vì đây là 2 field khác nhau)
                 else:  # Nếu status ID mới là None (hiếm khi xảy ra khi update)
                     db_lead.consultation_status_id = None
                     db_lead.pipeline_stage_id = None
@@ -615,7 +617,7 @@ async def add_consultation(
             # Cập nhật trạng thái Lead theo status mới của consultation
             lead.consultation_status_id = new_status.id
             lead.pipeline_stage_id = new_status.stage_id
-            lead.status = new_status.id  # Đồng bộ status chính
+            # Giữ nguyên status (đây là field riêng, không phải consultation_status_id)
 
             # Chuẩn bị dữ liệu để tạo Consultation
             create_consult_data = data.model_dump(exclude={"status_id"})
@@ -902,7 +904,12 @@ async def delete_consultation(
         # Cập nhật trạng thái Lead
         lead.consultation_status_id = new_status_id
         lead.pipeline_stage_id = new_stage_id
-        lead.status = new_status_id  # Đồng bộ status chính
+        # Cập nhật status dựa trên ngữ cảnh
+        if new_status_id is None:
+            lead.status = "unknown"
+        elif new_status_id == settings.DEFAULT_INITIAL_LEAD_STATUS_ID:
+            lead.status = "new"
+        # Giữ nguyên status hiện tại nếu đang revert về consultation khác
         db.add(lead)  # Đánh dấu lead là dirty
 
         # Lấy trạng thái mới sau khi cập nhật

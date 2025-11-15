@@ -61,9 +61,9 @@ export function LeadTimelineTab({ timeline }: LeadTimelineTabProps) {
 
                 {/* Timeline dot */}
                 <div className="flex-shrink-0 w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center z-10">
-                  {event.event_type === "consultation_added" ? (
+                  {(event.event_type || event.type) === "consultation_added" ? (
                     <FileText className="h-4 w-4 text-primary" />
-                  ) : event.event_type === "assigned" ? (
+                  ) : (event.event_type || event.type) === "assigned" ? (
                     <User className="h-4 w-4 text-primary" />
                   ) : (
                     <Clock className="h-4 w-4 text-primary" />
@@ -75,9 +75,9 @@ export function LeadTimelineTab({ timeline }: LeadTimelineTabProps) {
                   <div className="flex items-center gap-2 mb-1">
                     <Badge
                       variant="outline"
-                      className={eventTypeColors[event.event_type] || eventTypeColors.note_added}
+                      className={eventTypeColors[event.event_type || event.type] || eventTypeColors.note_added}
                     >
-                      {event.event_type.replace(/_/g, " ")}
+                      {(event.event_type || event.type).replace(/_/g, " ")}
                     </Badge>
                     <span className="text-sm text-muted-foreground">
                       {event.created_at ? new Date(event.created_at).toLocaleString() : new Date(event.timestamp).toLocaleString()}

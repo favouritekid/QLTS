@@ -80,7 +80,7 @@ export function AssignLeadDialog({
   const form = useForm<AssignFormValues>({
     resolver: zodResolver(assignSchema),
     defaultValues: {
-      officer_id: undefined,
+      officer_id: "",
       reason: "",
     },
   });
@@ -93,12 +93,14 @@ export function AssignLeadDialog({
   }, [open, form]);
 
   const onSubmit = async (data: AssignFormValues) => {
+    const officerId = parseInt(data.officer_id, 10);
+
     if (isSingle && lead) {
       assignMutation.mutate(
         {
           leadId: lead.id,
           data: {
-            officer_id: data.officer_id,
+            officer_id: officerId,
             reason: data.reason,
           },
         },
@@ -113,7 +115,7 @@ export function AssignLeadDialog({
       bulkAssignMutation.mutate(
         {
           lead_ids: leadIds,
-          officer_id: data.officer_id,
+          officer_id: officerId,
           reason: data.reason,
         },
         {
@@ -158,8 +160,8 @@ export function AssignLeadDialog({
                 <FormItem>
                   <FormLabel>Assign to Officer *</FormLabel>
                   <Select
-                    onValueChange={(value) => field.onChange(Number(value))}
-                    value={field.value?.toString()}
+                    onValueChange={field.onChange}
+                    value={field.value}
                     disabled={usersLoading}
                   >
                     <FormControl>

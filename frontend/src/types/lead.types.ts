@@ -317,6 +317,7 @@ export interface TimelineItem {
     id: number
     full_name: string
   } | null
+  actor_id?: number | null // Direct actor ID (alternative to actor object)
   metadata?: Record<string, unknown>
 }
 

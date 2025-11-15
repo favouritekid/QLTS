@@ -424,6 +424,7 @@ export function usePerformLeadAction() {
     onSuccess: (updatedLead, variables) => {
       const actionMessages: Record<string, string> = {
         reject: "Lead rejected",
+        reassign: "Lead reassigned",
         convert: "Lead converted successfully!",
         reassign: "Lead reassigned successfully!",
         mark_lost: "Lead marked as lost",

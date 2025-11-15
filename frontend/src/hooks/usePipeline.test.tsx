@@ -22,10 +22,9 @@ import {
 } from "./usePipeline";
 import type {
   PipelineStage,
+  ConsultationStatus,
   PipelineStageCreate,
   PipelineStageUpdate,
-  ConsultationStatus,
-  ConsultationStatusCreate,
   ConsultationStatusUpdate,
 } from "@/types/pipeline.types";
 import type { Lead } from "@/types/lead.types";

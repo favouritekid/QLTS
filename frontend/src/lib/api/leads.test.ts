@@ -214,7 +214,7 @@ describe("Leads API Client", () => {
           const body = (await request.json()) as { officer_id: number; reason?: string }
           return HttpResponse.json({
             id: 1,
-            assigned_officer_id: body.officer_id,
+            assigned_officer_id: body?.officer_id,
             status: 'assigned',
             assigned_at: new Date().toISOString(),
           })

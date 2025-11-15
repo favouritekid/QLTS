@@ -140,8 +140,8 @@ export function ConsultationDialog({
                 <FormItem>
                   <FormLabel>Status *</FormLabel>
                   <Select
-                    onValueChange={(value) => field.onChange(Number(value))}
-                    value={field.value?.toString()}
+                    onValueChange={field.onChange}
+                    value={field.value}
                     disabled={statusesLoading}
                   >
                     <FormControl>
@@ -156,7 +156,7 @@ export function ConsultationDialog({
                         </div>
                       ) : (
                         statuses?.map((status) => (
-                          <SelectItem key={status.id} value={status.id.toString()}>
+                          <SelectItem key={status.id} value={status.id}>
                             <div className="flex items-center gap-2">
                               <div
                                 className="w-3 h-3 rounded-full"

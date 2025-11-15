@@ -23,6 +23,7 @@ import {
 } from "./useLeads";
 import type {
   Lead,
+  Consultation,
   LeadCreate,
   LeadUpdate,
   Consultation,
@@ -344,7 +345,6 @@ describe("useLeads Hook", () => {
               notes: "Initial consultation",
               consultation_status_id: "scheduled",
               created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
             } as Consultation);
           })
         );
