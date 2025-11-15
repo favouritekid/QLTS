@@ -270,13 +270,13 @@ export const socket = {
   disconnect() {
     socketService.disconnect();
   },
-  on(event: string, handler: (...args: any[]) => void) {
+  on(event: string, handler: (...args: unknown[]) => void) {
     socketService.getSocket()?.on(event, handler);
   },
-  off(event: string, handler?: (...args: any[]) => void) {
+  off(event: string, handler?: (...args: unknown[]) => void) {
     socketService.getSocket()?.off(event, handler);
   },
-  emit(event: string, ...args: any[]) {
+  emit(event: string, ...args: unknown[]) {
     socketService.getSocket()?.emit(event, ...args);
   },
 };

@@ -1,7 +1,7 @@
 // src/components/officer/WorkloadCard.tsx
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -94,13 +94,24 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
   const currentBadge = statusBadge[statusOverview.availability_status];
   const StatusIcon = currentBadge.icon;
 
-  // Calculate minutes ago for last assignment (memoized to avoid purity issues)
-  const minutesAgo = useMemo(() => {
-    if (!statusOverview.last_assigned_at) return null;
-    return Math.floor(
-      (Date.now() - new Date(statusOverview.last_assigned_at).getTime()) / 60000
-    );
-  }, [statusOverview.last_assigned_at]);
+  // Format relative time for last assignment
+  const getRelativeTime = (timestamp: string | null) => {
+    if (!timestamp) return "No assignments yet";
+
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+
+    if (diffMins < 1) return "Just now";
+    if (diffMins < 60) return `${diffMins} minute${diffMins !== 1 ? "s" : ""} ago`;
+
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? "s" : ""} ago`;
+
+    const diffDays = Math.floor(diffHours / 24);
+    return `${diffDays} day${diffDays !== 1 ? "s" : ""} ago`;
+  };
 
   return (
     <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
@@ -181,7 +192,7 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
         </CardHeader>
         <CardContent>
           <p className="text-xs text-muted-foreground">
-            {minutesAgo !== null ? `${minutesAgo} minutes ago` : "No assignments yet"}
+            {getRelativeTime(statusOverview.last_assigned_at)}
           </p>
         </CardContent>
       </Card>

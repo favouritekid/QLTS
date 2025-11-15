@@ -46,7 +46,7 @@ export function useAppNavigation(): UseAppNavigationReturn {
       // Check if user's role is in the allowed roles
       return roles.includes(user.role);
     },
-    [user?.role]
+    [user]
   );
 
   /**
