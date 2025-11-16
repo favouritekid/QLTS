@@ -48,15 +48,9 @@ from .routers import (
 
 # ✅ V5: Import SIO, LUA loader, và Prometheus
 from .socket_manager import load_rate_limit_script, sio
-from .utils.exceptions import (
-    AuthenticationError,
-    BadRequest,
-    BaseAppException,
-    DuplicateResourceError,
-    InvalidToken,
-    PermissionDeniedError,
-    ResourceNotFoundError,
-)
+
+# ✅ PHASE 1: Import centralized exception handler registration
+from .middleware import register_exception_handlers
 
 # === Cấu hình Structured Logging ===
 structlog.configure(
@@ -324,145 +318,14 @@ app_with_sockets = socketio.ASGIApp(sio, app)
 
 
 # ===============================================================
-# === EXCEPTION HANDLERS (Đã xóa `await` khỏi log) =============
+# === ✅ PHASE 1: EXCEPTION HANDLERS (Centralized) =============
 # ===============================================================
 
-
-@app.exception_handler(InvalidToken)
-async def invalid_token_handler(request: Request, exc: InvalidToken):
-    log.warning(  # ✅ SỬA LỖI: Xóa `await`
-        "Invalid Token Error",
-        detail=exc.detail,
-        path=request.url.path,
-    )
-    return JSONResponse(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        content={"detail": exc.detail},
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-
-@app.exception_handler(AuthenticationError)
-async def authentication_error_handler(request: Request, exc: AuthenticationError):
-    log.warning(  # ✅ SỬA LỖI: Xóa `await`
-        "Authentication Error",
-        detail=exc.detail,
-        path=request.url.path,
-    )
-    return JSONResponse(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        content={"detail": exc.detail},
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-
-@app.exception_handler(BadRequest)
-async def bad_request_handler(request: Request, exc: BadRequest):
-    log.warning(
-        "Bad Request", detail=exc.detail, path=request.url.path
-    )  # ✅ SỬA LỖI: Xóa `await`
-    return JSONResponse(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        content={"detail": exc.detail},
-    )
-
-
-@app.exception_handler(PermissionDeniedError)
-async def permission_denied_handler(request: Request, exc: PermissionDeniedError):
-    log.warning(
-        "Permission Denied", detail=exc.detail, path=request.url.path
-    )  # ✅ SỬA LỖI: Xóa `await`
-    return JSONResponse(
-        status_code=status.HTTP_403_FORBIDDEN,
-        content={"detail": exc.detail},
-    )
-
-
-@app.exception_handler(ResourceNotFoundError)
-async def resource_not_found_handler(request: Request, exc: ResourceNotFoundError):
-    log.warning(
-        "Resource Not Found", detail=exc.detail, path=request.url.path
-    )  # ✅ SỬA LỖI: Xóa `await`
-    return JSONResponse(
-        status_code=status.HTTP_404_NOT_FOUND,
-        content={"detail": exc.detail},
-    )
-
-
-@app.exception_handler(DuplicateResourceError)
-async def duplicate_resource_handler(request: Request, exc: DuplicateResourceError):
-    log.warning(
-        "Duplicate Resource", detail=exc.detail, path=request.url.path
-    )  # ✅ SỬA LỖI: Xóa `await`
-    return JSONResponse(
-        status_code=status.HTTP_409_CONFLICT,
-        content={"detail": exc.detail},
-    )
-
-
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    error_details = []
-    for error in exc.errors():
-        field_parts = [str(loc_part) for loc_part in error.get("loc", [])]
-        field = " -> ".join(field_parts) if field_parts else "body"
-        message = error.get("msg", "Unknown validation error")
-        error_details.append({"field": field, "message": message})
-
-    log.warning(
-        "Request Validation Error", errors=error_details, path=request.url.path
-    )  # ✅ SỬA LỖI: Xóa `await`
-    return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-        content={"detail": "Validation Error", "errors": error_details},
-        headers={"Content-Type": "application/json; charset=utf-8"},
-    )
-
-
-@app.exception_handler(BaseAppException)
-async def base_app_exception_handler(request: Request, exc: BaseAppException):
-    log.error(  # ✅ SỬA LỖI: Xóa `await`
-        "Unhandled BaseAppException",
-        type=type(exc).__name__,
-        detail=exc.detail,
-        path=request.url.path,
-    )
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={"detail": exc.detail},
-        headers=getattr(exc, "headers", None),
-    )
-
-
-@app.exception_handler(ValidationError)
-async def pydantic_validation_exception_handler(request: Request, exc: ValidationError):
-    error_details = []
-    for error in exc.errors():
-        field = " -> ".join(map(str, error.get("loc", []))) or "body"
-        message = error.get("msg", "Unknown validation error")
-        error_details.append({"field": field, "message": message})
-
-    log.warning(
-        "Pydantic Validation Error inside endpoint",
-        errors=error_details,
-        path=request.url.path,
-    )  # ✅ SỬA LỖI: Xóa `await`
-    return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-        content={"detail": "Validation Error", "errors": error_details},
-        headers={"Content-Type": "application/json; charset=utf-8"},
-    )
-
-
-@app.exception_handler(Exception)
-async def generic_exception_handler(request: Request, exc: Exception):
-    log.exception(
-        "Unhandled Internal Server Error", path=request.url.path, exc_info=True
-    )  # ✅ SỬA LỖI: Xóa `await`
-    return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": "An unexpected internal server error occurred."},
-    )
+# Register all custom exception handlers from middleware
+# This replaces manual exception handler definitions with a centralized system
+# See: app/middleware/exception_handlers.py for implementation
+register_exception_handlers(app)
+log.info("✅ Custom exception handlers registered")
 
 
 # ===============================================================
