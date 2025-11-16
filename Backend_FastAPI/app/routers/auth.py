@@ -22,6 +22,10 @@ from .. import database, models, schemas, security, services
 from ..celery_utils import send_login_alert_email_task
 from ..config import settings
 from ..core import deps
+from ..utils.exceptions import (  # ✅ PHASE 1: Import custom exceptions
+    CacheServiceError,
+    UserServiceError,
+)
 from ..database import (
     safe_redis_delete,
     safe_redis_exists,
@@ -509,9 +513,18 @@ async def perform_password_reset(
             email=user.email,
             security_event="PASSWORD_RESET_SESSIONS_INVALIDATED",
         )
-    except HTTPException:
-        # Already a proper HTTP exception, re-raise
-        raise
+    except (CacheServiceError, UserServiceError) as e:
+        # ✅ PHASE 1: Catch custom exceptions from service layer
+        log.critical(
+            "Failed to invalidate sessions after password reset - SECURITY RISK",
+            user_id=user.id,
+            error=e.detail,
+            context=e.context,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to invalidate sessions after password reset"
+        )
     except Exception as e:
         log.critical(
             "Failed to invalidate all sessions after password reset, "
@@ -587,9 +600,18 @@ async def perform_change_password(
             "All user sessions invalidated after password change",
             user_id=current_user.id,
         )
-    except HTTPException:
-        # Already a proper HTTP exception, re-raise
-        raise
+    except (CacheServiceError, UserServiceError) as e:
+        # ✅ PHASE 1: Catch custom exceptions from service layer
+        log.critical(
+            "Failed to invalidate sessions after password change - SECURITY RISK",
+            user_id=current_user.id,
+            error=e.detail,
+            context=e.context,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to invalidate sessions after password change"
+        )
     except Exception as e:
         log.critical(
             "Failed to invalidate all sessions after password change",
