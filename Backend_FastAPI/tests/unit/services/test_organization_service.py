@@ -16,7 +16,7 @@ from app.utils.exceptions import DuplicateResourceError, ResourceNotFoundError
 
 # Import constants
 try:
-    from ..fixtures.constants import NON_EXISTENT_ID, TestOrgData
+    from tests.fixtures.constants import NON_EXISTENT_ID, TestOrgData
 except ImportError:
     pytest.fail("Could not import constants from tests.fixtures.constants.")
 

@@ -19,7 +19,7 @@ from app.utils.exceptions import ResourceNotFoundError
 
 # Import constants
 try:
-    from ..fixtures.constants import TestConfigData, TestOrgData
+    from tests.fixtures.constants import TestConfigData, TestOrgData
 except ImportError:
     pytest.fail("Could not import constants from tests.fixtures.constants.")
 

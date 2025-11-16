@@ -15,7 +15,7 @@ from app.config import settings  # Cần settings để lấy secret key và alg
 # Import constants
 try:
     # Đảm bảo bạn đã tạo file tests/fixtures/constants.py
-    from ..fixtures.constants import SecurityConstants, TestUsers
+    from tests.fixtures.constants import SecurityConstants, TestUsers
 except ImportError:
     pytest.fail(
         "Could not import constants from tests.fixtures.constants. Please create the file."

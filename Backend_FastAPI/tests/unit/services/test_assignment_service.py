@@ -20,7 +20,7 @@ from app.utils.exceptions import (
 
 # Import constants
 try:
-    from ..fixtures.constants import (
+    from tests.fixtures.constants import (
         NON_EXISTENT_ID,
         TestLeadData,
         TestOrgData,

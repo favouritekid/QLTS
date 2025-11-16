@@ -21,7 +21,7 @@ from app.utils.exceptions import (
 )
 
 try:
-    from ..fixtures.constants import NON_EXISTENT_ID, SecurityConstants, TestUsers
+    from tests.fixtures.constants import NON_EXISTENT_ID, SecurityConstants, TestUsers
 except ImportError:
     pytest.fail("Could not import constants from tests.fixtures.constants.")
 

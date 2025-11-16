@@ -20,7 +20,7 @@ from app.utils.exceptions import DuplicateResourceError, ResourceNotFoundError
 
 # Import constants
 try:
-    from ..fixtures.constants import TestPipelineData
+    from tests.fixtures.constants import TestPipelineData
 except ImportError:
     pytest.fail("Could not import constants from tests.fixtures.constants.")
 
