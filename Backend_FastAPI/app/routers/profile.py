@@ -13,6 +13,37 @@ router = APIRouter(tags=["Profile"])
 PermissionDep = Depends(deps.check_permission)
 
 
+# ✅ PHASE 1: Helper function for activity logging (replaces service-level log_activity_from_request)
+async def log_profile_activity(
+    db: AsyncSession,
+    request: Request,
+    action: str,
+    resource_type: str,
+    actor_id: Optional[int] = None,
+    description: Optional[str] = None,
+    changes: Optional[dict] = None,
+) -> models.UserActivityLog:
+    """
+    Helper function to log profile activities with IP/UA extracted from request.
+
+    This replaces log_profile_activity() which was removed
+    to maintain service layer protocol independence.
+    """
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+
+    return await activity_service.log_activity(
+        db=db,
+        action=action,
+        resource_type=resource_type,
+        actor_id=actor_id,
+        description=description,
+        changes=changes,
+        ip_address=ip_address,
+        user_agent=user_agent,
+    )
+
+
 @router.get("", response_model=schemas.User)
 async def read_current_user_profile(
     current_user: models.User = PermissionDep,  # <-- THAY ĐỔI
@@ -86,7 +117,7 @@ async def update_current_user_profile(
     )
 
     # Log activity
-    await activity_service.log_activity_from_request(
+    await log_profile_activity(
         db=db,
         request=request,
         action="update_profile",

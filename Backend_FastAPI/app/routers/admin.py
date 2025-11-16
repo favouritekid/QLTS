@@ -56,6 +56,41 @@ PermissionDep = Depends(deps.check_permission)
 LeadAccessDep = Depends(deps.get_lead_for_user)
 
 
+# ✅ PHASE 1: Helper function for activity logging (replaces service-level log_activity_from_request)
+async def log_admin_activity(
+    db: AsyncSession,
+    request: Request,
+    action: str,
+    resource_type: str,
+    actor_id: Optional[int] = None,
+    target_user_id: Optional[int] = None,
+    resource_id: Optional[int] = None,
+    description: Optional[str] = None,
+    changes: Optional[dict] = None,
+) -> models.UserActivityLog:
+    """
+    Helper function to log admin activities with IP/UA extracted from request.
+
+    This replaces log_admin_activity() which was removed
+    to maintain service layer protocol independence.
+    """
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+
+    return await activity_service.log_activity(
+        db=db,
+        action=action,
+        resource_type=resource_type,
+        actor_id=actor_id,
+        target_user_id=target_user_id,
+        resource_id=resource_id,
+        description=description,
+        changes=changes,
+        ip_address=ip_address,
+        user_agent=user_agent,
+    )
+
+
 # ===============================================================
 # POLICY MANAGEMENT ROUTES
 # ===============================================================
@@ -98,7 +133,7 @@ async def add_new_policy(
         raise DuplicateResourceError("Policy already exists.")
 
     # Log activity
-    await activity_service.log_activity_from_request(
+    await log_admin_activity(
         db=db,
         request=request,
         action="add_policy",
@@ -152,7 +187,7 @@ async def delete_policy(
         raise ResourceNotFoundError("Policy not found or could not be removed.")
 
     # Log activity
-    await activity_service.log_activity_from_request(
+    await log_admin_activity(
         db=db,
         request=request,
         action="remove_policy",
@@ -453,7 +488,7 @@ async def add_grouping_policy(
     await enforcer.save_policy()
 
     # Log activity
-    await activity_service.log_activity_from_request(
+    await log_admin_activity(
         db=db,
         request=request,
         action="add_grouping_policy",
@@ -513,7 +548,7 @@ async def delete_grouping_policy(
     await enforcer.save_policy()
 
     # Log activity
-    await activity_service.log_activity_from_request(
+    await log_admin_activity(
         db=db,
         request=request,
         action="remove_grouping_policy",
@@ -704,7 +739,7 @@ async def delete_role_atomic(
         await db.commit()
 
         # STEP 11: Log activity
-        await activity_service.log_activity_from_request(
+        await log_admin_activity(
             db=db,
             request=request,
             action="delete_role_atomic",
@@ -848,7 +883,7 @@ async def add_policies_batch(
 
     # Log activity for each added policy
     if result["added"] > 0:
-        await activity_service.log_activity_from_request(
+        await log_admin_activity(
             db=db,
             request=request,
             action="batch_add_policies",
@@ -947,7 +982,7 @@ async def apply_template_to_role(
 
     # Log activity
     if result.get("added", 0) > 0:
-        await activity_service.log_activity_from_request(
+        await log_admin_activity(
             db=db,
             request=request,
             action="apply_policy_template",
@@ -1080,7 +1115,7 @@ async def create_new_user(
     # Casbin sync now happens inside create_user_by_admin atomically
 
     # Log activity
-    await activity_service.log_activity_from_request(
+    await log_admin_activity(
         db=db,
         request=request,
         action="create_user",
@@ -1304,7 +1339,7 @@ async def update_existing_user(
     )
 
     # Log activity
-    await activity_service.log_activity_from_request(
+    await log_admin_activity(
         db=db,
         request=request,
         action="update_user",
@@ -1384,7 +1419,7 @@ async def delete_existing_user(
     await services.user_service.delete_user(db, user_id)
 
     # Log activity
-    await activity_service.log_activity_from_request(
+    await log_admin_activity(
         db=db,
         request=request,
         action="delete_user",
@@ -1442,7 +1477,7 @@ async def bulk_user_action(
         action_desc += f" to {action_data.status}"
     action_desc += f" for {len(action_data.user_ids)} users"
 
-    await activity_service.log_activity_from_request(
+    await log_admin_activity(
         db=db,
         request=request,
         action=f"bulk_{action_data.action}",
@@ -1579,7 +1614,7 @@ async def sync_users(
     await db.commit()
 
     # Log activity
-    await activity_service.log_activity_from_request(
+    await log_admin_activity(
         db=db,
         request=request,
         action="sync_users",
@@ -2580,7 +2615,7 @@ async def who_can_access_resource(
         warning = f"⚠️ Slow query ({execution_time_ms}ms). This is unusual for role-only lookup."
 
     # Log activity for audit trail
-    await activity_service.log_activity_from_request(
+    await log_admin_activity(
         db=db,
         request=request,
         action="permission_lookup",
