@@ -7,7 +7,12 @@ import os
 import sys
 from typing import Any, Dict, List, Optional
 
-import pandas as pd
+try:
+    import pandas as pd
+except ImportError:
+    # pandas not required for refactoring/unit tests
+    pd = None
+
 import pytest
 import pytest_asyncio
 import redis.asyncio as redis
