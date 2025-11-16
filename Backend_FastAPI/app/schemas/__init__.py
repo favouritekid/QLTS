@@ -182,3 +182,13 @@ from .notification_preference import (
     NotificationPreferenceUpdate,
     NotificationTypePreference,
 )
+from .officer import (
+    AvailabilityUpdate,
+    AvailabilityResponse,
+    OfficerDashboardStats,
+    ActionableLists,
+    WorkloadStats,
+    TrendPoint,
+    FunnelStage,
+    UpcomingConsultation
+)

@@ -75,6 +75,9 @@ class OrganizationUnit(Base):
     scoring_config = relationship(
         "LeadScoringConfig", back_populates="unit", uselist=False
     )
+    distribution_configs = relationship(
+        "OfferingDistributionConfig", back_populates="unit", cascade="all, delete-orphan"
+    )
 
     # Database constraints
     __table_args__ = (
@@ -87,6 +90,112 @@ class OrganizationUnit(Base):
             # but prevents duplicate names within same parent
         ),
     )
+
+
+class OfferingDistributionConfig(Base):
+    """
+    Configuration for Weighted Round Robin distribution of Leads across Units
+    when a ProgramOffering is shared by multiple Units.
+
+    This model enables fair lead distribution based on configurable weights and priorities,
+    preventing territorial conflicts and ensuring optimal resource allocation.
+
+    Features:
+    - Weighted Round Robin: Units with higher weights receive more leads
+    - Priority levels: Higher priority units are considered first
+    - Active/Inactive toggle: Temporarily disable a unit from receiving leads
+    - Redis-backed cursor: Atomic increment for concurrent safety
+
+    Example:
+        Offering "MBA Program" shared by 3 units:
+        - Unit A (weight=3, priority=1) -> Gets 3x more leads than Unit B
+        - Unit B (weight=1, priority=1) -> Base allocation
+        - Unit C (weight=2, priority=2) -> Only gets leads if A & B at capacity
+    """
+    __tablename__ = "offering_distribution_config"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Foreign keys
+    offering_id = Column(
+        Integer,
+        ForeignKey("program_offering.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="ProgramOffering being distributed"
+    )
+    unit_id = Column(
+        Integer,
+        ForeignKey("organization_unit.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="OrganizationUnit receiving leads"
+    )
+
+    # Distribution parameters
+    weight = Column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default="1",
+        comment="Distribution weight (higher = more leads). Range: 1-100"
+    )
+    priority = Column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default="1",
+        comment="Priority level (lower number = higher priority). Range: 1-10"
+    )
+    is_active = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="true",
+        index=True,
+        comment="Toggle to temporarily exclude unit from receiving leads"
+    )
+
+    # Audit trail
+    created_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        comment="Timestamp when config was created"
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+        comment="Timestamp when config was last updated"
+    )
+
+    # Relationships
+    offering = relationship("ProgramOffering", back_populates="distribution_configs")
+    unit = relationship("OrganizationUnit", back_populates="distribution_configs")
+
+    # Database constraints
+    __table_args__ = (
+        UniqueConstraint(
+            'offering_id',
+            'unit_id',
+            name='uq_offering_unit_distribution',
+        ),
+        # Index for fast lookups during lead creation
+        # Usage: SELECT * FROM offering_distribution_config
+        #        WHERE offering_id = ? AND is_active = true
+        #        ORDER BY priority, weight DESC
+    )
+
+    def __repr__(self):
+        return (
+            f"<OfferingDistributionConfig "
+            f"offering_id={self.offering_id} "
+            f"unit_id={self.unit_id} "
+            f"weight={self.weight} "
+            f"priority={self.priority}>"
+        )
 
 
 # ============================================================================

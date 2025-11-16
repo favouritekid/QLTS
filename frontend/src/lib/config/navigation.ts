@@ -10,7 +10,9 @@ import {
   Database,
   LayoutDashboard,
   Settings,
+  Share2,
   ShieldCheck,
+  TrendingUp,
   Trello,
   Users,
   Workflow,
@@ -31,6 +33,12 @@ export const navigationConfig: NavigationConfig = {
           href: "/dashboard",
           icon: LayoutDashboard,
           roles: [], // Accessible to all roles
+        },
+        {
+          label: "Officer Dashboard",
+          href: "/dashboard/officer",
+          icon: TrendingUp,
+          roles: ["officer"], // Only officers can see this
         },
         {
           label: "Lead Management",
@@ -56,6 +64,12 @@ export const navigationConfig: NavigationConfig = {
               label: "Pipeline Settings",
               href: "/admin/pipeline",
               icon: Workflow,
+              roles: ["admin", "manager"], // Only admin and manager can see this
+            },
+            {
+              label: "Distribution Config",
+              href: "/admin/distribution",
+              icon: Share2,
               roles: ["admin", "manager"], // Only admin and manager can see this
             },
           ],

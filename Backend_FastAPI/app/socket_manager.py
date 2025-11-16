@@ -426,3 +426,96 @@ async def emit_to_all(event: str, data: dict, namespace: str = "/"):
             error=str(e),
             exc_info=True
         )
+
+
+# =====================================================================
+# UTILITY FUNCTIONS FOR LEAD REASSIGNMENT
+# =====================================================================
+
+async def emit_lead_reassigned(
+    lead_id: int,
+    old_officer_id: int | None,
+    old_unit_id: int,
+    new_unit_id: int,
+    reason: str = "Offering changed"
+):
+    """
+    Emit Socket.IO events when a lead is automatically reassigned due to offering change.
+
+    This function notifies:
+    1. Old officer (if any): Lead has been removed from their list
+    2. New unit admin: New lead has been transferred to their unit
+
+    Args:
+        lead_id: ID of the lead being reassigned
+        old_officer_id: Previous officer ID (None if unassigned)
+        old_unit_id: Previous unit ID
+        new_unit_id: New unit ID
+        reason: Reason for reassignment (default: "Offering changed")
+
+    Events emitted:
+        - "lead_reassigned" to old officer's room
+        - "lead_transferred_in" to new unit admin's room
+    """
+    try:
+        # === Event 1: Notify old officer (if exists) ===
+        if old_officer_id:
+            old_officer_room = f"user_room_{old_officer_id}"
+            await sio.emit(
+                "lead_reassigned",
+                {
+                    "lead_id": lead_id,
+                    "reason": reason,
+                    "old_unit_id": old_unit_id,
+                    "new_unit_id": new_unit_id,
+                    "message": f"Lead #{lead_id} has been transferred to another unit due to offering change.",
+                    "action": "remove_from_list"  # UI should remove lead from officer's list
+                },
+                room=old_officer_room
+            )
+            log.info(
+                "Lead reassignment notification sent to old officer",
+                lead_id=lead_id,
+                old_officer_id=old_officer_id,
+                old_unit_id=old_unit_id,
+                new_unit_id=new_unit_id
+            )
+
+        # === Event 2: Notify new unit (broadcast to unit room or admin) ===
+        # Option A: Emit to all officers in new unit (if you have unit rooms)
+        # new_unit_room = f"unit_room_{new_unit_id}"
+        # await sio.emit("lead_transferred_in", {...}, room=new_unit_room)
+
+        # Option B: Emit to all admins (simpler for now)
+        # You can filter admins by unit in client-side or create unit-specific admin rooms
+        await sio.emit(
+            "lead_transferred_in",
+            {
+                "lead_id": lead_id,
+                "reason": reason,
+                "old_unit_id": old_unit_id,
+                "new_unit_id": new_unit_id,
+                "old_officer_id": old_officer_id,
+                "message": f"Lead #{lead_id} has been transferred from Unit #{old_unit_id}.",
+                "action": "refresh_unassigned_leads"  # UI should refresh unassigned lead list
+            },
+            namespace="/"  # Broadcast to all connected clients (admins can filter by unit)
+        )
+
+        log.info(
+            "Lead transfer notification sent to new unit",
+            lead_id=lead_id,
+            new_unit_id=new_unit_id
+        )
+
+    except Exception as e:
+        log.error(
+            "Failed to emit lead reassignment Socket.IO events",
+            lead_id=lead_id,
+            old_officer_id=old_officer_id,
+            old_unit_id=old_unit_id,
+            new_unit_id=new_unit_id,
+            error=str(e),
+            exc_info=True
+        )
+        # Don't raise - socket errors should not break lead update logic

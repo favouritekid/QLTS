@@ -62,6 +62,13 @@ class ProgramOffering(Base):
     # Leads sẽ liên kết vào đây
     leads = relationship("Lead", back_populates="offering")
 
+    # Distribution configurations for multi-unit offerings
+    distribution_configs = relationship(
+        "OfferingDistributionConfig",
+        back_populates="offering",
+        cascade="all, delete-orphan"
+    )
+
     __table_args__ = (
         UniqueConstraint('program_id', 'offering_type', name='uq_program_offering_type'),
     )

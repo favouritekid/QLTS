@@ -109,6 +109,7 @@ class Settings(BaseSettings):
     DEFAULT_UNASSIGNED_LEAD_STATUS: str = "unassigned_pending"
     DEFAULT_ASSIGNED_LEAD_STATUS: str = "assigned"
     DEFAULT_REASSIGN_LEAD_STATUS: str = "reassigned_pending"
+    DEFAULT_ADMISSIONS_UNIT_ID: int = 1  # Fallback unit when no distribution config found
 
     # -- Lead Scoring Defaults (Không từ env) --
     LEAD_SCORING_ENGAGEMENT_POINTS: Dict[str, Any] = {

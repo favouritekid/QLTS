@@ -251,3 +251,32 @@ class SocketService {
 }
 
 export const socketService = new SocketService();
+
+/**
+ * Export socket instance for direct access in components.
+ * Use this for event listeners and emit operations.
+ *
+ * @example
+ * import { socket } from "@/lib/socket/client";
+ * socket.on("data_updated", handleUpdate);
+ */
+export const socket = {
+  get connected() {
+    return socketService.getSocket()?.connected || false;
+  },
+  connect() {
+    socketService.connect();
+  },
+  disconnect() {
+    socketService.disconnect();
+  },
+  on(event: string, handler: (...args: unknown[]) => void) {
+    socketService.getSocket()?.on(event, handler);
+  },
+  off(event: string, handler?: (...args: unknown[]) => void) {
+    socketService.getSocket()?.off(event, handler);
+  },
+  emit(event: string, ...args: unknown[]) {
+    socketService.getSocket()?.emit(event, ...args);
+  },
+};

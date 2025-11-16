@@ -23,7 +23,7 @@ from .notification_preference import NotificationPreference
 
 # Organization models (includes temporal models)
 # OLD: from .organization import Major  # REMOVED after 3-tier migration
-from .organization import OrganizationUnit
+from .organization import OfferingDistributionConfig, OrganizationUnit
 
 # NEW: 3-tier architecture models
 from .major_program import MajorProgram  # Level 1
@@ -67,6 +67,7 @@ __all__ = [
     # "Major",  # REMOVED after 3-tier migration k6l7m8n9o0p1
     # "MajorAcademicInfo",  # REMOVED after 3-tier migration k6l7m8n9o0p1
     "OrganizationUnit",
+    "OfferingDistributionConfig",
     # Organization (NEW 3-tier)
     "MajorProgram",
     "ProgramOffering",
