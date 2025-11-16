@@ -13,6 +13,7 @@ Tests all custom exceptions defined in app.utils.exceptions to ensure:
 import pytest
 from fastapi import status
 
+from app.utils import exceptions as app_exceptions
 from app.utils.exceptions import (
     BaseAppException,
     ResourceNotFoundError,
@@ -21,7 +22,6 @@ from app.utils.exceptions import (
     OrganizationNotFoundError,
     SessionNotFoundError,
     DuplicateResourceError,
-    ValidationError,
     DataValidationError,
     FileValidationError,
     FileSizeError,
@@ -40,6 +40,9 @@ from app.utils.exceptions import (
     WebSocketServiceError,
     EXCEPTION_HTTP_STATUS_MAP,
 )
+
+# Use alias to avoid conflict with pydantic ValidationError
+ValidationError = app_exceptions.ValidationError
 
 
 # ============================================================================
