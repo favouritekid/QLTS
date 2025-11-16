@@ -16,7 +16,7 @@ from app.config import settings
 from app.database import AsyncSessionLocal
 
 # Import helper tạo file mock
-from tests.integration.conftest import (  # ✅ Đường dẫn import đúng (từ thư mục cha)
+from tests.conftest import (  # Helper nằm trong root conftest
     create_mock_lead_file,
 )
 
