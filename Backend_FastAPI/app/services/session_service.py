@@ -11,7 +11,7 @@ from fastapi import status
 
 from .. import models
 from ..database import safe_redis_delete, safe_redis_set
-from ..database import AsyncSessionLocal  # ✅ 1. IMPORT SESSION MỚI
+# ✅ PHASE 1: Removed AsyncSessionLocal import (DI pattern - db injected via parameter)
 from ..utils.exceptions import (  # ✅ PHASE 1: Custom exceptions (protocol-independent)
     SessionRevocationError,
     SessionServiceError,
@@ -330,82 +330,96 @@ async def get_active_sessions(
 
 
 async def revoke_session(
-    # ❌ 2. XÓA `db: AsyncSession,`
-    session_id: int, 
+    db: AsyncSession,  # ✅ PHASE 1: Accept db parameter (DI pattern)
+    session_id: int,
     user_id: int
 ) -> bool:
-    session_to_emit = None  # Biến để lưu session JTI ra ngoài transaction
+    """
+    Revoke a user session.
 
-    # ✅ 3. TẠO SESSION CỦA RIÊNG HÀM NÀY
-    async with AsyncSessionLocal() as db:
-        try:
-            # ✅ 4. SỬA THÀNH `db.begin()`
-            async with db.begin(): # Bắt đầu transaction MỚI
-                result = await db.execute(
-                    select(models.UserSession)
-                    .where(
-                        and_(
-                            models.UserSession.id == session_id,
-                            models.UserSession.user_id == user_id,
-                        )
+    Args:
+        db: Database session (injected via DI)
+        session_id: ID of session to revoke
+        user_id: User ID for ownership verification
+
+    Returns:
+        True if session was revoked, False if not found
+
+    Raises:
+        SessionRevocationError: If revocation fails
+    """
+    session_to_emit = None  # Store session JTI for socket emission
+
+    try:
+        # ✅ PHASE 1: Use injected db session (no AsyncSessionLocal creation)
+        async with db.begin():  # Start transaction
+            result = await db.execute(
+                select(models.UserSession)
+                .where(
+                    and_(
+                        models.UserSession.id == session_id,
+                        models.UserSession.user_id == user_id,
                     )
-                    .with_for_update()
                 )
-                session = result.scalar_one_or_none()
+                .with_for_update()
+            )
+            session = result.scalar_one_or_none()
 
-                if not session:
-                    raise NoResultFound("Session not found")
+            if not session:
+                raise NoResultFound("Session not found")
 
-                if session.revoked_at is not None:
-                    log.warning("Session already revoked, skipping", session_id=session_id)
-                    return False
+            if session.revoked_at is not None:
+                log.warning("Session already revoked, skipping", session_id=session_id)
+                return False
 
-                # 1. Cập nhật CSDL
-                session.revoked_at = datetime.now(timezone.utc)
-                db.add(session)
-                session_to_emit = session.refresh_jti # Lưu JTI
+            # 1. Update database
+            session.revoked_at = datetime.now(timezone.utc)
+            db.add(session)
+            session_to_emit = session.refresh_jti  # Store JTI for socket event
 
-                # 2. Cập nhật REDIS (NẰM TRONG TRANSACTION)
-                ttl = int(
-                    (session.expires_at - datetime.now(timezone.utc)).total_seconds()
+            # 2. Update Redis (within transaction)
+            ttl = int(
+                (session.expires_at - datetime.now(timezone.utc)).total_seconds()
+            )
+            if ttl > 0:
+                await safe_redis_set(
+                    f"blacklist:{session.refresh_jti}", "revoked_by_user", ex=ttl
                 )
-                if ttl > 0:
-                    await safe_redis_set(
-                        f"blacklist:{session.refresh_jti}", "revoked_by_user", ex=ttl
-                    )
-                
-                await safe_redis_delete(f"session:{session.refresh_jti}")
-                log.info("Session DB marked and Redis keys updated (in transaction)", 
-                         session_id=session_id)
 
-            # 3. COMMIT TỰ ĐỘNG
-            log.info("Revoke transaction committed", session_id=session_id, user_id=user_id)
+            await safe_redis_delete(f"session:{session.refresh_jti}")
+            log.info(
+                "Session marked in DB and Redis keys updated (in transaction)",
+                session_id=session_id
+            )
 
-        except NoResultFound:
-            log.warning(
-                "Session not found or doesn't belong to user",
-                session_id=session_id,
-                user_id=user_id,
-            )
-            return False # Thất bại (an toàn)
-        except Exception as e:
-            # Bất kỳ lỗi nào (CSDL hoặc Redis) đều sẽ bị bắt ở đây
-            # db.rollback() được tự động gọi
-            log.error(
-                "Failed to revoke session (transaction rolled back)",
-                session_id=session_id,
-                user_id=user_id,
-                error=str(e),
-            )
-            # 💡 Raise custom exception for router to handle
-            raise SessionRevocationError(
-                detail="Failed to revoke session",
-                context={
-                    "session_id": session_id,
-                    "user_id": user_id,
-                    "error": str(e),
-                }
-            )
+        # Transaction committed automatically
+        log.info("Revoke transaction committed", session_id=session_id, user_id=user_id)
+
+    except NoResultFound:
+        log.warning(
+            "Session not found or doesn't belong to user",
+            session_id=session_id,
+            user_id=user_id,
+        )
+        return False  # Session not found (safe failure)
+    except Exception as e:
+        # Any error (database or Redis) will be caught here
+        # db.rollback() is called automatically by db.begin() context manager
+        log.error(
+            "Failed to revoke session (transaction rolled back)",
+            session_id=session_id,
+            user_id=user_id,
+            error=str(e),
+        )
+        # ✅ PHASE 1: Raise custom exception for router to handle
+        raise SessionRevocationError(
+            detail="Failed to revoke session",
+            context={
+                "session_id": session_id,
+                "user_id": user_id,
+                "error": str(e),
+            }
+        )
 
     # 4. Gửi Socket.IO (Chỉ khi transaction thành công)
     if session_to_emit:
@@ -474,63 +488,74 @@ async def update_session_activity(
 
 
 async def revoke_all_other_sessions(
-    # ❌ 1. XÓA `db: AsyncSession,`
-    user_id: int, 
+    db: AsyncSession,  # ✅ PHASE 1: Accept db parameter (DI pattern)
+    user_id: int,
     except_session_id: Optional[int] = None
 ) -> int:
+    """
+    Revoke all other sessions for a user except optionally one.
+
+    Args:
+        db: Database session (injected via DI)
+        user_id: User ID
+        except_session_id: Optional session ID to preserve
+
+    Returns:
+        Number of sessions revoked
+
+    Raises:
+        Exception: If revocation fails (caught and re-raised for router handling)
+    """
     revoked_jtis = []
     revoked_count = 0
-    
-    # ✅ 2. TẠO SESSION CỦA RIÊNG HÀM NÀY
-    async with AsyncSessionLocal() as db:
-        try:
-            # ✅ 3. SỬA THÀNH `db.begin()`
-            async with db.begin():
-                now = datetime.now(timezone.utc)
-                conditions = [
-                    models.UserSession.user_id == user_id,
-                    models.UserSession.revoked_at.is_(None),
-                ]
-                if except_session_id is not None:
-                    conditions.append(models.UserSession.id != except_session_id)
 
-                result = await db.execute(
-                    select(models.UserSession).where(and_(*conditions)).with_for_update()
-                )
-                sessions = result.scalars().all()
+    try:
+        # ✅ PHASE 1: Use injected db session (no AsyncSessionLocal creation)
+        async with db.begin():  # Start transaction
+            now = datetime.now(timezone.utc)
+            conditions = [
+                models.UserSession.user_id == user_id,
+                models.UserSession.revoked_at.is_(None),
+            ]
+            if except_session_id is not None:
+                conditions.append(models.UserSession.id != except_session_id)
 
-                for session in sessions:
-                    session.revoked_at = now
-                    db.add(session)
-                    revoked_jtis.append(session.refresh_jti)
-                    
-                    # Cập nhật Redis (Nếu đây là lỗi, exception sẽ văng ra
-                    # và db.begin() sẽ tự động rollback)
-                    ttl = int((session.expires_at - now).total_seconds())
-                    if ttl > 0:
-                        await safe_redis_set(
-                            f"blacklist:{session.refresh_jti}",
-                            "revoked_by_user",
-                            ex=ttl,
-                        )
-                    await safe_redis_delete(f"session:{session.refresh_jti}")
-                    
-                    revoked_count += 1
-            
-            # ✅ 4. COMMIT TỰ ĐỘNG (Chỉ khi CSDL và Redis đều thành công)
-            log.info("Revoked all other sessions and updated Redis", 
-                     user_id=user_id, 
-                     revoked_count=revoked_count)
-
-        except Exception as e:
-            # ✅ 5. BẮT LỖI VÀ NÉM LẠI
-            log.error(
-                "Failed to revoke all other sessions (service level)",
-                user_id=user_id,
-                error=str(e),
-                exc_info=True,
+            result = await db.execute(
+                select(models.UserSession).where(and_(*conditions)).with_for_update()
             )
-            raise e # Ném lại lỗi để router xử lý (trả về 500)
+            sessions = result.scalars().all()
+
+            for session in sessions:
+                session.revoked_at = now
+                db.add(session)
+                revoked_jtis.append(session.refresh_jti)
+
+                # Cập nhật Redis (Nếu đây là lỗi, exception sẽ văng ra
+                # và db.begin() sẽ tự động rollback)
+                ttl = int((session.expires_at - now).total_seconds())
+                if ttl > 0:
+                    await safe_redis_set(
+                        f"blacklist:{session.refresh_jti}",
+                        "revoked_by_user",
+                        ex=ttl,
+                    )
+                await safe_redis_delete(f"session:{session.refresh_jti}")
+
+                revoked_count += 1
+
+        # ✅ Transaction auto-commits if successful
+        log.info("Revoked all other sessions and updated Redis",
+                 user_id=user_id,
+                 revoked_count=revoked_count)
+
+    except Exception as e:
+        log.error(
+            "Failed to revoke all other sessions (service level)",
+            user_id=user_id,
+            error=str(e),
+            exc_info=True,
+        )
+        raise e # Ném lại lỗi để router xử lý (trả về 500)
 
 
     # Gửi sự kiện Socket.IO (Sau khi đã commit)
