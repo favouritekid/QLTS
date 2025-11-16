@@ -5,7 +5,7 @@ from typing import AsyncGenerator
 import structlog
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timezone
-from fastapi import HTTPException, UploadFile
+from fastapi import UploadFile
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +14,11 @@ import casbin  # ← PHASE 1: Import casbin
 from .. import models, schemas
 from ..config import settings
 from ..utils.csv_helpers import sanitize_csv_row  # ✅ SECURITY FIX: CSV Injection Prevention
+from ..utils.exceptions import (  # ✅ PHASE 1: Custom exceptions (protocol-independent)
+    CacheServiceError,
+    UserServiceError,
+    BaseAppException,
+)
 
 # ✅ 1. SỬA LỖI: Thêm import `safe_redis_pipeline` (sửa NameError)
 from ..database import (
@@ -981,8 +986,13 @@ async def invalidate_all_sessions(db: AsyncSession, user: models.User):
                     error=str(e_redis_set),
                 )
                 # Ném lỗi để rollback transaction
-                raise HTTPException(
-                    status_code=500, detail="Auth service failure (Cache)"
+                raise CacheServiceError(
+                    detail="Failed to invalidate sessions in cache",
+                    context={
+                        "operation": "redis_blacklist",
+                        "user_id": user_id,
+                        "error": str(e_redis_set),
+                    }
                 )
 
         # 4. ✅ COMMIT TỰ ĐỘNG (khi ra khỏi `async with db.begin()`)
@@ -1024,16 +1034,19 @@ async def invalidate_all_sessions(db: AsyncSession, user: models.User):
 
     except Exception as e:
         # Rollback tự động nếu lỗi trong `async with db.begin()`
-        if not isinstance(e, HTTPException):
+        if not isinstance(e, BaseAppException):
             log.error(
                 "Failed to invalidate sessions",
                 user_id=user_id,
                 error=str(e),
                 exc_info=True,
             )
-            raise HTTPException(status_code=500, detail="Could not invalidate sessions")
+            raise UserServiceError(
+                detail="Could not invalidate sessions",
+                context={"user_id": user_id, "error": str(e)}
+            )
         else:
-            raise  # Ném lại lỗi HTTPException (vd: từ Redis)
+            raise  # Re-raise custom exceptions (e.g., CacheServiceError)
 
 
 async def logout_user(db: AsyncSession, user: models.User):

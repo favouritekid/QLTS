@@ -7,11 +7,15 @@ from sqlalchemy import and_, select
 from sqlalchemy.exc import NoResultFound  # ✅ Thêm exception
 from sqlalchemy.ext.asyncio import AsyncSession
 from user_agents import parse as parse_user_agent
-from fastapi import HTTPException, status
+from fastapi import status
 
 from .. import models
 from ..database import safe_redis_delete, safe_redis_set
 from ..database import AsyncSessionLocal  # ✅ 1. IMPORT SESSION MỚI
+from ..utils.exceptions import (  # ✅ PHASE 1: Custom exceptions (protocol-independent)
+    SessionRevocationError,
+    SessionServiceError,
+)
 from ..socket_manager import sio
 from ..socket_metrics import socket_emit_failures_total  # ✅ Thêm Metrics
 from ..socket_metrics import (
@@ -393,10 +397,14 @@ async def revoke_session(
                 user_id=user_id,
                 error=str(e),
             )
-            # 💡 Trả về lỗi 500 cho Frontend (Device A) biết là đã thất bại
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to revoke session due to service error: {e}"
+            # 💡 Raise custom exception for router to handle
+            raise SessionRevocationError(
+                detail="Failed to revoke session",
+                context={
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "error": str(e),
+                }
             )
 
     # 4. Gửi Socket.IO (Chỉ khi transaction thành công)
