@@ -23,19 +23,19 @@ class TestTask15SourceCodeVerification:
     @pytest.fixture
     def activity_service_source(self):
         """Load activity_service.py source code."""
-        service_path = Path(__file__).parent.parent.parent / "app" / "services" / "activity_service.py"
+        service_path = Path(__file__).parent.parent.parent.parent / "app" / "services" / "activity_service.py"
         return service_path.read_text()
 
     @pytest.fixture
     def admin_router_source(self):
         """Load admin.py router source code."""
-        router_path = Path(__file__).parent.parent.parent / "app" / "routers" / "admin.py"
+        router_path = Path(__file__).parent.parent.parent.parent / "app" / "routers" / "admin.py"
         return router_path.read_text()
 
     @pytest.fixture
     def profile_router_source(self):
         """Load profile.py router source code."""
-        router_path = Path(__file__).parent.parent.parent / "app" / "routers" / "profile.py"
+        router_path = Path(__file__).parent.parent.parent.parent / "app" / "routers" / "profile.py"
         return router_path.read_text()
 
     def test_1_5_1_no_request_import(self, activity_service_source):
@@ -244,17 +244,17 @@ class TestTask15CompletionSummary:
 
     @pytest.fixture
     def activity_service_source(self):
-        service_path = Path(__file__).parent.parent.parent / "app" / "services" / "activity_service.py"
+        service_path = Path(__file__).parent.parent.parent.parent / "app" / "services" / "activity_service.py"
         return service_path.read_text()
 
     @pytest.fixture
     def admin_router_source(self):
-        router_path = Path(__file__).parent.parent.parent / "app" / "routers" / "admin.py"
+        router_path = Path(__file__).parent.parent.parent.parent / "app" / "routers" / "admin.py"
         return router_path.read_text()
 
     @pytest.fixture
     def profile_router_source(self):
-        router_path = Path(__file__).parent.parent.parent / "app" / "routers" / "profile.py"
+        router_path = Path(__file__).parent.parent.parent.parent / "app" / "routers" / "profile.py"
         return router_path.read_text()
 
     def test_task_1_5_all_subtasks_complete(

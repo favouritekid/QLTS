@@ -34,7 +34,7 @@ class TestTask13ServiceLayerRefactoring:
         HTTPException is a FastAPI/HTTP-specific concern.
         """
         # Read the source file
-        service_path = Path(__file__).parent.parent.parent / "app" / "services" / "user_service.py"
+        service_path = Path(__file__).parent.parent.parent.parent / "app" / "services" / "user_service.py"
         source_code = service_path.read_text()
 
         # Parse AST
@@ -62,7 +62,7 @@ class TestTask13ServiceLayerRefactoring:
         """
         Task 1.3.2: Verify custom exceptions ARE imported in user_service.py
         """
-        service_path = Path(__file__).parent.parent.parent / "app" / "services" / "user_service.py"
+        service_path = Path(__file__).parent.parent.parent.parent / "app" / "services" / "user_service.py"
         source_code = service_path.read_text()
 
         # Check for custom exception imports
@@ -108,7 +108,7 @@ class TestTask13ServiceLayerRefactoring:
 
         Line 1037 should check isinstance(e, BaseAppException)
         """
-        service_path = Path(__file__).parent.parent.parent / "app" / "services" / "user_service.py"
+        service_path = Path(__file__).parent.parent.parent.parent / "app" / "services" / "user_service.py"
         source_code = service_path.read_text()
 
         # Verify the type check is updated
@@ -141,7 +141,7 @@ class TestTask13ServiceLayerRefactoring:
         """
         Comprehensive source code verification for all Task 1.3 changes.
         """
-        service_path = Path(__file__).parent.parent.parent / "app" / "services" / "user_service.py"
+        service_path = Path(__file__).parent.parent.parent.parent / "app" / "services" / "user_service.py"
         source_code = service_path.read_text()
 
         # Verify specific refactored lines exist
@@ -179,7 +179,7 @@ class TestTask13RouterExceptionHandling:
         """
         Task 1.3.6: Verify auth.py imports custom exceptions
         """
-        router_path = Path(__file__).parent.parent.parent / "app" / "routers" / "auth.py"
+        router_path = Path(__file__).parent.parent.parent.parent / "app" / "routers" / "auth.py"
         source_code = router_path.read_text()
 
         assert "from ..utils.exceptions import" in source_code, \
@@ -197,7 +197,7 @@ class TestTask13RouterExceptionHandling:
         - CacheServiceError
         - UserServiceError
         """
-        router_path = Path(__file__).parent.parent.parent / "app" / "routers" / "auth.py"
+        router_path = Path(__file__).parent.parent.parent.parent / "app" / "routers" / "auth.py"
         source_code = router_path.read_text()
 
         # Check for exception catching
@@ -213,7 +213,7 @@ class TestTask13RouterExceptionHandling:
         """
         Task 1.3.6: Verify router converts custom exceptions to HTTPException
         """
-        router_path = Path(__file__).parent.parent.parent / "app" / "routers" / "auth.py"
+        router_path = Path(__file__).parent.parent.parent.parent / "app" / "routers" / "auth.py"
         source_code = router_path.read_text()
 
         # After catching custom exception, should raise HTTPException
@@ -234,7 +234,7 @@ class TestTask13RouterExceptionHandling:
 
         This should be replaced with custom exception handling.
         """
-        router_path = Path(__file__).parent.parent.parent / "app" / "routers" / "auth.py"
+        router_path = Path(__file__).parent.parent.parent.parent / "app" / "routers" / "auth.py"
         source_code = router_path.read_text()
 
         # Check that we're not just catching and re-raising HTTPException
@@ -272,8 +272,8 @@ class TestTask13Summary:
         """
         Verify all Task 1.3 subtasks are completed.
         """
-        service_path = Path(__file__).parent.parent.parent / "app" / "services" / "user_service.py"
-        router_path = Path(__file__).parent.parent.parent / "app" / "routers" / "auth.py"
+        service_path = Path(__file__).parent.parent.parent.parent / "app" / "services" / "user_service.py"
+        router_path = Path(__file__).parent.parent.parent.parent / "app" / "routers" / "auth.py"
 
         service_code = service_path.read_text()
         router_code = router_path.read_text()
@@ -303,7 +303,7 @@ class TestTask13Summary:
         Service should not import or use FastAPI-specific classes except:
         - UploadFile (for file handling, acceptable)
         """
-        service_path = Path(__file__).parent.parent.parent / "app" / "services" / "user_service.py"
+        service_path = Path(__file__).parent.parent.parent.parent / "app" / "services" / "user_service.py"
         source_code = service_path.read_text()
 
         # Parse imports

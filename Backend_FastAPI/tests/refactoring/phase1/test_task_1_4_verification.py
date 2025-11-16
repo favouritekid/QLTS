@@ -23,13 +23,13 @@ class TestTask14SourceCodeVerification:
     @pytest.fixture
     def session_service_source(self):
         """Load session_service.py source code."""
-        service_path = Path(__file__).parent.parent.parent / "app" / "services" / "session_service.py"
+        service_path = Path(__file__).parent.parent.parent.parent / "app" / "services" / "session_service.py"
         return service_path.read_text()
 
     @pytest.fixture
     def sessions_router_source(self):
         """Load sessions.py router source code."""
-        router_path = Path(__file__).parent.parent.parent / "app" / "routers" / "sessions.py"
+        router_path = Path(__file__).parent.parent.parent.parent / "app" / "routers" / "sessions.py"
         return router_path.read_text()
 
     def test_1_4_1_no_httpexception_import(self, session_service_source):
@@ -247,12 +247,12 @@ class TestTask14CompletionSummary:
 
     @pytest.fixture
     def session_service_source(self):
-        service_path = Path(__file__).parent.parent.parent / "app" / "services" / "session_service.py"
+        service_path = Path(__file__).parent.parent.parent.parent / "app" / "services" / "session_service.py"
         return service_path.read_text()
 
     @pytest.fixture
     def sessions_router_source(self):
-        router_path = Path(__file__).parent.parent.parent / "app" / "routers" / "sessions.py"
+        router_path = Path(__file__).parent.parent.parent.parent / "app" / "routers" / "sessions.py"
         return router_path.read_text()
 
     def test_task_1_4_all_subtasks_complete(self, session_service_source, sessions_router_source):
