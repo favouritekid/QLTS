@@ -26,7 +26,7 @@ from app.config import settings
 
 # Import constants
 try:
-    from ..fixtures.constants import AuthURLs, ProfileURLs, TestUsers
+    from tests.fixtures.constants import AuthURLs, ProfileURLs, TestUsers
 except ImportError:
     pytest.fail("Could not import constants from tests.fixtures.constants.")
 

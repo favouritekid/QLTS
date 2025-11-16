@@ -17,13 +17,13 @@ from app.security import decode_token_for_invalidation  # Cần để lấy JTI 
 # Import constants
 try:
     # Đảm bảo bạn đã tạo file tests/fixtures/constants.py
-    from ..fixtures.constants import (
+    from tests.fixtures.constants import (
         ProfileURLs,  # Cần ProfileURLs để test token sau logout
     )
-    from ..fixtures.constants import (
+    from tests.fixtures.constants import (
         SecurityConstants,  # Không cần trực tiếp nhưng import sẵn
     )
-    from ..fixtures.constants import (
+    from tests.fixtures.constants import (
         AuthURLs,
         TestUsers,
     )

@@ -22,10 +22,10 @@ from app.security import (
 # Import constants
 try:
     # Đảm bảo bạn đã tạo file tests/fixtures/constants.py
-    from ..fixtures.constants import (
+    from tests.fixtures.constants import (
         AuthURLs,  # Cần AuthURLs nếu test unauthenticated cần login
     )
-    from ..fixtures.constants import (  # NON_EXISTENT_ID # Không cần ID không tồn tại cho profile của chính user
+    from tests.fixtures.constants import (  # NON_EXISTENT_ID # Không cần ID không tồn tại cho profile của chính user
         ProfileURLs,
         TestUsers,
     )

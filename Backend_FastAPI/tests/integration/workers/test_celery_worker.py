@@ -19,7 +19,7 @@ from app.database import AsyncSessionLocal
 
 # Import constants và URLs
 try:
-    from ..fixtures.constants import (
+    from tests.fixtures.constants import (
         AuthURLs,
         LeadsURLs,
         TestOrgData,

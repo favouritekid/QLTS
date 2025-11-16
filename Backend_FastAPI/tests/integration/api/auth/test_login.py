@@ -15,7 +15,7 @@ from app.utils.exceptions import InvalidCredentials
 
 # Import constants
 try:
-    from ..fixtures.constants import SecurityConstants, TestUsers
+    from tests.fixtures.constants import SecurityConstants, TestUsers
 except ImportError:
     pytest.fail(
         "Could not import constants from tests.fixtures.constants. Please create the file."

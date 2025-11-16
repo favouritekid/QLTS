@@ -21,9 +21,9 @@ from app.services.pipeline_service import (
 # Import constants và NON_EXISTENT_IDs
 try:
     # Đảm bảo bạn đã tạo file tests/fixtures/constants.py
-    from ..fixtures.constants import TestLeadData  # Cần để seed lead
-    from ..fixtures.constants import TestOrgData  # Cần để seed lead
-    from ..fixtures.constants import (
+    from tests.fixtures.constants import TestLeadData  # Cần để seed lead
+    from tests.fixtures.constants import TestOrgData  # Cần để seed lead
+    from tests.fixtures.constants import (
         NON_EXISTENT_ID,
         NON_EXISTENT_STAGE_ID,
         NON_EXISTENT_STATUS_ID,

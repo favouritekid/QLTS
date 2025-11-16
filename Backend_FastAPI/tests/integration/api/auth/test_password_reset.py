@@ -24,10 +24,10 @@ from app.security import (  # Import security functions
 
 # Import constants
 try:
-    from ..fixtures.constants import (
+    from tests.fixtures.constants import (
         NON_EXISTENT_ID,  # Dùng cho user không tồn tại khi reset
     )
-    from ..fixtures.constants import (
+    from tests.fixtures.constants import (
         AuthURLs,
         SecurityConstants,
         TestUsers,

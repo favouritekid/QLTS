@@ -22,7 +22,7 @@ from app.services.pipeline_service import (  # Import cache keys
 # Import constants
 try:
     # Đảm bảo bạn đã tạo file tests/fixtures/constants.py
-    from ..fixtures.constants import (  # Không cần các constants khác cho file này
+    from tests.fixtures.constants import (  # Không cần các constants khác cho file này
         PipelineURLs,
         TestPipelineData,
     )

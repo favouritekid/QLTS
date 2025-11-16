@@ -20,8 +20,8 @@ from app.security import decode_token_for_invalidation
 # Import constants
 try:
     # Đảm bảo bạn đã tạo file tests/fixtures/constants.py
-    from ..fixtures.constants import ProfileURLs  # Cần để test token mới/cũ
-    from ..fixtures.constants import AuthURLs, SecurityConstants, TestUsers
+    from tests.fixtures.constants import ProfileURLs  # Cần để test token mới/cũ
+    from tests.fixtures.constants import AuthURLs, SecurityConstants, TestUsers
 except ImportError:
     pytest.fail("Could not import constants from tests.fixtures.constants.")
 

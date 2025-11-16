@@ -14,7 +14,7 @@ from app.schemas.permissions import PolicyCreate, RoleAssignment  # Cần schema
 
 # Import constants
 try:
-    from ..fixtures.constants import NON_EXISTENT_ID, AdminURLs, TestUsers
+    from tests.fixtures.constants import NON_EXISTENT_ID, AdminURLs, TestUsers
 except ImportError:
     pytest.fail("Could not import constants from tests.fixtures.constants.")
 

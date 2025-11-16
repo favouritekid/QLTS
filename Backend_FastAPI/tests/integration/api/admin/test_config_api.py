@@ -17,7 +17,7 @@ from app.database import AsyncSessionLocal
 # Import constants và NON_EXISTENT_ID
 try:
     # Đảm bảo bạn đã tạo file tests/fixtures/constants.py
-    from ..fixtures.constants import (
+    from tests.fixtures.constants import (
         NON_EXISTENT_ID,
         AdminURLs,
         TestConfigData,

@@ -23,7 +23,7 @@ from app.security import verify_password
 
 # Import constants
 try:
-    from ..fixtures.constants import NON_EXISTENT_ID, AdminURLs, AuthURLs, TestUsers
+    from tests.fixtures.constants import NON_EXISTENT_ID, AdminURLs, AuthURLs, TestUsers
 except ImportError:
     pytest.fail("Could not import constants from tests.fixtures.constants.")
 

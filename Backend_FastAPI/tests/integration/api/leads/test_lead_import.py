@@ -16,15 +16,15 @@ from app.config import settings
 from app.database import AsyncSessionLocal
 
 # Import helper tạo file mock
-from ..conftest import (  # ✅ Đường dẫn import đúng (từ thư mục cha)
+from tests.integration.conftest import (  # ✅ Đường dẫn import đúng (từ thư mục cha)
     create_mock_lead_file,
 )
 
 # Import constants và fixtures
-from ..fixtures.constants import (
+from tests.fixtures.constants import (
     LeadsURLs,  # Thêm LeadsURLs nếu bạn dùng lambda URLs (hiện tại không cần)
 )
-from ..fixtures.constants import (  # TestLeadData # Không cần trực tiếp vì dùng data custom
+from tests.fixtures.constants import (  # TestLeadData # Không cần trực tiếp vì dùng data custom
     AdminURLs,
     TestOrgData,
     TestPipelineData,

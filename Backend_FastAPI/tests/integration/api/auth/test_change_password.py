@@ -20,11 +20,11 @@ from app.security import (  # Cần verify_password và decode
 # Import constants
 try:
     # Đảm bảo bạn đã tạo file tests/fixtures/constants.py
-    from ..fixtures.constants import ProfileURLs  # Cần ProfileURLs để test token cũ
-    from ..fixtures.constants import (
+    from tests.fixtures.constants import ProfileURLs  # Cần ProfileURLs để test token cũ
+    from tests.fixtures.constants import (
         SecurityConstants,  # Không cần trực tiếp nhưng có thể hữu ích
     )
-    from ..fixtures.constants import (
+    from tests.fixtures.constants import (
         AuthURLs,
         TestUsers,
     )
