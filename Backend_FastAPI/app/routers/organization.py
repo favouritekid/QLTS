@@ -187,6 +187,31 @@ async def create_offering_academic_info(
         created_by_user_id=current_user.id
     )
 
+# Thêm vào cuối file hoặc gần các API Offerings
+@router.get("/program-offerings", response_model=List[schemas.ProgramOffering])
+async def get_all_program_offerings(
+    is_active: Optional[bool] = None,
+    skip: int = 0,
+    limit: int = 1000, # Default limit lớn cho dropdown
+    db: AsyncSession = Depends(database.get_db),
+    current_user: schemas.User = PermissionDep,
+):
+    """
+    Lấy danh sách tất cả loại hình đào tạo (Flat list).
+    Dùng cho các Dropdown chọn Offering.
+    """
+    from sqlalchemy import select
+    from .. import models
+
+    query = select(models.ProgramOffering)
+    
+    if is_active is not None:
+        query = query.where(models.ProgramOffering.is_active == is_active)
+        
+    query = query.order_by(models.ProgramOffering.name).offset(skip).limit(limit)
+    
+    result = await db.execute(query)
+    return result.scalars().all()
 
 @router.patch("/academic-info/{academic_info_id}", response_model=schemas.OfferingAcademicInfo)
 async def update_offering_academic_info(

@@ -1,9 +1,9 @@
 # app/routers/admin.py
 import io
-from typing import List, Optional
+from typing import Annotated, List, Optional
 from fastapi.responses import StreamingResponse
 from datetime import datetime, timezone
-
+from sqlalchemy.orm import selectinload
 import casbin
 import pandas as pd
 import structlog
@@ -28,11 +28,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 
 from .. import database, models, schemas, services
+from ..database import get_db
 from ..celery_utils import process_automatic_lead_assignment_task
 from ..core import deps
 from ..services import activity_service, notification_service
 from ..routers.notifications import send_realtime_notification
 from ..schemas.permissions import PolicyCreate, RoleAssignment, GroupingPolicyCreate
+from ..schemas.organization import DistributionRuleCreate, DistributionRuleUpdate, DistributionRuleResponse
 from ..services import (
     config_service,
     lead_service,
@@ -3193,3 +3195,95 @@ async def delete_offering_academic_info(
     """(Admin only) Xóa thông tin tuyển sinh."""
     await organization_service.delete_academic_info(db, academic_info_id)
     return None
+
+# =============================================================================
+# DISTRIBUTION RULES - ADMIN ENDPOINTS
+# =============================================================================
+
+@router.get("/distribution-rules", response_model=List[DistributionRuleResponse])
+async def get_distribution_rules(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[models.User, PermissionDep],
+    offering_id: Optional[int] = None
+):
+    """Lấy danh sách luật phân phối"""
+    query = (
+        select(models.OfferingDistributionConfig)
+        .options(
+            selectinload(models.OfferingDistributionConfig.offering),
+            selectinload(models.OfferingDistributionConfig.unit)
+        )
+        .order_by(models.OfferingDistributionConfig.offering_id, models.OfferingDistributionConfig.priority)
+    )
+    
+    if offering_id:
+        query = query.where(models.OfferingDistributionConfig.offering_id == offering_id)
+        
+    result = await db.execute(query)
+    rules = result.scalars().all()
+    
+    # Map thêm name để hiển thị
+    response = []
+    for r in rules:
+        item = DistributionRuleResponse.model_validate(r)
+        item.offering_name = r.offering.name if r.offering else "Unknown"
+        item.unit_name = r.unit.name if r.unit else "Unknown"
+        response.append(item)
+        
+    return response
+
+@router.post("/distribution-rules", response_model=DistributionRuleResponse)
+async def create_distribution_rule(
+    rule_in: DistributionRuleCreate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[models.User, PermissionDep],
+):
+    """Tạo luật phân phối mới"""
+    # Check trùng lặp
+    exists = await db.scalar(
+        select(models.OfferingDistributionConfig).where(
+            models.OfferingDistributionConfig.offering_id == rule_in.offering_id,
+            models.OfferingDistributionConfig.unit_id == rule_in.unit_id
+        )
+    )
+    if exists:
+        raise HTTPException(400, "Rule for this offering and unit already exists")
+        
+    new_rule = models.OfferingDistributionConfig(**rule_in.model_dump())
+    db.add(new_rule)
+    await db.commit()
+    await db.refresh(new_rule)
+    return new_rule
+
+@router.put("/distribution-rules/{rule_id}", response_model=DistributionRuleResponse)
+async def update_distribution_rule(
+    rule_id: int,
+    rule_in: DistributionRuleUpdate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[models.User, PermissionDep],
+):
+    rule = await db.get(models.OfferingDistributionConfig, rule_id)
+    if not rule:
+        raise HTTPException(404, "Rule not found")
+        
+    update_data = rule_in.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(rule, field, value)
+        
+    await db.commit()
+    await db.refresh(rule)
+    return rule
+
+@router.delete("/distribution-rules/{rule_id}")
+async def delete_distribution_rule(
+    rule_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[models.User, PermissionDep],
+):
+    rule = await db.get(models.OfferingDistributionConfig, rule_id)
+    if not rule:
+        raise HTTPException(404, "Rule not found")
+    
+    await db.delete(rule)
+    await db.commit()
+    return {"status": "success"}

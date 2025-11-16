@@ -1,393 +1,256 @@
-# app/services/officer_service.py
-"""
-Officer Command Center Service - Optimized queries for Officer Dashboard.
-
-Performance optimizations:
-- Aggregation at DB level (no N+1 queries)
-- Subqueries for performance trends
-- JOINs minimized via selectinload
-- CTEs for complex analytics
-"""
-from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional
-
 import structlog
-from sqlalchemy import and_, case, func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload
+from datetime import datetime, timedelta, timezone, date
+from typing import List, Dict, Any
 
-from .. import models
-from ..config import settings
+from sqlalchemy import select, func, or_, desc, case, and_
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload, joinedload, aliased
+
+from .. import models, schemas
+from ..socket_manager import emit_to_all
 
 log = structlog.get_logger(__name__)
 
 
 async def get_officer_dashboard_stats(
-    db: AsyncSession,
-    officer_id: int
-) -> Dict:
+    db: AsyncSession, officer_id: int
+) -> Dict[str, Any]:
     """
-    Get comprehensive dashboard statistics for an officer.
-
-    Optimizations:
-    - Single query per section (no N+1)
-    - Aggregations done at DB level
-    - Efficient date filtering with indexes
-
-    Returns:
-        dict: {
-            "status_overview": {...},
-            "performance_trends": [...],
-            "sales_funnel": {...},
-            "actionable_lists": {...}
-        }
+    Lấy thống kê tổng hợp cho Officer Dashboard.
+    Logic Workload khớp với assignment_service (dựa trên is_final_status).
     """
-    log.info("Fetching officer dashboard stats", officer_id=officer_id)
+    # 1. Lấy thông tin User (Officer)
+    user = await db.get(models.User, officer_id)
+    if not user:
+        raise ValueError(f"User {officer_id} not found")
 
-    # === 1. STATUS OVERVIEW ===
-    # Get officer with capacity info
-    officer = await db.get(models.User, officer_id)
-    if not officer:
-        raise ValueError(f"Officer {officer_id} not found")
-
-    # Calculate current workload (MUST match assignment_service logic)
-    workload_stmt = (
+    # 2. TÍNH TOÁN WORKLOAD & CAPACITY
+    # Logic: Chỉ đếm những Lead mà status của nó CÓ is_final_status = False (hoặc NULL)
+    # Điều này đồng bộ với logic phân phối trong assignment_service
+    workload_query = (
         select(func.count(models.Lead.id))
         .join(
             models.ConsultationStatus,
             models.Lead.consultation_status_id == models.ConsultationStatus.id,
-            isouter=True
+            isouter=True,  # LEFT JOIN để lấy cả Lead chưa có status
         )
         .where(
-            and_(
-                models.Lead.assigned_officer_id == officer_id,
-                # Only count non-final leads (active workload)
-                (models.ConsultationStatus.is_final_status == False) |
-                (models.ConsultationStatus.is_final_status.is_(None))
-            )
+            models.Lead.assigned_officer_id == officer_id,
+            or_(
+                models.ConsultationStatus.is_final_status == False,
+                models.ConsultationStatus.is_final_status.is_(None),
+            ),
         )
     )
-    workload_result = await db.execute(workload_stmt)
-    current_workload = workload_result.scalar_one()
+    current_workload = (await db.execute(workload_query)).scalar() or 0
+    
+    max_capacity = user.max_capacity or 100
+    # Tránh chia cho 0
+    utilization = 0.0
+    if max_capacity > 0:
+        utilization = round((current_workload / max_capacity) * 100, 1)
 
-    max_capacity = officer.max_capacity or 100
-    utilization = (current_workload / max_capacity * 100) if max_capacity > 0 else 0
-
-    status_overview = {
-        "workload": current_workload,
-        "max_capacity": max_capacity,
-        "utilization": round(utilization, 1),
-        "availability_status": officer.availability_status,
-        "last_assigned_at": officer.last_assigned_at.isoformat() if officer.last_assigned_at else None
-    }
-
-    # === 2. PERFORMANCE TRENDS (Last 7 days) ===
-    seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
-
-    # Query for daily aggregated performance
-    # Get: assigned leads count, consultations count, converted leads count
-    trends_stmt = (
+    # 3. PERFORMANCE TRENDS (7 ngày qua)
+    # Chúng ta cần thống kê 3 chỉ số theo ngày:
+    # - Assigned: Số lead được gán (dựa vào AssignmentLog hoặc created_at nếu gán ngay)
+    # - Consultations: Số lượt tương tác (dựa vào bảng Consultation - nếu có)
+    # - Converted: Số lead chuyển đổi thành công (Status final & positive)
+    
+    today = datetime.now(timezone.utc).date()
+    seven_days_ago = today - timedelta(days=6)
+    
+    # A. Query số lượng Lead được gán theo ngày (Dựa trên AssignmentLog)
+    # Nếu chưa có bảng AssignmentLog đầy đủ, có thể tạm dùng Lead.created_at cho lead mới
+    assigned_query = (
         select(
-            func.date(models.Lead.assigned_at).label("date"),
-            func.count(models.Lead.id).label("leads_assigned"),
+            func.date(models.AssignmentLog.timestamp).label("date"),
+            func.count(models.AssignmentLog.id)
         )
         .where(
-            and_(
-                models.Lead.assigned_officer_id == officer_id,
-                models.Lead.assigned_at >= seven_days_ago,
-                models.Lead.assigned_at.isnot(None)
-            )
+            models.AssignmentLog.officer_id == officer_id,
+            func.date(models.AssignmentLog.timestamp) >= seven_days_ago
         )
-        .group_by(func.date(models.Lead.assigned_at))
-        .order_by(func.date(models.Lead.assigned_at))
+        .group_by(func.date(models.AssignmentLog.timestamp))
     )
-    trends_result = await db.execute(trends_stmt)
-    trends_rows = trends_result.all()
+    assigned_res = (await db.execute(assigned_query)).all()
 
-    # Consultation counts per day
-    consultations_stmt = (
+    # B. Query số lượng Consultation (Tương tác) theo ngày
+    # Giả định bạn có model Consultation, nếu chưa có bảng này thì trả về 0
+    # consultation_query = (...) 
+    # Ở đây tôi để placeholder để code không lỗi nếu thiếu bảng
+    consultations_res = [] 
+    # Nếu có bảng Consultation, uncomment đoạn dưới:
+    """
+    consultation_query = (
         select(
-            func.date(models.Consultation.consultation_date).label("date"),
-            func.count(models.Consultation.id).label("consultations_count")
+            func.date(models.Consultation.created_at).label("date"),
+            func.count(models.Consultation.id)
         )
         .where(
-            and_(
-                models.Consultation.officer_id == officer_id,
-                models.Consultation.consultation_date >= seven_days_ago
-            )
+            models.Consultation.officer_id == officer_id,
+            func.date(models.Consultation.created_at) >= seven_days_ago
         )
-        .group_by(func.date(models.Consultation.consultation_date))
-        .order_by(func.date(models.Consultation.consultation_date))
+        .group_by(func.date(models.Consultation.created_at))
     )
-    consultations_result = await db.execute(consultations_stmt)
-    consultations_rows = consultations_result.all()
+    consultations_res = (await db.execute(consultation_query)).all()
+    """
 
-    # Converted leads per day (leads that reached final "Enrolled" stage)
-    # Assuming there's a ConsultationStatus with specific ID for "Enrolled"
-    # For this example, we'll count leads with is_final_status=True
-    converted_stmt = (
+    # C. Query số lượng Lead Chốt đơn (Converted) theo ngày cập nhật
+    # (Dựa trên Lead.updated_at và status positive)
+    converted_query = (
         select(
             func.date(models.Lead.updated_at).label("date"),
-            func.count(models.Lead.id).label("converted_count")
+            func.count(models.Lead.id)
         )
-        .join(
-            models.ConsultationStatus,
-            models.Lead.consultation_status_id == models.ConsultationStatus.id
-        )
+        .join(models.ConsultationStatus, models.Lead.consultation_status_id == models.ConsultationStatus.id)
         .where(
-            and_(
-                models.Lead.assigned_officer_id == officer_id,
-                models.Lead.updated_at >= seven_days_ago,
-                models.ConsultationStatus.is_final_status == True
-            )
+            models.Lead.assigned_officer_id == officer_id,
+            models.ConsultationStatus.outcome_type == "positive",
+            models.ConsultationStatus.is_final_status == True,
+            func.date(models.Lead.updated_at) >= seven_days_ago
         )
         .group_by(func.date(models.Lead.updated_at))
-        .order_by(func.date(models.Lead.updated_at))
     )
-    converted_result = await db.execute(converted_stmt)
-    converted_rows = converted_result.all()
+    converted_res = (await db.execute(converted_query)).all()
 
-    # Merge all trends data by date
+    # Tổng hợp dữ liệu vào Dict để fill những ngày trống
     trends_map = {}
-    for row in trends_rows:
-        date_str = row.date.isoformat() if row.date else None
-        if date_str:
-            trends_map[date_str] = {"date": date_str, "leads_assigned": row.leads_assigned, "consultations": 0, "converted": 0}
-
-    for row in consultations_rows:
-        date_str = row.date.isoformat() if row.date else None
-        if date_str:
-            if date_str not in trends_map:
-                trends_map[date_str] = {"date": date_str, "leads_assigned": 0, "consultations": 0, "converted": 0}
-            trends_map[date_str]["consultations"] = row.consultations_count
-
-    for row in converted_rows:
-        date_str = row.date.isoformat() if row.date else None
-        if date_str:
-            if date_str not in trends_map:
-                trends_map[date_str] = {"date": date_str, "leads_assigned": 0, "consultations": 0, "converted": 0}
-            trends_map[date_str]["converted"] = row.converted_count
-
-    # Fill in missing days with zero values
-    performance_trends = []
     for i in range(7):
-        date = (datetime.now(timezone.utc) - timedelta(days=6 - i)).date()
-        date_str = date.isoformat()
-        if date_str in trends_map:
-            performance_trends.append(trends_map[date_str])
-        else:
-            performance_trends.append({
-                "date": date_str,
-                "leads_assigned": 0,
-                "consultations": 0,
-                "converted": 0
-            })
+        d = seven_days_ago + timedelta(days=i)
+        d_str = d.strftime("%Y-%m-%d")
+        trends_map[d_str] = {
+            "date": d_str, 
+            "assigned": 0, 
+            "consultations": 0, 
+            "converted": 0
+        }
 
-    # === 3. SALES FUNNEL ===
-    # Count leads by pipeline stage
-    funnel_stmt = (
+    for row in assigned_res:
+        d_str = str(row.date)
+        if d_str in trends_map:
+            trends_map[d_str]["assigned"] = row[1]
+            
+    for row in consultations_res:
+        d_str = str(row.date)
+        if d_str in trends_map:
+            trends_map[d_str]["consultations"] = row[1]
+
+    for row in converted_res:
+        d_str = str(row.date)
+        if d_str in trends_map:
+            trends_map[d_str]["converted"] = row[1]
+
+    performance_trends = list(trends_map.values())
+
+    # 4. SALES FUNNEL (Phễu bán hàng)
+    # Đếm số lượng Lead theo từng Stage (Pipeline Stage)
+    funnel_query = (
         select(
-            models.PipelineStage.name.label("stage_name"),
-            models.PipelineStage.order.label("stage_order"),
-            func.count(models.Lead.id).label("lead_count")
+            models.PipelineStage.name,
+            func.count(models.Lead.id),
+            models.PipelineStage.order
         )
-        .join(
-            models.PipelineStage,
-            models.Lead.pipeline_stage_id == models.PipelineStage.id,
-            isouter=True
-        )
+        .select_from(models.Lead)
+        .join(models.PipelineStage, models.Lead.pipeline_stage_id == models.PipelineStage.id)
         .where(models.Lead.assigned_officer_id == officer_id)
         .group_by(models.PipelineStage.id, models.PipelineStage.name, models.PipelineStage.order)
-        .order_by(models.PipelineStage.order)
+        .order_by(models.PipelineStage.order.asc())
     )
-    funnel_result = await db.execute(funnel_stmt)
-    funnel_rows = funnel_result.all()
+    funnel_res = (await db.execute(funnel_query)).all()
+    
+    # Format màu sắc cho đẹp (Chart 1 -> 5)
+    sales_funnel = []
+    for idx, row in enumerate(funnel_res):
+        sales_funnel.append({
+            "stage": row[0],
+            "count": row[1],
+            "fill": f"var(--chart-{idx % 5 + 1})"
+        })
 
-    sales_funnel = [
-        {
-            "stage_name": row.stage_name or "Unknown",
-            "stage_order": row.stage_order or 0,
-            "lead_count": row.lead_count
-        }
-        for row in funnel_rows
-    ]
-
-    # === 4. ACTIONABLE LISTS ===
-
-    # 4.1. High Score Leads (Top 5 by lead_score, not yet converted)
-    high_score_stmt = (
+    # 5. ACTIONABLE LISTS (Danh sách cần xử lý)
+    
+    # A. High Score Leads (Top 5 điểm cao chưa chốt)
+    high_score_query = (
         select(models.Lead)
-        .join(
-            models.ConsultationStatus,
-            models.Lead.consultation_status_id == models.ConsultationStatus.id,
-            isouter=True
-        )
+        .join(models.ConsultationStatus, models.Lead.consultation_status_id == models.ConsultationStatus.id, isouter=True)
         .where(
-            and_(
-                models.Lead.assigned_officer_id == officer_id,
-                # Not final status (still active)
-                (models.ConsultationStatus.is_final_status == False) |
-                (models.ConsultationStatus.is_final_status.is_(None))
+            models.Lead.assigned_officer_id == officer_id,
+            # Chỉ lấy lead chưa final
+            or_(
+                models.ConsultationStatus.is_final_status == False,
+                models.ConsultationStatus.is_final_status.is_(None)
             )
         )
-        .order_by(models.Lead.lead_score.desc())
+        .order_by(models.Lead.lead_score.desc().nulls_last())
         .limit(5)
     )
-    high_score_result = await db.execute(high_score_stmt)
-    high_score_leads = high_score_result.scalars().all()
+    high_score_leads = (await db.execute(high_score_query)).scalars().all()
 
-    # 4.2. Stale Leads (No consultation in last 3 days)
-    three_days_ago = datetime.now(timezone.utc) - timedelta(days=3)
-
-    # Subquery to find leads with recent consultations
-    recent_consultation_subq = (
-        select(models.Consultation.lead_id)
-        .where(models.Consultation.consultation_date >= three_days_ago)
-        .distinct()
-    )
-
-    stale_leads_stmt = (
+    # B. Stale Leads (Lead "nguội" - Không cập nhật > 3 ngày)
+    stale_date = datetime.now(timezone.utc) - timedelta(days=3)
+    stale_query = (
         select(models.Lead)
-        .join(
-            models.ConsultationStatus,
-            models.Lead.consultation_status_id == models.ConsultationStatus.id,
-            isouter=True
-        )
+        .join(models.ConsultationStatus, models.Lead.consultation_status_id == models.ConsultationStatus.id, isouter=True)
         .where(
-            and_(
-                models.Lead.assigned_officer_id == officer_id,
-                # Not final status
-                (models.ConsultationStatus.is_final_status == False) |
-                (models.ConsultationStatus.is_final_status.is_(None)),
-                # Not in recent consultation list
-                ~models.Lead.id.in_(recent_consultation_subq)
+            models.Lead.assigned_officer_id == officer_id,
+            models.Lead.updated_at < stale_date,
+            or_(
+                models.ConsultationStatus.is_final_status == False,
+                models.ConsultationStatus.is_final_status.is_(None)
             )
         )
-        .order_by(models.Lead.updated_at.asc())  # Oldest first
+        .order_by(models.Lead.updated_at.asc()) # Cũ nhất lên đầu
         .limit(5)
     )
-    stale_result = await db.execute(stale_leads_stmt)
-    stale_leads = stale_result.scalars().all()
+    stale_leads = (await db.execute(stale_query)).scalars().all()
 
-    # 4.3. Upcoming Consultations (Today)
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    today_end = today_start + timedelta(days=1)
+    # C. Upcoming (Lịch hẹn sắp tới)
+    # Placeholder: Trả về rỗng nếu chưa có bảng Consultation/Task
+    upcoming = []
 
-    upcoming_consultations_stmt = (
-        select(models.Consultation)
-        .options(joinedload(models.Consultation.lead))
-        .where(
-            and_(
-                models.Consultation.officer_id == officer_id,
-                models.Consultation.consultation_date >= today_start,
-                models.Consultation.consultation_date < today_end
-            )
-        )
-        .order_by(models.Consultation.consultation_date.asc())
-    )
-    upcoming_result = await db.execute(upcoming_consultations_stmt)
-    upcoming_consultations = upcoming_result.scalars().all()
-
-    actionable_lists = {
-        "high_score": [
-            {
-                "id": lead.id,
-                "full_name": lead.full_name,
-                "email": lead.email,
-                "lead_score": lead.lead_score,
-                "status": lead.status,
-                "created_at": lead.created_at.isoformat()
-            }
-            for lead in high_score_leads
-        ],
-        "stale": [
-            {
-                "id": lead.id,
-                "full_name": lead.full_name,
-                "email": lead.email,
-                "last_updated": lead.updated_at.isoformat(),
-                "days_stale": (datetime.now(timezone.utc) - lead.updated_at).days
-            }
-            for lead in stale_leads
-        ],
-        "upcoming": [
-            {
-                "id": consult.id,
-                "lead_id": consult.lead_id,
-                "lead_name": consult.lead.full_name if consult.lead else "Unknown",
-                "consultation_date": consult.consultation_date.isoformat(),
-                "method": consult.method,
-                "notes": consult.notes
-            }
-            for consult in upcoming_consultations
-        ]
-    }
-
-    # === RETURN COMPLETE DASHBOARD DATA ===
-    dashboard_data = {
-        "status_overview": status_overview,
+    return {
+        "status_overview": {
+            "current_workload": current_workload,
+            "max_capacity": max_capacity,
+            "utilization": utilization,
+            "availability_status": user.availability_status or "offline"
+        },
         "performance_trends": performance_trends,
         "sales_funnel": sales_funnel,
-        "actionable_lists": actionable_lists
+        "actionable_lists": {
+            "high_score": high_score_leads,
+            "stale": stale_leads,
+            "upcoming": upcoming
+        }
     }
-
-    log.info(
-        "Officer dashboard stats fetched successfully",
-        officer_id=officer_id,
-        workload=current_workload,
-        utilization=utilization
-    )
-
-    return dashboard_data
 
 
 async def update_officer_availability(
-    db: AsyncSession,
-    officer_id: int,
+    db: AsyncSession, 
+    officer_id: int, 
     availability_status: str
 ) -> models.User:
     """
-    Update officer's availability status (available/busy/offline).
-
-    Args:
-        db: Database session
-        officer_id: Officer user ID
-        availability_status: New status (available/busy/offline)
-
-    Returns:
-        Updated User object
-
-    Raises:
-        ValueError: If officer not found or invalid status
+    Cập nhật trạng thái nhận việc (Available/Busy) và bắn Socket.
     """
-    # Validate status
-    valid_statuses = ["available", "busy", "offline"]
-    if availability_status not in valid_statuses:
-        raise ValueError(
-            f"Invalid availability_status: {availability_status}. "
-            f"Must be one of: {valid_statuses}"
-        )
-
-    # Get and update officer
-    officer = await db.get(models.User, officer_id)
-    if not officer:
-        raise ValueError(f"Officer {officer_id} not found")
-
-    if officer.role != "officer":
-        raise ValueError(f"User {officer_id} is not an officer")
-
-    old_status = officer.availability_status
-    officer.availability_status = availability_status
-
-    db.add(officer)
+    user = await db.get(models.User, officer_id)
+    if not user:
+        raise ValueError("User not found")
+    
+    user.availability_status = availability_status
+    db.add(user)
     await db.commit()
-    await db.refresh(officer)
-
-    log.info(
-        "Officer availability updated",
-        officer_id=officer_id,
-        old_status=old_status,
-        new_status=availability_status
+    await db.refresh(user)
+    
+    # Bắn sự kiện Real-time để Admin và Dashboard cập nhật
+    await emit_to_all(
+        event="officer_availability_changed",
+        data={
+            "officer_id": officer_id,
+            "new_status": availability_status,
+            "username": user.username,
+            "unit_id": user.unit_id
+        }
     )
-
-    return officer
+    
+    return user

@@ -401,3 +401,29 @@ class ConfigOfferingType(ConfigOfferingTypeBase):
     id: int = Field(..., description="Primary key")
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# --- Distribution Schemas ---
+class DistributionRuleBase(BaseModel):
+    offering_id: int
+    unit_id: int
+    weight: int = 1
+    priority: int = 1
+    is_active: bool = True
+
+class DistributionRuleCreate(DistributionRuleBase):
+    pass
+
+class DistributionRuleUpdate(BaseModel):
+    weight: Optional[int] = None
+    priority: Optional[int] = None
+    is_active: Optional[bool] = None
+
+class DistributionRuleResponse(DistributionRuleBase):
+    id: int
+    # Để hiển thị tên cho đẹp
+    offering_name: Optional[str] = None 
+    unit_name: Optional[str] = None
+
+    class Config:
+        from_attributes = True
