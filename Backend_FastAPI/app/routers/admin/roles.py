@@ -28,6 +28,7 @@ from fastapi import (
     Body,
     Depends,
     HTTPException,
+    Query,
     Request,
     status,
 )
