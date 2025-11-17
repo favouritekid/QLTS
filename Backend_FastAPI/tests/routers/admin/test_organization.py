@@ -50,8 +50,7 @@ async def test_create_organization_unit_success(
 
     unit_data = {
         "name": "Test Faculty",
-        "type": "Faculty",
-        "code": "TF",
+        "type": "Khoa",  # Must be one of: "Phòng ban", "Trung tâm", "Khoa", "Tổ", "Bộ môn"
         "description": "Test faculty for automated testing",
     }
 
@@ -101,8 +100,7 @@ async def test_create_organization_unit_duplicate_code(
 
     unit_data = {
         "name": "Original Unit",
-        "type": "Faculty",
-        "code": "DUP",
+        "type": "Khoa",
         "description": "First unit",
     }
 
@@ -116,9 +114,8 @@ async def test_create_organization_unit_duplicate_code(
 
     # Try to create duplicate
     duplicate_data = {
-        "name": "Duplicate Unit",
-        "type": "Department",
-        "code": "DUP",  # Same code
+        "name": "Original Unit",  # Same name to test duplicate
+        "type": "Trung tâm",
         "description": "Duplicate unit",
     }
 
@@ -149,8 +146,7 @@ async def test_get_organization_unit_success(
     # Create a unit first
     unit_data = {
         "name": "Get Test Unit",
-        "type": "Faculty",
-        "code": "GTU",
+        "type": "Khoa",
         "description": "Unit for get test",
     }
 
@@ -218,8 +214,7 @@ async def test_update_organization_unit_success(
     # Create a unit first
     unit_data = {
         "name": "Original Name",
-        "type": "Faculty",
-        "code": "UPD",
+        "type": "Khoa",
         "description": "Original description",
     }
 
@@ -250,7 +245,7 @@ async def test_update_organization_unit_success(
     assert data["id"] == unit_id
     assert data["name"] == update_data["name"]
     assert data["description"] == update_data["description"]
-    assert data["code"] == unit_data["code"]  # Code unchanged
+    assert data["type"] == unit_data["type"]  # Type unchanged
 
     log.info(f"✅ Unit updated successfully: {data['name']}")
 
@@ -273,8 +268,7 @@ async def test_delete_organization_unit_success(
     # Create a unit first
     unit_data = {
         "name": "Unit To Delete",
-        "type": "Department",
-        "code": "DEL",
+        "type": "Phòng ban",
         "description": "Will be deleted",
     }
 
@@ -334,8 +328,7 @@ async def test_create_major_program_success(
     # Create organization unit first
     unit_data = {
         "name": "Faculty for Programs",
-        "type": "Faculty",
-        "code": "FFP",
+        "type": "Khoa",
         "description": "Faculty for program testing",
     }
 
@@ -349,11 +342,10 @@ async def test_create_major_program_success(
 
     # Create major program
     program_data = {
-        "name": "Computer Science",
-        "code": "CS",
+        "name": "Công nghệ thông tin",
+        "degree_level": "Cao đẳng",  # Required field
+        "code": "6480201",
         "unit_id": unit_id,
-        "description": "Computer Science program",
-        "duration_years": 4,
     }
 
     response = await client.post(
@@ -390,8 +382,7 @@ async def test_get_major_program_success(
     # Create organization unit first
     unit_data = {
         "name": "Faculty for Get Test",
-        "type": "Faculty",
-        "code": "FGT",
+        "type": "Khoa",
     }
 
     unit_response = await client.post(
@@ -403,8 +394,9 @@ async def test_get_major_program_success(
 
     # Create program
     program_data = {
-        "name": "Mathematics",
-        "code": "MATH",
+        "name": "Toán học",
+        "degree_level": "Đại học",
+        "code": "7460101",
         "unit_id": unit_id,
     }
 
@@ -449,8 +441,7 @@ async def test_update_major_program_success(
     # Create organization unit first
     unit_data = {
         "name": "Faculty for Update",
-        "type": "Faculty",
-        "code": "FUP",
+        "type": "Khoa",
     }
 
     unit_response = await client.post(
@@ -462,10 +453,10 @@ async def test_update_major_program_success(
 
     # Create program
     program_data = {
-        "name": "Physics Original",
-        "code": "PHY",
+        "name": "Vật lý Original",
+        "degree_level": "Đại học",
+        "code": "7440201",
         "unit_id": unit_id,
-        "duration_years": 3,
     }
 
     create_response = await client.post(
@@ -478,9 +469,8 @@ async def test_update_major_program_success(
 
     # Update the program
     update_data = {
-        "name": "Physics Updated",
-        "duration_years": 4,
-        "description": "Updated description",
+        "name": "Vật lý Updated",
+        "degree_level": "Thạc sĩ",
     }
 
     response = await client.put(
@@ -494,7 +484,7 @@ async def test_update_major_program_success(
 
     assert data["id"] == program_id
     assert data["name"] == update_data["name"]
-    assert data["duration_years"] == update_data["duration_years"]
+    assert data["degree_level"] == update_data["degree_level"]
 
     log.info(f"✅ Program updated successfully: {data['name']}")
 
@@ -517,8 +507,7 @@ async def test_delete_major_program_success(
     # Create organization unit first
     unit_data = {
         "name": "Faculty for Delete",
-        "type": "Faculty",
-        "code": "FDL",
+        "type": "Khoa",
     }
 
     unit_response = await client.post(
@@ -531,7 +520,8 @@ async def test_delete_major_program_success(
     # Create program
     program_data = {
         "name": "Program To Delete",
-        "code": "DEL",
+        "degree_level": "Cao đẳng",
+        "code": "6999999",
         "unit_id": unit_id,
     }
 
@@ -577,8 +567,7 @@ async def test_create_program_offering_success(
     # Create organization unit first
     unit_data = {
         "name": "Faculty for Offerings",
-        "type": "Faculty",
-        "code": "FFO",
+        "type": "Khoa",
     }
 
     unit_response = await client.post(
@@ -590,8 +579,9 @@ async def test_create_program_offering_success(
 
     # Create major program
     program_data = {
-        "name": "Engineering",
-        "code": "ENG",
+        "name": "Kỹ thuật",
+        "degree_level": "Đại học",
+        "code": "7520101",
         "unit_id": unit_id,
     }
 
@@ -605,11 +595,10 @@ async def test_create_program_offering_success(
 
     # Create program offering
     offering_data = {
-        "name": "Full-time Engineering",
-        "code": "ENG-FT",
+        "offering_type": "Chính quy",  # Required field (not 'name', 'code', or 'type')
         "program_id": program_id,
-        "type": "Full-time",
-        "duration_years": 4,
+        "duration_semesters": 8,  # Optional (not 'duration_years')
+        "total_credits": 120,  # Optional
     }
 
     response = await client.post(
@@ -621,9 +610,9 @@ async def test_create_program_offering_success(
     assert response.status_code == 201, f"Failed to create offering: {response.text}"
     data = response.json()
 
-    assert data["name"] == offering_data["name"]
-    assert data["code"] == offering_data["code"]
+    assert data["offering_type"] == offering_data["offering_type"]
     assert data["program_id"] == program_id
+    assert data["duration_semesters"] == offering_data["duration_semesters"]
     assert "id" in data
 
     log.info(f"✅ Program offering created successfully with ID: {data['id']}")
@@ -661,10 +650,8 @@ async def test_create_program_offering_program_id_mismatch(
 
     # Try to create offering with mismatched program_id
     offering_data = {
-        "name": "Test Offering",
-        "code": "TO",
+        "offering_type": "Tại chức",
         "program_id": program_id + 999,  # Different program_id
-        "type": "Part-time",
     }
 
     response = await client.post(
@@ -692,7 +679,7 @@ async def test_get_program_offering_success(
     log.info("--- Running: test_get_program_offering_success ---")
 
     # Create hierarchy: unit -> program -> offering
-    unit_data = {"name": "Test Unit", "type": "Faculty", "code": "TU"}
+    unit_data = {"name": "Test Unit", "type": "Khoa"}
     unit_response = await client.post(
         "/api/admin/organization-units",
         json=unit_data,
@@ -709,10 +696,9 @@ async def test_get_program_offering_success(
     program_id = program_response.json()["id"]
 
     offering_data = {
-        "name": "Part-time Program",
-        "code": "TP-PT",
+        "offering_type": "Tại chức",
         "program_id": program_id,
-        "type": "Part-time",
+        "duration_semesters": 10,
     }
 
     create_response = await client.post(
@@ -733,10 +719,9 @@ async def test_get_program_offering_success(
     data = response.json()
 
     assert data["id"] == offering_id
-    assert data["name"] == offering_data["name"]
-    assert data["code"] == offering_data["code"]
+    assert data["offering_type"] == offering_data["offering_type"]
 
-    log.info(f"✅ Retrieved offering successfully: {data['name']}")
+    log.info(f"✅ Retrieved offering successfully: {data['offering_type']}")
 
 
 @pytest.mark.asyncio
@@ -754,7 +739,7 @@ async def test_update_program_offering_success(
     log.info("--- Running: test_update_program_offering_success ---")
 
     # Create hierarchy
-    unit_data = {"name": "Test Unit", "type": "Faculty", "code": "TU2"}
+    unit_data = {"name": "Test Unit", "type": "Khoa"}
     unit_response = await client.post(
         "/api/admin/organization-units",
         json=unit_data,
@@ -762,7 +747,7 @@ async def test_update_program_offering_success(
     )
     unit_id = unit_response.json()["id"]
 
-    program_data = {"name": "Test Program", "code": "TP2", "unit_id": unit_id}
+    program_data = {"name": "Test Program", "degree_level": "Đại học", "code": "7777777", "unit_id": unit_id}
     program_response = await client.post(
         "/api/admin/programs",
         json=program_data,
@@ -771,11 +756,10 @@ async def test_update_program_offering_success(
     program_id = program_response.json()["id"]
 
     offering_data = {
-        "name": "Original Offering",
-        "code": "ORIG",
+        "offering_type": "Chính quy",
         "program_id": program_id,
-        "type": "Full-time",
-        "duration_years": 3,
+        "duration_semesters": 6,
+        "total_credits": 90,
     }
 
     create_response = await client.post(
@@ -788,9 +772,9 @@ async def test_update_program_offering_success(
 
     # Update the offering
     update_data = {
-        "name": "Updated Offering",
-        "duration_years": 4,
-        "description": "Updated description",
+        "offering_type": "Tại chức",
+        "duration_semesters": 8,
+        "total_credits": 120,
     }
 
     response = await client.put(
@@ -803,10 +787,10 @@ async def test_update_program_offering_success(
     data = response.json()
 
     assert data["id"] == offering_id
-    assert data["name"] == update_data["name"]
-    assert data["duration_years"] == update_data["duration_years"]
+    assert data["offering_type"] == update_data["offering_type"]
+    assert data["duration_semesters"] == update_data["duration_semesters"]
 
-    log.info(f"✅ Offering updated successfully: {data['name']}")
+    log.info(f"✅ Offering updated successfully: {data['offering_type']}")
 
 
 @pytest.mark.asyncio
@@ -825,7 +809,7 @@ async def test_delete_program_offering_success(
     log.info("--- Running: test_delete_program_offering_success ---")
 
     # Create hierarchy
-    unit_data = {"name": "Test Unit", "type": "Faculty", "code": "TU3"}
+    unit_data = {"name": "Test Unit", "type": "Khoa"}
     unit_response = await client.post(
         "/api/admin/organization-units",
         json=unit_data,
@@ -833,7 +817,7 @@ async def test_delete_program_offering_success(
     )
     unit_id = unit_response.json()["id"]
 
-    program_data = {"name": "Test Program", "code": "TP3", "unit_id": unit_id}
+    program_data = {"name": "Test Program", "degree_level": "Đại học", "code": "7666666", "unit_id": unit_id}
     program_response = await client.post(
         "/api/admin/programs",
         json=program_data,
@@ -842,10 +826,8 @@ async def test_delete_program_offering_success(
     program_id = program_response.json()["id"]
 
     offering_data = {
-        "name": "Offering To Delete",
-        "code": "DEL",
+        "offering_type": "Từ xa",
         "program_id": program_id,
-        "type": "Online",
     }
 
     create_response = await client.post(
@@ -887,8 +869,7 @@ async def test_create_organization_unit_unauthorized(
 
     unit_data = {
         "name": "Unauthorized Unit",
-        "type": "Faculty",
-        "code": "UNAUTH",
+        "type": "Khoa",
     }
 
     response = await client.post(
@@ -915,7 +896,8 @@ async def test_create_major_program_unauthorized(
 
     program_data = {
         "name": "Unauthorized Program",
-        "code": "UNAUTH",
+        "degree_level": "Đại học",
+        "code": "7555555",
         "unit_id": 1,
     }
 
