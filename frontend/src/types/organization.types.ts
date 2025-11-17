@@ -409,3 +409,60 @@ export interface ConfigOfferingTypeUpdate {
   display_order?: number;
   is_active?: boolean;
 }
+
+// =============================================================================
+// ASSIGNMENT CONFIG TYPES
+// =============================================================================
+
+/**
+ * AssignmentConfigParams - Flexible configuration parameters for lead assignment
+ * Stores strategy, rules, and settings as JSON
+ */
+export interface AssignmentConfigParams {
+  strategy?: string; // e.g., "round_robin", "skill_based", "load_balanced"
+  max_concurrent?: number; // Maximum concurrent assignments per officer
+  auto_assign?: boolean; // Enable automatic assignment
+  priority_skills?: string[]; // Skills to prioritize in assignment
+  [key: string]: any; // Flexible params for future extensions
+}
+
+/**
+ * AssignmentConfig - Assignment configuration for an organization unit
+ * Stores lead distribution and assignment rules
+ */
+export interface AssignmentConfig {
+  params: AssignmentConfigParams;
+}
+
+/**
+ * Form data for updating AssignmentConfig
+ */
+export interface AssignmentConfigUpdate {
+  params: AssignmentConfigParams;
+}
+
+// =============================================================================
+// SKILL RULE TYPES
+// =============================================================================
+
+/**
+ * SkillRule - Skill-based assignment rule
+ * Maps lead attributes to required officer skills
+ */
+export interface SkillRule {
+  id: number;
+  lead_attribute: string; // Lead attribute to match (e.g., "source", "major")
+  attribute_value: string; // Value to match (e.g., "facebook", "Computer Science")
+  required_skill: string; // Required officer skill (e.g., "Social Media Marketing")
+  priority?: number; // Rule priority (optional, for ordering)
+}
+
+/**
+ * Form data for creating SkillRule
+ */
+export interface SkillRuleCreate {
+  lead_attribute: string;
+  attribute_value: string;
+  required_skill: string;
+  priority?: number;
+}
