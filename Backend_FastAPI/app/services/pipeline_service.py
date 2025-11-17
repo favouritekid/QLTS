@@ -1,6 +1,5 @@
 # app/services/pipeline_service.py
-import asyncio  # ✅ Thêm import
-import json  # ✅ Thêm import
+import json  # ✅ For JSON serialization
 from typing import List
 
 import structlog
@@ -9,20 +8,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from .. import models, schemas
-from ..config import settings  # ✅ Thêm import
-# ✅ Thêm import
-from ..database import safe_redis_delete, safe_redis_get, safe_redis_set
+from ..config import settings  # ✅ For cache TTL
+# ✅ Import Redis utilities including distributed lock
+from ..database import (
+    safe_redis_delete,
+    safe_redis_get,
+    safe_redis_set,
+    redis_distributed_lock,  # ✅ TASK 5.4: Replace asyncio.Lock with Redis distributed lock
+)
 from ..utils.exceptions import DuplicateResourceError, ResourceNotFoundError
 
 log = structlog.get_logger(__name__)
 
-# --- ✅ Định nghĩa Key, TTL, và Lock cho Cache ---
+# --- ✅ Cache Key and TTL Configuration ---
 PIPELINE_STAGES_CACHE_KEY = "pipeline:all_stages"
 PIPELINE_STATUSES_CACHE_KEY = "pipeline:all_statuses"
-CACHE_TTL = settings.CONFIG_CACHE_TTL_SECONDS  # Lấy từ config (ví dụ: 3600s)
+CACHE_TTL = settings.CONFIG_CACHE_TTL_SECONDS  # e.g., 3600s
 
-_pipeline_cache_lock = asyncio.Lock()
-_status_cache_lock = asyncio.Lock()
+# ✅ TASK 5.4: Removed asyncio.Lock - Now using Redis distributed locks
+# This enables proper cache synchronization across multiple workers/pods
+# Old: _pipeline_cache_lock = asyncio.Lock()
+# Old: _status_cache_lock = asyncio.Lock()
 # ----------------------------------------------
 
 
@@ -48,20 +54,21 @@ async def get_all_pipeline_stages(db: AsyncSession) -> List[dict]:
             error=str(e_redis_get),
         )
 
-    log.debug("Cache miss for pipeline stages, acquiring lock...")
+    log.debug("Cache miss for pipeline stages, acquiring distributed lock...")
 
-    # 2. Cache Miss -> Lấy Lock
-    async with _pipeline_cache_lock:
-        # 2a. Kiểm tra lại cache (phòng trường hợp request khác đã refresh)
+    # 2. Cache Miss -> Acquire Redis Distributed Lock
+    # ✅ TASK 5.4: Using Redis distributed lock (works across workers/pods)
+    async with redis_distributed_lock("pipeline_stages_cache", timeout=10):
+        # 2a. Double-check cache (another worker may have refreshed it)
         try:
             cached_data_after_lock = await safe_redis_get(PIPELINE_STAGES_CACHE_KEY)
             if cached_data_after_lock:
-                log.debug("Cache hit (after acquiring lock) for pipeline stages")
+                log.debug("Cache hit (after acquiring distributed lock) for pipeline stages")
                 return json.loads(cached_data_after_lock)
         except Exception:
-            pass  # Bỏ qua, chúng ta sẽ query lại
+            pass  # Ignore, we'll query DB
 
-        log.debug("Cache miss (after acquiring lock), querying DB")
+        log.debug("Cache miss (after acquiring distributed lock), querying DB")
 
         # 3. Cache Miss: Query DB
         query = select(models.PipelineStage).order_by(models.PipelineStage.order)
@@ -117,20 +124,21 @@ async def get_all_consultation_statuses(
             error=str(e_redis_get),
         )
 
-    log.debug("Cache miss for consultation statuses, acquiring lock...")
+    log.debug("Cache miss for consultation statuses, acquiring distributed lock...")
 
-    # 2. Cache Miss -> Lấy Lock
-    async with _status_cache_lock:
-        # 2a. Kiểm tra lại cache
+    # 2. Cache Miss -> Acquire Redis Distributed Lock
+    # ✅ TASK 5.4: Using Redis distributed lock (works across workers/pods)
+    async with redis_distributed_lock("pipeline_statuses_cache", timeout=10):
+        # 2a. Double-check cache (another worker may have refreshed it)
         try:
             cached_data_after_lock = await safe_redis_get(PIPELINE_STATUSES_CACHE_KEY)
             if cached_data_after_lock:
-                log.debug("Cache hit (after acquiring lock) for statuses")
+                log.debug("Cache hit (after acquiring distributed lock) for statuses")
                 return json.loads(cached_data_after_lock)
         except Exception:
-            pass
+            pass  # Ignore, we'll query DB
 
-        log.debug("Cache miss (after acquiring lock), querying DB")
+        log.debug("Cache miss (after acquiring distributed lock), querying DB")
 
         # 3. Cache Miss: Query DB
         query = select(models.ConsultationStatus)

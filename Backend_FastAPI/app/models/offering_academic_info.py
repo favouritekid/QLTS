@@ -106,15 +106,16 @@ class OfferingAcademicInfo(Base):
         nullable=True
     )
 
+    # ✅ TASK 6.1: Updated to use back_populates (explicit bidirectional relationship)
     created_by = relationship(
         "User",
         foreign_keys=[created_by_user_id],
-        backref="created_academic_infos"
+        back_populates="created_academic_infos"
     )
     updated_by = relationship(
         "User",
         foreign_keys=[updated_by_user_id],
-        backref="updated_academic_infos"
+        back_populates="updated_academic_infos"
     )
 
     __table_args__ = (

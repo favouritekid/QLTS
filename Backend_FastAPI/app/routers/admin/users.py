@@ -45,7 +45,7 @@ from pydantic import EmailStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import database, models, schemas, services
+from app import database, models, schemas
 from app.config import settings
 from app.core import deps
 from app.database import get_db
@@ -133,14 +133,14 @@ async def create_new_user(
         status=status,
     )
 
-    if await services.user_service.get_user_by_username(db, user_in.username):
+    if await user_service.get_user_by_username(db, user_in.username):
         raise DuplicateResourceError(detail="Username already exists")
-    if await services.user_service.get_user_by_email(db, user_in.email):
+    if await user_service.get_user_by_email(db, user_in.email):
         raise DuplicateResourceError(detail="Email already exists")
 
     # ✅ ATOMIC FIX (v17): Pass enforcer to service for atomic DB + Casbin transaction
     enforcer = request.app.state.enforcer
-    created_user = await services.user_service.create_user_by_admin(
+    created_user = await user_service.create_user_by_admin(
         db=db,
         user_in=user_in,
         enforcer=enforcer,
@@ -176,7 +176,7 @@ async def get_all_users(
     """(Admin only) Lấy danh sách tất cả người dùng với phân trang, filter, search."""
     skip = (page - 1) * page_size
     query_params = dict(request.query_params)
-    total, users = await services.user_service.get_users(
+    total, users = await user_service.get_users(
         db, params=query_params, skip=skip, limit=page_size
     )
     return {"total_count": total, "users": users}
@@ -243,7 +243,7 @@ async def admin_set_user_password(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Admin đặt lại mật khẩu cho người dùng."""
-    await services.user_service.set_password_by_admin(
+    await user_service.set_password_by_admin(
         db, user_id, password_data.new_password
     )
     return None
@@ -275,7 +275,7 @@ async def export_all_users(
     query_params = dict(request.query_params)
     # Gọi get_users với skip=0 và limit rất lớn để lấy tất cả
     # Hoặc có thể gọi với skip=0, limit=None nếu service hỗ trợ
-    total, users = await services.user_service.get_users(
+    total, users = await user_service.get_users(
         db, params=query_params, skip=0, limit=10000  # Giới hạn tạm 10k users
     )
 
@@ -328,7 +328,7 @@ async def stream_export_users_csv(
     log.info("CSV export stream requested by admin", admin_id=current_admin.id, filters=query_params)
 
     # 1. Gọi service (là một async generator)
-    csv_streamer = services.user_service.stream_users_csv(db, query_params)
+    csv_streamer = user_service.stream_users_csv(db, query_params)
 
     # 2. Đặt tên file và headers
     filename = f"users_export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
@@ -360,7 +360,7 @@ async def bulk_user_action(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Thực hiện hành động hàng loạt (xóa, đổi trạng thái) trên nhiều người dùng."""
-    message = await services.user_service.perform_bulk_action(
+    message = await user_service.perform_bulk_action(
         db,
         action=action_data.action,
         user_ids=action_data.user_ids,
@@ -415,7 +415,7 @@ async def get_sync_status(
     synced_count = 0
 
     for user in users:
-        casbin_role = await services.user_service.get_highest_priority_role_from_casbin(
+        casbin_role = await user_service.get_highest_priority_role_from_casbin(
             enforcer, user.id
         )
 
@@ -471,7 +471,7 @@ async def sync_users(
     user_ids = sync_request.user_ids
 
     # Call service layer with injected dependencies (DI pattern)
-    result = await services.user_service.sync_users_to_casbin(
+    result = await user_service.sync_users_to_casbin(
         db=db,
         enforcer=enforcer,
         user_ids=user_ids
@@ -711,7 +711,7 @@ async def get_user_details(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Lấy thông tin chi tiết của một người dùng."""
-    db_user = await services.user_service.get_user_by_id(db, user_id)
+    db_user = await user_service.get_user_by_id(db, user_id)
     return db_user
 
 
@@ -734,7 +734,7 @@ async def update_existing_user(
     unit_id: Optional[int] = Form(None),  # Organizational unit assignment
 ):
     """(Admin only) Cập nhật người dùng, có hỗ trợ upload avatar."""
-    db_user = await services.user_service.get_user_by_id(db, user_id)
+    db_user = await user_service.get_user_by_id(db, user_id)
     if not db_user:
         raise ResourceNotFoundError(detail="User not found")
 
@@ -785,7 +785,7 @@ async def update_existing_user(
             
             # ✅ SỬA: Thêm kiểm tra DB (giống hệt logic của profile.py)
             if valid_email != db_user.email:
-                existing_user = await services.user_service.get_user_by_email(db, valid_email)
+                existing_user = await user_service.get_user_by_email(db, valid_email)
                 if existing_user:
                     raise HTTPException(
                         status_code=status.HTTP_409_CONFLICT,
@@ -818,7 +818,7 @@ async def update_existing_user(
     enforcer = request.app.state.enforcer
 
     # Truyền avatar và enforcer vào hàm service
-    updated_user = await services.user_service.update_user(
+    updated_user = await user_service.update_user(
         db, db_user, user_in, enforcer=enforcer, avatar_file=avatar
     )
 
@@ -895,7 +895,7 @@ async def delete_existing_user(
         raise PermissionDeniedError(detail="Admin cannot delete themselves")
 
     # Get user info before deleting for activity log
-    db_user = await services.user_service.get_user_by_id(db, user_id)
+    db_user = await user_service.get_user_by_id(db, user_id)
     username = db_user.username if db_user else f"User#{user_id}"
 
     # ⚠️ IMPORTANT: Log activity BEFORE deleting user to avoid FK constraint violation
@@ -912,7 +912,7 @@ async def delete_existing_user(
     )
 
     # Delete user AFTER logging (service handles cascading deletes)
-    await services.user_service.delete_user(db, user_id)
+    await user_service.delete_user(db, user_id)
 
     return None
 

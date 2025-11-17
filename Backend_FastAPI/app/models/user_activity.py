@@ -53,15 +53,16 @@ class UserActivityLog(Base):
     )
 
     # Relationships
+    # ✅ TASK 6.1: Updated to use back_populates (explicit bidirectional relationship)
     actor = relationship(
         "User",
         foreign_keys=[actor_id],
-        backref="activities_performed"
+        back_populates="activities_performed"
     )
     target_user = relationship(
         "User",
         foreign_keys=[target_user_id],
-        backref="activities_received"
+        back_populates="activities_received"
     )
 
     def __repr__(self) -> str:

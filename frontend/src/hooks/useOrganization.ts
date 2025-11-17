@@ -27,6 +27,12 @@ import type {
   ConfigDegreeLevel,
   ConfigOfferingType,
 
+  // Assignment Config & Skill Rules
+  AssignmentConfig,
+  AssignmentConfigUpdate,
+  SkillRule,
+  SkillRuleCreate,
+
   // Legacy (Deprecated)
   Major,
   MajorCreate,
@@ -1191,5 +1197,130 @@ export function useOfferingTypes(activeOnly: boolean = true) {
       return response.data;
     },
     staleTime: 1000 * 60 * 30, // Cache for 30 minutes (config changes infrequently)
+  });
+}
+
+// =====================================================================
+// ASSIGNMENT CONFIG HOOKS
+// =====================================================================
+
+/**
+ * Get assignment config for an organization unit
+ * PHASE 3: Added to complete frontend hook coverage
+ */
+export function useAssignmentConfig(unitId: number | undefined) {
+  return useQuery<AssignmentConfig, AxiosError<ApiErrorResponse>>({
+    queryKey: ["assignment-config", unitId],
+    queryFn: async () => {
+      if (!unitId) throw new Error("Unit ID is required");
+
+      const response = await api.get<AssignmentConfig>(
+        `/api/admin/assignment-config/${unitId}`
+      );
+      return response.data;
+    },
+    enabled: !!unitId, // Only fetch if unitId is provided
+    staleTime: 1000 * 60 * 5, // Cache for 5 minutes
+  });
+}
+
+/**
+ * Update assignment config for an organization unit
+ * Creates config if it doesn't exist (upsert pattern)
+ * PHASE 3: Added to complete frontend hook coverage
+ */
+export function useUpdateAssignmentConfig() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    AssignmentConfig,
+    AxiosError<ApiErrorResponse>,
+    { unitId: number; params: AssignmentConfigUpdate["params"] }
+  >({
+    mutationFn: async ({ unitId, params }) => {
+      const response = await api.put<AssignmentConfig>(
+        `/api/admin/assignment-config/${unitId}`,
+        { params }
+      );
+      return response.data;
+    },
+    onSuccess: (_, { unitId }) => {
+      // Invalidate specific config query
+      queryClient.invalidateQueries({ queryKey: ["assignment-config", unitId] });
+      toast.success("Assignment configuration updated successfully");
+    },
+    onError: (error) => {
+      toast.error(
+        error.response?.data?.detail || "Failed to update assignment config"
+      );
+    },
+  });
+}
+
+// =====================================================================
+// SKILL RULES HOOKS
+// =====================================================================
+
+/**
+ * Get all skill rules
+ * PHASE 3: Added to complete frontend hook coverage
+ */
+export function useSkillRules() {
+  return useQuery<SkillRule[], AxiosError<ApiErrorResponse>>({
+    queryKey: ["skill-rules"],
+    queryFn: async () => {
+      const response = await api.get<SkillRule[]>("/api/admin/skill-rules");
+      return response.data;
+    },
+    staleTime: 1000 * 60 * 5, // Cache for 5 minutes
+  });
+}
+
+/**
+ * Create a new skill rule
+ * PHASE 3: Added to complete frontend hook coverage
+ */
+export function useCreateSkillRule() {
+  const queryClient = useQueryClient();
+
+  return useMutation<SkillRule, AxiosError<ApiErrorResponse>, SkillRuleCreate>({
+    mutationFn: async (data) => {
+      const response = await api.post<SkillRule>("/api/admin/skill-rules", data);
+      return response.data;
+    },
+    onSuccess: () => {
+      // Invalidate skill rules list
+      queryClient.invalidateQueries({ queryKey: ["skill-rules"] });
+      toast.success("Skill rule created successfully");
+    },
+    onError: (error) => {
+      toast.error(
+        error.response?.data?.detail || "Failed to create skill rule"
+      );
+    },
+  });
+}
+
+/**
+ * Delete a skill rule
+ * PHASE 3: Added to complete frontend hook coverage
+ */
+export function useDeleteSkillRule() {
+  const queryClient = useQueryClient();
+
+  return useMutation<void, AxiosError<ApiErrorResponse>, number>({
+    mutationFn: async (ruleId) => {
+      await api.delete(`/api/admin/skill-rules/${ruleId}`);
+    },
+    onSuccess: () => {
+      // Invalidate skill rules list
+      queryClient.invalidateQueries({ queryKey: ["skill-rules"] });
+      toast.success("Skill rule deleted successfully");
+    },
+    onError: (error) => {
+      toast.error(
+        error.response?.data?.detail || "Failed to delete skill rule"
+      );
+    },
   });
 }

@@ -4,9 +4,10 @@ import socketio
 import structlog
 from fastapi import HTTPException
 
-from . import models, security, services
+from . import models, security
 from .config import settings
 from .database import AsyncSessionLocal, redis_client, safe_redis_get
+from .services import user_service
 from .socket_metrics import track_event_latency  # ✅ Thêm latency tracker
 from .socket_metrics import (
     socket_auth_failures_total,
@@ -159,7 +160,7 @@ async def _get_user_from_token(token: str) -> models.User:
             raise HTTPException(status_code=401, detail="Session revoked or expired")
 
         async with AsyncSessionLocal() as db:
-            user = await services.user_service.get_user_by_username(
+            user = await user_service.get_user_by_username(
                 db, username=username
             )
             if not user:

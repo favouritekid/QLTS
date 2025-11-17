@@ -8,8 +8,9 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import database, models, security, services  # ✅ THÊM IMPORT security
+from .. import database, models, security  # ✅ THÊM IMPORT security
 from ..database import safe_redis_exists, safe_redis_get
+from ..services import user_service
 from ..utils.exceptions import (
     InvalidToken,
     PermissionDeniedError,
@@ -107,7 +108,7 @@ async def get_current_user(
             # (Không cần fallback CSDL cho access JTI)
 
         # === STEP 3: GET USER & CHECK USER BLACKLIST ===
-        user = await services.user_service.get_user_by_username(db, username=username)
+        user = await user_service.get_user_by_username(db, username=username)
         if user is None:
             log.warning("Token validation failed: User not found", username=username)
             raise credentials_exception
@@ -221,7 +222,7 @@ async def get_current_user(
         # ← PHASE 2: Auto-sync DB role to match Casbin (source of truth)
         try:
             enforcer = request.app.state.enforcer
-            casbin_role = await services.user_service.get_highest_priority_role_from_casbin(
+            casbin_role = await user_service.get_highest_priority_role_from_casbin(
                 enforcer, user.id
             )
 
