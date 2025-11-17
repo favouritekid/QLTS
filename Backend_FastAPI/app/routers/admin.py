@@ -2129,8 +2129,8 @@ async def bulk_assign_leads(
 
 @router.post(
     "/leads/import",
-    response_model=schemas.LeadImportResult,  # Sử dụng schema kết quả mới
-    status_code=status.HTTP_200_OK,  # Trả về 200 OK (hoặc 207 Multi-Status nếu muốn chi tiết hơn)
+    response_model=schemas.LeadImportResult,
+    status_code=status.HTTP_200_OK,
     tags=["Admin - Lead Management"],
     summary="Import leads from a CSV or Excel file",
 )
@@ -2146,6 +2146,9 @@ async def import_leads_from_file(
     File cần có các cột: 'full_name', 'email', 'phone', 'source', 'unit_id', 'offering_id' (tùy chọn).
     Endpoint sẽ tạo leads trong DB nhưng **không** tự động phân công.
     Trả về kết quả import bao gồm ID các lead đã tạo và danh sách lỗi.
+
+    REFACTORED: Business logic extracted to lead_service.import_leads_from_file_content()
+    Router now only handles HTTP concerns (file reading, exception conversion)
     """
     log.info(
         "Received lead import request",
@@ -2153,247 +2156,45 @@ async def import_leads_from_file(
         filename=file.filename,
     )
 
-    # --- 1. Kiểm tra loại file ---
-    file_extension = ""
-    if file.filename:
-        file_extension = file.filename.rsplit(".", 1)[-1].lower()
-
-    if file_extension not in ["csv", "xlsx"]:
-        log.warning(
-            "Import failed: Invalid file extension",
-            filename=file.filename,
-            ext=file_extension,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid file format. Only .csv and .xlsx files are supported.",
-        )
-
-    # --- 2. Đọc nội dung file vào DataFrame ---
+    # Read file content (HTTP-specific operation)
     try:
         content = await file.read()
-        if not content:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file uploaded."
-            )
-
-        if file_extension == "csv":
-            # Dùng io.BytesIO để pandas đọc từ bytes
-            df = pd.read_csv(io.BytesIO(content))
-        else:  # xlsx
-            df = pd.read_excel(io.BytesIO(content), engine="openpyxl")
-
-        log.info(f"Successfully read {len(df)} rows from {file_extension} file.")
-
-    except HTTPException as e:
-        raise e  # Ném lại lỗi 400
     except Exception as e:
         log.error(
-            "Failed to read or parse file content",
+            "Failed to read uploaded file",
             filename=file.filename,
             error=str(e),
             exc_info=True,
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Could not read or parse the file. Ensure it is a valid {file_extension} file. Error: {e}",
+            detail=f"Failed to read uploaded file: {e}",
         )
     finally:
-        await file.close()  # Luôn đóng file
+        await file.close()
 
-    # --- 3. Xử lý dữ liệu và Tạo Leads ---
-    required_columns = {"full_name", "email", "phone", "source", "unit_id"}
-    # optional_columns = {"offering_id"}  # Các cột tùy chọn
-    # Chuẩn hóa tên cột (viết thường, bỏ dấu cách)
-    df.columns = df.columns.str.lower().str.strip().str.replace(" ", "_")
+    # Call service layer with file content (DI pattern)
+    try:
+        result = await services.lead_service.import_leads_from_file_content(
+            file_content=content,
+            filename=file.filename or "unknown",
+            db=db,
+        )
+        return result
 
-    # Kiểm tra các cột bắt buộc
-    missing_cols = required_columns - set(df.columns)
-    if missing_cols:
+    except ValueError as e:
+        # Service raises ValueError for validation errors
+        # Router converts to HTTPException (HTTP concern)
         log.warning(
-            "Import failed: Missing required columns", missing=list(missing_cols)
+            "Lead import validation failed",
+            admin_id=current_admin.id,
+            filename=file.filename,
+            error=str(e),
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"File is missing required columns: {', '.join(missing_cols)}",
+            detail=str(e),
         )
-
-    leads_to_insert = []
-    errors: List[schemas.LeadImportError] = []
-    processed_row_count = 0
-    initial_status_id = settings.DEFAULT_INITIAL_LEAD_STATUS_ID  # Lấy status mặc định
-
-    # Lấy stage_id tương ứng với initial_status_id (cần cho bulk insert)
-    initial_status_obj = await db.get(models.ConsultationStatus, initial_status_id)
-    initial_stage_id = initial_status_obj.stage_id if initial_status_obj else None
-    if not initial_stage_id:
-        log.error(
-            f"FATAL: Initial status {initial_status_id} not found in DB. Cannot determine initial stage."
-        )
-        raise HTTPException(
-            status_code=500,
-            detail="System configuration error: Initial lead status not found.",
-        )
-
-    # Lấy danh sách email đã tồn tại để kiểm tra trùng lặp hiệu quả hơn
-    existing_emails_in_db = set()
-    async for email_tuple in await db.stream(select(models.Lead.email)):
-        existing_emails_in_db.add(email_tuple[0])
-    emails_in_current_file = set()
-
-    # Lặp qua từng dòng trong DataFrame
-    for index, row in df.iterrows():
-        processed_row_count += 1
-        row_number = index + 2
-        row_data = row.to_dict()
-        cleaned_data = {}  # Dữ liệu đã được ép kiểu
-        validation_errors_for_row = []  # Lỗi ép kiểu
-
-        # --- ✅ BẮT ĐẦU SỬA LỖI ÉP KIỂU ---
-
-        # 1. Ép kiểu các trường bắt buộc
-        try:
-            # Dùng str() và strip() cho các trường text
-            cleaned_data["full_name"] = str(row_data.get("full_name", "")).strip()
-            cleaned_data["email"] = str(row_data.get("email", "")).strip()
-            # Xử lý đặc biệt cho 'phone': luôn chuyển sang string, bỏ ".0" nếu là float
-            phone_val = row_data.get("phone")
-            cleaned_data["phone"] = (
-                str(phone_val).split(".")[0] if pd.notna(phone_val) else ""
-            )
-
-            cleaned_data["source"] = str(row_data.get("source", "")).strip()
-
-            # Xử lý 'unit_id': ép sang int
-            unit_id_val = row_data.get("unit_id")
-            if pd.notna(unit_id_val):
-                cleaned_data["unit_id"] = int(float(unit_id_val))
-            else:
-                # Nếu unit_id là bắt buộc, Pydantic sẽ bắt lỗi 'missing' sau
-                cleaned_data["unit_id"] = None
-
-        except (ValueError, TypeError, Exception) as e:
-            # Lỗi cơ bản khi ép kiểu (ví dụ: unit_id là "abc")
-            validation_errors_for_row.append(f"Type conversion error: {e}")
-
-        # 2. Ép kiểu trường tùy chọn 'offering_id'
-        offering_id_val = row_data.get("offering_id")
-        if pd.notna(offering_id_val):
-            try:
-                cleaned_data["offering_id"] = int(float(offering_id_val))
-            except (ValueError, TypeError):
-                validation_errors_for_row.append(
-                    "Invalid format for 'offering_id', expected a number."
-                )
-        else:
-            cleaned_data["offering_id"] = None
-
-        # --- KẾT THÚC SỬA LỖI ÉP KIỂU ---
-
-        # 3. Validate bằng Pydantic
-        try:
-            # Nếu đã có lỗi ép kiểu, ném lỗi luôn để vào khối except
-            if validation_errors_for_row:
-                raise ValueError(", ".join(validation_errors_for_row))
-
-            lead_in = schemas.LeadCreate(**cleaned_data)
-
-            # Kiểm tra trùng lặp email
-            if (
-                lead_in.email in existing_emails_in_db
-                or lead_in.email in emails_in_current_file
-            ):
-                raise ValueError(
-                    f"Email '{lead_in.email}' already exists in the database or this file."
-                )
-
-            emails_in_current_file.add(lead_in.email)
-
-            # Chuẩn bị dict để bulk insert (Nếu mọi thứ OK)
-            lead_dict = lead_in.model_dump()
-            lead_dict["status"] = initial_status_id
-            lead_dict["consultation_status_id"] = initial_status_id
-            lead_dict["pipeline_stage_id"] = initial_stage_id
-            lead_dict["assigned_officer_id"] = None
-            lead_dict["assigned_at"] = None
-
-            leads_to_insert.append(lead_dict)
-
-        except (ValueError, TypeError) as e:
-            errors.append(
-                schemas.LeadImportError(
-                    row_number=row_number,
-                    error_message=f"Data validation failed: {e}",  # Lỗi Pydantic hoặc lỗi ép kiểu/trùng lặp
-                    row_data=row_data,
-                )
-            )
-        except Exception as e:
-            errors.append(
-                schemas.LeadImportError(
-                    row_number=row_number,
-                    error_message=f"Unexpected error processing row: {e}",
-                    row_data=row_data,
-                )
-            )
-
-    # --- 4. Thực hiện Bulk Insert ---
-    created_lead_ids: List[int] = []
-    batch_size = 100  # Commit mỗi 100 lead
-
-    if leads_to_insert:
-        try:
-            for i in range(0, len(leads_to_insert), batch_size):
-                batch = leads_to_insert[i : i + batch_size]
-                
-                async with db.begin_nested(): # Bắt đầu 1 transaction con
-                    # 1. Insert batch
-                    await db.execute(pg_insert(models.Lead), batch)
-                    
-                    # 2. Lấy ID của batch vừa insert
-                    inserted_emails = [ld["email"] for ld in batch]
-                    query = select(models.Lead.id).where(models.Lead.email.in_(inserted_emails))
-                    result = await db.execute(query)
-                    batch_ids = result.scalars().all()
-                    created_lead_ids.extend(batch_ids)
-                
-                # 3. Commit transaction con (db.begin_nested() tự commit)
-                log.info(f"Committed batch {i // batch_size + 1}, {len(batch_ids)} leads inserted.")
-
-            # Commit transaction chính (nếu có)
-            await db.commit()
-            log.info(f"Successfully bulk inserted {len(created_lead_ids)} leads in total.")
-
-        except Exception as e:
-            await db.rollback() # Rollback transaction chính nếu có lỗi
-            log.error(
-                "Bulk lead insertion failed during batch, rolling back.", error=str(e), exc_info=True
-            )
-            # Ghi nhận lỗi
-            errors.append(
-                schemas.LeadImportError(
-                    row_number=-1,
-                    error_message=f"Database bulk insert error (batch failed): {e}",
-                    row_data={},
-                )
-            )
-            created_lead_ids = []  # Reset ID vì đã rollback
-
-    # --- 5. Trả về kết quả ---
-    result = schemas.LeadImportResult(
-        total_rows_processed=processed_row_count,
-        successful_imports=len(created_lead_ids),
-        failed_imports=len(errors),
-        created_lead_ids=created_lead_ids,
-        errors=errors,
-    )
-
-    result_summary = result.model_dump(exclude={"errors"})
-    if errors:
-        log.warning("Lead import process finished with errors", result=result_summary)
-    else:
-        log.info("Lead import process finished successfully", result=result_summary)
-
-    return result
 
 
 # ===============================================================
