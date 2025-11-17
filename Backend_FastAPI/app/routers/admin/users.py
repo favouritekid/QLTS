@@ -184,215 +184,12 @@ async def get_all_users(
 
 
 
-@router.get("/{user_id}")
-async def get_user_details(
-    user_id: int,
-    db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
-):
-    """(Admin only) Lấy thông tin chi tiết của một người dùng."""
-    db_user = await services.user_service.get_user_by_id(db, user_id)
-    return db_user
 
 
-
-
-@router.put("/{user_id}")
-async def update_existing_user(
-    user_id: int,
-    request: Request,
-    db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
-    full_name: Optional[str] = Form(None),
-    email: Optional[str] = Form(None),  # <-- Sửa lại thành Optional[str]
-    phone_number: Optional[str] = Form(None),
-    role: Optional[str] = Form(None),
-    status: Optional[str] = Form(None),
-    avatar: Optional[UploadFile] = File(None),
-    skills: Optional[str] = Form(None),  # Nhận JSON string từ form-data
-    max_capacity: Optional[int] = Form(None),
-    unit_id: Optional[int] = Form(None),  # Organizational unit assignment
-):
-    """(Admin only) Cập nhật người dùng, có hỗ trợ upload avatar."""
-    db_user = await services.user_service.get_user_by_id(db, user_id)
-    if not db_user:
-        raise ResourceNotFoundError(detail="User not found")
-
-    # Xây dựng dict chỉ chứa các trường hợp lệ được cung cấp
-    update_dict = {}
-    if full_name is not None and full_name.strip():
-        update_dict["full_name"] = full_name.strip()
-    if phone_number is not None and phone_number.strip():
-        update_dict["phone_number"] = phone_number.strip()
-    if role is not None and role.strip():
-        update_dict["role"] = role.strip()
-    if status is not None and status.strip():
-        update_dict["status"] = status.strip()
-    if max_capacity is not None and max_capacity >= 0:
-        update_dict["max_capacity"] = max_capacity
-
-    # Handle unit_id assignment - validate unit exists
-    if unit_id is not None:
-        if unit_id > 0:  # Assigning to a unit
-            unit = await db.get(models.OrganizationUnit, unit_id)
-            if not unit:
-                raise ResourceNotFoundError(
-                    detail=f"Organization unit with id {unit_id} not found."
-                )
-            update_dict["unit_id"] = unit_id
-        else:  # Remove unit assignment (set to None)
-            update_dict["unit_id"] = None
-
-    if skills is not None:
-        try:
-            # Chuyển đổi chuỗi JSON 'skills' từ Form thành đối tượng Python (list)
-            import json
-
-            update_dict["skills"] = json.loads(skills)
-            if not isinstance(update_dict["skills"], list):
-                raise ValueError("Skills must be a JSON list of strings")
-        except (json.JSONDecodeError, ValueError) as e:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f'Invalid format for skills. Must be a JSON string of a list (e.g., \'["skill1", "skill2"]\'): {e}',
-            )
-    # Chỉ xử lý email nếu được cung cấp và không rỗng
-    if email is not None and email.strip():
-        cleaned_email = email.strip()
-        try:
-            EmailStrAdapter = TypeAdapter(EmailStr)
-            valid_email = EmailStrAdapter.validate_python(cleaned_email)
-            
-            # ✅ SỬA: Thêm kiểm tra DB (giống hệt logic của profile.py)
-            if valid_email != db_user.email:
-                existing_user = await services.user_service.get_user_by_email(db, valid_email)
-                if existing_user:
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail="Email already registered by another user",
-                    )
-            update_dict["email"] = valid_email
-            
-        except ValidationError as e:
-            error_detail = e.errors()[0].get("msg", "Invalid email format")
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Invalid email format: {cleaned_email}. Error: {error_detail}",
-            )
-        # (Thêm HTTPException nếu raise từ logic check DB)
-        except HTTPException as e: 
-            raise e
-
-    # Track changes for activity log
-    changes = {}
-    if update_dict:
-        for key, new_value in update_dict.items():
-            old_value = getattr(db_user, key, None)
-            if old_value != new_value:
-                changes[key] = {"old": str(old_value), "new": str(new_value)}
-
-    # Tạo schema UserUpdate CHỈ với các dữ liệu đã được xác thực
-    user_in = schemas.UserUpdate(**update_dict)
-
-    # ← PHASE 1: Lấy enforcer từ app state để sync Casbin khi role thay đổi
-    enforcer = request.app.state.enforcer
-
-    # Truyền avatar và enforcer vào hàm service
-    updated_user = await services.user_service.update_user(
-        db, db_user, user_in, enforcer=enforcer, avatar_file=avatar
-    )
-
-    # Log activity
-    await log_admin_activity(
-        db=db,
-        request=request,
-        action="update_user",
-        resource_type="user",
-        actor_id=current_admin.id,
-        target_user_id=updated_user.id,
-        resource_id=updated_user.id,
-        description=f"Admin updated user: {updated_user.username}",
-        changes=changes if changes else None,
-    )
-
-    # Send notification to user if admin updated their info
-    if current_admin.id != updated_user.id and changes:
-        log.info(
-            "Admin updated user info, creating notification",
-            admin_id=current_admin.id,
-            target_user_id=updated_user.id,
-            changes=list(changes.keys()),
-        )
-        change_description = ", ".join([f"{key}" for key in changes.keys()])
-        try:
-            notification = await notification_service.create_notification(
-                db=db,
-                user_id=updated_user.id,
-                title="Your profile has been updated",
-                message=f"An administrator has updated your profile. Changed: {change_description}",
-                notification_type="admin_update",
-                link=f"/profile",
-            )
-            log.info(
-                "Notification created successfully",
-                notification_id=notification.id,
-                target_user_id=updated_user.id,
-            )
-            # Send real-time notification via WebSocket
-            await send_realtime_notification(notification)
-        except Exception as e:
-            log.error(
-                "Failed to create/send notification",
-                admin_id=current_admin.id,
-                target_user_id=updated_user.id,
-                error=str(e),
-            )
-    else:
-        log.debug(
-            "Skipping notification",
-            admin_id=current_admin.id,
-            target_user_id=updated_user.id,
-            same_user=current_admin.id == updated_user.id,
-            has_changes=bool(changes),
-        )
-
-    return updated_user
 
 
 # === KẾT THÚC HÀM CẬP NHẬT ===
 
-
-@router.delete("/{user_id}")
-async def delete_existing_user(
-    user_id: int,
-    request: Request,
-    db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
-):
-    """(Admin only) Xóa một người dùng."""
-    if user_id == current_admin.id:
-        raise PermissionDeniedError(detail="Admin cannot delete themselves")
-
-    # Get user info before deleting for activity log
-    db_user = await services.user_service.get_user_by_id(db, user_id)
-    username = db_user.username if db_user else f"User#{user_id}"
-
-    # Bỏ kiểm tra 'is None' vì service đã ném 404
-    await services.user_service.delete_user(db, user_id)
-
-    # Log activity
-    await log_admin_activity(
-        db=db,
-        request=request,
-        action="delete_user",
-        resource_type="user",
-        actor_id=current_admin.id,
-        target_user_id=user_id,
-        resource_id=user_id,
-        description=f"Admin deleted user: {username}",
-    )
-
-    return None
 
 
 
@@ -872,6 +669,226 @@ async def get_activity_logs(
 
     return {"total_count": total, "logs": logs}
 
+# ============================================================================
+# GENERIC USER CRUD OPERATIONS (/{user_id})
+# ============================================================================
+# ⚠️ IMPORTANT: These routes MUST be declared LAST to avoid conflicts with
+# specific routes like /export, /statistics, /activity-logs, etc.
+# FastAPI matches routes in declaration order, so:
+#   - /users/export would match GET /users/{user_id} if /{user_id} comes first
+#   - Moving /{user_id} routes to the end ensures specific routes match first
+# ============================================================================
 
+@router.get("/{user_id}")
+async def get_user_details(
+    user_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Lấy thông tin chi tiết của một người dùng."""
+    db_user = await services.user_service.get_user_by_id(db, user_id)
+    return db_user
+
+
+
+
+@router.put("/{user_id}")
+async def update_existing_user(
+    user_id: int,
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+    full_name: Optional[str] = Form(None),
+    email: Optional[str] = Form(None),  # <-- Sửa lại thành Optional[str]
+    phone_number: Optional[str] = Form(None),
+    role: Optional[str] = Form(None),
+    status: Optional[str] = Form(None),
+    avatar: Optional[UploadFile] = File(None),
+    skills: Optional[str] = Form(None),  # Nhận JSON string từ form-data
+    max_capacity: Optional[int] = Form(None),
+    unit_id: Optional[int] = Form(None),  # Organizational unit assignment
+):
+    """(Admin only) Cập nhật người dùng, có hỗ trợ upload avatar."""
+    db_user = await services.user_service.get_user_by_id(db, user_id)
+    if not db_user:
+        raise ResourceNotFoundError(detail="User not found")
+
+    # Xây dựng dict chỉ chứa các trường hợp lệ được cung cấp
+    update_dict = {}
+    if full_name is not None and full_name.strip():
+        update_dict["full_name"] = full_name.strip()
+    if phone_number is not None and phone_number.strip():
+        update_dict["phone_number"] = phone_number.strip()
+    if role is not None and role.strip():
+        update_dict["role"] = role.strip()
+    if status is not None and status.strip():
+        update_dict["status"] = status.strip()
+    if max_capacity is not None and max_capacity >= 0:
+        update_dict["max_capacity"] = max_capacity
+
+    # Handle unit_id assignment - validate unit exists
+    if unit_id is not None:
+        if unit_id > 0:  # Assigning to a unit
+            unit = await db.get(models.OrganizationUnit, unit_id)
+            if not unit:
+                raise ResourceNotFoundError(
+                    detail=f"Organization unit with id {unit_id} not found."
+                )
+            update_dict["unit_id"] = unit_id
+        else:  # Remove unit assignment (set to None)
+            update_dict["unit_id"] = None
+
+    if skills is not None:
+        try:
+            # Chuyển đổi chuỗi JSON 'skills' từ Form thành đối tượng Python (list)
+            import json
+
+            update_dict["skills"] = json.loads(skills)
+            if not isinstance(update_dict["skills"], list):
+                raise ValueError("Skills must be a JSON list of strings")
+        except (json.JSONDecodeError, ValueError) as e:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f'Invalid format for skills. Must be a JSON string of a list (e.g., \'["skill1", "skill2"]\'): {e}',
+            )
+    # Chỉ xử lý email nếu được cung cấp và không rỗng
+    if email is not None and email.strip():
+        cleaned_email = email.strip()
+        try:
+            EmailStrAdapter = TypeAdapter(EmailStr)
+            valid_email = EmailStrAdapter.validate_python(cleaned_email)
+            
+            # ✅ SỬA: Thêm kiểm tra DB (giống hệt logic của profile.py)
+            if valid_email != db_user.email:
+                existing_user = await services.user_service.get_user_by_email(db, valid_email)
+                if existing_user:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="Email already registered by another user",
+                    )
+            update_dict["email"] = valid_email
+            
+        except ValidationError as e:
+            error_detail = e.errors()[0].get("msg", "Invalid email format")
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid email format: {cleaned_email}. Error: {error_detail}",
+            )
+        # (Thêm HTTPException nếu raise từ logic check DB)
+        except HTTPException as e: 
+            raise e
+
+    # Track changes for activity log
+    changes = {}
+    if update_dict:
+        for key, new_value in update_dict.items():
+            old_value = getattr(db_user, key, None)
+            if old_value != new_value:
+                changes[key] = {"old": str(old_value), "new": str(new_value)}
+
+    # Tạo schema UserUpdate CHỈ với các dữ liệu đã được xác thực
+    user_in = schemas.UserUpdate(**update_dict)
+
+    # ← PHASE 1: Lấy enforcer từ app state để sync Casbin khi role thay đổi
+    enforcer = request.app.state.enforcer
+
+    # Truyền avatar và enforcer vào hàm service
+    updated_user = await services.user_service.update_user(
+        db, db_user, user_in, enforcer=enforcer, avatar_file=avatar
+    )
+
+    # Log activity
+    await log_admin_activity(
+        db=db,
+        request=request,
+        action="update_user",
+        resource_type="user",
+        actor_id=current_admin.id,
+        target_user_id=updated_user.id,
+        resource_id=updated_user.id,
+        description=f"Admin updated user: {updated_user.username}",
+        changes=changes if changes else None,
+    )
+
+    # Send notification to user if admin updated their info
+    if current_admin.id != updated_user.id and changes:
+        log.info(
+            "Admin updated user info, creating notification",
+            admin_id=current_admin.id,
+            target_user_id=updated_user.id,
+            changes=list(changes.keys()),
+        )
+        change_description = ", ".join([f"{key}" for key in changes.keys()])
+        try:
+            notification = await notification_service.create_notification(
+                db=db,
+                user_id=updated_user.id,
+                title="Your profile has been updated",
+                message=f"An administrator has updated your profile. Changed: {change_description}",
+                notification_type="admin_update",
+                link=f"/profile",
+            )
+            log.info(
+                "Notification created successfully",
+                notification_id=notification.id,
+                target_user_id=updated_user.id,
+            )
+            # Send real-time notification via WebSocket
+            await send_realtime_notification(notification)
+        except Exception as e:
+            log.error(
+                "Failed to create/send notification",
+                admin_id=current_admin.id,
+                target_user_id=updated_user.id,
+                error=str(e),
+            )
+    else:
+        log.debug(
+            "Skipping notification",
+            admin_id=current_admin.id,
+            target_user_id=updated_user.id,
+            same_user=current_admin.id == updated_user.id,
+            has_changes=bool(changes),
+        )
+
+    return updated_user
+
+
+
+# === KẾT THÚC HÀM CẬP NHẬT ===
+
+
+@router.delete("/{user_id}")
+async def delete_existing_user(
+    user_id: int,
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Xóa một người dùng."""
+    if user_id == current_admin.id:
+        raise PermissionDeniedError(detail="Admin cannot delete themselves")
+
+    # Get user info before deleting for activity log
+    db_user = await services.user_service.get_user_by_id(db, user_id)
+    username = db_user.username if db_user else f"User#{user_id}"
+
+    # ⚠️ IMPORTANT: Log activity BEFORE deleting user to avoid FK constraint violation
+    # The activity_log.target_user_id references user.id, so user must exist when logging
+    await log_admin_activity(
+        db=db,
+        request=request,
+        action="delete_user",
+        resource_type="user",
+        actor_id=current_admin.id,
+        target_user_id=user_id,
+        resource_id=user_id,
+        description=f"Admin deleted user: {username}",
+    )
+
+    # Delete user AFTER logging (service handles cascading deletes)
+    await services.user_service.delete_user(db, user_id)
+
+    return None
 
 

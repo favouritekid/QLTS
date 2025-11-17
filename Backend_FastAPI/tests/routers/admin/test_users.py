@@ -116,18 +116,20 @@ async def test_get_all_users(
     assert response.status_code == 200, f"Failed to get users: {response.text}"
     data = response.json()
 
-    # Verify response is a list
-    assert isinstance(data, list), "Response should be a list"
-    assert len(data) > 0, "Should have at least admin user"
+    # Verify response format (API returns dict with 'users' and 'total_count')
+    assert isinstance(data, dict), "Response should be a dict"
+    assert "users" in data, "Response should have 'users' key"
+    assert "total_count" in data, "Response should have 'total_count' key"
+    assert len(data["users"]) > 0, "Should have at least admin user"
 
     # Verify password hash not exposed
-    for user in data:
+    for user in data["users"]:
         assert "hashed_password" not in user, "Password hash should not be exposed"
         assert "password" not in user, "Password should not be exposed"
         assert "email" in user
         assert "role" in user
 
-    log.info(f"✅ Retrieved {len(data)} users successfully")
+    log.info(f"✅ Retrieved {len(data['users'])} users successfully (total: {data['total_count']})")
 
 
 @pytest.mark.asyncio
@@ -415,12 +417,15 @@ async def test_get_casbin_sync_status(
     assert response.status_code == 200, f"Failed to get sync status: {response.text}"
     data = response.json()
 
-    # Verify response structure
-    assert "users_in_db" in data
-    assert "users_in_casbin" in data
-    assert isinstance(data["users_in_db"], int)
+    # Verify response structure (API returns: total_users, synced_count, out_of_sync_count, mismatched_users)
+    assert "total_users" in data
+    assert "synced_count" in data
+    assert "out_of_sync_count" in data
+    assert "mismatched_users" in data
+    assert isinstance(data["total_users"], int)
+    assert isinstance(data["synced_count"], int)
 
-    log.info(f"✅ Sync status: {data['users_in_db']} users in DB")
+    log.info(f"✅ Sync status: {data['total_users']} total users, {data['synced_count']} synced, {data['out_of_sync_count']} out of sync")
 
 
 @pytest.mark.asyncio
@@ -439,8 +444,11 @@ async def test_sync_users_to_casbin(
     """
     log.info("--- Running: test_sync_users_to_casbin ---")
 
+    # Sync all users (user_ids=None means sync all)
+    sync_data = {"user_ids": None}
     response = await client.post(
         "/api/admin/users/sync",
+        json=sync_data,
         headers=admin_token_headers,
     )
 
