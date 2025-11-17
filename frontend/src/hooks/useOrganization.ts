@@ -32,14 +32,6 @@ import type {
   AssignmentConfigUpdate,
   SkillRule,
   SkillRuleCreate,
-
-  // Legacy (Deprecated)
-  Major,
-  MajorCreate,
-  MajorUpdate,
-  MajorAcademicInfo,
-  MajorAcademicInfoCreate,
-  MajorAcademicInfoUpdate,
 } from "@/types/organization.types";
 
 // =====================================================================
@@ -81,16 +73,6 @@ export const organizationKeys = {
     [...organizationKeys.academicInfo(), "list", offeringId, { publishedOnly }] as const,
   academicInfoByYear: (offeringId: number, year: number) =>
     [...organizationKeys.academicInfo(), "year", offeringId, year] as const,
-
-  // === LEGACY KEYS (DEPRECATED) ===
-  majors: () => [...organizationKeys.all, "majors"] as const,
-  majorsList: (unitId?: number, search?: string) =>
-    [...organizationKeys.majors(), { unitId, search }] as const,
-  majorDetail: (id: number) => [...organizationKeys.majors(), "detail", id] as const,
-  academicInfoHistory: (majorId: number, publishedOnly?: boolean) =>
-    [...organizationKeys.all, "legacyAcademicInfo", "history", majorId, { publishedOnly }] as const,
-  academicInfoByYearLegacy: (majorId: number, year: number) =>
-    [...organizationKeys.all, "legacyAcademicInfo", "year", majorId, year] as const,
 };
 
 // =====================================================================
