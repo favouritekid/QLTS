@@ -173,10 +173,46 @@ class User(UserBase):
 
 
 class UserInDB(UserBase):
+    """
+    🚨 DEPRECATED: DO NOT USE THIS SCHEMA IN API RESPONSES! 🚨
+
+    This schema contains sensitive field (password_hash) and should ONLY be used
+    for internal database operations, NEVER as a response_model.
+
+    For API responses, use the `User` schema instead.
+
+    Security Note: password_hash field exists but is hidden from serialization
+    to prevent accidental exposure.
+    """
     id: int
-    password_hash: str
+    # 🔒 SECURITY FIX: Exclude password_hash from JSON serialization
+    # This prevents exposure even if someone accidentally uses this as response_model
+    password_hash: str = Field(exclude=True)
 
     model_config = ConfigDict(from_attributes=True)
+
+    def dict(self, **kwargs):
+        """
+        Override dict() to ensure password_hash is always excluded.
+
+        This handles backward compatibility with code using deprecated .dict() method
+        instead of .model_dump().
+
+        Delegates to model_dump() which properly respects Field(exclude=True).
+        """
+        # Use model_dump() which respects Field(exclude=True)
+        # This ensures password_hash is excluded regardless of serialization method used
+        return self.model_dump(**kwargs)
+
+    def __iter__(self):
+        """
+        Override iteration to exclude password_hash.
+
+        This ensures that dict(instance) also excludes password_hash,
+        not just instance.dict() or instance.model_dump().
+        """
+        # Iterate over model_dump() output which excludes password_hash
+        return iter(self.model_dump().items())
 
 
 class LoginSchema(BaseModel):

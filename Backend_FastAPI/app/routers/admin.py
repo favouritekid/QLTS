@@ -40,6 +40,7 @@ from ..services import (
     lead_service,
     organization_service,
     pipeline_service,
+    role_service,
 )
 from ..utils.exceptions import (
     BadRequest,
@@ -54,6 +55,41 @@ router = APIRouter(tags=["Admin"])
 # --- ĐỊNH NGHĨA DEPENDENCY MỚI ---
 PermissionDep = Depends(deps.check_permission)
 LeadAccessDep = Depends(deps.get_lead_for_user)
+
+
+# ✅ PHASE 1: Helper function for activity logging (replaces service-level log_activity_from_request)
+async def log_admin_activity(
+    db: AsyncSession,
+    request: Request,
+    action: str,
+    resource_type: str,
+    actor_id: Optional[int] = None,
+    target_user_id: Optional[int] = None,
+    resource_id: Optional[int] = None,
+    description: Optional[str] = None,
+    changes: Optional[dict] = None,
+) -> models.UserActivityLog:
+    """
+    Helper function to log admin activities with IP/UA extracted from request.
+
+    This replaces log_admin_activity() which was removed
+    to maintain service layer protocol independence.
+    """
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+
+    return await activity_service.log_activity(
+        db=db,
+        action=action,
+        resource_type=resource_type,
+        actor_id=actor_id,
+        target_user_id=target_user_id,
+        resource_id=resource_id,
+        description=description,
+        changes=changes,
+        ip_address=ip_address,
+        user_agent=user_agent,
+    )
 
 
 # ===============================================================
@@ -98,7 +134,7 @@ async def add_new_policy(
         raise DuplicateResourceError("Policy already exists.")
 
     # Log activity
-    await activity_service.log_activity_from_request(
+    await log_admin_activity(
         db=db,
         request=request,
         action="add_policy",
@@ -152,7 +188,7 @@ async def delete_policy(
         raise ResourceNotFoundError("Policy not found or could not be removed.")
 
     # Log activity
-    await activity_service.log_activity_from_request(
+    await log_admin_activity(
         db=db,
         request=request,
         action="remove_policy",
@@ -326,90 +362,20 @@ async def remove_role_from_users(
     - Updates database user.role to reflect remaining highest-priority role
 
     Priority order: admin > manager > officer > user
+
+    REFACTORED: Business logic extracted to role_service.remove_role_from_users()
+    Router now only handles HTTP concerns (request/response, dependency injection)
     """
+    # Extract Casbin enforcer from app state (HTTP-specific)
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
-    if not user_ids:
-        raise ResourceNotFoundError("No user IDs provided")
-
-    # Role priority for DB field (highest to lowest)
-    ROLE_PRIORITY = {
-        "role:admin": 4,
-        "role:manager": 3,
-        "role:officer": 2,
-        "role:user": 1,
-    }
-
-    removed_count = 0
-    reassigned_count = 0
-    failed_users = []
-
-    for user_id in user_ids:
-        user_subject = f"user:{user_id}"
-
-        try:
-            # Get all current roles for this user
-            current_roles = await enforcer.get_roles_for_user(user_subject)
-
-            # Check if user actually has the role to remove
-            if role_to_remove not in current_roles:
-                log.warning(f"User {user_id} doesn't have role {role_to_remove}, skipping")
-                continue
-
-            # Remove the specified role
-            await enforcer.remove_grouping_policy(user_subject, role_to_remove)
-            removed_count += 1
-
-            # Get remaining roles after removal
-            remaining_roles = [r for r in current_roles if r != role_to_remove]
-
-            # If no roles left, auto-assign role:user as fallback
-            if not remaining_roles:
-                await enforcer.add_grouping_policy(user_subject, "role:user")
-                remaining_roles = ["role:user"]
-                reassigned_count += 1
-                log.info(f"User {user_id} had no roles left, auto-assigned role:user")
-
-            # Update database user.role field to highest priority remaining role
-            result = await db.execute(
-                select(models.User).where(models.User.id == user_id)
-            )
-            user = result.scalar_one_or_none()
-
-            if user:
-                # Find highest priority role from remaining roles
-                highest_priority_role = max(
-                    remaining_roles,
-                    key=lambda r: ROLE_PRIORITY.get(r, 0),
-                    default="role:user"
-                )
-
-                # Extract role name without "role:" prefix for DB
-                db_role_name = highest_priority_role.replace("role:", "")
-                user.role = db_role_name
-                await db.commit()
-
-                log.info(
-                    f"User {user_id} updated",
-                    removed_role=role_to_remove,
-                    remaining_roles=remaining_roles,
-                    db_role=db_role_name
-                )
-
-        except Exception as e:
-            failed_users.append({"user_id": user_id, "error": str(e)})
-            log.error(f"Failed to remove role from user {user_id}", error=str(e))
-
-    # Save Casbin policies
-    await enforcer.save_policy()
-
-    return {
-        "detail": f"Removed {role_to_remove} from {removed_count} user(s), {reassigned_count} auto-assigned to role:user",
-        "removed_count": removed_count,
-        "reassigned_to_user_count": reassigned_count,
-        "failed_count": len(failed_users),
-        "failed_users": failed_users,
-    }
+    # Call service layer with injected dependencies (DI pattern)
+    return await role_service.remove_role_from_users(
+        db=db,
+        enforcer=enforcer,
+        user_ids=user_ids,
+        role_to_remove=role_to_remove,
+    )
 
 
 @router.post(
@@ -453,7 +419,7 @@ async def add_grouping_policy(
     await enforcer.save_policy()
 
     # Log activity
-    await activity_service.log_activity_from_request(
+    await log_admin_activity(
         db=db,
         request=request,
         action="add_grouping_policy",
@@ -513,7 +479,7 @@ async def delete_grouping_policy(
     await enforcer.save_policy()
 
     # Log activity
-    await activity_service.log_activity_from_request(
+    await log_admin_activity(
         db=db,
         request=request,
         action="remove_grouping_policy",
@@ -704,7 +670,7 @@ async def delete_role_atomic(
         await db.commit()
 
         # STEP 11: Log activity
-        await activity_service.log_activity_from_request(
+        await log_admin_activity(
             db=db,
             request=request,
             action="delete_role_atomic",
@@ -848,7 +814,7 @@ async def add_policies_batch(
 
     # Log activity for each added policy
     if result["added"] > 0:
-        await activity_service.log_activity_from_request(
+        await log_admin_activity(
             db=db,
             request=request,
             action="batch_add_policies",
@@ -947,7 +913,7 @@ async def apply_template_to_role(
 
     # Log activity
     if result.get("added", 0) > 0:
-        await activity_service.log_activity_from_request(
+        await log_admin_activity(
             db=db,
             request=request,
             action="apply_policy_template",
@@ -1080,7 +1046,7 @@ async def create_new_user(
     # Casbin sync now happens inside create_user_by_admin atomically
 
     # Log activity
-    await activity_service.log_activity_from_request(
+    await log_admin_activity(
         db=db,
         request=request,
         action="create_user",
@@ -1304,7 +1270,7 @@ async def update_existing_user(
     )
 
     # Log activity
-    await activity_service.log_activity_from_request(
+    await log_admin_activity(
         db=db,
         request=request,
         action="update_user",
@@ -1384,7 +1350,7 @@ async def delete_existing_user(
     await services.user_service.delete_user(db, user_id)
 
     # Log activity
-    await activity_service.log_activity_from_request(
+    await log_admin_activity(
         db=db,
         request=request,
         action="delete_user",
@@ -1442,7 +1408,7 @@ async def bulk_user_action(
         action_desc += f" to {action_data.status}"
     action_desc += f" for {len(action_data.user_ids)} users"
 
-    await activity_service.log_activity_from_request(
+    await log_admin_activity(
         db=db,
         request=request,
         action=f"bulk_{action_data.action}",
@@ -1529,57 +1495,26 @@ async def sync_users(
     Casbin được coi là source of truth (nguồn chân lý).
 
     - `user_ids`: Danh sách ID users cần sync. Nếu None hoặc rỗng, sync tất cả users.
+
+    REFACTORED: Business logic extracted to user_service.sync_users_to_casbin()
+    Router now only handles HTTP concerns (request/response, DI, admin activity logging)
     """
+    # Extract Casbin enforcer from app state (HTTP-specific)
     enforcer = request.app.state.enforcer
     user_ids = sync_request.user_ids
 
-    # Determine which users to sync
-    if user_ids:
-        result = await db.execute(
-            select(models.User).where(models.User.id.in_(user_ids))
-        )
-    else:
-        result = await db.execute(select(models.User))
+    # Call service layer with injected dependencies (DI pattern)
+    result = await services.user_service.sync_users_to_casbin(
+        db=db,
+        enforcer=enforcer,
+        user_ids=user_ids
+    )
 
-    users = result.scalars().all()
-
-    synced_count = 0
-    failed_users = []
-
-    for user in users:
-        try:
-            casbin_role = await services.user_service.get_highest_priority_role_from_casbin(
-                enforcer, user.id
-            )
-
-            if user.role != casbin_role:
-                old_role = user.role
-                user.role = casbin_role
-                db.add(user)
-                synced_count += 1
-                log.info(
-                    "User role synced",
-                    user_id=user.id,
-                    old_role=old_role,
-                    new_role=casbin_role
-                )
-        except Exception as e:
-            log.error(
-                "Failed to sync user",
-                user_id=user.id,
-                error=str(e),
-                exc_info=True
-            )
-            failed_users.append({
-                "user_id": user.id,
-                "username": user.username,
-                "error": str(e)
-            })
-
+    # Commit transaction (router responsibility)
     await db.commit()
 
-    # Log activity
-    await activity_service.log_activity_from_request(
+    # Log admin activity (HTTP/audit concern, not business logic)
+    await log_admin_activity(
         db=db,
         request=request,
         action="sync_users",
@@ -1587,8 +1522,8 @@ async def sync_users(
         actor_id=current_admin.id,
         resource_id=None,
         changes={
-            "synced_count": synced_count,
-            "failed_count": len(failed_users),
+            "synced_count": result["synced_count"],
+            "failed_count": result["failed_count"],
             "user_ids": user_ids or "all"
         }
     )
@@ -1596,15 +1531,11 @@ async def sync_users(
     log.info(
         "User sync completed",
         admin_id=current_admin.id,
-        synced=synced_count,
-        failed=len(failed_users)
+        synced=result["synced_count"],
+        failed=result["failed_count"]
     )
 
-    return {
-        "synced_count": synced_count,
-        "failed_count": len(failed_users),
-        "failed_users": failed_users
-    }
+    return result
 
 
 # ===============================================================
@@ -2198,8 +2129,8 @@ async def bulk_assign_leads(
 
 @router.post(
     "/leads/import",
-    response_model=schemas.LeadImportResult,  # Sử dụng schema kết quả mới
-    status_code=status.HTTP_200_OK,  # Trả về 200 OK (hoặc 207 Multi-Status nếu muốn chi tiết hơn)
+    response_model=schemas.LeadImportResult,
+    status_code=status.HTTP_200_OK,
     tags=["Admin - Lead Management"],
     summary="Import leads from a CSV or Excel file",
 )
@@ -2215,6 +2146,9 @@ async def import_leads_from_file(
     File cần có các cột: 'full_name', 'email', 'phone', 'source', 'unit_id', 'offering_id' (tùy chọn).
     Endpoint sẽ tạo leads trong DB nhưng **không** tự động phân công.
     Trả về kết quả import bao gồm ID các lead đã tạo và danh sách lỗi.
+
+    REFACTORED: Business logic extracted to lead_service.import_leads_from_file_content()
+    Router now only handles HTTP concerns (file reading, exception conversion)
     """
     log.info(
         "Received lead import request",
@@ -2222,247 +2156,45 @@ async def import_leads_from_file(
         filename=file.filename,
     )
 
-    # --- 1. Kiểm tra loại file ---
-    file_extension = ""
-    if file.filename:
-        file_extension = file.filename.rsplit(".", 1)[-1].lower()
-
-    if file_extension not in ["csv", "xlsx"]:
-        log.warning(
-            "Import failed: Invalid file extension",
-            filename=file.filename,
-            ext=file_extension,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid file format. Only .csv and .xlsx files are supported.",
-        )
-
-    # --- 2. Đọc nội dung file vào DataFrame ---
+    # Read file content (HTTP-specific operation)
     try:
         content = await file.read()
-        if not content:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file uploaded."
-            )
-
-        if file_extension == "csv":
-            # Dùng io.BytesIO để pandas đọc từ bytes
-            df = pd.read_csv(io.BytesIO(content))
-        else:  # xlsx
-            df = pd.read_excel(io.BytesIO(content), engine="openpyxl")
-
-        log.info(f"Successfully read {len(df)} rows from {file_extension} file.")
-
-    except HTTPException as e:
-        raise e  # Ném lại lỗi 400
     except Exception as e:
         log.error(
-            "Failed to read or parse file content",
+            "Failed to read uploaded file",
             filename=file.filename,
             error=str(e),
             exc_info=True,
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Could not read or parse the file. Ensure it is a valid {file_extension} file. Error: {e}",
+            detail=f"Failed to read uploaded file: {e}",
         )
     finally:
-        await file.close()  # Luôn đóng file
+        await file.close()
 
-    # --- 3. Xử lý dữ liệu và Tạo Leads ---
-    required_columns = {"full_name", "email", "phone", "source", "unit_id"}
-    # optional_columns = {"offering_id"}  # Các cột tùy chọn
-    # Chuẩn hóa tên cột (viết thường, bỏ dấu cách)
-    df.columns = df.columns.str.lower().str.strip().str.replace(" ", "_")
+    # Call service layer with file content (DI pattern)
+    try:
+        result = await services.lead_service.import_leads_from_file_content(
+            file_content=content,
+            filename=file.filename or "unknown",
+            db=db,
+        )
+        return result
 
-    # Kiểm tra các cột bắt buộc
-    missing_cols = required_columns - set(df.columns)
-    if missing_cols:
+    except ValueError as e:
+        # Service raises ValueError for validation errors
+        # Router converts to HTTPException (HTTP concern)
         log.warning(
-            "Import failed: Missing required columns", missing=list(missing_cols)
+            "Lead import validation failed",
+            admin_id=current_admin.id,
+            filename=file.filename,
+            error=str(e),
         )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"File is missing required columns: {', '.join(missing_cols)}",
+            detail=str(e),
         )
-
-    leads_to_insert = []
-    errors: List[schemas.LeadImportError] = []
-    processed_row_count = 0
-    initial_status_id = settings.DEFAULT_INITIAL_LEAD_STATUS_ID  # Lấy status mặc định
-
-    # Lấy stage_id tương ứng với initial_status_id (cần cho bulk insert)
-    initial_status_obj = await db.get(models.ConsultationStatus, initial_status_id)
-    initial_stage_id = initial_status_obj.stage_id if initial_status_obj else None
-    if not initial_stage_id:
-        log.error(
-            f"FATAL: Initial status {initial_status_id} not found in DB. Cannot determine initial stage."
-        )
-        raise HTTPException(
-            status_code=500,
-            detail="System configuration error: Initial lead status not found.",
-        )
-
-    # Lấy danh sách email đã tồn tại để kiểm tra trùng lặp hiệu quả hơn
-    existing_emails_in_db = set()
-    async for email_tuple in await db.stream(select(models.Lead.email)):
-        existing_emails_in_db.add(email_tuple[0])
-    emails_in_current_file = set()
-
-    # Lặp qua từng dòng trong DataFrame
-    for index, row in df.iterrows():
-        processed_row_count += 1
-        row_number = index + 2
-        row_data = row.to_dict()
-        cleaned_data = {}  # Dữ liệu đã được ép kiểu
-        validation_errors_for_row = []  # Lỗi ép kiểu
-
-        # --- ✅ BẮT ĐẦU SỬA LỖI ÉP KIỂU ---
-
-        # 1. Ép kiểu các trường bắt buộc
-        try:
-            # Dùng str() và strip() cho các trường text
-            cleaned_data["full_name"] = str(row_data.get("full_name", "")).strip()
-            cleaned_data["email"] = str(row_data.get("email", "")).strip()
-            # Xử lý đặc biệt cho 'phone': luôn chuyển sang string, bỏ ".0" nếu là float
-            phone_val = row_data.get("phone")
-            cleaned_data["phone"] = (
-                str(phone_val).split(".")[0] if pd.notna(phone_val) else ""
-            )
-
-            cleaned_data["source"] = str(row_data.get("source", "")).strip()
-
-            # Xử lý 'unit_id': ép sang int
-            unit_id_val = row_data.get("unit_id")
-            if pd.notna(unit_id_val):
-                cleaned_data["unit_id"] = int(float(unit_id_val))
-            else:
-                # Nếu unit_id là bắt buộc, Pydantic sẽ bắt lỗi 'missing' sau
-                cleaned_data["unit_id"] = None
-
-        except (ValueError, TypeError, Exception) as e:
-            # Lỗi cơ bản khi ép kiểu (ví dụ: unit_id là "abc")
-            validation_errors_for_row.append(f"Type conversion error: {e}")
-
-        # 2. Ép kiểu trường tùy chọn 'offering_id'
-        offering_id_val = row_data.get("offering_id")
-        if pd.notna(offering_id_val):
-            try:
-                cleaned_data["offering_id"] = int(float(offering_id_val))
-            except (ValueError, TypeError):
-                validation_errors_for_row.append(
-                    "Invalid format for 'offering_id', expected a number."
-                )
-        else:
-            cleaned_data["offering_id"] = None
-
-        # --- KẾT THÚC SỬA LỖI ÉP KIỂU ---
-
-        # 3. Validate bằng Pydantic
-        try:
-            # Nếu đã có lỗi ép kiểu, ném lỗi luôn để vào khối except
-            if validation_errors_for_row:
-                raise ValueError(", ".join(validation_errors_for_row))
-
-            lead_in = schemas.LeadCreate(**cleaned_data)
-
-            # Kiểm tra trùng lặp email
-            if (
-                lead_in.email in existing_emails_in_db
-                or lead_in.email in emails_in_current_file
-            ):
-                raise ValueError(
-                    f"Email '{lead_in.email}' already exists in the database or this file."
-                )
-
-            emails_in_current_file.add(lead_in.email)
-
-            # Chuẩn bị dict để bulk insert (Nếu mọi thứ OK)
-            lead_dict = lead_in.model_dump()
-            lead_dict["status"] = initial_status_id
-            lead_dict["consultation_status_id"] = initial_status_id
-            lead_dict["pipeline_stage_id"] = initial_stage_id
-            lead_dict["assigned_officer_id"] = None
-            lead_dict["assigned_at"] = None
-
-            leads_to_insert.append(lead_dict)
-
-        except (ValueError, TypeError) as e:
-            errors.append(
-                schemas.LeadImportError(
-                    row_number=row_number,
-                    error_message=f"Data validation failed: {e}",  # Lỗi Pydantic hoặc lỗi ép kiểu/trùng lặp
-                    row_data=row_data,
-                )
-            )
-        except Exception as e:
-            errors.append(
-                schemas.LeadImportError(
-                    row_number=row_number,
-                    error_message=f"Unexpected error processing row: {e}",
-                    row_data=row_data,
-                )
-            )
-
-    # --- 4. Thực hiện Bulk Insert ---
-    created_lead_ids: List[int] = []
-    batch_size = 100  # Commit mỗi 100 lead
-
-    if leads_to_insert:
-        try:
-            for i in range(0, len(leads_to_insert), batch_size):
-                batch = leads_to_insert[i : i + batch_size]
-                
-                async with db.begin_nested(): # Bắt đầu 1 transaction con
-                    # 1. Insert batch
-                    await db.execute(pg_insert(models.Lead), batch)
-                    
-                    # 2. Lấy ID của batch vừa insert
-                    inserted_emails = [ld["email"] for ld in batch]
-                    query = select(models.Lead.id).where(models.Lead.email.in_(inserted_emails))
-                    result = await db.execute(query)
-                    batch_ids = result.scalars().all()
-                    created_lead_ids.extend(batch_ids)
-                
-                # 3. Commit transaction con (db.begin_nested() tự commit)
-                log.info(f"Committed batch {i // batch_size + 1}, {len(batch_ids)} leads inserted.")
-
-            # Commit transaction chính (nếu có)
-            await db.commit()
-            log.info(f"Successfully bulk inserted {len(created_lead_ids)} leads in total.")
-
-        except Exception as e:
-            await db.rollback() # Rollback transaction chính nếu có lỗi
-            log.error(
-                "Bulk lead insertion failed during batch, rolling back.", error=str(e), exc_info=True
-            )
-            # Ghi nhận lỗi
-            errors.append(
-                schemas.LeadImportError(
-                    row_number=-1,
-                    error_message=f"Database bulk insert error (batch failed): {e}",
-                    row_data={},
-                )
-            )
-            created_lead_ids = []  # Reset ID vì đã rollback
-
-    # --- 5. Trả về kết quả ---
-    result = schemas.LeadImportResult(
-        total_rows_processed=processed_row_count,
-        successful_imports=len(created_lead_ids),
-        failed_imports=len(errors),
-        created_lead_ids=created_lead_ids,
-        errors=errors,
-    )
-
-    result_summary = result.model_dump(exclude={"errors"})
-    if errors:
-        log.warning("Lead import process finished with errors", result=result_summary)
-    else:
-        log.info("Lead import process finished successfully", result=result_summary)
-
-    return result
 
 
 # ===============================================================
@@ -2580,7 +2312,7 @@ async def who_can_access_resource(
         warning = f"⚠️ Slow query ({execution_time_ms}ms). This is unusual for role-only lookup."
 
     # Log activity for audit trail
-    await activity_service.log_activity_from_request(
+    await log_admin_activity(
         db=db,
         request=request,
         action="permission_lookup",

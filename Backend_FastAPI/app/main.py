@@ -33,7 +33,7 @@ from .database import redis_client as main_redis_client
 from .database import safe_redis_ping
 from .ratelimit import limiter
 from .routers import (
-    admin,
+    admin,  # Old monolithic admin router (keep temporarily for backward compatibility)
     auth,
     leads,
     notification_preferences,
@@ -45,6 +45,9 @@ from .routers import (
     sessions,
     users
 )
+
+# ✅ PHASE 2A: Import new split admin routers
+from .routers.admin import router as admin_router_new
 
 # ✅ V5: Import SIO, LUA loader, và Prometheus
 from .socket_manager import load_rate_limit_script, sio
@@ -436,7 +439,22 @@ app.include_router(
     organization.router, prefix="/api", tags=["Organization"]
 )
 app.include_router(officer.router, prefix="/api", tags=["Officer Dashboard"])
-app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
+
+# ===============================================================
+# === ADMIN ROUTERS (PHASE 2A Migration) =======================
+# ===============================================================
+
+# ⚠️ OLD MONOLITHIC ADMIN ROUTER (Temporary - for backward compatibility)
+# This will be removed after frontend migration is complete
+# Tag changed to "Admin (Legacy)" to distinguish from new routers
+app.include_router(admin.router, prefix="/api/admin", tags=["Admin (Legacy)"])
+
+# ✅ NEW SPLIT ADMIN ROUTERS (PHASE 2A)
+# Includes: users.py (16 endpoints) + roles.py (23 endpoints) = 39 endpoints
+app.include_router(admin_router_new, prefix="/api")
+# This provides:
+#   - /api/admin/users/*  (user management, sync, leads, analytics)
+#   - /api/admin/roles/*  (policy/role management, Casbin operations)
 # ===============================================================
 # === STATIC FILES ==============================================
 # ===============================================================

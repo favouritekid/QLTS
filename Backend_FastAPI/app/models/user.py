@@ -27,11 +27,12 @@ class User(Base):
     # NEW: Pointer to current assignment (source of truth)
     # ✅ FIX: use_alter=True to resolve circular dependency with user_unit_assignment
     # This defers FK creation to ALTER TABLE (after both tables exist)
-    # No need for explicit constraint name - SQLAlchemy handles it automatically
+    # ✅ TEST FIX: Explicit constraint name required for proper DROP in tests
     current_assignment_id = Column(
         Integer,
         ForeignKey(
             "user_unit_assignment.id",
+            name="fk_user_current_assignment",  # ✅ Explicit name for test compatibility
             ondelete="SET NULL",
             use_alter=True  # ✅ Defer constraint creation to break circular dependency
         ),

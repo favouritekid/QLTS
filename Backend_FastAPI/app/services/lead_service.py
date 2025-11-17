@@ -1404,3 +1404,293 @@ async def revert_last_status(
 
     # Trả về lead đã được tải đầy đủ sau khi commit thành công
     return await get_lead_by_id(db, lead_id)
+
+
+# =============================================================================
+# PHASE 1 - Task 1.8: LEAD IMPORT (EXTRACTED FROM ROUTER)
+# =============================================================================
+
+async def import_leads_from_file_content(
+    file_content: bytes,
+    filename: str,
+    db: AsyncSession,
+) -> schemas.LeadImportResult:
+    """
+    Import leads from CSV or Excel file content.
+
+    This function extracts business logic from the router layer, making it
+    protocol-independent and reusable across different contexts (HTTP, CLI, Celery).
+
+    Business Rules:
+    - Supports CSV (.csv) and Excel (.xlsx) files
+    - Required columns: full_name, email, phone, source, unit_id
+    - Optional columns: offering_id
+    - Email must be unique (checks both DB and current file)
+    - Leads are created with default initial status
+    - Batch insertion with error collection (doesn't fail fast)
+    - Transaction rollback on bulk insert failure
+
+    Args:
+        file_content: File content as bytes (CSV or Excel)
+        filename: Original filename (used to determine file type)
+        db: Database session (injected via DI)
+
+    Returns:
+        LeadImportResult containing:
+        - total_rows_processed: Number of rows processed
+        - successful_imports: Number of leads created
+        - failed_imports: Number of rows with errors
+        - created_lead_ids: List of created lead IDs
+        - errors: List of LeadImportError objects
+
+    Raises:
+        ValueError: If file format is invalid or file is empty
+
+    Example:
+        >>> with open("leads.csv", "rb") as f:
+        ...     content = f.read()
+        >>> result = await import_leads_from_file_content(
+        ...     file_content=content,
+        ...     filename="leads.csv",
+        ...     db=session
+        ... )
+        >>> print(f"Created {result.successful_imports} leads")
+    """
+    import io
+    import pandas as pd
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    # --- 1. Validate file extension ---
+    file_extension = ""
+    if filename:
+        file_extension = filename.rsplit(".", 1)[-1].lower()
+
+    if file_extension not in ["csv", "xlsx"]:
+        log.warning(
+            "Import failed: Invalid file extension",
+            filename=filename,
+            ext=file_extension,
+        )
+        raise ValueError(
+            "Invalid file format. Only .csv and .xlsx files are supported."
+        )
+
+    # --- 2. Read file content into DataFrame ---
+    try:
+        if not file_content:
+            raise ValueError("Empty file uploaded.")
+
+        if file_extension == "csv":
+            df = pd.read_csv(io.BytesIO(file_content))
+        else:  # xlsx
+            df = pd.read_excel(io.BytesIO(file_content), engine="openpyxl")
+
+        log.info(f"Successfully read {len(df)} rows from {file_extension} file.")
+
+    except ValueError as e:
+        raise e  # Re-raise validation errors
+    except Exception as e:
+        log.error(
+            "Failed to read or parse file content",
+            filename=filename,
+            error=str(e),
+            exc_info=True,
+        )
+        raise ValueError(
+            f"Could not read or parse the file. Ensure it is a valid {file_extension} file. Error: {e}"
+        )
+
+    # --- 3. Validate columns and process data ---
+    required_columns = {"full_name", "email", "phone", "source", "unit_id"}
+
+    # Normalize column names (lowercase, strip, replace spaces)
+    df.columns = df.columns.str.lower().str.strip().str.replace(" ", "_")
+
+    # Check required columns
+    missing_cols = required_columns - set(df.columns)
+    if missing_cols:
+        log.warning(
+            "Import failed: Missing required columns", missing=list(missing_cols)
+        )
+        raise ValueError(
+            f"File is missing required columns: {', '.join(missing_cols)}"
+        )
+
+    leads_to_insert = []
+    errors: List[schemas.LeadImportError] = []
+    processed_row_count = 0
+
+    # Get default initial status
+    from app.config import settings
+    initial_status_id = settings.DEFAULT_INITIAL_LEAD_STATUS_ID
+
+    # Get stage_id corresponding to initial_status_id
+    initial_status_obj = await db.get(models.ConsultationStatus, initial_status_id)
+    initial_stage_id = initial_status_obj.stage_id if initial_status_obj else None
+
+    if not initial_stage_id:
+        log.error(
+            f"FATAL: Initial status {initial_status_id} not found in DB. Cannot determine initial stage."
+        )
+        raise ValueError(
+            "System configuration error: Initial lead status not found."
+        )
+
+    # Get existing emails to check for duplicates efficiently
+    existing_emails_in_db = set()
+    async for email_tuple in await db.stream(select(models.Lead.email)):
+        existing_emails_in_db.add(email_tuple[0])
+    emails_in_current_file = set()
+
+    # --- 4. Process each row ---
+    for index, row in df.iterrows():
+        processed_row_count += 1
+        row_number = index + 2  # Excel row number (header is row 1)
+        row_data = row.to_dict()
+        cleaned_data = {}
+        validation_errors_for_row = []
+
+        # Type conversion for required fields
+        try:
+            cleaned_data["full_name"] = str(row_data.get("full_name", "")).strip()
+            cleaned_data["email"] = str(row_data.get("email", "")).strip()
+
+            # Special handling for 'phone': convert to string, remove ".0" if float
+            phone_val = row_data.get("phone")
+            cleaned_data["phone"] = (
+                str(phone_val).split(".")[0] if pd.notna(phone_val) else ""
+            )
+
+            cleaned_data["source"] = str(row_data.get("source", "")).strip()
+
+            # Convert 'unit_id' to int
+            unit_id_val = row_data.get("unit_id")
+            if pd.notna(unit_id_val):
+                cleaned_data["unit_id"] = int(float(unit_id_val))
+            else:
+                cleaned_data["unit_id"] = None
+
+        except (ValueError, TypeError, Exception) as e:
+            validation_errors_for_row.append(f"Type conversion error: {e}")
+
+        # Type conversion for optional 'offering_id'
+        offering_id_val = row_data.get("offering_id")
+        if pd.notna(offering_id_val):
+            try:
+                cleaned_data["offering_id"] = int(float(offering_id_val))
+            except (ValueError, TypeError):
+                validation_errors_for_row.append(
+                    "Invalid format for 'offering_id', expected a number."
+                )
+        else:
+            cleaned_data["offering_id"] = None
+
+        # Validate with Pydantic
+        try:
+            # If there are type conversion errors, raise them
+            if validation_errors_for_row:
+                raise ValueError(", ".join(validation_errors_for_row))
+
+            lead_in = schemas.LeadCreate(**cleaned_data)
+
+            # Check email duplication
+            if (
+                lead_in.email in existing_emails_in_db
+                or lead_in.email in emails_in_current_file
+            ):
+                raise ValueError(
+                    f"Email '{lead_in.email}' already exists in the database or this file."
+                )
+
+            emails_in_current_file.add(lead_in.email)
+
+            # Prepare dict for bulk insert
+            lead_dict = lead_in.model_dump()
+            lead_dict["status"] = initial_status_id
+            lead_dict["consultation_status_id"] = initial_status_id
+            lead_dict["pipeline_stage_id"] = initial_stage_id
+            lead_dict["assigned_officer_id"] = None
+            lead_dict["assigned_at"] = None
+
+            leads_to_insert.append(lead_dict)
+
+        except (ValueError, TypeError) as e:
+            errors.append(
+                schemas.LeadImportError(
+                    row_number=row_number,
+                    error_message=f"Data validation failed: {e}",
+                    row_data=row_data,
+                )
+            )
+        except Exception as e:
+            errors.append(
+                schemas.LeadImportError(
+                    row_number=row_number,
+                    error_message=f"Unexpected error processing row: {e}",
+                    row_data=row_data,
+                )
+            )
+
+    # --- 5. Bulk insert ---
+    created_lead_ids: List[int] = []
+    batch_size = 100  # Commit every 100 leads
+
+    if leads_to_insert:
+        try:
+            for i in range(0, len(leads_to_insert), batch_size):
+                batch = leads_to_insert[i : i + batch_size]
+
+                async with db.begin_nested():  # Start nested transaction
+                    # Insert batch
+                    await db.execute(pg_insert(models.Lead), batch)
+
+                    # Get IDs of inserted leads
+                    inserted_emails = [ld["email"] for ld in batch]
+                    query = select(models.Lead.id).where(
+                        models.Lead.email.in_(inserted_emails)
+                    )
+                    result = await db.execute(query)
+                    batch_ids = result.scalars().all()
+                    created_lead_ids.extend(batch_ids)
+
+                log.info(
+                    f"Committed batch {i // batch_size + 1}, {len(batch_ids)} leads inserted."
+                )
+
+            # Commit main transaction
+            await db.commit()
+            log.info(f"Successfully bulk inserted {len(created_lead_ids)} leads in total.")
+
+        except Exception as e:
+            await db.rollback()  # Rollback main transaction
+            log.error(
+                "Bulk lead insertion failed during batch, rolling back.",
+                error=str(e),
+                exc_info=True,
+            )
+            # Record error
+            errors.append(
+                schemas.LeadImportError(
+                    row_number=-1,
+                    error_message=f"Database bulk insert error (batch failed): {e}",
+                    row_data={},
+                )
+            )
+            created_lead_ids = []  # Reset IDs due to rollback
+
+    # --- 6. Build and return result ---
+    result = schemas.LeadImportResult(
+        total_rows_processed=processed_row_count,
+        successful_imports=len(created_lead_ids),
+        failed_imports=len(errors),
+        created_lead_ids=created_lead_ids,
+        errors=errors,
+    )
+
+    result_summary = result.model_dump(exclude={"errors"})
+    if errors:
+        log.warning("Lead import process finished with errors", result=result_summary)
+    else:
+        log.info("Lead import process finished successfully", result=result_summary)
+
+    return result

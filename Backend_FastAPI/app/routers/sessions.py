@@ -116,14 +116,16 @@ async def get_active_sessions(
 @router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_session(
     session_id: int,
+    db: AsyncSession = Depends(database.get_db),  # ✅ PHASE 1: Inject db session (DI pattern)
     current_user: models.User = Depends(deps.get_current_user),
-    # ❌ ĐÃ XÓA: db: AsyncSession = Depends(database.get_db),
 ):
     """
     Revoke a specific session.
 
     Args:
         session_id: ID of the session to revoke
+        db: Database session (injected)
+        current_user: Current authenticated user (injected)
 
     Security:
         - Requires authentication
@@ -135,9 +137,11 @@ async def revoke_session(
     log.info("Revoking session", user_id=current_user.id, session_id=session_id)
 
     try:
-        # ❌ ĐÃ XÓA `db=db,`
+        # ✅ PHASE 1: Pass db parameter to service (DI pattern)
         success = await session_service.revoke_session(
-            session_id=session_id, user_id=current_user.id
+            db=db,  # Pass injected database session
+            session_id=session_id,
+            user_id=current_user.id
         )
 
         if not success:
@@ -177,24 +181,38 @@ async def revoke_session(
 
 @router.post("/revoke-all", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_all_other_sessions(
-    # ✅ THAY ĐỔI Ở ĐÂY: Dùng Pydantic model để đọc JSON Body
     request_data: schemas.RevokeAllSessionsRequest,
+    db: AsyncSession = Depends(database.get_db),  # ✅ PHASE 1: Inject db session (DI pattern)
     current_user: models.User = Depends(deps.get_current_user),
-    # ❌ ĐÃ XÓA: db: AsyncSession = Depends(database.get_db),
 ):
-    # ✅ Lấy ID từ request_data (trong body)
+    """
+    Revoke all other sessions for the current user except optionally one.
+
+    Args:
+        request_data: Request body with optional current_session_id to preserve
+        db: Database session (injected)
+        current_user: Current authenticated user (injected)
+
+    Returns:
+        204 No Content on success
+
+    Raises:
+        500: If session revocation fails
+    """
     session_id_to_preserve = request_data.current_session_id
 
     log.info(
         "Revoking all other sessions",
         user_id=current_user.id,
-        preserve_session_id=session_id_to_preserve, # 👈 Log sẽ hiển thị đúng
+        preserve_session_id=session_id_to_preserve,
     )
 
     try:
-        # ❌ ĐÃ XÓA `db=db,`
+        # ✅ PHASE 1: Pass db parameter to service (DI pattern)
         revoked_count = await session_service.revoke_all_other_sessions(
-            user_id=current_user.id, except_session_id=session_id_to_preserve
+            db=db,  # Pass injected database session
+            user_id=current_user.id,
+            except_session_id=session_id_to_preserve
         )
 
         log.info(

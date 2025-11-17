@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import Request
+# ✅ PHASE 1: Removed FastAPI Request import (protocol-independent)
 from sqlalchemy import and_, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -59,36 +59,10 @@ async def log_activity(
     return activity_log
 
 
-async def log_activity_from_request(
-    db: AsyncSession,
-    request: Request,
-    action: str,
-    resource_type: str,
-    actor_id: Optional[int] = None,
-    target_user_id: Optional[int] = None,
-    resource_id: Optional[int] = None,
-    description: Optional[str] = None,
-    changes: Optional[Dict[str, Any]] = None,
-) -> models.UserActivityLog:
-    """
-    Create activity log from a FastAPI Request object.
-    Automatically extracts IP and user agent from request.
-    """
-    ip_address = request.client.host if request.client else None
-    user_agent = request.headers.get("user-agent", None)
-
-    return await log_activity(
-        db=db,
-        action=action,
-        resource_type=resource_type,
-        actor_id=actor_id,
-        target_user_id=target_user_id,
-        resource_id=resource_id,
-        description=description,
-        changes=changes,
-        ip_address=ip_address,
-        user_agent=user_agent,
-    )
+# ✅ PHASE 1: Removed log_activity_from_request() - routers should extract IP/UA
+# Routers can call log_activity() directly with:
+#   ip_address = request.client.host if request.client else None
+#   user_agent = request.headers.get("user-agent")
 
 
 async def get_activity_logs(

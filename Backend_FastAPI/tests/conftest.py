@@ -7,7 +7,12 @@ import os
 import sys
 from typing import Any, Dict, List, Optional
 
-import pandas as pd
+try:
+    import pandas as pd
+except ImportError:
+    # pandas not required for refactoring/unit tests
+    pd = None
+
 import pytest
 import pytest_asyncio
 import redis.asyncio as redis
@@ -316,7 +321,7 @@ def _verify_test_database_safety():
     log.info(f"✅ Safety check passed: APP_ENV={current_env}, DB_URL={db_url[:60]}...")
 
 
-@pytest_asyncio.fixture(scope="function", autouse=True)
+@pytest_asyncio.fixture(scope="function", autouse=False)
 async def setup_test_database(manage_engine):
     # 🚨 CRITICAL: Verify safety before ANY database operations!
     _verify_test_database_safety()
@@ -324,22 +329,47 @@ async def setup_test_database(manage_engine):
     log.info(
         "--- [FUNCTION SETUP] Setting up test database (dropping and creating all tables) ---"
     )
+
+    # ✅ FIX: Drop tables with CASCADE to avoid constraint errors
+    # This handles old schema (no constraint name) vs new schema (with constraint name)
+    try:
+        async with engine.begin() as conn:
+            # Drop all tables with CASCADE (ignores constraint issues)
+            await conn.execute(text("DROP SCHEMA public CASCADE"))
+            await conn.execute(text("CREATE SCHEMA public"))
+            await conn.execute(text("GRANT ALL ON SCHEMA public TO public"))
+            log.info("Schema reset complete (all tables dropped)")
+    except Exception as e:
+        log.warning(f"Schema reset failed, trying metadata drop: {e}")
+        # Fallback to metadata drop if schema drop fails
+        try:
+            async with engine.begin() as conn:
+                if CasbinBase:
+                    await conn.run_sync(CasbinBase.metadata.drop_all)
+                await conn.run_sync(AppBase.metadata.drop_all)
+        except Exception as e2:
+            log.warning(f"Metadata drop also failed (will create fresh): {e2}")
+
+    # Create all tables with new schema
     async with engine.begin() as conn:
-        if CasbinBase:
-            await conn.run_sync(CasbinBase.metadata.drop_all)
-        await conn.run_sync(AppBase.metadata.drop_all)
         await conn.run_sync(AppBase.metadata.create_all)
         if CasbinBase:
             await conn.run_sync(CasbinBase.metadata.create_all)
+
     log.info("--- [FUNCTION SETUP] Test database setup complete ---")
     yield
+
     log.info(
         "\n--- [FUNCTION TEARDOWN] Tearing down test database (dropping all tables) ---"
     )
-    async with engine.begin() as conn:
-        if CasbinBase:
-            await conn.run_sync(CasbinBase.metadata.drop_all)
-        await conn.run_sync(AppBase.metadata.drop_all)
+    try:
+        async with engine.begin() as conn:
+            # Drop all tables with CASCADE
+            await conn.execute(text("DROP SCHEMA public CASCADE"))
+            await conn.execute(text("CREATE SCHEMA public"))
+            await conn.execute(text("GRANT ALL ON SCHEMA public TO public"))
+    except Exception as e:
+        log.warning(f"Teardown schema drop failed: {e}")
     log.info("--- [FUNCTION TEARDOWN] Test database teardown complete ---")
 
 
@@ -358,7 +388,7 @@ async def test_redis_client():
         await client.aclose()
 
 
-@pytest_asyncio.fixture(scope="function", autouse=True)
+@pytest_asyncio.fixture(scope="function", autouse=False)
 async def clear_redis_keys(
     test_redis_client,
 ):  # Bỏ dependency setup_test_database ở đây
@@ -507,17 +537,33 @@ async def test_user_in_db(setup_test_database):
 
 
 async def _get_token_headers(client: AsyncClient, user_info: dict) -> dict:
-    """Helper để login và lấy headers."""
+    """
+    Helper to login and get auth headers.
+
+    ✅ FIX-5: Auth now uses httpOnly cookies. The httpx AsyncClient automatically
+    manages cookies, so we don't need to manually pass Authorization headers.
+    However, for backward compatibility with tests that use headers parameter,
+    we extract the token from the cookie and return it as an Authorization header.
+    """
     login_data = {"username": user_info["username"], "password": user_info["password"]}
     res = await client.post(
         AuthURLs.LOGIN, data=login_data
-    )  # Sử dụng AuthURLs đã import
+    )
     if res.status_code != 200:
         pytest.fail(
             f"{user_info['username']} login failed: Status {res.status_code} - {res.text}"
         )
-    tokens = res.json()
-    return {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    # ✅ FIX: Extract access_token from cookie (not JSON response)
+    access_token = res.cookies.get("access_token")
+    if not access_token:
+        pytest.fail(
+            f"{user_info['username']} login succeeded but access_token cookie not found"
+        )
+
+    # Return as Authorization header for backward compatibility
+    # (Backend supports both cookie and header auth)
+    return {"Authorization": f"Bearer {access_token}"}
 
 
 @pytest_asyncio.fixture(scope="function")
