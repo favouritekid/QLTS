@@ -50,8 +50,8 @@ async def test_get_assignment_config_success(
     # Create organization unit first
     unit_data = {
         "name": "Test Unit for Config",
-        "type": "Faculty",
-        "code": "TUC",
+        "type": "Khoa",
+        "description": "Test unit for assignment config testing",
     }
 
     unit_response = await client.post(
@@ -96,8 +96,8 @@ async def test_update_assignment_config_success(
     # Create organization unit first
     unit_data = {
         "name": "Test Unit for Update Config",
-        "type": "Department",
-        "code": "TUUC",
+        "type": "Phòng ban",
+        "description": "Test unit for updating config",
     }
 
     unit_response = await client.post(
@@ -166,8 +166,8 @@ async def test_update_assignment_config_invalid_strategy(
     # Create organization unit first
     unit_data = {
         "name": "Test Unit Invalid",
-        "type": "Faculty",
-        "code": "TUIV",
+        "type": "Khoa",
+        "description": "Test unit for invalid strategy testing",
     }
 
     unit_response = await client.post(
@@ -309,9 +309,9 @@ async def test_create_skill_rule_success(
     # Verify in database
     async with AsyncSessionLocal() as db:
         result = await db.execute(
-            select(models.SkillRule).where(
-                models.SkillRule.lead_attribute == rule_data["lead_attribute"],
-                models.SkillRule.attribute_value == rule_data["attribute_value"],
+            select(models.SkillRequirementRule).where(
+                models.SkillRequirementRule.lead_attribute == rule_data["lead_attribute"],
+                models.SkillRequirementRule.attribute_value == rule_data["attribute_value"],
             )
         )
         rule = result.scalar_one_or_none()
@@ -471,7 +471,7 @@ async def test_delete_skill_rule_success(
     # Verify rule is deleted
     async with AsyncSessionLocal() as db:
         result = await db.execute(
-            select(models.SkillRule).where(models.SkillRule.id == rule_id)
+            select(models.SkillRequirementRule).where(models.SkillRequirementRule.id == rule_id)
         )
         rule = result.scalar_one_or_none()
         assert rule is None, "Skill rule should be deleted from database"
@@ -601,8 +601,8 @@ async def test_config_workflow_integration(
     # 1. Create organization unit
     unit_data = {
         "name": "Integration Test Unit",
-        "type": "Faculty",
-        "code": "ITU",
+        "type": "Khoa",
+        "description": "Integration test unit for complete workflow",
     }
 
     unit_response = await client.post(
