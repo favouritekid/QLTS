@@ -86,8 +86,8 @@ async def test_create_user_success(
         assert user is not None, "User not found in database"
         assert user.email == user_data["email"]
         # Verify password is hashed
-        assert user.hashed_password != user_data["password"], "Password not hashed"
-        assert user.hashed_password.startswith("$2b$"), "Password not bcrypt hashed"
+        assert user.password_hash != user_data["password"], "Password not hashed"
+        assert user.password_hash.startswith("$2b$"), "Password not bcrypt hashed"
 
     log.info("✅ User created successfully with hashed password")
 
@@ -305,8 +305,8 @@ async def test_admin_reset_user_password(
         user = result.scalar_one_or_none()
         assert user is not None
         # Password should be hashed and different from plain text
-        assert user.hashed_password != new_password
-        assert user.hashed_password.startswith("$2b$")
+        assert user.password_hash != new_password
+        assert user.password_hash.startswith("$2b$")
 
     log.info(f"✅ Password reset successfully for user {user_id}")
 
