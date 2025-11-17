@@ -537,17 +537,33 @@ async def test_user_in_db(setup_test_database):
 
 
 async def _get_token_headers(client: AsyncClient, user_info: dict) -> dict:
-    """Helper để login và lấy headers."""
+    """
+    Helper to login and get auth headers.
+
+    ✅ FIX-5: Auth now uses httpOnly cookies. The httpx AsyncClient automatically
+    manages cookies, so we don't need to manually pass Authorization headers.
+    However, for backward compatibility with tests that use headers parameter,
+    we extract the token from the cookie and return it as an Authorization header.
+    """
     login_data = {"username": user_info["username"], "password": user_info["password"]}
     res = await client.post(
         AuthURLs.LOGIN, data=login_data
-    )  # Sử dụng AuthURLs đã import
+    )
     if res.status_code != 200:
         pytest.fail(
             f"{user_info['username']} login failed: Status {res.status_code} - {res.text}"
         )
-    tokens = res.json()
-    return {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    # ✅ FIX: Extract access_token from cookie (not JSON response)
+    access_token = res.cookies.get("access_token")
+    if not access_token:
+        pytest.fail(
+            f"{user_info['username']} login succeeded but access_token cookie not found"
+        )
+
+    # Return as Authorization header for backward compatibility
+    # (Backend supports both cookie and header auth)
+    return {"Authorization": f"Bearer {access_token}"}
 
 
 @pytest_asyncio.fixture(scope="function")
