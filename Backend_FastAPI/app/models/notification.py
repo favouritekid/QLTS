@@ -47,7 +47,8 @@ class Notification(Base):
     read_at = Column(DateTime(timezone=True), nullable=True)
 
     # Relationship
-    user = relationship("User", backref="notifications")
+    # ✅ TASK 6.1: Updated to use back_populates (explicit bidirectional relationship)
+    user = relationship("User", back_populates="notifications")
 
     def __repr__(self) -> str:
         return f"<Notification {self.id}: {self.title} for user {self.user_id}>"

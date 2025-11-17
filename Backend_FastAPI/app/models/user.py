@@ -104,6 +104,49 @@ class User(Base):
         "UserSession", back_populates="user", cascade="all, delete-orphan"
     )
 
+    # ✅ TASK 6.1: Added back_populates relationships (explicit bidirectional)
+    # These were previously auto-created by backref in child models
+
+    # Notifications
+    notifications = relationship(
+        "Notification",
+        back_populates="user",
+        cascade="all, delete-orphan"
+    )
+
+    # Notification preferences (one-to-one)
+    notification_preference = relationship(
+        "NotificationPreference",
+        back_populates="user",
+        uselist=False  # One-to-one relationship
+    )
+
+    # Activity logs (as actor)
+    activities_performed = relationship(
+        "UserActivityLog",
+        back_populates="actor",
+        foreign_keys="UserActivityLog.actor_id"
+    )
+
+    # Activity logs (as target)
+    activities_received = relationship(
+        "UserActivityLog",
+        back_populates="target_user",
+        foreign_keys="UserActivityLog.target_user_id"
+    )
+
+    # Academic info audit trails
+    created_academic_infos = relationship(
+        "OfferingAcademicInfo",
+        back_populates="created_by",
+        foreign_keys="OfferingAcademicInfo.created_by_user_id"
+    )
+    updated_academic_infos = relationship(
+        "OfferingAcademicInfo",
+        back_populates="updated_by",
+        foreign_keys="OfferingAcademicInfo.updated_by_user_id"
+    )
+
     def __repr__(self) -> str:
         return f"<User {self.username}>"
 

@@ -40,7 +40,8 @@ class NotificationPreference(Base):
     quiet_hours_end = Column(Time, nullable=True)  # e.g., 08:00
 
     # Relationships
-    user = relationship("User", backref="notification_preference")
+    # ✅ TASK 6.1: Updated to use back_populates (explicit bidirectional relationship)
+    user = relationship("User", back_populates="notification_preference")
 
     def get_type_preference(self, notification_type: str) -> dict:
         """Get preference for a specific notification type."""
