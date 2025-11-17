@@ -201,14 +201,3 @@ class OfferingDistributionConfig(Base):
 # ============================================================================
 # OLD 2-TIER MODEL - REMOVED AFTER MIGRATION k6l7m8n9o0p1
 # ============================================================================
-# class Major(Base):
-#     """
-#     [DEPRECATED] Old 2-tier model - replaced by 3-tier architecture:
-#     MajorProgram (Tier 1) -> ProgramOffering (Tier 2) -> OfferingAcademicInfo (Tier 3)
-#
-#     This model and its table were removed in migration k6l7m8n9o0p1.
-#     DO NOT UNCOMMENT - kept for reference only.
-#     """
-#     __tablename__ = "major"  # Table dropped in migration
-#     # ... fields removed ...
-# ============================================================================

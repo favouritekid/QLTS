@@ -47,13 +47,8 @@ export const API_ENDPOINTS = {
 
     // Tier 3: OfferingAcademicInfo
     LIST_ACADEMIC_INFO: (offeringId: number) => `/api/offerings/${offeringId}/academic-info`,
-    GET_ACADEMIC_INFO_BY_YEAR: (offeringId: number, year: number) => `/api/offerings/${offeringId}/academic-info/${year}`,
 
     // === LEGACY (DEPRECATED) ===
-    LIST_MAJORS: "/api/majors",
-    GET_MAJOR: (id: number) => `/api/majors/${id}`,
-    ACADEMIC_INFO_HISTORY: (majorId: number) => `/api/majors/${majorId}/academic-info`,
-    ACADEMIC_INFO_BY_YEAR: (majorId: number, year: number) => `/api/majors/${majorId}/academic-info/${year}`,
   },
   ADMIN: {
     USERS: {
@@ -104,10 +99,6 @@ export const API_ENDPOINTS = {
       DELETE_ACADEMIC_INFO: (academicInfoId: number) => `/api/admin/academic-info/${academicInfoId}`,
 
       // === LEGACY (DEPRECATED) ===
-      CREATE_MAJOR: "/api/admin/majors",
-      UPDATE_MAJOR: (id: number) => `/api/admin/majors/${id}`,
-      DELETE_MAJOR: (id: number) => `/api/admin/majors/${id}`,
-      GET_MAJOR: (id: number) => `/api/admin/majors/${id}`,
     },
     // System Configuration
     CONFIG: {
