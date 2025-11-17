@@ -5,7 +5,7 @@ import { useState, useMemo } from "react"; // ✅ Thêm useMemo
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { Plus, ArrowLeft, Pencil, Trash2, Workflow, FolderGit2 } from "lucide-react";
+import { Plus, ArrowLeft, Pencil, Trash2, Workflow } from "lucide-react";
 import Link from "next/link";
 import {
   usePipelineStages,
@@ -15,7 +15,6 @@ import {
 } from "@/hooks/usePipeline";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator"; // ✅ Thêm Separator để phân cách nhóm
 import { PipelineStageDialog } from "@/components/admin/PipelineStageDialog";
 import { ConsultationStatusDialog } from "@/components/admin/ConsultationStatusDialog";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";

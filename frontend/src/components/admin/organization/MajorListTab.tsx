@@ -107,7 +107,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
   const deleteOfferingMutation = useDeleteProgramOffering();
 
   // Query
-  const { data: allUnits = [], isLoading } = useOrganizationUnits();
+  const { isLoading } = useOrganizationUnits();
 
   // Get programs to display
   const isRootUnit = unit.parent_id === null;

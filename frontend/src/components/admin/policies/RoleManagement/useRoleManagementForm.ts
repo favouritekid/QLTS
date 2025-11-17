@@ -83,7 +83,8 @@ export function useRoleManagementForm() {
   };
 
   // Create role handler
-  const handleCreateRole = async (newRoleName: string, newRoleDescription: string) => {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const handleCreateRole = async (newRoleName: string, _newRoleDescription: string) => {
     // Validate role name
     if (!newRoleName.trim()) {
       toast.error("Role name is required");

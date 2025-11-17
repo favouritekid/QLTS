@@ -1,11 +1,10 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { Loader2, ArrowRight, Check, Search, MousePointerClick } from "lucide-react";
+import { Loader2, ArrowRight, Search, MousePointerClick } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";

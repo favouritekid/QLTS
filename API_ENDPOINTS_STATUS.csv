@@ -1,0 +1,133 @@
+Category,Backend Endpoint,HTTP Method,Frontend Hook/Component,Frontend File Location,Status,Priority,Notes
+Authentication,/api/auth/register,POST,useAuth,useAuth.ts:144,Implemented,High,
+Authentication,/api/auth/login,POST,useAuth,useAuth.ts:49,Implemented,High,
+Authentication,/api/auth/logout,POST,useAuth,useAuth.ts:87,Implemented,High,
+Authentication,/api/auth/check-status,GET,None,N/A,Missing,High,Should implement for session validation
+Authentication,/api/auth/forgot-password,POST,useAuth,useAuth.ts:176,Implemented,High,
+Authentication,/api/auth/reset-password,POST,useAuth,useAuth.ts:215,Implemented,High,
+Authentication,/api/auth/change-password,POST,useAuth,useAuth.ts:256,Implemented,High,
+Authentication,/api/auth/refresh,POST,api client,client.ts:164,Implemented,High,Auto-refresh in interceptor
+Profile,/api/profile,GET,useAuth,N/A,Missing,Medium,Profile read not explicitly used
+Profile,/api/profile,PUT,useAuth,useAuth.ts:312,Implemented,Medium,
+Users,/api/users/me,GET,useAuth,useAuth.ts:120,Implemented,High,
+Sessions,/api/sessions,GET,useSessions,sessions.ts:19,Implemented,Medium,
+Sessions,/api/sessions/{id},DELETE,useSessions,sessions.ts:27,Implemented,Medium,
+Sessions,/api/sessions/revoke-all,POST,useSessions,sessions.ts:34,Implemented,Medium,
+Notifications,/api/notifications,GET,useNotifications,useNotifications.ts:41,Implemented,Medium,
+Notifications,/api/notifications/mark-as-read,POST,useNotifications,useNotifications.ts:70,Implemented,Medium,
+Notifications,/api/notifications/mark-all-as-read,POST,useNotifications,useNotifications.ts:136,Implemented,Medium,
+Notifications,/api/notifications/{id},DELETE,useNotifications,useNotifications.ts:197,Implemented,Low,
+Notifications,/api/notifications/preferences,GET,useNotificationPreferences,useNotificationPreferences.ts:27,Implemented,Medium,
+Notifications,/api/notifications/preferences,PUT,useNotificationPreferences,useNotificationPreferences.ts:48,Implemented,Medium,
+Leads,/api/leads,POST,useLeads,leads.ts:75,Implemented,High,
+Leads,/api/leads,GET,useLeads,leads.ts:44,Implemented,High,
+Leads,/api/leads/export,GET,None,N/A,Duplicate,Medium,Duplicate with /api/admin/leads/export
+Leads,/api/leads/{id},GET,useLeads,leads.ts:54,Implemented,High,
+Leads,/api/leads/{id},PUT,useLeads,"leads.ts:88, pipeline.ts:251",Implemented,High,
+Leads,/api/leads/{id},DELETE,useLeads,leads.ts:98,Implemented,High,
+Leads,/api/leads/{id}/consultations,POST,useLeads,leads.ts:217,Implemented,High,
+Leads,/api/leads/{id}/assign,POST,useLeads,leads.ts:122,Implemented,High,
+Leads,/api/leads/{id}/action,POST,useLeads,leads.ts:187,Implemented,High,
+Leads,/api/leads/{id}/timeline,GET,useLeads,leads.ts:250,Implemented,Medium,
+Leads,/api/leads/{id}/insights,GET,useLeads,leads.ts:266,Implemented,Medium,
+Leads,/api/leads/{id}/consultations/{cid},DELETE,useLeads,leads.ts:231,Implemented,Medium,
+Admin Leads,/api/admin/leads/bulk-assign,POST,useLeads,leads.ts:152,Implemented,High,
+Admin Leads,/api/admin/leads/import,POST,useLeads,leads.ts:294,Implemented,High,
+Admin Leads,/api/admin/leads/export,GET,useLeads,leads.ts:332,Implemented,High,
+Admin Leads,/api/admin/leads/{id}/revert-status,POST,usePipeline,pipeline.ts:295,Implemented,Medium,
+Pipeline,/api/pipeline/stages,GET,usePipeline,pipeline.ts:35,Implemented,High,
+Pipeline,/api/pipeline/all,GET,usePipeline,pipeline.ts:62,Implemented,High,
+Admin Pipeline,/api/admin/pipeline-stages,GET,None,N/A,Missing,Low,Uses /api/pipeline/stages instead
+Admin Pipeline,/api/admin/pipeline-stages,POST,usePipeline,pipeline.ts:89,Implemented,High,
+Admin Pipeline,/api/admin/pipeline-stages/{id},GET,None,N/A,Missing,Low,Not needed - uses list query
+Admin Pipeline,/api/admin/pipeline-stages/{id},PUT,usePipeline,pipeline.ts:114,Implemented,High,
+Admin Pipeline,/api/admin/pipeline-stages/{id},DELETE,usePipeline,pipeline.ts:132,Implemented,High,
+Admin Pipeline,/api/admin/consultation-statuses,GET,usePipeline,pipeline.ts:150,Implemented,High,
+Admin Pipeline,/api/admin/consultation-statuses/{id},GET,usePipeline,pipeline.ts:164,Implemented,Medium,
+Admin Pipeline,/api/admin/consultation-statuses,POST,usePipeline,pipeline.ts:189,Implemented,High,
+Admin Pipeline,/api/admin/consultation-statuses/{id},PUT,usePipeline,pipeline.ts:207,Implemented,High,
+Admin Pipeline,/api/admin/consultation-statuses/{id},DELETE,usePipeline,pipeline.ts:222,Implemented,High,
+Admin Pipeline,/api/admin/allowed-transitions,GET,usePipeline,pipeline.ts:369,Implemented,Medium,
+Admin Pipeline,/api/admin/allowed-transitions,POST,usePipeline,pipeline.ts:392,Implemented,Medium,
+Admin Pipeline,/api/admin/allowed-transitions/{id},DELETE,usePipeline,pipeline.ts:408,Implemented,Medium,
+Admin Pipeline,/api/admin/pipeline/invalidate-cache,POST,usePipeline,pipeline.ts:426,Implemented,Low,
+Organization,/api/organization-unit-types,GET,useOrganization,useOrganization.ts:157,Implemented,Medium,
+Organization,/api/organization-units,GET,useOrganization,useOrganization.ts:112,Implemented,High,
+Organization,/api/organization-units/tree-with-aggregation,GET,useOrganization,useOrganization.ts:141,Implemented,High,
+Organization,/api/organization-units/{id},GET,useOrganization,useOrganization.ts:172,Implemented,Medium,
+Organization,/api/programs,GET,None,N/A,Missing,Low,Filtered program list not used
+Organization,/api/programs/{id}/offerings,GET,None,N/A,Missing,Low,Uses /api/major-programs/{id}/offerings instead
+Organization,/api/offerings/{id}/academic-info,GET,None,N/A,Missing,Medium,Academic info history not implemented
+Organization,/api/offerings/{id}/academic-info/{year},GET,None,N/A,Missing,Medium,Year-specific academic info not implemented
+Organization,/api/offerings/{id}/academic-info/current,GET,useOrganization,useOrganization.ts:267,Implemented,Medium,Uses /api/offerings/{id}/current-info
+Organization,/api/program-offerings,GET,DistributionRuleDialog,DistributionRuleDialog.tsx:87,Implemented,Medium,
+Organization,/api/academic-info/{id},PATCH,useOrganization,useOrganization.ts:739,Implemented,Medium,
+Organization,/api/academic-info/{id},DELETE,useOrganization,useOrganization.ts:780,Implemented,Medium,
+Admin Organization,/api/admin/organization-units,POST,useOrganization,useOrganization.ts:330,Implemented,High,
+Admin Organization,/api/admin/organization-units/{id},GET,None,N/A,Missing,Medium,Should implement for detail page optimization
+Admin Organization,/api/admin/organization-units/{id},PUT,useOrganization,useOrganization.ts:369,Implemented,High,
+Admin Organization,/api/admin/organization-units/{id},DELETE,useOrganization,useOrganization.ts:440,Implemented,High,
+Admin Organization,/api/admin/programs,POST,useOrganization,useOrganization.ts:474,Implemented,High,
+Admin Organization,/api/admin/programs/{id},GET,useOrganization,useOrganization.ts:214,Implemented,Medium,
+Admin Organization,/api/admin/programs/{id},PUT,useOrganization,useOrganization.ts:513,Implemented,High,
+Admin Organization,/api/admin/programs/{id},DELETE,useOrganization,useOrganization.ts:546,Implemented,High,
+Admin Organization,/api/admin/programs/{id}/offerings,POST,useOrganization,useOrganization.ts:583,Implemented,High,
+Admin Organization,/api/admin/offerings/{id},GET,useOrganization,useOrganization.ts:251,Implemented,Medium,
+Admin Organization,/api/admin/offerings/{id},PUT,useOrganization,useOrganization.ts:627,Implemented,High,
+Admin Organization,/api/admin/offerings/{id},DELETE,useOrganization,useOrganization.ts:659,Implemented,High,
+Admin Organization,/api/admin/offerings/{id}/academic-info,POST,useOrganization,useOrganization.ts:696,Implemented,Medium,
+Officer,/api/officer/stats,GET,Page Component,dashboard/officer/page.tsx:74,Implemented,High,
+Officer,/api/officer/availability,POST,WorkloadCard,WorkloadCard.tsx:28,Implemented,Medium,
+Admin Users,/api/admin/users,POST,useAdminUsers,useAdminUsers.ts:97,Implemented,High,
+Admin Users,/api/admin/users,GET,useAdminUsers,useAdminUsers.ts:50,Implemented,High,
+Admin Users,/api/admin/users/list,GET,None,N/A,Duplicate,Low,Duplicate with paginated /api/admin/users
+Admin Users,/api/admin/users/export,GET,None,N/A,Missing,Low,JSON export not used (CSV is used)
+Admin Users,/api/admin/users/export-csv,GET,Page Component,admin/users/page.tsx:379,Implemented,Medium,
+Admin Users,/api/admin/users/bulk-action,POST,useAdminUsers,useAdminUsers.ts:296,Implemented,High,
+Admin Users,/api/admin/users/sync/status,GET,None,N/A,Missing,Medium,Casbin sync status not implemented
+Admin Users,/api/admin/users/sync,POST,None,N/A,Missing,Medium,Manual Casbin sync not implemented
+Admin Users,/api/admin/users/statistics,GET,useActivityLogs,useActivityLogs.ts:69,Implemented,Medium,
+Admin Users,/api/admin/users/activity-logs,GET,useActivityLogs,useActivityLogs.ts:44,Implemented,Medium,
+Admin Users,/api/admin/users/{id},GET,useAdminUsers,useAdminUsers.ts:70,Implemented,High,
+Admin Users,/api/admin/users/{id},PUT,useAdminUsers,"useAdminUsers.ts:137, UserAssignmentDialog.tsx:161",Implemented,High,
+Admin Users,/api/admin/users/{id},DELETE,useAdminUsers,useAdminUsers.ts:208,Implemented,High,
+Admin Users,/api/admin/users/{id}/set-password,POST,useAdminUsers,useAdminUsers.ts:228,Implemented,High,
+Admin Roles,/api/admin/policies,GET,usePolicies,usePolicies.ts:34,Implemented,High,
+Admin Roles,/api/admin/policies,POST,usePolicies,usePolicies.ts:84,Implemented,High,
+Admin Roles,/api/admin/policies,DELETE,usePolicies,usePolicies.ts:100,Implemented,High,
+Admin Roles,/api/admin/roles/assign,POST,useAdminUsers,useAdminUsers.ts:249,Implemented,High,
+Admin Roles,/api/admin/roles/revoke,DELETE,useAdminUsers,useAdminUsers.ts:272,Implemented,High,
+Admin Roles,/api/admin/roles/users/{id}/roles,GET,useAdminUsers,useAdminUsers.ts:320,Implemented,Medium,
+Admin Roles,/api/admin/roles/{role}/users,GET,useRoleManagementForm,useRoleManagementForm.ts:50,Implemented,Medium,
+Admin Roles,/api/admin/roles/{role}/users,DELETE,None,N/A,Missing,Low,Bulk role removal not implemented
+Admin Roles,/api/admin/roles/grouping-policies,POST,usePolicies,usePolicies.ts:169,Implemented,Medium,
+Admin Roles,/api/admin/roles/grouping-policies,DELETE,usePolicies,usePolicies.ts:185,Implemented,Medium,
+Admin Roles,/api/admin/roles,GET,usePolicies,usePolicies.ts:50,Implemented,High,
+Admin Roles,/api/admin/roles/{role},DELETE,useRoleManagementForm,useRoleManagementForm.ts:170,Implemented,High,
+Admin Roles,/api/admin/roles/templates,GET,usePolicies,usePolicies.ts:61,Implemented,Medium,
+Admin Roles,/api/admin/roles/templates/apply,POST,usePolicies,usePolicies.ts:151,Implemented,Medium,
+Admin Roles,/api/admin/roles/policies/batch,POST,usePolicies,usePolicies.ts:119,Implemented,Medium,
+Admin Roles,/api/admin/roles/policies/validate,POST,usePolicies,usePolicies.ts:136,Implemented,Medium,
+Admin Roles,/api/admin/permissions/simulate,POST,None,N/A,Missing,Low,Permission simulation not implemented
+Admin Roles,/api/admin/roles/policies/statistics,GET,usePolicies,usePolicies.ts:72,Implemented,Medium,
+Admin Roles,/api/admin/roles/policies/suggestions,GET,usePolicySuggestions,usePolicySuggestions.ts:27,Implemented,Low,
+Admin Roles,/api/admin/roles/{role}/permissions/explain,GET,usePermissionExplain,usePermissionExplain.ts:32,Implemented,Medium,
+Admin Roles,/api/admin/permissions/who-can-access,POST,None,N/A,Missing,Low,Reverse permission lookup not implemented
+Admin Roles,/api/admin/roles/{role}/features,GET,FeaturePolicyTab,FeaturePolicyTab.tsx:73,Implemented,Low,
+Admin Roles,/api/admin/roles/{role}/features/{feature}/toggle,POST,FeaturePolicyTab,FeaturePolicyTab.tsx:95,Implemented,Low,
+Admin Config,/api/admin/assignment-config/{unit_id},GET,useOrganization,useOrganization.ts:1217,Implemented,High,
+Admin Config,/api/admin/assignment-config/{unit_id},PUT,useOrganization,useOrganization.ts:1242,Implemented,High,
+Admin Config,/api/admin/skill-rules,GET,useOrganization,useOrganization.ts:1274,Implemented,Medium,
+Admin Config,/api/admin/skill-rules,POST,useOrganization,useOrganization.ts:1290,Implemented,Medium,
+Admin Config,/api/admin/skill-rules/{id},DELETE,useOrganization,useOrganization.ts:1317,Implemented,Medium,
+Distribution,/api/admin/distribution-rules,GET,Page Component,admin/distribution/page.tsx:45,Implemented,High,
+Distribution,/api/admin/distribution-rules,POST,DistributionRuleDialog,DistributionRuleDialog.tsx:162,Implemented,High,
+Distribution,/api/admin/distribution-rules/{id},PUT,DistributionRuleDialog,DistributionRuleDialog.tsx:160,Implemented,High,
+Distribution,/api/admin/distribution-rules/{id},DELETE,Page Component,admin/distribution/page.tsx:65,Implemented,High,
+Legacy,/api/majors,GET,useOrganization,useOrganization.ts:819,Deprecated,N/A,Remove - Use /api/major-programs
+Legacy,/api/majors/{id},GET,useOrganization,useOrganization.ts:836,Deprecated,N/A,Remove - Use /api/major-programs/{id}
+Legacy,/api/admin/majors,POST,useOrganization,useOrganization.ts:851,Deprecated,N/A,Remove - Use /api/admin/programs
+Legacy,/api/admin/majors/{id},PUT,useOrganization,useOrganization.ts:880,Deprecated,N/A,Remove - Use /api/admin/programs/{id}
+Legacy,/api/admin/majors/{id},DELETE,useOrganization,useOrganization.ts:910,Deprecated,N/A,Remove - Use /api/admin/programs/{id}
+Legacy,/api/majors/{id}/academic-info,GET,useOrganization,useOrganization.ts:940,Deprecated,N/A,Remove - Use offerings academic info
+Legacy,/api/majors/{id}/academic-info/{year},GET,useOrganization,useOrganization.ts:958,Deprecated,N/A,Remove - Use offerings academic info

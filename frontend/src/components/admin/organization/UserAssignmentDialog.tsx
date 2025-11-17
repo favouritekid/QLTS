@@ -80,7 +80,7 @@ export function UserAssignmentDialog({
     status: "active", // Only active users
   });
 
-  const users = usersData?.users || [];
+  const users = useMemo(() => usersData?.users || [], [usersData?.users]);
 
   // Filter users by search and categorize them
   const { currentUsers, availableUsers } = useMemo(() => {

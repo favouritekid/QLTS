@@ -800,284 +800,6 @@ export function useDeleteOfferingAcademicInfo() {
 }
 
 // =====================================================================
-// LEGACY HOOKS (DEPRECATED - For backward compatibility)
-// =====================================================================
-
-/**
- * @deprecated Use useMajorPrograms instead
- * Get majors by unit ID (with optional search)
- */
-export function useMajors(unitId?: number, search?: string) {
-  return useQuery<Major[], AxiosError<ApiErrorResponse>>({
-    queryKey: organizationKeys.majorsList(unitId, search),
-    queryFn: async () => {
-      const params = new URLSearchParams();
-      if (unitId) params.append("unitId", String(unitId));
-      if (search) params.append("search", search);
-
-      const response = await api.get<Major[]>(
-        `${API_ENDPOINTS.ORGANIZATION.LIST_MAJORS}?${params.toString()}`
-      );
-      return response.data;
-    },
-    enabled: !!unitId,
-    staleTime: Infinity,
-  });
-}
-
-/**
- * @deprecated Use useMajorProgram instead
- * Get a single major by ID
- */
-export function useMajor(id: number) {
-  return useQuery<Major, AxiosError<ApiErrorResponse>>({
-    queryKey: organizationKeys.majorDetail(id),
-    queryFn: async () => {
-      const response = await api.get<Major>(API_ENDPOINTS.ORGANIZATION.GET_MAJOR(id));
-      return response.data;
-    },
-    enabled: !!id,
-    staleTime: Infinity,
-  });
-}
-
-/**
- * @deprecated Use useCreateMajorProgram instead
- * Create a new major
- */
-export function useCreateMajor() {
-  return useMutation<Major, AxiosError<ApiErrorResponse>, MajorCreate>({
-    mutationFn: async (data) => {
-      const response = await api.post<Major>(API_ENDPOINTS.ADMIN.ORGANIZATION.CREATE_MAJOR, data);
-      return response.data;
-    },
-    onSuccess: (newMajor) => {
-      toast.success("Ngành học mới đã được tạo!", {
-        description: newMajor.name,
-      });
-    },
-    onError: (error) => {
-      const detail = error.response?.data?.detail;
-      const message =
-        typeof detail === "string"
-          ? detail
-          : Array.isArray(detail)
-            ? detail.map((e) => e.msg).join(", ")
-            : "Tạo ngành học thất bại";
-      toast.error("Lỗi", { description: message });
-    },
-  });
-}
-
-/**
- * @deprecated Use useUpdateMajorProgram instead
- * Update an existing major
- */
-export function useUpdateMajor() {
-  return useMutation<Major, AxiosError<ApiErrorResponse>, { id: number; data: MajorUpdate }>({
-    mutationFn: async ({ id, data }) => {
-      const response = await api.put<Major>(
-        API_ENDPOINTS.ADMIN.ORGANIZATION.UPDATE_MAJOR(id),
-        data
-      );
-      return response.data;
-    },
-    onSuccess: (updatedMajor) => {
-      toast.success("Ngành học đã được cập nhật!", {
-        description: updatedMajor.name,
-      });
-    },
-    onError: (error) => {
-      const detail = error.response?.data?.detail;
-      const message =
-        typeof detail === "string"
-          ? detail
-          : Array.isArray(detail)
-            ? detail.map((e) => e.msg).join(", ")
-            : "Cập nhật ngành học thất bại";
-      toast.error("Lỗi", { description: message });
-    },
-  });
-}
-
-/**
- * @deprecated Use useDeleteMajorProgram instead
- * Delete a major
- */
-export function useDeleteMajor() {
-  return useMutation<void, AxiosError<ApiErrorResponse>, number>({
-    mutationFn: async (id) => {
-      await api.delete(API_ENDPOINTS.ADMIN.ORGANIZATION.DELETE_MAJOR(id));
-    },
-    onSuccess: () => {
-      toast.success("Ngành học đã được xóa!");
-    },
-    onError: (error) => {
-      const detail = error.response?.data?.detail;
-      const message =
-        typeof detail === "string"
-          ? detail
-          : Array.isArray(detail)
-            ? detail.map((e) => e.msg).join(", ")
-            : "Xóa ngành học thất bại";
-      toast.error("Lỗi", { description: message });
-    },
-  });
-}
-
-/**
- * @deprecated Use useOfferingAcademicInfoList instead
- * Get academic info history for a major
- */
-export function useAcademicInfoHistory(majorId: number, publishedOnly: boolean = false) {
-  return useQuery<MajorAcademicInfo[], AxiosError<ApiErrorResponse>>({
-    queryKey: organizationKeys.academicInfoHistory(majorId, publishedOnly),
-    queryFn: async () => {
-      const params = new URLSearchParams();
-      if (publishedOnly) params.append("published_only", "true");
-
-      const response = await api.get<MajorAcademicInfo[]>(
-        `${API_ENDPOINTS.ORGANIZATION.ACADEMIC_INFO_HISTORY(majorId)}?${params.toString()}`
-      );
-      return response.data;
-    },
-    enabled: !!majorId,
-    staleTime: 1000 * 60 * 5, // 5 minutes
-  });
-}
-
-/**
- * @deprecated Use useOfferingAcademicInfoByYear instead
- * Get academic info for a specific year
- */
-export function useAcademicInfoByYear(majorId: number, year: number) {
-  return useQuery<MajorAcademicInfo, AxiosError<ApiErrorResponse>>({
-    queryKey: organizationKeys.academicInfoByYearLegacy(majorId, year),
-    queryFn: async () => {
-      const response = await api.get<MajorAcademicInfo>(
-        API_ENDPOINTS.ORGANIZATION.ACADEMIC_INFO_BY_YEAR(majorId, year)
-      );
-      return response.data;
-    },
-    enabled: !!majorId && !!year,
-    staleTime: 1000 * 60 * 5, // 5 minutes
-  });
-}
-
-/**
- * @deprecated Use useCreateOfferingAcademicInfo instead
- * Create new academic info for a major
- */
-export function useCreateAcademicInfo() {
-  const queryClient = useQueryClient();
-
-  return useMutation<MajorAcademicInfo, AxiosError<ApiErrorResponse>, MajorAcademicInfoCreate>({
-    mutationFn: async (data) => {
-      const response = await api.post<MajorAcademicInfo>(
-        API_ENDPOINTS.ADMIN.ORGANIZATION.CREATE_ACADEMIC_INFO(data.major_id),
-        data
-      );
-      return response.data;
-    },
-    onSuccess: (newInfo) => {
-      toast.success("Thông tin học thuật đã được tạo!", {
-        description: `Năm học ${newInfo.academic_year}`,
-      });
-      // Invalidate history query
-      queryClient.invalidateQueries({
-        queryKey: organizationKeys.academicInfoHistory(newInfo.major_id),
-      });
-    },
-    onError: (error) => {
-      const detail = error.response?.data?.detail;
-      const message =
-        typeof detail === "string"
-          ? detail
-          : Array.isArray(detail)
-            ? detail.map((e) => e.msg).join(", ")
-            : "Tạo thông tin học thuật thất bại";
-      toast.error("Lỗi", { description: message });
-    },
-  });
-}
-
-/**
- * @deprecated Use useUpdateOfferingAcademicInfo instead
- * Update existing academic info
- */
-export function useUpdateAcademicInfo() {
-  const queryClient = useQueryClient();
-
-  return useMutation<
-    MajorAcademicInfo,
-    AxiosError<ApiErrorResponse>,
-    { id: number; data: MajorAcademicInfoUpdate }
-  >({
-    mutationFn: async ({ id, data }) => {
-      const response = await api.patch<MajorAcademicInfo>(
-        API_ENDPOINTS.ADMIN.ORGANIZATION.UPDATE_ACADEMIC_INFO(id),
-        data
-      );
-      return response.data;
-    },
-    onSuccess: (updatedInfo) => {
-      toast.success("Thông tin học thuật đã được cập nhật!", {
-        description: `Năm học ${updatedInfo.academic_year}`,
-      });
-      // Invalidate history and specific year queries
-      queryClient.invalidateQueries({
-        queryKey: organizationKeys.academicInfoHistory(updatedInfo.major_id),
-      });
-      queryClient.invalidateQueries({
-        queryKey: organizationKeys.academicInfoByYearLegacy(
-          updatedInfo.major_id,
-          updatedInfo.academic_year
-        ),
-      });
-    },
-    onError: (error) => {
-      const detail = error.response?.data?.detail;
-      const message =
-        typeof detail === "string"
-          ? detail
-          : Array.isArray(detail)
-            ? detail.map((e) => e.msg).join(", ")
-            : "Cập nhật thông tin học thuật thất bại";
-      toast.error("Lỗi", { description: message });
-    },
-  });
-}
-
-/**
- * @deprecated Use useDeleteOfferingAcademicInfo instead
- * Delete academic info
- */
-export function useDeleteAcademicInfo() {
-  const queryClient = useQueryClient();
-
-  return useMutation<void, AxiosError<ApiErrorResponse>, { id: number; majorId: number }>({
-    mutationFn: async ({ id }) => {
-      await api.delete(API_ENDPOINTS.ADMIN.ORGANIZATION.DELETE_ACADEMIC_INFO(id));
-    },
-    onSuccess: (_, variables) => {
-      toast.success("Thông tin học thuật đã được xóa!");
-      // Invalidate history query
-      queryClient.invalidateQueries({
-        queryKey: organizationKeys.academicInfoHistory(variables.majorId),
-      });
-    },
-    onError: (error) => {
-      const detail = error.response?.data?.detail;
-      const message =
-        typeof detail === "string"
-          ? detail
-          : Array.isArray(detail)
-            ? detail.map((e) => e.msg).join(", ")
-            : "Xóa thông tin học thuật thất bại";
-      toast.error("Lỗi", { description: message });
-    },
-  });
-}
 
 // =====================================================================
 // UTILITY FUNCTIONS
@@ -1250,9 +972,11 @@ export function useUpdateAssignmentConfig() {
       toast.success("Assignment configuration updated successfully");
     },
     onError: (error) => {
-      toast.error(
-        error.response?.data?.detail || "Failed to update assignment config"
-      );
+      const detail = error.response?.data?.detail;
+      const message = Array.isArray(detail)
+        ? detail.map(item => item.msg).join(", ")
+        : detail || "Failed to update assignment config";
+      toast.error(message);
     },
   });
 }
@@ -1294,9 +1018,11 @@ export function useCreateSkillRule() {
       toast.success("Skill rule created successfully");
     },
     onError: (error) => {
-      toast.error(
-        error.response?.data?.detail || "Failed to create skill rule"
-      );
+      const detail = error.response?.data?.detail;
+      const message = Array.isArray(detail)
+        ? detail.map(item => item.msg).join(", ")
+        : detail || "Failed to create skill rule";
+      toast.error(message);
     },
   });
 }
@@ -1318,9 +1044,11 @@ export function useDeleteSkillRule() {
       toast.success("Skill rule deleted successfully");
     },
     onError: (error) => {
-      toast.error(
-        error.response?.data?.detail || "Failed to delete skill rule"
-      );
+      const detail = error.response?.data?.detail;
+      const message = Array.isArray(detail)
+        ? detail.map(item => item.msg).join(", ")
+        : detail || "Failed to delete skill rule";
+      toast.error(message);
     },
   });
 }

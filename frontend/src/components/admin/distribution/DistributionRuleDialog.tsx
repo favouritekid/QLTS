@@ -41,17 +41,26 @@ import { Switch } from "@/components/ui/switch";
 const formSchema = z.object({
   offering_id: z.string().min(1, "Vui lòng chọn chương trình đào tạo"),
   unit_id: z.string().min(1, "Vui lòng chọn đơn vị tiếp nhận"),
-  weight: z.coerce.number().min(1, "Trọng số tối thiểu là 1"),
-  priority: z.coerce.number().min(1, "Độ ưu tiên tối thiểu là 1"),
-  is_active: z.boolean().default(true),
+  weight: z.number().min(1, "Trọng số tối thiểu là 1"),
+  priority: z.number().min(1, "Độ ưu tiên tối thiểu là 1"),
+  is_active: z.boolean(),
 });
 
 type FormValues = z.infer<typeof formSchema>;
 
+interface DistributionRule {
+  id: number;
+  offering_id: number;
+  unit_id: number;
+  weight: number;
+  priority: number;
+  is_active: boolean;
+}
+
 interface DistributionRuleDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  rule: any | null;
+  rule: DistributionRule | null;
 }
 
 export function DistributionRuleDialog({ open, onOpenChange, rule }: DistributionRuleDialogProps) {
@@ -60,8 +69,18 @@ export function DistributionRuleDialog({ open, onOpenChange, rule }: Distributio
 
   // === 🔥 TỐI ƯU: TÁI SỬ DỤNG API CÓ SẴN (REUSE) ===
 
+  interface Offering {
+    id: number;
+    name: string;
+  }
+
+  interface Unit {
+    id: number;
+    name: string;
+  }
+
   // 1. Fetch Offerings (Reuse API /program-offerings)
-  const { data: offerings, isLoading: isLoadingOfferings } = useQuery({
+  const { data: offerings, isLoading: isLoadingOfferings } = useQuery<Offering[]>({
     queryKey: ["organization", "offerings", "all"],
     queryFn: async () => {
       // Gọi API với limit lớn để giả lập "Get All"
@@ -79,7 +98,7 @@ export function DistributionRuleDialog({ open, onOpenChange, rule }: Distributio
   });
 
   // 2. Fetch Units (Reuse API /units)
-  const { data: units, isLoading: isLoadingUnits } = useQuery({
+  const { data: units, isLoading: isLoadingUnits } = useQuery<Unit[]>({
     queryKey: ["organization", "units", "all"],
     queryFn: async () => {
       const res = await api.get("/api/organization/units", {
@@ -148,9 +167,9 @@ export function DistributionRuleDialog({ open, onOpenChange, rule }: Distributio
       toast.success(isEditing ? "Cập nhật thành công" : "Tạo mới thành công");
       onOpenChange(false);
     },
-    onError: (error: any) => {
+    onError: (error: unknown) => {
       // Xử lý lỗi trùng lặp từ Backend
-      const msg = error.response?.data?.detail || "Có lỗi xảy ra";
+      const msg = (error as { response?: { data?: { detail?: string } } }).response?.data?.detail || "Có lỗi xảy ra";
       toast.error(msg);
     },
   });
@@ -190,7 +209,7 @@ export function DistributionRuleDialog({ open, onOpenChange, rule }: Distributio
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      {offerings?.map((item: any) => (
+                      {offerings?.map((item) => (
                         <SelectItem key={item.id} value={item.id.toString()}>
                           {item.name}
                         </SelectItem>
@@ -222,7 +241,7 @@ export function DistributionRuleDialog({ open, onOpenChange, rule }: Distributio
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      {units?.map((item: any) => (
+                      {units?.map((item) => (
                         <SelectItem key={item.id} value={item.id.toString()}>
                           {item.name}
                         </SelectItem>
@@ -242,7 +261,12 @@ export function DistributionRuleDialog({ open, onOpenChange, rule }: Distributio
                   <FormItem>
                     <FormLabel>Trọng số (Weight)</FormLabel>
                     <FormControl>
-                      <Input type="number" min={1} {...field} />
+                      <Input
+                        type="number"
+                        min={1}
+                        {...field}
+                        onChange={(e) => field.onChange(Number(e.target.value))}
+                      />
                     </FormControl>
                     <FormDescription className="text-[11px]">
                       Tỷ lệ được chia (VD: 5).
@@ -258,7 +282,12 @@ export function DistributionRuleDialog({ open, onOpenChange, rule }: Distributio
                   <FormItem>
                     <FormLabel>Thứ tự ưu tiên</FormLabel>
                     <FormControl>
-                      <Input type="number" min={1} {...field} />
+                      <Input
+                        type="number"
+                        min={1}
+                        {...field}
+                        onChange={(e) => field.onChange(Number(e.target.value))}
+                      />
                     </FormControl>
                     <FormDescription className="text-[11px]">1 = Cao nhất.</FormDescription>
                     <FormMessage />
