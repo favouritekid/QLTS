@@ -1250,9 +1250,11 @@ export function useUpdateAssignmentConfig() {
       toast.success("Assignment configuration updated successfully");
     },
     onError: (error) => {
-      toast.error(
-        error.response?.data?.detail || "Failed to update assignment config"
-      );
+      const detail = error.response?.data?.detail;
+      const message = Array.isArray(detail)
+        ? detail.map(item => item.msg).join(", ")
+        : detail || "Failed to update assignment config";
+      toast.error(message);
     },
   });
 }
@@ -1294,9 +1296,11 @@ export function useCreateSkillRule() {
       toast.success("Skill rule created successfully");
     },
     onError: (error) => {
-      toast.error(
-        error.response?.data?.detail || "Failed to create skill rule"
-      );
+      const detail = error.response?.data?.detail;
+      const message = Array.isArray(detail)
+        ? detail.map(item => item.msg).join(", ")
+        : detail || "Failed to create skill rule";
+      toast.error(message);
     },
   });
 }
@@ -1318,9 +1322,11 @@ export function useDeleteSkillRule() {
       toast.success("Skill rule deleted successfully");
     },
     onError: (error) => {
-      toast.error(
-        error.response?.data?.detail || "Failed to delete skill rule"
-      );
+      const detail = error.response?.data?.detail;
+      const message = Array.isArray(detail)
+        ? detail.map(item => item.msg).join(", ")
+        : detail || "Failed to delete skill rule";
+      toast.error(message);
     },
   });
 }

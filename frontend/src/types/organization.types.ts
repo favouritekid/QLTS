@@ -423,7 +423,7 @@ export interface AssignmentConfigParams {
   max_concurrent?: number; // Maximum concurrent assignments per officer
   auto_assign?: boolean; // Enable automatic assignment
   priority_skills?: string[]; // Skills to prioritize in assignment
-  [key: string]: any; // Flexible params for future extensions
+  [key: string]: string | number | boolean | string[] | undefined; // Flexible params for future extensions
 }
 
 /**

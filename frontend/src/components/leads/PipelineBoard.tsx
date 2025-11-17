@@ -17,7 +17,7 @@ import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortabl
 import { PipelineColumn } from "./PipelineColumn";
 import { LeadKanbanCard } from "./LeadKanbanCard";
 import { useMoveLeadToStage } from "@/hooks/usePipeline";
-import type { FullPipeline, PipelineStageWithStats } from "@/types/pipeline.types";
+import type { FullPipeline } from "@/types/pipeline.types";
 import type { Lead } from "@/types/lead.types";
 
 interface PipelineBoardProps {

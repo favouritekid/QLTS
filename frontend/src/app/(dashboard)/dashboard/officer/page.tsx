@@ -98,7 +98,8 @@ export default function OfficerDashboardPage() {
     }
 
     // Listen for data update events
-    const handleDataUpdate = (data: { resource: string }) => {
+    const handleDataUpdate = (...args: unknown[]) => {
+      const data = args[0] as { resource: string };
       // Invalidate queries when leads or consultations are updated
       if (data.resource === "lead" || data.resource === "consultation") {
         queryClient.invalidateQueries({ queryKey: ["officer", "stats"] });

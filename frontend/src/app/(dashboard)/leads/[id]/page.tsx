@@ -2,10 +2,8 @@
 "use client";
 
 import { useState } from "react";
-import { useParams, useRouter } from "next/navigation";
-import Link from "next/link";
+import { useParams } from "next/navigation";
 import {
-  ArrowLeft,
   Edit,
   UserPlus,
   Calendar,
@@ -58,7 +56,6 @@ const getStatusBadgeVariant = (status: LeadStatus) => {
 
 export default function LeadDetailPage() {
   const params = useParams();
-  const router = useRouter();
   const leadId = Number(params.id);
 
   const [editDialogOpen, setEditDialogOpen] = useState(false);
