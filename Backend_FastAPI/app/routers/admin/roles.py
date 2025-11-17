@@ -735,7 +735,7 @@ async def get_policy_templates(
     Templates provide pre-configured sets of policies for common roles.
     Admins can apply templates to quickly set up permissions.
     """
-    from app.core.casbin_config.policy_templates import POLICY_TEMPLATES
+    from app.casbin_config.policy_templates import POLICY_TEMPLATES
 
     templates = []
     for template_id, template_data in POLICY_TEMPLATES.items():
@@ -1077,7 +1077,7 @@ async def explain_role_permissions(
 
     This helps admins understand permission inheritance and sources.
     """
-    from app.core.casbin_config.policy_templates import (
+    from app.casbin_config.policy_templates import (
         FEATURE_MAP,
         ADMIN_TEMPLATE,
         MANAGER_TEMPLATE,
@@ -1313,7 +1313,7 @@ async def get_role_features(
             ]
         }
     """
-    from app.core.casbin_config.policy_templates import FEATURE_MAP
+    from app.casbin_config.policy_templates import FEATURE_MAP
 
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
@@ -1380,7 +1380,7 @@ async def toggle_role_feature(
 
     This will add/remove all policies associated with the "view_leads" feature.
     """
-    from app.core.casbin_config.policy_templates import FEATURE_MAP
+    from app.casbin_config.policy_templates import FEATURE_MAP
     from app.services.casbin_service import CasbinPolicyService
 
     # Validate feature exists

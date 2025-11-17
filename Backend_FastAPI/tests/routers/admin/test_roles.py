@@ -184,11 +184,12 @@ async def test_delete_policy_success(
     assert add_response.status_code == 201
 
     # Delete the policy
-    # Note: httpx delete() doesn't support json parameter, use content instead
-    delete_response = await client.delete(
+    # Note: httpx delete() doesn't support json/content, use request() method instead
+    delete_response = await client.request(
+        "DELETE",
         "/api/admin/roles/policies",
-        content=json.dumps(policy_data),
-        headers={**admin_token_headers, "Content-Type": "application/json"},
+        json=policy_data,
+        headers=admin_token_headers,
     )
 
     assert delete_response.status_code == 200, \
@@ -287,11 +288,12 @@ async def test_revoke_role_from_user(
     assert assign_response.status_code == 201
 
     # Revoke the role
-    # Note: httpx delete() doesn't support json parameter, use content instead
-    revoke_response = await client.delete(
+    # Note: httpx delete() doesn't support json/content, use request() method instead
+    revoke_response = await client.request(
+        "DELETE",
         "/api/admin/roles/revoke",
-        content=json.dumps(assignment_data),
-        headers={**admin_token_headers, "Content-Type": "application/json"},
+        json=assignment_data,
+        headers=admin_token_headers,
     )
 
     assert revoke_response.status_code == 200, \
@@ -442,11 +444,12 @@ async def test_delete_grouping_policy(
     assert add_response.status_code == 201
 
     # Delete the grouping policy
-    # Note: httpx delete() doesn't support json parameter, use content instead
-    delete_response = await client.delete(
+    # Note: httpx delete() doesn't support json/content, use request() method instead
+    delete_response = await client.request(
+        "DELETE",
         "/api/admin/roles/grouping-policies",
-        content=json.dumps(grouping_data),
-        headers={**admin_token_headers, "Content-Type": "application/json"},
+        json=grouping_data,
+        headers=admin_token_headers,
     )
 
     assert delete_response.status_code == 200, \
@@ -843,11 +846,12 @@ async def test_delete_nonexistent_policy(
         "action": "GET",
     }
 
-    # Note: httpx delete() doesn't support json parameter, use content instead
-    response = await client.delete(
+    # Note: httpx delete() doesn't support json/content, use request() method instead
+    response = await client.request(
+        "DELETE",
         "/api/admin/roles/policies",
-        content=json.dumps(policy_data),
-        headers={**admin_token_headers, "Content-Type": "application/json"},
+        json=policy_data,
+        headers=admin_token_headers,
     )
 
     # Should return 404
