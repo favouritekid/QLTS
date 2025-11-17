@@ -329,22 +329,47 @@ async def setup_test_database(manage_engine):
     log.info(
         "--- [FUNCTION SETUP] Setting up test database (dropping and creating all tables) ---"
     )
+
+    # ✅ FIX: Drop tables with CASCADE to avoid constraint errors
+    # This handles old schema (no constraint name) vs new schema (with constraint name)
+    try:
+        async with engine.begin() as conn:
+            # Drop all tables with CASCADE (ignores constraint issues)
+            await conn.execute(text("DROP SCHEMA public CASCADE"))
+            await conn.execute(text("CREATE SCHEMA public"))
+            await conn.execute(text("GRANT ALL ON SCHEMA public TO public"))
+            log.info("Schema reset complete (all tables dropped)")
+    except Exception as e:
+        log.warning(f"Schema reset failed, trying metadata drop: {e}")
+        # Fallback to metadata drop if schema drop fails
+        try:
+            async with engine.begin() as conn:
+                if CasbinBase:
+                    await conn.run_sync(CasbinBase.metadata.drop_all)
+                await conn.run_sync(AppBase.metadata.drop_all)
+        except Exception as e2:
+            log.warning(f"Metadata drop also failed (will create fresh): {e2}")
+
+    # Create all tables with new schema
     async with engine.begin() as conn:
-        if CasbinBase:
-            await conn.run_sync(CasbinBase.metadata.drop_all)
-        await conn.run_sync(AppBase.metadata.drop_all)
         await conn.run_sync(AppBase.metadata.create_all)
         if CasbinBase:
             await conn.run_sync(CasbinBase.metadata.create_all)
+
     log.info("--- [FUNCTION SETUP] Test database setup complete ---")
     yield
+
     log.info(
         "\n--- [FUNCTION TEARDOWN] Tearing down test database (dropping all tables) ---"
     )
-    async with engine.begin() as conn:
-        if CasbinBase:
-            await conn.run_sync(CasbinBase.metadata.drop_all)
-        await conn.run_sync(AppBase.metadata.drop_all)
+    try:
+        async with engine.begin() as conn:
+            # Drop all tables with CASCADE
+            await conn.execute(text("DROP SCHEMA public CASCADE"))
+            await conn.execute(text("CREATE SCHEMA public"))
+            await conn.execute(text("GRANT ALL ON SCHEMA public TO public"))
+    except Exception as e:
+        log.warning(f"Teardown schema drop failed: {e}")
     log.info("--- [FUNCTION TEARDOWN] Test database teardown complete ---")
 
 
