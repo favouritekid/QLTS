@@ -43,7 +43,7 @@ async def test_get_assignment_config_success(
     Verifies:
     - Admin can retrieve assignment config for a unit
     - Returns config params (strategy, max_concurrent, etc.)
-    - Creates default config if none exists
+    - Config must be created first via PUT
     """
     log.info("--- Running: test_get_assignment_config_success ---")
 
@@ -62,6 +62,22 @@ async def test_get_assignment_config_success(
     assert unit_response.status_code == 201
     unit_id = unit_response.json()["id"]
 
+    # Create assignment config first via PUT
+    config_data = {
+        "params": {
+            "strategy": "round_robin",
+            "max_concurrent": 5,
+            "auto_assign": False,
+        }
+    }
+
+    create_response = await client.put(
+        f"/api/admin/assignment-config/{unit_id}",
+        json=config_data,
+        headers=admin_token_headers,
+    )
+    assert create_response.status_code == 200
+
     # Get assignment config
     response = await client.get(
         f"/api/admin/assignment-config/{unit_id}",
@@ -74,6 +90,7 @@ async def test_get_assignment_config_success(
     # Verify response structure
     assert "params" in data
     assert isinstance(data["params"], dict)
+    assert data["params"]["strategy"] == "round_robin"
 
     log.info(f"✅ Retrieved assignment config for unit {unit_id}: {data['params']}")
 
@@ -137,8 +154,8 @@ async def test_update_assignment_config_success(
     # Verify in database
     async with AsyncSessionLocal() as db:
         result = await db.execute(
-            select(models.AssignmentConfig).where(
-                models.AssignmentConfig.unit_id == unit_id
+            select(models.OfficerAssignmentConfig).where(
+                models.OfficerAssignmentConfig.unit_id == unit_id
             )
         )
         config = result.scalar_one_or_none()
@@ -613,14 +630,29 @@ async def test_config_workflow_integration(
     assert unit_response.status_code == 201
     unit_id = unit_response.json()["id"]
 
-    # 2. Get default assignment config
+    # 2. Create assignment config via PUT (creates if not exists)
+    initial_config_data = {
+        "params": {
+            "strategy": "basic",
+            "max_concurrent": 5,
+        }
+    }
+
+    initial_config_response = await client.put(
+        f"/api/admin/assignment-config/{unit_id}",
+        json=initial_config_data,
+        headers=admin_token_headers,
+    )
+    assert initial_config_response.status_code == 200
+
+    # 3. Get assignment config to verify creation
     config_response = await client.get(
         f"/api/admin/assignment-config/{unit_id}",
         headers=admin_token_headers,
     )
     assert config_response.status_code == 200
 
-    # 3. Update assignment config
+    # 4. Update assignment config
     config_data = {
         "params": {
             "strategy": "skill_based",
@@ -638,7 +670,7 @@ async def test_config_workflow_integration(
     updated_config = update_response.json()
     assert updated_config["params"]["strategy"] == "skill_based"
 
-    # 4. Create skill rules
+    # 5. Create skill rules
     rule1_data = {
         "lead_attribute": "unit_id",
         "attribute_value": str(unit_id),
@@ -652,7 +684,7 @@ async def test_config_workflow_integration(
     )
     assert rule_response.status_code == 201
 
-    # 5. Verify all components
+    # 6. Verify all components
     all_rules_response = await client.get(
         "/api/admin/skill-rules",
         headers=admin_token_headers,
