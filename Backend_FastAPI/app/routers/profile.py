@@ -5,9 +5,9 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from pydantic import EmailStr, TypeAdapter, ValidationError  # <-- BỔ SUNG TypeAdapter
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import database, models, schemas, services
+from .. import database, models, schemas
 from ..core import deps
-from ..services import activity_service
+from ..services import activity_service, user_service
 
 router = APIRouter(tags=["Profile"])
 PermissionDep = Depends(deps.check_permission)
@@ -85,7 +85,7 @@ async def update_current_user_profile(
 
             # Chỉ kiểm tra DB nếu email thực sự thay đổi
             if valid_email != current_user.email:
-                existing_user = await services.user_service.get_user_by_email(
+                existing_user = await user_service.get_user_by_email(
                     db, valid_email
                 )
                 if existing_user:
@@ -112,7 +112,7 @@ async def update_current_user_profile(
 
     update_data = schemas.UserUpdate(**update_dict)
 
-    updated_user = await services.user_service.update_profile(
+    updated_user = await user_service.update_profile(
         db, db_user=current_user, user_in=update_data, avatar_file=avatar
     )
 

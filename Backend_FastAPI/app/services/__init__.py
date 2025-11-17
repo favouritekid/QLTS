@@ -1,13 +1,17 @@
 # app/services/__init__.py
+"""
+Services package.
+
+IMPORTANT: This __init__.py is intentionally kept minimal to avoid circular imports.
+Import services directly from their modules instead of via this package.
+
+Example:
+    # ❌ Old way (causes circular imports):
+    from .. import services
+    services.user_service.some_function()
+
+    # ✅ New way (no circular imports):
+    from ..services import user_service
+    user_service.some_function()
+"""
 # flake8: noqa: F401
-from . import user_service
-from . import lead_service
-from . import session_service
-from . import organization_service
-from . import pipeline_service
-from . import config_service
-from . import assignment_service
-from . import insights_service
-from . import anomaly_detection
-from . import role_service
-from . import auth_service

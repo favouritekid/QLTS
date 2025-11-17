@@ -38,7 +38,6 @@ router = APIRouter(tags=["Admin - Pipeline Management"])
 
 # Permission dependency
 PermissionDep = Depends(deps.check_permission)
-LeadAccessDep = Depends(deps.get_lead_with_access)
 
 
 # ============================================================================
@@ -249,7 +248,7 @@ async def delete_existing_allowed_transition(
     summary="Admin reverts the last status change of a Lead",
 )
 async def admin_revert_lead_status(
-    lead: models.Lead = LeadAccessDep,
+    lead_id: int,
     current_user: models.User = PermissionDep,
     reason: Optional[str] = Body(
         None, embed=True, description="Reason for reverting the status"
@@ -263,7 +262,7 @@ async def admin_revert_lead_status(
     của một lead, giúp sửa lỗi hoặc điều chỉnh workflow.
 
     Args:
-        lead: Lead object (injected by LeadAccessDep)
+        lead_id: ID of the lead to revert status
         current_user: Current admin user (injected by PermissionDep)
         reason: Optional reason for reverting
         db: Database session
@@ -277,9 +276,9 @@ async def admin_revert_lead_status(
         HTTPException 500: Internal server error
     """
     try:
-        # Dependency 'LeadAccessDep' đã kiểm tra quyền admin/manager
+        # Admin permission already checked by PermissionDep
         updated_lead = await lead_service.revert_last_status(
-            db=db, lead_id=lead.id, admin_user=current_user, reason=reason
+            db=db, lead_id=lead_id, admin_user=current_user, reason=reason
         )
         return updated_lead
     except (BadRequest, ResourceNotFoundError) as e:
@@ -287,7 +286,7 @@ async def admin_revert_lead_status(
     except Exception as e:
         log.error(
             "Error reverting lead status via API",
-            lead_id=lead.id,
+            lead_id=lead_id,
             admin_id=current_user.id,
             error=str(e),
             exc_info=True,

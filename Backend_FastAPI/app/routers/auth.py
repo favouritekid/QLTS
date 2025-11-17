@@ -18,7 +18,7 @@ from jose import JWTError, jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import database, models, schemas, security, services
+from .. import database, models, schemas, security
 from ..celery_utils import send_login_alert_email_task
 from ..config import settings
 from ..core import deps
@@ -34,7 +34,7 @@ from ..database import (
     safe_redis_set,
 )
 from ..ratelimit import RATE_LIMITS, limiter
-from ..services import session_service
+from ..services import session_service, user_service
 from ..services.anomaly_detection import AnomalyDetector
 
 
@@ -78,10 +78,10 @@ async def register_user(
     - Attack: Enumerate all usernames/emails in database
     - Fix: Generic message "Username or email already registered" + stricter rate limit
     """
-    db_user_by_username = await services.user_service.get_user_by_username(
+    db_user_by_username = await user_service.get_user_by_username(
         db, username=user_in.username
     )
-    db_user_by_email = await services.user_service.get_user_by_email(
+    db_user_by_email = await user_service.get_user_by_email(
         db, email=user_in.email
     )
 
@@ -101,7 +101,7 @@ async def register_user(
             detail="Username or email already registered",  # ✅ Generic message
         )
 
-    created_user = await services.user_service.create_user(db=db, user_in=user_in)
+    created_user = await user_service.create_user(db=db, user_in=user_in)
 
     # ✅ FIX: Automatically add Casbin grouping policy to map user to their role
     try:
@@ -133,12 +133,12 @@ async def login_for_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(database.get_db),
 ):
-    user = await services.user_service.authenticate_user(
+    user = await user_service.authenticate_user(
         db, username=form_data.username, password=form_data.password
     )
 
     try:
-        await services.user_service.remove_user_from_global_blacklist(user.id)
+        await user_service.remove_user_from_global_blacklist(user.id)
     except Exception as e:
         log.error(
             "Failed to remove user from global blacklist during login",
@@ -476,7 +476,7 @@ async def request_password_reset(
     db: AsyncSession = Depends(database.get_db),
 ):
     # (Giữ nguyên logic)
-    await services.user_service.handle_forgot_password(
+    await user_service.handle_forgot_password(
         db=db, email_in=forgot_data.email
     )
     return {
@@ -498,7 +498,7 @@ async def perform_password_reset(
     session hijacking attacks. If an attacker had access to the account,
     all their sessions will be revoked.
     """
-    user = await services.user_service.reset_password(
+    user = await user_service.reset_password(
         db, token=reset_data.token, new_password=reset_data.new_password
     )
 
@@ -506,7 +506,7 @@ async def perform_password_reset(
     # This prevents session hijacking if attacker had compromised account
     # ✅ FIX-2: Throw exception if invalidate fails (don't silently fail)
     try:
-        await services.user_service.invalidate_all_sessions(db, user)
+        await user_service.invalidate_all_sessions(db, user)
         log.warning(
             "All user sessions invalidated after password reset",
             user_id=user.id,
@@ -586,7 +586,7 @@ async def perform_change_password(
     If session invalidation fails, the request will fail with 500 to prevent
     security issues with dangling sessions.
     """
-    await services.user_service.change_password(
+    await user_service.change_password(
         db,
         user=current_user,
         old_password=password_data.old_password,
@@ -595,7 +595,7 @@ async def perform_change_password(
 
     # ✅ FIX-2: Throw exception if invalidate fails (don't silently fail)
     try:
-        await services.user_service.invalidate_all_sessions(db, current_user)
+        await user_service.invalidate_all_sessions(db, current_user)
         log.info(
             "All user sessions invalidated after password change",
             user_id=current_user.id,
