@@ -47,6 +47,7 @@ export const API_ENDPOINTS = {
 
     // Tier 3: OfferingAcademicInfo
     LIST_ACADEMIC_INFO: (offeringId: number) => `/api/offerings/${offeringId}/academic-info`,
+    GET_ACADEMIC_INFO_BY_YEAR: (offeringId: number, year: number) => `/api/offerings/${offeringId}/academic-info/${year}`,
 
     // === LEGACY (DEPRECATED) ===
   },
