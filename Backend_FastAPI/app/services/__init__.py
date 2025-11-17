@@ -9,3 +9,4 @@ from . import config_service
 from . import assignment_service
 from . import insights_service
 from . import anomaly_detection
+from . import role_service
