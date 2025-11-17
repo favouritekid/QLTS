@@ -66,7 +66,6 @@ async def test_create_organization_unit_success(
     # Verify response structure
     assert data["name"] == unit_data["name"]
     assert data["type"] == unit_data["type"]
-    assert data["code"] == unit_data["code"]
     assert data["description"] == unit_data["description"]
     assert "id" in data
 
@@ -74,7 +73,7 @@ async def test_create_organization_unit_success(
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             select(models.OrganizationUnit).where(
-                models.OrganizationUnit.code == unit_data["code"]
+                models.OrganizationUnit.name == unit_data["name"]
             )
         )
         unit = result.scalar_one_or_none()
@@ -170,7 +169,7 @@ async def test_get_organization_unit_success(
 
     assert data["id"] == unit_id
     assert data["name"] == unit_data["name"]
-    assert data["code"] == unit_data["code"]
+    assert data["type"] == unit_data["type"]
 
     log.info(f"✅ Retrieved unit successfully: {data['name']}")
 
@@ -289,18 +288,18 @@ async def test_delete_organization_unit_success(
 
     assert response.status_code == 204, f"Failed to delete unit: {response.status_code}"
 
-    # Verify unit is soft-deleted or not retrievable
+    # Verify unit is soft-deleted (marked as inactive)
     get_response = await client.get(
         f"/api/admin/organization-units/{unit_id}",
         headers=admin_token_headers,
     )
 
-    # Should be 404 or return with deleted flag
+    # Should be 404 or return with is_active = False (soft delete)
     assert get_response.status_code in [404, 200]
     if get_response.status_code == 200:
         data = get_response.json()
-        # Check for soft delete flag if applicable
-        assert data.get("is_deleted") == True or data.get("deleted_at") is not None
+        # Check for soft delete: is_active should be False
+        assert data.get("is_active") == False, "Unit should be marked as inactive (soft delete)"
 
     log.info("✅ Unit deleted successfully")
 
@@ -632,7 +631,7 @@ async def test_create_program_offering_program_id_mismatch(
     log.info("--- Running: test_create_program_offering_program_id_mismatch ---")
 
     # Create organization unit and program
-    unit_data = {"name": "Test Faculty", "type": "Faculty", "code": "TF"}
+    unit_data = {"name": "Test Faculty", "type": "Khoa"}
     unit_response = await client.post(
         "/api/admin/organization-units",
         json=unit_data,
@@ -640,7 +639,7 @@ async def test_create_program_offering_program_id_mismatch(
     )
     unit_id = unit_response.json()["id"]
 
-    program_data = {"name": "Test Program", "code": "TP", "unit_id": unit_id}
+    program_data = {"name": "Test Program", "degree_level": "Đại học", "code": "7999999", "unit_id": unit_id}
     program_response = await client.post(
         "/api/admin/programs",
         json=program_data,
@@ -687,7 +686,7 @@ async def test_get_program_offering_success(
     )
     unit_id = unit_response.json()["id"]
 
-    program_data = {"name": "Test Program", "code": "TP", "unit_id": unit_id}
+    program_data = {"name": "Test Program", "degree_level": "Đại học", "code": "7888888", "unit_id": unit_id}
     program_response = await client.post(
         "/api/admin/programs",
         json=program_data,
