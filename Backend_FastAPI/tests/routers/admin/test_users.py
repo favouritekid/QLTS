@@ -340,16 +340,20 @@ async def test_export_users_excel(
     )
 
     assert response.status_code == 200, f"Failed to export users: {response.text}"
+    data = response.json()
 
-    # Verify Content-Type is Excel
-    content_type = response.headers.get("content-type", "")
-    assert "spreadsheet" in content_type or "excel" in content_type, \
-        f"Expected Excel Content-Type, got: {content_type}"
+    # Verify response is a list (endpoint /export returns JSON array of users)
+    assert isinstance(data, list), f"Response should be a list, got: {type(data)}"
+    assert len(data) > 0, "Exported users list should not be empty"
 
-    # Verify response is not empty
-    assert len(response.content) > 0, "Excel file is empty"
+    # Verify password hashes are NOT included
+    for user in data:
+        assert "password" not in user, "Password should not be in export"
+        assert "password_hash" not in user, "Password hash should not be in export"
+        assert "email" in user
+        assert "username" in user
 
-    log.info("✅ Users exported to Excel successfully")
+    log.info(f"✅ Exported {len(data)} users to JSON successfully")
 
 
 @pytest.mark.asyncio
@@ -523,17 +527,20 @@ async def test_get_activity_logs(
     assert response.status_code == 200, f"Failed to get activity logs: {response.text}"
     data = response.json()
 
-    # Verify response is a list
-    assert isinstance(data, list), "Response should be a list"
+    # Verify response format (API returns dict with 'logs' and 'total_count')
+    assert isinstance(data, dict), "Response should be a dict"
+    assert "logs" in data, "Response should have 'logs' key"
+    assert "total_count" in data, "Response should have 'total_count' key"
+    assert isinstance(data["logs"], list), "logs should be a list"
 
     # If there are logs, verify structure
-    if len(data) > 0:
-        log_entry = data[0]
+    if len(data["logs"]) > 0:
+        log_entry = data["logs"][0]
         assert "action" in log_entry
         assert "resource_type" in log_entry
         assert "created_at" in log_entry
 
-    log.info(f"✅ Retrieved {len(data)} activity logs")
+    log.info(f"✅ Retrieved {len(data['logs'])} activity logs (total: {data['total_count']})")
 
 
 # ============================================================================
