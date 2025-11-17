@@ -14,6 +14,7 @@ Tests for app/routers/admin/roles.py endpoints:
 Created: 2025-11-17
 Part of: PHASE 2A Router Extraction
 """
+import json
 import logging
 from typing import Dict
 
@@ -183,10 +184,11 @@ async def test_delete_policy_success(
     assert add_response.status_code == 201
 
     # Delete the policy
+    # Note: httpx delete() doesn't support json parameter, use content instead
     delete_response = await client.delete(
         "/api/admin/roles/policies",
-        json=policy_data,
-        headers=admin_token_headers,
+        content=json.dumps(policy_data),
+        headers={**admin_token_headers, "Content-Type": "application/json"},
     )
 
     assert delete_response.status_code == 200, \
@@ -285,10 +287,11 @@ async def test_revoke_role_from_user(
     assert assign_response.status_code == 201
 
     # Revoke the role
+    # Note: httpx delete() doesn't support json parameter, use content instead
     revoke_response = await client.delete(
         "/api/admin/roles/revoke",
-        json=assignment_data,
-        headers=admin_token_headers,
+        content=json.dumps(assignment_data),
+        headers={**admin_token_headers, "Content-Type": "application/json"},
     )
 
     assert revoke_response.status_code == 200, \
@@ -439,10 +442,11 @@ async def test_delete_grouping_policy(
     assert add_response.status_code == 201
 
     # Delete the grouping policy
+    # Note: httpx delete() doesn't support json parameter, use content instead
     delete_response = await client.delete(
         "/api/admin/roles/grouping-policies",
-        json=grouping_data,
-        headers=admin_token_headers,
+        content=json.dumps(grouping_data),
+        headers={**admin_token_headers, "Content-Type": "application/json"},
     )
 
     assert delete_response.status_code == 200, \
@@ -839,10 +843,11 @@ async def test_delete_nonexistent_policy(
         "action": "GET",
     }
 
+    # Note: httpx delete() doesn't support json parameter, use content instead
     response = await client.delete(
         "/api/admin/roles/policies",
-        json=policy_data,
-        headers=admin_token_headers,
+        content=json.dumps(policy_data),
+        headers={**admin_token_headers, "Content-Type": "application/json"},
     )
 
     # Should return 404

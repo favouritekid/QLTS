@@ -161,7 +161,7 @@ async def delete_policy(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Xóa một chính sách (quyền) cụ thể với safety checks."""
-    from ..services.casbin_service import CasbinPolicyService
+    from app.services.casbin_service import CasbinPolicyService
 
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
     casbin_service = CasbinPolicyService(db, enforcer)
@@ -527,7 +527,7 @@ async def get_all_roles_with_info(
     - Custom roles created by admins
     - Policy counts for each role
     """
-    from ..services.casbin_service import CasbinPolicyService
+    from app.services.casbin_service import CasbinPolicyService
 
     enforcer = request.app.state.enforcer
     casbin_service = CasbinPolicyService(db, enforcer)
@@ -574,7 +574,7 @@ async def delete_role_atomic(
         400: If trying to delete a system role
         404: If role doesn't exist
     """
-    from ..services.casbin_service import CasbinPolicyService
+    from app.services.casbin_service import CasbinPolicyService
 
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
@@ -735,7 +735,7 @@ async def get_policy_templates(
     Templates provide pre-configured sets of policies for common roles.
     Admins can apply templates to quickly set up permissions.
     """
-    from ..casbin_config.policy_templates import POLICY_TEMPLATES
+    from app.core.casbin_config.policy_templates import POLICY_TEMPLATES
 
     templates = []
     for template_id, template_data in POLICY_TEMPLATES.items():
@@ -775,7 +775,7 @@ async def apply_template_to_role(
     Example: Apply "officer" template to "role:custom" to give it all
     officer permissions.
     """
-    from ..services.casbin_service import CasbinPolicyService
+    from app.services.casbin_service import CasbinPolicyService
 
     enforcer = request.app.state.enforcer
     casbin_service = CasbinPolicyService(db, enforcer)
@@ -829,7 +829,7 @@ async def add_policies_batch(
 
     Returns detailed results including successes, failures, and warnings.
     """
-    from ..services.casbin_service import CasbinPolicyService
+    from app.services.casbin_service import CasbinPolicyService
 
     enforcer = request.app.state.enforcer
     casbin_service = CasbinPolicyService(db, enforcer)
@@ -907,7 +907,7 @@ async def validate_policy_operation(
 
     Use this before deleting policies to prevent accidents.
     """
-    from ..services.casbin_service import CasbinPolicyService
+    from app.services.casbin_service import CasbinPolicyService
 
     enforcer = request.app.state.enforcer
     casbin_service = CasbinPolicyService(db, enforcer)
@@ -1007,7 +1007,7 @@ async def get_policy_statistics(
     - Total roles
     - Total user-role assignments
     """
-    from ..services.casbin_service import CasbinPolicyService
+    from app.services.casbin_service import CasbinPolicyService
 
     enforcer = request.app.state.enforcer
     casbin_service = CasbinPolicyService(db, enforcer)
@@ -1077,7 +1077,7 @@ async def explain_role_permissions(
 
     This helps admins understand permission inheritance and sources.
     """
-    from ..casbin_config.policy_templates import (
+    from app.core.casbin_config.policy_templates import (
         FEATURE_MAP,
         ADMIN_TEMPLATE,
         MANAGER_TEMPLATE,
@@ -1223,7 +1223,7 @@ async def who_can_access_resource(
         - ~10ms execution time (vs 5000ms+ in old implementation)
     """
     import time
-    from ..services.casbin_service import CasbinPolicyService
+    from app.services.casbin_service import CasbinPolicyService
 
     start_time = time.time()
 
@@ -1313,7 +1313,7 @@ async def get_role_features(
             ]
         }
     """
-    from ..casbin_config.policy_templates import FEATURE_MAP
+    from app.core.casbin_config.policy_templates import FEATURE_MAP
 
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
@@ -1380,8 +1380,8 @@ async def toggle_role_feature(
 
     This will add/remove all policies associated with the "view_leads" feature.
     """
-    from ..casbin_config.policy_templates import FEATURE_MAP
-    from ..services.casbin_service import CasbinPolicyService
+    from app.core.casbin_config.policy_templates import FEATURE_MAP
+    from app.services.casbin_service import CasbinPolicyService
 
     # Validate feature exists
     if request_data.feature_id not in FEATURE_MAP:

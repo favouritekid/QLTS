@@ -270,6 +270,7 @@ async def export_all_users(
     để đảm bảo export toàn bộ users, không chỉ trang hiện tại.
 
     ✅ Sử dụng eager loading (selectinload) để tránh N+1 queries.
+    🔒 SECURITY: Excludes password_hash from export to prevent credential leakage
     """
     query_params = dict(request.query_params)
     # Gọi get_users với skip=0 và limit rất lớn để lấy tất cả
@@ -277,7 +278,31 @@ async def export_all_users(
     total, users = await services.user_service.get_users(
         db, params=query_params, skip=0, limit=10000  # Giới hạn tạm 10k users
     )
-    return users
+
+    # 🔒 SECURITY FIX: Remove password_hash from export
+    # Convert SQLAlchemy models to dicts and exclude sensitive fields
+    safe_users = []
+    for user in users:
+        user_dict = {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "full_name": user.full_name,
+            "role": user.role,
+            "status": user.status,
+            "phone_number": user.phone_number,
+            "avatar_url": user.avatar_url,
+            "unit_id": user.unit_id,
+            "skills": user.skills,
+            "availability_status": user.availability_status,
+            "max_capacity": user.max_capacity,
+            "total_lead_score": user.total_lead_score,
+            "current_assignment_id": user.current_assignment_id,
+            # Explicitly EXCLUDE: password_hash, active_jti, search_vector
+        }
+        safe_users.append(user_dict)
+
+    return safe_users
 
 
 # ✅ FIX: Move /users/export-csv BEFORE /users/{user_id} to prevent route conflict
