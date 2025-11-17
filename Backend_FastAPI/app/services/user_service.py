@@ -1280,3 +1280,117 @@ async def stream_users_csv(
         yield f"\"Error streaming data: {str(e)}\""
 
     log.info("CSV stream generation complete", filters=params)
+
+
+# =============================================================================
+# PHASE 1 - Task 1.7: USER SYNC TO CASBIN (EXTRACTED FROM ROUTER)
+# =============================================================================
+
+async def sync_users_to_casbin(
+    db: AsyncSession,
+    enforcer: casbin.AsyncEnforcer,
+    user_ids: Optional[List[int]] = None,
+) -> Dict[str, any]:
+    """
+    Synchronize user roles from Casbin (source of truth) to database.
+
+    This function extracts business logic from the router layer, making it
+    protocol-independent and reusable across different contexts (HTTP, CLI, Celery).
+
+    Business Rules:
+    - Casbin is the source of truth for role assignments
+    - Database user.role field is updated to match Casbin
+    - Highest priority role is used if user has multiple roles
+    - Failed syncs are collected and returned for error handling
+
+    Args:
+        db: Database session (injected via DI)
+        enforcer: Casbin enforcer instance (injected via DI)
+        user_ids: Optional list of specific user IDs to sync.
+                  If None or empty, sync all users in database.
+
+    Returns:
+        Dict containing:
+        - synced_count: Number of users successfully synced
+        - failed_count: Number of failed sync operations
+        - failed_users: List of dicts with user_id, username, error
+
+    Raises:
+        No exceptions raised - errors are collected in failed_users
+
+    Example:
+        >>> result = await sync_users_to_casbin(
+        ...     db=session,
+        ...     enforcer=app.state.enforcer,
+        ...     user_ids=[1, 2, 3]  # Sync specific users
+        ... )
+        >>> print(result["synced_count"])
+        3
+
+        >>> result = await sync_users_to_casbin(
+        ...     db=session,
+        ...     enforcer=app.state.enforcer,
+        ...     user_ids=None  # Sync ALL users
+        ... )
+
+    Note:
+        This function does NOT commit the transaction. The caller is responsible
+        for calling db.commit() after this function returns.
+    """
+    # Query users to sync (specific IDs or all)
+    if user_ids:
+        result = await db.execute(
+            select(models.User).where(models.User.id.in_(user_ids))
+        )
+    else:
+        result = await db.execute(select(models.User))
+
+    users = result.scalars().all()
+
+    synced_count = 0
+    failed_users = []
+
+    # Process each user
+    for user in users:
+        try:
+            # Get highest priority role from Casbin (source of truth)
+            casbin_role = await get_highest_priority_role_from_casbin(
+                enforcer, user.id
+            )
+
+            # Update DB if role doesn't match
+            if user.role != casbin_role:
+                old_role = user.role
+                user.role = casbin_role
+                db.add(user)
+                synced_count += 1
+
+                log.info(
+                    "User role synced from Casbin to DB",
+                    user_id=user.id,
+                    username=user.username,
+                    old_role=old_role,
+                    new_role=casbin_role
+                )
+
+        except Exception as e:
+            log.error(
+                "Failed to sync user role from Casbin",
+                user_id=user.id,
+                username=getattr(user, 'username', 'unknown'),
+                error=str(e),
+                exc_info=True
+            )
+            failed_users.append({
+                "user_id": user.id,
+                "username": getattr(user, 'username', 'unknown'),
+                "error": str(e)
+            })
+
+    # Note: Caller is responsible for db.commit()
+
+    return {
+        "synced_count": synced_count,
+        "failed_count": len(failed_users),
+        "failed_users": failed_users
+    }

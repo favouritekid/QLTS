@@ -1495,56 +1495,25 @@ async def sync_users(
     Casbin được coi là source of truth (nguồn chân lý).
 
     - `user_ids`: Danh sách ID users cần sync. Nếu None hoặc rỗng, sync tất cả users.
+
+    REFACTORED: Business logic extracted to user_service.sync_users_to_casbin()
+    Router now only handles HTTP concerns (request/response, DI, admin activity logging)
     """
+    # Extract Casbin enforcer from app state (HTTP-specific)
     enforcer = request.app.state.enforcer
     user_ids = sync_request.user_ids
 
-    # Determine which users to sync
-    if user_ids:
-        result = await db.execute(
-            select(models.User).where(models.User.id.in_(user_ids))
-        )
-    else:
-        result = await db.execute(select(models.User))
+    # Call service layer with injected dependencies (DI pattern)
+    result = await services.user_service.sync_users_to_casbin(
+        db=db,
+        enforcer=enforcer,
+        user_ids=user_ids
+    )
 
-    users = result.scalars().all()
-
-    synced_count = 0
-    failed_users = []
-
-    for user in users:
-        try:
-            casbin_role = await services.user_service.get_highest_priority_role_from_casbin(
-                enforcer, user.id
-            )
-
-            if user.role != casbin_role:
-                old_role = user.role
-                user.role = casbin_role
-                db.add(user)
-                synced_count += 1
-                log.info(
-                    "User role synced",
-                    user_id=user.id,
-                    old_role=old_role,
-                    new_role=casbin_role
-                )
-        except Exception as e:
-            log.error(
-                "Failed to sync user",
-                user_id=user.id,
-                error=str(e),
-                exc_info=True
-            )
-            failed_users.append({
-                "user_id": user.id,
-                "username": user.username,
-                "error": str(e)
-            })
-
+    # Commit transaction (router responsibility)
     await db.commit()
 
-    # Log activity
+    # Log admin activity (HTTP/audit concern, not business logic)
     await log_admin_activity(
         db=db,
         request=request,
@@ -1553,8 +1522,8 @@ async def sync_users(
         actor_id=current_admin.id,
         resource_id=None,
         changes={
-            "synced_count": synced_count,
-            "failed_count": len(failed_users),
+            "synced_count": result["synced_count"],
+            "failed_count": result["failed_count"],
             "user_ids": user_ids or "all"
         }
     )
@@ -1562,15 +1531,11 @@ async def sync_users(
     log.info(
         "User sync completed",
         admin_id=current_admin.id,
-        synced=synced_count,
-        failed=len(failed_users)
+        synced=result["synced_count"],
+        failed=result["failed_count"]
     )
 
-    return {
-        "synced_count": synced_count,
-        "failed_count": len(failed_users),
-        "failed_users": failed_users
-    }
+    return result
 
 
 # ===============================================================
