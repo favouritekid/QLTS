@@ -191,6 +191,19 @@ class UserInDB(UserBase):
 
     model_config = ConfigDict(from_attributes=True)
 
+    def dict(self, **kwargs):
+        """
+        Override dict() to ensure password_hash is always excluded.
+
+        This handles backward compatibility with code using deprecated .dict() method
+        instead of .model_dump().
+        """
+        # Get base dict output
+        d = super().dict(**kwargs)
+        # Ensure password_hash is removed (security failsafe)
+        d.pop('password_hash', None)
+        return d
+
 
 class LoginSchema(BaseModel):
     username: str
