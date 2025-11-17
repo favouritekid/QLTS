@@ -33,6 +33,7 @@ from .database import redis_client as main_redis_client
 from .database import safe_redis_ping
 from .ratelimit import limiter
 from .routers import (
+    applications,
     auth,
     leads,
     notification_preferences,
@@ -439,6 +440,7 @@ app.include_router(sessions.router, prefix="/api", tags=["Sessions"])
 app.include_router(notifications.router, prefix="/api/notifications", tags=["Notifications"])
 app.include_router(notification_preferences.router, prefix="/api/notifications", tags=["Notification Preferences"])
 app.include_router(leads.router, prefix="/api/leads", tags=["Leads"])
+app.include_router(applications.router, prefix="/api", tags=["Applications"])
 app.include_router(pipeline.router, prefix="/api/pipeline", tags=["Pipeline"])
 app.include_router(
     organization.router, prefix="/api", tags=["Organization"]
