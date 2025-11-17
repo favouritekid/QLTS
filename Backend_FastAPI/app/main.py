@@ -33,7 +33,6 @@ from .database import redis_client as main_redis_client
 from .database import safe_redis_ping
 from .ratelimit import limiter
 from .routers import (
-    admin,  # Old monolithic admin router (keep temporarily for backward compatibility)
     auth,
     leads,
     notification_preferences,
@@ -46,8 +45,14 @@ from .routers import (
     users
 )
 
-# ✅ PHASE 2A: Import new split admin routers
-from .routers.admin import router as admin_router_new
+# ✅ PHASE 2 COMPLETE: Import split admin routers
+# Includes all 5 specialized routers (70 endpoints total):
+# - users.py (16 endpoints)
+# - roles.py (23 endpoints)
+# - organization.py (12 endpoints) - PHASE 2B
+# - config.py (5 endpoints) - PHASE 2B
+# - pipeline.py (14 endpoints) - PHASE 2C
+from .routers.admin import router as admin_router
 
 # ✅ V5: Import SIO, LUA loader, và Prometheus
 from .socket_manager import load_rate_limit_script, sio
@@ -441,20 +446,29 @@ app.include_router(
 app.include_router(officer.router, prefix="/api", tags=["Officer Dashboard"])
 
 # ===============================================================
-# === ADMIN ROUTERS (PHASE 2A Migration) =======================
+# === ADMIN ROUTERS (PHASE 2 COMPLETE) =========================
 # ===============================================================
 
-# ⚠️ OLD MONOLITHIC ADMIN ROUTER (Temporary - for backward compatibility)
-# This will be removed after frontend migration is complete
-# Tag changed to "Admin (Legacy)" to distinguish from new routers
-app.include_router(admin.router, prefix="/api/admin", tags=["Admin (Legacy)"])
-
-# ✅ NEW SPLIT ADMIN ROUTERS (PHASE 2A)
-# Includes: users.py (16 endpoints) + roles.py (23 endpoints) = 39 endpoints
-app.include_router(admin_router_new, prefix="/api")
+# ✅ SPLIT ADMIN ROUTERS - All 5 specialized routers (70 endpoints)
+# Old monolithic admin.py (2,740 lines) has been completely replaced
+app.include_router(admin_router, prefix="/api")
 # This provides:
-#   - /api/admin/users/*  (user management, sync, leads, analytics)
-#   - /api/admin/roles/*  (policy/role management, Casbin operations)
+#   PHASE 2A (39 endpoints):
+#   - /api/admin/users/*       (16 endpoints - user management, sync, analytics)
+#   - /api/admin/roles/*       (23 endpoints - policy/role management, Casbin)
+#
+#   PHASE 2B (17 endpoints):
+#   - /api/admin/organization-units/* (4 endpoints)
+#   - /api/admin/programs/*           (4 endpoints)
+#   - /api/admin/offerings/*          (4 endpoints)
+#   - /api/admin/assignment-config/*  (2 endpoints)
+#   - /api/admin/skill-rules/*        (3 endpoints)
+#
+#   PHASE 2C (14 endpoints):
+#   - /api/admin/pipeline-stages/*      (5 endpoints)
+#   - /api/admin/consultation-statuses/* (5 endpoints)
+#   - /api/admin/allowed-transitions/*  (3 endpoints)
+#   - /api/admin/leads/*/revert-status  (1 endpoint)
 # ===============================================================
 # === STATIC FILES ==============================================
 # ===============================================================
