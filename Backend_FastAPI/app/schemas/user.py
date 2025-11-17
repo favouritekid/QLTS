@@ -204,6 +204,16 @@ class UserInDB(UserBase):
         # This ensures password_hash is excluded regardless of serialization method used
         return self.model_dump(**kwargs)
 
+    def __iter__(self):
+        """
+        Override iteration to exclude password_hash.
+
+        This ensures that dict(instance) also excludes password_hash,
+        not just instance.dict() or instance.model_dump().
+        """
+        # Iterate over model_dump() output which excludes password_hash
+        return iter(self.model_dump().items())
+
 
 class LoginSchema(BaseModel):
     username: str
