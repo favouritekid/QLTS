@@ -173,8 +173,21 @@ class User(UserBase):
 
 
 class UserInDB(UserBase):
+    """
+    🚨 DEPRECATED: DO NOT USE THIS SCHEMA IN API RESPONSES! 🚨
+
+    This schema contains sensitive field (password_hash) and should ONLY be used
+    for internal database operations, NEVER as a response_model.
+
+    For API responses, use the `User` schema instead.
+
+    Security Note: password_hash field exists but is hidden from serialization
+    to prevent accidental exposure.
+    """
     id: int
-    password_hash: str
+    # 🔒 SECURITY FIX: Exclude password_hash from JSON serialization
+    # This prevents exposure even if someone accidentally uses this as response_model
+    password_hash: str = Field(exclude=True)
 
     model_config = ConfigDict(from_attributes=True)
 
