@@ -51,16 +51,17 @@ async def test_create_user_success(
     log.info("--- Running: test_create_user_success ---")
 
     user_data = {
+        "username": "newuser",
         "email": "newuser@example.com",
         "full_name": "New Test User",
         "password": "SecurePass123!",
         "role": "Advisor",
-        "is_active": True,
+        "status": "active",
     }
 
     response = await client.post(
         "/api/admin/users",
-        json=user_data,
+        data=user_data,  # Use Form data, not JSON
         headers=admin_token_headers,
     )
 
@@ -68,10 +69,11 @@ async def test_create_user_success(
     data = response.json()
 
     # Verify response structure
+    assert data["username"] == user_data["username"]
     assert data["email"] == user_data["email"]
     assert data["full_name"] == user_data["full_name"]
     assert data["role"] == user_data["role"]
-    assert data["is_active"] == user_data["is_active"]
+    assert data["status"] == user_data["status"]
     assert "id" in data
     assert "password" not in data, "Password should not be in response"
 
@@ -186,7 +188,7 @@ async def test_update_user(
 
     response = await client.put(
         f"/api/admin/users/{user_id}",
-        json=update_data,
+        data=update_data,  # Use Form data, not JSON
         headers=admin_token_headers,
     )
 
@@ -228,15 +230,17 @@ async def test_delete_user(
 
     # First create a user to delete
     user_data = {
+        "username": "todelete",
         "email": "todelete@example.com",
         "full_name": "To Delete",
         "password": "Password123!",
         "role": "Advisor",
+        "status": "active",
     }
 
     create_response = await client.post(
         "/api/admin/users",
-        json=user_data,
+        data=user_data,  # Use Form data, not JSON
         headers=admin_token_headers,
     )
     assert create_response.status_code == 201
@@ -553,16 +557,18 @@ async def test_regular_user_cannot_create_user(
 
     # Try to create user with regular user token
     user_data = {
+        "username": "unauthorized",
         "email": "unauthorized@example.com",
         "full_name": "Unauthorized",
         "password": "Pass123!",
         "role": "Advisor",
+        "status": "active",
     }
 
     # Use cookies from login instead of headers
     response = await client.post(
         "/api/admin/users",
-        json=user_data,
+        data=user_data,  # Use Form data, not JSON
         cookies=login_response.cookies,
     )
 
@@ -616,15 +622,17 @@ async def test_create_user_duplicate_email(
     log.info("--- Running: test_create_user_duplicate_email ---")
 
     user_data = {
+        "username": "duplicateuser",
         "email": regular_user_in_db["email"],  # Duplicate email
         "full_name": "Duplicate User",
         "password": "Pass123!",
         "role": "Advisor",
+        "status": "active",
     }
 
     response = await client.post(
         "/api/admin/users",
-        json=user_data,
+        data=user_data,  # Use Form data, not JSON
         headers=admin_token_headers,
     )
 
@@ -677,7 +685,7 @@ async def test_update_nonexistent_user(
 
     response = await client.put(
         "/api/admin/users/999999",
-        json=update_data,
+        data=update_data,  # Use Form data, not JSON
         headers=admin_token_headers,
     )
 
