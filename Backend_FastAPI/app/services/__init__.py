@@ -10,3 +10,4 @@ from . import assignment_service
 from . import insights_service
 from . import anomaly_detection
 from . import role_service
+from . import auth_service
