@@ -321,7 +321,7 @@ def _verify_test_database_safety():
     log.info(f"✅ Safety check passed: APP_ENV={current_env}, DB_URL={db_url[:60]}...")
 
 
-@pytest_asyncio.fixture(scope="function", autouse=True)
+@pytest_asyncio.fixture(scope="function", autouse=False)
 async def setup_test_database(manage_engine):
     # 🚨 CRITICAL: Verify safety before ANY database operations!
     _verify_test_database_safety()
@@ -363,7 +363,7 @@ async def test_redis_client():
         await client.aclose()
 
 
-@pytest_asyncio.fixture(scope="function", autouse=True)
+@pytest_asyncio.fixture(scope="function", autouse=False)
 async def clear_redis_keys(
     test_redis_client,
 ):  # Bỏ dependency setup_test_database ở đây
