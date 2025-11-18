@@ -152,6 +152,9 @@ class Application(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
+    # Soft delete support
+    deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
     # Relationships
     officer = relationship(
         "User", back_populates="applications_handled", foreign_keys=[officer_id]

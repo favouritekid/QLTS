@@ -7,6 +7,7 @@ Tuân thủ kiến trúc phân lớp:
 - Không phụ thuộc vào Request/Response của FastAPI
 - Sử dụng selectinload, joinedload để tránh N+1
 """
+from datetime import datetime, timezone
 from typing import Optional
 
 import structlog
@@ -87,6 +88,7 @@ async def get_application_by_id(
     db: AsyncSession,
     application_id: int,
     load_relationships: bool = True,
+    include_deleted: bool = False,
 ) -> Optional[models.Application]:
     """
     Lấy Application theo ID.
@@ -95,11 +97,16 @@ async def get_application_by_id(
         db: Database session
         application_id: ID của Application
         load_relationships: Load relationships (major_program, program_offering)
+        include_deleted: If True, include soft-deleted applications (default: False)
 
     Returns:
         Application hoặc None nếu không tìm thấy
     """
     stmt = select(models.Application).where(models.Application.id == application_id)
+
+    # Filter out soft-deleted applications by default
+    if not include_deleted:
+        stmt = stmt.where(models.Application.deleted_at.is_(None))
 
     if load_relationships:
         stmt = stmt.options(
@@ -181,6 +188,7 @@ async def get_application_by_lead_id(
     db: AsyncSession,
     lead_id: int,
     load_relationships: bool = True,
+    include_deleted: bool = False,
 ) -> Optional[models.Application]:
     """
     Lấy Application theo Lead ID.
@@ -189,11 +197,16 @@ async def get_application_by_lead_id(
         db: Database session
         lead_id: ID của Lead
         load_relationships: Load relationships
+        include_deleted: If True, include soft-deleted applications (default: False)
 
     Returns:
         Application hoặc None nếu không tìm thấy
     """
     stmt = select(models.Application).where(models.Application.lead_id == lead_id)
+
+    # Filter out soft-deleted applications by default
+    if not include_deleted:
+        stmt = stmt.where(models.Application.deleted_at.is_(None))
 
     if load_relationships:
         stmt = stmt.options(
@@ -204,3 +217,52 @@ async def get_application_by_lead_id(
 
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
+
+
+async def delete_application(
+    db: AsyncSession,
+    application_id: int,
+    deleted_by: models.User,
+) -> models.Application:
+    """
+    Soft delete an Application (Admin only).
+
+    Args:
+        db: Database session
+        application_id: ID của Application cần xóa
+        deleted_by: User thực hiện xóa (Admin)
+
+    Returns:
+        Application đã được đánh dấu xóa
+
+    Raises:
+        ResourceNotFoundError: Nếu Application không tồn tại hoặc đã bị xóa
+    """
+    # Get application (exclude already deleted ones)
+    application = await get_application_by_id(
+        db, application_id, load_relationships=False, include_deleted=False
+    )
+
+    if not application:
+        log.warning("Application not found or already deleted", application_id=application_id)
+        raise ResourceNotFoundError(
+            f"Hồ sơ với ID {application_id} không tồn tại hoặc đã bị xóa"
+        )
+
+    # Mark as soft deleted
+    application.deleted_at = datetime.now(timezone.utc)
+    application.status = "deleted"
+
+    db.add(application)
+    await db.commit()
+    await db.refresh(application)
+
+    log.info(
+        "Application soft-deleted",
+        application_id=application_id,
+        deleted_by_user_id=deleted_by.id,
+        deleted_by_role=deleted_by.role,
+        deleted_by_username=deleted_by.username,
+    )
+
+    return application
