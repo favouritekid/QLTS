@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models
-from app.routers.admin import deps
+from app.core import deps  # ✅ Fixed: Import from app.core instead of app.routers.admin
 from app.services import activity_service
 
 # PHASE 2A routers
