@@ -36,6 +36,7 @@ from .routers import (
     applications,
     auth,
     leads,
+    monitoring,
     notification_preferences,
     notifications,
     officer,
@@ -446,6 +447,7 @@ app.include_router(
     organization.router, prefix="/api", tags=["Organization"]
 )
 app.include_router(officer.router, prefix="/api", tags=["Officer Dashboard"])
+app.include_router(monitoring.router, prefix="/api", tags=["System Monitoring"])
 
 # ===============================================================
 # === ADMIN ROUTERS (PHASE 2 COMPLETE) =========================
