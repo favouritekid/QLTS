@@ -84,6 +84,11 @@ from .organization import (
     ConfigOfferingTypeBase,
     ConfigOfferingTypeCreate,
     ConfigOfferingTypeUpdate,
+    # Distribution Rule schemas
+    DistributionRuleBase,
+    DistributionRuleCreate,
+    DistributionRuleUpdate,
+    DistributionRuleResponse,
 )
 
 # --- Từ permissions.py ---

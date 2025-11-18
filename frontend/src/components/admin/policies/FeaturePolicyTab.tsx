@@ -92,7 +92,7 @@ export function FeaturePolicyTab({ roleName: propRoleName }: FeaturePolicyTabPro
   const toggleFeature = async (featureId: string, enabled: boolean) => {
     setTogglingFeature(featureId);
     try {
-      await api.post(`/api/admin/roles/${effectiveRole}/features`, {
+      await api.post(`/api/admin/roles/${effectiveRole}/features/toggle`, {
         feature_id: featureId,
         enabled,
       });

@@ -170,3 +170,142 @@ async def get_distribution_stats(
 
     stats = await distribution_service.get_distribution_stats(db, offering_id)
     return stats
+
+
+# ============================================================================
+# DISTRIBUTION RULES MANAGEMENT
+# ============================================================================
+
+
+@router.get(
+    "/distribution-rules",
+    response_model=List[schemas.DistributionRuleResponse],
+)
+async def list_distribution_rules(
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) List all distribution rules.
+
+    Returns all distribution rules ordered by priority (highest first).
+    """
+    rules = await config_service.get_all_distribution_rules(db)
+
+    # Enrich with offering and unit names
+    response = []
+    for rule in rules:
+        # Load relationships if not already loaded
+        await db.refresh(rule, ["offering", "unit"])
+
+        response.append(schemas.DistributionRuleResponse(
+            id=rule.id,
+            offering_id=rule.offering_id,
+            unit_id=rule.unit_id,
+            weight=rule.weight,
+            priority=rule.priority,
+            is_active=rule.is_active,
+            offering_name=rule.offering.name if rule.offering else None,
+            unit_name=rule.unit.name if rule.unit else None,
+        ))
+
+    return response
+
+
+@router.post(
+    "/distribution-rules",
+    response_model=schemas.DistributionRuleResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_distribution_rule(
+    rule_in: schemas.DistributionRuleCreate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Create a new distribution rule.
+
+    **Validation:**
+    - offering_id must exist
+    - unit_id must exist
+    - Duplicate (offering_id + unit_id) is not allowed
+
+    **Example:**
+    ```json
+    {
+        "offering_id": 5,
+        "unit_id": 10,
+        "weight": 3,
+        "priority": 1,
+        "is_active": true
+    }
+    ```
+    """
+    rule = await config_service.create_distribution_rule(db, rule_in)
+
+    # Load relationships for response
+    await db.refresh(rule, ["offering", "unit"])
+
+    return schemas.DistributionRuleResponse(
+        id=rule.id,
+        offering_id=rule.offering_id,
+        unit_id=rule.unit_id,
+        weight=rule.weight,
+        priority=rule.priority,
+        is_active=rule.is_active,
+        offering_name=rule.offering.name if rule.offering else None,
+        unit_name=rule.unit.name if rule.unit else None,
+    )
+
+
+@router.put(
+    "/distribution-rules/{rule_id}",
+    response_model=schemas.DistributionRuleResponse,
+)
+async def update_distribution_rule(
+    rule_id: int,
+    rule_in: schemas.DistributionRuleUpdate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Update a distribution rule.
+
+    Only provided fields will be updated (partial update).
+
+    **Example:**
+    ```json
+    {
+        "is_active": false
+    }
+    ```
+    """
+    rule = await config_service.update_distribution_rule(db, rule_id, rule_in)
+
+    # Load relationships for response
+    await db.refresh(rule, ["offering", "unit"])
+
+    return schemas.DistributionRuleResponse(
+        id=rule.id,
+        offering_id=rule.offering_id,
+        unit_id=rule.unit_id,
+        weight=rule.weight,
+        priority=rule.priority,
+        is_active=rule.is_active,
+        offering_name=rule.offering.name if rule.offering else None,
+        unit_name=rule.unit.name if rule.unit else None,
+    )
+
+
+@router.delete(
+    "/distribution-rules/{rule_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_distribution_rule(
+    rule_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Delete a distribution rule."""
+    await config_service.delete_distribution_rule(db, rule_id)
+    return None
