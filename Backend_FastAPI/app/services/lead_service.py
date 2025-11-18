@@ -205,11 +205,16 @@ def _get_current_lead_state(lead: models.Lead) -> dict:
     }
 
 
-async def get_lead_by_id(db: AsyncSession, lead_id: int) -> models.Lead:
+async def get_lead_by_id(db: AsyncSession, lead_id: int, include_deleted: bool = False) -> models.Lead:
     """
     Lấy chi tiết Lead bằng ID (Detail View).
     Hàm này giữ nguyên eager loading đầy đủ
     vì nó cần thiết cho Timeline và Insights.
+
+    Args:
+        db: Database session
+        lead_id: Lead ID to fetch
+        include_deleted: If True, include soft-deleted leads (default: False)
     """
     query = (
         select(models.Lead)
@@ -235,16 +240,26 @@ async def get_lead_by_id(db: AsyncSession, lead_id: int) -> models.Lead:
         )
         .where(models.Lead.id == lead_id)
     )
+
+    # Filter deleted leads unless explicitly requested
+    if not include_deleted:
+        query = query.where(models.Lead.deleted_at.is_(None))
+
     result = await db.execute(query)
     lead = result.scalar_one_or_none()
     if not lead:
         raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found")
     return lead
 
-async def get_lead_by_id_shallow(db: AsyncSession, lead_id: int) -> models.Lead:
+async def get_lead_by_id_shallow(db: AsyncSession, lead_id: int, include_deleted: bool = False) -> models.Lead:
     """
     Lấy chi tiết Lead (Shallow View - Nhanh).
     Chỉ Eager Load các quan hệ 1-1 cần thiết cho List/Detail View.
+
+    Args:
+        db: Database session
+        lead_id: Lead ID to fetch
+        include_deleted: If True, include soft-deleted leads (default: False)
     """
     query = (
         select(models.Lead)
@@ -258,6 +273,11 @@ async def get_lead_by_id_shallow(db: AsyncSession, lead_id: int) -> models.Lead:
         )
         .where(models.Lead.id == lead_id)
     )
+
+    # Filter deleted leads unless explicitly requested
+    if not include_deleted:
+        query = query.where(models.Lead.deleted_at.is_(None))
+
     result = await db.execute(query)
     lead = result.scalar_one_or_none()
     if not lead:
@@ -287,6 +307,8 @@ async def get_leads(
 
     # === Áp dụng filter ===
     filters = []
+    # Filter out soft-deleted leads (always applied)
+    filters.append(models.Lead.deleted_at.is_(None))
     if status:
         statuses = [s.strip() for s in status.split(",") if s.strip()]
         if statuses:
@@ -1697,3 +1719,99 @@ async def import_leads_from_file_content(
         log.info("Lead import process finished successfully", result=result_summary)
 
     return result
+
+
+# =============================================================================
+# DELETE LEAD (SOFT DELETE)
+# =============================================================================
+
+async def delete_lead(
+    db: AsyncSession,
+    lead_id: int,
+    deleted_by: models.User
+) -> models.Lead:
+    """
+    Soft delete a Lead (Admin only).
+
+    Business Rules:
+    - Sets deleted_at timestamp instead of physically deleting
+    - Preserves all historical data (consultations, applications, logs)
+    - Deleted leads are filtered out from normal queries
+    - Only Admin can delete leads
+    - Cannot delete already-deleted leads
+
+    Args:
+        db: Database session
+        lead_id: Lead ID to delete
+        deleted_by: User performing the deletion (for audit trail)
+
+    Returns:
+        models.Lead: The soft-deleted lead object
+
+    Raises:
+        ResourceNotFoundError: If lead not found or already deleted
+        PermissionDeniedError: If user doesn't have permission (checked in router)
+
+    Example:
+        >>> lead = await delete_lead(db, lead_id=123, deleted_by=admin_user)
+        >>> print(lead.deleted_at)  # 2025-11-18 02:30:00+00:00
+    """
+    try:
+        async with db.begin_nested():
+            # Fetch lead (exclude already deleted leads)
+            lead = await get_lead_by_id_shallow(db, lead_id, include_deleted=False)
+
+            # Check if lead is already deleted (double-check)
+            if lead.deleted_at is not None:
+                raise ResourceNotFoundError(
+                    detail=f"Lead with id {lead_id} is already deleted"
+                )
+
+            # Capture old state for history logging
+            old_state = _get_current_lead_state(lead)
+
+            # Set deleted_at timestamp (soft delete)
+            lead.deleted_at = datetime.now(timezone.utc)
+
+            # Optionally update status to indicate deletion
+            lead.status = "deleted"
+
+            # Mark as modified
+            db.add(lead)
+
+            # Get new state
+            new_state = _get_current_lead_state(lead)
+
+            # Log state change in history
+            await _log_lead_state_change(
+                db,
+                lead,
+                old_state,
+                new_state,
+                changed_by=deleted_by,
+                reason=f"Lead soft-deleted by {deleted_by.role} {deleted_by.username}"
+            )
+
+            log.info(
+                "Lead soft-deleted successfully",
+                lead_id=lead_id,
+                deleted_by_user_id=deleted_by.id,
+                deleted_by_username=deleted_by.username
+            )
+
+            return lead
+
+    except ResourceNotFoundError:
+        # Lead not found or already deleted
+        raise
+    except Exception as e:
+        # Rollback on any error
+        await db.rollback()
+        log.error(
+            "Failed to delete lead",
+            lead_id=lead_id,
+            deleted_by_user_id=deleted_by.id,
+            error=str(e),
+            exc_info=True
+        )
+        raise e

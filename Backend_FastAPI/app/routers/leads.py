@@ -93,6 +93,32 @@ async def update_existing_lead(
     return await lead_service.update_lead(db, lead.id, lead_in, updated_by=current_user)
 
 
+@router.delete("/{lead_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_lead(
+    lead_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = PermissionDep,
+):
+    """
+    (Admin only) Soft delete a Lead.
+
+    Sets deleted_at timestamp instead of physically deleting the lead.
+    Preserves all historical data (consultations, applications, logs).
+    Deleted leads are filtered out from normal queries.
+
+    **Permission:** Admin only (enforced by Casbin)
+
+    **Status Code:** 204 No Content on success
+
+    **Raises:**
+    - 404 Not Found: If lead doesn't exist or already deleted
+    - 403 Forbidden: If user doesn't have admin permission
+    """
+    await lead_service.delete_lead(db, lead_id, deleted_by=current_user)
+    await db.commit()
+    return None
+
+
 @router.post(
     "/{lead_id}/consultations",
     response_model=schemas.Consultation,
