@@ -376,6 +376,140 @@ async def export_leads(
         }
 
 
+@router.get("/import/template")
+async def download_import_template(
+    format: str = Query("csv", description="Template format (csv or xlsx)"),
+    current_user: models.User = PermissionDep,
+):
+    """
+    Download CSV/Excel template for lead import.
+
+    Returns a pre-formatted template file with:
+    - Correct column headers (required + optional)
+    - Example data row with Vietnamese sample
+    - Column descriptions as comments (Excel only)
+
+    **Query Parameters:**
+    - `format`: "csv" or "xlsx" (default: csv)
+
+    **Template Columns:**
+    - Required: full_name, email, phone, source, unit_id
+    - Optional: offering_id, education_level, gpa, location
+
+    **Usage:**
+    1. Download template
+    2. Fill in lead data
+    3. Upload via POST /api/admin/users/leads/import
+    """
+    # Define template data
+    headers = ["full_name", "email", "phone", "source", "unit_id", "offering_id", "education_level", "gpa", "location"]
+    example_row = [
+        "Nguyễn Văn An",
+        "nguyenvanan@gmail.com",
+        "0901234567",
+        "website",
+        "1",  # unit_id - Replace with your actual unit ID
+        "",   # offering_id - Optional
+        "bachelor",  # high_school, bachelor, master, phd
+        "3.5",  # 0.0-4.0
+        "Hà Nội"
+    ]
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if format.lower() == "csv":
+        # Generate CSV template
+        output = io.StringIO()
+        writer = csv.writer(output)
+
+        # Add header comment
+        output.write("# Lead Import Template\n")
+        output.write("# Required columns: full_name, email, phone, source, unit_id\n")
+        output.write("# Optional columns: offering_id, education_level, gpa, location\n")
+        output.write("# Education levels: high_school, bachelor, master, phd\n")
+        output.write("# Sources: website, referral, social_media, walk_in, email, phone, event, other\n")
+        output.write("#\n")
+
+        # Write headers and example
+        writer.writerow(headers)
+        writer.writerow(example_row)
+
+        output.seek(0)
+        filename = f"lead_import_template_{timestamp}.csv"
+
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+
+    elif format.lower() in ["xlsx", "excel"]:
+        # Generate Excel template with styling
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from openpyxl.comments import Comment
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Lead Import Template"
+
+        # Header row with styling
+        ws.append(headers)
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        header_font = Font(color="FFFFFF", bold=True)
+
+        column_descriptions = [
+            "Full name (required)",
+            "Email address (required, unique per unit)",
+            "Phone number (required)",
+            "Lead source (required): website, referral, social_media, walk_in, email, phone, event, other",
+            "Organization Unit ID (required): Get from /api/organization-units",
+            "Program Offering ID (optional): Get from /api/offerings",
+            "Education level (optional): high_school, bachelor, master, phd",
+            "GPA (optional): 0.0-4.0 scale",
+            "Location (optional): City/Province"
+        ]
+
+        for idx, cell in enumerate(ws[1], start=0):
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+            # Add comment with description
+            cell.comment = Comment(column_descriptions[idx], "System")
+
+        # Example row
+        ws.append(example_row)
+
+        # Auto-adjust column widths
+        for column in ws.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = max(max_length + 2, 15)  # Min 15 chars
+            ws.column_dimensions[column_letter].width = adjusted_width
+
+        # Save to BytesIO
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        filename = f"lead_import_template_{timestamp}.xlsx"
+
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+
+    else:
+        return {"error": f"Unsupported format '{format}'. Supported: csv, xlsx"}
+
+
 @router.post("/bulk-assign", status_code=status.HTTP_200_OK)
 async def bulk_assign_leads(
     bulk_assign_data: schemas.BulkAssignLeadsSchema,

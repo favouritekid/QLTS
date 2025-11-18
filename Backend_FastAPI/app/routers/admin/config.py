@@ -115,3 +115,58 @@ async def delete_skill_rule_route(
     """(Admin only) Xóa một quy tắc kỹ năng."""
     await config_service.delete_skill_rule(db, rule_id)
     return None
+
+
+# ============================================================================
+# OFFERING DISTRIBUTION STATS
+# ============================================================================
+
+
+@router.get("/distribution/{offering_id}/stats")
+async def get_distribution_stats(
+    offering_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Get distribution statistics for a Program Offering.
+
+    Shows current round-robin cursor position, active distribution configs,
+    and which unit will receive the next lead for this offering.
+
+    **Returns:**
+    ```json
+    {
+        "offering_id": 5,
+        "cursor_value": 42,
+        "configs": [
+            {
+                "unit_id": 10,
+                "unit_name": "Phòng Tuyển Sinh A",
+                "weight": 3,
+                "priority": 1,
+                "slots_in_cycle": 3
+            },
+            {
+                "unit_id": 20,
+                "unit_name": "Phòng Tuyển Sinh B",
+                "weight": 1,
+                "priority": 1,
+                "slots_in_cycle": 1
+            }
+        ],
+        "total_slots": 4,
+        "next_unit_id": 10
+    }
+    ```
+
+    **Use Cases:**
+    - Monitor distribution fairness
+    - Debug distribution issues
+    - Analytics and reporting
+    - Reset cursor if needed (separate endpoint)
+    """
+    from app.services import distribution_service
+
+    stats = await distribution_service.get_distribution_stats(db, offering_id)
+    return stats
