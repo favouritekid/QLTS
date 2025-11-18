@@ -36,6 +36,7 @@ dnspython==2.8.0
 ecdsa==0.19.1
 email-validator==2.3.0
 et_xmlfile==2.0.0
+Faker==35.3.0
 fakeredis==2.32.0
 fastapi==0.119.0
 geoip2==4.8.0

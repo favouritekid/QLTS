@@ -223,6 +223,7 @@ async def get_lead_by_id(db: AsyncSession, lead_id: int) -> models.Lead:
             selectinload(models.Lead.assigned_officer),
             selectinload(models.Lead.pipeline_stage),
             selectinload(models.Lead.consultation_status),
+            selectinload(models.Lead.application),  # Fix MissingGreenlet: Eager load application
             # Load sâu consultations và logs để dùng cho timeline/insights
             selectinload(models.Lead.consultations).options(
                 joinedload(models.Consultation.officer),
@@ -253,6 +254,7 @@ async def get_lead_by_id_shallow(db: AsyncSession, lead_id: int) -> models.Lead:
             selectinload(models.Lead.assigned_officer),
             selectinload(models.Lead.pipeline_stage),
             selectinload(models.Lead.consultation_status),
+            selectinload(models.Lead.application),  # Fix MissingGreenlet: Eager load application
         )
         .where(models.Lead.id == lead_id)
     )
@@ -340,6 +342,7 @@ async def get_leads(
             selectinload(models.Lead.assigned_officer),
             selectinload(models.Lead.pipeline_stage),
             selectinload(models.Lead.consultation_status),
+            selectinload(models.Lead.application),  # Fix MissingGreenlet: Eager load application
         )
         .offset(skip)
         .limit(limit)
