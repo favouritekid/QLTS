@@ -246,11 +246,60 @@ export function SocketHandler() {
       }
     };
 
+    // ✅ REAL-TIME LEAD ASSIGNMENT (Week 1): Lắng nghe sự kiện lead_assigned
+    const handleLeadAssigned = (data: {
+      lead_id: number;
+      lead_name: string;
+      lead_phone: string;
+      lead_email: string;
+      offering_name: string;
+      unit_name: string;
+      assigned_at: string;
+      assignment_type: "automatic" | "manual";
+      priority: string;
+      message: string;
+    }) => {
+      console.log("[SocketHandler] Received lead_assigned event:", data);
+
+      // Invalidate lead-related queries to refresh officer's lead list
+      queryClient.invalidateQueries({ queryKey: ["leads"] });
+      queryClient.invalidateQueries({ queryKey: ["officer-leads"] });
+      queryClient.invalidateQueries({ queryKey: ["officer", "my-leads"] });
+
+      // Show prominent success toast with action button
+      toast.success(data.message, {
+        description: `${data.offering_name} • ${data.unit_name}`,
+        duration: 10000, // 10 seconds for important notifications
+        action: {
+          label: "Xem Lead",
+          onClick: () => {
+            // Navigate to the lead detail page
+            window.location.href = `/dashboard/officer/leads/${data.lead_id}`;
+          },
+        },
+      });
+
+      // Play notification sound if preferences allow
+      if (preferences?.sound_enabled) {
+        playNotificationSound();
+      }
+
+      // Show browser notification if enabled
+      if (preferences?.browser_enabled) {
+        showBrowserNotification("Lead Mới Được Gán", {
+          body: `${data.lead_name} - ${data.offering_name}`,
+          icon: "/favicon.ico",
+          tag: `lead-assigned-${data.lead_id}`,
+        });
+      }
+    };
+
     // Đăng ký listeners
     socket.on("force_logout_batch", handleForceLogoutBatch);
     socket.on("force_logout_all", handleForceLogoutAll);
     socket.on("notification", handleNewNotification);
     socket.on("data_updated", handleDataUpdated);
+    socket.on("lead_assigned", handleLeadAssigned);
 
     // Cleanup listeners khi effect này chạy lại hoặc component unmount
     return () => {
@@ -258,6 +307,7 @@ export function SocketHandler() {
       socket.off("force_logout_all", handleForceLogoutAll);
       socket.off("notification", handleNewNotification);
       socket.off("data_updated", handleDataUpdated);
+      socket.off("lead_assigned", handleLeadAssigned);
     };
     // ✅ SECURITY FIX: Removed 'token' from dependencies, now use 'isAuthenticated'
   }, [isAuthenticated, addNotification, preferences, queryClient]);
