@@ -243,6 +243,12 @@ async def create_leads_batch(
 
             # Commit after each lead to avoid session issues
             await db.commit()
+
+            # Expire all cached objects to prevent MissingGreenlet errors
+            # This is needed because create_lead dispatches Celery tasks
+            db.expire_all()
+
+            # Refresh the lead object after expiring
             await db.refresh(lead)
 
             created_leads.append(lead)
@@ -257,6 +263,8 @@ async def create_leads_batch(
                     )
                 # Commit after consultations
                 await db.commit()
+                # Expire cached objects after consultation operations
+                db.expire_all()
 
             # Progress indicator
             if (i + 1) % 10 == 0:
