@@ -400,6 +400,37 @@ export function SocketHandler() {
       });
     };
 
+    // ✅ REAL-TIME PIPELINE CONFIG (Week 3): Lắng nghe sự kiện pipeline_config_updated
+    const handlePipelineConfigUpdated = (data: {
+      config_type: "pipeline_stage" | "consultation_status" | "allowed_transition";
+      operation: "create" | "update" | "delete";
+      resource_id: string | number;
+      resource_data: Record<string, unknown>;
+      updated_by: string;
+      updated_at: string;
+      message: string;
+    }) => {
+      console.log("[SocketHandler] Received pipeline_config_updated event:", data);
+
+      // Invalidate pipeline-related queries for auto-refresh
+      queryClient.invalidateQueries({ queryKey: ["pipeline-stages"] });
+      queryClient.invalidateQueries({ queryKey: ["consultation-statuses"] });
+      queryClient.invalidateQueries({ queryKey: ["allowed-transitions"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "pipeline"] });
+
+      // Show toast notification with config type and operation
+      const operationEmoji = {
+        create: "✅",
+        update: "✏️",
+        delete: "🗑️"
+      }[data.operation];
+
+      toast.info(`${operationEmoji} ${data.message}`, {
+        description: `Updated by ${data.updated_by}`,
+        duration: 5000,
+      });
+    };
+
     // Đăng ký listeners
     socket.on("force_logout_batch", handleForceLogoutBatch);
     socket.on("force_logout_all", handleForceLogoutAll);
@@ -409,6 +440,7 @@ export function SocketHandler() {
     socket.on("application_created", handleApplicationCreated);
     socket.on("application_status_changed", handleApplicationStatusChanged);
     socket.on("application_documents_updated", handleApplicationDocumentsUpdated);
+    socket.on("pipeline_config_updated", handlePipelineConfigUpdated);
 
     // Cleanup listeners khi effect này chạy lại hoặc component unmount
     return () => {
@@ -420,6 +452,7 @@ export function SocketHandler() {
       socket.off("application_created", handleApplicationCreated);
       socket.off("application_status_changed", handleApplicationStatusChanged);
       socket.off("application_documents_updated", handleApplicationDocumentsUpdated);
+      socket.off("pipeline_config_updated", handlePipelineConfigUpdated);
     };
     // ✅ SECURITY FIX: Removed 'token' from dependencies, now use 'isAuthenticated'
   }, [isAuthenticated, addNotification, preferences, queryClient]);

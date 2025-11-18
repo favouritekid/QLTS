@@ -894,3 +894,106 @@ async def emit_application_documents_updated(
             exc_info=True
         )
         # Don't raise - socket errors should not break application update logic
+
+
+async def emit_pipeline_config_updated(
+    config_type: str,
+    operation: str,
+    resource_id: str,
+    resource_data: dict,
+    updated_by_username: str
+):
+    """
+    Emit Socket.IO event when pipeline configuration is updated.
+
+    This function notifies all admins immediately about pipeline config changes,
+    enabling real-time UI updates for pipeline management.
+
+    Args:
+        config_type: Type of config ("pipeline_stage", "consultation_status", "allowed_transition")
+        operation: Operation performed ("create", "update", "delete")
+        resource_id: ID of the affected resource
+        resource_data: Dictionary containing resource details
+        updated_by_username: Username who made the change
+
+    Events emitted:
+        - "pipeline_config_updated" to admin broadcast (role_admin)
+
+    Payload structure:
+        {
+            "config_type": "pipeline_stage" | "consultation_status" | "allowed_transition",
+            "operation": "create" | "update" | "delete",
+            "resource_id": str | int,
+            "resource_data": {
+                # Stage/Status/Transition details
+            },
+            "updated_by": str,
+            "updated_at": str (ISO 8601),
+            "message": "Pipeline stage '{name}' was created"
+        }
+    """
+    try:
+        from datetime import datetime, timezone
+
+        # Target: Broadcast to all admins
+        admin_room = "role_admin"
+
+        # Generate human-readable message
+        operation_text = {
+            "create": "created",
+            "update": "updated",
+            "delete": "deleted"
+        }.get(operation, operation)
+
+        config_type_text = {
+            "pipeline_stage": "Pipeline stage",
+            "consultation_status": "Consultation status",
+            "allowed_transition": "Allowed transition"
+        }.get(config_type, config_type)
+
+        resource_name = resource_data.get("name", resource_data.get("id", str(resource_id)))
+        message = f"{config_type_text} '{resource_name}' was {operation_text}"
+
+        # Prepare event payload
+        event_payload = {
+            "config_type": config_type,
+            "operation": operation,
+            "resource_id": resource_id,
+            "resource_data": resource_data,
+            "updated_by": updated_by_username,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "message": message
+        }
+
+        # Emit to admin room (broadcast)
+        await sio.emit(
+            "pipeline_config_updated",
+            event_payload,
+            room=admin_room
+        )
+
+        # Track metrics
+        socket_events_emitted_total.labels(event_type="pipeline_config_updated").inc()
+
+        log.info(
+            "Pipeline config update notification sent to admins",
+            config_type=config_type,
+            operation=operation,
+            resource_id=resource_id,
+            updated_by=updated_by_username,
+            admin_room=admin_room
+        )
+
+    except Exception as e:
+        # Track failure metrics
+        socket_emit_failures_total.labels(event_type="pipeline_config_updated").inc()
+
+        log.error(
+            "Failed to emit pipeline_config_updated Socket.IO event",
+            config_type=config_type,
+            operation=operation,
+            resource_id=resource_id,
+            error=str(e),
+            exc_info=True
+        )
+        # Don't raise - socket errors should not break pipeline config operations
