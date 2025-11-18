@@ -13,6 +13,8 @@ from .socket_metrics import (
     socket_auth_failures_total,
     socket_connections_active,
     socket_events_received_total,
+    socket_events_emitted_total,
+    socket_emit_failures_total,
 )
 
 log = structlog.get_logger(__name__)
@@ -520,3 +522,94 @@ async def emit_lead_reassigned(
             exc_info=True
         )
         # Don't raise - socket errors should not break lead update logic
+
+
+# =====================================================================
+# UTILITY FUNCTIONS FOR LEAD ASSIGNMENT
+# =====================================================================
+
+async def emit_lead_assigned(
+    lead_id: int,
+    officer_id: int,
+    lead_data: dict,
+    assignment_type: str = "automatic"
+):
+    """
+    Emit Socket.IO event when a lead is assigned to an officer.
+
+    This function notifies the officer immediately about their new lead assignment,
+    enabling real-time updates in the officer's dashboard.
+
+    Args:
+        lead_id: ID of the lead being assigned
+        officer_id: ID of the officer receiving the assignment
+        lead_data: Dictionary containing lead details (name, phone, email, offering, etc.)
+        assignment_type: Type of assignment ("automatic" or "manual")
+
+    Events emitted:
+        - "lead_assigned" to officer's room
+
+    Payload structure:
+        {
+            "lead_id": int,
+            "lead_name": str,
+            "lead_phone": str,
+            "lead_email": str,
+            "offering_name": str,
+            "unit_name": str,
+            "assigned_at": str (ISO 8601),
+            "assignment_type": "automatic" | "manual",
+            "priority": str,
+            "message": "You have been assigned a new lead: {lead_name}"
+        }
+    """
+    try:
+        from datetime import datetime, timezone
+
+        # Target officer's room
+        officer_room = f"user_room_{officer_id}"
+
+        # Prepare event payload
+        event_payload = {
+            "lead_id": lead_id,
+            "lead_name": lead_data.get("name", "Unknown"),
+            "lead_phone": lead_data.get("phone", ""),
+            "lead_email": lead_data.get("email", ""),
+            "offering_name": lead_data.get("offering_name", ""),
+            "unit_name": lead_data.get("unit_name", ""),
+            "assigned_at": datetime.now(timezone.utc).isoformat(),
+            "assignment_type": assignment_type,
+            "priority": lead_data.get("priority", "normal"),
+            "message": f"You have been assigned a new lead: {lead_data.get('name', 'Unknown')}"
+        }
+
+        # Emit event to officer's room
+        await sio.emit(
+            "lead_assigned",
+            event_payload,
+            room=officer_room
+        )
+
+        # Track metrics
+        socket_events_emitted_total.labels(event_type="lead_assigned").inc()
+
+        log.info(
+            "Lead assignment notification sent to officer",
+            lead_id=lead_id,
+            officer_id=officer_id,
+            assignment_type=assignment_type,
+            officer_room=officer_room
+        )
+
+    except Exception as e:
+        # Track failure metrics
+        socket_emit_failures_total.labels(event_type="lead_assigned").inc()
+
+        log.error(
+            "Failed to emit lead assignment Socket.IO event",
+            lead_id=lead_id,
+            officer_id=officer_id,
+            error=str(e),
+            exc_info=True
+        )
+        # Don't raise - socket errors should not break assignment logic
