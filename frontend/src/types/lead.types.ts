@@ -237,18 +237,74 @@ export interface ConsultationUpdate {
 // ============================================
 
 /**
- * Application object
+ * Application Status Enum
+ */
+export type ApplicationStatus =
+  | 'pending'           // Chờ xử lý (mặc định)
+  | 'missing_documents' // Chờ bổ sung (do thiếu/lỗi checklist)
+  | 'completed'         // Đã đủ hồ sơ
+  | 'passed'            // Đạt
+  | 'failed'            // Trượt
+
+/**
+ * Checklist Item for Application Documents
+ */
+export interface ChecklistItem {
+  code: string           // mã hồ sơ (vd: "hoc_ba_thpt")
+  label: string          // tên hồ sơ (vd: "Học bạ THPT")
+  status: 'missing' | 'submitted' | 'verified' | 'rejected'
+  submission_type: 'N/A' | 'photocopy' | 'notarized' | 'original' | 'incomplete'
+  notes: string
+}
+
+/**
+ * Application Documents Structure
+ */
+export interface ApplicationDocuments {
+  scores?: Record<string, number | null> | null // vd: {"Toan": 8.5, "Van": 7.0}
+  checklist?: ChecklistItem[] | null
+}
+
+/**
+ * Application object (Hồ sơ Tuyển sinh)
  */
 export interface Application {
   id: number
   lead_id: number
-  documents?: Record<string, unknown> | null // JSON field
-  status: string
-  officer_id: number
+  status: ApplicationStatus
+
+  // Foreign Keys liên kết đến 3-Tier
+  major_program_id: number | null
+  program_offering_id: number | null
+  criterion_id: string | null // AdmissionCriterion.id là string
+
+  // Trường JSON để lưu dữ liệu động
+  documents: ApplicationDocuments | null
+
+  // Legacy field (for backward compatibility)
+  officer_id?: number
 
   // Relationships
   officer?: User | null
   lead?: Lead | null
+}
+
+/**
+ * Application creation payload
+ */
+export interface ApplicationCreate {
+  lead_id: number
+}
+
+/**
+ * Application update payload
+ */
+export interface ApplicationUpdate {
+  status?: ApplicationStatus
+  major_program_id?: number | null
+  program_offering_id?: number | null
+  criterion_id?: string | null
+  documents?: ApplicationDocuments | null
 }
 
 // ============================================

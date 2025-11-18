@@ -12,10 +12,16 @@ export interface AdmissionCriterion {
   id: string; // vd: "hocba_2025"
   method_name: string; // Tên phương thức (vd: "Xét học bạ")
   program_type: string; // Loại hình (vd: "Chính quy")
-  subject_groups?: string[] | null; // Khối thi (vd: ["A00", "D07"])
+  subject_groups?: string[] | null; // Khối thi (vd: ["A00", "D07"]) - DÙNG ĐỂ RENDER Ô NHẬP ĐIỂM
   min_score?: number | null; // Điểm tối thiểu
   conditions?: string | null; // Điều kiện bổ sung
   profile_requirements?: string | null; // Yêu cầu hồ sơ
+
+  // ⬇️ TRƯỜNG MỚI - Danh sách hồ sơ bắt buộc
+  required_documents?: Array<{
+    code: string; // vd: "hoc_ba"
+    label: string; // vd: "Học bạ THPT (chứng thực)"
+  }> | null;
 }
 
 /**

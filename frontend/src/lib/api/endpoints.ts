@@ -125,4 +125,10 @@ export const API_ENDPOINTS = {
     DELETE: (id: number) => `/api/notifications/${id}`,
     PREFERENCES: "/api/notifications/preferences",
   },
+  // Applications (Hồ sơ Tuyển sinh)
+  APPLICATIONS: {
+    CREATE: (leadId: number) => `/api/leads/${leadId}/applications`,
+    UPDATE: (applicationId: number) => `/api/applications/${applicationId}`,
+    GET: (applicationId: number) => `/api/applications/${applicationId}`,
+  },
 } as const;

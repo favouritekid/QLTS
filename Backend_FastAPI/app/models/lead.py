@@ -108,20 +108,55 @@ class Consultation(Base):
 
 
 class Application(Base):
-    """Model cho hồ sơ nhập học."""
+    """Model cho hồ sơ nhập học (Admission Profile).
+
+    Lưu trữ thông tin hồ sơ tuyển sinh của thí sinh, bao gồm:
+    - Ngành đào tạo, loại hình, phương thức xét tuyển
+    - Điểm xét tuyển và checklist hồ sơ (JSON)
+    - Trạng thái xử lý hồ sơ
+    """
 
     __tablename__ = "application"
 
-    id = Column(Integer, primary_key=True)
-    lead_id = Column(Integer, ForeignKey("lead.id"), nullable=False, unique=True)
-    documents = Column(JSON)
-    status = Column(String(50), default="submitted")
-    officer_id = Column(Integer, ForeignKey("user.id"), nullable=False)
+    id = Column(Integer, primary_key=True, index=True)
+    lead_id = Column(Integer, ForeignKey("lead.id"), nullable=False, unique=True, index=True)
 
+    # Foreign Keys liên kết đến 3-Tier Architecture
+    major_program_id = Column(Integer, ForeignKey("major_program.id", ondelete="SET NULL"), nullable=True, index=True)
+    program_offering_id = Column(Integer, ForeignKey("program_offering.id", ondelete="SET NULL"), nullable=True, index=True)
+    criterion_id = Column(String(100), nullable=True, index=True)  # AdmissionCriterion.id (stored in JSON)
+
+    # Trường JSON để lưu dữ liệu động
+    # Structure: {"scores": {"Toan": 8.5, "Van": 7.0}, "checklist": [{code, label, status, submission_type, notes}]}
+    documents = Column(JSON, nullable=True)
+
+    # Trạng thái hồ sơ
+    # Allowed values: pending, missing_documents, completed, passed, failed
+    status = Column(String(50), nullable=False, default="pending", index=True)
+
+    # Legacy field
+    officer_id = Column(Integer, ForeignKey("user.id"), nullable=True)
+
+    # Timestamps
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    # Relationships
     officer = relationship(
         "User", back_populates="applications_handled", foreign_keys=[officer_id]
     )
     lead = relationship("Lead", back_populates="application")
+    major_program = relationship("MajorProgram")
+    program_offering = relationship("ProgramOffering")
 
 
 class CRMInteraction(Base):
