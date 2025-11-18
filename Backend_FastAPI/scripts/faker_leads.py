@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.config import settings
-from app.database import async_engine
+from app.database import engine
 from app.services import lead_service
 
 # Initialize Faker with Vietnamese locale
@@ -330,7 +330,7 @@ async def main():
     print("=" * 70)
 
     # Create async session
-    async with AsyncSession(async_engine) as db:
+    async with AsyncSession(engine) as db:
         try:
             # Load reference data
             refs = await get_reference_data(db)
