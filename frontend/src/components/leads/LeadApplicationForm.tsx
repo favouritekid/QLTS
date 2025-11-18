@@ -41,7 +41,7 @@ const applicationSchema = z.object({
   criterion_id: z.string().nullable(),
   status: z.enum(["pending", "missing_documents", "completed", "passed", "failed"]),
   documents: z.object({
-    scores: z.record(z.number().nullable()).nullable().optional(),
+    scores: z.record(z.string(), z.number().nullable()).nullable().optional(),
     checklist: z.array(
       z.object({
         code: z.string(),
@@ -110,7 +110,10 @@ export function LeadApplicationForm({ lead, application }: LeadApplicationFormPr
       program_offering_id: data.program_offering_id,
       criterion_id: data.criterion_id,
       status: data.status,
-      documents: data.documents,
+      documents: data.documents ? {
+        scores: data.documents.scores ?? null,
+        checklist: data.documents.checklist ?? null,
+      } : null,
     };
 
     updateApplication.mutate(payload);

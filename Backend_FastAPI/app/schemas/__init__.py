@@ -31,6 +31,13 @@ from .lead import (
     LeadsPage,
     LeadUpdate,
     TimelineItem,
+    # Application schemas (Hồ sơ Tuyển sinh)
+    Application,
+    ApplicationBase,
+    ApplicationCreate,
+    ApplicationUpdate,
+    ApplicationDocuments,
+    ChecklistItem,
 )
 
 # --- Từ organization.py ---
