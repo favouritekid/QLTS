@@ -360,6 +360,9 @@ async def bulk_user_action(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Thực hiện hành động hàng loạt (xóa, đổi trạng thái) trên nhiều người dùng."""
+    enforcer = request.app.state.enforcer
+
+    # Perform bulk action
     message = await user_service.perform_bulk_action(
         db,
         action=action_data.action,
@@ -367,6 +370,24 @@ async def bulk_user_action(
         admin_user=current_admin,
         new_status=action_data.status,
     )
+
+    # Clean up Casbin policies for deleted users
+    if action_data.action == "delete":
+        for user_id in action_data.user_ids:
+            # Skip if this was the admin (they can't delete themselves)
+            if user_id == current_admin.id:
+                continue
+
+            # Remove all Casbin policies for this user
+            user_subject = f"user:{user_id}"
+            try:
+                # Remove all role assignments for this user
+                await enforcer.delete_roles_for_user(user_subject)
+                # Remove all permissions for this user
+                await enforcer.delete_permissions_for_user(user_subject)
+            except Exception as e:
+                # Log but don't fail the request if Casbin cleanup fails
+                print(f"Warning: Failed to clean up Casbin policies for user {user_id}: {e}")
 
     # Log activity for bulk action
     action_desc = f"Bulk {action_data.action}"
@@ -663,36 +684,10 @@ async def get_user_statistics(
 # =============================================================================
 # ADVANCED CASBIN PERMISSION TOOLS
 # =============================================================================
-
-
-
-
-@router.get("/activity-logs")
-async def get_activity_logs(
-    request: Request,
-    db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=100),
-    actor_id: Optional[int] = Query(None),
-    target_user_id: Optional[int] = Query(None),
-    action: Optional[str] = Query(None),
-    resource_type: Optional[str] = Query(None),
-):
-    """(Admin only) Lấy danh sách activity logs với filters."""
-    skip = (page - 1) * page_size
-
-    total, logs = await activity_service.get_activity_logs(
-        db=db,
-        skip=skip,
-        limit=page_size,
-        actor_id=actor_id,
-        target_user_id=target_user_id,
-        action=action,
-        resource_type=resource_type,
-    )
-
-    return {"total_count": total, "logs": logs}
+# NOTE: activity-logs endpoint moved to top-level admin router (admin/__init__.py)
+# to support all resource types (users, casbin_policy, leads, etc.)
+# Available at: /api/admin/activity-logs
+# =============================================================================
 
 # ============================================================================
 # GENERIC USER CRUD OPERATIONS (/{user_id})

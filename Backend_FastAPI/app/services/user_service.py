@@ -1114,22 +1114,77 @@ async def perform_bulk_action(
         processed_count = 0
         message = ""
         if action == "delete":
+            # Check for FK constraints before deleting
+            from sqlalchemy import func as sql_func
+
+            # Check if any users have consultations (cannot delete)
+            consultation_check = await db.execute(
+                select(models.Consultation.officer_id, sql_func.count(models.Consultation.id))
+                .where(models.Consultation.officer_id.in_(user_ids))
+                .group_by(models.Consultation.officer_id)
+            )
+            users_with_consultations = {row[0]: row[1] for row in consultation_check.all()}
+
+            if users_with_consultations:
+                user_list = ", ".join(f"User ID {uid} ({count} consultations)"
+                                     for uid, count in users_with_consultations.items())
+                error_msg = f"Cannot delete users with consultations: {user_list}. Please reassign or delete their consultations first."
+                log.warning(
+                    "Bulk delete blocked: Users have consultations",
+                    admin_id=admin_user.id,
+                    users_with_consultations=users_with_consultations,
+                )
+                raise BadRequest(detail=error_msg)
+
+            # Unassign leads from users being deleted (set assigned_officer_id to NULL)
+            await db.execute(
+                select(models.Lead)
+                .where(models.Lead.assigned_officer_id.in_(user_ids))
+            )
+            unassign_result = await db.execute(
+                select(models.Lead)
+                .where(models.Lead.assigned_officer_id.in_(user_ids))
+            )
+            leads_to_unassign = unassign_result.scalars().all()
+            for lead in leads_to_unassign:
+                lead.assigned_officer_id = None
+                db.add(lead)
+
+            if leads_to_unassign:
+                log.info(
+                    "Unassigned leads before bulk delete",
+                    admin_id=admin_user.id,
+                    lead_count=len(leads_to_unassign),
+                )
+
             ids_to_delete = []
+            skipped_users = []
             for user in users_to_process:
                 if user.id == admin_user.id:
-                    log.warning(  # ✅ SỬA LỖI: Xóa `await`
+                    log.warning(
                         "Admin attempted to delete self during bulk action, skipping.",
                         admin_id=admin_user.id,
                     )
+                    skipped_users.append(user.id)
                     continue
-                await db.delete(user)
+
+                await db.delete(user)  # Mark user for deletion
                 ids_to_delete.append(user.id)
                 processed_count += 1
+
+            # Build message with details
             message = f"Successfully deleted {processed_count} users."
-            log.info(  # ✅ SỬA LỖI: Xóa `await`
+            if skipped_users:
+                message += f" Skipped {len(skipped_users)} users (cannot delete self)."
+            if leads_to_unassign:
+                message += f" Unassigned {len(leads_to_unassign)} leads."
+
+            log.info(
                 "Admin bulk deleted users",
                 admin_id=admin_user.id,
                 deleted_ids=ids_to_delete,
+                skipped_ids=skipped_users,
+                unassigned_leads=len(leads_to_unassign) if leads_to_unassign else 0,
             )
 
         elif action == "change_status":

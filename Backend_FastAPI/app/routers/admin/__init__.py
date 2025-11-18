@@ -11,7 +11,14 @@ PHASE 2C: pipeline.py ✅
 PHASE 2D: sync.py ✅ (Backward compatible aliases)
 """
 
-from fastapi import APIRouter
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Query, Request
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app import database, models
+from app.routers.admin import deps
+from app.services import activity_service
 
 # PHASE 2A routers
 from . import users, roles
@@ -27,6 +34,46 @@ from . import sync
 
 # Create main admin router
 router = APIRouter(prefix="/admin", tags=["Admin"])
+
+# Permission dependency
+PermissionDep = Depends(deps.check_permission)
+
+
+# =============================================================================
+# TOP-LEVEL ADMIN ENDPOINTS (not specific to any sub-resource)
+# =============================================================================
+
+@router.get("/activity-logs")
+async def get_activity_logs(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+    actor_id: Optional[int] = Query(None),
+    target_user_id: Optional[int] = Query(None),
+    action: Optional[str] = Query(None),
+    resource_type: Optional[str] = Query(None),
+):
+    """(Admin only) Get activity logs with filters - supports all resource types including casbin_policy."""
+    skip = (page - 1) * page_size
+
+    total, logs = await activity_service.get_activity_logs(
+        db=db,
+        skip=skip,
+        limit=page_size,
+        actor_id=actor_id,
+        target_user_id=target_user_id,
+        action=action,
+        resource_type=resource_type,
+    )
+
+    return {"total_count": total, "logs": logs}
+
+
+# =============================================================================
+# SUB-ROUTERS
+# =============================================================================
 
 # Include PHASE 2A routers
 router.include_router(users.router)    # /api/admin/users/*
