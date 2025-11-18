@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from faker import Faker
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import create_async_session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.config import settings
@@ -330,7 +330,6 @@ async def main():
     print("=" * 70)
 
     # Create async session
-    from sqlalchemy.ext.asyncio import AsyncSession
     async with AsyncSession(async_engine) as db:
         try:
             # Load reference data
