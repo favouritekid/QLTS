@@ -294,12 +294,121 @@ export function SocketHandler() {
       }
     };
 
+    // ✅ REAL-TIME APPLICATION EVENTS (Week 2): Lắng nghe sự kiện application_created
+    const handleApplicationCreated = (data: {
+      application_id: number;
+      lead_id: number;
+      lead_name: string;
+      officer_id: number;
+      major_program_name: string;
+      status: string;
+      created_at: string;
+      message: string;
+    }) => {
+      console.log("[SocketHandler] Received application_created event:", data);
+
+      // Invalidate application-related queries
+      queryClient.invalidateQueries({ queryKey: ["applications"] });
+      queryClient.invalidateQueries({ queryKey: ["officer", "applications"] });
+      queryClient.invalidateQueries({ queryKey: ["lead", data.lead_id] });
+
+      // Show toast notification
+      toast.info(data.message, {
+        description: `${data.major_program_name} • ${data.status}`,
+        duration: 5000,
+        action: {
+          label: "Xem Hồ Sơ",
+          onClick: () => {
+            window.location.href = `/dashboard/officer/applications/${data.application_id}`;
+          },
+        },
+      });
+
+      // Play notification sound if preferences allow
+      if (preferences?.sound_enabled) {
+        playNotificationSound();
+      }
+    };
+
+    // ✅ REAL-TIME APPLICATION EVENTS (Week 2): Lắng nghe sự kiện application_status_changed
+    const handleApplicationStatusChanged = (data: {
+      application_id: number;
+      lead_id: number;
+      old_status: string;
+      new_status: string;
+      changed_by: string;
+      changed_at: string;
+      message: string;
+    }) => {
+      console.log("[SocketHandler] Received application_status_changed event:", data);
+
+      // Invalidate application-related queries
+      queryClient.invalidateQueries({ queryKey: ["applications"] });
+      queryClient.invalidateQueries({ queryKey: ["application", data.application_id] });
+      queryClient.invalidateQueries({ queryKey: ["officer", "applications"] });
+
+      // Determine toast variant based on new status
+      const variant =
+        data.new_status === "passed" ? "success" :
+        data.new_status === "failed" ? "error" :
+        "info";
+
+      // Show toast notification
+      if (variant === "success") {
+        toast.success(data.message, {
+          description: `Updated by ${data.changed_by}`,
+          duration: 7000,
+        });
+      } else if (variant === "error") {
+        toast.error(data.message, {
+          description: `Updated by ${data.changed_by}`,
+          duration: 7000,
+        });
+      } else {
+        toast.info(data.message, {
+          description: `Updated by ${data.changed_by}`,
+          duration: 5000,
+        });
+      }
+
+      // Play notification sound for important status changes
+      if (preferences?.sound_enabled && (data.new_status === "passed" || data.new_status === "failed")) {
+        playNotificationSound();
+      }
+    };
+
+    // ✅ REAL-TIME APPLICATION EVENTS (Week 2): Lắng nghe sự kiện application_documents_updated
+    const handleApplicationDocumentsUpdated = (data: {
+      application_id: number;
+      lead_id: number;
+      updated_by: string;
+      updated_at: string;
+      documents_summary: string;
+      message: string;
+    }) => {
+      console.log("[SocketHandler] Received application_documents_updated event:", data);
+
+      // Invalidate application-related queries
+      queryClient.invalidateQueries({ queryKey: ["applications"] });
+      queryClient.invalidateQueries({ queryKey: ["application", data.application_id] });
+      queryClient.invalidateQueries({ queryKey: ["officer", "applications"] });
+
+      // Show subtle toast notification
+      toast.info(data.message, {
+        description: `${data.documents_summary} by ${data.updated_by}`,
+        duration: 4000,
+      });
+    };
+
     // Đăng ký listeners
     socket.on("force_logout_batch", handleForceLogoutBatch);
     socket.on("force_logout_all", handleForceLogoutAll);
     socket.on("notification", handleNewNotification);
     socket.on("data_updated", handleDataUpdated);
     socket.on("lead_assigned", handleLeadAssigned);
+    socket.on("application_created", handleApplicationCreated);
+    socket.on("application_status_changed", handleApplicationStatusChanged);
+    socket.on("application_documents_updated", handleApplicationDocumentsUpdated);
 
     // Cleanup listeners khi effect này chạy lại hoặc component unmount
     return () => {
@@ -308,6 +417,9 @@ export function SocketHandler() {
       socket.off("notification", handleNewNotification);
       socket.off("data_updated", handleDataUpdated);
       socket.off("lead_assigned", handleLeadAssigned);
+      socket.off("application_created", handleApplicationCreated);
+      socket.off("application_status_changed", handleApplicationStatusChanged);
+      socket.off("application_documents_updated", handleApplicationDocumentsUpdated);
     };
     // ✅ SECURITY FIX: Removed 'token' from dependencies, now use 'isAuthenticated'
   }, [isAuthenticated, addNotification, preferences, queryClient]);

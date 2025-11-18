@@ -17,6 +17,11 @@ from sqlalchemy.orm import selectinload
 
 from .. import models, schemas
 from ..utils.exceptions import ResourceNotFoundError, BadRequest
+from ..socket_manager import (
+    emit_application_created,
+    emit_application_status_changed,
+    emit_application_documents_updated,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -74,11 +79,40 @@ async def create_application(
     await db.commit()
     await db.refresh(new_application)
 
+    # Load relationships for socket event payload
+    stmt_reload = (
+        select(models.Application)
+        .where(models.Application.id == new_application.id)
+        .options(
+            selectinload(models.Application.lead),
+            selectinload(models.Application.major_program),
+        )
+    )
+    result_reload = await db.execute(stmt_reload)
+    new_application = result_reload.scalar_one()
+
     log.info(
         "Application created",
         application_id=new_application.id,
         lead_id=lead_id,
         officer_id=current_user.id,
+    )
+
+    # === SOCKET.IO EVENT: Emit application_created event ===
+    lead_name = f"{new_application.lead.first_name or ''} {new_application.lead.last_name or ''}".strip() or "Unknown"
+    major_program_name = new_application.major_program.name if new_application.major_program else "N/A"
+
+    application_data = {
+        "lead_name": lead_name,
+        "major_program_name": major_program_name,
+        "status": new_application.status,
+    }
+
+    await emit_application_created(
+        application_id=new_application.id,
+        lead_id=lead_id,
+        officer_id=current_user.id,
+        application_data=application_data,
     )
 
     return new_application
@@ -124,6 +158,7 @@ async def update_application(
     db: AsyncSession,
     application_id: int,
     update_data: schemas.ApplicationUpdate,
+    current_user: Optional[models.User] = None,
 ) -> models.Application:
     """
     Cập nhật Application.
@@ -132,6 +167,7 @@ async def update_application(
         db: Database session
         application_id: ID của Application
         update_data: Dữ liệu cập nhật
+        current_user: User thực hiện update (for Socket.IO events)
 
     Returns:
         Application đã cập nhật
@@ -145,8 +181,16 @@ async def update_application(
         log.warning("Application not found", application_id=application_id)
         raise ResourceNotFoundError(f"Hồ sơ với ID {application_id} không tồn tại")
 
+    # Track old values for Socket.IO events
+    old_status = application.status
+    old_documents = application.documents
+
     # Cập nhật các trường (chỉ cập nhật nếu có trong update_data)
     update_dict = update_data.model_dump(exclude_unset=True)
+
+    # Track what changed
+    status_changed = False
+    documents_changed = False
 
     for field, value in update_dict.items():
         # Xử lý đặc biệt cho documents (convert Pydantic model sang dict)
@@ -155,6 +199,10 @@ async def update_application(
                 setattr(application, field, value.model_dump(exclude_none=True))
             else:
                 setattr(application, field, value)
+            documents_changed = True
+        elif field == "status":
+            setattr(application, field, value)
+            status_changed = True
         else:
             setattr(application, field, value)
 
@@ -180,6 +228,29 @@ async def update_application(
         application_id=application_id,
         updated_fields=list(update_dict.keys()),
     )
+
+    # === SOCKET.IO EVENTS: Emit events based on what changed ===
+    if current_user and application.officer_id:
+        # Emit status changed event
+        if status_changed and old_status != application.status:
+            await emit_application_status_changed(
+                application_id=application.id,
+                lead_id=application.lead_id,
+                officer_id=application.officer_id,
+                old_status=old_status,
+                new_status=application.status,
+                changed_by_username=current_user.username,
+            )
+
+        # Emit documents updated event
+        if documents_changed and old_documents != application.documents:
+            await emit_application_documents_updated(
+                application_id=application.id,
+                lead_id=application.lead_id,
+                officer_id=application.officer_id,
+                updated_by_username=current_user.username,
+                documents_summary="Documents checklist updated",
+            )
 
     return application
 

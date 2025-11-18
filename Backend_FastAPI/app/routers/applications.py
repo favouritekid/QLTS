@@ -135,6 +135,7 @@ async def update_application(
             db=db,
             application_id=application_id,
             update_data=update_data,
+            current_user=current_user,
         )
         return application
     except ResourceNotFoundError as e:
