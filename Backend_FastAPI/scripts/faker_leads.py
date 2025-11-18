@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
 from app.config import settings
-from app.database import engine
+from app.database import engine, AsyncSessionLocal
 from app.services import lead_service
 
 # Initialize Faker with Vietnamese locale
@@ -214,7 +214,6 @@ def generate_random_lead(units, offerings=None, target_unit_id=None):
 
 
 async def create_leads_batch(
-    db,
     count: int,
     units,
     offerings,
@@ -223,58 +222,55 @@ async def create_leads_batch(
     consultation_statuses=None,
     officers=None
 ):
-    """Tạo một batch leads."""
+    """Tạo một batch leads - mỗi lead dùng session riêng."""
     print(f"\n🔧 Creating batch of {count} leads...")
 
     created_leads = []
     errors = []
 
     for i in range(count):
-        try:
-            # Generate lead data
-            lead_data = generate_random_lead(units, offerings, target_unit_id)
+        # Create a NEW session for each lead to avoid MissingGreenlet errors
+        # This is necessary because create_lead() dispatches Celery tasks
+        # which corrupt the session's async context
+        async with AsyncSessionLocal() as db:
+            try:
+                # Generate lead data
+                lead_data = generate_random_lead(units, offerings, target_unit_id)
 
-            # Create lead via service (includes auto-scoring)
-            from app.schemas.lead import LeadCreate
-            lead_create = LeadCreate(**lead_data)
+                # Create lead via service (includes auto-scoring)
+                from app.schemas.lead import LeadCreate
+                lead_create = LeadCreate(**lead_data)
 
-            # Create lead
-            lead = await lead_service.create_lead(db, lead_create)
+                # Create lead
+                lead = await lead_service.create_lead(db, lead_create)
 
-            # Commit after each lead to avoid session issues
-            await db.commit()
-
-            # Expire all cached objects to prevent MissingGreenlet errors
-            # This is needed because create_lead dispatches Celery tasks
-            db.expire_all()
-
-            # Refresh the lead object after expiring
-            await db.refresh(lead)
-
-            created_leads.append(lead)
-
-            # Optionally create consultations
-            if with_consultations and consultation_statuses and officers and random.random() > 0.3:
-                # Create 1-3 consultations per lead
-                num_consultations = random.randint(1, 3)
-                for _ in range(num_consultations):
-                    await create_random_consultation(
-                        db, lead, consultation_statuses, officers
-                    )
-                # Commit after consultations
+                # Commit lead
                 await db.commit()
-                # Expire cached objects after consultation operations
-                db.expire_all()
+                await db.refresh(lead)
 
-            # Progress indicator
-            if (i + 1) % 10 == 0:
-                print(f"   ✅ Created {i + 1}/{count} leads...")
+                created_leads.append(lead)
 
-        except Exception as e:
-            error_msg = f"Row {i + 1}: {str(e)}"
-            errors.append(error_msg)
-            print(f"   ❌ {error_msg}")
-            continue
+                # Optionally create consultations
+                if with_consultations and consultation_statuses and officers and random.random() > 0.3:
+                    # Create 1-3 consultations per lead
+                    num_consultations = random.randint(1, 3)
+                    for _ in range(num_consultations):
+                        await create_random_consultation(
+                            db, lead, consultation_statuses, officers
+                        )
+                    # Commit consultations
+                    await db.commit()
+
+                # Progress indicator
+                if (i + 1) % 10 == 0:
+                    print(f"   ✅ Created {i + 1}/{count} leads...")
+
+            except Exception as e:
+                await db.rollback()
+                error_msg = f"Row {i + 1}: {str(e)}"
+                errors.append(error_msg)
+                print(f"   ❌ {error_msg}")
+                continue
 
     return created_leads, errors
 
@@ -362,7 +358,7 @@ async def main():
                     print(f"❌ ERROR: Unit ID {args.unit_id} not found!")
                     return
 
-            # Create leads in batches
+            # Create leads in batches (each lead uses its own session)
             total_created = 0
             total_errors = 0
 
@@ -371,7 +367,6 @@ async def main():
                 batch_size = min(args.batch_size, remaining)
 
                 created, errors = await create_leads_batch(
-                    db,
                     count=batch_size,
                     units=refs["units"],
                     offerings=refs["offerings"],
@@ -385,7 +380,7 @@ async def main():
                 total_errors += len(errors)
                 remaining -= batch_size
 
-                # Note: Each lead is already committed individually
+                # Each lead already committed in its own session
                 print(f"   ✅ Batch {batch_size} leads processed")
 
             # Summary
