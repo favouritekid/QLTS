@@ -416,6 +416,9 @@ async def emit_to_all(event: str, data: dict, namespace: str = "/"):
     """
     try:
         await sio.emit(event, data, namespace=namespace)
+        # Track metrics
+        socket_events_emitted_total.labels(event_type=event).inc()
+
         log.info(
             "Emitted event to all clients",
             socket_event=event,
@@ -423,6 +426,9 @@ async def emit_to_all(event: str, data: dict, namespace: str = "/"):
             data_keys=list(data.keys())
         )
     except Exception as e:
+        # Track failure metrics
+        socket_emit_failures_total.labels(event_type=event).inc()
+
         log.error(
             "Failed to emit event to all clients",
             socket_event=event,
@@ -476,6 +482,9 @@ async def emit_lead_reassigned(
                 },
                 room=old_officer_room
             )
+            # Track metrics
+            socket_events_emitted_total.labels(event_type="lead_reassigned").inc()
+
             log.info(
                 "Lead reassignment notification sent to old officer",
                 lead_id=lead_id,
@@ -504,6 +513,8 @@ async def emit_lead_reassigned(
             },
             namespace="/"  # Broadcast to all connected clients (admins can filter by unit)
         )
+        # Track metrics
+        socket_events_emitted_total.labels(event_type="lead_transferred_in").inc()
 
         log.info(
             "Lead transfer notification sent to new unit",
@@ -512,6 +523,11 @@ async def emit_lead_reassigned(
         )
 
     except Exception as e:
+        # Track failure metrics
+        if old_officer_id:
+            socket_emit_failures_total.labels(event_type="lead_reassigned").inc()
+        socket_emit_failures_total.labels(event_type="lead_transferred_in").inc()
+
         log.error(
             "Failed to emit lead reassignment Socket.IO events",
             lead_id=lead_id,
