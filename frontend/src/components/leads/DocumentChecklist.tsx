@@ -28,12 +28,12 @@ import {
 import type { AdmissionCriterion } from "@/types/organization.types";
 import type { ChecklistItem } from "@/types/lead.types";
 
-interface DocumentChecklistProps {
-  control: Control<FieldValues>;
+interface DocumentChecklistProps<T extends FieldValues = FieldValues> {
+  control: Control<T>;
   admissionMethod: AdmissionCriterion;
 }
 
-export function DocumentChecklist({ control, admissionMethod }: DocumentChecklistProps) {
+export function DocumentChecklist<T extends FieldValues = FieldValues>({ control, admissionMethod }: DocumentChecklistProps<T>) {
   const { fields, replace } = useFieldArray({
     control,
     name: "documents.checklist",
