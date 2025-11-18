@@ -52,7 +52,7 @@ const applicationSchema = z.object({
   }).nullable(),
 });
 
-type ApplicationFormValues = z.infer<typeof applicationSchema>;
+export type ApplicationFormValues = z.infer<typeof applicationSchema>;
 
 interface LeadApplicationFormProps {
   lead: Lead;

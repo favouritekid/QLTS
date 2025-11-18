@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { Control, useFieldArray, FieldValues } from "react-hook-form";
+import { Control, useFieldArray, Path, FieldArray } from "react-hook-form";
 import {
   FormControl,
   FormField,
@@ -27,29 +27,30 @@ import {
 } from "@/components/ui/table";
 import type { AdmissionCriterion } from "@/types/organization.types";
 import type { ChecklistItem } from "@/types/lead.types";
+import type { ApplicationFormValues } from "./LeadApplicationForm";
 
-interface DocumentChecklistProps<T extends FieldValues = FieldValues> {
-  control: Control<T>;
+interface DocumentChecklistProps {
+  control: Control<ApplicationFormValues>;
   admissionMethod: AdmissionCriterion;
 }
 
-export function DocumentChecklist<T extends FieldValues = FieldValues>({ control, admissionMethod }: DocumentChecklistProps<T>) {
+export function DocumentChecklist({ control, admissionMethod }: DocumentChecklistProps) {
   const { fields, replace } = useFieldArray({
     control,
-    name: "documents.checklist",
+    name: "documents.checklist" as "documents.checklist",
   });
 
   // Update checklist when admission method changes
   useEffect(() => {
     if (admissionMethod.required_documents) {
-      const newChecklist: ChecklistItem[] = admissionMethod.required_documents.map((doc) => ({
+      const newChecklist = admissionMethod.required_documents.map((doc) => ({
         code: doc.code,
         label: doc.label,
         status: "missing" as const,
         submission_type: "N/A" as const,
         notes: "",
       }));
-      replace(newChecklist);
+      replace(newChecklist as FieldArray<ApplicationFormValues, "documents.checklist">);
     } else {
       replace([]);
     }
@@ -81,7 +82,7 @@ export function DocumentChecklist<T extends FieldValues = FieldValues>({ control
               <TableCell className="font-medium">
                 <FormField
                   control={control}
-                  name={`documents.checklist.${index}.label`}
+                  name={`documents.checklist.${index}.label` as Path<ApplicationFormValues>}
                   render={({ field }) => (
                     <FormItem>
                       <FormControl>
@@ -96,7 +97,7 @@ export function DocumentChecklist<T extends FieldValues = FieldValues>({ control
               <TableCell>
                 <FormField
                   control={control}
-                  name={`documents.checklist.${index}.status`}
+                  name={`documents.checklist.${index}.status` as Path<ApplicationFormValues>}
                   render={({ field }) => (
                     <FormItem>
                       <Select onValueChange={field.onChange} value={field.value}>
@@ -122,7 +123,7 @@ export function DocumentChecklist<T extends FieldValues = FieldValues>({ control
               <TableCell>
                 <FormField
                   control={control}
-                  name={`documents.checklist.${index}.submission_type`}
+                  name={`documents.checklist.${index}.submission_type` as Path<ApplicationFormValues>}
                   render={({ field }) => (
                     <FormItem>
                       <Select onValueChange={field.onChange} value={field.value}>
@@ -149,7 +150,7 @@ export function DocumentChecklist<T extends FieldValues = FieldValues>({ control
               <TableCell>
                 <FormField
                   control={control}
-                  name={`documents.checklist.${index}.notes`}
+                  name={`documents.checklist.${index}.notes` as Path<ApplicationFormValues>}
                   render={({ field }) => (
                     <FormItem>
                       <FormControl>
