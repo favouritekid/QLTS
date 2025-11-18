@@ -192,7 +192,16 @@ async def delete_a_consultation(
     current_user: models.User = PermissionDep,  # <-- THAY ĐỔI (Casbin Check)
     db: AsyncSession = Depends(database.get_db),
 ):
-    """(Admin only) Xóa một ghi chú tư vấn (Đã xác thực 2 lớp)."""
+    """
+    Xóa một ghi chú tư vấn (Admin: any consultation, Officer: most recent only).
+
+    Permission Rules:
+    - Admin: Can delete any consultation
+    - Officer: Can only delete the most recent consultation to maintain consultation chain integrity
+    - Other roles: Cannot delete consultations
+
+    This prevents Officers from breaking the consultation chain by deleting historical consultations.
+    """
     await lead_service.delete_consultation(db, lead.id, consultation_id, current_user)
     return None
 

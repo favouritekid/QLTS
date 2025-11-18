@@ -1007,7 +1007,13 @@ async def get_lead_timeline(db: AsyncSession, lead_id: int) -> List[dict]:
 async def delete_consultation(
     db: AsyncSession, lead_id: int, consultation_id: int, current_user: models.User
 ):
-    """(Admin only) Xóa một consultation và cập nhật lại trạng thái Lead."""
+    """
+    Xóa một consultation và cập nhật lại trạng thái Lead.
+
+    Permission Rules:
+    - Admin: Can delete any consultation
+    - Officer: Can only delete the most recent consultation (prevents breaking consultation chain)
+    """
     try:
         # Lấy Lead (không cần eager load consultations ở đây)
         lead_query = select(models.Lead).where(models.Lead.id == lead_id)
@@ -1028,9 +1034,37 @@ async def delete_consultation(
                 detail="Consultation does not belong to the specified lead."
             )
 
-        # Kiểm tra quyền Admin
-        if current_user.role != "admin":
-            raise PermissionDeniedError(detail="Only admins can delete consultations.")
+        # Kiểm tra quyền
+        if current_user.role == "admin":
+            # Admin có quyền xóa bất kỳ consultation nào
+            pass
+        elif current_user.role == "officer":
+            # Officer chỉ được xóa consultation mới nhất
+            # Tìm consultation mới nhất của Lead này
+            latest_consultation_query = (
+                select(models.Consultation)
+                .where(models.Consultation.lead_id == lead_id)
+                .order_by(
+                    models.Consultation.consultation_date.desc(),
+                    models.Consultation.id.desc(),
+                )
+            )
+            latest_consultation_result = await db.execute(latest_consultation_query)
+            latest_consultation = latest_consultation_result.scalars().first()
+
+            if not latest_consultation or latest_consultation.id != consultation_id:
+                raise PermissionDeniedError(
+                    detail="Officers can only delete the most recent consultation to maintain consultation chain integrity."
+                )
+
+            # Kiểm tra officer có được gán cho Lead này không
+            if lead.assigned_officer_id != current_user.id:
+                raise PermissionDeniedError(
+                    detail="You are not assigned to this lead."
+                )
+        else:
+            # Các role khác không có quyền xóa consultation
+            raise PermissionDeniedError(detail="You don't have permission to delete consultations.")
 
         # Lưu trạng thái cũ của Lead trước khi xóa consultation
         old_state = _get_current_lead_state(lead)
