@@ -150,8 +150,13 @@ def generate_random_lead(units, offerings=None, target_unit_id=None):
     ])
     email = f"{email_prefix}@{email_domain}"
 
-    # Generate phone (Vietnam format)
-    phone = fake.phone_number()
+    # Generate phone (Vietnam format - 10 digits)
+    # Format: 09XX XXX XXX or 03XX XXX XXX
+    prefix = random.choice(['090', '091', '092', '093', '094', '095', '096', '097', '098', '099',
+                           '032', '033', '034', '035', '036', '037', '038', '039',
+                           '070', '076', '077', '078', '079',
+                           '081', '082', '083', '084', '085', '086', '088', '089'])
+    phone = f"{prefix}{random.randint(1000000, 9999999)}"
 
     # Random source
     source = random.choice(LEAD_SOURCES)
@@ -235,6 +240,11 @@ async def create_leads_batch(
 
             # Create lead
             lead = await lead_service.create_lead(db, lead_create)
+
+            # Commit after each lead to avoid session issues
+            await db.commit()
+            await db.refresh(lead)
+
             created_leads.append(lead)
 
             # Optionally create consultations
@@ -245,6 +255,8 @@ async def create_leads_batch(
                     await create_random_consultation(
                         db, lead, consultation_statuses, officers
                     )
+                # Commit after consultations
+                await db.commit()
 
             # Progress indicator
             if (i + 1) % 10 == 0:
@@ -365,9 +377,8 @@ async def main():
                 total_errors += len(errors)
                 remaining -= batch_size
 
-                # Commit batch
-                await db.commit()
-                print(f"   💾 Batch committed to database")
+                # Note: Each lead is already committed individually
+                print(f"   ✅ Batch {batch_size} leads processed")
 
             # Summary
             print("\n" + "=" * 70)
