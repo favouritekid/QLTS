@@ -296,9 +296,136 @@ async def export_leads(
                 "Content-Disposition": f'attachment; filename="{filename}"'
             }
         )
+    elif format.lower() in ["xlsx", "excel"]:
+        # Generate Excel using openpyxl
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Leads Export"
+
+        # Header row with styling
+        headers = [
+            "ID", "Full Name", "Email", "Phone", "Status", "Lead Score",
+            "Source", "Education Level", "GPA", "Location",
+            "Assigned Officer ID", "Pipeline Stage ID", "Consultation Status ID",
+            "Created At", "Updated At"
+        ]
+        ws.append(headers)
+
+        # Style header row
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        header_font = Font(color="FFFFFF", bold=True)
+        for cell in ws[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+
+        # Data rows
+        for lead in leads:
+            ws.append([
+                lead.id,
+                lead.full_name,
+                lead.email,
+                lead.phone,
+                lead.status,
+                lead.lead_score,
+                lead.source,
+                lead.education_level or "",
+                lead.gpa or "",
+                lead.location or "",
+                lead.assigned_officer_id or "",
+                lead.pipeline_stage_id or "",
+                lead.consultation_status_id or "",
+                lead.created_at.isoformat() if lead.created_at else "",
+                lead.updated_at.isoformat() if lead.updated_at else "",
+            ])
+
+        # Auto-adjust column widths
+        for column in ws.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)  # Cap at 50
+            ws.column_dimensions[column_letter].width = adjusted_width
+
+        # Save to BytesIO
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        # Generate filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"leads_export_{timestamp}.xlsx"
+
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
     else:
-        # For now, only CSV is supported
-        # Excel support can be added later with openpyxl
         return {
-            "error": "Only CSV format is currently supported. Excel support coming soon."
+            "error": f"Unsupported format '{format}'. Supported formats: csv, xlsx"
         }
+
+
+@router.post("/bulk-assign", status_code=status.HTTP_200_OK)
+async def bulk_assign_leads(
+    bulk_assign_data: schemas.BulkAssignLeadsSchema,
+    officer_id: int = Query(..., description="Officer ID to assign leads to"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = PermissionDep,
+):
+    """
+    (Admin/Manager only) Bulk assign multiple leads to a single officer.
+
+    Assigns multiple leads to one officer in a single operation.
+    Continues on errors (doesn't fail fast) and returns detailed results.
+
+    **Request Body:**
+    ```json
+    {
+        "lead_ids": [1, 2, 3, 4, 5]
+    }
+    ```
+
+    **Query Parameters:**
+    - `officer_id`: Target officer ID to assign all leads to
+
+    **Response:**
+    ```json
+    {
+        "total": 5,
+        "successful": 4,
+        "failed": 1,
+        "assigned_lead_ids": [1, 2, 3, 4],
+        "errors": [
+            {"lead_id": 5, "error": "Lead with id 5 not found"}
+        ]
+    }
+    ```
+
+    **Permission:** Admin or Manager only (enforced by Casbin)
+
+    **Business Rules:**
+    - Officer must exist, be active, and have role="officer"
+    - Creates AssignmentLog for each successful assignment
+    - Logs state change in LeadStatusHistory
+    - Updates lead status to "assigned"
+    - Updates officer's last_assigned_at timestamp
+    """
+    result = await lead_service.bulk_assign_leads(
+        db,
+        lead_ids=bulk_assign_data.lead_ids,
+        officer_id=officer_id,
+        assigner=current_user
+    )
+    await db.commit()
+    return result

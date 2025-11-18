@@ -1722,6 +1722,101 @@ async def import_leads_from_file_content(
 
 
 # =============================================================================
+# BULK OPERATIONS
+# =============================================================================
+
+async def bulk_assign_leads(
+    db: AsyncSession,
+    lead_ids: List[int],
+    officer_id: int,
+    assigner: models.User
+) -> dict:
+    """
+    Bulk assign multiple leads to a single officer (Admin/Manager only).
+
+    Args:
+        db: Database session
+        lead_ids: List of Lead IDs to assign
+        officer_id: Target officer ID
+        assigner: User performing the assignment
+
+    Returns:
+        dict: {
+            "total": int,
+            "successful": int,
+            "failed": int,
+            "assigned_lead_ids": List[int],
+            "errors": List[dict]
+        }
+
+    Business Rules:
+    - All leads must exist and not be deleted
+    - Officer must be active and have role="officer"
+    - Creates AssignmentLog for each successful assignment
+    - Logs state change in LeadStatusHistory
+    - Continues on errors (doesn't fail fast)
+    """
+    # Validate officer
+    officer = await db.get(models.User, officer_id)
+    if not officer:
+        raise ResourceNotFoundError(f"Officer with id {officer_id} not found")
+    if officer.role != "officer":
+        raise PermissionDeniedError(f"User {officer_id} is not an officer")
+    if officer.status != "active":
+        raise BadRequest(f"Officer {officer_id} is not active")
+
+    assigned_lead_ids = []
+    errors = []
+
+    for lead_id in lead_ids:
+        try:
+            # Assign lead using existing service function
+            lead = await assign_lead_manually(db, lead_id, officer_id, assigner)
+            assigned_lead_ids.append(lead.id)
+
+        except (ResourceNotFoundError, PermissionDeniedError, BadRequest) as e:
+            errors.append({
+                "lead_id": lead_id,
+                "error": str(e)
+            })
+            log.warning(
+                "Bulk assign: Failed to assign lead",
+                lead_id=lead_id,
+                officer_id=officer_id,
+                error=str(e)
+            )
+        except Exception as e:
+            errors.append({
+                "lead_id": lead_id,
+                "error": f"Unexpected error: {str(e)}"
+            })
+            log.error(
+                "Bulk assign: Unexpected error",
+                lead_id=lead_id,
+                officer_id=officer_id,
+                error=str(e),
+                exc_info=True
+            )
+
+    log.info(
+        "Bulk assign completed",
+        total=len(lead_ids),
+        successful=len(assigned_lead_ids),
+        failed=len(errors),
+        officer_id=officer_id,
+        assigner_id=assigner.id
+    )
+
+    return {
+        "total": len(lead_ids),
+        "successful": len(assigned_lead_ids),
+        "failed": len(errors),
+        "assigned_lead_ids": assigned_lead_ids,
+        "errors": errors
+    }
+
+
+# =============================================================================
 # DELETE LEAD (SOFT DELETE)
 # =============================================================================
 
