@@ -1,7 +1,6 @@
 // src/components/leads/LeadApplicationForm.tsx
 "use client";
 
-import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -32,7 +31,6 @@ import { useUpdateApplication } from "@/hooks/useApplication";
 import { useMajorPrograms, useOfferingAcademicInfoList } from "@/hooks/useOrganization";
 import { DocumentChecklist } from "./DocumentChecklist";
 import type { Lead, Application, ApplicationUpdate, ChecklistItem } from "@/types/lead.types";
-import type { MajorProgram, ProgramOffering, AdmissionCriterion } from "@/types/organization.types";
 
 // Validation schema
 const applicationSchema = z.object({
@@ -86,9 +84,6 @@ export function LeadApplicationForm({ lead, application }: LeadApplicationFormPr
 
   // Find selected objects
   const selectedMajorProgram = majorPrograms.find((p) => p.id === selectedMajorProgramId);
-  const selectedOffering = selectedMajorProgram?.offerings?.find(
-    (o) => o.id === selectedOfferingId
-  );
 
   // Fetch academic info for selected offering
   const {
@@ -314,6 +309,7 @@ export function LeadApplicationForm({ lead, application }: LeadApplicationFormPr
                     <FormField
                       key={subject}
                       control={form.control}
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
                       name={`documents.scores.${subject}` as any}
                       render={({ field }) => (
                         <FormItem>

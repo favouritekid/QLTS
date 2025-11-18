@@ -2,12 +2,11 @@
 "use client";
 
 import { useEffect } from "react";
-import { Control, useFieldArray } from "react-hook-form";
+import { Control, useFieldArray, FieldValues } from "react-hook-form";
 import {
   FormControl,
   FormField,
   FormItem,
-  FormLabel,
   FormMessage,
 } from "@/components/ui/form";
 import {
@@ -30,7 +29,7 @@ import type { AdmissionCriterion } from "@/types/organization.types";
 import type { ChecklistItem } from "@/types/lead.types";
 
 interface DocumentChecklistProps {
-  control: Control<any>;
+  control: Control<FieldValues>;
   admissionMethod: AdmissionCriterion;
 }
 
