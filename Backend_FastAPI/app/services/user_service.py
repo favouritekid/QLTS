@@ -480,7 +480,11 @@ async def get_users(
     allowed_filters = {
         "role": models.User.role,
         "status": models.User.status,
-        "unit_id": models.User.unit_id,  # Filter by organization unit
+    }
+
+    # Integer filters need type conversion (query params come as strings)
+    integer_filters = {
+        "unit_id": models.User.unit_id,
     }
 
     # ✅ SECURITY FIX: Search DoS Prevention (CVSS 7.5 HIGH)
@@ -491,6 +495,14 @@ async def get_users(
         if key in allowed_filters and value:
             values_to_filter = [v.strip() for v in value.split(",")]
             query = query.filter(allowed_filters[key].in_(values_to_filter))
+        elif key in integer_filters and value:
+            # Convert string values to integers for integer columns
+            try:
+                int_values = [int(v.strip()) for v in value.split(",")]
+                query = query.filter(integer_filters[key].in_(int_values))
+            except ValueError:
+                # Invalid integer value - skip this filter
+                log.warning(f"Invalid integer value for filter {key}: {value}")
         elif key == "search" and value:
             # ✅ NEW: Use full-text search with search_vector column
             # Convert spaces to AND operator for multi-word search
