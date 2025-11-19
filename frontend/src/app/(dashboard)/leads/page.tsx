@@ -194,15 +194,48 @@ export default function LeadsPage() {
           );
         },
         cell: ({ row }) => (
-          <div className="flex flex-col">
-            <span className="font-medium">{row.getValue("full_name")}</span>
-            <span className="text-sm text-muted-foreground">{row.original.email}</span>
-          </div>
+          <Link href={`/leads/${row.original.id}`} className="block hover:underline">
+            <div className="flex flex-col">
+              <span className="font-medium text-primary">{row.getValue("full_name")}</span>
+              <span className="text-sm text-muted-foreground">{row.original.email}</span>
+            </div>
+          </Link>
         ),
       },
       {
         accessorKey: "phone",
         header: "Phone",
+      },
+      {
+        id: "offering",
+        header: "Ngành đăng ký",
+        cell: ({ row }) => {
+          const lead = row.original;
+          if (lead.offering) {
+            return (
+              <div className="flex flex-col">
+                <span className="text-sm font-medium">{lead.offering.name || lead.offering.code}</span>
+              </div>
+            );
+          }
+          return <span className="text-sm text-muted-foreground">-</span>;
+        },
+      },
+      {
+        id: "assigned_officer",
+        header: "Officer",
+        cell: ({ row }) => {
+          const lead = row.original;
+          if (lead.assigned_officer) {
+            return (
+              <div className="flex flex-col">
+                <span className="text-sm font-medium">{lead.assigned_officer.full_name}</span>
+                <span className="text-xs text-muted-foreground">{lead.assigned_officer.email}</span>
+              </div>
+            );
+          }
+          return <span className="text-sm text-muted-foreground">Chưa gán</span>;
+        },
       },
       {
         accessorKey: "source",
