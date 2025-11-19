@@ -84,6 +84,11 @@ from .organization import (
     ConfigOfferingTypeBase,
     ConfigOfferingTypeCreate,
     ConfigOfferingTypeUpdate,
+    # Document Type schemas
+    ConfigDocumentType,
+    ConfigDocumentTypeBase,
+    ConfigDocumentTypeCreate,
+    ConfigDocumentTypeUpdate,
     # Distribution Rule schemas
     DistributionRuleBase,
     DistributionRuleCreate,

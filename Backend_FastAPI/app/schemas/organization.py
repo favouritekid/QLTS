@@ -21,6 +21,7 @@ class OrganizationUnitType(str, Enum):
 
     Để thêm loại mới: thêm vào enum này và update frontend UnitDialog.tsx
     """
+    TRUONG = "Trường"
     PHONG_BAN = "Phòng ban"
     TRUNG_TAM = "Trung tâm"
     KHOA = "Khoa"
@@ -398,6 +399,38 @@ class ConfigOfferingTypeUpdate(BaseModel):
 
 class ConfigOfferingType(ConfigOfferingTypeBase):
     """Full schema for offering type (includes ID)."""
+    id: int = Field(..., description="Primary key")
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# --- ConfigDocumentType (Loại tài liệu tuyển sinh) ---
+
+class ConfigDocumentTypeBase(BaseModel):
+    """Base schema for document type configuration."""
+    code: str = Field(..., min_length=1, max_length=50, description="Unique code (e.g., 'hoc_ba')")
+    name: str = Field(..., min_length=1, max_length=100, description="Display name (e.g., 'Học bạ')")
+    description: Optional[str] = Field(None, max_length=500, description="Detailed description")
+    display_order: int = Field(default=0, description="Display order in dropdown (lower = higher priority)")
+    is_active: bool = Field(default=True, description="Soft delete flag")
+
+
+class ConfigDocumentTypeCreate(ConfigDocumentTypeBase):
+    """Schema for creating a new document type."""
+    pass
+
+
+class ConfigDocumentTypeUpdate(BaseModel):
+    """Schema for updating a document type."""
+    code: Optional[str] = Field(None, min_length=1, max_length=50)
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    description: Optional[str] = Field(None, max_length=500)
+    display_order: Optional[int] = None
+    is_active: Optional[bool] = None
+
+
+class ConfigDocumentType(ConfigDocumentTypeBase):
+    """Full schema for document type (includes ID)."""
     id: int = Field(..., description="Primary key")
 
     model_config = ConfigDict(from_attributes=True)

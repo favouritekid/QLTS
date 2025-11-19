@@ -309,3 +309,198 @@ async def delete_distribution_rule(
     """(Admin only) Delete a distribution rule."""
     await config_service.delete_distribution_rule(db, rule_id)
     return None
+
+
+# ============================================================================
+# DEGREE LEVELS MANAGEMENT
+# ============================================================================
+
+
+@router.get(
+    "/degree-levels",
+    response_model=List[schemas.ConfigDegreeLevel],
+)
+async def list_degree_levels(
+    active_only: bool = True,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) List all degree levels.
+
+    Args:
+        active_only: If True, return only active degree levels
+    """
+    return await config_service.get_degree_levels(db, active_only)
+
+
+@router.post(
+    "/degree-levels",
+    response_model=schemas.ConfigDegreeLevel,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_degree_level(
+    level_in: schemas.ConfigDegreeLevelCreate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Create a new degree level."""
+    return await config_service.create_degree_level(db, level_in)
+
+
+@router.put(
+    "/degree-levels/{level_id}",
+    response_model=schemas.ConfigDegreeLevel,
+)
+async def update_degree_level(
+    level_id: int,
+    level_in: schemas.ConfigDegreeLevelUpdate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Update a degree level."""
+    return await config_service.update_degree_level(db, level_id, level_in)
+
+
+@router.delete(
+    "/degree-levels/{level_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_degree_level(
+    level_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Delete a degree level (soft delete)."""
+    await config_service.delete_degree_level(db, level_id)
+    return None
+
+
+# ============================================================================
+# OFFERING TYPES MANAGEMENT
+# ============================================================================
+
+
+@router.get(
+    "/offering-types",
+    response_model=List[schemas.ConfigOfferingType],
+)
+async def list_offering_types(
+    active_only: bool = True,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) List all offering types.
+
+    Args:
+        active_only: If True, return only active offering types
+    """
+    return await config_service.get_offering_types(db, active_only)
+
+
+@router.post(
+    "/offering-types",
+    response_model=schemas.ConfigOfferingType,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_offering_type(
+    type_in: schemas.ConfigOfferingTypeCreate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Create a new offering type."""
+    return await config_service.create_offering_type(db, type_in)
+
+
+@router.put(
+    "/offering-types/{type_id}",
+    response_model=schemas.ConfigOfferingType,
+)
+async def update_offering_type(
+    type_id: int,
+    type_in: schemas.ConfigOfferingTypeUpdate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Update an offering type."""
+    return await config_service.update_offering_type(db, type_id, type_in)
+
+
+@router.delete(
+    "/offering-types/{type_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_offering_type(
+    type_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Delete an offering type (soft delete)."""
+    await config_service.delete_offering_type(db, type_id)
+    return None
+
+
+# ============================================================================
+# DOCUMENT TYPES MANAGEMENT
+# ============================================================================
+
+
+@router.get(
+    "/document-types",
+    response_model=List[schemas.ConfigDocumentType],
+)
+async def list_document_types(
+    active_only: bool = True,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) List all document types.
+
+    Args:
+        active_only: If True, return only active document types
+    """
+    return await config_service.get_document_types(db, active_only)
+
+
+@router.post(
+    "/document-types",
+    response_model=schemas.ConfigDocumentType,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_document_type(
+    type_in: schemas.ConfigDocumentTypeCreate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Create a new document type."""
+    return await config_service.create_document_type(db, type_in)
+
+
+@router.put(
+    "/document-types/{type_id}",
+    response_model=schemas.ConfigDocumentType,
+)
+async def update_document_type(
+    type_id: int,
+    type_in: schemas.ConfigDocumentTypeUpdate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Update a document type."""
+    return await config_service.update_document_type(db, type_id, type_in)
+
+
+@router.delete(
+    "/document-types/{type_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_document_type(
+    type_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """(Admin only) Delete a document type (soft delete)."""
+    await config_service.delete_document_type(db, type_id)
+    return None

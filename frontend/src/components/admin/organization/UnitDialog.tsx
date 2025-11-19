@@ -125,8 +125,10 @@ export function UnitDialog({ open, onOpenChange, unit }: UnitDialogProps) {
 
   // Handle form submission
   const onSubmit = async (values: UnitFormValues) => {
-    // Convert parent_id from string to number
-    const parent_id = values.parent_id ? Number(values.parent_id) : null;
+    // Convert parent_id from string to number (handle "none" as null)
+    const parent_id = values.parent_id && values.parent_id !== "none"
+      ? Number(values.parent_id)
+      : null;
 
     // Validate circular dependency
     if (isEditMode && unit && parent_id) {
@@ -136,6 +138,24 @@ export function UnitDialog({ open, onOpenChange, unit }: UnitDialogProps) {
         });
         return;
       }
+    }
+
+    // Check for duplicate unit name within same parent (only active units)
+    const trimmedName = values.name.trim();
+    const isDuplicate = allUnits.some(u =>
+      u.is_active &&
+      u.name.trim().toLowerCase() === trimmedName.toLowerCase() &&
+      u.parent_id === parent_id &&
+      (!isEditMode || u.id !== unit?.id) // Exclude self in edit mode
+    );
+
+    if (isDuplicate) {
+      form.setError("name", {
+        message: parent_id
+          ? "Đã tồn tại đơn vị cùng tên trong đơn vị cha này"
+          : "Đã tồn tại đơn vị cùng tên ở cấp cao nhất",
+      });
+      return;
     }
 
     const payload = {

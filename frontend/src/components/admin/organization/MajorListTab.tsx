@@ -24,6 +24,14 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
   Plus,
   Search,
   MoreVertical,
@@ -34,6 +42,8 @@ import {
   ChevronDown,
   Layers,
   CalendarCheck,
+  CheckCircle,
+  XCircle,
 } from "lucide-react";
 import {
   useOrganizationUnits,
@@ -127,6 +137,10 @@ export function MajorListTab({ unit }: MajorListTabProps) {
       offering.offering_type.toLowerCase().includes(searchQuery.toLowerCase())
     );
   });
+
+  // Group programs by status
+  const activePrograms = filteredPrograms.filter((p) => p.is_active);
+  const inactivePrograms = filteredPrograms.filter((p) => !p.is_active);
 
   // ===================================================================
   // HANDLERS - TIER 1 (MajorProgram)
@@ -293,179 +307,359 @@ export function MajorListTab({ unit }: MajorListTabProps) {
             )}
           </div>
         ) : (
-          // Programs list (3-tier tree)
-          <div className="space-y-3 p-6">
-            {filteredPrograms.map((program) => {
-              const isExpanded = expandedPrograms.has(program.id);
-              const hasOfferings = program.offerings && program.offerings.length > 0;
-
-              return (
-                <div key={program.id} className="bg-card overflow-hidden rounded-lg border">
-                  {/* TIER 1: MajorProgram Header */}
-                  <div className="bg-muted/30 p-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex flex-1 items-center gap-3">
-                        {/* Expand/Collapse button */}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => toggleProgramExpand(program.id)}
-                          className="h-8 w-8 p-0"
-                          disabled={!hasOfferings}
-                        >
-                          {hasOfferings ? (
-                            isExpanded ? (
-                              <ChevronDown className="h-4 w-4" />
-                            ) : (
-                              <ChevronRight className="h-4 w-4" />
-                            )
-                          ) : (
-                            <div className="h-4 w-4" />
-                          )}
-                        </Button>
-
-                        <GraduationCap className="text-primary h-5 w-5" />
-
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2">
-                            <h4 className="font-semibold">{program.name}</h4>
-                            <Badge variant="outline" className="text-xs">
-                              {program.degree_level}
-                            </Badge>
-                            {!program.is_active && (
-                              <Badge variant="destructive" className="text-xs">
-                                Ngưng hoạt động
-                              </Badge>
-                            )}
-                          </div>
-                          <div className="mt-1 flex items-center gap-4">
-                            <code className="bg-muted rounded px-2 py-0.5 font-mono text-xs">
-                              {program.code}
-                            </code>
-                            <span className="text-muted-foreground text-xs">
-                              {hasOfferings
-                                ? `${program.offerings.length} loại hình`
-                                : "Chưa có loại hình"}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Actions for Tier 1 */}
-                      <div className="flex items-center gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleCreateOffering(program)}
-                        >
-                          <Plus className="mr-1 h-4 w-4" />
-                          Thêm loại hình
-                        </Button>
-
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="sm">
-                              <MoreVertical className="h-4 w-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => handleEditProgram(program)}>
-                              <Edit className="mr-2 h-4 w-4" />
-                              Chỉnh sửa
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() => handleDeleteProgramClick(program)}
-                              className="text-red-600"
-                            >
-                              <Trash2 className="mr-2 h-4 w-4" />
-                              Xóa
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* TIER 2: ProgramOffering List (Expandable) */}
-                  {isExpanded && hasOfferings && (
-                    <div className="border-t">
-                      {program.offerings.map((offering) => (
-                        <div
-                          key={offering.id}
-                          className="hover:bg-muted/20 border-b p-4 transition-colors last:border-b-0"
-                        >
-                          <div className="flex items-center justify-between">
-                            <div className="flex flex-1 items-center gap-3">
-                              <div className="ml-10" /> {/* Indent */}
-                              <Layers className="h-4 w-4 text-blue-500" />
-                              <div className="flex-1">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-sm font-medium">
-                                    {offering.offering_type}
-                                  </span>
-                                  {!offering.is_active && (
-                                    <Badge variant="destructive" className="text-xs">
-                                      Ngưng hoạt động
-                                    </Badge>
-                                  )}
-                                </div>
-                                <div className="mt-1 flex items-center gap-4">
-                                  {offering.duration_semesters && (
-                                    <span className="text-muted-foreground text-xs">
-                                      {offering.duration_semesters} kỳ
-                                    </span>
-                                  )}
-                                  {offering.total_credits && (
-                                    <span className="text-muted-foreground text-xs">
-                                      {offering.total_credits} tín chỉ
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Actions for Tier 2 */}
-                            <div className="flex items-center gap-2">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleManageAcademicInfo(offering)}
-                              >
-                                <CalendarCheck className="mr-1 h-4 w-4" />
-                                Thông tin tuyển sinh
-                              </Button>
-
-                              <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <Button variant="ghost" size="sm">
-                                    <MoreVertical className="h-4 w-4" />
-                                  </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end">
-                                  <DropdownMenuItem
-                                    onClick={() => handleEditOffering(program, offering)}
-                                  >
-                                    <Edit className="mr-2 h-4 w-4" />
-                                    Chỉnh sửa
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem
-                                    onClick={() => handleDeleteOfferingClick(offering)}
-                                    className="text-red-600"
-                                  >
-                                    <Trash2 className="mr-2 h-4 w-4" />
-                                    Xóa
-                                  </DropdownMenuItem>
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+          // Programs table with status grouping
+          <div className="p-6">
+            {/* Active Programs Section */}
+            {activePrograms.length > 0 && (
+              <div className="mb-6">
+                <div className="mb-3 flex items-center gap-2">
+                  <CheckCircle className="h-4 w-4 text-green-500" />
+                  <h4 className="font-semibold text-green-700">
+                    Đang hoạt động ({activePrograms.length})
+                  </h4>
                 </div>
-              );
-            })}
+                <div className="rounded-lg border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-muted/50">
+                        <TableHead className="w-[40px]"></TableHead>
+                        <TableHead>Tên chương trình</TableHead>
+                        <TableHead className="w-[100px]">Mã</TableHead>
+                        <TableHead className="w-[120px]">Trình độ</TableHead>
+                        <TableHead className="w-[100px]">Loại hình</TableHead>
+                        <TableHead className="w-[200px] text-right">Thao tác</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {activePrograms.map((program) => {
+                        const isExpanded = expandedPrograms.has(program.id);
+                        const hasOfferings = program.offerings && program.offerings.length > 0;
+
+                        return (
+                          <>
+                            {/* Program Row */}
+                            <TableRow key={program.id} className="hover:bg-muted/30">
+                              <TableCell className="p-2">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => toggleProgramExpand(program.id)}
+                                  className="h-7 w-7 p-0"
+                                  disabled={!hasOfferings}
+                                >
+                                  {hasOfferings ? (
+                                    isExpanded ? (
+                                      <ChevronDown className="h-4 w-4" />
+                                    ) : (
+                                      <ChevronRight className="h-4 w-4" />
+                                    )
+                                  ) : (
+                                    <div className="h-4 w-4" />
+                                  )}
+                                </Button>
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-2">
+                                  <GraduationCap className="text-primary h-4 w-4" />
+                                  <span className="font-medium">{program.name}</span>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <code className="bg-muted rounded px-2 py-0.5 font-mono text-xs">
+                                  {program.code}
+                                </code>
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant="outline" className="text-xs">
+                                  {program.degree_level}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>
+                                <span className="text-muted-foreground text-sm">
+                                  {hasOfferings ? program.offerings.length : 0}
+                                </span>
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <div className="flex items-center justify-end gap-1">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleCreateOffering(program)}
+                                  >
+                                    <Plus className="mr-1 h-3 w-3" />
+                                    Loại hình
+                                  </Button>
+                                  <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                      <Button variant="ghost" size="sm">
+                                        <MoreVertical className="h-4 w-4" />
+                                      </Button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end">
+                                      <DropdownMenuItem onClick={() => handleEditProgram(program)}>
+                                        <Edit className="mr-2 h-4 w-4" />
+                                        Chỉnh sửa
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem
+                                        onClick={() => handleDeleteProgramClick(program)}
+                                        className="text-red-600"
+                                      >
+                                        <Trash2 className="mr-2 h-4 w-4" />
+                                        Xóa
+                                      </DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                  </DropdownMenu>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+
+                            {/* Expanded Offerings */}
+                            {isExpanded && hasOfferings && program.offerings.map((offering) => (
+                              <TableRow key={`offering-${offering.id}`} className="bg-muted/20">
+                                <TableCell></TableCell>
+                                <TableCell colSpan={3}>
+                                  <div className="flex items-center gap-2 pl-6">
+                                    <Layers className="h-4 w-4 text-blue-500" />
+                                    <span className="text-sm">{offering.offering_type}</span>
+                                    {!offering.is_active && (
+                                      <Badge variant="destructive" className="text-xs">
+                                        Ngưng
+                                      </Badge>
+                                    )}
+                                    {offering.duration_semesters && (
+                                      <span className="text-muted-foreground text-xs">
+                                        • {offering.duration_semesters} kỳ
+                                      </span>
+                                    )}
+                                    {offering.total_credits && (
+                                      <span className="text-muted-foreground text-xs">
+                                        • {offering.total_credits} TC
+                                      </span>
+                                    )}
+                                  </div>
+                                </TableCell>
+                                <TableCell></TableCell>
+                                <TableCell className="text-right">
+                                  <div className="flex items-center justify-end gap-1">
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => handleManageAcademicInfo(offering)}
+                                    >
+                                      <CalendarCheck className="mr-1 h-3 w-3" />
+                                      Tuyển sinh
+                                    </Button>
+                                    <DropdownMenu>
+                                      <DropdownMenuTrigger asChild>
+                                        <Button variant="ghost" size="sm">
+                                          <MoreVertical className="h-4 w-4" />
+                                        </Button>
+                                      </DropdownMenuTrigger>
+                                      <DropdownMenuContent align="end">
+                                        <DropdownMenuItem
+                                          onClick={() => handleEditOffering(program, offering)}
+                                        >
+                                          <Edit className="mr-2 h-4 w-4" />
+                                          Chỉnh sửa
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem
+                                          onClick={() => handleDeleteOfferingClick(offering)}
+                                          className="text-red-600"
+                                        >
+                                          <Trash2 className="mr-2 h-4 w-4" />
+                                          Xóa
+                                        </DropdownMenuItem>
+                                      </DropdownMenuContent>
+                                    </DropdownMenu>
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+            )}
+
+            {/* Inactive Programs Section */}
+            {inactivePrograms.length > 0 && (
+              <div>
+                <div className="mb-3 flex items-center gap-2">
+                  <XCircle className="h-4 w-4 text-red-500" />
+                  <h4 className="font-semibold text-red-700">
+                    Ngưng hoạt động ({inactivePrograms.length})
+                  </h4>
+                </div>
+                <div className="rounded-lg border border-red-200">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-red-50">
+                        <TableHead className="w-[40px]"></TableHead>
+                        <TableHead>Tên chương trình</TableHead>
+                        <TableHead className="w-[100px]">Mã</TableHead>
+                        <TableHead className="w-[120px]">Trình độ</TableHead>
+                        <TableHead className="w-[100px]">Loại hình</TableHead>
+                        <TableHead className="w-[200px] text-right">Thao tác</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {inactivePrograms.map((program) => {
+                        const isExpanded = expandedPrograms.has(program.id);
+                        const hasOfferings = program.offerings && program.offerings.length > 0;
+
+                        return (
+                          <>
+                            {/* Program Row */}
+                            <TableRow key={program.id} className="hover:bg-red-50/50">
+                              <TableCell className="p-2">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => toggleProgramExpand(program.id)}
+                                  className="h-7 w-7 p-0"
+                                  disabled={!hasOfferings}
+                                >
+                                  {hasOfferings ? (
+                                    isExpanded ? (
+                                      <ChevronDown className="h-4 w-4" />
+                                    ) : (
+                                      <ChevronRight className="h-4 w-4" />
+                                    )
+                                  ) : (
+                                    <div className="h-4 w-4" />
+                                  )}
+                                </Button>
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-2">
+                                  <GraduationCap className="h-4 w-4 text-red-400" />
+                                  <span className="font-medium text-muted-foreground">
+                                    {program.name}
+                                  </span>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <code className="bg-muted rounded px-2 py-0.5 font-mono text-xs">
+                                  {program.code}
+                                </code>
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant="outline" className="text-xs">
+                                  {program.degree_level}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>
+                                <span className="text-muted-foreground text-sm">
+                                  {hasOfferings ? program.offerings.length : 0}
+                                </span>
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <div className="flex items-center justify-end gap-1">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleCreateOffering(program)}
+                                  >
+                                    <Plus className="mr-1 h-3 w-3" />
+                                    Loại hình
+                                  </Button>
+                                  <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                      <Button variant="ghost" size="sm">
+                                        <MoreVertical className="h-4 w-4" />
+                                      </Button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end">
+                                      <DropdownMenuItem onClick={() => handleEditProgram(program)}>
+                                        <Edit className="mr-2 h-4 w-4" />
+                                        Chỉnh sửa
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem
+                                        onClick={() => handleDeleteProgramClick(program)}
+                                        className="text-red-600"
+                                      >
+                                        <Trash2 className="mr-2 h-4 w-4" />
+                                        Xóa
+                                      </DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                  </DropdownMenu>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+
+                            {/* Expanded Offerings */}
+                            {isExpanded && hasOfferings && program.offerings.map((offering) => (
+                              <TableRow key={`offering-${offering.id}`} className="bg-red-50/30">
+                                <TableCell></TableCell>
+                                <TableCell colSpan={3}>
+                                  <div className="flex items-center gap-2 pl-6">
+                                    <Layers className="h-4 w-4 text-blue-500" />
+                                    <span className="text-sm">{offering.offering_type}</span>
+                                    {!offering.is_active && (
+                                      <Badge variant="destructive" className="text-xs">
+                                        Ngưng
+                                      </Badge>
+                                    )}
+                                    {offering.duration_semesters && (
+                                      <span className="text-muted-foreground text-xs">
+                                        • {offering.duration_semesters} kỳ
+                                      </span>
+                                    )}
+                                    {offering.total_credits && (
+                                      <span className="text-muted-foreground text-xs">
+                                        • {offering.total_credits} TC
+                                      </span>
+                                    )}
+                                  </div>
+                                </TableCell>
+                                <TableCell></TableCell>
+                                <TableCell className="text-right">
+                                  <div className="flex items-center justify-end gap-1">
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => handleManageAcademicInfo(offering)}
+                                    >
+                                      <CalendarCheck className="mr-1 h-3 w-3" />
+                                      Tuyển sinh
+                                    </Button>
+                                    <DropdownMenu>
+                                      <DropdownMenuTrigger asChild>
+                                        <Button variant="ghost" size="sm">
+                                          <MoreVertical className="h-4 w-4" />
+                                        </Button>
+                                      </DropdownMenuTrigger>
+                                      <DropdownMenuContent align="end">
+                                        <DropdownMenuItem
+                                          onClick={() => handleEditOffering(program, offering)}
+                                        >
+                                          <Edit className="mr-2 h-4 w-4" />
+                                          Chỉnh sửa
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem
+                                          onClick={() => handleDeleteOfferingClick(offering)}
+                                          className="text-red-600"
+                                        >
+                                          <Trash2 className="mr-2 h-4 w-4" />
+                                          Xóa
+                                        </DropdownMenuItem>
+                                      </DropdownMenuContent>
+                                    </DropdownMenu>
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </ScrollArea>

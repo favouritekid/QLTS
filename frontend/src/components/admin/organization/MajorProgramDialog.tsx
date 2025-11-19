@@ -263,11 +263,21 @@ export function MajorProgramDialog({
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      {degreeLevels.map((level) => (
-                        <SelectItem key={level.id} value={level.name}>
-                          {level.name}
+                      {degreeLevelsLoading ? (
+                        <SelectItem value="loading" disabled>
+                          Đang tải...
                         </SelectItem>
-                      ))}
+                      ) : degreeLevels.length === 0 ? (
+                        <SelectItem value="empty" disabled>
+                          Chưa có trình độ nào. Vui lòng tạo trình độ trong Cấu hình hệ thống.
+                        </SelectItem>
+                      ) : (
+                        degreeLevels.map((level) => (
+                          <SelectItem key={level.id} value={level.name}>
+                            {level.name}
+                          </SelectItem>
+                        ))
+                      )}
                     </SelectContent>
                   </Select>
                   <FormDescription>
