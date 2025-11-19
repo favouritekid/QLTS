@@ -480,6 +480,7 @@ async def get_users(
     allowed_filters = {
         "role": models.User.role,
         "status": models.User.status,
+        "unit_id": models.User.unit_id,  # Filter by organization unit
     }
 
     # ✅ SECURITY FIX: Search DoS Prevention (CVSS 7.5 HIGH)

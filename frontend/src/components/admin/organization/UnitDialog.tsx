@@ -39,6 +39,8 @@ import {
   useCreateUnit,
   useUpdateUnit,
   wouldCreateCircularDependency,
+  flattenOrganizationTree,
+  getAllDescendantIds,
 } from "@/hooks/useOrganization";
 import type {
   OrganizationUnit,
@@ -186,58 +188,42 @@ export function UnitDialog({ open, onOpenChange, unit }: UnitDialogProps) {
 
   // Get units available as parent (exclude self and descendants in edit mode)
   // Also flatten hierarchy for better display
-  const getAvailableParentUnits = (): Array<OrganizationUnit & { displayName: string; level: number }> => {
-    // First, filter to only active units
-    const activeUnits = allUnits.filter(u => u.is_active);
+  // Get available parent units using the shared flattenOrganizationTree helper
+  const availableParentUnits = (() => {
+    // Flatten the nested tree structure from API
+    const flattenedUnits = flattenOrganizationTree(allUnits);
 
-    // In edit mode, exclude self and descendants
-    let filteredUnits = activeUnits;
+    // Filter to only active units
+    let filteredUnits = flattenedUnits.filter(item => item.unit.is_active);
+
+    // In edit mode, exclude self and descendants to prevent circular dependencies
     if (isEditMode && unit) {
-      const excludedIds = new Set<number>([unit.id]);
-
-      const collectDescendants = (unitId: number) => {
-        activeUnits.forEach((u) => {
-          if (u.parent_id === unitId) {
-            excludedIds.add(u.id);
-            collectDescendants(u.id); // Recursive
+      // Find the unit in the tree to get its descendants
+      const findUnit = (units: OrganizationUnit[], id: number): OrganizationUnit | null => {
+        for (const u of units) {
+          if (u.id === id) return u;
+          if (u.children) {
+            const found = findUnit(u.children, id);
+            if (found) return found;
           }
-        });
+        }
+        return null;
       };
 
-      collectDescendants(unit.id);
-      filteredUnits = activeUnits.filter((u) => !excludedIds.has(u.id));
+      const currentUnit = findUnit(allUnits, unit.id);
+      if (currentUnit) {
+        const excludedIds = getAllDescendantIds(currentUnit);
+        filteredUnits = filteredUnits.filter(item => !excludedIds.has(item.unit.id));
+      }
     }
 
-    // Build hierarchy tree
-    const buildTree = (parentId: number | null): Array<OrganizationUnit & { displayName: string; level: number }> => {
-      const children = filteredUnits.filter(u => u.parent_id === parentId);
-      const result: Array<OrganizationUnit & { displayName: string; level: number }> = [];
-
-      children.forEach(child => {
-        const level = getUnitLevel(child.id, filteredUnits);
-        const indent = "└─ ".repeat(level);
-        result.push({
-          ...child,
-          displayName: `${indent}${child.name}`,
-          level,
-        });
-        result.push(...buildTree(child.id));
-      });
-
-      return result;
-    };
-
-    // Get level of a unit (distance from root)
-    const getUnitLevel = (unitId: number, units: OrganizationUnit[]): number => {
-      const currentUnit = units.find(u => u.id === unitId);
-      if (!currentUnit || !currentUnit.parent_id) return 0;
-      return 1 + getUnitLevel(currentUnit.parent_id, units);
-    };
-
-    return buildTree(null);
-  };
-
-  const availableParentUnits = getAvailableParentUnits();
+    // Transform to the format expected by the Select component
+    return filteredUnits.map(item => ({
+      ...item.unit,
+      displayName: `${"└─ ".repeat(item.level)}${item.unit.name}`,
+      level: item.level,
+    }));
+  })();
 
   // Check if mutation is in progress
   const isSubmitting = createMutation.isPending || updateMutation.isPending;
