@@ -29,7 +29,7 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Plus, Trash, Save, SaveAll } from "lucide-react";
+import { Loader2, Plus, Trash, Save, SaveAll, FileText } from "lucide-react";
 import {
   useCreateOfferingAcademicInfo,
   useUpdateOfferingAcademicInfo,
@@ -44,21 +44,34 @@ import type {
 // FORM TYPES & SCHEMA
 // =====================================================================
 
+interface RequiredDocumentFormData {
+  code: string;
+  label: string;
+}
+
 interface AdmissionCriterionFormData {
   id: string;
   method_name: string;
   program_type?: string;
   subject_groups?: string; // String trong form (A00, B00), Array trong API
   min_score?: number | null;
+  required_documents?: RequiredDocumentFormData[]; // Danh sách hồ sơ bắt buộc
 }
 
-// 1. Schema cho từng item (giữ nguyên)
+// Schema cho hồ sơ bắt buộc
+const requiredDocumentSchema = z.object({
+  code: z.string().min(1, "Mã hồ sơ là bắt buộc"),
+  label: z.string().min(1, "Tên hồ sơ là bắt buộc"),
+});
+
+// 1. Schema cho từng item
 const admissionCriterionSchema = z.object({
   id: z.string().min(1, "Mã phương thức là bắt buộc"),
   method_name: z.string().min(1, "Tên phương thức là bắt buộc"),
   program_type: z.string().optional(),
   subject_groups: z.string().optional(),
   min_score: z.number().min(0).max(30).nullish(),
+  required_documents: z.array(requiredDocumentSchema).optional(),
 });
 
 // 2. Schema tổng thể (CẬP NHẬT THÊM superRefine)
@@ -148,6 +161,13 @@ function convertApiToFormData(apiCriteria: AdmissionCriterion[]): AdmissionCrite
       criterion.min_score !== null && criterion.min_score !== undefined
         ? Number(criterion.min_score)
         : null,
+    // Chuyển đổi required_documents
+    required_documents: Array.isArray(criterion.required_documents)
+      ? criterion.required_documents.map((doc) => ({
+          code: doc.code || "",
+          label: doc.label || "",
+        }))
+      : [],
   }));
 }
 
@@ -164,6 +184,10 @@ function convertFormToApiData(formCriteria: AdmissionCriterionFormData[]): Admis
           .filter((s) => s.length > 0)
       : [],
     min_score: criterion.min_score ?? null,
+    // Chuyển đổi required_documents
+    required_documents: criterion.required_documents
+      ? criterion.required_documents.filter((doc) => doc.code && doc.label)
+      : null,
   }));
 }
 
@@ -490,6 +514,7 @@ export function OfferingAcademicInfoDialog({
                       program_type: "",
                       subject_groups: "",
                       min_score: null,
+                      required_documents: [],
                     })
                   }
                   disabled={isSubmitting}
@@ -595,6 +620,96 @@ export function OfferingAcademicInfoDialog({
                           </FormItem>
                         )}
                       />
+
+                      {/* Required Documents Section */}
+                      <div className="md:col-span-2 mt-4 pt-4 border-t">
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-2 text-sm font-medium">
+                            <FileText className="h-4 w-4" />
+                            Hồ sơ bắt buộc
+                          </div>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              const currentDocs = form.getValues(`admission_criteria.${index}.required_documents`) || [];
+                              form.setValue(`admission_criteria.${index}.required_documents`, [
+                                ...currentDocs,
+                                { code: "", label: "" },
+                              ]);
+                            }}
+                            disabled={isSubmitting}
+                          >
+                            <Plus className="mr-1 h-3 w-3" />
+                            Thêm
+                          </Button>
+                        </div>
+
+                        {(!form.watch(`admission_criteria.${index}.required_documents`) ||
+                          form.watch(`admission_criteria.${index}.required_documents`)?.length === 0) && (
+                          <div className="text-muted-foreground text-xs text-center py-3 border border-dashed rounded">
+                            Chưa có hồ sơ bắt buộc. Nhấn &quot;Thêm&quot; để thêm.
+                          </div>
+                        )}
+
+                        <div className="space-y-2">
+                          {form.watch(`admission_criteria.${index}.required_documents`)?.map((_, docIndex) => (
+                            <div key={docIndex} className="flex items-start gap-2">
+                              <FormField
+                                control={form.control}
+                                name={`admission_criteria.${index}.required_documents.${docIndex}.code`}
+                                render={({ field }) => (
+                                  <FormItem className="flex-1">
+                                    <FormControl>
+                                      <Input
+                                        placeholder="Mã (vd: hoc_ba)"
+                                        {...field}
+                                        disabled={isSubmitting}
+                                        className="text-xs h-8"
+                                      />
+                                    </FormControl>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+                              <FormField
+                                control={form.control}
+                                name={`admission_criteria.${index}.required_documents.${docIndex}.label`}
+                                render={({ field }) => (
+                                  <FormItem className="flex-[2]">
+                                    <FormControl>
+                                      <Input
+                                        placeholder="Tên hồ sơ (vd: Học bạ THPT)"
+                                        {...field}
+                                        disabled={isSubmitting}
+                                        className="text-xs h-8"
+                                      />
+                                    </FormControl>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                  const currentDocs = form.getValues(`admission_criteria.${index}.required_documents`) || [];
+                                  form.setValue(
+                                    `admission_criteria.${index}.required_documents`,
+                                    currentDocs.filter((_, i) => i !== docIndex)
+                                  );
+                                }}
+                                disabled={isSubmitting}
+                                className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                              >
+                                <Trash className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                     </CardContent>
                   </Card>
                 ))}
