@@ -208,7 +208,7 @@ async def get_all_program_offerings(
     if is_active is not None:
         query = query.where(models.ProgramOffering.is_active == is_active)
         
-    query = query.order_by(models.ProgramOffering.name).offset(skip).limit(limit)
+    query = query.order_by(models.ProgramOffering.offering_type).offset(skip).limit(limit)
     
     result = await db.execute(query)
     return result.scalars().all()
