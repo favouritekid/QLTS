@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { Control, useFieldArray, Path, FieldArray } from "react-hook-form";
+import { Control, useFieldArray, Path } from "react-hook-form";
 import {
   FormControl,
   FormField,
@@ -43,14 +43,14 @@ export function DocumentChecklist({ control, admissionMethod }: DocumentChecklis
   // Update checklist when admission method changes
   useEffect(() => {
     if (admissionMethod.required_documents) {
-      const newChecklist = admissionMethod.required_documents.map((doc) => ({
+      const newChecklist: ChecklistItem[] = admissionMethod.required_documents.map((doc) => ({
         code: doc.code,
         label: doc.label,
         status: "missing" as const,
         submission_type: "N/A" as const,
         notes: "",
       }));
-      replace(newChecklist as FieldArray<ApplicationFormValues, "documents.checklist">);
+      replace(newChecklist);
     } else {
       replace([]);
     }
@@ -86,7 +86,7 @@ export function DocumentChecklist({ control, admissionMethod }: DocumentChecklis
                   render={({ field }) => (
                     <FormItem>
                       <FormControl>
-                        <div className="text-sm">{field.value}</div>
+                        <div className="text-sm">{field.value as string}</div>
                       </FormControl>
                     </FormItem>
                   )}
@@ -100,7 +100,7 @@ export function DocumentChecklist({ control, admissionMethod }: DocumentChecklis
                   name={`documents.checklist.${index}.status` as Path<ApplicationFormValues>}
                   render={({ field }) => (
                     <FormItem>
-                      <Select onValueChange={field.onChange} value={field.value}>
+                      <Select onValueChange={field.onChange} value={field.value as string}>
                         <FormControl>
                           <SelectTrigger>
                             <SelectValue />
@@ -126,7 +126,7 @@ export function DocumentChecklist({ control, admissionMethod }: DocumentChecklis
                   name={`documents.checklist.${index}.submission_type` as Path<ApplicationFormValues>}
                   render={({ field }) => (
                     <FormItem>
-                      <Select onValueChange={field.onChange} value={field.value}>
+                      <Select onValueChange={field.onChange} value={field.value as string}>
                         <FormControl>
                           <SelectTrigger>
                             <SelectValue />
@@ -157,6 +157,7 @@ export function DocumentChecklist({ control, admissionMethod }: DocumentChecklis
                         <Input
                           placeholder="Nhập ghi chú..."
                           {...field}
+                          value={field.value as string}
                         />
                       </FormControl>
                       <FormMessage />
