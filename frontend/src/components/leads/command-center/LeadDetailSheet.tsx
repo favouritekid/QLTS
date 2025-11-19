@@ -91,6 +91,9 @@ export function LeadDetailSheet({
       <SheetContent className="w-full sm:max-w-lg overflow-y-auto">
         {isLoading || !lead ? (
           <div className="space-y-4">
+            <SheetHeader>
+              <SheetTitle>Loading Lead...</SheetTitle>
+            </SheetHeader>
             <div className="flex items-center gap-4">
               <Skeleton className="h-16 w-16 rounded-full" />
               <div className="space-y-2">
