@@ -190,26 +190,7 @@ async def list_distribution_rules(
 
     Returns all distribution rules ordered by priority (highest first).
     """
-    rules = await config_service.get_all_distribution_rules(db)
-
-    # Enrich with offering and unit names
-    response = []
-    for rule in rules:
-        # Load relationships if not already loaded
-        await db.refresh(rule, ["offering", "unit"])
-
-        response.append(schemas.DistributionRuleResponse(
-            id=rule.id,
-            offering_id=rule.offering_id,
-            unit_id=rule.unit_id,
-            weight=rule.weight,
-            priority=rule.priority,
-            is_active=rule.is_active,
-            offering_name=rule.offering.name if rule.offering else None,
-            unit_name=rule.unit.name if rule.unit else None,
-        ))
-
-    return response
+    return await config_service.get_all_distribution_rules(db)
 
 
 @router.post(
@@ -241,21 +222,7 @@ async def create_distribution_rule(
     }
     ```
     """
-    rule = await config_service.create_distribution_rule(db, rule_in)
-
-    # Load relationships for response
-    await db.refresh(rule, ["offering", "unit"])
-
-    return schemas.DistributionRuleResponse(
-        id=rule.id,
-        offering_id=rule.offering_id,
-        unit_id=rule.unit_id,
-        weight=rule.weight,
-        priority=rule.priority,
-        is_active=rule.is_active,
-        offering_name=rule.offering.name if rule.offering else None,
-        unit_name=rule.unit.name if rule.unit else None,
-    )
+    return await config_service.create_distribution_rule(db, rule_in)
 
 
 @router.put(
@@ -280,21 +247,7 @@ async def update_distribution_rule(
     }
     ```
     """
-    rule = await config_service.update_distribution_rule(db, rule_id, rule_in)
-
-    # Load relationships for response
-    await db.refresh(rule, ["offering", "unit"])
-
-    return schemas.DistributionRuleResponse(
-        id=rule.id,
-        offering_id=rule.offering_id,
-        unit_id=rule.unit_id,
-        weight=rule.weight,
-        priority=rule.priority,
-        is_active=rule.is_active,
-        offering_name=rule.offering.name if rule.offering else None,
-        unit_name=rule.unit.name if rule.unit else None,
-    )
+    return await config_service.update_distribution_rule(db, rule_id, rule_in)
 
 
 @router.delete(

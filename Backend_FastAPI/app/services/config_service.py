@@ -773,21 +773,55 @@ async def delete_document_type(
 # ============================================================================
 
 
-async def get_all_distribution_rules(db: AsyncSession) -> List[models.OfferingDistributionConfig]:
+def _build_distribution_rule_response(
+    rule: models.OfferingDistributionConfig
+) -> schemas.DistributionRuleResponse:
+    """
+    Helper to build DistributionRuleResponse from model.
+
+    Constructs offering_name as: "{MajorProgram.name} - {offering_type}"
+    """
+    offering_name = None
+    if rule.offering:
+        program_name = rule.offering.program.name if rule.offering.program else "Unknown"
+        offering_name = f"{program_name} - {rule.offering.offering_type}"
+
+    return schemas.DistributionRuleResponse(
+        id=rule.id,
+        offering_id=rule.offering_id,
+        unit_id=rule.unit_id,
+        weight=rule.weight,
+        priority=rule.priority,
+        is_active=rule.is_active,
+        offering_name=offering_name,
+        unit_name=rule.unit.name if rule.unit else None,
+    )
+
+
+async def get_all_distribution_rules(db: AsyncSession) -> List[schemas.DistributionRuleResponse]:
     """
     Get all distribution rules with offering and unit names.
 
     Returns:
-        List of OfferingDistributionConfig models
+        List of DistributionRuleResponse schemas
     """
+    from sqlalchemy.orm import selectinload
+
     result = await db.execute(
         select(models.OfferingDistributionConfig)
+        .options(
+            selectinload(models.OfferingDistributionConfig.offering)
+            .selectinload(models.ProgramOffering.program),
+            selectinload(models.OfferingDistributionConfig.unit)
+        )
         .order_by(
             models.OfferingDistributionConfig.priority.asc(),  # Lower number = higher priority
             models.OfferingDistributionConfig.id
         )
     )
-    return result.scalars().all()
+    rules = result.scalars().all()
+
+    return [_build_distribution_rule_response(rule) for rule in rules]
 
 
 async def get_distribution_rule_by_id(
@@ -818,7 +852,7 @@ async def get_distribution_rule_by_id(
 async def create_distribution_rule(
     db: AsyncSession,
     rule_in: schemas.DistributionRuleCreate
-) -> models.OfferingDistributionConfig:
+) -> schemas.DistributionRuleResponse:
     """
     Create a new distribution rule.
 
@@ -827,11 +861,12 @@ async def create_distribution_rule(
         rule_in: Distribution rule creation data
 
     Returns:
-        Created DistributionRule model
+        DistributionRuleResponse schema
 
     Raises:
         BadRequest: If offering_id or unit_id doesn't exist
     """
+    from sqlalchemy.orm import selectinload
     from ..utils.exceptions import BadRequest
 
     # Validate offering exists
@@ -864,7 +899,18 @@ async def create_distribution_rule(
     db_rule = models.OfferingDistributionConfig(**rule_in.model_dump())
     db.add(db_rule)
     await db.commit()
-    await db.refresh(db_rule)
+
+    # Re-fetch with eager loading for response
+    result = await db.execute(
+        select(models.OfferingDistributionConfig)
+        .where(models.OfferingDistributionConfig.id == db_rule.id)
+        .options(
+            selectinload(models.OfferingDistributionConfig.offering)
+            .selectinload(models.ProgramOffering.program),
+            selectinload(models.OfferingDistributionConfig.unit)
+        )
+    )
+    db_rule = result.scalar_one()
 
     log.info(
         "Distribution rule created",
@@ -872,14 +918,14 @@ async def create_distribution_rule(
         offering_id=db_rule.offering_id,
         unit_id=db_rule.unit_id
     )
-    return db_rule
+    return _build_distribution_rule_response(db_rule)
 
 
 async def update_distribution_rule(
     db: AsyncSession,
     rule_id: int,
     rule_in: schemas.DistributionRuleUpdate
-) -> models.OfferingDistributionConfig:
+) -> schemas.DistributionRuleResponse:
     """
     Update a distribution rule.
 
@@ -889,11 +935,13 @@ async def update_distribution_rule(
         rule_in: Update data
 
     Returns:
-        Updated DistributionRule model
+        DistributionRuleResponse schema
 
     Raises:
         ResourceNotFoundError: If rule doesn't exist
     """
+    from sqlalchemy.orm import selectinload
+
     db_rule = await get_distribution_rule_by_id(db, rule_id)
 
     # Update only provided fields
@@ -902,10 +950,21 @@ async def update_distribution_rule(
         setattr(db_rule, field, value)
 
     await db.commit()
-    await db.refresh(db_rule)
+
+    # Re-fetch with eager loading for response
+    result = await db.execute(
+        select(models.OfferingDistributionConfig)
+        .where(models.OfferingDistributionConfig.id == rule_id)
+        .options(
+            selectinload(models.OfferingDistributionConfig.offering)
+            .selectinload(models.ProgramOffering.program),
+            selectinload(models.OfferingDistributionConfig.unit)
+        )
+    )
+    db_rule = result.scalar_one()
 
     log.info("Distribution rule updated", rule_id=rule_id)
-    return db_rule
+    return _build_distribution_rule_response(db_rule)
 
 
 async def delete_distribution_rule(
