@@ -52,15 +52,29 @@ async def get_all_leads(
     order: str = Query("desc", description="Sort order (asc or desc)"),
     # === KẾT THÚC THÊM THAM SỐ ===
 ):
-    """Lấy danh sách Leads (có phân trang, filter, search, sort)."""
+    """
+    Lấy danh sách Leads (có phân trang, filter, search, sort).
+
+    **Role-based filtering:**
+    - Admin/Manager: Xem tất cả leads
+    - Officer: Chỉ xem leads được gán cho mình
+    """
     skip = (page - 1) * page_size
+
+    # === ROLE-BASED FILTERING ===
+    # Officers can only see their assigned leads
+    effective_officer_id = assigned_officer_id
+    if current_user.role == "officer":
+        # Force filter by current officer, ignore any passed assigned_officer_id
+        effective_officer_id = current_user.id
+
     total, leads = await lead_service.get_leads(
         db,
         skip=skip,
         limit=page_size,
         # === ⭐️ TRUYỀN THAM SỐ VÀO SERVICE ===
         status=status,
-        assigned_officer_id=assigned_officer_id,
+        assigned_officer_id=effective_officer_id,
         unit_id=unit_id,
         offering_id=offering_id,
         source=source,
