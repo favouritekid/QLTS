@@ -84,6 +84,7 @@ class LeadBase(BaseModel):
     full_name: str = Field(..., min_length=1, max_length=255, strip_whitespace=True)
     email: EmailStr  # EmailStr đã tự động strip và validate
     phone: str = Field(..., min_length=1, max_length=20, strip_whitespace=True)
+    phone2: Optional[str] = Field(None, max_length=20, strip_whitespace=True)  # Số điện thoại phụ
     source: str = Field(..., min_length=1, max_length=50, strip_whitespace=True)
     unit_id: int
     offering_id: Optional[int] = None
@@ -95,6 +96,7 @@ class LeadCreate(LeadBase):
 
 class LeadUpdate(BaseModel):
     full_name: Optional[str] = None
+    phone2: Optional[str] = Field(None, max_length=20, strip_whitespace=True)
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
     source: Optional[str] = None

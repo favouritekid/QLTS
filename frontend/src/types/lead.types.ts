@@ -86,6 +86,7 @@ export interface Lead {
   full_name: string
   email: string
   phone: string
+  phone2?: string | null  // Số điện thoại phụ
   source: LeadSource
   status: LeadStatus
   lead_score: number
@@ -122,6 +123,7 @@ export interface LeadCreate {
   full_name: string
   email: string
   phone: string
+  phone2?: string | null  // Số điện thoại phụ
   source: LeadSource
   education_level?: EducationLevel | null
   gpa?: number | null
@@ -137,6 +139,7 @@ export interface LeadUpdate {
   full_name?: string
   email?: string
   phone?: string
+  phone2?: string | null  // Số điện thoại phụ
   source?: LeadSource
   status?: LeadStatus
   education_level?: EducationLevel | null

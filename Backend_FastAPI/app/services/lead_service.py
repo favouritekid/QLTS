@@ -383,20 +383,38 @@ async def create_lead(db: AsyncSession, lead_in: schemas.LeadCreate) -> models.L
     from ..celery_utils import process_automatic_lead_assignment_task
 
     try:
-        # Kiểm tra trùng lặp email + unit_id
+        # Kiểm tra trùng lặp email hoặc phone trong cùng unit
+        # Build phone conditions
+        phone_conditions = [models.Lead.phone == lead_in.phone]
+        if lead_in.phone2:
+            phone_conditions.append(models.Lead.phone == lead_in.phone2)
+            phone_conditions.append(models.Lead.phone2 == lead_in.phone)
+            phone_conditions.append(models.Lead.phone2 == lead_in.phone2)
+
         existing_lead_query = (
             select(models.Lead)
             .where(
-                models.Lead.email == lead_in.email,
                 models.Lead.unit_id == lead_in.unit_id,
+                models.Lead.deleted_at.is_(None),  # Exclude soft-deleted
+                or_(
+                    models.Lead.email == lead_in.email,
+                    *phone_conditions  # Check all phone combinations
+                )
             )
             .with_for_update()  # Khóa để tránh race condition khi tạo
         )
         existing_lead_result = await db.execute(existing_lead_query)
-        if existing_lead_result.scalar_one_or_none():
-            raise DuplicateResourceError(
-                detail="Lead with this email already exists in the unit."
-            )
+        existing_lead = existing_lead_result.scalar_one_or_none()
+        if existing_lead:
+            # Determine which field caused the duplicate
+            if existing_lead.email == lead_in.email:
+                raise DuplicateResourceError(
+                    detail="Lead with this email already exists in the unit."
+                )
+            else:
+                raise DuplicateResourceError(
+                    detail="Lead with this phone number already exists in the unit."
+                )
 
         # Chuẩn bị dữ liệu và tạo đối tượng Lead
         create_data = lead_in.model_dump()
@@ -1473,6 +1491,8 @@ async def import_leads_from_file_content(
     file_content: bytes,
     filename: str,
     db: AsyncSession,
+    default_unit_id: Optional[int] = None,  # Force all leads to this unit
+    auto_assign_officer_id: Optional[int] = None,  # Auto-assign to this officer
 ) -> schemas.LeadImportResult:
     """
     Import leads from CSV or Excel file content.
@@ -1622,12 +1642,16 @@ async def import_leads_from_file_content(
 
             cleaned_data["source"] = str(row_data.get("source", "")).strip()
 
-            # Convert 'unit_id' to int
-            unit_id_val = row_data.get("unit_id")
-            if pd.notna(unit_id_val):
-                cleaned_data["unit_id"] = int(float(unit_id_val))
+            # Convert 'unit_id' to int (or use default if provided)
+            if default_unit_id:
+                # Override with default unit (for officer import)
+                cleaned_data["unit_id"] = default_unit_id
             else:
-                cleaned_data["unit_id"] = None
+                unit_id_val = row_data.get("unit_id")
+                if pd.notna(unit_id_val):
+                    cleaned_data["unit_id"] = int(float(unit_id_val))
+                else:
+                    cleaned_data["unit_id"] = None
 
         except (ValueError, TypeError, Exception) as e:
             validation_errors_for_row.append(f"Type conversion error: {e}")
@@ -1668,8 +1692,15 @@ async def import_leads_from_file_content(
             lead_dict["status"] = initial_status_id
             lead_dict["consultation_status_id"] = initial_status_id
             lead_dict["pipeline_stage_id"] = initial_stage_id
-            lead_dict["assigned_officer_id"] = None
-            lead_dict["assigned_at"] = None
+
+            # Auto-assign to officer if specified
+            if auto_assign_officer_id:
+                lead_dict["assigned_officer_id"] = auto_assign_officer_id
+                lead_dict["assigned_at"] = datetime.now(timezone.utc)
+                lead_dict["status"] = "assigned"  # Update status to assigned
+            else:
+                lead_dict["assigned_officer_id"] = None
+                lead_dict["assigned_at"] = None
 
             leads_to_insert.append(lead_dict)
 
