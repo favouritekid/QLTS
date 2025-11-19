@@ -345,8 +345,8 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                   <FormItem>
                     <FormLabel>Program Offering</FormLabel>
                     <Select
-                      onValueChange={(value) => field.onChange(value ? parseInt(value, 10) : null)}
-                      value={field.value?.toString() || ""}
+                      onValueChange={(value) => field.onChange(value === "none" ? null : parseInt(value, 10))}
+                      value={field.value?.toString() || "none"}
                       disabled={offeringsLoading}
                     >
                       <FormControl>
@@ -355,7 +355,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="">None</SelectItem>
+                        <SelectItem value="none">None</SelectItem>
                         {offerings.map((offering) => (
                           <SelectItem key={offering.id} value={offering.id.toString()}>
                             {offering.offering_type}
