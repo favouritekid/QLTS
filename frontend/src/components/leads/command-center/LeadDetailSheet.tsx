@@ -1,7 +1,7 @@
 // src/components/leads/command-center/LeadDetailSheet.tsx
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import {
   Sheet,
   SheetContent,
@@ -28,6 +28,7 @@ import { cn } from "@/lib/utils";
 import { useLead, useLeadTimeline } from "@/hooks/useLeads";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { LeadConsultationsTab } from "@/components/leads/LeadConsultationsTab";
+import { ConsultationDialog } from "@/components/leads/ConsultationDialog";
 import type { Lead, LeadStatus } from "@/types/lead.types";
 
 interface LeadDetailSheetProps {
@@ -85,8 +86,10 @@ export function LeadDetailSheet({
 }: LeadDetailSheetProps) {
   const { data: lead, isLoading } = useLead(leadId || 0, open && !!leadId);
   const { data: timeline = [] } = useLeadTimeline(leadId || 0);
+  const [consultationDialogOpen, setConsultationDialogOpen] = useState(false);
 
   return (
+    <>
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-full sm:max-w-lg overflow-y-auto">
         {isLoading || !lead ? (
@@ -214,9 +217,7 @@ export function LeadDetailSheet({
                 <LeadConsultationsTab
                   leadId={lead.id}
                   lead={lead}
-                  onAddConsultation={() => {
-                    // TODO: Implement add consultation dialog
-                  }}
+                  onAddConsultation={() => setConsultationDialogOpen(true)}
                 />
               </TabsContent>
             </Tabs>
@@ -253,5 +254,15 @@ export function LeadDetailSheet({
         )}
       </SheetContent>
     </Sheet>
+
+    {/* Consultation Dialog */}
+    {lead && (
+      <ConsultationDialog
+        leadId={lead.id}
+        open={consultationDialogOpen}
+        onOpenChange={setConsultationDialogOpen}
+      />
+    )}
+    </>
   );
 }
