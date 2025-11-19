@@ -118,7 +118,8 @@ class User(Base):
     notification_preference = relationship(
         "NotificationPreference",
         back_populates="user",
-        uselist=False  # One-to-one relationship
+        uselist=False,  # One-to-one relationship
+        cascade="all, delete-orphan"  # ✅ FIX: Delete preference when user is deleted
     )
 
     # Activity logs (as actor)
