@@ -219,7 +219,9 @@ async def get_lead_by_id(db: AsyncSession, lead_id: int, include_deleted: bool =
     query = (
         select(models.Lead)
         .options(
-            selectinload(models.Lead.offering),
+            selectinload(models.Lead.offering).options(
+                selectinload(models.ProgramOffering.program)  # Eager load program for name display
+            ),
             selectinload(models.Lead.unit).options(
                 selectinload(models.OrganizationUnit.parent),
                 selectinload(models.OrganizationUnit.children),
@@ -266,7 +268,9 @@ async def get_lead_by_id_shallow(db: AsyncSession, lead_id: int, include_deleted
     query = (
         select(models.Lead)
         .options(
-            selectinload(models.Lead.offering),
+            selectinload(models.Lead.offering).options(
+                selectinload(models.ProgramOffering.program)  # Eager load program for name display
+            ),
             selectinload(models.Lead.unit), # <--- Load unit (thường là cần)
             selectinload(models.Lead.assigned_officer),
             selectinload(models.Lead.pipeline_stage),
