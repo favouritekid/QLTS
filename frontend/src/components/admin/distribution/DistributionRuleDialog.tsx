@@ -42,7 +42,6 @@ import { Switch } from "@/components/ui/switch";
 // Import existing hooks for component reuse
 import {
   useOrganizationUnits,
-  useMajorPrograms,
   useDegreeLevels,
   flattenOrganizationTree,
 } from "@/hooks/useOrganization";
@@ -88,13 +87,10 @@ export function DistributionRuleDialog({ open, onOpenChange, rule }: Distributio
 
   // === REUSE EXISTING HOOKS ===
 
-  // 1. Fetch organization units using existing hook
+  // 1. Fetch organization units using existing hook (includes major_programs with offerings)
   const { data: units = [], isLoading: isLoadingUnits } = useOrganizationUnits();
 
-  // 2. Fetch all major programs using existing hook
-  const { data: majorPrograms = [], isLoading: isLoadingPrograms } = useMajorPrograms();
-
-  // 3. Fetch degree levels for grouping
+  // 2. Fetch degree levels for grouping
   const { data: degreeLevels = [], isLoading: isLoadingDegreeLevels } = useDegreeLevels(true);
 
   // Flatten units for dropdown with hierarchy indication
@@ -102,12 +98,40 @@ export function DistributionRuleDialog({ open, onOpenChange, rule }: Distributio
     return flattenOrganizationTree(units);
   }, [units]);
 
+  // Extract all programs from units tree
+  // useOrganizationUnits returns units with major_programs that include offerings
+  const allPrograms = useMemo(() => {
+    const programs: Array<{
+      id: number;
+      name: string;
+      degree_level: string;
+      offerings: Array<{
+        id: number;
+        offering_type: string;
+      }>;
+    }> = [];
+
+    const extractPrograms = (unitList: typeof units) => {
+      unitList.forEach(unit => {
+        if (unit.major_programs) {
+          programs.push(...unit.major_programs);
+        }
+        if (unit.children) {
+          extractPrograms(unit.children);
+        }
+      });
+    };
+
+    extractPrograms(units);
+    return programs;
+  }, [units]);
+
   // Build hierarchical offering options
   // Structure: Trình độ -> Tên ngành -> Tên loại hình
   const offeringOptions = useMemo(() => {
     const options: OfferingOption[] = [];
 
-    majorPrograms.forEach(program => {
+    allPrograms.forEach(program => {
       // Each program has offerings
       if (program.offerings && program.offerings.length > 0) {
         program.offerings.forEach(offering => {
@@ -132,7 +156,7 @@ export function DistributionRuleDialog({ open, onOpenChange, rule }: Distributio
       }
       return a.offeringType.localeCompare(b.offeringType);
     });
-  }, [majorPrograms]);
+  }, [allPrograms]);
 
   // Group offerings by degree level for better UX
   const groupedOfferings = useMemo(() => {
@@ -209,7 +233,7 @@ export function DistributionRuleDialog({ open, onOpenChange, rule }: Distributio
   });
 
   const onSubmit = (values: FormValues) => mutation.mutate(values);
-  const isLoadingDropdowns = isLoadingUnits || isLoadingPrograms || isLoadingDegreeLevels;
+  const isLoadingDropdowns = isLoadingUnits || isLoadingDegreeLevels;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
