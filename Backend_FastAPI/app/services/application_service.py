@@ -99,7 +99,7 @@ async def create_application(
     )
 
     # === SOCKET.IO EVENT: Emit application_created event ===
-    lead_name = f"{new_application.lead.first_name or ''} {new_application.lead.last_name or ''}".strip() or "Unknown"
+    lead_name = new_application.lead.full_name or "Unknown"
     major_program_name = new_application.major_program.name if new_application.major_program else "N/A"
 
     application_data = {
@@ -321,8 +321,9 @@ async def delete_application(
         )
 
     # Mark as soft deleted
+    # Note: We don't change status to "deleted" because it's not in ApplicationStatus enum
+    # The deleted_at timestamp is sufficient for soft delete filtering
     application.deleted_at = datetime.now(timezone.utc)
-    application.status = "deleted"
 
     db.add(application)
     await db.commit()
