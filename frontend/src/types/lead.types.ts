@@ -517,6 +517,17 @@ export interface OrganizationUnit {
 }
 
 /**
+ * Major Program (shallow for nested use)
+ */
+export interface MajorProgramShallow {
+  id: number
+  name: string
+  degree_level: string
+  code: string
+  is_active: boolean
+}
+
+/**
  * Program Offering
  */
 export interface ProgramOffering {
@@ -526,6 +537,7 @@ export interface ProgramOffering {
   duration_semesters?: number | null
   total_credits?: number | null
   is_active: boolean
+  program?: MajorProgramShallow | null
 }
 
 /**

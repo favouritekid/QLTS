@@ -141,7 +141,7 @@ export const LeadListItem = React.memo(function LeadListItem({
             {/* Offering Badge */}
             {lead.offering && (
               <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                {lead.offering.offering_type}
+                {lead.offering.program?.name || lead.offering.offering_type}
               </Badge>
             )}
           </div>

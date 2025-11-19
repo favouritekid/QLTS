@@ -358,7 +358,8 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                         <SelectItem value="none">None</SelectItem>
                         {offerings.map((offering) => (
                           <SelectItem key={offering.id} value={offering.id.toString()}>
-                            {offering.offering_type}
+                            {offering.program?.name || offering.offering_type}
+                            {offering.program && ` (${offering.offering_type})`}
                           </SelectItem>
                         ))}
                       </SelectContent>

@@ -141,6 +141,8 @@ class ProgramOfferingUpdate(BaseModel):
 class ProgramOffering(ProgramOfferingBase):
     id: int
     program_id: int
+    # Include program name for display (using forward reference)
+    program: Optional["MajorProgramShallow"] = None
     # ✅ Removed academic_info_history to prevent MissingGreenlet error
     # Frontend should load academic info on-demand using dedicated endpoints
     # This avoids loading 30,000+ historical records unnecessarily
@@ -169,6 +171,16 @@ class MajorProgramUpdate(BaseModel):
     unit_id: Optional[int] = Field(None, gt=0)
     is_active: Optional[bool] = None
     # 'code' (Mã ngành) không cho phép cập nhật
+
+
+# Schema "Shallow" cho MajorProgram (dùng trong ProgramOffering để tránh vòng lặp)
+class MajorProgramShallow(BaseModel):
+    id: int
+    name: str
+    degree_level: str
+    code: str
+    is_active: bool
+    model_config = ConfigDict(from_attributes=True)
 
 
 class MajorProgram(MajorProgramBase):
@@ -460,3 +472,6 @@ class DistributionRuleResponse(DistributionRuleBase):
 
     class Config:
         from_attributes = True
+
+# Resolve forward references
+ProgramOffering.model_rebuild()

@@ -360,7 +360,9 @@ async def get_leads(
     # === Áp dụng eager loading tối ưu và pagination ===
     leads_query = (
         leads_query.options(
-            selectinload(models.Lead.offering),
+            selectinload(models.Lead.offering).options(
+                selectinload(models.ProgramOffering.program)  # Eager load program for name display
+            ),
             selectinload(models.Lead.unit).options(
                 selectinload(models.OrganizationUnit.parent),
                 selectinload(models.OrganizationUnit.major_programs),

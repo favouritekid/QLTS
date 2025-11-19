@@ -221,7 +221,8 @@ export const LeadFilters = React.memo(function LeadFilters({
                   <SelectItem value="all">All Offerings</SelectItem>
                   {offerings.map((offering) => (
                     <SelectItem key={offering.id} value={offering.id.toString()}>
-                      {offering.offering_type}
+                      {offering.program?.name || offering.offering_type}
+                      {offering.program && ` (${offering.offering_type})`}
                     </SelectItem>
                   ))}
                 </SelectContent>

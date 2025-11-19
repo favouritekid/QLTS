@@ -177,7 +177,10 @@ export function LeadDetailSheet({
               {lead.offering && (
                 <div className="flex items-center gap-3 text-sm">
                   <Building className="h-4 w-4 text-muted-foreground" />
-                  <span>{lead.offering.offering_type}</span>
+                  <span>
+                    {lead.offering.program?.name || lead.offering.offering_type}
+                    {lead.offering.program && ` (${lead.offering.offering_type})`}
+                  </span>
                 </div>
               )}
               {lead.assigned_officer && (
