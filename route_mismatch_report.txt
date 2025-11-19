@@ -1,0 +1,139 @@
+ROUTE MISMATCH REPORT
+================================================================================
+
+CRITICAL: Frontend calls non-existent routes
+--------------------------------------------------------------------------------
+
+DELETE /api/admin/distribution-rules/{id}
+  Normalized: /api/admin/distribution-rules/{id}
+
+DELETE /api/admin/grouping-policies
+  Normalized: /api/admin/grouping-policies
+
+DELETE /api/admin/roles/{id}
+  Normalized: /api/admin/roles/{id}
+
+DELETE /api/admin/skill-rules/{id}
+  Normalized: /api/admin/skill-rules/{id}
+
+DELETE /api/leads/{id}
+  Normalized: /api/leads/{id}
+
+DELETE /api/leads/{id}/consultations/{id}
+  Normalized: /api/leads/{id}/consultations/{id}
+
+GET /api/admin/distribution-rules
+  Normalized: /api/admin/distribution-rules
+
+GET /api/admin/leads/export
+  Normalized: /api/admin/leads/export
+
+GET /api/admin/roles/{id}/users
+  Normalized: /api/admin/roles/{id}/users
+
+GET /api/admin/skill-rules
+  Normalized: /api/admin/skill-rules
+
+GET /api/admin/sync/status
+  Normalized: /api/admin/sync/status
+
+GET /api/leads
+  Normalized: /api/leads
+
+GET /api/leads/{id}
+  Normalized: /api/leads/{id}
+
+GET /api/leads/{id}/insights
+  Normalized: /api/leads/{id}/insights
+
+GET /api/leads/{id}/timeline
+  Normalized: /api/leads/{id}/timeline
+
+GET /api/officer/stats
+  Normalized: /api/officer/stats
+
+GET /api/organization/program-offerings
+  Normalized: /api/organization/program-offerings
+
+GET /api/organization/units
+  Normalized: /api/organization/units
+
+GET /api/pipeline/all
+  Normalized: /api/pipeline/all
+
+GET /api/pipeline/stages
+  Normalized: /api/pipeline/stages
+
+POST /api/admin/distribution-rules
+  Normalized: /api/admin/distribution-rules
+
+POST /api/admin/grouping-policies
+  Normalized: /api/admin/grouping-policies
+
+POST /api/admin/roles/{id}/features
+  Normalized: /api/admin/roles/{id}/features
+
+POST /api/admin/skill-rules
+  Normalized: /api/admin/skill-rules
+
+POST /api/admin/sync/users
+  Normalized: /api/admin/sync/users
+
+POST /api/leads
+  Normalized: /api/leads
+
+POST /api/leads/{id}/action
+  Normalized: /api/leads/{id}/action
+
+POST /api/leads/{id}/assign
+  Normalized: /api/leads/{id}/assign
+
+POST /api/officer/availability
+  Normalized: /api/officer/availability
+
+PUT /api/admin/distribution-rules/{id}
+  Normalized: /api/admin/distribution-rules/{id}
+
+PUT /api/leads/{id}
+  Normalized: /api/leads/{id}
+
+
+WARNING: Backend routes not called by frontend
+--------------------------------------------------------------------------------
+DELETE /api/grouping-policies
+DELETE /api/revoke
+DELETE /api/{id}
+DELETE /api/{id}/users
+GET /api/distribution/{id}/stats
+GET /api/export
+GET /api/export/csv
+GET /api/list
+GET /api/policies/statistics
+GET /api/policies/suggestions
+GET /api/statistics
+GET /api/status
+GET /api/sync/status
+GET /api/templates
+GET /api/users/{id}/roles
+GET /api/{id}
+GET /api/{id}/features
+GET /api/{id}/permissions/explain
+GET /api/{id}/users
+GET /check-status
+GET /export
+GET /import/template
+POST /api/bulk
+POST /api/leads/bulk-assign
+POST /api/leads/import
+POST /api/permissions/simulate
+POST /api/permissions/who-can-access
+POST /api/policies/batch
+POST /api/policies/validate
+POST /api/sync
+POST /api/templates/apply
+POST /api/{id}/features/toggle
+POST /api/{id}/password
+POST /login
+POST /logout
+POST /refresh
+PUT /api/{id}

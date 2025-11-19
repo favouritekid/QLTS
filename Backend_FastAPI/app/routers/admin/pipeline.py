@@ -71,7 +71,7 @@ async def create_new_pipeline_stage(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Tạo một Giai đoạn (Stage) mới trong Pipeline."""
-    return await pipeline_service.create_pipeline_stage(db, stage_in)
+    return await pipeline_service.create_pipeline_stage(db, stage_in, current_user=current_admin)
 
 
 @router.get(
@@ -98,7 +98,7 @@ async def update_existing_pipeline_stage(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Cập nhật một Giai đoạn (Stage)."""
-    return await pipeline_service.update_pipeline_stage(db, stage_id, stage_in)
+    return await pipeline_service.update_pipeline_stage(db, stage_id, stage_in, current_user=current_admin)
 
 
 @router.delete(
@@ -111,7 +111,7 @@ async def delete_existing_pipeline_stage(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Xóa một Giai đoạn (Stage). (Chỉ thành công nếu không có Status nào liên kết)"""
-    await pipeline_service.delete_pipeline_stage(db, stage_id)
+    await pipeline_service.delete_pipeline_stage(db, stage_id, current_user=current_admin)
     return None
 
 
@@ -146,7 +146,7 @@ async def create_new_consultation_status(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Tạo một Trạng thái tư vấn (Status) mới."""
-    return await pipeline_service.create_consultation_status(db, status_in)
+    return await pipeline_service.create_consultation_status(db, status_in, current_user=current_admin)
 
 
 @router.get(
@@ -173,7 +173,7 @@ async def update_existing_consultation_status(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Cập nhật một Trạng thái tư vấn (Status)."""
-    return await pipeline_service.update_consultation_status(db, status_id, status_in)
+    return await pipeline_service.update_consultation_status(db, status_id, status_in, current_user=current_admin)
 
 
 @router.delete(
@@ -186,7 +186,7 @@ async def delete_existing_consultation_status(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Xóa một Trạng thái tư vấn (Status). (Chỉ thành công nếu không có Lead nào sử dụng)"""
-    await pipeline_service.delete_consultation_status(db, status_id)
+    await pipeline_service.delete_consultation_status(db, status_id, current_user=current_admin)
     return None
 
 
@@ -219,7 +219,7 @@ async def create_new_allowed_transition(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Tạo một Allowed Transition mới."""
-    return await pipeline_service.create_allowed_transition(db, transition_in)
+    return await pipeline_service.create_allowed_transition(db, transition_in, current_user=current_admin)
 
 
 @router.delete(
@@ -232,7 +232,7 @@ async def delete_existing_allowed_transition(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Xóa một Allowed Transition."""
-    await pipeline_service.delete_allowed_transition(db, transition_id)
+    await pipeline_service.delete_allowed_transition(db, transition_id, current_user=current_admin)
     return None
 
 

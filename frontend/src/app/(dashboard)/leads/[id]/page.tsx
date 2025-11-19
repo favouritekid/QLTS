@@ -2,7 +2,7 @@
 "use client";
 
 import { useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import {
   Edit,
   UserPlus,
@@ -12,6 +12,7 @@ import {
   Mail,
   Phone,
   MapPin,
+  Trash2,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -19,8 +20,18 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
-import { useLead, useLeadTimeline, useLeadInsights } from "@/hooks/useLeads";
+import { useLead, useLeadTimeline, useLeadInsights, useDeleteLead } from "@/hooks/useLeads";
 import { LeadDialog } from "@/components/leads/LeadDialog";
 import { AssignLeadDialog } from "@/components/leads/AssignLeadDialog";
 import { ConsultationDialog } from "@/components/leads/ConsultationDialog";
@@ -56,16 +67,29 @@ const getStatusBadgeVariant = (status: LeadStatus) => {
 
 export default function LeadDetailPage() {
   const params = useParams();
+  const router = useRouter();
   const leadId = Number(params.id);
 
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);
   const [consultationDialogOpen, setConsultationDialogOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
   // Fetch lead data
   const { data: lead, isLoading, isError, error } = useLead(leadId);
   const { data: timeline } = useLeadTimeline(leadId);
   const { data: insights } = useLeadInsights(leadId);
+
+  // Delete mutation
+  const deleteMutation = useDeleteLead();
+
+  const handleDelete = () => {
+    deleteMutation.mutate(leadId, {
+      onSuccess: () => {
+        router.push("/leads");
+      },
+    });
+  };
 
   if (isLoading) {
     return (
@@ -145,6 +169,13 @@ export default function LeadDetailPage() {
           <Button onClick={() => setEditDialogOpen(true)}>
             <Edit className="mr-2 h-4 w-4" />
             Edit
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={() => setDeleteDialogOpen(true)}
+          >
+            <Trash2 className="mr-2 h-4 w-4" />
+            Delete
           </Button>
         </div>
       </div>
@@ -250,6 +281,33 @@ export default function LeadDetailPage() {
         onOpenChange={setConsultationDialogOpen}
         leadId={leadId}
       />
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action will soft delete the lead <strong>{lead.full_name}</strong> (ID: #{lead.id}).
+              <br /><br />
+              The lead will be marked as deleted and hidden from the lead list.
+              All historical data (consultations, applications, logs) will be preserved.
+              <br /><br />
+              This action can be reversed by an administrator if needed.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDelete}
+              disabled={deleteMutation.isPending}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              {deleteMutation.isPending ? "Deleting..." : "Delete Lead"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -31,6 +31,13 @@ from .lead import (
     LeadsPage,
     LeadUpdate,
     TimelineItem,
+    # Application schemas (Hồ sơ Tuyển sinh)
+    Application,
+    ApplicationBase,
+    ApplicationCreate,
+    ApplicationUpdate,
+    ApplicationDocuments,
+    ChecklistItem,
 )
 
 # --- Từ organization.py ---
@@ -77,6 +84,11 @@ from .organization import (
     ConfigOfferingTypeBase,
     ConfigOfferingTypeCreate,
     ConfigOfferingTypeUpdate,
+    # Distribution Rule schemas
+    DistributionRuleBase,
+    DistributionRuleCreate,
+    DistributionRuleUpdate,
+    DistributionRuleResponse,
 )
 
 # --- Từ permissions.py ---

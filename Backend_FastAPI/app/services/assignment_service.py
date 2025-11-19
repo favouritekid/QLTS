@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models
 from ..config import settings
+from ..socket_manager import emit_lead_assigned
 
 # Lấy logger chuẩn ở đây, dùng làm fallback
 default_log = logging.getLogger(__name__)
@@ -207,6 +208,31 @@ async def automatically_assign_lead(
                 db.add_all([lead, chosen_one, log_entry])
                 log.info(
                     f"[Lead ID: {lead_id}] Lead assignment successful to officer {chosen_one.id}."
+                )
+
+                # === BƯỚC 7: Emit Socket.IO Event for Real-time Notification ===
+                # Load relationships để lấy thông tin đầy đủ cho event payload
+                await db.refresh(lead, ["unit", "program_offering"])
+
+                # Prepare lead data for socket event
+                lead_data = {
+                    "name": f"{lead.first_name or ''} {lead.last_name or ''}".strip() or "Unknown",
+                    "phone": lead.phone or "",
+                    "email": lead.email or "",
+                    "offering_name": lead.program_offering.name if lead.program_offering else "N/A",
+                    "unit_name": lead.unit.name if lead.unit else "N/A",
+                    "priority": "normal"  # Can be enhanced with actual priority field
+                }
+
+                # Emit event to officer's room
+                await emit_lead_assigned(
+                    lead_id=lead.id,
+                    officer_id=chosen_one.id,
+                    lead_data=lead_data,
+                    assignment_type="automatic"
+                )
+                log.info(
+                    f"[Lead ID: {lead_id}] Socket.IO 'lead_assigned' event emitted to officer {chosen_one.id}."
                 )
 
         # Kết thúc `async with db.begin_nested()` - Tự động commit nếu không có lỗi

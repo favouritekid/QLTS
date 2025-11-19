@@ -587,3 +587,165 @@ async def delete_offering_type(
         await db.delete(db_type)
         await db.commit()
         log.info("Offering type hard deleted", type_id=type_id)
+
+
+# ============================================================================
+# DISTRIBUTION RULES MANAGEMENT
+# ============================================================================
+
+
+async def get_all_distribution_rules(db: AsyncSession) -> List[models.OfferingDistributionConfig]:
+    """
+    Get all distribution rules with offering and unit names.
+
+    Returns:
+        List of OfferingDistributionConfig models
+    """
+    result = await db.execute(
+        select(models.OfferingDistributionConfig)
+        .order_by(
+            models.OfferingDistributionConfig.priority.asc(),  # Lower number = higher priority
+            models.OfferingDistributionConfig.id
+        )
+    )
+    return result.scalars().all()
+
+
+async def get_distribution_rule_by_id(
+    db: AsyncSession,
+    rule_id: int
+) -> models.OfferingDistributionConfig:
+    """
+    Get a distribution rule by ID.
+
+    Args:
+        db: Database session
+        rule_id: ID of the rule
+
+    Returns:
+        OfferingDistributionConfig model
+
+    Raises:
+        ResourceNotFoundError: If rule doesn't exist
+    """
+    rule = await db.get(models.OfferingDistributionConfig, rule_id)
+    if not rule:
+        raise ResourceNotFoundError(
+            detail=f"Distribution rule with id {rule_id} not found"
+        )
+    return rule
+
+
+async def create_distribution_rule(
+    db: AsyncSession,
+    rule_in: schemas.DistributionRuleCreate
+) -> models.OfferingDistributionConfig:
+    """
+    Create a new distribution rule.
+
+    Args:
+        db: Database session
+        rule_in: Distribution rule creation data
+
+    Returns:
+        Created DistributionRule model
+
+    Raises:
+        BadRequest: If offering_id or unit_id doesn't exist
+    """
+    from ..utils.exceptions import BadRequest
+
+    # Validate offering exists
+    offering = await db.get(models.ProgramOffering, rule_in.offering_id)
+    if not offering:
+        raise BadRequest(
+            detail=f"Program offering with id {rule_in.offering_id} not found"
+        )
+
+    # Validate unit exists
+    unit = await db.get(models.OrganizationUnit, rule_in.unit_id)
+    if not unit:
+        raise BadRequest(
+            detail=f"Organization unit with id {rule_in.unit_id} not found"
+        )
+
+    # Check for duplicate (same offering + unit)
+    existing = await db.execute(
+        select(models.OfferingDistributionConfig).where(
+            models.OfferingDistributionConfig.offering_id == rule_in.offering_id,
+            models.OfferingDistributionConfig.unit_id == rule_in.unit_id
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise BadRequest(
+            detail=f"Distribution rule for offering {rule_in.offering_id} and unit {rule_in.unit_id} already exists"
+        )
+
+    # Create rule
+    db_rule = models.OfferingDistributionConfig(**rule_in.model_dump())
+    db.add(db_rule)
+    await db.commit()
+    await db.refresh(db_rule)
+
+    log.info(
+        "Distribution rule created",
+        rule_id=db_rule.id,
+        offering_id=db_rule.offering_id,
+        unit_id=db_rule.unit_id
+    )
+    return db_rule
+
+
+async def update_distribution_rule(
+    db: AsyncSession,
+    rule_id: int,
+    rule_in: schemas.DistributionRuleUpdate
+) -> models.OfferingDistributionConfig:
+    """
+    Update a distribution rule.
+
+    Args:
+        db: Database session
+        rule_id: ID of the rule to update
+        rule_in: Update data
+
+    Returns:
+        Updated DistributionRule model
+
+    Raises:
+        ResourceNotFoundError: If rule doesn't exist
+    """
+    db_rule = await get_distribution_rule_by_id(db, rule_id)
+
+    # Update only provided fields
+    update_data = rule_in.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(db_rule, field, value)
+
+    await db.commit()
+    await db.refresh(db_rule)
+
+    log.info("Distribution rule updated", rule_id=rule_id)
+    return db_rule
+
+
+async def delete_distribution_rule(
+    db: AsyncSession,
+    rule_id: int
+) -> None:
+    """
+    Delete a distribution rule.
+
+    Args:
+        db: Database session
+        rule_id: ID of the rule to delete
+
+    Raises:
+        ResourceNotFoundError: If rule doesn't exist
+    """
+    db_rule = await get_distribution_rule_by_id(db, rule_id)
+
+    await db.delete(db_rule)
+    await db.commit()
+
+    log.info("Distribution rule deleted", rule_id=rule_id)

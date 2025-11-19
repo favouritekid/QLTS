@@ -13,6 +13,8 @@ from .socket_metrics import (
     socket_auth_failures_total,
     socket_connections_active,
     socket_events_received_total,
+    socket_events_emitted_total,
+    socket_emit_failures_total,
 )
 
 log = structlog.get_logger(__name__)
@@ -414,6 +416,9 @@ async def emit_to_all(event: str, data: dict, namespace: str = "/"):
     """
     try:
         await sio.emit(event, data, namespace=namespace)
+        # Track metrics
+        socket_events_emitted_total.labels(event_type=event).inc()
+
         log.info(
             "Emitted event to all clients",
             socket_event=event,
@@ -421,6 +426,9 @@ async def emit_to_all(event: str, data: dict, namespace: str = "/"):
             data_keys=list(data.keys())
         )
     except Exception as e:
+        # Track failure metrics
+        socket_emit_failures_total.labels(event_type=event).inc()
+
         log.error(
             "Failed to emit event to all clients",
             socket_event=event,
@@ -474,6 +482,9 @@ async def emit_lead_reassigned(
                 },
                 room=old_officer_room
             )
+            # Track metrics
+            socket_events_emitted_total.labels(event_type="lead_reassigned").inc()
+
             log.info(
                 "Lead reassignment notification sent to old officer",
                 lead_id=lead_id,
@@ -502,6 +513,8 @@ async def emit_lead_reassigned(
             },
             namespace="/"  # Broadcast to all connected clients (admins can filter by unit)
         )
+        # Track metrics
+        socket_events_emitted_total.labels(event_type="lead_transferred_in").inc()
 
         log.info(
             "Lead transfer notification sent to new unit",
@@ -510,6 +523,11 @@ async def emit_lead_reassigned(
         )
 
     except Exception as e:
+        # Track failure metrics
+        if old_officer_id:
+            socket_emit_failures_total.labels(event_type="lead_reassigned").inc()
+        socket_emit_failures_total.labels(event_type="lead_transferred_in").inc()
+
         log.error(
             "Failed to emit lead reassignment Socket.IO events",
             lead_id=lead_id,
@@ -520,3 +538,478 @@ async def emit_lead_reassigned(
             exc_info=True
         )
         # Don't raise - socket errors should not break lead update logic
+
+
+# =====================================================================
+# UTILITY FUNCTIONS FOR LEAD ASSIGNMENT
+# =====================================================================
+
+async def emit_lead_assigned(
+    lead_id: int,
+    officer_id: int,
+    lead_data: dict,
+    assignment_type: str = "automatic"
+):
+    """
+    Emit Socket.IO event when a lead is assigned to an officer.
+
+    This function notifies the officer immediately about their new lead assignment,
+    enabling real-time updates in the officer's dashboard.
+
+    Args:
+        lead_id: ID of the lead being assigned
+        officer_id: ID of the officer receiving the assignment
+        lead_data: Dictionary containing lead details (name, phone, email, offering, etc.)
+        assignment_type: Type of assignment ("automatic" or "manual")
+
+    Events emitted:
+        - "lead_assigned" to officer's room
+
+    Payload structure:
+        {
+            "lead_id": int,
+            "lead_name": str,
+            "lead_phone": str,
+            "lead_email": str,
+            "offering_name": str,
+            "unit_name": str,
+            "assigned_at": str (ISO 8601),
+            "assignment_type": "automatic" | "manual",
+            "priority": str,
+            "message": "You have been assigned a new lead: {lead_name}"
+        }
+    """
+    try:
+        from datetime import datetime, timezone
+
+        # Target officer's room
+        officer_room = f"user_room_{officer_id}"
+
+        # Prepare event payload
+        event_payload = {
+            "lead_id": lead_id,
+            "lead_name": lead_data.get("name", "Unknown"),
+            "lead_phone": lead_data.get("phone", ""),
+            "lead_email": lead_data.get("email", ""),
+            "offering_name": lead_data.get("offering_name", ""),
+            "unit_name": lead_data.get("unit_name", ""),
+            "assigned_at": datetime.now(timezone.utc).isoformat(),
+            "assignment_type": assignment_type,
+            "priority": lead_data.get("priority", "normal"),
+            "message": f"You have been assigned a new lead: {lead_data.get('name', 'Unknown')}"
+        }
+
+        # Emit event to officer's room
+        await sio.emit(
+            "lead_assigned",
+            event_payload,
+            room=officer_room
+        )
+
+        # Track metrics
+        socket_events_emitted_total.labels(event_type="lead_assigned").inc()
+
+        log.info(
+            "Lead assignment notification sent to officer",
+            lead_id=lead_id,
+            officer_id=officer_id,
+            assignment_type=assignment_type,
+            officer_room=officer_room
+        )
+
+    except Exception as e:
+        # Track failure metrics
+        socket_emit_failures_total.labels(event_type="lead_assigned").inc()
+
+        log.error(
+            "Failed to emit lead assignment Socket.IO event",
+            lead_id=lead_id,
+            officer_id=officer_id,
+            error=str(e),
+            exc_info=True
+        )
+        # Don't raise - socket errors should not break assignment logic
+
+
+async def emit_application_created(
+    application_id: int,
+    lead_id: int,
+    officer_id: int,
+    application_data: dict
+):
+    """
+    Emit Socket.IO event when a new application is created.
+
+    This function notifies the officer immediately about the new application
+    creation, enabling real-time updates.
+
+    Args:
+        application_id: ID of the application created
+        lead_id: ID of the lead
+        officer_id: ID of the officer
+        application_data: Dictionary containing application details
+
+    Events emitted:
+        - "application_created" to officer's room + admin broadcast
+
+    Payload structure:
+        {
+            "application_id": int,
+            "lead_id": int,
+            "lead_name": str,
+            "officer_id": int,
+            "major_program_name": str,
+            "status": str,
+            "created_at": str (ISO 8601),
+            "message": "New application created for {lead_name}"
+        }
+    """
+    try:
+        from datetime import datetime, timezone
+
+        # Target rooms: officer + admins
+        officer_room = f"user_room_{officer_id}"
+        admin_room = "role_admin"
+
+        # Prepare event payload
+        event_payload = {
+            "application_id": application_id,
+            "lead_id": lead_id,
+            "lead_name": application_data.get("lead_name", "Unknown"),
+            "officer_id": officer_id,
+            "major_program_name": application_data.get("major_program_name", "N/A"),
+            "status": application_data.get("status", "pending"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "message": f"New application created for {application_data.get('lead_name', 'Unknown')}"
+        }
+
+        # Emit to officer's room
+        await sio.emit(
+            "application_created",
+            event_payload,
+            room=officer_room
+        )
+
+        # Emit to admin room (broadcast)
+        await sio.emit(
+            "application_created",
+            event_payload,
+            room=admin_room
+        )
+
+        # Track metrics
+        socket_events_emitted_total.labels(event_type="application_created").inc()
+
+        log.info(
+            "Application created notification sent",
+            application_id=application_id,
+            lead_id=lead_id,
+            officer_id=officer_id,
+            officer_room=officer_room,
+            admin_room=admin_room
+        )
+
+    except Exception as e:
+        # Track failure metrics
+        socket_emit_failures_total.labels(event_type="application_created").inc()
+
+        log.error(
+            "Failed to emit application_created Socket.IO event",
+            application_id=application_id,
+            lead_id=lead_id,
+            officer_id=officer_id,
+            error=str(e),
+            exc_info=True
+        )
+        # Don't raise - socket errors should not break application creation logic
+
+
+async def emit_application_status_changed(
+    application_id: int,
+    lead_id: int,
+    officer_id: int,
+    old_status: str,
+    new_status: str,
+    changed_by_username: str
+):
+    """
+    Emit Socket.IO event when application status changes.
+
+    This function notifies the officer and admins immediately about status changes,
+    enabling real-time tracking of application progress.
+
+    Args:
+        application_id: ID of the application
+        lead_id: ID of the lead
+        officer_id: ID of the officer
+        old_status: Previous status
+        new_status: New status
+        changed_by_username: Username who made the change
+
+    Events emitted:
+        - "application_status_changed" to officer's room + admin broadcast
+
+    Payload structure:
+        {
+            "application_id": int,
+            "lead_id": int,
+            "old_status": str,
+            "new_status": str,
+            "changed_by": str,
+            "changed_at": str (ISO 8601),
+            "message": "Application status changed from {old} to {new}"
+        }
+    """
+    try:
+        from datetime import datetime, timezone
+
+        # Target rooms: officer + admins
+        officer_room = f"user_room_{officer_id}"
+        admin_room = "role_admin"
+
+        # Prepare event payload
+        event_payload = {
+            "application_id": application_id,
+            "lead_id": lead_id,
+            "old_status": old_status,
+            "new_status": new_status,
+            "changed_by": changed_by_username,
+            "changed_at": datetime.now(timezone.utc).isoformat(),
+            "message": f"Application status changed from {old_status} to {new_status}"
+        }
+
+        # Emit to officer's room
+        await sio.emit(
+            "application_status_changed",
+            event_payload,
+            room=officer_room
+        )
+
+        # Emit to admin room (broadcast)
+        await sio.emit(
+            "application_status_changed",
+            event_payload,
+            room=admin_room
+        )
+
+        # Track metrics
+        socket_events_emitted_total.labels(event_type="application_status_changed").inc()
+
+        log.info(
+            "Application status change notification sent",
+            application_id=application_id,
+            lead_id=lead_id,
+            officer_id=officer_id,
+            old_status=old_status,
+            new_status=new_status,
+            changed_by=changed_by_username
+        )
+
+    except Exception as e:
+        # Track failure metrics
+        socket_emit_failures_total.labels(event_type="application_status_changed").inc()
+
+        log.error(
+            "Failed to emit application_status_changed Socket.IO event",
+            application_id=application_id,
+            lead_id=lead_id,
+            officer_id=officer_id,
+            old_status=old_status,
+            new_status=new_status,
+            error=str(e),
+            exc_info=True
+        )
+        # Don't raise - socket errors should not break application update logic
+
+
+async def emit_application_documents_updated(
+    application_id: int,
+    lead_id: int,
+    officer_id: int,
+    updated_by_username: str,
+    documents_summary: str = "Documents updated"
+):
+    """
+    Emit Socket.IO event when application documents are updated.
+
+    This function notifies the officer and admins immediately about document updates,
+    enabling real-time tracking of application completeness.
+
+    Args:
+        application_id: ID of the application
+        lead_id: ID of the lead
+        officer_id: ID of the officer
+        updated_by_username: Username who made the update
+        documents_summary: Brief summary of the update
+
+    Events emitted:
+        - "application_documents_updated" to officer's room + admin broadcast
+
+    Payload structure:
+        {
+            "application_id": int,
+            "lead_id": int,
+            "updated_by": str,
+            "updated_at": str (ISO 8601),
+            "documents_summary": str,
+            "message": "Application documents updated"
+        }
+    """
+    try:
+        from datetime import datetime, timezone
+
+        # Target rooms: officer + admins
+        officer_room = f"user_room_{officer_id}"
+        admin_room = "role_admin"
+
+        # Prepare event payload
+        event_payload = {
+            "application_id": application_id,
+            "lead_id": lead_id,
+            "updated_by": updated_by_username,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "documents_summary": documents_summary,
+            "message": "Application documents updated"
+        }
+
+        # Emit to officer's room
+        await sio.emit(
+            "application_documents_updated",
+            event_payload,
+            room=officer_room
+        )
+
+        # Emit to admin room (broadcast)
+        await sio.emit(
+            "application_documents_updated",
+            event_payload,
+            room=admin_room
+        )
+
+        # Track metrics
+        socket_events_emitted_total.labels(event_type="application_documents_updated").inc()
+
+        log.info(
+            "Application documents update notification sent",
+            application_id=application_id,
+            lead_id=lead_id,
+            officer_id=officer_id,
+            updated_by=updated_by_username
+        )
+
+    except Exception as e:
+        # Track failure metrics
+        socket_emit_failures_total.labels(event_type="application_documents_updated").inc()
+
+        log.error(
+            "Failed to emit application_documents_updated Socket.IO event",
+            application_id=application_id,
+            lead_id=lead_id,
+            officer_id=officer_id,
+            error=str(e),
+            exc_info=True
+        )
+        # Don't raise - socket errors should not break application update logic
+
+
+async def emit_pipeline_config_updated(
+    config_type: str,
+    operation: str,
+    resource_id: str,
+    resource_data: dict,
+    updated_by_username: str
+):
+    """
+    Emit Socket.IO event when pipeline configuration is updated.
+
+    This function notifies all admins immediately about pipeline config changes,
+    enabling real-time UI updates for pipeline management.
+
+    Args:
+        config_type: Type of config ("pipeline_stage", "consultation_status", "allowed_transition")
+        operation: Operation performed ("create", "update", "delete")
+        resource_id: ID of the affected resource
+        resource_data: Dictionary containing resource details
+        updated_by_username: Username who made the change
+
+    Events emitted:
+        - "pipeline_config_updated" to admin broadcast (role_admin)
+
+    Payload structure:
+        {
+            "config_type": "pipeline_stage" | "consultation_status" | "allowed_transition",
+            "operation": "create" | "update" | "delete",
+            "resource_id": str | int,
+            "resource_data": {
+                # Stage/Status/Transition details
+            },
+            "updated_by": str,
+            "updated_at": str (ISO 8601),
+            "message": "Pipeline stage '{name}' was created"
+        }
+    """
+    try:
+        from datetime import datetime, timezone
+
+        # Target: Broadcast to all admins
+        admin_room = "role_admin"
+
+        # Generate human-readable message
+        operation_text = {
+            "create": "created",
+            "update": "updated",
+            "delete": "deleted"
+        }.get(operation, operation)
+
+        config_type_text = {
+            "pipeline_stage": "Pipeline stage",
+            "consultation_status": "Consultation status",
+            "allowed_transition": "Allowed transition"
+        }.get(config_type, config_type)
+
+        resource_name = resource_data.get("name", resource_data.get("id", str(resource_id)))
+        message = f"{config_type_text} '{resource_name}' was {operation_text}"
+
+        # Prepare event payload
+        event_payload = {
+            "config_type": config_type,
+            "operation": operation,
+            "resource_id": resource_id,
+            "resource_data": resource_data,
+            "updated_by": updated_by_username,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "message": message
+        }
+
+        # Emit to admin room (broadcast)
+        await sio.emit(
+            "pipeline_config_updated",
+            event_payload,
+            room=admin_room
+        )
+
+        # Track metrics
+        socket_events_emitted_total.labels(event_type="pipeline_config_updated").inc()
+
+        log.info(
+            "Pipeline config update notification sent to admins",
+            config_type=config_type,
+            operation=operation,
+            resource_id=resource_id,
+            updated_by=updated_by_username,
+            admin_room=admin_room
+        )
+
+    except Exception as e:
+        # Track failure metrics
+        socket_emit_failures_total.labels(event_type="pipeline_config_updated").inc()
+
+        log.error(
+            "Failed to emit pipeline_config_updated Socket.IO event",
+            config_type=config_type,
+            operation=operation,
+            resource_id=resource_id,
+            error=str(e),
+            exc_info=True
+        )
+        # Don't raise - socket errors should not break pipeline config operations

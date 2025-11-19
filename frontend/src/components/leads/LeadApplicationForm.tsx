@@ -1,7 +1,6 @@
 // src/components/leads/LeadApplicationForm.tsx
 "use client";
 
-import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -32,7 +31,6 @@ import { useUpdateApplication } from "@/hooks/useApplication";
 import { useMajorPrograms, useOfferingAcademicInfoList } from "@/hooks/useOrganization";
 import { DocumentChecklist } from "./DocumentChecklist";
 import type { Lead, Application, ApplicationUpdate, ChecklistItem } from "@/types/lead.types";
-import type { MajorProgram, ProgramOffering, AdmissionCriterion } from "@/types/organization.types";
 
 // Validation schema
 const applicationSchema = z.object({
@@ -41,7 +39,7 @@ const applicationSchema = z.object({
   criterion_id: z.string().nullable(),
   status: z.enum(["pending", "missing_documents", "completed", "passed", "failed"]),
   documents: z.object({
-    scores: z.record(z.number().nullable()).nullable().optional(),
+    scores: z.record(z.string(), z.number().nullable()).nullable().optional(),
     checklist: z.array(
       z.object({
         code: z.string(),
@@ -54,7 +52,7 @@ const applicationSchema = z.object({
   }).nullable(),
 });
 
-type ApplicationFormValues = z.infer<typeof applicationSchema>;
+export type ApplicationFormValues = z.infer<typeof applicationSchema>;
 
 interface LeadApplicationFormProps {
   lead: Lead;
@@ -86,9 +84,6 @@ export function LeadApplicationForm({ lead, application }: LeadApplicationFormPr
 
   // Find selected objects
   const selectedMajorProgram = majorPrograms.find((p) => p.id === selectedMajorProgramId);
-  const selectedOffering = selectedMajorProgram?.offerings?.find(
-    (o) => o.id === selectedOfferingId
-  );
 
   // Fetch academic info for selected offering
   const {
@@ -110,7 +105,10 @@ export function LeadApplicationForm({ lead, application }: LeadApplicationFormPr
       program_offering_id: data.program_offering_id,
       criterion_id: data.criterion_id,
       status: data.status,
-      documents: data.documents,
+      documents: data.documents ? {
+        scores: data.documents.scores ?? null,
+        checklist: data.documents.checklist ?? null,
+      } : null,
     };
 
     updateApplication.mutate(payload);
@@ -311,6 +309,7 @@ export function LeadApplicationForm({ lead, application }: LeadApplicationFormPr
                     <FormField
                       key={subject}
                       control={form.control}
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
                       name={`documents.scores.${subject}` as any}
                       render={({ field }) => (
                         <FormItem>

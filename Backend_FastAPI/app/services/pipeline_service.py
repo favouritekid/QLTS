@@ -1,6 +1,6 @@
 # app/services/pipeline_service.py
 import json  # ✅ For JSON serialization
-from typing import List
+from typing import List, Optional
 
 import structlog
 from sqlalchemy import func, select, and_
@@ -17,6 +17,7 @@ from ..database import (
     redis_distributed_lock,  # ✅ TASK 5.4: Replace asyncio.Lock with Redis distributed lock
 )
 from ..utils.exceptions import DuplicateResourceError, ResourceNotFoundError
+from ..socket_manager import emit_pipeline_config_updated
 
 log = structlog.get_logger(__name__)
 
@@ -217,7 +218,9 @@ async def _get_status_by_id(
 
 
 async def create_pipeline_stage(
-    db: AsyncSession, stage_in: schemas.PipelineStageCreate
+    db: AsyncSession,
+    stage_in: schemas.PipelineStageCreate,
+    current_user: Optional[models.User] = None
 ) -> models.PipelineStage:
     try:
         # 1. Kiểm tra ID đã tồn tại
@@ -259,6 +262,22 @@ async def create_pipeline_stage(
         await invalidate_pipeline_cache()
         log.info("Created new pipeline stage, cache invalidated", stage_id=db_stage.id)
 
+        # 6. === SOCKET.IO EVENT: Emit pipeline_config_updated event ===
+        if current_user:
+            resource_data = {
+                "id": db_stage.id,
+                "name": db_stage.name,
+                "order": db_stage.order,
+                "is_final_stage": db_stage.is_final_stage,
+            }
+            await emit_pipeline_config_updated(
+                config_type="pipeline_stage",
+                operation="create",
+                resource_id=db_stage.id,
+                resource_data=resource_data,
+                updated_by_username=current_user.username,
+            )
+
         return db_stage
     except Exception as e:
         await db.rollback()
@@ -272,7 +291,10 @@ async def get_pipeline_stage(db: AsyncSession, stage_id: str) -> models.Pipeline
 
 
 async def update_pipeline_stage(
-    db: AsyncSession, stage_id: str, stage_in: schemas.PipelineStageUpdate
+    db: AsyncSession,
+    stage_id: str,
+    stage_in: schemas.PipelineStageUpdate,
+    current_user: Optional[models.User] = None
 ) -> models.PipelineStage:
     try:
         db_stage = await _get_stage_by_id(db, stage_id)
@@ -314,6 +336,22 @@ async def update_pipeline_stage(
         await invalidate_pipeline_cache()
         log.info("Updated pipeline stage, cache invalidated", stage_id=db_stage.id)
 
+        # 5. === SOCKET.IO EVENT: Emit pipeline_config_updated event ===
+        if current_user:
+            resource_data = {
+                "id": db_stage.id,
+                "name": db_stage.name,
+                "order": db_stage.order,
+                "is_final_stage": db_stage.is_final_stage,
+            }
+            await emit_pipeline_config_updated(
+                config_type="pipeline_stage",
+                operation="update",
+                resource_id=db_stage.id,
+                resource_data=resource_data,
+                updated_by_username=current_user.username,
+            )
+
         return db_stage
     except Exception as e:
         await db.rollback()
@@ -326,9 +364,20 @@ async def update_pipeline_stage(
         raise e
 
 
-async def delete_pipeline_stage(db: AsyncSession, stage_id: str):
+async def delete_pipeline_stage(
+    db: AsyncSession,
+    stage_id: str,
+    current_user: Optional[models.User] = None
+):
     try:
         db_stage = await _get_stage_by_id(db, stage_id)
+
+        # Store data before deletion for socket event
+        stage_data = {
+            "id": db_stage.id,
+            "name": db_stage.name,
+            "order": db_stage.order,
+        }
 
         # 1. KIỂM TRA RÀNG BUỘC (QUAN TRỌNG)
         child_status_count = await db.scalar(
@@ -349,6 +398,16 @@ async def delete_pipeline_stage(db: AsyncSession, stage_id: str):
         await invalidate_pipeline_cache()
         log.info("Deleted pipeline stage, cache invalidated", stage_id=stage_id)
 
+        # 4. === SOCKET.IO EVENT: Emit pipeline_config_updated event ===
+        if current_user:
+            await emit_pipeline_config_updated(
+                config_type="pipeline_stage",
+                operation="delete",
+                resource_id=stage_id,
+                resource_data=stage_data,
+                updated_by_username=current_user.username,
+            )
+
     except Exception as e:
         await db.rollback()
         log.error(
@@ -366,7 +425,9 @@ async def delete_pipeline_stage(db: AsyncSession, stage_id: str):
 
 
 async def create_consultation_status(
-    db: AsyncSession, status_in: schemas.ConsultationStatusCreate
+    db: AsyncSession,
+    status_in: schemas.ConsultationStatusCreate,
+    current_user: Optional[models.User] = None
 ) -> models.ConsultationStatus:
     try:
         # 1. Kiểm tra ID
@@ -438,6 +499,24 @@ async def create_consultation_status(
             "Created new consultation status, cache invalidated", status_id=db_status.id
         )
 
+        # 6. === SOCKET.IO EVENT: Emit pipeline_config_updated event ===
+        if current_user:
+            resource_data = {
+                "id": db_status.id,
+                "name": db_status.name,
+                "color_code": db_status.color_code,
+                "stage_id": db_status.stage_id,
+                "outcome_type": db_status.outcome_type.value,
+                "is_final_status": db_status.is_final_status,
+            }
+            await emit_pipeline_config_updated(
+                config_type="consultation_status",
+                operation="create",
+                resource_id=db_status.id,
+                resource_data=resource_data,
+                updated_by_username=current_user.username,
+            )
+
         return db_status
     except Exception as e:
         await db.rollback()
@@ -453,7 +532,10 @@ async def get_consultation_status(
 
 
 async def update_consultation_status(
-    db: AsyncSession, status_id: str, status_in: schemas.ConsultationStatusUpdate
+    db: AsyncSession,
+    status_id: str,
+    status_in: schemas.ConsultationStatusUpdate,
+    current_user: Optional[models.User] = None
 ) -> models.ConsultationStatus:
     try:
         db_status = await _get_status_by_id(db, status_id)
@@ -516,6 +598,24 @@ async def update_consultation_status(
             "Updated consultation status, cache invalidated", status_id=db_status.id
         )
 
+        # 5. === SOCKET.IO EVENT: Emit pipeline_config_updated event ===
+        if current_user:
+            resource_data = {
+                "id": db_status.id,
+                "name": db_status.name,
+                "color_code": db_status.color_code,
+                "stage_id": db_status.stage_id,
+                "outcome_type": db_status.outcome_type.value,
+                "is_final_status": db_status.is_final_status,
+            }
+            await emit_pipeline_config_updated(
+                config_type="consultation_status",
+                operation="update",
+                resource_id=db_status.id,
+                resource_data=resource_data,
+                updated_by_username=current_user.username,
+            )
+
         return db_status
     except Exception as e:
         await db.rollback()
@@ -528,9 +628,21 @@ async def update_consultation_status(
         raise e
 
 
-async def delete_consultation_status(db: AsyncSession, status_id: str):
+async def delete_consultation_status(
+    db: AsyncSession,
+    status_id: str,
+    current_user: Optional[models.User] = None
+):
     try:
         db_status = await _get_status_by_id(db, status_id)
+
+        # Store data before deletion for socket event
+        status_data = {
+            "id": db_status.id,
+            "name": db_status.name,
+            "color_code": db_status.color_code,
+            "stage_id": db_status.stage_id,
+        }
 
         # 1. KIỂM TRA RÀNG BUỘC (QUAN TRỌNG)
         lead_count = await db.scalar(
@@ -561,6 +673,16 @@ async def delete_consultation_status(db: AsyncSession, status_id: str):
         # 3. Hủy cache
         await invalidate_pipeline_cache()
         log.info("Deleted consultation status, cache invalidated", status_id=status_id)
+
+        # 4. === SOCKET.IO EVENT: Emit pipeline_config_updated event ===
+        if current_user:
+            await emit_pipeline_config_updated(
+                config_type="consultation_status",
+                operation="delete",
+                resource_id=status_id,
+                resource_data=status_data,
+                updated_by_username=current_user.username,
+            )
 
     except Exception as e:
         await db.rollback()
@@ -594,7 +716,9 @@ async def get_all_allowed_transitions(db: AsyncSession) -> List[models.AllowedTr
 
 
 async def create_allowed_transition(
-    db: AsyncSession, transition_in: schemas.AllowedTransitionCreate
+    db: AsyncSession,
+    transition_in: schemas.AllowedTransitionCreate,
+    current_user: Optional[models.User] = None
 ) -> models.AllowedTransition:
     """Tạo một allowed transition mới."""
     try:
@@ -644,6 +768,23 @@ async def create_allowed_transition(
             to_status=transition_in.to_status_id,
         )
 
+        # === SOCKET.IO EVENT: Emit pipeline_config_updated event ===
+        if current_user:
+            resource_data = {
+                "id": db_transition.id,
+                "from_status_id": db_transition.from_status_id,
+                "to_status_id": db_transition.to_status_id,
+                "from_status_name": db_transition.from_status.name if db_transition.from_status else "N/A",
+                "to_status_name": db_transition.to_status.name if db_transition.to_status else "N/A",
+            }
+            await emit_pipeline_config_updated(
+                config_type="allowed_transition",
+                operation="create",
+                resource_id=str(db_transition.id),
+                resource_data=resource_data,
+                updated_by_username=current_user.username,
+            )
+
         return db_transition
 
     except Exception as e:
@@ -652,19 +793,53 @@ async def create_allowed_transition(
         raise e
 
 
-async def delete_allowed_transition(db: AsyncSession, transition_id: int):
+async def delete_allowed_transition(
+    db: AsyncSession,
+    transition_id: int,
+    current_user: Optional[models.User] = None
+):
     """Xóa một allowed transition."""
     try:
-        db_transition = await db.get(models.AllowedTransition, transition_id)
+        # Load with relationships for socket event
+        query = (
+            select(models.AllowedTransition)
+            .options(
+                selectinload(models.AllowedTransition.from_status),
+                selectinload(models.AllowedTransition.to_status),
+            )
+            .where(models.AllowedTransition.id == transition_id)
+        )
+        result = await db.execute(query)
+        db_transition = result.scalar_one_or_none()
+
         if not db_transition:
             raise ResourceNotFoundError(
                 f"Allowed transition with ID {transition_id} not found."
             )
 
+        # Store data before deletion for socket event
+        transition_data = {
+            "id": db_transition.id,
+            "from_status_id": db_transition.from_status_id,
+            "to_status_id": db_transition.to_status_id,
+            "from_status_name": db_transition.from_status.name if db_transition.from_status else "N/A",
+            "to_status_name": db_transition.to_status.name if db_transition.to_status else "N/A",
+        }
+
         await db.delete(db_transition)
         await db.commit()
 
         log.info("Deleted allowed transition", transition_id=transition_id)
+
+        # === SOCKET.IO EVENT: Emit pipeline_config_updated event ===
+        if current_user:
+            await emit_pipeline_config_updated(
+                config_type="allowed_transition",
+                operation="delete",
+                resource_id=str(transition_id),
+                resource_data=transition_data,
+                updated_by_username=current_user.username,
+            )
 
     except Exception as e:
         await db.rollback()

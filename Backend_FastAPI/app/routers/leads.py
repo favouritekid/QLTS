@@ -93,6 +93,32 @@ async def update_existing_lead(
     return await lead_service.update_lead(db, lead.id, lead_in, updated_by=current_user)
 
 
+@router.delete("/{lead_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_lead(
+    lead_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = PermissionDep,
+):
+    """
+    (Admin only) Soft delete a Lead.
+
+    Sets deleted_at timestamp instead of physically deleting the lead.
+    Preserves all historical data (consultations, applications, logs).
+    Deleted leads are filtered out from normal queries.
+
+    **Permission:** Admin only (enforced by Casbin)
+
+    **Status Code:** 204 No Content on success
+
+    **Raises:**
+    - 404 Not Found: If lead doesn't exist or already deleted
+    - 403 Forbidden: If user doesn't have admin permission
+    """
+    await lead_service.delete_lead(db, lead_id, deleted_by=current_user)
+    await db.commit()
+    return None
+
+
 @router.post(
     "/{lead_id}/consultations",
     response_model=schemas.Consultation,
@@ -166,7 +192,16 @@ async def delete_a_consultation(
     current_user: models.User = PermissionDep,  # <-- THAY ĐỔI (Casbin Check)
     db: AsyncSession = Depends(database.get_db),
 ):
-    """(Admin only) Xóa một ghi chú tư vấn (Đã xác thực 2 lớp)."""
+    """
+    Xóa một ghi chú tư vấn (Admin: any consultation, Officer: most recent only).
+
+    Permission Rules:
+    - Admin: Can delete any consultation
+    - Officer: Can only delete the most recent consultation to maintain consultation chain integrity
+    - Other roles: Cannot delete consultations
+
+    This prevents Officers from breaking the consultation chain by deleting historical consultations.
+    """
     await lead_service.delete_consultation(db, lead.id, consultation_id, current_user)
     return None
 
@@ -270,9 +305,270 @@ async def export_leads(
                 "Content-Disposition": f'attachment; filename="{filename}"'
             }
         )
+    elif format.lower() in ["xlsx", "excel"]:
+        # Generate Excel using openpyxl
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Leads Export"
+
+        # Header row with styling
+        headers = [
+            "ID", "Full Name", "Email", "Phone", "Status", "Lead Score",
+            "Source", "Education Level", "GPA", "Location",
+            "Assigned Officer ID", "Pipeline Stage ID", "Consultation Status ID",
+            "Created At", "Updated At"
+        ]
+        ws.append(headers)
+
+        # Style header row
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        header_font = Font(color="FFFFFF", bold=True)
+        for cell in ws[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+
+        # Data rows
+        for lead in leads:
+            ws.append([
+                lead.id,
+                lead.full_name,
+                lead.email,
+                lead.phone,
+                lead.status,
+                lead.lead_score,
+                lead.source,
+                lead.education_level or "",
+                lead.gpa or "",
+                lead.location or "",
+                lead.assigned_officer_id or "",
+                lead.pipeline_stage_id or "",
+                lead.consultation_status_id or "",
+                lead.created_at.isoformat() if lead.created_at else "",
+                lead.updated_at.isoformat() if lead.updated_at else "",
+            ])
+
+        # Auto-adjust column widths
+        for column in ws.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)  # Cap at 50
+            ws.column_dimensions[column_letter].width = adjusted_width
+
+        # Save to BytesIO
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        # Generate filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"leads_export_{timestamp}.xlsx"
+
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
     else:
-        # For now, only CSV is supported
-        # Excel support can be added later with openpyxl
         return {
-            "error": "Only CSV format is currently supported. Excel support coming soon."
+            "error": f"Unsupported format '{format}'. Supported formats: csv, xlsx"
         }
+
+
+@router.get("/import/template")
+async def download_import_template(
+    format: str = Query("csv", description="Template format (csv or xlsx)"),
+    current_user: models.User = PermissionDep,
+):
+    """
+    Download CSV/Excel template for lead import.
+
+    Returns a pre-formatted template file with:
+    - Correct column headers (required + optional)
+    - Example data row with Vietnamese sample
+    - Column descriptions as comments (Excel only)
+
+    **Query Parameters:**
+    - `format`: "csv" or "xlsx" (default: csv)
+
+    **Template Columns:**
+    - Required: full_name, email, phone, source, unit_id
+    - Optional: offering_id, education_level, gpa, location
+
+    **Usage:**
+    1. Download template
+    2. Fill in lead data
+    3. Upload via POST /api/admin/users/leads/import
+    """
+    # Define template data
+    headers = ["full_name", "email", "phone", "source", "unit_id", "offering_id", "education_level", "gpa", "location"]
+    example_row = [
+        "Nguyễn Văn An",
+        "nguyenvanan@gmail.com",
+        "0901234567",
+        "website",
+        "1",  # unit_id - Replace with your actual unit ID
+        "",   # offering_id - Optional
+        "bachelor",  # high_school, bachelor, master, phd
+        "3.5",  # 0.0-4.0
+        "Hà Nội"
+    ]
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if format.lower() == "csv":
+        # Generate CSV template
+        output = io.StringIO()
+        writer = csv.writer(output)
+
+        # Add header comment
+        output.write("# Lead Import Template\n")
+        output.write("# Required columns: full_name, email, phone, source, unit_id\n")
+        output.write("# Optional columns: offering_id, education_level, gpa, location\n")
+        output.write("# Education levels: high_school, bachelor, master, phd\n")
+        output.write("# Sources: website, referral, social_media, walk_in, email, phone, event, other\n")
+        output.write("#\n")
+
+        # Write headers and example
+        writer.writerow(headers)
+        writer.writerow(example_row)
+
+        output.seek(0)
+        filename = f"lead_import_template_{timestamp}.csv"
+
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+
+    elif format.lower() in ["xlsx", "excel"]:
+        # Generate Excel template with styling
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from openpyxl.comments import Comment
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Lead Import Template"
+
+        # Header row with styling
+        ws.append(headers)
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        header_font = Font(color="FFFFFF", bold=True)
+
+        column_descriptions = [
+            "Full name (required)",
+            "Email address (required, unique per unit)",
+            "Phone number (required)",
+            "Lead source (required): website, referral, social_media, walk_in, email, phone, event, other",
+            "Organization Unit ID (required): Get from /api/organization-units",
+            "Program Offering ID (optional): Get from /api/offerings",
+            "Education level (optional): high_school, bachelor, master, phd",
+            "GPA (optional): 0.0-4.0 scale",
+            "Location (optional): City/Province"
+        ]
+
+        for idx, cell in enumerate(ws[1], start=0):
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+            # Add comment with description
+            cell.comment = Comment(column_descriptions[idx], "System")
+
+        # Example row
+        ws.append(example_row)
+
+        # Auto-adjust column widths
+        for column in ws.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = max(max_length + 2, 15)  # Min 15 chars
+            ws.column_dimensions[column_letter].width = adjusted_width
+
+        # Save to BytesIO
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        filename = f"lead_import_template_{timestamp}.xlsx"
+
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+
+    else:
+        return {"error": f"Unsupported format '{format}'. Supported: csv, xlsx"}
+
+
+@router.post("/bulk-assign", status_code=status.HTTP_200_OK)
+async def bulk_assign_leads(
+    bulk_assign_data: schemas.BulkAssignLeadsSchema,
+    officer_id: int = Query(..., description="Officer ID to assign leads to"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = PermissionDep,
+):
+    """
+    (Admin/Manager only) Bulk assign multiple leads to a single officer.
+
+    Assigns multiple leads to one officer in a single operation.
+    Continues on errors (doesn't fail fast) and returns detailed results.
+
+    **Request Body:**
+    ```json
+    {
+        "lead_ids": [1, 2, 3, 4, 5]
+    }
+    ```
+
+    **Query Parameters:**
+    - `officer_id`: Target officer ID to assign all leads to
+
+    **Response:**
+    ```json
+    {
+        "total": 5,
+        "successful": 4,
+        "failed": 1,
+        "assigned_lead_ids": [1, 2, 3, 4],
+        "errors": [
+            {"lead_id": 5, "error": "Lead with id 5 not found"}
+        ]
+    }
+    ```
+
+    **Permission:** Admin or Manager only (enforced by Casbin)
+
+    **Business Rules:**
+    - Officer must exist, be active, and have role="officer"
+    - Creates AssignmentLog for each successful assignment
+    - Logs state change in LeadStatusHistory
+    - Updates lead status to "assigned"
+    - Updates officer's last_assigned_at timestamp
+    """
+    result = await lead_service.bulk_assign_leads(
+        db,
+        lead_ids=bulk_assign_data.lead_ids,
+        officer_id=officer_id,
+        assigner=current_user
+    )
+    await db.commit()
+    return result

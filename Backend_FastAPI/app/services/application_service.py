@@ -7,6 +7,7 @@ Tuân thủ kiến trúc phân lớp:
 - Không phụ thuộc vào Request/Response của FastAPI
 - Sử dụng selectinload, joinedload để tránh N+1
 """
+from datetime import datetime, timezone
 from typing import Optional
 
 import structlog
@@ -16,6 +17,11 @@ from sqlalchemy.orm import selectinload
 
 from .. import models, schemas
 from ..utils.exceptions import ResourceNotFoundError, BadRequest
+from ..socket_manager import (
+    emit_application_created,
+    emit_application_status_changed,
+    emit_application_documents_updated,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -73,11 +79,40 @@ async def create_application(
     await db.commit()
     await db.refresh(new_application)
 
+    # Load relationships for socket event payload
+    stmt_reload = (
+        select(models.Application)
+        .where(models.Application.id == new_application.id)
+        .options(
+            selectinload(models.Application.lead),
+            selectinload(models.Application.major_program),
+        )
+    )
+    result_reload = await db.execute(stmt_reload)
+    new_application = result_reload.scalar_one()
+
     log.info(
         "Application created",
         application_id=new_application.id,
         lead_id=lead_id,
         officer_id=current_user.id,
+    )
+
+    # === SOCKET.IO EVENT: Emit application_created event ===
+    lead_name = f"{new_application.lead.first_name or ''} {new_application.lead.last_name or ''}".strip() or "Unknown"
+    major_program_name = new_application.major_program.name if new_application.major_program else "N/A"
+
+    application_data = {
+        "lead_name": lead_name,
+        "major_program_name": major_program_name,
+        "status": new_application.status,
+    }
+
+    await emit_application_created(
+        application_id=new_application.id,
+        lead_id=lead_id,
+        officer_id=current_user.id,
+        application_data=application_data,
     )
 
     return new_application
@@ -87,6 +122,7 @@ async def get_application_by_id(
     db: AsyncSession,
     application_id: int,
     load_relationships: bool = True,
+    include_deleted: bool = False,
 ) -> Optional[models.Application]:
     """
     Lấy Application theo ID.
@@ -95,11 +131,16 @@ async def get_application_by_id(
         db: Database session
         application_id: ID của Application
         load_relationships: Load relationships (major_program, program_offering)
+        include_deleted: If True, include soft-deleted applications (default: False)
 
     Returns:
         Application hoặc None nếu không tìm thấy
     """
     stmt = select(models.Application).where(models.Application.id == application_id)
+
+    # Filter out soft-deleted applications by default
+    if not include_deleted:
+        stmt = stmt.where(models.Application.deleted_at.is_(None))
 
     if load_relationships:
         stmt = stmt.options(
@@ -117,6 +158,7 @@ async def update_application(
     db: AsyncSession,
     application_id: int,
     update_data: schemas.ApplicationUpdate,
+    current_user: Optional[models.User] = None,
 ) -> models.Application:
     """
     Cập nhật Application.
@@ -125,6 +167,7 @@ async def update_application(
         db: Database session
         application_id: ID của Application
         update_data: Dữ liệu cập nhật
+        current_user: User thực hiện update (for Socket.IO events)
 
     Returns:
         Application đã cập nhật
@@ -138,8 +181,16 @@ async def update_application(
         log.warning("Application not found", application_id=application_id)
         raise ResourceNotFoundError(f"Hồ sơ với ID {application_id} không tồn tại")
 
+    # Track old values for Socket.IO events
+    old_status = application.status
+    old_documents = application.documents
+
     # Cập nhật các trường (chỉ cập nhật nếu có trong update_data)
     update_dict = update_data.model_dump(exclude_unset=True)
+
+    # Track what changed
+    status_changed = False
+    documents_changed = False
 
     for field, value in update_dict.items():
         # Xử lý đặc biệt cho documents (convert Pydantic model sang dict)
@@ -148,6 +199,10 @@ async def update_application(
                 setattr(application, field, value.model_dump(exclude_none=True))
             else:
                 setattr(application, field, value)
+            documents_changed = True
+        elif field == "status":
+            setattr(application, field, value)
+            status_changed = True
         else:
             setattr(application, field, value)
 
@@ -174,6 +229,29 @@ async def update_application(
         updated_fields=list(update_dict.keys()),
     )
 
+    # === SOCKET.IO EVENTS: Emit events based on what changed ===
+    if current_user and application.officer_id:
+        # Emit status changed event
+        if status_changed and old_status != application.status:
+            await emit_application_status_changed(
+                application_id=application.id,
+                lead_id=application.lead_id,
+                officer_id=application.officer_id,
+                old_status=old_status,
+                new_status=application.status,
+                changed_by_username=current_user.username,
+            )
+
+        # Emit documents updated event
+        if documents_changed and old_documents != application.documents:
+            await emit_application_documents_updated(
+                application_id=application.id,
+                lead_id=application.lead_id,
+                officer_id=application.officer_id,
+                updated_by_username=current_user.username,
+                documents_summary="Documents checklist updated",
+            )
+
     return application
 
 
@@ -181,6 +259,7 @@ async def get_application_by_lead_id(
     db: AsyncSession,
     lead_id: int,
     load_relationships: bool = True,
+    include_deleted: bool = False,
 ) -> Optional[models.Application]:
     """
     Lấy Application theo Lead ID.
@@ -189,11 +268,16 @@ async def get_application_by_lead_id(
         db: Database session
         lead_id: ID của Lead
         load_relationships: Load relationships
+        include_deleted: If True, include soft-deleted applications (default: False)
 
     Returns:
         Application hoặc None nếu không tìm thấy
     """
     stmt = select(models.Application).where(models.Application.lead_id == lead_id)
+
+    # Filter out soft-deleted applications by default
+    if not include_deleted:
+        stmt = stmt.where(models.Application.deleted_at.is_(None))
 
     if load_relationships:
         stmt = stmt.options(
@@ -204,3 +288,52 @@ async def get_application_by_lead_id(
 
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
+
+
+async def delete_application(
+    db: AsyncSession,
+    application_id: int,
+    deleted_by: models.User,
+) -> models.Application:
+    """
+    Soft delete an Application (Admin only).
+
+    Args:
+        db: Database session
+        application_id: ID của Application cần xóa
+        deleted_by: User thực hiện xóa (Admin)
+
+    Returns:
+        Application đã được đánh dấu xóa
+
+    Raises:
+        ResourceNotFoundError: Nếu Application không tồn tại hoặc đã bị xóa
+    """
+    # Get application (exclude already deleted ones)
+    application = await get_application_by_id(
+        db, application_id, load_relationships=False, include_deleted=False
+    )
+
+    if not application:
+        log.warning("Application not found or already deleted", application_id=application_id)
+        raise ResourceNotFoundError(
+            f"Hồ sơ với ID {application_id} không tồn tại hoặc đã bị xóa"
+        )
+
+    # Mark as soft deleted
+    application.deleted_at = datetime.now(timezone.utc)
+    application.status = "deleted"
+
+    db.add(application)
+    await db.commit()
+    await db.refresh(application)
+
+    log.info(
+        "Application soft-deleted",
+        application_id=application_id,
+        deleted_by_user_id=deleted_by.id,
+        deleted_by_role=deleted_by.role,
+        deleted_by_username=deleted_by.username,
+    )
+
+    return application

@@ -6,6 +6,7 @@ Endpoints:
 - POST /api/leads/{lead_id}/applications - Tạo Application cho Lead
 - PUT /api/applications/{application_id} - Cập nhật Application
 - GET /api/applications/{application_id} - Lấy Application theo ID
+- DELETE /api/applications/{application_id} - Xóa Application (Admin only, soft delete)
 """
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -134,8 +135,51 @@ async def update_application(
             db=db,
             application_id=application_id,
             update_data=update_data,
+            current_user=current_user,
         )
         return application
+    except ResourceNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+
+@router.delete(
+    "/applications/{application_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Xóa hồ sơ tuyển sinh (Admin only)",
+)
+async def delete_application(
+    application_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = PermissionDep,
+):
+    """
+    Soft delete Application (Admin only).
+
+    **Chức năng:**
+    - Đánh dấu Application là đã xóa (soft delete)
+    - Chỉ Admin mới có quyền xóa
+    - Application đã xóa sẽ không hiển thị trong danh sách
+
+    **Quyền truy cập:**
+    - Admin: Có quyền xóa bất kỳ Application nào
+
+    **Lỗi:**
+    - 403: Không có quyền xóa (chỉ Admin)
+    - 404: Application không tồn tại hoặc đã bị xóa
+
+    **Lưu ý:**
+    - Đây là soft delete (deleted_at timestamp), không xóa vĩnh viễn
+    - Application đã xóa có thể phục hồi bởi Admin nếu cần
+    """
+    try:
+        await application_service.delete_application(
+            db=db,
+            application_id=application_id,
+            deleted_by=current_user,
+        )
+        return None
     except ResourceNotFoundError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -39,7 +39,7 @@ export function useCreateApplication(leadId: number) {
       return response.data;
     },
 
-    onSuccess: (newApplication) => {
+    onSuccess: () => {
       toast.success("Đã tạo hồ sơ tuyển sinh!", {
         description: "Bạn có thể bắt đầu điền thông tin hồ sơ",
       });

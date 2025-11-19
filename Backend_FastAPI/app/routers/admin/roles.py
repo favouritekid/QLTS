@@ -1357,7 +1357,7 @@ async def get_role_features(
 
 
 
-@router.post("/{role_name}/features/{feature_name}/toggle")
+@router.post("/{role_name}/features/toggle")
 async def toggle_role_feature(
     request: Request,
     role_name: str,
@@ -1372,7 +1372,7 @@ async def toggle_role_feature(
     making it easier to grant/revoke business-level permissions.
 
     Example:
-        POST /api/admin/roles/role:manager/features
+        POST /api/admin/roles/role:manager/features/toggle
         {
             "feature_id": "view_leads",
             "enabled": true
