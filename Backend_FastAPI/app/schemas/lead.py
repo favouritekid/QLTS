@@ -125,7 +125,8 @@ class Lead(LeadBase):
     assigned_officer: Optional[User] = None
     pipeline_stage: Optional[PipelineStage] = None
     consultation_status: Optional[ConsultationStatus] = None
-    application: Optional["Application"] = None  # Forward reference to Application
+    # Sử dụng ApplicationShallow để tránh cyclic reference (Lead -> Application -> Lead)
+    application: Optional["ApplicationShallow"] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -183,6 +184,23 @@ class ApplicationBase(BaseModel):
     program_offering_id: Optional[int] = None
     criterion_id: Optional[str] = Field(None, max_length=100)
     documents: Optional[ApplicationDocuments] = None
+
+
+class ApplicationShallow(ApplicationBase):
+    """Schema response cho Application khi được nested trong Lead (không có lead relationship để tránh vòng lặp)."""
+
+    id: int
+    lead_id: int
+    created_at: datetime
+    updated_at: datetime
+
+    # Legacy field
+    officer_id: Optional[int] = None
+
+    # Relationships (không có lead để tránh cyclic reference)
+    officer: Optional[User] = None
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ApplicationCreate(BaseModel):
