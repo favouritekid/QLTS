@@ -214,7 +214,7 @@ export default function LeadsPage() {
           if (lead.offering) {
             return (
               <div className="flex flex-col">
-                <span className="text-sm font-medium">{lead.offering.name || lead.offering.code}</span>
+                <span className="text-sm font-medium">{lead.offering.offering_type}</span>
               </div>
             );
           }

@@ -41,6 +41,7 @@ export const API_ENDPOINTS = {
     GET_MAJOR_PROGRAM: (id: number) => `/api/major-programs/${id}`,
 
     // Tier 2: ProgramOffering
+    ALL_OFFERINGS: "/api/program-offerings",
     LIST_OFFERINGS: (programId: number) => `/api/major-programs/${programId}/offerings`,
     GET_OFFERING: (offeringId: number) => `/api/offerings/${offeringId}`,
     GET_OFFERING_CURRENT_INFO: (offeringId: number) => `/api/offerings/${offeringId}/current-info`,

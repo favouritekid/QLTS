@@ -82,15 +82,19 @@ export function LeadInsightsTab({ insights }: LeadInsightsTabProps) {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            {Object.entries(insights.lead_score_breakdown).map(([key, value]) => (
-              <div key={key} className="space-y-1">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="capitalize">{key.replace(/_/g, " ")}</span>
-                  <span className="font-semibold">{value}/100</span>
+            {insights.lead_score_breakdown && Object.keys(insights.lead_score_breakdown).length > 0 ? (
+              Object.entries(insights.lead_score_breakdown).map(([key, value]) => (
+                <div key={key} className="space-y-1">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="capitalize">{key.replace(/_/g, " ")}</span>
+                    <span className="font-semibold">{value}/100</span>
+                  </div>
+                  <Progress value={value} className="h-2" />
                 </div>
-                <Progress value={value} className="h-2" />
-              </div>
-            ))}
+              ))
+            ) : (
+              <p className="text-muted-foreground text-sm">No score breakdown available</p>
+            )}
           </CardContent>
         </Card>
 

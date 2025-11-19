@@ -521,11 +521,11 @@ export interface OrganizationUnit {
  */
 export interface ProgramOffering {
   id: number
-  name: string
-  code: string
-  major_id: number
-  level: string
-  duration_months: number
+  program_id: number
+  offering_type: string
+  duration_semesters?: number | null
+  total_credits?: number | null
+  is_active: boolean
 }
 
 /**
