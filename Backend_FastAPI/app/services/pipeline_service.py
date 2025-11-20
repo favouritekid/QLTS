@@ -881,5 +881,59 @@ async def validate_status_transition(
     )
     result = await db.execute(query)
     transition = result.scalar_one_or_none()
-    
+
     return transition is not None
+
+
+async def get_allowed_next_statuses(
+    db: AsyncSession,
+    current_status_id: Optional[str]
+) -> List[models.ConsultationStatus]:
+    """
+    Lấy danh sách các trạng thái được phép chuyển đến từ trạng thái hiện tại.
+
+    Sử dụng bảng allowed_transitions để xác định workflow hợp lệ.
+    Nếu current_status_id là None (lead mới), trả về tất cả statuses.
+
+    Args:
+        db: AsyncSession
+        current_status_id: ID của trạng thái hiện tại (có thể None)
+
+    Returns:
+        Danh sách ConsultationStatus được phép chuyển đến
+    """
+    # Nếu chưa có status (lead mới), trả về tất cả statuses
+    if not current_status_id:
+        query = (
+            select(models.ConsultationStatus)
+            .order_by(
+                models.ConsultationStatus.display_order,
+                models.ConsultationStatus.name
+            )
+        )
+        result = await db.execute(query)
+        return list(result.scalars().all())
+
+    # Query các transitions được phép từ status hiện tại
+    query = (
+        select(models.ConsultationStatus)
+        .join(
+            models.AllowedTransition,
+            models.ConsultationStatus.id == models.AllowedTransition.to_status_id
+        )
+        .where(models.AllowedTransition.from_status_id == current_status_id)
+        .order_by(
+            models.ConsultationStatus.display_order,
+            models.ConsultationStatus.name
+        )
+    )
+
+    result = await db.execute(query)
+    allowed_statuses = list(result.scalars().all())
+
+    # Luôn cho phép giữ nguyên status hiện tại (để cập nhật notes, etc.)
+    current_status = await _get_status_by_id(db, current_status_id)
+    if current_status and current_status not in allowed_statuses:
+        allowed_statuses.insert(0, current_status)
+
+    return allowed_statuses

@@ -18,8 +18,8 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
-import { useConsultationStatuses } from "@/hooks/usePipeline";
-import { useAddConsultation } from "@/hooks/useLeads";
+import { useAllowedNextStatuses } from "@/hooks/usePipeline";
+import { useAddConsultation, useLead } from "@/hooks/useLeads";
 import type { ConsultationStatus, ConsultationCreate } from "@/types/lead.types";
 
 interface QuickDispositionProps {
@@ -39,7 +39,12 @@ const COMPLEX_STATUS_IDS = [
 const SCHEDULABLE_STATUS_IDS = ["hen_goi_lai", "tiem_nang"];
 
 export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
-  const { data: statuses = [], isLoading: statusesLoading, error, isError } = useConsultationStatuses();
+  // Get lead data to determine current consultation status
+  const { data: lead } = useLead(leadId);
+  const currentStatusId = lead?.consultation_status_id;
+
+  // Get allowed next statuses based on state machine
+  const { data: statuses = [], isLoading: statusesLoading, error, isError } = useAllowedNextStatuses(currentStatusId);
   const addConsultation = useAddConsultation();
 
   // Dialog state

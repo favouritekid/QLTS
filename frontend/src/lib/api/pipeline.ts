@@ -63,6 +63,33 @@ export async function getFullPipeline(
   return response.data
 }
 
+/**
+ * Get allowed next statuses from current status (state machine)
+ * Returns only valid next statuses based on workflow transitions
+ *
+ * @param currentStatusId - Current consultation status ID (null for new leads)
+ *
+ * @example
+ * ```ts
+ * // Get allowed next statuses from current status
+ * const nextStatuses = await pipelineApi.getAllowedNextStatuses('sts01')
+ *
+ * // Get all statuses for new lead (no current status)
+ * const allStatuses = await pipelineApi.getAllowedNextStatuses(null)
+ * ```
+ */
+export async function getAllowedNextStatuses(
+  currentStatusId: string | null
+): Promise<ConsultationStatus[]> {
+  const response = await api.get<ConsultationStatus[]>(
+    '/api/pipeline/allowed-next-statuses',
+    {
+      params: currentStatusId ? { current_status_id: currentStatusId } : {},
+    }
+  )
+  return response.data
+}
+
 // ============================================
 // PIPELINE STAGE OPERATIONS (Admin Only)
 // ============================================
@@ -440,6 +467,7 @@ export const pipelineApi = {
   // Public: Stages
   getStages,
   getFullPipeline,
+  getAllowedNextStatuses,
 
   // Admin: Stage Management
   createStage,

@@ -30,6 +30,8 @@ export const pipelineKeys = {
   fullPipeline: (params?: PipelineQueryParams) => [...pipelineKeys.all, "full", params] as const,
   stageLeads: (stageId: string) => [...pipelineKeys.all, "stageLeads", stageId] as const,
   consultationStatuses: () => [...pipelineKeys.all, "consultationStatuses"] as const,
+  allowedNextStatuses: (currentStatusId?: string | null) =>
+    [...pipelineKeys.all, "allowedNextStatuses", currentStatusId] as const,
   allowedTransitions: () => [...pipelineKeys.all, "allowedTransitions"] as const,
   stats: (params?: PipelineQueryParams) => [...pipelineKeys.all, "stats", params] as const,
 };
@@ -158,6 +160,32 @@ export function useConsultationStatuses() {
       return response.statuses || [];
     },
     staleTime: 1000 * 60 * 5, // 5 minutes
+    gcTime: 1000 * 60 * 10, // 10 minutes in cache
+  });
+}
+
+/**
+ * Get allowed next statuses from current status (state machine)
+ * Returns only valid transitions based on workflow configuration
+ *
+ * @param currentStatusId - Current consultation status ID (null/undefined for new leads)
+ *
+ * @example
+ * ```tsx
+ * // Get next allowed statuses for a lead with status 'sts01'
+ * const { data: nextStatuses } = useAllowedNextStatuses('sts01');
+ *
+ * // Get all statuses for new lead (no current status)
+ * const { data: allStatuses } = useAllowedNextStatuses(null);
+ * ```
+ */
+export function useAllowedNextStatuses(currentStatusId?: string | null) {
+  return useQuery<ConsultationStatus[], AxiosError<ApiErrorResponse>>({
+    queryKey: pipelineKeys.allowedNextStatuses(currentStatusId),
+    queryFn: async () => {
+      return await pipelineApi.getAllowedNextStatuses(currentStatusId || null);
+    },
+    staleTime: 1000 * 60 * 5, // 5 minutes (workflow rules don't change frequently)
     gcTime: 1000 * 60 * 10, // 10 minutes in cache
   });
 }
