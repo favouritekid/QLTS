@@ -906,10 +906,7 @@ async def get_allowed_next_statuses(
     if not current_status_id:
         query = (
             select(models.ConsultationStatus)
-            .order_by(
-                models.ConsultationStatus.display_order,
-                models.ConsultationStatus.name
-            )
+            .order_by(models.ConsultationStatus.name)
         )
         result = await db.execute(query)
         return list(result.scalars().all())
@@ -922,10 +919,7 @@ async def get_allowed_next_statuses(
             models.ConsultationStatus.id == models.AllowedTransition.to_status_id
         )
         .where(models.AllowedTransition.from_status_id == current_status_id)
-        .order_by(
-            models.ConsultationStatus.display_order,
-            models.ConsultationStatus.name
-        )
+        .order_by(models.ConsultationStatus.name)
     )
 
     result = await db.execute(query)
