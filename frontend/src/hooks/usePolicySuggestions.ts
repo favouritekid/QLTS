@@ -1,6 +1,7 @@
 // src/hooks/usePolicySuggestions.ts
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api/client";
+import { API_ENDPOINTS } from "@/lib/api/endpoints";
 
 interface PolicySuggestionsResponse {
   subjects: string[];
@@ -25,7 +26,7 @@ export function usePolicySuggestions() {
     queryKey: ["admin", "policies", "suggestions"],
     queryFn: async () => {
       const response = await api.get<PolicySuggestionsResponse>(
-        "/api/admin/policies/suggestions"
+        `${API_ENDPOINTS.ADMIN.PERMISSIONS.POLICIES}/suggestions`
       );
       return response.data;
     },

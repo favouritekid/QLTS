@@ -66,15 +66,15 @@ export const API_ENDPOINTS = {
       EXPORT_CSV_STREAM: "/api/admin/users/export-csv",
     },
     PERMISSIONS: {
-      POLICIES: "/api/admin/policies",
+      POLICIES: "/api/admin/roles/policies",
       ASSIGN_ROLE: "/api/admin/assign-role",
       REMOVE_ROLE: "/api/admin/assign-role", // DELETE method
       ROLES: "/api/admin/roles",
       TEMPLATES: "/api/admin/policy-templates",
-      BATCH: "/api/admin/policies/batch",
-      VALIDATE: "/api/admin/policies/validate",
-      APPLY_TEMPLATE: "/api/admin/policies/apply-template",
-      STATISTICS: "/api/admin/policies/statistics",
+      BATCH: "/api/admin/roles/policies/batch",
+      VALIDATE: "/api/admin/roles/policies/validate",
+      APPLY_TEMPLATE: "/api/admin/roles/policies/apply-template",
+      STATISTICS: "/api/admin/roles/policies/statistics",
     },
     // Organization Management (Admin Only)
     ORGANIZATION: {
