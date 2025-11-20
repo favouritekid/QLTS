@@ -39,6 +39,8 @@ class Lead(Base):
     assigned_at = Column(DateTime(timezone=True), nullable=True)
     # Soft delete support
     deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    # Quick Disposition: Next activity timestamp for bubble-up sorting
+    next_activity_at = Column(DateTime(timezone=True), nullable=True, index=True)
     # NEW 3-TIER ARCHITECTURE: Link to ProgramOffering instead of Major
     offering_id = Column(Integer, ForeignKey("program_offering.id", ondelete="SET NULL"), nullable=True, index=True)
     unit_id = Column(Integer, ForeignKey("organization_unit.id"), nullable=False)
@@ -94,6 +96,8 @@ class Consultation(Base):
         default=lambda: datetime.now(timezone.utc),
         index=True,
     )
+    # Quick Disposition: Scheduled follow-up time
+    scheduled_at = Column(DateTime(timezone=True), nullable=True, index=True)
     method = Column(String(50))
     notes = Column(Text)
     outcome = Column(String(50))

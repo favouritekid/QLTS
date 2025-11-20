@@ -98,6 +98,7 @@ export interface Lead {
   created_at: string // ISO datetime
   updated_at: string // ISO datetime
   assigned_at?: string | null // ISO datetime
+  next_activity_at?: string | null // ISO datetime - Quick Disposition bubble-up
 
   // Foreign Keys
   offering_id?: number | null
@@ -215,12 +216,12 @@ export interface Consultation {
  */
 export interface ConsultationCreate {
   consultation_date?: string // ISO datetime
-  scheduled_at?: string // ISO datetime
+  scheduled_at?: string | null // ISO datetime - for follow-up scheduling
   method?: ConsultationMethod
   notes?: string
   outcome?: ConsultationOutcome
   duration_minutes?: number
-  consultation_status_id?: string
+  status_id: string // Required - consultation status ID
 }
 
 /**

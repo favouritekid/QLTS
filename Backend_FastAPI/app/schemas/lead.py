@@ -25,11 +25,14 @@ class ConsultationBase(BaseModel):
 
 class ConsultationCreate(ConsultationBase):
     status_id: str
+    consultation_date: Optional[datetime] = None  # Optional, defaults to NOW
+    scheduled_at: Optional[datetime] = None  # Quick Disposition: follow-up time
 
 
 class Consultation(ConsultationBase):
     id: int
     consultation_date: datetime
+    scheduled_at: Optional[datetime] = None  # Quick Disposition: follow-up time
     officer_id: int
     consultation_status_id: Optional[str] = None
     officer: Optional[User] = None
@@ -120,6 +123,7 @@ class Lead(LeadBase):
     assigned_officer_id: Optional[int] = None
     consultation_status_id: Optional[str] = None
     pipeline_stage_id: Optional[str] = None
+    next_activity_at: Optional[datetime] = None  # Quick Disposition: bubble-up sorting
 
     offering: Optional[ProgramOffering] = None
     # THAY ĐỔI Ở ĐÂY: Sử dụng OrganizationUnitShallow

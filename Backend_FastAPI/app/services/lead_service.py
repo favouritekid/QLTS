@@ -5,7 +5,7 @@ from datetime import (
 from typing import List, Optional, Tuple
 
 import structlog
-from sqlalchemy import func, or_, select  # ✅ SỬA LỖI: Thêm 'desc' vào import và xóa comment
+from sqlalchemy import case, func, or_, select  # ✅ SỬA LỖI: Thêm 'desc' vào import và xóa comment
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -354,12 +354,37 @@ async def get_leads(
     if total_count == 0:
         return 0, []
 
-    # === Áp dụng sắp xếp ===
+    # === Áp dụng sắp xếp (Bubble Up Logic) ===
+    # Priority sorting: Overdue/Today activities bubble up to top
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+    # Create priority weight using CASE statement:
+    # Priority 0: Overdue (next_activity_at <= now) - Most urgent
+    # Priority 1: Today (next_activity_at is today but not yet due)
+    # Priority 2: Future or NULL - Less urgent
+    activity_priority = case(
+        (models.Lead.next_activity_at <= now, 0),  # Overdue
+        (models.Lead.next_activity_at.between(today_start, today_end), 1),  # Today
+        else_=2  # Future or NULL
+    )
+
+    # Default sort with bubble-up: priority first, then by sort_column
     sort_column = getattr(models.Lead, sort_by, models.Lead.created_at)
+
     if order.lower() == "desc":
-        leads_query = base_query.order_by(sort_column.desc())
+        leads_query = base_query.order_by(
+            activity_priority.asc(),  # Always prioritize urgent items first
+            models.Lead.next_activity_at.asc().nullslast(),  # Oldest/most urgent first
+            sort_column.desc()
+        )
     else:
-        leads_query = base_query.order_by(sort_column.asc())
+        leads_query = base_query.order_by(
+            activity_priority.asc(),  # Always prioritize urgent items first
+            models.Lead.next_activity_at.asc().nullslast(),  # Oldest/most urgent first
+            sort_column.asc()
+        )
 
     # === Áp dụng eager loading tối ưu và pagination ===
     leads_query = (
@@ -838,15 +863,23 @@ async def add_consultation(
             lead.pipeline_stage_id = new_status.stage_id
             # Giữ nguyên status (đây là field riêng, không phải consultation_status_id)
 
+            # Quick Disposition: Sync scheduled_at to lead.next_activity_at
+            if data.scheduled_at:
+                lead.next_activity_at = data.scheduled_at
+
             # Chuẩn bị dữ liệu để tạo Consultation
-            create_consult_data = data.model_dump(exclude={"status_id"})
+            create_consult_data = data.model_dump(exclude={"status_id", "consultation_date"})
             # (Đã xóa .strip() vì Pydantic xử lý)
+
+            # Handle consultation_date: use provided value or default to NOW
+            consultation_date = data.consultation_date or datetime.now(timezone.utc)
 
             # Tạo đối tượng Consultation mới
             new_consultation = models.Consultation(
                 lead_id=lead_id,
                 officer_id=officer_id,
                 consultation_status_id=new_status.id,  # Gán status ID cho consultation
+                consultation_date=consultation_date,
                 **create_consult_data,
             )
 

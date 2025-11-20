@@ -2,12 +2,57 @@
 "use client";
 
 import React from "react";
-import { Phone, Mail, UserPlus, Flame } from "lucide-react";
+import { Phone, Mail, UserPlus, Flame, Clock } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { format, isToday, isPast, parseISO } from "date-fns";
+import { vi } from "date-fns/locale";
 import type { Lead, LeadStatus } from "@/types/lead.types";
+
+// Activity status helpers
+type ActivityStatus = "overdue" | "today" | "future" | "none";
+
+const getActivityStatus = (nextActivityAt: string | null | undefined): ActivityStatus => {
+  if (!nextActivityAt) return "none";
+
+  const date = parseISO(nextActivityAt);
+  if (isPast(date)) return "overdue";
+  if (isToday(date)) return "today";
+  return "future";
+};
+
+const getActivityBadgeStyle = (status: ActivityStatus): string => {
+  switch (status) {
+    case "overdue":
+      return "bg-red-100 text-red-700 border-red-300";
+    case "today":
+      return "bg-yellow-100 text-yellow-700 border-yellow-300";
+    case "future":
+      return "bg-blue-50 text-blue-600 border-blue-200";
+    default:
+      return "";
+  }
+};
+
+const getActivityLabel = (status: ActivityStatus): string => {
+  switch (status) {
+    case "overdue":
+      return "Quá hạn";
+    case "today":
+      return "Hôm nay";
+    case "future":
+      return "Sắp tới";
+    default:
+      return "";
+  }
+};
 
 interface LeadListItemProps {
   lead: Lead;
@@ -80,6 +125,7 @@ export const LeadListItem = React.memo(function LeadListItem({
   onQuickAssign,
 }: LeadListItemProps) {
   const isHighScore = lead.lead_score >= 80;
+  const activityStatus = getActivityStatus(lead.next_activity_at);
 
   return (
     <div
@@ -87,7 +133,10 @@ export const LeadListItem = React.memo(function LeadListItem({
       className={cn(
         "group relative p-3 border-b cursor-pointer transition-all",
         "hover:bg-accent/50",
-        isSelected && "bg-accent border-l-2 border-l-primary"
+        isSelected && "bg-accent border-l-2 border-l-primary",
+        // Activity urgency indicators
+        !isSelected && activityStatus === "overdue" && "border-l-2 border-l-red-500 bg-red-50/30",
+        !isSelected && activityStatus === "today" && "border-l-2 border-l-yellow-500 bg-yellow-50/30"
       )}
     >
       <div className="flex items-start gap-3">
@@ -143,6 +192,32 @@ export const LeadListItem = React.memo(function LeadListItem({
               <Badge variant="outline" className="text-[10px] px-1.5 py-0">
                 {lead.offering.program?.name || lead.offering.offering_type}
               </Badge>
+            )}
+
+            {/* Activity Status Badge */}
+            {activityStatus !== "none" && lead.next_activity_at && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      "text-[10px] px-1.5 py-0",
+                      getActivityBadgeStyle(activityStatus)
+                    )}
+                  >
+                    <Clock className={cn(
+                      "h-2.5 w-2.5 mr-1",
+                      activityStatus === "overdue" && "animate-pulse"
+                    )} />
+                    {getActivityLabel(activityStatus)}
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>
+                    {format(parseISO(lead.next_activity_at), "dd/MM/yyyy HH:mm", { locale: vi })}
+                  </p>
+                </TooltipContent>
+              </Tooltip>
             )}
           </div>
         </div>
