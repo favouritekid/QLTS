@@ -119,14 +119,14 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
     defaultValues: isEdit && lead
       ? {
           full_name: lead.full_name,
-          email: lead.email,
+          email: lead.email || "",
           phone: lead.phone,
           phone2: lead.phone2 || null,
           source: lead.source,
-          education_level: lead.education_level,
-          gpa: lead.gpa,
-          location: lead.location,
-          offering_id: lead.offering_id,
+          education_level: lead.education_level || null,
+          gpa: lead.gpa ?? null,
+          location: lead.location || null,
+          offering_id: lead.offering_id ?? null,
           unit_id: lead.unit_id?.toString() || "",
         }
       : {
@@ -153,14 +153,14 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
     if (isEdit && lead) {
       form.reset({
         full_name: lead.full_name,
-        email: lead.email,
+        email: lead.email || "",
         phone: lead.phone,
         phone2: lead.phone2 || null,
         source: lead.source,
-        education_level: lead.education_level,
-        gpa: lead.gpa,
-        location: lead.location,
-        offering_id: lead.offering_id,
+        education_level: lead.education_level || null,
+        gpa: lead.gpa ?? null,
+        location: lead.location || null,
+        offering_id: lead.offering_id ?? null,
         unit_id: lead.unit_id?.toString() || "",
       });
     } else if (isCreate) {

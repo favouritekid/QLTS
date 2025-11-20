@@ -230,12 +230,14 @@ export function LeadDetailPanel({
               </div>
 
               {/* Email */}
-              <div className="flex items-center gap-3 text-sm">
-                <Mail className="h-4 w-4 text-muted-foreground shrink-0" />
-                <a href={`mailto:${lead.email}`} className="hover:underline truncate text-blue-600">
-                  {lead.email}
-                </a>
-              </div>
+              {lead.email && (
+                <div className="flex items-center gap-3 text-sm">
+                  <Mail className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <a href={`mailto:${lead.email}`} className="hover:underline truncate text-blue-600">
+                    {lead.email}
+                  </a>
+                </div>
+              )}
 
               {/* Location */}
               {lead.location && (

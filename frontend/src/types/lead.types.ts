@@ -84,7 +84,7 @@ export type AssignmentMethod =
 export interface Lead {
   id: number
   full_name: string
-  email: string
+  email?: string | null  // Email is optional - not all leads have email
   phone: string
   phone2?: string | null  // Số điện thoại phụ
   source: LeadSource
@@ -122,7 +122,7 @@ export interface Lead {
  */
 export interface LeadCreate {
   full_name: string
-  email: string
+  email?: string | null  // Email is optional - not all leads have email
   phone: string
   phone2?: string | null  // Số điện thoại phụ
   source: LeadSource
