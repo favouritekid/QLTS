@@ -21,6 +21,7 @@ from .lead import (
     Consultation,
     ConsultationBase,
     ConsultationCreate,
+    ConsultationUpdate,
     Lead,
     LeadAction,
     LeadBase,

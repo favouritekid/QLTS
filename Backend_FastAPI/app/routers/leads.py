@@ -208,6 +208,37 @@ async def get_lead_insights(
     return await insights_service.get_lead_insights(db, lead, timeline)
 
 
+@router.put(
+    "/{lead_id}/consultations/{consultation_id}", response_model=schemas.Consultation
+)
+async def update_a_consultation(
+    consultation_id: int,
+    consultation_in: schemas.ConsultationUpdate,
+    lead: models.Lead = LeadAccessDep,  # <-- IDOR Check
+    current_user: models.User = PermissionDep,  # <-- Casbin Check
+    db: AsyncSession = Depends(database.get_db),
+):
+    """
+    Cập nhật một ghi chú tư vấn (Admin: any consultation, Officer: most recent only).
+
+    Permission Rules:
+    - Admin: Can update any consultation
+    - Officer: Can only update the most recent consultation to maintain consultation chain integrity
+    - Other roles: Cannot update consultations
+
+    Business Logic:
+    - If status_id is changed and this is the most recent consultation, lead status will be updated
+    - Changes are logged in LeadStatusHistory
+    - Real-time Socket.IO event is emitted to all connected clients
+
+    This prevents Officers from breaking the consultation chain by editing historical consultations.
+    """
+    result = await lead_service.update_consultation(
+        db, lead.id, consultation_id, consultation_in, current_user
+    )
+    return result
+
+
 @router.delete(
     "/{lead_id}/consultations/{consultation_id}", status_code=status.HTTP_204_NO_CONTENT
 )

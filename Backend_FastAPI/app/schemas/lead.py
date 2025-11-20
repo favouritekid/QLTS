@@ -29,6 +29,19 @@ class ConsultationCreate(ConsultationBase):
     scheduled_at: Optional[datetime] = None  # Quick Disposition: follow-up time
 
 
+class ConsultationUpdate(BaseModel):
+    """
+    Schema for updating a consultation.
+    All fields are optional - only provided fields will be updated.
+    """
+    method: Optional[str] = None
+    notes: Optional[str] = Field(None, strip_whitespace=True)
+    outcome: Optional[str] = None
+    duration_minutes: Optional[int] = None
+    status_id: Optional[str] = None
+    scheduled_at: Optional[datetime] = None
+
+
 class Consultation(ConsultationBase):
     id: int
     consultation_date: datetime

@@ -511,7 +511,55 @@ export function useAddConsultation() {
 }
 
 /**
- * Delete a consultation
+ * Update a consultation (admin: any, officer: most recent only)
+ *
+ * @example
+ * ```tsx
+ * const updateConsultation = useUpdateConsultation();
+ * updateConsultation.mutate({
+ *   leadId: 123,
+ *   consultationId: 456,
+ *   data: { notes: "Updated notes", status_id: "sts02" }
+ * });
+ * ```
+ */
+export function useUpdateConsultation() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    Consultation,
+    AxiosError<ApiErrorResponse>,
+    { leadId: number; consultationId: number; data: ConsultationUpdate }
+  >({
+    mutationFn: async ({ leadId, consultationId, data }) => {
+      return await leadsApi.updateConsultation(leadId, consultationId, data);
+    },
+
+    onSuccess: (consultation, { leadId }) => {
+      toast.success("Consultation updated successfully!");
+
+      // Invalidate lead detail, timeline, and pipeline (if status changed)
+      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(leadId) });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(leadId) });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+    },
+
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e: any) => e.msg).join(", ")
+            : "Failed to update consultation";
+      toast.error("Error", { description: message });
+    },
+  });
+}
+
+/**
+ * Delete a consultation (admin: any, officer: most recent only)
  *
  * @example
  * ```tsx
