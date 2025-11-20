@@ -6,6 +6,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   Clock,
   User,
   FileText,
@@ -16,6 +22,8 @@ import {
   UserPlus,
   Video,
   Trash2,
+  Edit,
+  MoreVertical,
 } from "lucide-react";
 import { useLeadTimeline, useDeleteConsultation } from "@/hooks/useLeads";
 import { format, isToday, isYesterday, parseISO } from "date-fns";
@@ -45,41 +53,41 @@ const getEventConfig = (eventType: string, method?: string) => {
       case "phone":
         return {
           icon: Phone,
-          color: "text-blue-600",
-          bgColor: "bg-blue-100",
-          ringColor: "ring-blue-200",
+          color: "text-slate-600",
+          bgColor: "bg-slate-100",
+          ringColor: "ring-slate-200",
           label: "Cuộc gọi",
         };
       case "email":
         return {
           icon: Mail,
-          color: "text-yellow-600",
-          bgColor: "bg-yellow-100",
-          ringColor: "ring-yellow-200",
+          color: "text-slate-600",
+          bgColor: "bg-slate-100",
+          ringColor: "ring-slate-200",
           label: "Email",
         };
       case "video":
         return {
           icon: Video,
-          color: "text-purple-600",
-          bgColor: "bg-purple-100",
-          ringColor: "ring-purple-200",
+          color: "text-slate-600",
+          bgColor: "bg-slate-100",
+          ringColor: "ring-slate-200",
           label: "Video call",
         };
       case "in_person":
         return {
           icon: User,
-          color: "text-emerald-600",
-          bgColor: "bg-emerald-100",
-          ringColor: "ring-emerald-200",
+          color: "text-slate-600",
+          bgColor: "bg-slate-100",
+          ringColor: "ring-slate-200",
           label: "Gặp trực tiếp",
         };
       default:
         return {
           icon: MessageSquare,
-          color: "text-cyan-600",
-          bgColor: "bg-cyan-100",
-          ringColor: "ring-cyan-200",
+          color: "text-slate-600",
+          bgColor: "bg-slate-100",
+          ringColor: "ring-slate-200",
           label: "Tư vấn",
         };
     }
@@ -89,9 +97,9 @@ const getEventConfig = (eventType: string, method?: string) => {
   if (eventType === "assignment") {
     return {
       icon: UserPlus,
-      color: "text-orange-600",
-      bgColor: "bg-orange-100",
-      ringColor: "ring-orange-200",
+      color: "text-slate-600",
+      bgColor: "bg-slate-100",
+      ringColor: "ring-slate-200",
       label: "Phân công",
     };
   }
@@ -99,9 +107,9 @@ const getEventConfig = (eventType: string, method?: string) => {
   // Default
   return {
     icon: Clock,
-    color: "text-gray-600",
-    bgColor: "bg-gray-100",
-    ringColor: "ring-gray-200",
+    color: "text-slate-600",
+    bgColor: "bg-slate-100",
+    ringColor: "ring-slate-200",
     label: "Hoạt động",
   };
 };
@@ -216,9 +224,9 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
             </div>
 
             {/* Events for this date - with connecting line */}
-            <div className="relative pl-8 space-y-6">
+            <div className="relative pl-6 space-y-6">
               {/* Connecting line */}
-              <div className="absolute left-[19px] top-3 bottom-3 w-0.5 bg-gradient-to-b from-border via-border to-transparent" />
+              <div className="absolute left-[15px] top-3 bottom-3 w-0.5 bg-gradient-to-b from-border via-border to-transparent" />
 
               {groupedTimeline[dateKey].map((event, index) => {
                 const eventType = event.type || "unknown";
@@ -232,7 +240,7 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
                 );
                 const Icon = config.icon;
 
-                // Generate title based on event type
+                // Generate title and subtitle
                 let title = "";
                 let subtitle = "";
                 let actorName = "";
@@ -240,7 +248,14 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
                 if (isConsultation) {
                   const statusName = eventData.consultation_status?.name || "Tư vấn";
                   title = statusName;
-                  subtitle = eventData.notes || "";
+
+                  // Only show notes if it's not the auto-generated "Ghi nhận nhanh: {status}" format
+                  const autoNotePattern = `Ghi nhận nhanh: ${statusName}`;
+                  const notes = eventData.notes || "";
+                  if (notes && notes !== autoNotePattern) {
+                    subtitle = notes;
+                  }
+
                   actorName = eventData.officer?.full_name || "";
                 } else if (isAssignment) {
                   title = "Phân công lead";
@@ -249,16 +264,16 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
                 }
 
                 return (
-                  <div key={index} className="relative flex gap-4 group">
-                    {/* Timeline Dot (Icon) */}
+                  <div key={index} className="relative flex gap-3 group">
+                    {/* Timeline Dot (Icon) - smaller and neutral */}
                     <div
                       className={cn(
-                        "relative z-10 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-2 border-white shadow-sm transition-all group-hover:scale-110 ring-2",
+                        "relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 border-white shadow-sm transition-all ring-1",
                         config.bgColor,
                         config.ringColor
                       )}
                     >
-                      <Icon className={cn("h-5 w-5", config.color)} />
+                      <Icon className={cn("h-3.5 w-3.5", config.color)} />
                     </div>
 
                     {/* Content Block */}
@@ -301,56 +316,60 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
                             </div>
                           </div>
 
-                          {/* Actions */}
+                          {/* Actions Menu */}
                           {isConsultation && eventData.id && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 w-7 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
-                              onClick={() => handleDeleteConsultation(eventData.id)}
-                            >
-                              <Trash2 className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
-                            </Button>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 w-7 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                                >
+                                  <MoreVertical className="h-4 w-4 text-muted-foreground" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuItem
+                                  onClick={() => {
+                                    // TODO: Implement edit functionality
+                                    console.log("Edit consultation", eventData.id);
+                                  }}
+                                >
+                                  <Edit className="h-4 w-4 mr-2" />
+                                  Sửa
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  className="text-destructive focus:text-destructive"
+                                  onClick={() => handleDeleteConsultation(eventData.id)}
+                                >
+                                  <Trash2 className="h-4 w-4 mr-2" />
+                                  Xóa
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           )}
                         </div>
 
-                        {/* Body: Description/Notes */}
+                        {/* Body: Description/Notes - only if not redundant */}
                         {subtitle && (
-                          <div className="text-sm text-muted-foreground leading-relaxed pl-6 mb-3">
+                          <div className="text-sm text-muted-foreground leading-relaxed mb-3">
                             <div className="flex items-start gap-2">
-                              <FileText className="h-4 w-4 shrink-0 mt-0.5 opacity-50" />
+                              <FileText className="h-3.5 w-3.5 shrink-0 mt-0.5 opacity-40" />
                               <p className="flex-1">{subtitle}</p>
                             </div>
                           </div>
                         )}
 
-                        {/* Footer: Metadata */}
-                        {isConsultation && (
-                          <div className="flex flex-wrap gap-2 pl-6">
-                            {/* Scheduled follow-up */}
-                            {eventData.scheduled_at && (
-                              <Badge
-                                variant="outline"
-                                className="text-xs font-normal gap-1 border-blue-200 bg-blue-50 text-blue-700"
-                              >
-                                <Calendar className="h-3 w-3" />
-                                Hẹn: {format(parseISO(eventData.scheduled_at), "dd/MM HH:mm")}
-                              </Badge>
-                            )}
-
-                            {/* Consultation status badge */}
-                            {eventData.consultation_status && (
-                              <Badge
-                                variant="outline"
-                                className="text-xs font-normal"
-                                style={{
-                                  borderColor: eventData.consultation_status.color_code,
-                                  color: eventData.consultation_status.color_code,
-                                }}
-                              >
-                                {eventData.consultation_status.name}
-                              </Badge>
-                            )}
+                        {/* Footer: Metadata - only scheduled_at */}
+                        {isConsultation && eventData.scheduled_at && (
+                          <div className="flex flex-wrap gap-2">
+                            <Badge
+                              variant="outline"
+                              className="text-xs font-normal gap-1 border-blue-200 bg-blue-50 text-blue-700"
+                            >
+                              <Calendar className="h-3 w-3" />
+                              Hẹn: {format(parseISO(eventData.scheduled_at), "dd/MM HH:mm")}
+                            </Badge>
                           </div>
                         )}
                       </div>
