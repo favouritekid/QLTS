@@ -29,6 +29,7 @@ import { useLead, useLeadTimeline } from "@/hooks/useLeads";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { LeadConsultationsTab } from "@/components/leads/LeadConsultationsTab";
 import { ConsultationDialog } from "@/components/leads/ConsultationDialog";
+import { QuickDisposition } from "@/components/leads/QuickDisposition";
 import type { Lead, LeadStatus } from "@/types/lead.types";
 
 interface LeadDetailSheetProps {
@@ -203,11 +204,16 @@ export function LeadDetailSheet({
             </div>
 
             {/* Tabs */}
-            <Tabs defaultValue="timeline" className="mt-4">
-              <TabsList className="grid w-full grid-cols-2">
+            <Tabs defaultValue="quick" className="mt-4">
+              <TabsList className="grid w-full grid-cols-3">
+                <TabsTrigger value="quick">Quick</TabsTrigger>
                 <TabsTrigger value="timeline">Timeline</TabsTrigger>
-                <TabsTrigger value="consultations">Consultations</TabsTrigger>
+                <TabsTrigger value="consultations">History</TabsTrigger>
               </TabsList>
+
+              <TabsContent value="quick" className="mt-4">
+                <QuickDisposition leadId={lead.id} />
+              </TabsContent>
 
               <TabsContent value="timeline" className="mt-4">
                 <LeadTimelineTab leadId={lead.id} timeline={timeline} />

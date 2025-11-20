@@ -2,8 +2,8 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
-import { format, addDays, setHours, setMinutes } from "date-fns";
-import { Calendar as CalendarIcon, Clock, Loader2 } from "lucide-react";
+import { format, addDays, parseISO } from "date-fns";
+import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -15,12 +15,6 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import { Calendar } from "@/components/ui/calendar";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { useConsultationStatuses } from "@/hooks/usePipeline";
@@ -77,29 +71,10 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState<ConsultationStatus | null>(null);
 
-  // Form state for complex dialog
-  const [consultationDate, setConsultationDate] = useState<Date>(new Date());
-  const [consultationTime, setConsultationTime] = useState<string>(
-    format(new Date(), "HH:mm")
-  );
+  // Form state for complex dialog - using ISO string format for simplicity
+  const [consultationDateTime, setConsultationDateTime] = useState<string>("");
   const [notes, setNotes] = useState("");
-  const [scheduledDate, setScheduledDate] = useState<Date | undefined>(
-    addDays(new Date(), 1)
-  );
-  const [scheduledTime, setScheduledTime] = useState<string>("09:00");
-
-  // Group statuses by stage for better organization
-  const groupedStatuses = useMemo(() => {
-    const groups: Record<string, ConsultationStatus[]> = {};
-    statuses.forEach((status) => {
-      const stage = status.stage_id || "other";
-      if (!groups[stage]) {
-        groups[stage] = [];
-      }
-      groups[stage].push(status);
-    });
-    return groups;
-  }, [statuses]);
+  const [scheduledDateTime, setScheduledDateTime] = useState<string>("");
 
   // Handle simple 1-click disposition
   const handleSimpleDisposition = async (status: ConsultationStatus) => {
@@ -122,13 +97,14 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
   const handleComplexDisposition = (status: ConsultationStatus) => {
     setSelectedStatus(status);
     setNotes("");
-    setConsultationDate(new Date());
-    setConsultationTime(format(new Date(), "HH:mm"));
+
+    // Set default consultation time to now
+    const now = new Date();
+    setConsultationDateTime(format(now, "yyyy-MM-dd'T'HH:mm"));
 
     // Default scheduled time: tomorrow at 9:00 AM
-    const tomorrow = addDays(new Date(), 1);
-    setScheduledDate(tomorrow);
-    setScheduledTime("09:00");
+    const tomorrow = addDays(now, 1);
+    setScheduledDateTime(format(tomorrow, "yyyy-MM-dd") + "T09:00");
 
     setDialogOpen(true);
   };
@@ -137,27 +113,15 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
   const handleSubmitComplex = async () => {
     if (!selectedStatus) return;
 
-    // Parse consultation datetime
-    const [consultHours, consultMinutes] = consultationTime.split(":").map(Number);
-    const consultDateTime = setMinutes(
-      setHours(consultationDate, consultHours),
-      consultMinutes
-    );
-
     // Parse scheduled datetime (if applicable)
     let scheduledAt: string | null = null;
-    if (SCHEDULABLE_STATUSES.includes(selectedStatus.id) && scheduledDate) {
-      const [schedHours, schedMinutes] = scheduledTime.split(":").map(Number);
-      const schedDateTime = setMinutes(
-        setHours(scheduledDate, schedHours),
-        schedMinutes
-      );
-      scheduledAt = schedDateTime.toISOString();
+    if (SCHEDULABLE_STATUSES.includes(selectedStatus.id) && scheduledDateTime) {
+      scheduledAt = new Date(scheduledDateTime).toISOString();
     }
 
     const payload: ConsultationCreate = {
       status_id: selectedStatus.id,
-      consultation_date: consultDateTime.toISOString(),
+      consultation_date: consultationDateTime ? new Date(consultationDateTime).toISOString() : undefined,
       method: "phone",
       notes: notes || `Ghi nhận: ${selectedStatus.name}`,
       scheduled_at: scheduledAt,
@@ -233,44 +197,13 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
           <div className="space-y-4">
             {/* Consultation Date/Time */}
             <div className="space-y-2">
-              <Label>Thời gian tương tác</Label>
-              <div className="flex gap-2">
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button
-                      variant="outline"
-                      className={cn(
-                        "flex-1 justify-start text-left font-normal",
-                        !consultationDate && "text-muted-foreground"
-                      )}
-                    >
-                      <CalendarIcon className="mr-2 h-4 w-4" />
-                      {consultationDate ? (
-                        format(consultationDate, "dd/MM/yyyy")
-                      ) : (
-                        "Chọn ngày"
-                      )}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0" align="start">
-                    <Calendar
-                      mode="single"
-                      selected={consultationDate}
-                      onSelect={(date) => date && setConsultationDate(date)}
-                      initialFocus
-                    />
-                  </PopoverContent>
-                </Popover>
-                <div className="relative w-24">
-                  <Clock className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    type="time"
-                    value={consultationTime}
-                    onChange={(e) => setConsultationTime(e.target.value)}
-                    className="pl-8"
-                  />
-                </div>
-              </div>
+              <Label htmlFor="consultation-datetime">Thời gian tương tác</Label>
+              <Input
+                id="consultation-datetime"
+                type="datetime-local"
+                value={consultationDateTime}
+                onChange={(e) => setConsultationDateTime(e.target.value)}
+              />
             </div>
 
             {/* Notes */}
@@ -289,45 +222,13 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
             {/* Scheduled Follow-up (only for schedulable statuses) */}
             {selectedStatus && SCHEDULABLE_STATUSES.includes(selectedStatus.id) && (
               <div className="space-y-2">
-                <Label>Lịch hẹn tiếp theo</Label>
-                <div className="flex gap-2">
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="outline"
-                        className={cn(
-                          "flex-1 justify-start text-left font-normal",
-                          !scheduledDate && "text-muted-foreground"
-                        )}
-                      >
-                        <CalendarIcon className="mr-2 h-4 w-4" />
-                        {scheduledDate ? (
-                          format(scheduledDate, "dd/MM/yyyy")
-                        ) : (
-                          "Chọn ngày"
-                        )}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start">
-                      <Calendar
-                        mode="single"
-                        selected={scheduledDate}
-                        onSelect={setScheduledDate}
-                        disabled={(date) => date < new Date()}
-                        initialFocus
-                      />
-                    </PopoverContent>
-                  </Popover>
-                  <div className="relative w-24">
-                    <Clock className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      type="time"
-                      value={scheduledTime}
-                      onChange={(e) => setScheduledTime(e.target.value)}
-                      className="pl-8"
-                    />
-                  </div>
-                </div>
+                <Label htmlFor="scheduled-datetime">Lịch hẹn tiếp theo</Label>
+                <Input
+                  id="scheduled-datetime"
+                  type="datetime-local"
+                  value={scheduledDateTime}
+                  onChange={(e) => setScheduledDateTime(e.target.value)}
+                />
                 <p className="text-xs text-muted-foreground">
                   Lead sẽ được ưu tiên hiển thị khi đến thời gian hẹn
                 </p>

@@ -92,7 +92,7 @@ export default function LeadsCommandCenter() {
     return leadsPage.leads.filter(
       (lead) => lead.lead_score >= scoreRange[0] && lead.lead_score <= scoreRange[1]
     );
-  }, [leadsPage?.leads, scoreRange]);
+  }, [leadsPage, scoreRange]);
 
   // =====================================================================
   // HANDLERS
