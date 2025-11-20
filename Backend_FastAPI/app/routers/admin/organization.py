@@ -218,3 +218,79 @@ async def delete_existing_offering(
     """(Admin only) Xóa loại hình đào tạo (soft delete)."""
     await organization_service.delete_program_offering(db, offering_id)
     return None
+
+
+# ============================================================================
+# OFFERING ACADEMIC INFO CRUD (Level 3 - Thông tin tuyển sinh)
+# ============================================================================
+
+
+@router.post(
+    "/offerings/{offering_id}/academic-info",
+    response_model=schemas.OfferingAcademicInfo,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_new_academic_info(
+    offering_id: int,
+    academic_info_in: schemas.OfferingAcademicInfoCreate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Tạo thông tin tuyển sinh mới cho loại hình đào tạo (Level 3).
+
+    Mỗi loại hình có thể có nhiều năm học khác nhau.
+    Returns 400 nếu thông tin đã tồn tại cho offering/year này.
+    """
+    # Ensure offering_id in path matches offering_id in body
+    if academic_info_in.offering_id != offering_id:
+        raise BadRequest(detail="offering_id in path must match offering_id in request body")
+
+    return await organization_service.create_academic_info(
+        db,
+        academic_info_in=academic_info_in,
+        created_by_user_id=current_admin.id
+    )
+
+
+@router.patch(
+    "/academic-info/{academic_info_id}",
+    response_model=schemas.OfferingAcademicInfo,
+)
+async def update_existing_academic_info(
+    academic_info_id: int,
+    academic_info_in: schemas.OfferingAcademicInfoUpdate,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Cập nhật thông tin tuyển sinh.
+
+    Supports partial updates.
+    Returns 404 nếu academic info không tồn tại.
+    """
+    return await organization_service.update_academic_info(
+        db,
+        academic_info_id=academic_info_id,
+        academic_info_in=academic_info_in,
+        updated_by_user_id=current_admin.id
+    )
+
+
+@router.delete(
+    "/academic-info/{academic_info_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_existing_academic_info(
+    academic_info_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Xóa thông tin tuyển sinh.
+
+    Note: Đây là hard delete. Nên cân nhắc đánh dấu unpublished thay vì xóa.
+    Returns 404 nếu academic info không tồn tại.
+    """
+    await organization_service.delete_academic_info(db, academic_info_id=academic_info_id)
+    return None

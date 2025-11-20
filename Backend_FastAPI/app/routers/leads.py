@@ -3,13 +3,16 @@ import io
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+import structlog
 
 from .. import database, models, schemas
 from ..core import deps
 from ..services import insights_service, lead_service
+
+log = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["Leads"])
 
@@ -52,15 +55,29 @@ async def get_all_leads(
     order: str = Query("desc", description="Sort order (asc or desc)"),
     # === KẾT THÚC THÊM THAM SỐ ===
 ):
-    """Lấy danh sách Leads (có phân trang, filter, search, sort)."""
+    """
+    Lấy danh sách Leads (có phân trang, filter, search, sort).
+
+    **Role-based filtering:**
+    - Admin/Manager: Xem tất cả leads
+    - Officer: Chỉ xem leads được gán cho mình
+    """
     skip = (page - 1) * page_size
+
+    # === ROLE-BASED FILTERING ===
+    # Officers can only see their assigned leads
+    effective_officer_id = assigned_officer_id
+    if current_user.role == "officer":
+        # Force filter by current officer, ignore any passed assigned_officer_id
+        effective_officer_id = current_user.id
+
     total, leads = await lead_service.get_leads(
         db,
         skip=skip,
         limit=page_size,
         # === ⭐️ TRUYỀN THAM SỐ VÀO SERVICE ===
         status=status,
-        assigned_officer_id=assigned_officer_id,
+        assigned_officer_id=effective_officer_id,
         unit_id=unit_id,
         offering_id=offering_id,
         source=source,
@@ -572,3 +589,75 @@ async def bulk_assign_leads(
     )
     await db.commit()
     return result
+
+
+@router.post("/import", response_model=schemas.LeadImportResult)
+async def officer_import_leads(
+    file: UploadFile = File(
+        ..., description="CSV or Excel file containing lead data (.csv, .xlsx)"
+    ),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = PermissionDep,
+):
+    """
+    Import leads từ file CSV hoặc Excel (cho Officer/Admin/Manager).
+
+    **Khác với Admin import:**
+    - Leads được tự động gán cho officer đang import
+    - Officer chỉ có thể import vào unit của mình
+
+    **Required columns:** full_name, email, phone, source
+    **Optional columns:** phone2, offering_id, education_level, gpa, location
+
+    **Note:** unit_id sẽ được tự động set thành unit của officer.
+    """
+    log.info(
+        "Received officer lead import request",
+        user_id=current_user.id,
+        role=current_user.role,
+        filename=file.filename,
+    )
+
+    # Validate officer has a unit
+    if not current_user.unit_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You must be assigned to a unit before importing leads."
+        )
+
+    # Read file content
+    try:
+        content = await file.read()
+    except Exception as e:
+        log.error(
+            "Failed to read uploaded file",
+            filename=file.filename,
+            error=str(e),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to read file: {str(e)}"
+        )
+
+    # Call service with auto-assign parameters
+    try:
+        result = await lead_service.import_leads_from_file_content(
+            file_content=content,
+            filename=file.filename or "unknown",
+            db=db,
+            default_unit_id=current_user.unit_id,  # Force unit to officer's unit
+            auto_assign_officer_id=current_user.id,  # Auto-assign to officer
+        )
+        return result
+
+    except ValueError as e:
+        log.warning(
+            "Lead import validation failed",
+            user_id=current_user.id,
+            filename=file.filename,
+            error=str(e),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )

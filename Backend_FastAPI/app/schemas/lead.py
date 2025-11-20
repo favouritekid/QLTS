@@ -25,11 +25,14 @@ class ConsultationBase(BaseModel):
 
 class ConsultationCreate(ConsultationBase):
     status_id: str
+    consultation_date: Optional[datetime] = None  # Optional, defaults to NOW
+    scheduled_at: Optional[datetime] = None  # Quick Disposition: follow-up time
 
 
 class Consultation(ConsultationBase):
     id: int
     consultation_date: datetime
+    scheduled_at: Optional[datetime] = None  # Quick Disposition: follow-up time
     officer_id: int
     consultation_status_id: Optional[str] = None
     officer: Optional[User] = None
@@ -84,6 +87,7 @@ class LeadBase(BaseModel):
     full_name: str = Field(..., min_length=1, max_length=255, strip_whitespace=True)
     email: EmailStr  # EmailStr đã tự động strip và validate
     phone: str = Field(..., min_length=1, max_length=20, strip_whitespace=True)
+    phone2: Optional[str] = Field(None, max_length=20, strip_whitespace=True)  # Số điện thoại phụ
     source: str = Field(..., min_length=1, max_length=50, strip_whitespace=True)
     unit_id: int
     offering_id: Optional[int] = None
@@ -95,6 +99,7 @@ class LeadCreate(LeadBase):
 
 class LeadUpdate(BaseModel):
     full_name: Optional[str] = None
+    phone2: Optional[str] = Field(None, max_length=20, strip_whitespace=True)
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
     source: Optional[str] = None
@@ -118,6 +123,7 @@ class Lead(LeadBase):
     assigned_officer_id: Optional[int] = None
     consultation_status_id: Optional[str] = None
     pipeline_stage_id: Optional[str] = None
+    next_activity_at: Optional[datetime] = None  # Quick Disposition: bubble-up sorting
 
     offering: Optional[ProgramOffering] = None
     # THAY ĐỔI Ở ĐÂY: Sử dụng OrganizationUnitShallow
@@ -125,7 +131,8 @@ class Lead(LeadBase):
     assigned_officer: Optional[User] = None
     pipeline_stage: Optional[PipelineStage] = None
     consultation_status: Optional[ConsultationStatus] = None
-    application: Optional["Application"] = None  # Forward reference to Application
+    # Sử dụng ApplicationShallow để tránh cyclic reference (Lead -> Application -> Lead)
+    application: Optional["ApplicationShallow"] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -183,6 +190,23 @@ class ApplicationBase(BaseModel):
     program_offering_id: Optional[int] = None
     criterion_id: Optional[str] = Field(None, max_length=100)
     documents: Optional[ApplicationDocuments] = None
+
+
+class ApplicationShallow(ApplicationBase):
+    """Schema response cho Application khi được nested trong Lead (không có lead relationship để tránh vòng lặp)."""
+
+    id: int
+    lead_id: int
+    created_at: datetime
+    updated_at: datetime
+
+    # Legacy field
+    officer_id: Optional[int] = None
+
+    # Relationships (không có lead để tránh cyclic reference)
+    officer: Optional[User] = None
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ApplicationCreate(BaseModel):

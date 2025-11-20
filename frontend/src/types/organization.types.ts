@@ -86,6 +86,15 @@ export interface ProgramOffering {
   total_credits?: number | null; // Tổng số tín chỉ
   is_active: boolean; // Soft delete flag
 
+  // Nested program info for display
+  program?: {
+    id: number;
+    name: string;
+    degree_level: string;
+    code: string;
+    is_active: boolean;
+  } | null;
+
   // ✅ Removed academic_info_history - should be loaded on-demand
   // Use dedicated endpoints to fetch academic info when needed
 }

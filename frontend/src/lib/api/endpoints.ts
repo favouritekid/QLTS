@@ -41,6 +41,7 @@ export const API_ENDPOINTS = {
     GET_MAJOR_PROGRAM: (id: number) => `/api/major-programs/${id}`,
 
     // Tier 2: ProgramOffering
+    ALL_OFFERINGS: "/api/program-offerings",
     LIST_OFFERINGS: (programId: number) => `/api/major-programs/${programId}/offerings`,
     GET_OFFERING: (offeringId: number) => `/api/offerings/${offeringId}`,
     GET_OFFERING_CURRENT_INFO: (offeringId: number) => `/api/offerings/${offeringId}/current-info`,
@@ -59,7 +60,7 @@ export const API_ENDPOINTS = {
       UPDATE: (id: number) => `/api/admin/users/${id}`,
       DELETE: (id: number) => `/api/admin/users/${id}`,
       SET_PASSWORD: (id: number) => `/api/admin/users/${id}/set-password`,
-      BULK_ACTION: "/api/admin/users/bulk-action",
+      BULK_ACTION: "/api/admin/users/bulk",
       ROLES: (id: number) => `/api/admin/users/${id}/roles`,
       EXPORT: "/api/admin/users/export",
       EXPORT_CSV_STREAM: "/api/admin/users/export-csv",

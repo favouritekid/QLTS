@@ -86,6 +86,7 @@ export interface Lead {
   full_name: string
   email: string
   phone: string
+  phone2?: string | null  // Số điện thoại phụ
   source: LeadSource
   status: LeadStatus
   lead_score: number
@@ -97,6 +98,7 @@ export interface Lead {
   created_at: string // ISO datetime
   updated_at: string // ISO datetime
   assigned_at?: string | null // ISO datetime
+  next_activity_at?: string | null // ISO datetime - Quick Disposition bubble-up
 
   // Foreign Keys
   offering_id?: number | null
@@ -122,6 +124,7 @@ export interface LeadCreate {
   full_name: string
   email: string
   phone: string
+  phone2?: string | null  // Số điện thoại phụ
   source: LeadSource
   education_level?: EducationLevel | null
   gpa?: number | null
@@ -137,6 +140,7 @@ export interface LeadUpdate {
   full_name?: string
   email?: string
   phone?: string
+  phone2?: string | null  // Số điện thoại phụ
   source?: LeadSource
   status?: LeadStatus
   education_level?: EducationLevel | null
@@ -212,12 +216,12 @@ export interface Consultation {
  */
 export interface ConsultationCreate {
   consultation_date?: string // ISO datetime
-  scheduled_at?: string // ISO datetime
+  scheduled_at?: string | null // ISO datetime - for follow-up scheduling
   method?: ConsultationMethod
   notes?: string
   outcome?: ConsultationOutcome
   duration_minutes?: number
-  consultation_status_id?: string
+  status_id: string // Required - consultation status ID
 }
 
 /**
@@ -514,15 +518,27 @@ export interface OrganizationUnit {
 }
 
 /**
+ * Major Program (shallow for nested use)
+ */
+export interface MajorProgramShallow {
+  id: number
+  name: string
+  degree_level: string
+  code: string
+  is_active: boolean
+}
+
+/**
  * Program Offering
  */
 export interface ProgramOffering {
   id: number
-  name: string
-  code: string
-  major_id: number
-  level: string
-  duration_months: number
+  program_id: number
+  offering_type: string
+  duration_semesters?: number | null
+  total_credits?: number | null
+  is_active: boolean
+  program?: MajorProgramShallow | null
 }
 
 /**

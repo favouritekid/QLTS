@@ -209,11 +209,21 @@ export function ProgramOfferingDialog({
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      {offeringTypes.map((type) => (
-                        <SelectItem key={type.id} value={type.name}>
-                          {type.name}
+                      {offeringTypesLoading ? (
+                        <SelectItem value="loading" disabled>
+                          Đang tải...
                         </SelectItem>
-                      ))}
+                      ) : offeringTypes.length === 0 ? (
+                        <SelectItem value="empty" disabled>
+                          Chưa có loại hình nào. Vui lòng tạo trong Cấu hình hệ thống.
+                        </SelectItem>
+                      ) : (
+                        offeringTypes.map((type) => (
+                          <SelectItem key={type.id} value={type.name}>
+                            {type.name}
+                          </SelectItem>
+                        ))
+                      )}
                     </SelectContent>
                   </Select>
                   <FormDescription>

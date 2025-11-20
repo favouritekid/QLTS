@@ -134,3 +134,54 @@ class ConfigOfferingType(Base):
 
     def __repr__(self):
         return f"<ConfigOfferingType {self.code}: {self.name}>"
+
+
+class ConfigDocumentType(Base):
+    """
+    Cấu hình Loại tài liệu tuyển sinh.
+
+    Stores standardized document types for admission like:
+    - Học bạ
+    - Bằng tốt nghiệp
+    - Giấy khai sinh
+    - CCCD/CMND
+
+    Provides dropdown options for admission document requirements.
+    """
+    __tablename__ = "config_document_type"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(
+        String(50),
+        unique=True,
+        nullable=False,
+        index=True,
+        comment="Mã định danh (vd: 'hoc_ba', 'bang_tot_nghiep')"
+    )
+    name = Column(
+        String(100),
+        unique=True,
+        nullable=False,
+        comment="Tên hiển thị (vd: 'Học bạ', 'Bằng tốt nghiệp')"
+    )
+    description = Column(
+        String(500),
+        nullable=True,
+        comment="Mô tả chi tiết về loại tài liệu"
+    )
+    display_order = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="Thứ tự hiển thị trong dropdown (nhỏ hơn = cao hơn)"
+    )
+    is_active = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        index=True,
+        comment="Soft delete flag"
+    )
+
+    def __repr__(self):
+        return f"<ConfigDocumentType {self.code}: {self.name}>"

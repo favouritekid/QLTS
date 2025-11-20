@@ -5,7 +5,7 @@ from datetime import (
 from typing import List, Optional, Tuple
 
 import structlog
-from sqlalchemy import func, or_, select  # ✅ SỬA LỖI: Thêm 'desc' vào import và xóa comment
+from sqlalchemy import case, func, or_, select  # ✅ SỬA LỖI: Thêm 'desc' vào import và xóa comment
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -219,7 +219,9 @@ async def get_lead_by_id(db: AsyncSession, lead_id: int, include_deleted: bool =
     query = (
         select(models.Lead)
         .options(
-            selectinload(models.Lead.offering),
+            selectinload(models.Lead.offering).options(
+                selectinload(models.ProgramOffering.program)  # Eager load program for name display
+            ),
             selectinload(models.Lead.unit).options(
                 selectinload(models.OrganizationUnit.parent),
                 selectinload(models.OrganizationUnit.children),
@@ -228,7 +230,9 @@ async def get_lead_by_id(db: AsyncSession, lead_id: int, include_deleted: bool =
             selectinload(models.Lead.assigned_officer),
             selectinload(models.Lead.pipeline_stage),
             selectinload(models.Lead.consultation_status),
-            selectinload(models.Lead.application),  # Fix MissingGreenlet: Eager load application
+            selectinload(models.Lead.application).options(
+                selectinload(models.Application.officer)
+            ),  # Fix MissingGreenlet: Eager load application and its officer
             # Load sâu consultations và logs để dùng cho timeline/insights
             selectinload(models.Lead.consultations).options(
                 joinedload(models.Consultation.officer),
@@ -264,12 +268,16 @@ async def get_lead_by_id_shallow(db: AsyncSession, lead_id: int, include_deleted
     query = (
         select(models.Lead)
         .options(
-            selectinload(models.Lead.offering),
+            selectinload(models.Lead.offering).options(
+                selectinload(models.ProgramOffering.program)  # Eager load program for name display
+            ),
             selectinload(models.Lead.unit), # <--- Load unit (thường là cần)
             selectinload(models.Lead.assigned_officer),
             selectinload(models.Lead.pipeline_stage),
             selectinload(models.Lead.consultation_status),
-            selectinload(models.Lead.application),  # Fix MissingGreenlet: Eager load application
+            selectinload(models.Lead.application).options(
+                selectinload(models.Application.officer)
+            ),  # Fix MissingGreenlet: Eager load application and its officer
         )
         .where(models.Lead.id == lead_id)
     )
@@ -346,17 +354,44 @@ async def get_leads(
     if total_count == 0:
         return 0, []
 
-    # === Áp dụng sắp xếp ===
+    # === Áp dụng sắp xếp (Bubble Up Logic) ===
+    # Priority sorting: Overdue/Today activities bubble up to top
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+    # Create priority weight using CASE statement:
+    # Priority 0: Overdue (next_activity_at <= now) - Most urgent
+    # Priority 1: Today (next_activity_at is today but not yet due)
+    # Priority 2: Future or NULL - Less urgent
+    activity_priority = case(
+        (models.Lead.next_activity_at <= now, 0),  # Overdue
+        (models.Lead.next_activity_at.between(today_start, today_end), 1),  # Today
+        else_=2  # Future or NULL
+    )
+
+    # Default sort with bubble-up: priority first, then by sort_column
     sort_column = getattr(models.Lead, sort_by, models.Lead.created_at)
+
     if order.lower() == "desc":
-        leads_query = base_query.order_by(sort_column.desc())
+        leads_query = base_query.order_by(
+            activity_priority.asc(),  # Always prioritize urgent items first
+            models.Lead.next_activity_at.asc().nullslast(),  # Oldest/most urgent first
+            sort_column.desc()
+        )
     else:
-        leads_query = base_query.order_by(sort_column.asc())
+        leads_query = base_query.order_by(
+            activity_priority.asc(),  # Always prioritize urgent items first
+            models.Lead.next_activity_at.asc().nullslast(),  # Oldest/most urgent first
+            sort_column.asc()
+        )
 
     # === Áp dụng eager loading tối ưu và pagination ===
     leads_query = (
         leads_query.options(
-            selectinload(models.Lead.offering),
+            selectinload(models.Lead.offering).options(
+                selectinload(models.ProgramOffering.program)  # Eager load program for name display
+            ),
             selectinload(models.Lead.unit).options(
                 selectinload(models.OrganizationUnit.parent),
                 selectinload(models.OrganizationUnit.major_programs),
@@ -364,7 +399,9 @@ async def get_leads(
             selectinload(models.Lead.assigned_officer),
             selectinload(models.Lead.pipeline_stage),
             selectinload(models.Lead.consultation_status),
-            selectinload(models.Lead.application),  # Fix MissingGreenlet: Eager load application
+            selectinload(models.Lead.application).options(
+                selectinload(models.Application.officer)
+            ),  # Fix MissingGreenlet: Eager load application and its officer
         )
         .offset(skip)
         .limit(limit)
@@ -383,20 +420,38 @@ async def create_lead(db: AsyncSession, lead_in: schemas.LeadCreate) -> models.L
     from ..celery_utils import process_automatic_lead_assignment_task
 
     try:
-        # Kiểm tra trùng lặp email + unit_id
+        # Kiểm tra trùng lặp email hoặc phone trong cùng unit
+        # Build phone conditions
+        phone_conditions = [models.Lead.phone == lead_in.phone]
+        if lead_in.phone2:
+            phone_conditions.append(models.Lead.phone == lead_in.phone2)
+            phone_conditions.append(models.Lead.phone2 == lead_in.phone)
+            phone_conditions.append(models.Lead.phone2 == lead_in.phone2)
+
         existing_lead_query = (
             select(models.Lead)
             .where(
-                models.Lead.email == lead_in.email,
                 models.Lead.unit_id == lead_in.unit_id,
+                models.Lead.deleted_at.is_(None),  # Exclude soft-deleted
+                or_(
+                    models.Lead.email == lead_in.email,
+                    *phone_conditions  # Check all phone combinations
+                )
             )
             .with_for_update()  # Khóa để tránh race condition khi tạo
         )
         existing_lead_result = await db.execute(existing_lead_query)
-        if existing_lead_result.scalar_one_or_none():
-            raise DuplicateResourceError(
-                detail="Lead with this email already exists in the unit."
-            )
+        existing_lead = existing_lead_result.scalar_one_or_none()
+        if existing_lead:
+            # Determine which field caused the duplicate
+            if existing_lead.email == lead_in.email:
+                raise DuplicateResourceError(
+                    detail="Lead with this email already exists in the unit."
+                )
+            else:
+                raise DuplicateResourceError(
+                    detail="Lead with this phone number already exists in the unit."
+                )
 
         # Chuẩn bị dữ liệu và tạo đối tượng Lead
         create_data = lead_in.model_dump()
@@ -808,15 +863,23 @@ async def add_consultation(
             lead.pipeline_stage_id = new_status.stage_id
             # Giữ nguyên status (đây là field riêng, không phải consultation_status_id)
 
+            # Quick Disposition: Sync scheduled_at to lead.next_activity_at
+            if data.scheduled_at:
+                lead.next_activity_at = data.scheduled_at
+
             # Chuẩn bị dữ liệu để tạo Consultation
-            create_consult_data = data.model_dump(exclude={"status_id"})
+            create_consult_data = data.model_dump(exclude={"status_id", "consultation_date"})
             # (Đã xóa .strip() vì Pydantic xử lý)
+
+            # Handle consultation_date: use provided value or default to NOW
+            consultation_date = data.consultation_date or datetime.now(timezone.utc)
 
             # Tạo đối tượng Consultation mới
             new_consultation = models.Consultation(
                 lead_id=lead_id,
                 officer_id=officer_id,
                 consultation_status_id=new_status.id,  # Gán status ID cho consultation
+                consultation_date=consultation_date,
                 **create_consult_data,
             )
 
@@ -1473,6 +1536,8 @@ async def import_leads_from_file_content(
     file_content: bytes,
     filename: str,
     db: AsyncSession,
+    default_unit_id: Optional[int] = None,  # Force all leads to this unit
+    auto_assign_officer_id: Optional[int] = None,  # Auto-assign to this officer
 ) -> schemas.LeadImportResult:
     """
     Import leads from CSV or Excel file content.
@@ -1622,12 +1687,16 @@ async def import_leads_from_file_content(
 
             cleaned_data["source"] = str(row_data.get("source", "")).strip()
 
-            # Convert 'unit_id' to int
-            unit_id_val = row_data.get("unit_id")
-            if pd.notna(unit_id_val):
-                cleaned_data["unit_id"] = int(float(unit_id_val))
+            # Convert 'unit_id' to int (or use default if provided)
+            if default_unit_id:
+                # Override with default unit (for officer import)
+                cleaned_data["unit_id"] = default_unit_id
             else:
-                cleaned_data["unit_id"] = None
+                unit_id_val = row_data.get("unit_id")
+                if pd.notna(unit_id_val):
+                    cleaned_data["unit_id"] = int(float(unit_id_val))
+                else:
+                    cleaned_data["unit_id"] = None
 
         except (ValueError, TypeError, Exception) as e:
             validation_errors_for_row.append(f"Type conversion error: {e}")
@@ -1668,8 +1737,15 @@ async def import_leads_from_file_content(
             lead_dict["status"] = initial_status_id
             lead_dict["consultation_status_id"] = initial_status_id
             lead_dict["pipeline_stage_id"] = initial_stage_id
-            lead_dict["assigned_officer_id"] = None
-            lead_dict["assigned_at"] = None
+
+            # Auto-assign to officer if specified
+            if auto_assign_officer_id:
+                lead_dict["assigned_officer_id"] = auto_assign_officer_id
+                lead_dict["assigned_at"] = datetime.now(timezone.utc)
+                lead_dict["status"] = "assigned"  # Update status to assigned
+            else:
+                lead_dict["assigned_officer_id"] = None
+                lead_dict["assigned_at"] = None
 
             leads_to_insert.append(lead_dict)
 

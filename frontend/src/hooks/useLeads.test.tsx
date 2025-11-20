@@ -357,7 +357,7 @@ describe("useLeads Hook", () => {
           data: {
             scheduled_at: "2025-01-15T10:00:00",
             notes: "Initial consultation",
-            consultation_status_id: "scheduled",
+            status_id: "scheduled",
           },
         });
 

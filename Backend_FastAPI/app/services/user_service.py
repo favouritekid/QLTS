@@ -482,6 +482,11 @@ async def get_users(
         "status": models.User.status,
     }
 
+    # Integer filters need type conversion (query params come as strings)
+    integer_filters = {
+        "unit_id": models.User.unit_id,
+    }
+
     # ✅ SECURITY FIX: Search DoS Prevention (CVSS 7.5 HIGH)
     # Old code used ILIKE '%term%' which caused full table scan (500ms per query)
     # New code uses PostgreSQL Full-Text Search with GIN index (2ms per query)
@@ -490,6 +495,14 @@ async def get_users(
         if key in allowed_filters and value:
             values_to_filter = [v.strip() for v in value.split(",")]
             query = query.filter(allowed_filters[key].in_(values_to_filter))
+        elif key in integer_filters and value:
+            # Convert string values to integers for integer columns
+            try:
+                int_values = [int(v.strip()) for v in value.split(",")]
+                query = query.filter(integer_filters[key].in_(int_values))
+            except ValueError:
+                # Invalid integer value - skip this filter
+                log.warning(f"Invalid integer value for filter {key}: {value}")
         elif key == "search" and value:
             # ✅ NEW: Use full-text search with search_vector column
             # Convert spaces to AND operator for multi-word search
@@ -753,7 +766,21 @@ async def update_profile(
 async def delete_user(db: AsyncSession, user_id: int):
     """Xóa một user. Ném ResourceNotFound nếu không tìm thấy."""
     try:
-        user_to_delete = await db.get(models.User, user_id)
+        # ✅ FIX MissingGreenlet: Eager load cascade-delete relationships
+        # Without this, SQLAlchemy tries to lazy-load during cascade delete,
+        # which fails in async mode with "greenlet_spawn has not been called"
+        stmt = (
+            select(models.User)
+            .where(models.User.id == user_id)
+            .options(
+                selectinload(models.User.sessions),
+                selectinload(models.User.unit_assignments),
+                selectinload(models.User.notification_preference),
+            )
+        )
+        result = await db.execute(stmt)
+        user_to_delete = result.scalar_one_or_none()
+
         if not user_to_delete:
             raise ResourceNotFoundError(detail=f"User with id {user_id} not found.")
 
@@ -1099,7 +1126,15 @@ async def perform_bulk_action(
             )
             raise BadRequest(detail=f"Unsupported bulk action: {action}.")
 
+        # ✅ FIX MissingGreenlet: Eager load cascade-delete relationships for delete action
+        # Without this, SQLAlchemy tries to lazy-load during cascade delete
         query = select(models.User).where(models.User.id.in_(user_ids))
+        if action == "delete":
+            query = query.options(
+                selectinload(models.User.sessions),
+                selectinload(models.User.unit_assignments),
+                selectinload(models.User.notification_preference),
+            )
         users_to_process_result = await db.execute(query)
         users_to_process = users_to_process_result.scalars().all()
 

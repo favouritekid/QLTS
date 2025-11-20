@@ -41,7 +41,7 @@ import { useConsultationStatuses } from "@/hooks/usePipeline";
 // Validation schema
 const consultationSchema = z.object({
   scheduled_at: z.string().min(1, "Scheduled date/time is required"),
-  consultation_status_id: z.string({ message: "Status is required" }),
+  status_id: z.string().min(1, "Status is required"),
   notes: z
     .string()
     .max(1000, "Notes must be less than 1000 characters")
@@ -68,7 +68,7 @@ export function ConsultationDialog({
     resolver: zodResolver(consultationSchema),
     defaultValues: {
       scheduled_at: "",
-      consultation_status_id: undefined,
+      status_id: "",
       notes: "",
     },
   });
@@ -85,9 +85,10 @@ export function ConsultationDialog({
       {
         leadId,
         data: {
-          scheduled_at: data.scheduled_at,
-          consultation_status_id: data.consultation_status_id,
+          scheduled_at: data.scheduled_at || null,
+          status_id: data.status_id,
           notes: data.notes,
+          method: "phone",
         },
       },
       {
@@ -135,7 +136,7 @@ export function ConsultationDialog({
 
             <FormField
               control={form.control}
-              name="consultation_status_id"
+              name="status_id"
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>Status *</FormLabel>

@@ -224,6 +224,23 @@ export function useProgramOfferings(programId: number) {
 }
 
 /**
+ * Get all program offerings (flat list for dropdowns)
+ */
+export function useAllProgramOfferings(activeOnly: boolean = true) {
+  return useQuery<ProgramOffering[], AxiosError<ApiErrorResponse>>({
+    queryKey: [...organizationKeys.offerings(), "all", { activeOnly }],
+    queryFn: async () => {
+      const response = await api.get<ProgramOffering[]>(
+        API_ENDPOINTS.ORGANIZATION.ALL_OFFERINGS,
+        { params: { is_active: activeOnly || undefined } }
+      );
+      return response.data;
+    },
+    staleTime: 1000 * 60 * 5, // 5 minutes
+  });
+}
+
+/**
  * Get a single offering by ID
  */
 export function useProgramOffering(id: number) {

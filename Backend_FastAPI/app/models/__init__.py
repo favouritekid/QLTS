@@ -7,6 +7,7 @@ from .base import Base
 # Config models
 from .config import (
     ConfigDegreeLevel,
+    ConfigDocumentType,
     ConfigOfferingType,
     LeadScoringConfig,
     OfficerAssignmentConfig,
@@ -49,6 +50,7 @@ __all__ = [
     "Base",
     # Config
     "ConfigDegreeLevel",
+    "ConfigDocumentType",
     "ConfigOfferingType",
     "LeadScoringConfig",
     "OfficerAssignmentConfig",

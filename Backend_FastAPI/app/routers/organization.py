@@ -201,15 +201,18 @@ async def get_all_program_offerings(
     Dùng cho các Dropdown chọn Offering.
     """
     from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
     from .. import models
 
-    query = select(models.ProgramOffering)
-    
+    query = select(models.ProgramOffering).options(
+        selectinload(models.ProgramOffering.program)  # Eager load program for name display
+    )
+
     if is_active is not None:
         query = query.where(models.ProgramOffering.is_active == is_active)
-        
-    query = query.order_by(models.ProgramOffering.name).offset(skip).limit(limit)
-    
+
+    query = query.order_by(models.ProgramOffering.offering_type).offset(skip).limit(limit)
+
     result = await db.execute(query)
     return result.scalars().all()
 

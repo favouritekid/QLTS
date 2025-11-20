@@ -35,7 +35,7 @@ import {
 } from "@/components/ui/select";
 
 import { useCreateLead, useUpdateLead } from "@/hooks/useLeads";
-import { useOrganizationUnits } from "@/hooks/useOrganization";
+import { useOrganizationUnits, useAllProgramOfferings } from "@/hooks/useOrganization";
 import type { Lead } from "@/types/lead.types";
 
 // Validation schema
@@ -50,6 +50,12 @@ const leadSchema = z.object({
     .min(1, "Phone number is required")
     .max(20, "Phone number must be less than 20 characters")
     .regex(/^[0-9+\-\s()]+$/, "Invalid phone number format"),
+  phone2: z
+    .string()
+    .max(20, "Phone number must be less than 20 characters")
+    .regex(/^[0-9+\-\s()]*$/, "Invalid phone number format")
+    .optional()
+    .nullable(),
   source: z.enum([
     "website",
     "referral",
@@ -95,6 +101,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
   const createMutation = useCreateLead();
   const updateMutation = useUpdateLead();
   const { data: units, isLoading: unitsLoading } = useOrganizationUnits();
+  const { data: offerings = [], isLoading: offeringsLoading } = useAllProgramOfferings(true);
 
   const isCreate = mode === "create";
   const isEdit = mode === "edit";
@@ -106,6 +113,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
           full_name: lead.full_name,
           email: lead.email,
           phone: lead.phone,
+          phone2: lead.phone2 || null,
           source: lead.source,
           education_level: lead.education_level,
           gpa: lead.gpa,
@@ -117,6 +125,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
           full_name: "",
           email: "",
           phone: "",
+          phone2: null,
           source: "website" as const,
           education_level: null,
           gpa: null,
@@ -138,6 +147,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
         full_name: lead.full_name,
         email: lead.email,
         phone: lead.phone,
+        phone2: lead.phone2 || null,
         source: lead.source,
         education_level: lead.education_level,
         gpa: lead.gpa,
@@ -150,6 +160,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
         full_name: "",
         email: "",
         phone: "",
+        phone2: null,
         source: "website" as const,
         education_level: null,
         gpa: null,
@@ -249,6 +260,25 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                 />
               </div>
 
+              <FormField
+                control={form.control}
+                name="phone2"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Secondary Phone</FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder="0909123456"
+                        {...field}
+                        value={field.value ?? ""}
+                      />
+                    </FormControl>
+                    <FormDescription>Optional secondary phone number</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
               <div className="grid grid-cols-2 gap-4">
                 <FormField
                   control={form.control}
@@ -307,6 +337,38 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                   )}
                 />
               </div>
+
+              <FormField
+                control={form.control}
+                name="offering_id"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Program Offering</FormLabel>
+                    <Select
+                      onValueChange={(value) => field.onChange(value === "none" ? null : parseInt(value, 10))}
+                      value={field.value?.toString() || "none"}
+                      disabled={offeringsLoading}
+                    >
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select offering (optional)" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="none">None</SelectItem>
+                        {offerings.map((offering) => (
+                          <SelectItem key={offering.id} value={offering.id.toString()}>
+                            {offering.program?.name || offering.offering_type}
+                            {offering.program && ` (${offering.offering_type})`}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormDescription>The program/offering the lead is interested in</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
             </div>
 
             {/* Academic Information */}

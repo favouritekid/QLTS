@@ -21,6 +21,7 @@ class OrganizationUnitType(str, Enum):
 
     Để thêm loại mới: thêm vào enum này và update frontend UnitDialog.tsx
     """
+    TRUONG = "Trường"
     PHONG_BAN = "Phòng ban"
     TRUNG_TAM = "Trung tâm"
     KHOA = "Khoa"
@@ -140,6 +141,8 @@ class ProgramOfferingUpdate(BaseModel):
 class ProgramOffering(ProgramOfferingBase):
     id: int
     program_id: int
+    # Include program name for display (using forward reference)
+    program: Optional["MajorProgramShallow"] = None
     # ✅ Removed academic_info_history to prevent MissingGreenlet error
     # Frontend should load academic info on-demand using dedicated endpoints
     # This avoids loading 30,000+ historical records unnecessarily
@@ -168,6 +171,16 @@ class MajorProgramUpdate(BaseModel):
     unit_id: Optional[int] = Field(None, gt=0)
     is_active: Optional[bool] = None
     # 'code' (Mã ngành) không cho phép cập nhật
+
+
+# Schema "Shallow" cho MajorProgram (dùng trong ProgramOffering để tránh vòng lặp)
+class MajorProgramShallow(BaseModel):
+    id: int
+    name: str
+    degree_level: str
+    code: str
+    is_active: bool
+    model_config = ConfigDict(from_attributes=True)
 
 
 class MajorProgram(MajorProgramBase):
@@ -403,6 +416,38 @@ class ConfigOfferingType(ConfigOfferingTypeBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+# --- ConfigDocumentType (Loại tài liệu tuyển sinh) ---
+
+class ConfigDocumentTypeBase(BaseModel):
+    """Base schema for document type configuration."""
+    code: str = Field(..., min_length=1, max_length=50, description="Unique code (e.g., 'hoc_ba')")
+    name: str = Field(..., min_length=1, max_length=100, description="Display name (e.g., 'Học bạ')")
+    description: Optional[str] = Field(None, max_length=500, description="Detailed description")
+    display_order: int = Field(default=0, description="Display order in dropdown (lower = higher priority)")
+    is_active: bool = Field(default=True, description="Soft delete flag")
+
+
+class ConfigDocumentTypeCreate(ConfigDocumentTypeBase):
+    """Schema for creating a new document type."""
+    pass
+
+
+class ConfigDocumentTypeUpdate(BaseModel):
+    """Schema for updating a document type."""
+    code: Optional[str] = Field(None, min_length=1, max_length=50)
+    name: Optional[str] = Field(None, min_length=1, max_length=100)
+    description: Optional[str] = Field(None, max_length=500)
+    display_order: Optional[int] = None
+    is_active: Optional[bool] = None
+
+
+class ConfigDocumentType(ConfigDocumentTypeBase):
+    """Full schema for document type (includes ID)."""
+    id: int = Field(..., description="Primary key")
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 # --- Distribution Schemas ---
 class DistributionRuleBase(BaseModel):
     offering_id: int
@@ -427,3 +472,6 @@ class DistributionRuleResponse(DistributionRuleBase):
 
     class Config:
         from_attributes = True
+
+# Resolve forward references
+ProgramOffering.model_rebuild()

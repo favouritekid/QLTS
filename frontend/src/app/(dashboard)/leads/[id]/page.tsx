@@ -13,6 +13,7 @@ import {
   Phone,
   MapPin,
   Trash2,
+  FileText,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -39,6 +40,7 @@ import { LeadInfoTab } from "@/components/leads/LeadInfoTab";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { LeadConsultationsTab } from "@/components/leads/LeadConsultationsTab";
 import { LeadInsightsTab } from "@/components/leads/LeadInsightsTab";
+import { LeadApplicationTab } from "@/components/leads/LeadApplicationTab";
 import { BackButton } from "@/components/common/BackButton";
 import { Breadcrumbs } from "@/components/common/Breadcrumbs";
 import type { LeadStatus } from "@/types/lead.types";
@@ -234,8 +236,12 @@ export default function LeadDetailPage() {
 
       {/* Tabs */}
       <Tabs defaultValue="info" className="space-y-4">
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="info">Information</TabsTrigger>
+          <TabsTrigger value="application" className="flex items-center gap-1">
+            <FileText className="h-4 w-4" />
+            Hồ sơ
+          </TabsTrigger>
           <TabsTrigger value="timeline">Timeline</TabsTrigger>
           <TabsTrigger value="consultations">Consultations</TabsTrigger>
           <TabsTrigger value="insights">AI Insights</TabsTrigger>
@@ -243,6 +249,10 @@ export default function LeadDetailPage() {
 
         <TabsContent value="info">
           <LeadInfoTab lead={lead} />
+        </TabsContent>
+
+        <TabsContent value="application">
+          <LeadApplicationTab lead={lead} />
         </TabsContent>
 
         <TabsContent value="timeline">

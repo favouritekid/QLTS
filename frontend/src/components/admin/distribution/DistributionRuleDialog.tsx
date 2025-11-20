@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
-import { Loader2 } from "lucide-react";
+import { Loader2, ChevronRight } from "lucide-react";
 
 import {
   Dialog,
@@ -29,13 +29,22 @@ import {
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+
+// Import existing hooks for component reuse
+import {
+  useOrganizationUnits,
+  useDegreeLevels,
+  flattenOrganizationTree,
+} from "@/hooks/useOrganization";
 
 // Schema validation
 const formSchema = z.object({
@@ -63,55 +72,105 @@ interface DistributionRuleDialogProps {
   rule: DistributionRule | null;
 }
 
+// Helper type for hierarchical offering display
+interface OfferingOption {
+  id: number;
+  displayName: string;
+  degreeLevel: string;
+  majorName: string;
+  offeringType: string;
+}
+
 export function DistributionRuleDialog({ open, onOpenChange, rule }: DistributionRuleDialogProps) {
   const queryClient = useQueryClient();
   const isEditing = !!rule;
 
-  // === 🔥 TỐI ƯU: TÁI SỬ DỤNG API CÓ SẴN (REUSE) ===
+  // === REUSE EXISTING HOOKS ===
 
-  interface Offering {
-    id: number;
-    name: string;
-  }
+  // 1. Fetch organization units using existing hook (includes major_programs with offerings)
+  const { data: units = [], isLoading: isLoadingUnits } = useOrganizationUnits();
 
-  interface Unit {
-    id: number;
-    name: string;
-  }
+  // 2. Fetch degree levels for grouping
+  const { data: degreeLevels = [], isLoading: isLoadingDegreeLevels } = useDegreeLevels(true);
 
-  // 1. Fetch Offerings (Reuse API /program-offerings)
-  const { data: offerings, isLoading: isLoadingOfferings } = useQuery<Offering[]>({
-    queryKey: ["organization", "offerings", "all"],
-    queryFn: async () => {
-      // Gọi API với limit lớn để giả lập "Get All"
-      const res = await api.get("/api/organization/program-offerings", {
-        params: { skip: 0, limit: 1000 },
+  // Flatten units for dropdown with hierarchy indication
+  const flattenedUnits = useMemo(() => {
+    return flattenOrganizationTree(units);
+  }, [units]);
+
+  // Extract all programs from units tree
+  // useOrganizationUnits returns units with major_programs that include offerings
+  const allPrograms = useMemo(() => {
+    const programs: Array<{
+      id: number;
+      name: string;
+      degree_level: string;
+      offerings: Array<{
+        id: number;
+        offering_type: string;
+      }>;
+    }> = [];
+
+    const extractPrograms = (unitList: typeof units) => {
+      unitList.forEach(unit => {
+        if (unit.major_programs) {
+          programs.push(...unit.major_programs);
+        }
+        if (unit.children) {
+          extractPrograms(unit.children);
+        }
       });
+    };
 
-      // Xử lý response đa hình (Array hoặc Paginated Object)
-      if (Array.isArray(res.data)) return res.data;
-      if (res.data && Array.isArray(res.data.items)) return res.data.items;
-      return [];
-    },
-    enabled: open, // Chỉ gọi khi mở dialog
-    staleTime: 5 * 60 * 1000, // Cache 5 phút
-  });
+    extractPrograms(units);
+    return programs;
+  }, [units]);
 
-  // 2. Fetch Units (Reuse API /units)
-  const { data: units, isLoading: isLoadingUnits } = useQuery<Unit[]>({
-    queryKey: ["organization", "units", "all"],
-    queryFn: async () => {
-      const res = await api.get("/api/organization/units", {
-        params: { skip: 0, limit: 1000 },
-      });
+  // Build hierarchical offering options
+  // Structure: Trình độ -> Tên ngành -> Tên loại hình
+  const offeringOptions = useMemo(() => {
+    const options: OfferingOption[] = [];
 
-      if (Array.isArray(res.data)) return res.data;
-      if (res.data && Array.isArray(res.data.items)) return res.data.items;
-      return [];
-    },
-    enabled: open,
-    staleTime: 5 * 60 * 1000,
-  });
+    allPrograms.forEach(program => {
+      // Each program has offerings
+      if (program.offerings && program.offerings.length > 0) {
+        program.offerings.forEach(offering => {
+          options.push({
+            id: offering.id,
+            displayName: `${program.degree_level} - ${program.name} - ${offering.offering_type}`,
+            degreeLevel: program.degree_level,
+            majorName: program.name,
+            offeringType: offering.offering_type,
+          });
+        });
+      }
+    });
+
+    // Sort by degree level, then major name, then offering type
+    return options.sort((a, b) => {
+      if (a.degreeLevel !== b.degreeLevel) {
+        return a.degreeLevel.localeCompare(b.degreeLevel);
+      }
+      if (a.majorName !== b.majorName) {
+        return a.majorName.localeCompare(b.majorName);
+      }
+      return a.offeringType.localeCompare(b.offeringType);
+    });
+  }, [allPrograms]);
+
+  // Group offerings by degree level for better UX
+  const groupedOfferings = useMemo(() => {
+    const groups: Record<string, OfferingOption[]> = {};
+
+    offeringOptions.forEach(option => {
+      if (!groups[option.degreeLevel]) {
+        groups[option.degreeLevel] = [];
+      }
+      groups[option.degreeLevel].push(option);
+    });
+
+    return groups;
+  }, [offeringOptions]);
 
   // === FORM SETUP ===
   const form = useForm<FormValues>({
@@ -168,18 +227,17 @@ export function DistributionRuleDialog({ open, onOpenChange, rule }: Distributio
       onOpenChange(false);
     },
     onError: (error: unknown) => {
-      // Xử lý lỗi trùng lặp từ Backend
       const msg = (error as { response?: { data?: { detail?: string } } }).response?.data?.detail || "Có lỗi xảy ra";
       toast.error(msg);
     },
   });
 
   const onSubmit = (values: FormValues) => mutation.mutate(values);
-  const isLoadingDropdowns = isLoadingOfferings || isLoadingUnits;
+  const isLoadingDropdowns = isLoadingUnits || isLoadingDegreeLevels;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="sm:max-w-[550px]">
         <DialogHeader>
           <DialogTitle>{isEditing ? "Sửa Luật Phân Phối" : "Thêm Luật Mới"}</DialogTitle>
           <DialogDescription>
@@ -189,13 +247,13 @@ export function DistributionRuleDialog({ open, onOpenChange, rule }: Distributio
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-            {/* Offering Select */}
+            {/* Offering Select with Hierarchy Tree */}
             <FormField
               control={form.control}
               name="offering_id"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Chương trình (Offering)</FormLabel>
+                  <FormLabel>Chương trình đào tạo</FormLabel>
                   <Select
                     disabled={isEditing || isLoadingDropdowns}
                     onValueChange={field.onChange}
@@ -208,26 +266,44 @@ export function DistributionRuleDialog({ open, onOpenChange, rule }: Distributio
                         />
                       </SelectTrigger>
                     </FormControl>
-                    <SelectContent>
-                      {offerings?.map((item) => (
-                        <SelectItem key={item.id} value={item.id.toString()}>
-                          {item.name}
-                        </SelectItem>
+                    <SelectContent className="max-h-[300px]">
+                      {Object.entries(groupedOfferings).map(([degreeLevel, offerings]) => (
+                        <SelectGroup key={degreeLevel}>
+                          <SelectLabel className="font-bold text-primary">
+                            {degreeLevel}
+                          </SelectLabel>
+                          {offerings.map((item) => (
+                            <SelectItem key={item.id} value={item.id.toString()}>
+                              <span className="flex items-center gap-1">
+                                <ChevronRight className="h-3 w-3 text-muted-foreground" />
+                                {item.majorName} - {item.offeringType}
+                              </span>
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
                       ))}
+                      {offeringOptions.length === 0 && !isLoadingDropdowns && (
+                        <div className="text-muted-foreground p-2 text-center text-sm">
+                          Không có chương trình nào
+                        </div>
+                      )}
                     </SelectContent>
                   </Select>
+                  <FormDescription className="text-xs">
+                    Trình độ <ChevronRight className="inline h-3 w-3" /> Ngành <ChevronRight className="inline h-3 w-3" /> Loại hình
+                  </FormDescription>
                   <FormMessage />
                 </FormItem>
               )}
             />
 
-            {/* Unit Select */}
+            {/* Unit Select with Hierarchy */}
             <FormField
               control={form.control}
               name="unit_id"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Đơn vị tiếp nhận (Unit)</FormLabel>
+                  <FormLabel>Đơn vị tiếp nhận</FormLabel>
                   <Select
                     disabled={isEditing || isLoadingDropdowns}
                     onValueChange={field.onChange}
@@ -240,12 +316,20 @@ export function DistributionRuleDialog({ open, onOpenChange, rule }: Distributio
                         />
                       </SelectTrigger>
                     </FormControl>
-                    <SelectContent>
-                      {units?.map((item) => (
-                        <SelectItem key={item.id} value={item.id.toString()}>
-                          {item.name}
+                    <SelectContent className="max-h-[300px]">
+                      {flattenedUnits.map(({ unit, level }) => (
+                        <SelectItem key={unit.id} value={unit.id.toString()}>
+                          <span style={{ paddingLeft: `${level * 12}px` }}>
+                            {level > 0 && "└─ "}
+                            {unit.name}
+                          </span>
                         </SelectItem>
                       ))}
+                      {flattenedUnits.length === 0 && !isLoadingDropdowns && (
+                        <div className="text-muted-foreground p-2 text-center text-sm">
+                          Không có đơn vị nào
+                        </div>
+                      )}
                     </SelectContent>
                   </Select>
                   <FormMessage />
@@ -269,7 +353,7 @@ export function DistributionRuleDialog({ open, onOpenChange, rule }: Distributio
                       />
                     </FormControl>
                     <FormDescription className="text-[11px]">
-                      Tỷ lệ được chia (VD: 5).
+                      Tỷ lệ được chia (VD: 5 = 5 phần).
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -289,7 +373,9 @@ export function DistributionRuleDialog({ open, onOpenChange, rule }: Distributio
                         onChange={(e) => field.onChange(Number(e.target.value))}
                       />
                     </FormControl>
-                    <FormDescription className="text-[11px]">1 = Cao nhất.</FormDescription>
+                    <FormDescription className="text-[11px]">
+                      1 = Ưu tiên cao nhất.
+                    </FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -303,7 +389,9 @@ export function DistributionRuleDialog({ open, onOpenChange, rule }: Distributio
                 <FormItem className="flex flex-row items-center justify-between rounded-lg border p-3 shadow-sm">
                   <div className="space-y-0.5">
                     <FormLabel className="text-base">Kích hoạt</FormLabel>
-                    <FormDescription>Cho phép tham gia vòng chia Lead.</FormDescription>
+                    <FormDescription>
+                      Cho phép tham gia vòng chia Lead.
+                    </FormDescription>
                   </div>
                   <FormControl>
                     <Switch checked={field.value} onCheckedChange={field.onChange} />

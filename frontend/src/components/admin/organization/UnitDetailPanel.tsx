@@ -6,6 +6,7 @@ import { Building2, GraduationCap, Users, Settings } from "lucide-react";
 import { MajorListTab } from "./MajorListTab";
 import { UserListTab } from "./UserListTab";
 import { UnitSettingsTab } from "./UnitSettingsTab";
+import { useAdminUsersList } from "@/hooks/useAdminUsers";
 import type { OrganizationUnit } from "@/types/organization.types";
 
 // =====================================================================
@@ -22,6 +23,14 @@ interface UnitDetailPanelProps {
 // =====================================================================
 
 export function UnitDetailPanel({ unit, onUnitDeleted }: UnitDetailPanelProps) {
+  // Fetch user count for this unit
+  const { data: usersData } = useAdminUsersList({
+    page: 1,
+    page_size: 1, // Only need count, not data
+    unit_id: unit?.id,
+  });
+  const userCount = usersData?.total_count || 0;
+
   // Empty state when no unit selected
   if (!unit) {
     return (
@@ -88,6 +97,11 @@ export function UnitDetailPanel({ unit, onUnitDeleted }: UnitDetailPanelProps) {
             <TabsTrigger value="users" className="gap-2">
               <Users className="h-4 w-4" />
               Người dùng
+              {userCount > 0 && (
+                <span className="ml-1 text-xs bg-muted px-1.5 py-0.5 rounded">
+                  {userCount}
+                </span>
+              )}
             </TabsTrigger>
             <TabsTrigger value="settings" className="gap-2">
               <Settings className="h-4 w-4" />

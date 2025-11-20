@@ -589,26 +589,239 @@ async def delete_offering_type(
         log.info("Offering type hard deleted", type_id=type_id)
 
 
+# =============================================================================
+# DOCUMENT TYPE CONFIGURATION
+# =============================================================================
+
+async def get_document_types(
+    db: AsyncSession,
+    active_only: bool = True
+) -> List[models.ConfigDocumentType]:
+    """
+    Get all document types, ordered by display_order.
+
+    Args:
+        db: Database session
+        active_only: If True, return only active document types
+
+    Returns:
+        List of ConfigDocumentType models
+    """
+    query = select(models.ConfigDocumentType)
+
+    if active_only:
+        query = query.where(models.ConfigDocumentType.is_active == True)
+
+    query = query.order_by(
+        models.ConfigDocumentType.display_order,
+        models.ConfigDocumentType.name
+    )
+
+    result = await db.execute(query)
+    return list(result.scalars().all())
+
+
+async def get_document_type_by_id(
+    db: AsyncSession,
+    type_id: int
+) -> models.ConfigDocumentType:
+    """Get a document type by ID."""
+    result = await db.execute(
+        select(models.ConfigDocumentType).where(models.ConfigDocumentType.id == type_id)
+    )
+    document_type = result.scalar_one_or_none()
+
+    if not document_type:
+        raise ResourceNotFoundError(detail=f"Document type with ID {type_id} not found")
+
+    return document_type
+
+
+async def create_document_type(
+    db: AsyncSession,
+    type_in: schemas.ConfigDocumentTypeCreate
+) -> models.ConfigDocumentType:
+    """
+    Create a new document type.
+
+    Args:
+        db: Database session
+        type_in: Document type creation data
+
+    Returns:
+        Created ConfigDocumentType model
+
+    Raises:
+        DuplicateResourceError: If code or name already exists
+    """
+    # Check unique code
+    existing = await db.execute(
+        select(models.ConfigDocumentType).where(
+            models.ConfigDocumentType.code == type_in.code.lower()
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise DuplicateResourceError(
+            detail=f"Document type with code '{type_in.code}' already exists"
+        )
+
+    # Check unique name
+    existing = await db.execute(
+        select(models.ConfigDocumentType).where(
+            models.ConfigDocumentType.name == type_in.name
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise DuplicateResourceError(
+            detail=f"Document type with name '{type_in.name}' already exists"
+        )
+
+    db_type = models.ConfigDocumentType(
+        code=type_in.code.lower(),
+        name=type_in.name,
+        description=type_in.description,
+        display_order=type_in.display_order,
+        is_active=type_in.is_active
+    )
+    db.add(db_type)
+    await db.commit()
+    await db.refresh(db_type)
+
+    log.info("Document type created", type_id=db_type.id, code=db_type.code)
+    return db_type
+
+
+async def update_document_type(
+    db: AsyncSession,
+    type_id: int,
+    type_in: schemas.ConfigDocumentTypeUpdate
+) -> models.ConfigDocumentType:
+    """Update a document type."""
+    from ..utils.exceptions import BadRequest
+
+    db_type = await get_document_type_by_id(db, type_id)
+
+    update_data = type_in.model_dump(exclude_unset=True)
+
+    # Validate uniqueness if code is being updated
+    if "code" in update_data and update_data["code"] != db_type.code:
+        existing = await db.execute(
+            select(models.ConfigDocumentType).where(
+                models.ConfigDocumentType.code == update_data["code"].lower(),
+                models.ConfigDocumentType.id != type_id
+            )
+        )
+        if existing.scalar_one_or_none():
+            raise BadRequest(
+                detail=f"Document type with code '{update_data['code']}' already exists"
+            )
+        update_data["code"] = update_data["code"].lower()
+
+    # Validate uniqueness if name is being updated
+    if "name" in update_data and update_data["name"] != db_type.name:
+        existing = await db.execute(
+            select(models.ConfigDocumentType).where(
+                models.ConfigDocumentType.name == update_data["name"],
+                models.ConfigDocumentType.id != type_id
+            )
+        )
+        if existing.scalar_one_or_none():
+            raise BadRequest(
+                detail=f"Document type with name '{update_data['name']}' already exists"
+            )
+
+    for key, value in update_data.items():
+        setattr(db_type, key, value)
+
+    await db.commit()
+    await db.refresh(db_type)
+
+    log.info("Document type updated", type_id=type_id)
+    return db_type
+
+
+async def delete_document_type(
+    db: AsyncSession,
+    type_id: int,
+    soft_delete: bool = True
+) -> None:
+    """
+    Delete a document type.
+
+    Args:
+        db: Database session
+        type_id: ID of the document type
+        soft_delete: If True, set is_active=False; otherwise hard delete
+
+    Raises:
+        ResourceNotFoundError: If type doesn't exist
+    """
+    db_type = await get_document_type_by_id(db, type_id)
+
+    if soft_delete:
+        db_type.is_active = False
+        await db.commit()
+        log.info("Document type soft deleted", type_id=type_id)
+    else:
+        await db.delete(db_type)
+        await db.commit()
+        log.info("Document type hard deleted", type_id=type_id)
+
+
 # ============================================================================
 # DISTRIBUTION RULES MANAGEMENT
 # ============================================================================
 
 
-async def get_all_distribution_rules(db: AsyncSession) -> List[models.OfferingDistributionConfig]:
+def _build_distribution_rule_response(
+    rule: models.OfferingDistributionConfig
+) -> schemas.DistributionRuleResponse:
+    """
+    Helper to build DistributionRuleResponse from model.
+
+    Constructs offering_name as: "{MajorProgram.name} - {offering_type}"
+    """
+    offering_name = None
+    if rule.offering:
+        program_name = rule.offering.program.name if rule.offering.program else "Unknown"
+        offering_name = f"{program_name} - {rule.offering.offering_type}"
+
+    return schemas.DistributionRuleResponse(
+        id=rule.id,
+        offering_id=rule.offering_id,
+        unit_id=rule.unit_id,
+        weight=rule.weight,
+        priority=rule.priority,
+        is_active=rule.is_active,
+        offering_name=offering_name,
+        unit_name=rule.unit.name if rule.unit else None,
+    )
+
+
+async def get_all_distribution_rules(db: AsyncSession) -> List[schemas.DistributionRuleResponse]:
     """
     Get all distribution rules with offering and unit names.
 
     Returns:
-        List of OfferingDistributionConfig models
+        List of DistributionRuleResponse schemas
     """
+    from sqlalchemy.orm import selectinload
+
     result = await db.execute(
         select(models.OfferingDistributionConfig)
+        .options(
+            selectinload(models.OfferingDistributionConfig.offering)
+            .selectinload(models.ProgramOffering.program),
+            selectinload(models.OfferingDistributionConfig.unit)
+        )
         .order_by(
             models.OfferingDistributionConfig.priority.asc(),  # Lower number = higher priority
             models.OfferingDistributionConfig.id
         )
     )
-    return result.scalars().all()
+    rules = result.scalars().all()
+
+    return [_build_distribution_rule_response(rule) for rule in rules]
 
 
 async def get_distribution_rule_by_id(
@@ -639,7 +852,7 @@ async def get_distribution_rule_by_id(
 async def create_distribution_rule(
     db: AsyncSession,
     rule_in: schemas.DistributionRuleCreate
-) -> models.OfferingDistributionConfig:
+) -> schemas.DistributionRuleResponse:
     """
     Create a new distribution rule.
 
@@ -648,11 +861,12 @@ async def create_distribution_rule(
         rule_in: Distribution rule creation data
 
     Returns:
-        Created DistributionRule model
+        DistributionRuleResponse schema
 
     Raises:
         BadRequest: If offering_id or unit_id doesn't exist
     """
+    from sqlalchemy.orm import selectinload
     from ..utils.exceptions import BadRequest
 
     # Validate offering exists
@@ -685,7 +899,18 @@ async def create_distribution_rule(
     db_rule = models.OfferingDistributionConfig(**rule_in.model_dump())
     db.add(db_rule)
     await db.commit()
-    await db.refresh(db_rule)
+
+    # Re-fetch with eager loading for response
+    result = await db.execute(
+        select(models.OfferingDistributionConfig)
+        .where(models.OfferingDistributionConfig.id == db_rule.id)
+        .options(
+            selectinload(models.OfferingDistributionConfig.offering)
+            .selectinload(models.ProgramOffering.program),
+            selectinload(models.OfferingDistributionConfig.unit)
+        )
+    )
+    db_rule = result.scalar_one()
 
     log.info(
         "Distribution rule created",
@@ -693,14 +918,14 @@ async def create_distribution_rule(
         offering_id=db_rule.offering_id,
         unit_id=db_rule.unit_id
     )
-    return db_rule
+    return _build_distribution_rule_response(db_rule)
 
 
 async def update_distribution_rule(
     db: AsyncSession,
     rule_id: int,
     rule_in: schemas.DistributionRuleUpdate
-) -> models.OfferingDistributionConfig:
+) -> schemas.DistributionRuleResponse:
     """
     Update a distribution rule.
 
@@ -710,11 +935,13 @@ async def update_distribution_rule(
         rule_in: Update data
 
     Returns:
-        Updated DistributionRule model
+        DistributionRuleResponse schema
 
     Raises:
         ResourceNotFoundError: If rule doesn't exist
     """
+    from sqlalchemy.orm import selectinload
+
     db_rule = await get_distribution_rule_by_id(db, rule_id)
 
     # Update only provided fields
@@ -723,10 +950,21 @@ async def update_distribution_rule(
         setattr(db_rule, field, value)
 
     await db.commit()
-    await db.refresh(db_rule)
+
+    # Re-fetch with eager loading for response
+    result = await db.execute(
+        select(models.OfferingDistributionConfig)
+        .where(models.OfferingDistributionConfig.id == rule_id)
+        .options(
+            selectinload(models.OfferingDistributionConfig.offering)
+            .selectinload(models.ProgramOffering.program),
+            selectinload(models.OfferingDistributionConfig.unit)
+        )
+    )
+    db_rule = result.scalar_one()
 
     log.info("Distribution rule updated", rule_id=rule_id)
-    return db_rule
+    return _build_distribution_rule_response(db_rule)
 
 
 async def delete_distribution_rule(
