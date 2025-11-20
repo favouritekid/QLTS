@@ -40,6 +40,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { EditConsultationDialog } from "./EditConsultationDialog";
+import type { Consultation } from "@/types/lead.types";
 
 interface LeadTimelineTabProps {
   leadId: number;
@@ -166,6 +168,8 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
   const deleteMutation = useDeleteConsultation();
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedConsultationId, setSelectedConsultationId] = useState<number | null>(null);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editingConsultation, setEditingConsultation] = useState<Consultation | null>(null);
 
   if (isLoading || !timeline) {
     return (
@@ -189,6 +193,11 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
 
   const groupedTimeline = groupTimelineByDate(timeline);
   const dateKeys = Object.keys(groupedTimeline).sort().reverse();
+
+  const handleEditConsultation = (consultation: any) => {
+    setEditingConsultation(consultation as Consultation);
+    setEditDialogOpen(true);
+  };
 
   const handleDeleteConsultation = (consultationId: number) => {
     setSelectedConsultationId(consultationId);
@@ -330,10 +339,7 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
                                 <DropdownMenuItem
-                                  onClick={() => {
-                                    // TODO: Implement edit functionality
-                                    console.log("Edit consultation", eventData.id);
-                                  }}
+                                  onClick={() => handleEditConsultation(eventData)}
                                 >
                                   <Edit className="h-4 w-4 mr-2" />
                                   Sửa
@@ -402,6 +408,14 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Edit Consultation Dialog */}
+      <EditConsultationDialog
+        open={editDialogOpen}
+        onOpenChange={setEditDialogOpen}
+        leadId={leadId}
+        consultation={editingConsultation}
+      />
     </>
   );
 }
