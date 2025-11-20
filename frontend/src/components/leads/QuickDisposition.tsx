@@ -39,7 +39,7 @@ const COMPLEX_STATUS_IDS = [
 const SCHEDULABLE_STATUS_IDS = ["hen_goi_lai", "tiem_nang"];
 
 export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
-  const { data: statuses = [], isLoading: statusesLoading } = useConsultationStatuses();
+  const { data: statuses = [], isLoading: statusesLoading, error, isError } = useConsultationStatuses();
   const addConsultation = useAddConsultation();
 
   // Dialog state
@@ -150,6 +150,26 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
     return (
       <div className="flex items-center justify-center p-4">
         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  // Error state
+  if (isError) {
+    return (
+      <div className="p-4 text-sm text-red-600 bg-red-50 rounded-md">
+        <p className="font-medium">Không thể tải trạng thái</p>
+        <p className="text-xs mt-1">{error?.message || "Lỗi không xác định"}</p>
+      </div>
+    );
+  }
+
+  // Empty state - no statuses available
+  if (statuses.length === 0) {
+    return (
+      <div className="p-4 text-sm text-muted-foreground bg-muted/50 rounded-md">
+        <p>Không có trạng thái nào được cấu hình.</p>
+        <p className="text-xs mt-1">Vui lòng liên hệ Admin để thiết lập.</p>
       </div>
     );
   }
