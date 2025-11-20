@@ -107,8 +107,25 @@ async def update_existing_lead(
 ):
     """Cập nhật một Lead (chỉ Admin/Manager)."""
     # <<< SỬA Ở ĐÂY: Truyền current_user vào service >>>
+
+    # Track which fields are being updated
+    update_data = lead_in.model_dump(exclude_unset=True)
+    updated_fields = list(update_data.keys())
+    status_changed = "consultation_status_id" in updated_fields or "pipeline_stage_id" in updated_fields
+
     result = await lead_service.update_lead(db, lead.id, lead_in, updated_by=current_user)
     await db.commit()
+
+    # Emit Socket.IO event for real-time updates
+    from ..socket_manager import emit_lead_updated
+    await emit_lead_updated(
+        lead_id=lead.id,
+        officer_id=result.assigned_officer_id,
+        updated_fields=updated_fields,
+        updated_by_username=current_user.username,
+        status_changed=status_changed,
+    )
+
     return result
 
 
@@ -156,6 +173,17 @@ async def add_new_consultation(
         db, lead.id, current_user.id, consultation_in
     )
     await db.commit()
+
+    # Emit Socket.IO event for real-time updates
+    from ..socket_manager import emit_consultation_created
+    await emit_consultation_created(
+        lead_id=lead.id,
+        consultation_id=result.id,
+        officer_id=lead.assigned_officer_id,
+        consultation_status_id=result.consultation_status_id or "",
+        created_by_username=current_user.username,
+    )
+
     return result
 
 
