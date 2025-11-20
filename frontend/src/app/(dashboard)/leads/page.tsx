@@ -16,6 +16,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  ResizablePanelGroup,
+  ResizablePanel,
+  ResizableHandle,
+} from "@/components/ui/resizable";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 import {
   useLeads,
@@ -26,11 +32,11 @@ import {
 import { useAllProgramOfferings } from "@/hooks/useOrganization";
 import { LeadDialog } from "@/components/leads/LeadDialog";
 import { AssignLeadDialog } from "@/components/leads/AssignLeadDialog";
+import { LeadCard } from "@/components/leads/LeadCard";
 import {
   LeadStats,
   LeadFilters,
-  LeadListItem,
-  LeadDetailSheet,
+  LeadDetailPanel,
 } from "@/components/leads/command-center";
 import type { Lead, LeadStatus } from "@/types/lead.types";
 import { toast } from "sonner";
@@ -53,7 +59,6 @@ export default function LeadsCommandCenter() {
 
   // Selection & Dialogs
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
-  const [detailSheetOpen, setDetailSheetOpen] = useState(false);
   const [leadDialogOpen, setLeadDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<"create" | "edit">("create");
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
@@ -100,30 +105,21 @@ export default function LeadsCommandCenter() {
 
   const handleLeadSelect = useCallback((lead: Lead) => {
     setSelectedLeadId(lead.id);
-    setDetailSheetOpen(true);
-  }, []);
-
-  const handleQuickAssign = useCallback((lead: Lead) => {
-    setSelectedLead(lead);
-    setAssignDialogOpen(true);
   }, []);
 
   const handleEdit = useCallback((lead: Lead) => {
     setSelectedLead(lead);
     setDialogMode("edit");
     setLeadDialogOpen(true);
-    setDetailSheetOpen(false);
   }, []);
 
   const handleDelete = useCallback((lead: Lead) => {
     setLeadToDelete(lead);
-    setDetailSheetOpen(false);
   }, []);
 
   const handleAssign = useCallback((lead: Lead) => {
     setSelectedLead(lead);
     setAssignDialogOpen(true);
-    setDetailSheetOpen(false);
   }, []);
 
   const confirmDelete = async () => {
@@ -249,105 +245,119 @@ export default function LeadsCommandCenter() {
         </div>
       </div>
 
-      {/* Main Content - 3 Pane Layout */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left Sidebar - Filters */}
-        <LeadFilters
-          search={search}
-          onSearchChange={handleSearchChange}
-          statusFilters={statusFilters}
-          onStatusChange={handleStatusChange}
-          sourceFilter={sourceFilter}
-          onSourceChange={handleSourceChange}
-          scoreRange={scoreRange}
-          onScoreRangeChange={setScoreRange}
-          offeringFilter={offeringFilter}
-          onOfferingChange={handleOfferingChange}
-          offerings={offerings}
-          onReset={resetFilters}
-        />
+      {/* Main Content - 3 Pane Resizable Layout */}
+      <ResizablePanelGroup
+        direction="horizontal"
+        className="flex-1"
+      >
+        {/* Pane 1: Left Sidebar - Filters (20%) */}
+        <ResizablePanel defaultSize={20} minSize={15} maxSize={30}>
+          <div className="h-full overflow-hidden border-r">
+            <LeadFilters
+              search={search}
+              onSearchChange={handleSearchChange}
+              statusFilters={statusFilters}
+              onStatusChange={handleStatusChange}
+              sourceFilter={sourceFilter}
+              onSourceChange={handleSourceChange}
+              scoreRange={scoreRange}
+              onScoreRangeChange={setScoreRange}
+              offeringFilter={offeringFilter}
+              onOfferingChange={handleOfferingChange}
+              offerings={offerings}
+              onReset={resetFilters}
+            />
+          </div>
+        </ResizablePanel>
 
-        {/* Center - Lead List */}
-        <div className="flex-1 overflow-hidden flex flex-col">
-          {/* List Header */}
-          <div className="shrink-0 px-4 py-2 border-b bg-muted/30 flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">
-              {filteredLeads.length} of {leadsPage?.total_count || 0} leads
-            </span>
-            {/* Pagination */}
-            <div className="flex items-center gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setPage(Math.max(1, page - 1))}
-                disabled={page === 1}
-              >
-                Previous
-              </Button>
+        <ResizableHandle withHandle />
+
+        {/* Pane 2: Center - Lead List (30%) */}
+        <ResizablePanel defaultSize={30} minSize={20} maxSize={45}>
+          <div className="h-full flex flex-col overflow-hidden">
+            {/* List Header */}
+            <div className="shrink-0 px-4 py-2 border-b bg-muted/30 flex items-center justify-between">
               <span className="text-sm text-muted-foreground">
-                Page {page}
+                {filteredLeads.length} of {leadsPage?.total_count || 0} leads
               </span>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setPage(page + 1)}
-                disabled={filteredLeads.length < pageSize}
-              >
-                Next
-              </Button>
+              {/* Pagination */}
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setPage(Math.max(1, page - 1))}
+                  disabled={page === 1}
+                  className="h-7 px-2 text-xs"
+                >
+                  Prev
+                </Button>
+                <span className="text-xs text-muted-foreground px-1">
+                  {page}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setPage(page + 1)}
+                  disabled={filteredLeads.length < pageSize}
+                  className="h-7 px-2 text-xs"
+                >
+                  Next
+                </Button>
+              </div>
             </div>
-          </div>
 
-          {/* Lead List */}
-          <div className="flex-1 overflow-y-auto">
-            {isLoading ? (
-              <div className="p-4 space-y-2">
-                {[...Array(10)].map((_, i) => (
-                  <Skeleton key={i} className="h-20 w-full" />
-                ))}
+            {/* Lead List */}
+            <ScrollArea className="flex-1">
+              <div className="p-2 space-y-2">
+                {isLoading ? (
+                  [...Array(10)].map((_, i) => (
+                    <Skeleton key={i} className="h-20 w-full rounded-lg" />
+                  ))
+                ) : isError ? (
+                  <div className="flex items-center justify-center h-40">
+                    <div className="text-center">
+                      <p className="text-red-600 font-medium text-sm">Error loading leads</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {error?.message || "Unknown error"}
+                      </p>
+                    </div>
+                  </div>
+                ) : filteredLeads.length === 0 ? (
+                  <div className="flex items-center justify-center h-40">
+                    <div className="text-center">
+                      <p className="font-medium text-sm">No leads found</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Try adjusting your filters
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  filteredLeads.map((lead) => (
+                    <LeadCard
+                      key={lead.id}
+                      lead={lead}
+                      isSelected={selectedLeadId === lead.id}
+                      onSelect={handleLeadSelect}
+                    />
+                  ))
+                )}
               </div>
-            ) : isError ? (
-              <div className="flex items-center justify-center h-full">
-                <div className="text-center">
-                  <p className="text-red-600 font-medium">Error loading leads</p>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    {error?.message || "Unknown error"}
-                  </p>
-                </div>
-              </div>
-            ) : filteredLeads.length === 0 ? (
-              <div className="flex items-center justify-center h-full">
-                <div className="text-center">
-                  <p className="font-medium">No leads found</p>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Try adjusting your filters
-                  </p>
-                </div>
-              </div>
-            ) : (
-              filteredLeads.map((lead) => (
-                <LeadListItem
-                  key={lead.id}
-                  lead={lead}
-                  isSelected={selectedLeadId === lead.id}
-                  onSelect={handleLeadSelect}
-                  onQuickAssign={handleQuickAssign}
-                />
-              ))
-            )}
+            </ScrollArea>
           </div>
-        </div>
-      </div>
+        </ResizablePanel>
 
-      {/* Right Panel - Detail Sheet */}
-      <LeadDetailSheet
-        leadId={selectedLeadId}
-        open={detailSheetOpen}
-        onOpenChange={setDetailSheetOpen}
-        onEdit={handleEdit}
-        onDelete={handleDelete}
-        onAssign={handleAssign}
-      />
+        <ResizableHandle withHandle />
+
+        {/* Pane 3: Right - Lead Details (50%) */}
+        <ResizablePanel defaultSize={50} minSize={35}>
+          <LeadDetailPanel
+            leadId={selectedLeadId}
+            onEdit={handleEdit}
+            onDelete={handleDelete}
+            onAssign={handleAssign}
+          />
+        </ResizablePanel>
+      </ResizablePanelGroup>
 
       {/* Dialogs */}
       <LeadDialog
