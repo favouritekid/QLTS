@@ -107,7 +107,9 @@ async def update_existing_lead(
 ):
     """Cập nhật một Lead (chỉ Admin/Manager)."""
     # <<< SỬA Ở ĐÂY: Truyền current_user vào service >>>
-    return await lead_service.update_lead(db, lead.id, lead_in, updated_by=current_user)
+    result = await lead_service.update_lead(db, lead.id, lead_in, updated_by=current_user)
+    await db.commit()
+    return result
 
 
 @router.delete("/{lead_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -150,9 +152,11 @@ async def add_new_consultation(
     """Thêm một ghi chú tư vấn mới cho Lead (Đã xác thực 2 lớp)."""
     # Service 'add_consultation' có logic check quyền sở hữu
     # nhưng check ở đây vẫn an toàn hơn
-    return await lead_service.add_consultation(
+    result = await lead_service.add_consultation(
         db, lead.id, current_user.id, consultation_in
     )
+    await db.commit()
+    return result
 
 
 @router.post("/{lead_id}/assign", response_model=schemas.Lead)
@@ -163,9 +167,11 @@ async def assign_lead_manually(
     db: AsyncSession = Depends(database.get_db),
 ):
     """(Admin/Manager only) Gán thủ công một Lead (Đã xác thực 2 lớp)."""
-    return await lead_service.assign_lead_manually(
+    result = await lead_service.assign_lead_manually(
         db, lead.id, assign_data.officer_id, current_user
     )
+    await db.commit()
+    return result
 
 
 @router.post("/{lead_id}/action", response_model=schemas.Lead)
@@ -176,9 +182,11 @@ async def perform_lead_action(
     db: AsyncSession = Depends(database.get_db),
 ):
     """Xử lý hành động (reject/reassign) của Officer (Đã xác thực 2 lớp)."""
-    return await lead_service.process_officer_action(
+    result = await lead_service.process_officer_action(
         db, lead.id, current_user, action_data.action, action_data.reason
     )
+    await db.commit()
+    return result
 
 
 @router.get("/{lead_id}/timeline", response_model=List[schemas.TimelineItem])
