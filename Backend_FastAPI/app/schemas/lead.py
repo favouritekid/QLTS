@@ -98,7 +98,7 @@ class LeadAction(BaseModel):
 class LeadBase(BaseModel):
     # ✅ SỬA: Thêm validation cho tất cả các trường string
     full_name: str = Field(..., min_length=1, max_length=255, strip_whitespace=True)
-    email: EmailStr  # EmailStr đã tự động strip và validate
+    email: Optional[EmailStr] = None  # Email is optional - not all leads have email
     phone: str = Field(..., min_length=1, max_length=20, strip_whitespace=True)
     phone2: Optional[str] = Field(None, max_length=20, strip_whitespace=True)  # Số điện thoại phụ
     source: str = Field(..., min_length=1, max_length=50, strip_whitespace=True)

@@ -162,6 +162,38 @@ export function LeadDetailPanel({
               )}
             </div>
           </div>
+
+          {/* Action Buttons */}
+          <div className="flex gap-2 shrink-0">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onEdit(lead)}
+              className="h-8"
+            >
+              <Edit className="h-3.5 w-3.5 mr-1.5" />
+              Sửa
+            </Button>
+            {!lead.assigned_officer && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => onAssign(lead)}
+                className="h-8"
+              >
+                <UserPlus className="h-3.5 w-3.5 mr-1.5" />
+                Gán
+              </Button>
+            )}
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => onDelete(lead)}
+              className="h-8 px-2"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -305,35 +337,6 @@ export function LeadDetailPanel({
           </Card>
         </div>
       </ScrollArea>
-
-      {/* Action Buttons - Fixed at bottom */}
-      <div className="shrink-0 p-4 border-t bg-background flex gap-2">
-        <Button
-          variant="outline"
-          className="flex-1"
-          onClick={() => onEdit(lead)}
-        >
-          <Edit className="h-4 w-4 mr-2" />
-          Sửa
-        </Button>
-        {!lead.assigned_officer && (
-          <Button
-            variant="outline"
-            className="flex-1"
-            onClick={() => onAssign(lead)}
-          >
-            <UserPlus className="h-4 w-4 mr-2" />
-            Gán
-          </Button>
-        )}
-        <Button
-          variant="destructive"
-          size="icon"
-          onClick={() => onDelete(lead)}
-        >
-          <Trash2 className="h-4 w-4" />
-        </Button>
-      </div>
 
       {/* Consultation Dialog */}
       <ConsultationDialog

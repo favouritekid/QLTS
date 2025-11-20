@@ -36,6 +36,7 @@ import {
 
 import { useCreateLead, useUpdateLead } from "@/hooks/useLeads";
 import { useOrganizationUnits, useAllProgramOfferings } from "@/hooks/useOrganization";
+import { useAuth } from "@/hooks/useAuth";
 import type { Lead } from "@/types/lead.types";
 
 // Validation schema
@@ -44,7 +45,12 @@ const leadSchema = z.object({
     .string()
     .min(1, "Full name is required")
     .max(120, "Full name must be less than 120 characters"),
-  email: z.string().email("Invalid email address"),
+  email: z
+    .string()
+    .email("Invalid email address")
+    .optional()
+    .or(z.literal(""))
+    .nullable(),
   phone: z
     .string()
     .min(1, "Phone number is required")
@@ -100,11 +106,13 @@ interface LeadDialogProps {
 export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) {
   const createMutation = useCreateLead();
   const updateMutation = useUpdateLead();
+  const { user } = useAuth(); // Get current user for unit auto-fill
   const { data: units, isLoading: unitsLoading } = useOrganizationUnits();
   const { data: offerings = [], isLoading: offeringsLoading } = useAllProgramOfferings(true);
 
   const isCreate = mode === "create";
   const isEdit = mode === "edit";
+  const isOfficer = user?.role === "officer"; // Officers can only create in their own unit
 
   const form = useForm<LeadFormValues>({
     resolver: zodResolver(leadSchema),
@@ -131,7 +139,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
           gpa: null,
           location: null,
           offering_id: null,
-          unit_id: "",
+          unit_id: user?.unit_id?.toString() || "", // Auto-fill with current user's unit
         },
   });
 
@@ -166,10 +174,10 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
         gpa: null,
         location: null,
         offering_id: null,
-        unit_id: "",
+        unit_id: user?.unit_id?.toString() || "", // Auto-fill with current user's unit
       });
     }
-  }, [open, lead, isEdit, isCreate, form]);
+  }, [open, lead, isEdit, isCreate, form, user]);
 
   const onSubmit = async (data: LeadFormValues) => {
     // Convert unit_id string to number for API
@@ -236,9 +244,9 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                   name="email"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Email *</FormLabel>
+                      <FormLabel>Email</FormLabel>
                       <FormControl>
-                        <Input type="email" placeholder="john@example.com" {...field} />
+                        <Input type="email" placeholder="john@example.com" {...field} value={field.value ?? ""} />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -317,7 +325,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                       <Select
                         onValueChange={field.onChange}
                         value={field.value}
-                        disabled={unitsLoading}
+                        disabled={unitsLoading || isOfficer} // Officers can only create in their own unit
                       >
                         <FormControl>
                           <SelectTrigger>
@@ -332,6 +340,11 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                           ))}
                         </SelectContent>
                       </Select>
+                      {isOfficer && (
+                        <FormDescription>
+                          You can only create leads in your assigned unit
+                        </FormDescription>
+                      )}
                       <FormMessage />
                     </FormItem>
                   )}

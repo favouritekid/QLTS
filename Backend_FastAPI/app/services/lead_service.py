@@ -606,6 +606,37 @@ async def update_lead(
                         detail="Another lead with this email already exists in the unit."
                     )
 
+            # Kiểm tra trùng lặp phone/phone2 nếu được cập nhật
+            phone_changed = "phone" in update_data and update_data["phone"] != db_lead.phone
+            phone2_changed = "phone2" in update_data and update_data["phone2"] != db_lead.phone2
+
+            if phone_changed or phone2_changed:
+                # Determine the new phone values to check
+                new_phone = update_data.get("phone", db_lead.phone)
+                new_phone2 = update_data.get("phone2", db_lead.phone2)
+
+                # Build phone duplicate check conditions
+                phone_conditions = []
+                if new_phone:
+                    phone_conditions.append(models.Lead.phone == new_phone)
+                if new_phone2:
+                    phone_conditions.append(models.Lead.phone == new_phone2)
+                    phone_conditions.append(models.Lead.phone2 == new_phone)
+                    phone_conditions.append(models.Lead.phone2 == new_phone2)
+
+                if phone_conditions:
+                    existing_lead_query = select(models.Lead).where(
+                        models.Lead.unit_id == db_lead.unit_id,  # Trong cùng unit
+                        models.Lead.id != lead_id,  # Loại trừ chính lead này
+                        models.Lead.deleted_at.is_(None),  # Exclude soft-deleted
+                        or_(*phone_conditions)
+                    )
+                    existing_lead_result = await db.execute(existing_lead_query)
+                    if existing_lead_result.scalar_one_or_none():
+                        raise DuplicateResourceError(
+                            detail="Another lead with this phone number already exists in the unit."
+                        )
+
             # === NEW FEATURE: Auto-Reassign on Offering Change ===
             # Track offering_id change before applying updates
             old_offering_id = db_lead.offering_id
