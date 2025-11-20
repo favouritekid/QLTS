@@ -137,6 +137,7 @@ export function usePipelineStats(params?: PipelineQueryParams) {
 
 /**
  * Get all consultation statuses
+ * Uses public pipeline endpoint to allow officer access
  *
  * @example
  * ```tsx
@@ -147,7 +148,23 @@ export function useConsultationStatuses() {
   return useQuery<ConsultationStatus[], AxiosError<ApiErrorResponse>>({
     queryKey: pipelineKeys.consultationStatuses(),
     queryFn: async () => {
-      return await pipelineApi.getConsultationStatuses();
+      // Use public endpoint instead of admin endpoint for officer access
+      const fullPipeline = await pipelineApi.getFullPipeline();
+
+      // Extract and flatten all statuses from all stages
+      const allStatuses: ConsultationStatus[] = [];
+      const seenIds = new Set<string>();
+
+      for (const stage of fullPipeline.stages) {
+        for (const status of stage.statuses || []) {
+          if (!seenIds.has(status.id)) {
+            seenIds.add(status.id);
+            allStatuses.push(status);
+          }
+        }
+      }
+
+      return allStatuses;
     },
     staleTime: 1000 * 60 * 5, // 5 minutes
     gcTime: 1000 * 60 * 10, // 10 minutes in cache
