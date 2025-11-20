@@ -5,11 +5,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Clock, User, FileText } from "lucide-react";
-import type { TimelineItem } from "@/types/lead.types";
+import { useLeadTimeline } from "@/hooks/useLeads";
 
 interface LeadTimelineTabProps {
   leadId: number;
-  timeline?: TimelineItem[];
 }
 
 const eventTypeColors: Record<string, string> = {
@@ -21,8 +20,10 @@ const eventTypeColors: Record<string, string> = {
   note_added: "bg-gray-100 text-gray-800",
 };
 
-export function LeadTimelineTab({ timeline }: LeadTimelineTabProps) {
-  if (!timeline) {
+export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
+  const { data: timeline, isLoading } = useLeadTimeline(leadId);
+
+  if (isLoading || !timeline) {
     return (
       <Card>
         <CardHeader>
