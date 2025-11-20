@@ -151,20 +151,11 @@ export function useConsultationStatuses() {
       // Use public endpoint instead of admin endpoint for officer access
       const fullPipeline = await pipelineApi.getFullPipeline();
 
-      // Extract and flatten all statuses from all stages
-      const allStatuses: ConsultationStatus[] = [];
-      const seenIds = new Set<string>();
+      // Backend returns statuses as a separate top-level array
+      // Type assertion needed because FullPipeline type may not include statuses
+      const response = fullPipeline as { stages: unknown[]; statuses?: ConsultationStatus[] };
 
-      for (const stage of fullPipeline.stages) {
-        for (const status of stage.statuses || []) {
-          if (!seenIds.has(status.id)) {
-            seenIds.add(status.id);
-            allStatuses.push(status);
-          }
-        }
-      }
-
-      return allStatuses;
+      return response.statuses || [];
     },
     staleTime: 1000 * 60 * 5, // 5 minutes
     gcTime: 1000 * 60 * 10, // 10 minutes in cache
