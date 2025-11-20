@@ -18,6 +18,7 @@ from ..utils.exceptions import (
     ResourceNotFoundError,
 )
 from ..services import pipeline_service, distribution_service
+from .. import socket_manager
 log = structlog.get_logger(__name__)
 
 
@@ -1219,6 +1220,15 @@ async def delete_consultation(
             lead_id=lead_id,
             consultation_id=consultation_id,
             new_lead_status=new_status_id,
+        )
+
+        # Emit Socket.IO event for real-time updates
+        await socket_manager.emit_consultation_deleted(
+            lead_id=lead_id,
+            consultation_id=consultation_id,
+            officer_id=lead.assigned_officer_id,
+            new_lead_status_id=new_status_id,
+            deleted_by_username=current_user.username,
         )
     except Exception as e:
         # Rollback nếu có lỗi

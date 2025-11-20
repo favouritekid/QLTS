@@ -431,6 +431,54 @@ export function SocketHandler() {
       });
     };
 
+    // ✅ REAL-TIME CONSULTATION MANAGEMENT: Lắng nghe sự kiện consultation_deleted
+    const handleConsultationDeleted = (data: {
+      lead_id: number;
+      consultation_id: number;
+      new_lead_status_id: string | null;
+      deleted_by: string;
+      deleted_at: string;
+      message: string;
+    }) => {
+      console.log("[SocketHandler] Received consultation_deleted event:", data);
+
+      // Invalidate lead-related queries to refresh timeline and status
+      queryClient.invalidateQueries({ queryKey: ["leads"] });
+      queryClient.invalidateQueries({ queryKey: ["leads", data.lead_id] });
+      queryClient.invalidateQueries({ queryKey: ["leads", data.lead_id, "timeline"] });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+
+      // Show toast notification
+      toast.info("🗑️ Consultation deleted", {
+        description: `Lead status reverted. Deleted by ${data.deleted_by}`,
+        duration: 4000,
+      });
+    };
+
+    // ✅ REAL-TIME CONSULTATION MANAGEMENT: Lắng nghe sự kiện consultation_updated
+    const handleConsultationUpdated = (data: {
+      lead_id: number;
+      consultation_id: number;
+      consultation_status_id: string;
+      updated_by: string;
+      updated_at: string;
+      message: string;
+    }) => {
+      console.log("[SocketHandler] Received consultation_updated event:", data);
+
+      // Invalidate lead-related queries to refresh timeline and status
+      queryClient.invalidateQueries({ queryKey: ["leads"] });
+      queryClient.invalidateQueries({ queryKey: ["leads", data.lead_id] });
+      queryClient.invalidateQueries({ queryKey: ["leads", data.lead_id, "timeline"] });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+
+      // Show toast notification
+      toast.info("✏️ Consultation updated", {
+        description: `Updated by ${data.updated_by}`,
+        duration: 4000,
+      });
+    };
+
     // Đăng ký listeners
     socket.on("force_logout_batch", handleForceLogoutBatch);
     socket.on("force_logout_all", handleForceLogoutAll);
@@ -441,6 +489,8 @@ export function SocketHandler() {
     socket.on("application_status_changed", handleApplicationStatusChanged);
     socket.on("application_documents_updated", handleApplicationDocumentsUpdated);
     socket.on("pipeline_config_updated", handlePipelineConfigUpdated);
+    socket.on("consultation_deleted", handleConsultationDeleted);
+    socket.on("consultation_updated", handleConsultationUpdated);
 
     // Cleanup listeners khi effect này chạy lại hoặc component unmount
     return () => {
@@ -453,6 +503,8 @@ export function SocketHandler() {
       socket.off("application_status_changed", handleApplicationStatusChanged);
       socket.off("application_documents_updated", handleApplicationDocumentsUpdated);
       socket.off("pipeline_config_updated", handlePipelineConfigUpdated);
+      socket.off("consultation_deleted", handleConsultationDeleted);
+      socket.off("consultation_updated", handleConsultationUpdated);
     };
     // ✅ SECURITY FIX: Removed 'token' from dependencies, now use 'isAuthenticated'
   }, [isAuthenticated, addNotification, preferences, queryClient]);

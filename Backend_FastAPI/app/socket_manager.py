@@ -1013,3 +1013,190 @@ async def emit_pipeline_config_updated(
             exc_info=True
         )
         # Don't raise - socket errors should not break pipeline config operations
+
+
+# =====================================================================
+# UTILITY FUNCTIONS FOR CONSULTATION MANAGEMENT
+# =====================================================================
+
+async def emit_consultation_deleted(
+    lead_id: int,
+    consultation_id: int,
+    officer_id: int | None,
+    new_lead_status_id: str | None,
+    deleted_by_username: str
+):
+    """
+    Emit Socket.IO event when a consultation is deleted.
+
+    This function notifies the officer and admins immediately about consultation deletion,
+    enabling real-time updates in the timeline and lead status.
+
+    Args:
+        lead_id: ID of the lead
+        consultation_id: ID of the deleted consultation
+        officer_id: ID of the officer assigned to this lead (if any)
+        new_lead_status_id: New status ID after revert (None if no consultations remain)
+        deleted_by_username: Username who deleted the consultation
+
+    Events emitted:
+        - "consultation_deleted" to officer's room + admin broadcast
+
+    Payload structure:
+        {
+            "lead_id": int,
+            "consultation_id": int,
+            "new_lead_status_id": str | None,
+            "deleted_by": str,
+            "deleted_at": str (ISO 8601),
+            "message": "Consultation deleted and lead status reverted"
+        }
+    """
+    try:
+        from datetime import datetime, timezone
+
+        # Prepare event payload
+        event_payload = {
+            "lead_id": lead_id,
+            "consultation_id": consultation_id,
+            "new_lead_status_id": new_lead_status_id,
+            "deleted_by": deleted_by_username,
+            "deleted_at": datetime.now(timezone.utc).isoformat(),
+            "message": "Consultation deleted and lead status reverted"
+        }
+
+        # Emit to officer's room (if assigned)
+        if officer_id:
+            officer_room = f"user_room_{officer_id}"
+            await sio.emit(
+                "consultation_deleted",
+                event_payload,
+                room=officer_room
+            )
+            log.info(
+                "Consultation deletion notification sent to officer",
+                lead_id=lead_id,
+                consultation_id=consultation_id,
+                officer_id=officer_id,
+                officer_room=officer_room
+            )
+
+        # Also emit to all connected clients for real-time dashboard updates
+        # This ensures other users viewing the same lead see the update
+        await sio.emit(
+            "consultation_deleted",
+            event_payload,
+            namespace="/"
+        )
+
+        # Track metrics
+        socket_events_emitted_total.labels(event_type="consultation_deleted").inc()
+
+        log.info(
+            "Consultation deletion notification broadcast",
+            lead_id=lead_id,
+            consultation_id=consultation_id,
+            deleted_by=deleted_by_username,
+            new_status=new_lead_status_id
+        )
+
+    except Exception as e:
+        # Track failure metrics
+        socket_emit_failures_total.labels(event_type="consultation_deleted").inc()
+
+        log.error(
+            "Failed to emit consultation_deleted Socket.IO event",
+            lead_id=lead_id,
+            consultation_id=consultation_id,
+            officer_id=officer_id,
+            error=str(e),
+            exc_info=True
+        )
+        # Don't raise - socket errors should not break consultation deletion logic
+
+
+async def emit_consultation_updated(
+    lead_id: int,
+    consultation_id: int,
+    officer_id: int | None,
+    consultation_status_id: str,
+    updated_by_username: str
+):
+    """
+    Emit Socket.IO event when a consultation is updated.
+
+    This function notifies the officer and admins immediately about consultation updates,
+    enabling real-time updates in the timeline and lead status.
+
+    Args:
+        lead_id: ID of the lead
+        consultation_id: ID of the updated consultation
+        officer_id: ID of the officer assigned to this lead (if any)
+        consultation_status_id: Updated consultation status ID
+        updated_by_username: Username who updated the consultation
+
+    Events emitted:
+        - "consultation_updated" to officer's room + broadcast
+
+    Payload structure:
+        {
+            "lead_id": int,
+            "consultation_id": int,
+            "consultation_status_id": str,
+            "updated_by": str,
+            "updated_at": str (ISO 8601),
+            "message": "Consultation updated"
+        }
+    """
+    try:
+        from datetime import datetime, timezone
+
+        # Prepare event payload
+        event_payload = {
+            "lead_id": lead_id,
+            "consultation_id": consultation_id,
+            "consultation_status_id": consultation_status_id,
+            "updated_by": updated_by_username,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "message": "Consultation updated"
+        }
+
+        # Emit to officer's room (if assigned)
+        if officer_id:
+            officer_room = f"user_room_{officer_id}"
+            await sio.emit(
+                "consultation_updated",
+                event_payload,
+                room=officer_room
+            )
+
+        # Also emit to all connected clients for real-time dashboard updates
+        await sio.emit(
+            "consultation_updated",
+            event_payload,
+            namespace="/"
+        )
+
+        # Track metrics
+        socket_events_emitted_total.labels(event_type="consultation_updated").inc()
+
+        log.info(
+            "Consultation update notification sent",
+            lead_id=lead_id,
+            consultation_id=consultation_id,
+            officer_id=officer_id,
+            updated_by=updated_by_username
+        )
+
+    except Exception as e:
+        # Track failure metrics
+        socket_emit_failures_total.labels(event_type="consultation_updated").inc()
+
+        log.error(
+            "Failed to emit consultation_updated Socket.IO event",
+            lead_id=lead_id,
+            consultation_id=consultation_id,
+            error=str(e),
+            exc_info=True
+        )
+        # Don't raise - socket errors should not break consultation update logic
