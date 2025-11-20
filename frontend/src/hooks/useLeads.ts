@@ -490,9 +490,10 @@ export function useAddConsultation() {
     onSuccess: (consultation, { leadId }) => {
       toast.success("Consultation added successfully!");
 
-      // Invalidate lead detail and timeline
+      // Invalidate lead detail, timeline, and lists (for LeadCard updates)
       queryClient.invalidateQueries({ queryKey: leadsKeys.detail(leadId) });
       queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(leadId) });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
       queryClient.invalidateQueries({ queryKey: ["pipeline"] });
     },
 

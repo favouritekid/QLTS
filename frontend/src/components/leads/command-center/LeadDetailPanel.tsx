@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Edit,
   Trash2,
@@ -19,6 +20,8 @@ import {
   Building,
   Calendar,
   User,
+  Zap,
+  ExternalLink,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLead } from "@/hooks/useLeads";
@@ -57,9 +60,9 @@ const getStatusColor = (status: LeadStatus) => {
 };
 
 const getScoreColor = (score: number) => {
-  if (score >= 80) return "text-red-600 bg-red-50";
-  if (score >= 50) return "text-yellow-600 bg-yellow-50";
-  return "text-gray-600 bg-gray-50";
+  if (score >= 80) return "text-red-600 bg-red-50 border-red-200";
+  if (score >= 50) return "text-yellow-600 bg-yellow-50 border-yellow-200";
+  return "text-gray-600 bg-gray-50 border-gray-200";
 };
 
 const getInitials = (name: string) => {
@@ -90,10 +93,10 @@ export function LeadDetailPanel({
           </div>
           <div>
             <p className="font-medium text-muted-foreground">
-              Select a lead to view details
+              Chọn lead để xem chi tiết
             </p>
             <p className="text-sm text-muted-foreground/70">
-              Click on a lead from the list
+              Click vào lead trong danh sách
             </p>
           </div>
         </div>
@@ -146,6 +149,17 @@ export function LeadDetailPanel({
                 />
                 {lead.status}
               </Badge>
+              {lead.consultation_status && (
+                <Badge
+                  variant="outline"
+                  style={{
+                    borderColor: lead.consultation_status.color_code,
+                    color: lead.consultation_status.color_code,
+                  }}
+                >
+                  {lead.consultation_status.name}
+                </Badge>
+              )}
             </div>
           </div>
         </div>
@@ -154,93 +168,141 @@ export function LeadDetailPanel({
       {/* Scrollable Content */}
       <ScrollArea className="flex-1">
         <div className="p-4 space-y-4">
-          {/* Quick Info */}
-          <div className="space-y-2.5 pb-4 border-b">
-            <div className="flex items-center gap-3 text-sm">
-              <Phone className="h-4 w-4 text-muted-foreground shrink-0" />
-              <a href={`tel:${lead.phone}`} className="hover:underline truncate">
-                {lead.phone}
-              </a>
-              {lead.phone2 && (
-                <>
-                  <span className="text-muted-foreground">/</span>
-                  <a href={`tel:${lead.phone2}`} className="hover:underline truncate">
-                    {lead.phone2}
-                  </a>
-                </>
+          {/* Contact Info Card */}
+          <Card>
+            <CardHeader className="py-3 px-4">
+              <CardTitle className="text-sm font-medium">Thông tin liên hệ</CardTitle>
+            </CardHeader>
+            <CardContent className="px-4 pb-4 pt-0 space-y-2.5">
+              {/* Phone with Call Button */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3 text-sm">
+                  <Phone className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <span className="truncate">{lead.phone}</span>
+                  {lead.phone2 && (
+                    <>
+                      <span className="text-muted-foreground">/</span>
+                      <span className="truncate">{lead.phone2}</span>
+                    </>
+                  )}
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                  onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
+                >
+                  <Phone className="h-3 w-3 mr-1" />
+                  Gọi
+                </Button>
+              </div>
+
+              {/* Email */}
+              <div className="flex items-center gap-3 text-sm">
+                <Mail className="h-4 w-4 text-muted-foreground shrink-0" />
+                <a href={`mailto:${lead.email}`} className="hover:underline truncate text-blue-600">
+                  {lead.email}
+                </a>
+              </div>
+
+              {/* Location */}
+              {lead.location && (
+                <div className="flex items-center gap-3 text-sm">
+                  <MapPin className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <span className="truncate">{lead.location}</span>
+                </div>
               )}
-            </div>
-            <div className="flex items-center gap-3 text-sm">
-              <Mail className="h-4 w-4 text-muted-foreground shrink-0" />
-              <a href={`mailto:${lead.email}`} className="hover:underline truncate">
-                {lead.email}
-              </a>
-            </div>
-            {lead.location && (
-              <div className="flex items-center gap-3 text-sm">
-                <MapPin className="h-4 w-4 text-muted-foreground shrink-0" />
-                <span className="truncate">{lead.location}</span>
-              </div>
-            )}
-            {lead.education_level && (
-              <div className="flex items-center gap-3 text-sm">
-                <GraduationCap className="h-4 w-4 text-muted-foreground shrink-0" />
-                <span className="capitalize truncate">
-                  {lead.education_level.replace(/_/g, " ")}
-                  {lead.gpa && ` (GPA: ${lead.gpa})`}
+
+              {/* Education */}
+              {lead.education_level && (
+                <div className="flex items-center gap-3 text-sm">
+                  <GraduationCap className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <span className="capitalize truncate">
+                    {lead.education_level.replace(/_/g, " ")}
+                    {lead.gpa && ` (GPA: ${lead.gpa})`}
+                  </span>
+                </div>
+              )}
+
+              {/* Offering */}
+              {lead.offering && (
+                <div className="flex items-center gap-3 text-sm">
+                  <Building className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <span className="truncate">
+                    {lead.offering.program?.name || lead.offering.offering_type}
+                    {lead.offering.program && ` (${lead.offering.offering_type})`}
+                  </span>
+                </div>
+              )}
+
+              {/* Assigned Officer */}
+              {lead.assigned_officer && (
+                <div className="flex items-center gap-3 text-sm">
+                  <UserPlus className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <span className="truncate">
+                    <strong>{lead.assigned_officer.full_name}</strong>
+                  </span>
+                </div>
+              )}
+
+              {/* Created Date */}
+              <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                <Calendar className="h-4 w-4 shrink-0" />
+                <span>
+                  Tạo: {new Date(lead.created_at).toLocaleDateString("vi-VN")}
                 </span>
               </div>
-            )}
-            {lead.offering && (
-              <div className="flex items-center gap-3 text-sm">
-                <Building className="h-4 w-4 text-muted-foreground shrink-0" />
-                <span className="truncate">
-                  {lead.offering.program?.name || lead.offering.offering_type}
-                  {lead.offering.program && ` (${lead.offering.offering_type})`}
-                </span>
-              </div>
-            )}
-            {lead.assigned_officer && (
-              <div className="flex items-center gap-3 text-sm">
-                <UserPlus className="h-4 w-4 text-muted-foreground shrink-0" />
-                <span className="truncate">
-                  Assigned to: <strong>{lead.assigned_officer.full_name}</strong>
-                </span>
-              </div>
-            )}
-            <div className="flex items-center gap-3 text-sm text-muted-foreground">
-              <Calendar className="h-4 w-4 shrink-0" />
-              <span>
-                Created: {new Date(lead.created_at).toLocaleDateString()}
-              </span>
-            </div>
-          </div>
+            </CardContent>
+          </Card>
 
-          {/* QuickDisposition - Pinned at top */}
-          <div className="pb-4 border-b">
-            <h3 className="text-sm font-medium mb-3">Quick Actions</h3>
-            <QuickDisposition leadId={lead.id} />
-          </div>
+          {/* Quick Actions Card - Highlighted */}
+          <Card className="bg-slate-50 border-slate-200">
+            <CardHeader className="py-3 px-4">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <Zap className="h-4 w-4 text-amber-500" />
+                Quick Actions
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="px-4 pb-4 pt-0">
+              <QuickDisposition leadId={lead.id} />
+            </CardContent>
+          </Card>
 
-          {/* Tabs */}
-          <Tabs defaultValue="timeline" className="mt-2">
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="timeline">Timeline</TabsTrigger>
-              <TabsTrigger value="consultations">History</TabsTrigger>
-            </TabsList>
+          {/* Tabs - Timeline & History */}
+          <Card>
+            <CardContent className="p-0">
+              <Tabs defaultValue="timeline">
+                <TabsList className="w-full rounded-none border-b bg-transparent h-auto p-0">
+                  <TabsTrigger
+                    value="timeline"
+                    className="flex-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-3"
+                  >
+                    Timeline
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="consultations"
+                    className="flex-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-3"
+                  >
+                    Lịch sử
+                  </TabsTrigger>
+                </TabsList>
 
-            <TabsContent value="timeline" className="mt-3">
-              <LeadTimelineTab leadId={lead.id} />
-            </TabsContent>
+                <div className="p-4">
+                  <TabsContent value="timeline" className="mt-0">
+                    <LeadTimelineTab leadId={lead.id} />
+                  </TabsContent>
 
-            <TabsContent value="consultations" className="mt-3">
-              <LeadConsultationsTab
-                leadId={lead.id}
-                lead={lead}
-                onAddConsultation={() => setConsultationDialogOpen(true)}
-              />
-            </TabsContent>
-          </Tabs>
+                  <TabsContent value="consultations" className="mt-0">
+                    <LeadConsultationsTab
+                      leadId={lead.id}
+                      lead={lead}
+                      onAddConsultation={() => setConsultationDialogOpen(true)}
+                    />
+                  </TabsContent>
+                </div>
+              </Tabs>
+            </CardContent>
+          </Card>
         </div>
       </ScrollArea>
 
@@ -252,7 +314,7 @@ export function LeadDetailPanel({
           onClick={() => onEdit(lead)}
         >
           <Edit className="h-4 w-4 mr-2" />
-          Edit
+          Sửa
         </Button>
         {!lead.assigned_officer && (
           <Button
@@ -261,7 +323,7 @@ export function LeadDetailPanel({
             onClick={() => onAssign(lead)}
           >
             <UserPlus className="h-4 w-4 mr-2" />
-            Assign
+            Gán
           </Button>
         )}
         <Button

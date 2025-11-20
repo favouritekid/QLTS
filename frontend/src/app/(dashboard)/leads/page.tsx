@@ -250,8 +250,8 @@ export default function LeadsCommandCenter() {
         direction="horizontal"
         className="flex-1"
       >
-        {/* Pane 1: Left Sidebar - Filters (20%) */}
-        <ResizablePanel defaultSize={20} minSize={15} maxSize={30}>
+        {/* Pane 1: Left Sidebar - Filters (18%) */}
+        <ResizablePanel defaultSize={18} minSize={12} maxSize={25}>
           <div className="h-full overflow-hidden border-r">
             <LeadFilters
               search={search}
@@ -272,8 +272,8 @@ export default function LeadsCommandCenter() {
 
         <ResizableHandle withHandle />
 
-        {/* Pane 2: Center - Lead List (30%) */}
-        <ResizablePanel defaultSize={30} minSize={20} maxSize={45}>
+        {/* Pane 2: Center - Lead List (32%) */}
+        <ResizablePanel defaultSize={32} minSize={20} maxSize={45}>
           <div className="h-full flex flex-col overflow-hidden">
             {/* List Header */}
             <div className="shrink-0 px-4 py-2 border-b bg-muted/30 flex items-center justify-between">

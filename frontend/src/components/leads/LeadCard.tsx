@@ -73,6 +73,20 @@ const getScoreColor = (score: number) => {
   return "bg-gray-100 text-gray-700 border-gray-200";
 };
 
+// Get border color based on score
+const getScoreBorderColor = (score: number) => {
+  if (score >= 70) return "border-l-emerald-500";
+  if (score >= 40) return "border-l-amber-500";
+  return "border-l-gray-300";
+};
+
+// Get background based on status
+const getStatusBackground = (status: string, score: number) => {
+  if (status === "new") return "bg-blue-50/50 hover:bg-blue-50";
+  if (score <= 20) return "bg-gray-50/50 hover:bg-gray-100";
+  return "hover:bg-accent/50";
+};
+
 export const LeadCard = React.memo(function LeadCard({
   lead,
   isSelected,
@@ -80,19 +94,21 @@ export const LeadCard = React.memo(function LeadCard({
 }: LeadCardProps) {
   const activityStatus = getActivityStatus(lead.next_activity_at);
 
+  // Determine border color priority: selected > activity > score
+  const getBorderClass = () => {
+    if (isSelected) return "border-l-primary bg-primary/5 ring-1 ring-primary/20";
+    if (activityStatus === "overdue") return "border-l-red-500 bg-red-50/50 hover:bg-red-50";
+    if (activityStatus === "today") return "border-l-amber-500 bg-amber-50/50 hover:bg-amber-50";
+    return cn(getScoreBorderColor(lead.lead_score), getStatusBackground(lead.status, lead.lead_score));
+  };
+
   return (
     <Card
       onClick={() => onSelect(lead)}
       className={cn(
         "p-3 cursor-pointer transition-all hover:shadow-md",
         "border-l-4",
-        isSelected
-          ? "border-l-primary bg-primary/5 ring-1 ring-primary/20"
-          : activityStatus === "overdue"
-            ? "border-l-red-500 bg-red-50/50 hover:bg-red-50"
-            : activityStatus === "today"
-              ? "border-l-amber-500 bg-amber-50/50 hover:bg-amber-50"
-              : "border-l-transparent hover:bg-accent/50"
+        getBorderClass()
       )}
     >
       <div className="space-y-2">
