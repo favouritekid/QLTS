@@ -48,7 +48,8 @@ export const API_ENDPOINTS = {
 
     // Tier 3: OfferingAcademicInfo
     LIST_ACADEMIC_INFO: (offeringId: number) => `/api/offerings/${offeringId}/academic-info`,
-    GET_ACADEMIC_INFO_BY_YEAR: (offeringId: number, year: number) => `/api/offerings/${offeringId}/academic-info/${year}`,
+    GET_ACADEMIC_INFO_BY_YEAR: (offeringId: number, year: number) =>
+      `/api/offerings/${offeringId}/academic-info/${year}`,
 
     // === LEGACY (DEPRECATED) ===
   },
@@ -96,28 +97,37 @@ export const API_ENDPOINTS = {
       DELETE_OFFERING: (offeringId: number) => `/api/admin/offerings/${offeringId}`,
 
       // Tier 3: OfferingAcademicInfo
-      CREATE_ACADEMIC_INFO: (offeringId: number) => `/api/admin/offerings/${offeringId}/academic-info`,
-      UPDATE_ACADEMIC_INFO: (academicInfoId: number) => `/api/admin/academic-info/${academicInfoId}`,
-      DELETE_ACADEMIC_INFO: (academicInfoId: number) => `/api/admin/academic-info/${academicInfoId}`,
+      CREATE_ACADEMIC_INFO: (offeringId: number) =>
+        `/api/admin/offerings/${offeringId}/academic-info`,
+      UPDATE_ACADEMIC_INFO: (academicInfoId: number) =>
+        `/api/admin/academic-info/${academicInfoId}`,
+      DELETE_ACADEMIC_INFO: (academicInfoId: number) =>
+        `/api/admin/academic-info/${academicInfoId}`,
 
       // === LEGACY (DEPRECATED) ===
     },
     // System Configuration
     CONFIG: {
       // Degree Levels
-      LIST_DEGREE_LEVELS: "/api/admin/config/degree-levels",
-      CREATE_DEGREE_LEVEL: "/api/admin/config/degree-levels",
-      UPDATE_DEGREE_LEVEL: (id: number) => `/api/admin/config/degree-levels/${id}`,
-      DELETE_DEGREE_LEVEL: (id: number) => `/api/admin/config/degree-levels/${id}`,
+      LIST_DEGREE_LEVELS: "/api/admin/degree-levels",
+      CREATE_DEGREE_LEVEL: "/api/admin/degree-levels",
+      UPDATE_DEGREE_LEVEL: (id: number) => `/api/admin/degree-levels/${id}`,
+      DELETE_DEGREE_LEVEL: (id: number) => `/api/admin/degree-levels/${id}`,
 
       // Offering Types
       LIST_OFFERING_TYPES: "/api/admin/config/offering-types",
       CREATE_OFFERING_TYPE: "/api/admin/config/offering-types",
       UPDATE_OFFERING_TYPE: (id: number) => `/api/admin/config/offering-types/${id}`,
       DELETE_OFFERING_TYPE: (id: number) => `/api/admin/config/offering-types/${id}`,
+
+      // Document Types ✨ MỚI THÊM
+      LIST_DOCUMENT_TYPES: "/api/admin/document-types",
+      CREATE_DOCUMENT_TYPE: "/api/admin/document-types",
+      UPDATE_DOCUMENT_TYPE: (id: number) => `/api/admin/document-types/${id}`,
+      DELETE_DOCUMENT_TYPE: (id: number) => `/api/admin/document-types/${id}`,
     },
     ACTIVITY_LOGS: "/api/admin/activity-logs",
-    STATISTICS: "/api/admin/statistics",
+    STATISTICS: "/api/admin/users/statistics",
   },
   NOTIFICATIONS: {
     LIST: "/api/notifications",

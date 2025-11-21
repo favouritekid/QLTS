@@ -1,7 +1,7 @@
 // src/components/admin/organization/MajorListTab.tsx
 "use client";
 
-import { useState } from "react";
+import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -414,67 +414,69 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                             </TableRow>
 
                             {/* Expanded Offerings */}
-                            {isExpanded && hasOfferings && program.offerings.map((offering) => (
-                              <TableRow key={`offering-${offering.id}`} className="bg-muted/20">
-                                <TableCell></TableCell>
-                                <TableCell colSpan={3}>
-                                  <div className="flex items-center gap-2 pl-6">
-                                    <Layers className="h-4 w-4 text-blue-500" />
-                                    <span className="text-sm">{offering.offering_type}</span>
-                                    {!offering.is_active && (
-                                      <Badge variant="destructive" className="text-xs">
-                                        Ngưng
-                                      </Badge>
-                                    )}
-                                    {offering.duration_semesters && (
-                                      <span className="text-muted-foreground text-xs">
-                                        • {offering.duration_semesters} kỳ
-                                      </span>
-                                    )}
-                                    {offering.total_credits && (
-                                      <span className="text-muted-foreground text-xs">
-                                        • {offering.total_credits} TC
-                                      </span>
-                                    )}
-                                  </div>
-                                </TableCell>
-                                <TableCell></TableCell>
-                                <TableCell className="text-right">
-                                  <div className="flex items-center justify-end gap-1">
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => handleManageAcademicInfo(offering)}
-                                    >
-                                      <CalendarCheck className="mr-1 h-3 w-3" />
-                                      Tuyển sinh
-                                    </Button>
-                                    <DropdownMenu>
-                                      <DropdownMenuTrigger asChild>
-                                        <Button variant="ghost" size="sm">
-                                          <MoreVertical className="h-4 w-4" />
-                                        </Button>
-                                      </DropdownMenuTrigger>
-                                      <DropdownMenuContent align="end">
-                                        <DropdownMenuItem
-                                          onClick={() => handleEditOffering(program, offering)}
-                                        >
-                                          <Edit className="mr-2 h-4 w-4" />
-                                          Chỉnh sửa
-                                        </DropdownMenuItem>
-                                        <DropdownMenuItem
-                                          onClick={() => handleDeleteOfferingClick(offering)}
-                                          className="text-red-600"
-                                        >
-                                          <Trash2 className="mr-2 h-4 w-4" />
-                                          Xóa
-                                        </DropdownMenuItem>
-                                      </DropdownMenuContent>
-                                    </DropdownMenu>
-                                  </div>
-                                </TableCell>
-                              </TableRow>
-                            ))}
+                            {isExpanded &&
+                              hasOfferings &&
+                              program.offerings.map((offering) => (
+                                <TableRow key={`offering-${offering.id}`} className="bg-muted/20">
+                                  <TableCell></TableCell>
+                                  <TableCell colSpan={3}>
+                                    <div className="flex items-center gap-2 pl-6">
+                                      <Layers className="h-4 w-4 text-blue-500" />
+                                      <span className="text-sm">{offering.offering_type}</span>
+                                      {!offering.is_active && (
+                                        <Badge variant="destructive" className="text-xs">
+                                          Ngưng
+                                        </Badge>
+                                      )}
+                                      {offering.duration_semesters && (
+                                        <span className="text-muted-foreground text-xs">
+                                          • {offering.duration_semesters} kỳ
+                                        </span>
+                                      )}
+                                      {offering.total_credits && (
+                                        <span className="text-muted-foreground text-xs">
+                                          • {offering.total_credits} TC
+                                        </span>
+                                      )}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell></TableCell>
+                                  <TableCell className="text-right">
+                                    <div className="flex items-center justify-end gap-1">
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => handleManageAcademicInfo(offering)}
+                                      >
+                                        <CalendarCheck className="mr-1 h-3 w-3" />
+                                        Tuyển sinh
+                                      </Button>
+                                      <DropdownMenu>
+                                        <DropdownMenuTrigger asChild>
+                                          <Button variant="ghost" size="sm">
+                                            <MoreVertical className="h-4 w-4" />
+                                          </Button>
+                                        </DropdownMenuTrigger>
+                                        <DropdownMenuContent align="end">
+                                          <DropdownMenuItem
+                                            onClick={() => handleEditOffering(program, offering)}
+                                          >
+                                            <Edit className="mr-2 h-4 w-4" />
+                                            Chỉnh sửa
+                                          </DropdownMenuItem>
+                                          <DropdownMenuItem
+                                            onClick={() => handleDeleteOfferingClick(offering)}
+                                            className="text-red-600"
+                                          >
+                                            <Trash2 className="mr-2 h-4 w-4" />
+                                            Xóa
+                                          </DropdownMenuItem>
+                                        </DropdownMenuContent>
+                                      </DropdownMenu>
+                                    </div>
+                                  </TableCell>
+                                </TableRow>
+                              ))}
                           </React.Fragment>
                         );
                       })}
@@ -536,7 +538,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                               <TableCell>
                                 <div className="flex items-center gap-2">
                                   <GraduationCap className="h-4 w-4 text-red-400" />
-                                  <span className="font-medium text-muted-foreground">
+                                  <span className="text-muted-foreground font-medium">
                                     {program.name}
                                   </span>
                                 </div>
@@ -591,67 +593,69 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                             </TableRow>
 
                             {/* Expanded Offerings */}
-                            {isExpanded && hasOfferings && program.offerings.map((offering) => (
-                              <TableRow key={`offering-${offering.id}`} className="bg-red-50/30">
-                                <TableCell></TableCell>
-                                <TableCell colSpan={3}>
-                                  <div className="flex items-center gap-2 pl-6">
-                                    <Layers className="h-4 w-4 text-blue-500" />
-                                    <span className="text-sm">{offering.offering_type}</span>
-                                    {!offering.is_active && (
-                                      <Badge variant="destructive" className="text-xs">
-                                        Ngưng
-                                      </Badge>
-                                    )}
-                                    {offering.duration_semesters && (
-                                      <span className="text-muted-foreground text-xs">
-                                        • {offering.duration_semesters} kỳ
-                                      </span>
-                                    )}
-                                    {offering.total_credits && (
-                                      <span className="text-muted-foreground text-xs">
-                                        • {offering.total_credits} TC
-                                      </span>
-                                    )}
-                                  </div>
-                                </TableCell>
-                                <TableCell></TableCell>
-                                <TableCell className="text-right">
-                                  <div className="flex items-center justify-end gap-1">
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() => handleManageAcademicInfo(offering)}
-                                    >
-                                      <CalendarCheck className="mr-1 h-3 w-3" />
-                                      Tuyển sinh
-                                    </Button>
-                                    <DropdownMenu>
-                                      <DropdownMenuTrigger asChild>
-                                        <Button variant="ghost" size="sm">
-                                          <MoreVertical className="h-4 w-4" />
-                                        </Button>
-                                      </DropdownMenuTrigger>
-                                      <DropdownMenuContent align="end">
-                                        <DropdownMenuItem
-                                          onClick={() => handleEditOffering(program, offering)}
-                                        >
-                                          <Edit className="mr-2 h-4 w-4" />
-                                          Chỉnh sửa
-                                        </DropdownMenuItem>
-                                        <DropdownMenuItem
-                                          onClick={() => handleDeleteOfferingClick(offering)}
-                                          className="text-red-600"
-                                        >
-                                          <Trash2 className="mr-2 h-4 w-4" />
-                                          Xóa
-                                        </DropdownMenuItem>
-                                      </DropdownMenuContent>
-                                    </DropdownMenu>
-                                  </div>
-                                </TableCell>
-                              </TableRow>
-                            ))}
+                            {isExpanded &&
+                              hasOfferings &&
+                              program.offerings.map((offering) => (
+                                <TableRow key={`offering-${offering.id}`} className="bg-red-50/30">
+                                  <TableCell></TableCell>
+                                  <TableCell colSpan={3}>
+                                    <div className="flex items-center gap-2 pl-6">
+                                      <Layers className="h-4 w-4 text-blue-500" />
+                                      <span className="text-sm">{offering.offering_type}</span>
+                                      {!offering.is_active && (
+                                        <Badge variant="destructive" className="text-xs">
+                                          Ngưng
+                                        </Badge>
+                                      )}
+                                      {offering.duration_semesters && (
+                                        <span className="text-muted-foreground text-xs">
+                                          • {offering.duration_semesters} kỳ
+                                        </span>
+                                      )}
+                                      {offering.total_credits && (
+                                        <span className="text-muted-foreground text-xs">
+                                          • {offering.total_credits} TC
+                                        </span>
+                                      )}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell></TableCell>
+                                  <TableCell className="text-right">
+                                    <div className="flex items-center justify-end gap-1">
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => handleManageAcademicInfo(offering)}
+                                      >
+                                        <CalendarCheck className="mr-1 h-3 w-3" />
+                                        Tuyển sinh
+                                      </Button>
+                                      <DropdownMenu>
+                                        <DropdownMenuTrigger asChild>
+                                          <Button variant="ghost" size="sm">
+                                            <MoreVertical className="h-4 w-4" />
+                                          </Button>
+                                        </DropdownMenuTrigger>
+                                        <DropdownMenuContent align="end">
+                                          <DropdownMenuItem
+                                            onClick={() => handleEditOffering(program, offering)}
+                                          >
+                                            <Edit className="mr-2 h-4 w-4" />
+                                            Chỉnh sửa
+                                          </DropdownMenuItem>
+                                          <DropdownMenuItem
+                                            onClick={() => handleDeleteOfferingClick(offering)}
+                                            className="text-red-600"
+                                          >
+                                            <Trash2 className="mr-2 h-4 w-4" />
+                                            Xóa
+                                          </DropdownMenuItem>
+                                        </DropdownMenuContent>
+                                      </DropdownMenu>
+                                    </div>
+                                  </TableCell>
+                                </TableRow>
+                              ))}
                           </React.Fragment>
                         );
                       })}

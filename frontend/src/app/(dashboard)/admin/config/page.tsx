@@ -8,13 +8,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Table,
   TableBody,
@@ -31,23 +25,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  GraduationCap,
-  Layers,
-  FileText,
-  Plus,
-  Pencil,
-  Trash2,
-  Loader2,
-} from "lucide-react";
+import { GraduationCap, Layers, FileText, Plus, Pencil, Trash2, Loader2 } from "lucide-react";
 
 // ============================================
 // TYPES
@@ -58,7 +39,7 @@ interface ConfigItem {
   code: string;
   name: string;
   description?: string | null;
-  order: number;
+  display_order: number; // ✅
   is_active: boolean;
 }
 
@@ -66,13 +47,13 @@ interface ConfigItemCreate {
   code: string;
   name: string;
   description?: string;
-  order?: number;
+  display_order?: number; // ✅
 }
 
 interface ConfigItemUpdate {
   name?: string;
   description?: string;
-  order?: number;
+  display_order?: number; // ✅
   is_active?: boolean;
 }
 
@@ -96,7 +77,7 @@ function ConfigTable({ title, description, icon, endpoint, queryKey }: ConfigTab
     code: "",
     name: "",
     description: "",
-    order: 1,
+    display_order: 1,
   });
 
   // Fetch items
@@ -154,9 +135,10 @@ function ConfigTable({ title, description, icon, endpoint, queryKey }: ConfigTab
     },
   });
 
+  // 2. handleOpenCreate (dòng ~599)
   const handleOpenCreate = () => {
     setEditItem(null);
-    setFormData({ code: "", name: "", description: "", order: items.length + 1 });
+    setFormData({ code: "", name: "", description: "", display_order: items.length + 1 }); // ✅
     setDialogOpen(true);
   };
 
@@ -166,17 +148,19 @@ function ConfigTable({ title, description, icon, endpoint, queryKey }: ConfigTab
       code: item.code,
       name: item.name,
       description: item.description || "",
-      order: item.order,
+      display_order: item.display_order, // ✅ Đổi từ item.order
     });
     setDialogOpen(true);
   };
 
+  // 4. handleCloseDialog (dòng ~617)
   const handleCloseDialog = () => {
     setDialogOpen(false);
     setEditItem(null);
-    setFormData({ code: "", name: "", description: "", order: 1 });
+    setFormData({ code: "", name: "", description: "", display_order: 1 }); // ✅
   };
 
+  // 5. handleSubmit (dòng ~627)
   const handleSubmit = () => {
     if (editItem) {
       updateMutation.mutate({
@@ -184,17 +168,11 @@ function ConfigTable({ title, description, icon, endpoint, queryKey }: ConfigTab
         data: {
           name: formData.name,
           description: formData.description,
-          order: formData.order,
+          display_order: formData.display_order, // ✅
         },
       });
     } else {
       createMutation.mutate(formData);
-    }
-  };
-
-  const handleDelete = (id: number) => {
-    if (confirm("Are you sure you want to delete this item?")) {
-      deleteMutation.mutate(id);
     }
   };
 
@@ -212,7 +190,7 @@ function ConfigTable({ title, description, icon, endpoint, queryKey }: ConfigTab
             </div>
           </div>
           <Button onClick={handleOpenCreate}>
-            <Plus className="h-4 w-4 mr-2" />
+            <Plus className="mr-2 h-4 w-4" />
             Add New
           </Button>
         </div>
@@ -225,7 +203,7 @@ function ConfigTable({ title, description, icon, endpoint, queryKey }: ConfigTab
             ))}
           </div>
         ) : items.length === 0 ? (
-          <div className="text-center py-8 text-muted-foreground">
+          <div className="text-muted-foreground py-8 text-center">
             No items configured. Click &quot;Add New&quot; to create one.
           </div>
         ) : (
@@ -244,15 +222,13 @@ function ConfigTable({ title, description, icon, endpoint, queryKey }: ConfigTab
               {items.map((item) => (
                 <TableRow key={item.id}>
                   <TableCell>
-                    <code className="bg-muted px-2 py-1 rounded text-xs">
-                      {item.code}
-                    </code>
+                    <code className="bg-muted rounded px-2 py-1 text-xs">{item.code}</code>
                   </TableCell>
                   <TableCell className="font-medium">{item.name}</TableCell>
                   <TableCell className="text-muted-foreground text-sm">
                     {item.description || "—"}
                   </TableCell>
-                  <TableCell>{item.order}</TableCell>
+                  <TableCell>{item.display_order}</TableCell>
                   <TableCell>
                     <Badge variant={item.is_active ? "default" : "secondary"}>
                       {item.is_active ? "Active" : "Inactive"}
@@ -260,11 +236,7 @@ function ConfigTable({ title, description, icon, endpoint, queryKey }: ConfigTab
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleOpenEdit(item)}
-                      >
+                      <Button variant="ghost" size="icon" onClick={() => handleOpenEdit(item)}>
                         <Pencil className="h-4 w-4" />
                       </Button>
                       <Button
@@ -273,7 +245,7 @@ function ConfigTable({ title, description, icon, endpoint, queryKey }: ConfigTab
                         onClick={() => handleDelete(item.id)}
                         disabled={deleteMutation.isPending}
                       >
-                        <Trash2 className="h-4 w-4 text-destructive" />
+                        <Trash2 className="text-destructive h-4 w-4" />
                       </Button>
                     </div>
                   </TableCell>
@@ -288,9 +260,7 @@ function ConfigTable({ title, description, icon, endpoint, queryKey }: ConfigTab
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>
-              {editItem ? `Edit ${title}` : `Create New ${title}`}
-            </DialogTitle>
+            <DialogTitle>{editItem ? `Edit ${title}` : `Create New ${title}`}</DialogTitle>
             <DialogDescription>
               {editItem
                 ? "Update the configuration item details"
@@ -307,12 +277,10 @@ function ConfigTable({ title, description, icon, endpoint, queryKey }: ConfigTab
                 <Input
                   placeholder="e.g., dai_hoc"
                   value={formData.code}
-                  onChange={(e) =>
-                    setFormData({ ...formData, code: e.target.value })
-                  }
+                  onChange={(e) => setFormData({ ...formData, code: e.target.value })}
                   disabled={isSubmitting}
                 />
-                <p className="text-xs text-muted-foreground">
+                <p className="text-muted-foreground text-xs">
                   Unique identifier (lowercase, underscores)
                 </p>
               </div>
@@ -325,9 +293,7 @@ function ConfigTable({ title, description, icon, endpoint, queryKey }: ConfigTab
               <Input
                 placeholder="e.g., Degree Level Name"
                 value={formData.name}
-                onChange={(e) =>
-                  setFormData({ ...formData, name: e.target.value })
-                }
+                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                 disabled={isSubmitting}
               />
             </div>
@@ -337,9 +303,7 @@ function ConfigTable({ title, description, icon, endpoint, queryKey }: ConfigTab
               <Textarea
                 placeholder="Optional description..."
                 value={formData.description}
-                onChange={(e) =>
-                  setFormData({ ...formData, description: e.target.value })
-                }
+                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                 disabled={isSubmitting}
               />
             </div>
@@ -349,9 +313,9 @@ function ConfigTable({ title, description, icon, endpoint, queryKey }: ConfigTab
               <Input
                 type="number"
                 min={1}
-                value={formData.order}
+                value={formData.display_order}
                 onChange={(e) =>
-                  setFormData({ ...formData, order: parseInt(e.target.value) || 1 })
+                  setFormData({ ...formData, display_order: parseInt(e.target.value) || 1 })
                 }
                 disabled={isSubmitting}
               />
@@ -359,18 +323,14 @@ function ConfigTable({ title, description, icon, endpoint, queryKey }: ConfigTab
           </div>
 
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={handleCloseDialog}
-              disabled={isSubmitting}
-            >
+            <Button variant="outline" onClick={handleCloseDialog} disabled={isSubmitting}>
               Cancel
             </Button>
             <Button
               onClick={handleSubmit}
               disabled={isSubmitting || !formData.code || !formData.name}
             >
-              {isSubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {editItem ? "Update" : "Create"}
             </Button>
           </DialogFooter>
@@ -391,7 +351,8 @@ export default function SystemConfigPage() {
       <header>
         <h1 className="text-3xl font-bold tracking-tight">System Configuration</h1>
         <p className="text-muted-foreground">
-          Manage system-wide configuration options for degree levels, offering types, and document types.
+          Manage system-wide configuration options for degree levels, offering types, and document
+          types.
         </p>
       </header>
 
@@ -416,7 +377,7 @@ export default function SystemConfigPage() {
           <ConfigTable
             title="Degree Level"
             description="Configure available degree levels for academic programs (e.g., Bachelor's, Master's, PhD)"
-            icon={<GraduationCap className="h-8 w-8 text-primary" />}
+            icon={<GraduationCap className="text-primary h-8 w-8" />}
             endpoint="degree-levels"
             queryKey="degree-levels"
           />
@@ -426,7 +387,7 @@ export default function SystemConfigPage() {
           <ConfigTable
             title="Offering Type"
             description="Configure program offering types (e.g., Full-time, Part-time, Online)"
-            icon={<Layers className="h-8 w-8 text-primary" />}
+            icon={<Layers className="text-primary h-8 w-8" />}
             endpoint="offering-types"
             queryKey="offering-types"
           />
@@ -436,7 +397,7 @@ export default function SystemConfigPage() {
           <ConfigTable
             title="Document Type"
             description="Configure required document types for applications (e.g., ID Card, Transcript, Photo)"
-            icon={<FileText className="h-8 w-8 text-primary" />}
+            icon={<FileText className="text-primary h-8 w-8" />}
             endpoint="document-types"
             queryKey="document-types"
           />
