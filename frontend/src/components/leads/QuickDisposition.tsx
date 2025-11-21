@@ -2,8 +2,8 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
-import { format, addDays, parseISO } from "date-fns";
-import { Loader2 } from "lucide-react";
+import { format, addDays } from "date-fns";
+import { Loader2, PhoneOff, ThumbsUp, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -16,9 +16,10 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
-import { useConsultationStatuses } from "@/hooks/usePipeline";
-import { useAddConsultation } from "@/hooks/useLeads";
+import { useAllowedNextStatuses } from "@/hooks/usePipeline";
+import { useAddConsultation, useLead } from "@/hooks/useLeads";
 import type { ConsultationStatus, ConsultationCreate } from "@/types/lead.types";
 
 interface QuickDispositionProps {
@@ -26,24 +27,8 @@ interface QuickDispositionProps {
   onSuccess?: () => void;
 }
 
-// Status categories for color coding
-const NEGATIVE_STATUSES = [
-  "khong_nghe_may",
-  "thue_bao",
-  "sai_so",
-  "tu_choi",
-  "khong_quan_tam",
-];
-
-const POSITIVE_STATUSES = [
-  "dong_y_tu_van",
-  "quan_tam",
-  "da_dang_ky",
-  "hoan_thanh",
-];
-
-// Statuses that require dialog with scheduling
-const COMPLEX_STATUSES = [
+// Statuses that require dialog (positive outcomes need more context)
+const COMPLEX_STATUS_IDS = [
   "hen_goi_lai",
   "tiem_nang",
   "dong_y_tu_van",
@@ -51,30 +36,50 @@ const COMPLEX_STATUSES = [
 ];
 
 // Statuses that show scheduled_at field
-const SCHEDULABLE_STATUSES = ["hen_goi_lai", "tiem_nang"];
-
-function getStatusColor(statusId: string): string {
-  if (NEGATIVE_STATUSES.includes(statusId)) {
-    return "bg-red-100 hover:bg-red-200 text-red-700 border-red-200";
-  }
-  if (POSITIVE_STATUSES.includes(statusId)) {
-    return "bg-green-100 hover:bg-green-200 text-green-700 border-green-200";
-  }
-  return "bg-yellow-100 hover:bg-yellow-200 text-yellow-700 border-yellow-200";
-}
+const SCHEDULABLE_STATUS_IDS = ["hen_goi_lai", "tiem_nang"];
 
 export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
-  const { data: statuses = [], isLoading: statusesLoading } = useConsultationStatuses();
+  // Get lead data to determine current consultation status
+  const { data: lead } = useLead(leadId);
+  const currentStatusId = lead?.consultation_status_id;
+
+  // Get allowed next statuses based on state machine
+  const { data: statuses = [], isLoading: statusesLoading, error, isError } = useAllowedNextStatuses(currentStatusId);
   const addConsultation = useAddConsultation();
 
   // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState<ConsultationStatus | null>(null);
 
-  // Form state for complex dialog - using ISO string format for simplicity
+  // Form state for complex dialog
   const [consultationDateTime, setConsultationDateTime] = useState<string>("");
   const [notes, setNotes] = useState("");
   const [scheduledDateTime, setScheduledDateTime] = useState<string>("");
+
+  // Group statuses by outcome_type
+  const groupedStatuses = useMemo(() => {
+    const neutral: ConsultationStatus[] = [];
+    const positive: ConsultationStatus[] = [];
+    const negative: ConsultationStatus[] = [];
+
+    statuses.forEach((status) => {
+      switch (status.outcome_type) {
+        case "neutral":
+          neutral.push(status);
+          break;
+        case "positive":
+          positive.push(status);
+          break;
+        case "negative":
+          negative.push(status);
+          break;
+        default:
+          neutral.push(status);
+      }
+    });
+
+    return { neutral, positive, negative };
+  }, [statuses]);
 
   // Handle simple 1-click disposition
   const handleSimpleDisposition = async (status: ConsultationStatus) => {
@@ -88,7 +93,7 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
     try {
       await addConsultation.mutateAsync({ leadId, data: payload });
       onSuccess?.();
-    } catch (error) {
+    } catch {
       // Error is handled by the mutation
     }
   };
@@ -115,7 +120,7 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
 
     // Parse scheduled datetime (if applicable)
     let scheduledAt: string | null = null;
-    if (SCHEDULABLE_STATUSES.includes(selectedStatus.id) && scheduledDateTime) {
+    if (SCHEDULABLE_STATUS_IDS.includes(selectedStatus.id) && scheduledDateTime) {
       scheduledAt = new Date(scheduledDateTime).toISOString();
     }
 
@@ -131,14 +136,15 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
       await addConsultation.mutateAsync({ leadId, data: payload });
       setDialogOpen(false);
       onSuccess?.();
-    } catch (error) {
+    } catch {
       // Error is handled by the mutation
     }
   };
 
-  // Handle status button click
+  // Handle status button click - determine if simple or complex
   const handleStatusClick = (status: ConsultationStatus) => {
-    if (COMPLEX_STATUSES.includes(status.id)) {
+    // Complex statuses need dialog for additional context
+    if (COMPLEX_STATUS_IDS.includes(status.id)) {
       handleComplexDisposition(status);
     } else {
       handleSimpleDisposition(status);
@@ -153,36 +159,138 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
     );
   }
 
+  // Error state
+  if (isError) {
+    return (
+      <div className="p-4 text-sm text-red-600 bg-red-50 rounded-md">
+        <p className="font-medium">Không thể tải trạng thái</p>
+        <p className="text-xs mt-1">{error?.message || "Lỗi không xác định"}</p>
+      </div>
+    );
+  }
+
+  // Empty state - no statuses available
+  if (statuses.length === 0) {
+    return (
+      <div className="p-4 text-sm text-muted-foreground bg-muted/50 rounded-md">
+        <p>Không có trạng thái nào được cấu hình.</p>
+        <p className="text-xs mt-1">Vui lòng liên hệ Admin để thiết lập.</p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
-      <h4 className="text-sm font-medium text-muted-foreground">Quick Disposition</h4>
+      {/* Neutral Group - Retry/Callback */}
+      {groupedStatuses.neutral.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <PhoneOff className="h-3.5 w-3.5" />
+            <span className="font-medium">Kết nối thất bại / Gọi lại</span>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {groupedStatuses.neutral.map((status) => (
+              <Button
+                key={status.id}
+                variant="ghost"
+                size="sm"
+                className={cn(
+                  "h-7 text-xs px-2.5",
+                  "bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200"
+                )}
+                onClick={() => handleStatusClick(status)}
+                disabled={addConsultation.isPending}
+              >
+                {addConsultation.isPending ? (
+                  <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
+                ) : (
+                  <span
+                    className="w-1.5 h-1.5 rounded-full mr-1.5 flex-shrink-0"
+                    style={{ backgroundColor: status.color_code }}
+                  />
+                )}
+                {status.name}
+              </Button>
+            ))}
+          </div>
+        </div>
+      )}
 
-      {/* Status Buttons Grid */}
-      <div className="grid grid-cols-2 gap-2">
-        {statuses.map((status) => (
-          <Button
-            key={status.id}
-            variant="outline"
-            size="sm"
-            className={cn(
-              "justify-start text-xs h-auto py-2 px-3",
-              getStatusColor(status.id)
-            )}
-            onClick={() => handleStatusClick(status)}
-            disabled={addConsultation.isPending}
-          >
-            {addConsultation.isPending ? (
-              <Loader2 className="h-3 w-3 animate-spin mr-2" />
-            ) : (
-              <span
-                className="w-2 h-2 rounded-full mr-2 flex-shrink-0"
-                style={{ backgroundColor: status.color_code }}
-              />
-            )}
-            <span className="truncate">{status.name}</span>
-          </Button>
-        ))}
-      </div>
+      {/* Positive Group - Progress/Success */}
+      {groupedStatuses.positive.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <ThumbsUp className="h-3.5 w-3.5" />
+            <span className="font-medium">Tích cực / Tiến triển</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {groupedStatuses.positive.map((status) => (
+              <Button
+                key={status.id}
+                variant="outline"
+                size="sm"
+                className={cn(
+                  "h-9 text-xs justify-start",
+                  "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200",
+                  "font-medium"
+                )}
+                onClick={() => handleStatusClick(status)}
+                disabled={addConsultation.isPending}
+              >
+                {addConsultation.isPending ? (
+                  <Loader2 className="h-3 w-3 animate-spin mr-2" />
+                ) : (
+                  <span
+                    className="w-2 h-2 rounded-full mr-2 flex-shrink-0"
+                    style={{ backgroundColor: status.color_code }}
+                  />
+                )}
+                <span className="truncate">{status.name}</span>
+              </Button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Separator */}
+      {groupedStatuses.negative.length > 0 && (
+        <Separator className="my-3" />
+      )}
+
+      {/* Negative Group - Stop/Remove */}
+      {groupedStatuses.negative.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <XCircle className="h-3.5 w-3.5" />
+            <span className="font-medium">Dừng / Loại bỏ</span>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {groupedStatuses.negative.map((status) => (
+              <Button
+                key={status.id}
+                variant="ghost"
+                size="sm"
+                className={cn(
+                  "h-7 text-xs px-2.5",
+                  "bg-red-50 hover:bg-red-100 text-red-600 border border-red-200"
+                )}
+                onClick={() => handleStatusClick(status)}
+                disabled={addConsultation.isPending}
+              >
+                {addConsultation.isPending ? (
+                  <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
+                ) : (
+                  <span
+                    className="w-1.5 h-1.5 rounded-full mr-1.5 flex-shrink-0"
+                    style={{ backgroundColor: status.color_code }}
+                  />
+                )}
+                {status.name}
+              </Button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Complex Disposition Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -220,7 +328,7 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
             </div>
 
             {/* Scheduled Follow-up (only for schedulable statuses) */}
-            {selectedStatus && SCHEDULABLE_STATUSES.includes(selectedStatus.id) && (
+            {selectedStatus && SCHEDULABLE_STATUS_IDS.includes(selectedStatus.id) && (
               <div className="space-y-2">
                 <Label htmlFor="scheduled-datetime">Lịch hẹn tiếp theo</Label>
                 <Input

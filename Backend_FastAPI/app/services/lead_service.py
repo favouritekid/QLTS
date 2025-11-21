@@ -18,6 +18,7 @@ from ..utils.exceptions import (
     ResourceNotFoundError,
 )
 from ..services import pipeline_service, distribution_service
+from .. import socket_manager
 log = structlog.get_logger(__name__)
 
 
@@ -604,6 +605,37 @@ async def update_lead(
                     raise DuplicateResourceError(
                         detail="Another lead with this email already exists in the unit."
                     )
+
+            # Kiểm tra trùng lặp phone/phone2 nếu được cập nhật
+            phone_changed = "phone" in update_data and update_data["phone"] != db_lead.phone
+            phone2_changed = "phone2" in update_data and update_data["phone2"] != db_lead.phone2
+
+            if phone_changed or phone2_changed:
+                # Determine the new phone values to check
+                new_phone = update_data.get("phone", db_lead.phone)
+                new_phone2 = update_data.get("phone2", db_lead.phone2)
+
+                # Build phone duplicate check conditions
+                phone_conditions = []
+                if new_phone:
+                    phone_conditions.append(models.Lead.phone == new_phone)
+                if new_phone2:
+                    phone_conditions.append(models.Lead.phone == new_phone2)
+                    phone_conditions.append(models.Lead.phone2 == new_phone)
+                    phone_conditions.append(models.Lead.phone2 == new_phone2)
+
+                if phone_conditions:
+                    existing_lead_query = select(models.Lead).where(
+                        models.Lead.unit_id == db_lead.unit_id,  # Trong cùng unit
+                        models.Lead.id != lead_id,  # Loại trừ chính lead này
+                        models.Lead.deleted_at.is_(None),  # Exclude soft-deleted
+                        or_(*phone_conditions)
+                    )
+                    existing_lead_result = await db.execute(existing_lead_query)
+                    if existing_lead_result.scalar_one_or_none():
+                        raise DuplicateResourceError(
+                            detail="Another lead with this phone number already exists in the unit."
+                        )
 
             # === NEW FEATURE: Auto-Reassign on Offering Change ===
             # Track offering_id change before applying updates
@@ -1220,11 +1252,197 @@ async def delete_consultation(
             consultation_id=consultation_id,
             new_lead_status=new_status_id,
         )
+
+        # Emit Socket.IO event for real-time updates
+        await socket_manager.emit_consultation_deleted(
+            lead_id=lead_id,
+            consultation_id=consultation_id,
+            officer_id=lead.assigned_officer_id,
+            new_lead_status_id=new_status_id,
+            deleted_by_username=current_user.username,
+        )
     except Exception as e:
         # Rollback nếu có lỗi
         await db.rollback()
         log.error(
             "Failed to delete consultation",
+            lead_id=lead_id,
+            consultation_id=consultation_id,
+            error=str(e),
+            exc_info=True,
+        )
+        raise e
+
+
+async def update_consultation(
+    db: AsyncSession,
+    lead_id: int,
+    consultation_id: int,
+    consultation_in: schemas.ConsultationUpdate,
+    current_user: models.User,
+):
+    """
+    Cập nhật một consultation.
+
+    Permission Rules:
+    - Admin: Can update any consultation
+    - Officer: Can only update the most recent consultation (prevents breaking consultation chain)
+
+    Business Logic:
+    - If status_id is changed, update lead's consultation_status_id and pipeline_stage_id
+    - Log the change in LeadStatusHistory if lead status changes
+    - Emit Socket.IO event for real-time updates
+    """
+    try:
+        # Lấy Lead
+        lead_query = select(models.Lead).where(models.Lead.id == lead_id)
+        lead_result = await db.execute(lead_query)
+        lead = lead_result.scalar_one_or_none()
+        if not lead:
+            raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found.")
+
+        # Lấy Consultation cần update
+        consultation = await db.get(models.Consultation, consultation_id)
+        if not consultation:
+            raise ResourceNotFoundError(
+                detail=f"Consultation with id {consultation_id} not found."
+            )
+        # Kiểm tra consultation thuộc đúng Lead
+        if consultation.lead_id != lead_id:
+            raise BadRequest(
+                detail="Consultation does not belong to the specified lead."
+            )
+
+        # Kiểm tra quyền
+        if current_user.role == "admin":
+            # Admin có quyền update bất kỳ consultation nào
+            pass
+        elif current_user.role == "officer":
+            # Officer chỉ được update consultation mới nhất
+            latest_consultation_query = (
+                select(models.Consultation)
+                .where(models.Consultation.lead_id == lead_id)
+                .order_by(
+                    models.Consultation.consultation_date.desc(),
+                    models.Consultation.id.desc(),
+                )
+            )
+            latest_consultation_result = await db.execute(latest_consultation_query)
+            latest_consultation = latest_consultation_result.scalars().first()
+
+            if not latest_consultation or latest_consultation.id != consultation_id:
+                raise PermissionDeniedError(
+                    detail="Officers can only update the most recent consultation to maintain consultation chain integrity."
+                )
+
+            # Kiểm tra officer có được gán cho Lead này không
+            if lead.assigned_officer_id != current_user.id:
+                raise PermissionDeniedError(
+                    detail="You are not assigned to this lead."
+                )
+        else:
+            # Các role khác không có quyền update consultation
+            raise PermissionDeniedError(
+                detail="You don't have permission to update consultations."
+            )
+
+        # Lưu trạng thái cũ của Lead trước khi update
+        old_state = _get_current_lead_state(lead)
+        old_consultation_status_id = consultation.consultation_status_id
+
+        # Update các trường được cung cấp
+        update_data = consultation_in.model_dump(exclude_unset=True)
+        for field, value in update_data.items():
+            if field == "status_id":
+                # Đặt consultation_status_id
+                consultation.consultation_status_id = value
+            else:
+                setattr(consultation, field, value)
+
+        db.add(consultation)
+
+        # Nếu status_id thay đổi và đây là consultation mới nhất
+        # Cập nhật trạng thái Lead
+        status_changed = False
+        if "status_id" in update_data and update_data["status_id"] != old_consultation_status_id:
+            # Kiểm tra xem có phải consultation mới nhất không
+            latest_consultation_query = (
+                select(models.Consultation)
+                .where(models.Consultation.lead_id == lead_id)
+                .order_by(
+                    models.Consultation.consultation_date.desc(),
+                    models.Consultation.id.desc(),
+                )
+            )
+            latest_consultation_result = await db.execute(latest_consultation_query)
+            latest_consultation = latest_consultation_result.scalars().first()
+
+            if latest_consultation and latest_consultation.id == consultation_id:
+                # Đây là consultation mới nhất, cập nhật lead status
+                new_status = await db.get(
+                    models.ConsultationStatus, update_data["status_id"]
+                )
+                if new_status:
+                    lead.consultation_status_id = new_status.id
+                    lead.pipeline_stage_id = new_status.stage_id
+                    db.add(lead)
+                    status_changed = True
+
+                    log.info(
+                        "Lead status updated via consultation update",
+                        lead_id=lead_id,
+                        consultation_id=consultation_id,
+                        old_status=old_consultation_status_id,
+                        new_status=new_status.id,
+                    )
+                else:
+                    log.warning(
+                        f"Status '{update_data['status_id']}' not found",
+                        lead_id=lead_id,
+                    )
+
+        # Lấy trạng thái mới sau khi cập nhật
+        new_state = _get_current_lead_state(lead)
+
+        # Ghi log lịch sử thay đổi trạng thái Lead (nếu có thay đổi)
+        if status_changed:
+            await _log_lead_state_change(
+                db,
+                lead,
+                old_state,
+                new_state,
+                changed_by=current_user,
+                reason=f"Updated consultation ID {consultation_id}",
+            )
+
+        # Commit transaction
+        await db.commit()
+        await db.refresh(consultation)
+
+        log.info(
+            "Consultation updated successfully",
+            user_id=current_user.id,
+            lead_id=lead_id,
+            consultation_id=consultation_id,
+            status_changed=status_changed,
+        )
+
+        # Emit Socket.IO event for real-time updates
+        await socket_manager.emit_consultation_updated(
+            lead_id=lead_id,
+            consultation_id=consultation_id,
+            officer_id=lead.assigned_officer_id,
+            consultation_status_id=consultation.consultation_status_id or "",
+            updated_by_username=current_user.username,
+        )
+
+        return consultation
+
+    except Exception as e:
+        # Rollback nếu có lỗi
+        await db.rollback()
+        log.error(
+            "Failed to update consultation",
             lead_id=lead_id,
             consultation_id=consultation_id,
             error=str(e),

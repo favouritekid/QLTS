@@ -91,8 +91,8 @@ export const LeadFilters = React.memo(function LeadFilters({
     offeringFilter !== "all";
 
   return (
-    <div className="w-[280px] shrink-0 border-r bg-card">
-      <div className="sticky top-0 h-[calc(100vh-200px)] overflow-y-auto p-4 space-y-4">
+    <div className="h-full bg-card">
+      <div className="h-full overflow-y-auto p-4 space-y-4">
         {/* Header */}
         <div className="flex items-center justify-between">
           <h3 className="font-semibold text-sm">Filters</h3>

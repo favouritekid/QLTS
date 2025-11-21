@@ -16,6 +16,7 @@ import type {
   LeadListParams,
   Consultation,
   ConsultationCreate,
+  ConsultationUpdate,
   TimelineItem,
   LeadInsights,
   LeadImportResult,
@@ -220,7 +221,24 @@ export async function addConsultation(
 }
 
 /**
- * Delete consultation (admin only)
+ * Update consultation (admin: any, officer: most recent only)
+ *
+ * @throws {AxiosError} 404 if not found, 403 if no permission
+ */
+export async function updateConsultation(
+  leadId: number,
+  consultationId: number,
+  data: ConsultationUpdate
+): Promise<Consultation> {
+  const response = await api.put<Consultation>(
+    `/api/leads/${leadId}/consultations/${consultationId}`,
+    data
+  )
+  return response.data
+}
+
+/**
+ * Delete consultation (admin: any, officer: most recent only)
  *
  * @throws {AxiosError} 404 if not found, 403 if no permission
  */
@@ -361,6 +379,7 @@ export const leadsApi = {
 
   // Consultations
   addConsultation,
+  updateConsultation,
   deleteConsultation,
 
   // Data Access

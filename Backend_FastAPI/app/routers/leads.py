@@ -107,7 +107,26 @@ async def update_existing_lead(
 ):
     """Cập nhật một Lead (chỉ Admin/Manager)."""
     # <<< SỬA Ở ĐÂY: Truyền current_user vào service >>>
-    return await lead_service.update_lead(db, lead.id, lead_in, updated_by=current_user)
+
+    # Track which fields are being updated
+    update_data = lead_in.model_dump(exclude_unset=True)
+    updated_fields = list(update_data.keys())
+    status_changed = "consultation_status_id" in updated_fields or "pipeline_stage_id" in updated_fields
+
+    result = await lead_service.update_lead(db, lead.id, lead_in, updated_by=current_user)
+    await db.commit()
+
+    # Emit Socket.IO event for real-time updates
+    from ..socket_manager import emit_lead_updated
+    await emit_lead_updated(
+        lead_id=lead.id,
+        officer_id=result.assigned_officer_id,
+        updated_fields=updated_fields,
+        updated_by_username=current_user.username,
+        status_changed=status_changed,
+    )
+
+    return result
 
 
 @router.delete("/{lead_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -150,9 +169,22 @@ async def add_new_consultation(
     """Thêm một ghi chú tư vấn mới cho Lead (Đã xác thực 2 lớp)."""
     # Service 'add_consultation' có logic check quyền sở hữu
     # nhưng check ở đây vẫn an toàn hơn
-    return await lead_service.add_consultation(
+    result = await lead_service.add_consultation(
         db, lead.id, current_user.id, consultation_in
     )
+    await db.commit()
+
+    # Emit Socket.IO event for real-time updates
+    from ..socket_manager import emit_consultation_created
+    await emit_consultation_created(
+        lead_id=lead.id,
+        consultation_id=result.id,
+        officer_id=lead.assigned_officer_id,
+        consultation_status_id=result.consultation_status_id or "",
+        created_by_username=current_user.username,
+    )
+
+    return result
 
 
 @router.post("/{lead_id}/assign", response_model=schemas.Lead)
@@ -163,9 +195,11 @@ async def assign_lead_manually(
     db: AsyncSession = Depends(database.get_db),
 ):
     """(Admin/Manager only) Gán thủ công một Lead (Đã xác thực 2 lớp)."""
-    return await lead_service.assign_lead_manually(
+    result = await lead_service.assign_lead_manually(
         db, lead.id, assign_data.officer_id, current_user
     )
+    await db.commit()
+    return result
 
 
 @router.post("/{lead_id}/action", response_model=schemas.Lead)
@@ -176,9 +210,11 @@ async def perform_lead_action(
     db: AsyncSession = Depends(database.get_db),
 ):
     """Xử lý hành động (reject/reassign) của Officer (Đã xác thực 2 lớp)."""
-    return await lead_service.process_officer_action(
+    result = await lead_service.process_officer_action(
         db, lead.id, current_user, action_data.action, action_data.reason
     )
+    await db.commit()
+    return result
 
 
 @router.get("/{lead_id}/timeline", response_model=List[schemas.TimelineItem])
@@ -198,6 +234,37 @@ async def get_lead_insights(
     """Lấy các chỉ số insight 360 độ của một Lead (Đã xác thực quyền)."""
     timeline = await lead_service.get_lead_timeline(db, lead.id)
     return await insights_service.get_lead_insights(db, lead, timeline)
+
+
+@router.put(
+    "/{lead_id}/consultations/{consultation_id}", response_model=schemas.Consultation
+)
+async def update_a_consultation(
+    consultation_id: int,
+    consultation_in: schemas.ConsultationUpdate,
+    lead: models.Lead = LeadAccessDep,  # <-- IDOR Check
+    current_user: models.User = PermissionDep,  # <-- Casbin Check
+    db: AsyncSession = Depends(database.get_db),
+):
+    """
+    Cập nhật một ghi chú tư vấn (Admin: any consultation, Officer: most recent only).
+
+    Permission Rules:
+    - Admin: Can update any consultation
+    - Officer: Can only update the most recent consultation to maintain consultation chain integrity
+    - Other roles: Cannot update consultations
+
+    Business Logic:
+    - If status_id is changed and this is the most recent consultation, lead status will be updated
+    - Changes are logged in LeadStatusHistory
+    - Real-time Socket.IO event is emitted to all connected clients
+
+    This prevents Officers from breaking the consultation chain by editing historical consultations.
+    """
+    result = await lead_service.update_consultation(
+        db, lead.id, consultation_id, consultation_in, current_user
+    )
+    return result
 
 
 @router.delete(

@@ -1,100 +1,423 @@
 // src/components/leads/LeadTimelineTab.tsx
 "use client";
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Clock, User, FileText } from "lucide-react";
-import type { TimelineItem } from "@/types/lead.types";
+import { Button } from "@/components/ui/button";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Clock,
+  User,
+  FileText,
+  Phone,
+  Mail,
+  MessageSquare,
+  Calendar,
+  UserPlus,
+  Video,
+  Trash2,
+  Edit,
+  MoreVertical,
+} from "lucide-react";
+import { useLeadTimeline, useDeleteConsultation } from "@/hooks/useLeads";
+import { format, isToday, isYesterday, parseISO } from "date-fns";
+import { vi } from "date-fns/locale";
+import { cn } from "@/lib/utils";
+import { useState } from "react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { EditConsultationDialog } from "./EditConsultationDialog";
+import type { Consultation, TimelineItem as TimelineItemBase } from "@/types/lead.types";
+
+// Extended timeline type for backward compatibility with old structure
+type TimelineItem = TimelineItemBase & {
+  data?: Consultation | { method?: string } | Record<string, unknown>;
+};
 
 interface LeadTimelineTabProps {
   leadId: number;
-  timeline?: TimelineItem[];
 }
 
-const eventTypeColors: Record<string, string> = {
-  created: "bg-blue-100 text-blue-800",
-  updated: "bg-yellow-100 text-yellow-800",
-  assigned: "bg-green-100 text-green-800",
-  status_changed: "bg-purple-100 text-purple-800",
-  consultation_added: "bg-pink-100 text-pink-800",
-  note_added: "bg-gray-100 text-gray-800",
+// Get icon and color based on event type and method
+const getEventConfig = (eventType: string, method?: string) => {
+  // Consultation events - differentiate by method
+  if (eventType === "consultation") {
+    switch (method) {
+      case "phone":
+        return {
+          icon: Phone,
+          color: "text-slate-600",
+          bgColor: "bg-slate-100",
+          ringColor: "ring-slate-200",
+          label: "Cuộc gọi",
+        };
+      case "email":
+        return {
+          icon: Mail,
+          color: "text-slate-600",
+          bgColor: "bg-slate-100",
+          ringColor: "ring-slate-200",
+          label: "Email",
+        };
+      case "video":
+        return {
+          icon: Video,
+          color: "text-slate-600",
+          bgColor: "bg-slate-100",
+          ringColor: "ring-slate-200",
+          label: "Video call",
+        };
+      case "in_person":
+        return {
+          icon: User,
+          color: "text-slate-600",
+          bgColor: "bg-slate-100",
+          ringColor: "ring-slate-200",
+          label: "Gặp trực tiếp",
+        };
+      default:
+        return {
+          icon: MessageSquare,
+          color: "text-slate-600",
+          bgColor: "bg-slate-100",
+          ringColor: "ring-slate-200",
+          label: "Tư vấn",
+        };
+    }
+  }
+
+  // Assignment events
+  if (eventType === "assignment") {
+    return {
+      icon: UserPlus,
+      color: "text-slate-600",
+      bgColor: "bg-slate-100",
+      ringColor: "ring-slate-200",
+      label: "Phân công",
+    };
+  }
+
+  // Default
+  return {
+    icon: Clock,
+    color: "text-slate-600",
+    bgColor: "bg-slate-100",
+    ringColor: "ring-slate-200",
+    label: "Hoạt động",
+  };
 };
 
-export function LeadTimelineTab({ timeline }: LeadTimelineTabProps) {
-  if (!timeline) {
+// Format date for grouping
+const formatDateGroup = (dateString: string) => {
+  const date = parseISO(dateString);
+  if (isToday(date)) return "Hôm nay";
+  if (isYesterday(date)) return "Hôm qua";
+  return format(date, "EEEE, dd/MM/yyyy", { locale: vi });
+};
+
+// Group timeline by date
+const groupTimelineByDate = (timeline: TimelineItem[]) => {
+  const groups: Record<string, typeof timeline> = {};
+
+  // Sort by date descending (newest first)
+  const sorted = [...timeline].sort((a, b) => {
+    const dateA = new Date(a.timestamp || 0);
+    const dateB = new Date(b.timestamp || 0);
+    return dateB.getTime() - dateA.getTime();
+  });
+
+  sorted.forEach((event) => {
+    const dateKey = format(
+      parseISO(event.timestamp || new Date().toISOString()),
+      "yyyy-MM-dd"
+    );
+    if (!groups[dateKey]) {
+      groups[dateKey] = [];
+    }
+    groups[dateKey].push(event);
+  });
+
+  return groups;
+};
+
+// Get initials from name
+const getInitials = (name: string) => {
+  return name
+    .split(" ")
+    .map((n) => n[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
+};
+
+export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
+  const { data: timeline, isLoading } = useLeadTimeline(leadId);
+  const deleteMutation = useDeleteConsultation();
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [selectedConsultationId, setSelectedConsultationId] = useState<number | null>(null);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editingConsultation, setEditingConsultation] = useState<Consultation | null>(null);
+
+  if (isLoading || !timeline) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Timeline</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {[...Array(3)].map((_, i) => (
-            <Skeleton key={i} className="h-20 w-full" />
-          ))}
-        </CardContent>
-      </Card>
+      <div className="space-y-4">
+        {[...Array(3)].map((_, i) => (
+          <Skeleton key={i} className="h-24 w-full rounded-lg" />
+        ))}
+      </div>
     );
   }
 
+  if (timeline.length === 0) {
+    return (
+      <div className="text-center py-12 text-muted-foreground bg-slate-50/50 rounded-lg border border-dashed">
+        <MessageSquare className="h-10 w-10 mx-auto mb-3 opacity-20" />
+        <p className="font-medium">Chưa có hoạt động nào</p>
+        <p className="text-xs mt-1">Lịch sử tương tác sẽ xuất hiện tại đây</p>
+      </div>
+    );
+  }
+
+  const groupedTimeline = groupTimelineByDate(timeline);
+  const dateKeys = Object.keys(groupedTimeline).sort().reverse();
+
+  const handleEditConsultation = (consultation: Consultation) => {
+    setEditingConsultation(consultation);
+    setEditDialogOpen(true);
+  };
+
+  const handleDeleteConsultation = (consultationId: number) => {
+    setSelectedConsultationId(consultationId);
+    setDeleteDialogOpen(true);
+  };
+
+  const confirmDelete = () => {
+    if (selectedConsultationId) {
+      deleteMutation.mutate(
+        { leadId, consultationId: selectedConsultationId },
+        {
+          onSuccess: () => {
+            setDeleteDialogOpen(false);
+            setSelectedConsultationId(null);
+          },
+        }
+      );
+    }
+  };
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Timeline</CardTitle>
-        <CardDescription>
-          Complete history of activities for this lead
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        {timeline.length === 0 ? (
-          <div className="text-center py-8 text-muted-foreground">
-            No timeline events recorded yet
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {timeline.map((event, index) => (
-              <div key={event.id || index} className="flex gap-4 relative">
-                {/* Timeline line */}
-                {index !== timeline.length - 1 && (
-                  <div className="absolute left-4 top-8 bottom-0 w-0.5 bg-border" />
-                )}
+    <>
+      <div className="space-y-8">
+        {dateKeys.map((dateKey) => (
+          <div key={dateKey}>
+            {/* Date Header */}
+            <div className="flex items-center gap-3 mb-4">
+              <Calendar className="h-4 w-4 text-muted-foreground" />
+              <span className="text-sm font-semibold text-foreground">
+                {formatDateGroup(dateKey + "T00:00:00")}
+              </span>
+              <div className="flex-1 h-px bg-border" />
+            </div>
 
-                {/* Timeline dot */}
-                <div className="flex-shrink-0 w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center z-10">
-                  {(event.event_type || event.type) === "consultation_added" ? (
-                    <FileText className="h-4 w-4 text-primary" />
-                  ) : (event.event_type || event.type) === "assigned" ? (
-                    <User className="h-4 w-4 text-primary" />
-                  ) : (
-                    <Clock className="h-4 w-4 text-primary" />
-                  )}
-                </div>
+            {/* Events for this date - with connecting line */}
+            <div className="relative pl-6 space-y-6">
+              {/* Connecting line */}
+              <div className="absolute left-[15px] top-3 bottom-3 w-0.5 bg-gradient-to-b from-border via-border to-transparent" />
 
-                {/* Event content */}
-                <div className="flex-1 pb-4">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Badge
-                      variant="outline"
-                      className={eventTypeColors[event.event_type || event.type] || eventTypeColors.note_added}
+              {groupedTimeline[dateKey].map((event, index) => {
+                const eventType = event.type || "lead_created";
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const eventData = (event.data || {}) as any; // TODO: Refactor to use new TimelineItem structure
+                const isConsultation = eventType === "consultation_added" || eventType === "consultation_updated";
+                const isAssignment = eventType === "assigned";
+
+                const config = getEventConfig(
+                  eventType,
+                  isConsultation ? (eventData.method as string) : undefined
+                );
+                const Icon = config.icon;
+
+                // Generate title and subtitle
+                let title = "";
+                let subtitle = "";
+                let actorName = "";
+
+                if (isConsultation) {
+                  const statusName = eventData.consultation_status?.name || "Tư vấn";
+                  title = statusName;
+
+                  // Only show notes if it's not the auto-generated "Ghi nhận nhanh: {status}" format
+                  const autoNotePattern = `Ghi nhận nhanh: ${statusName}`;
+                  const notes = eventData.notes || "";
+                  if (notes && notes !== autoNotePattern) {
+                    subtitle = notes;
+                  }
+
+                  actorName = eventData.officer?.full_name || "";
+                } else if (isAssignment) {
+                  title = "Phân công lead";
+                  subtitle = eventData.reason || "Lead được gán cho officer";
+                  actorName = eventData.officer?.full_name || "";
+                }
+
+                return (
+                  <div key={index} className="relative flex gap-3 group">
+                    {/* Timeline Dot (Icon) - smaller and neutral */}
+                    <div
+                      className={cn(
+                        "relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 border-white shadow-sm transition-all ring-1",
+                        config.bgColor,
+                        config.ringColor
+                      )}
                     >
-                      {(event.event_type || event.type).replace(/_/g, " ")}
-                    </Badge>
-                    <span className="text-sm text-muted-foreground">
-                      {event.created_at ? new Date(event.created_at).toLocaleString() : new Date(event.timestamp).toLocaleString()}
-                    </span>
+                      <Icon className={cn("h-3.5 w-3.5", config.color)} />
+                    </div>
+
+                    {/* Content Block */}
+                    <div className="flex-1 bg-card rounded-lg border shadow-sm transition-all hover:shadow-md hover:border-primary/30">
+                      <div className="p-4">
+                        {/* Header: Title, Actor, Time, Actions */}
+                        <div className="flex items-start justify-between gap-3 mb-2">
+                          <div className="flex-1 min-w-0">
+                            {/* Title with method badge */}
+                            <div className="flex items-center gap-2 mb-1">
+                              <h4 className="font-semibold text-sm text-foreground">
+                                {title}
+                              </h4>
+                              {isConsultation && eventData.method && (
+                                <Badge
+                                  variant="secondary"
+                                  className="text-[10px] px-1.5 py-0 font-normal"
+                                >
+                                  {config.label}
+                                </Badge>
+                              )}
+                            </div>
+
+                            {/* Actor and time */}
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                              {actorName && (
+                                <>
+                                  <Avatar className="h-4 w-4">
+                                    <AvatarFallback className="text-[8px] bg-primary/10">
+                                      {getInitials(actorName)}
+                                    </AvatarFallback>
+                                  </Avatar>
+                                  <span className="font-medium">{actorName}</span>
+                                  <span>•</span>
+                                </>
+                              )}
+                              <time>
+                                {format(parseISO(event.timestamp || ""), "HH:mm")}
+                              </time>
+                            </div>
+                          </div>
+
+                          {/* Actions Menu */}
+                          {isConsultation && eventData.id && (
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 w-7 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                                >
+                                  <MoreVertical className="h-4 w-4 text-muted-foreground" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuItem
+                                  onClick={() => handleEditConsultation(eventData)}
+                                >
+                                  <Edit className="h-4 w-4 mr-2" />
+                                  Sửa
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  className="text-destructive focus:text-destructive"
+                                  onClick={() => handleDeleteConsultation(eventData.id)}
+                                >
+                                  <Trash2 className="h-4 w-4 mr-2" />
+                                  Xóa
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          )}
+                        </div>
+
+                        {/* Body: Description/Notes - only if not redundant */}
+                        {subtitle && (
+                          <div className="text-sm text-muted-foreground leading-relaxed mb-3">
+                            <div className="flex items-start gap-2">
+                              <FileText className="h-3.5 w-3.5 shrink-0 mt-0.5 opacity-40" />
+                              <p className="flex-1">{subtitle}</p>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Footer: Metadata - only scheduled_at */}
+                        {isConsultation && eventData.scheduled_at && (
+                          <div className="flex flex-wrap gap-2">
+                            <Badge
+                              variant="outline"
+                              className="text-xs font-normal gap-1 border-blue-200 bg-blue-50 text-blue-700"
+                            >
+                              <Calendar className="h-3 w-3" />
+                              Hẹn: {format(parseISO(eventData.scheduled_at), "dd/MM HH:mm")}
+                            </Badge>
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                  <p className="text-sm text-muted-foreground">{event.description}</p>
-                  {event.actor_id && (
-                    <p className="text-xs text-muted-foreground mt-1">
-                      By: User #{event.actor_id}
-                    </p>
-                  )}
-                </div>
-              </div>
-            ))}
+                );
+              })}
+            </div>
           </div>
-        )}
-      </CardContent>
-    </Card>
+        ))}
+      </div>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Xóa ghi nhận tư vấn?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Hành động này không thể hoàn tác. Ghi nhận tư vấn sẽ bị xóa vĩnh viễn khỏi timeline.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Hủy</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDelete}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              Xóa
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Edit Consultation Dialog */}
+      <EditConsultationDialog
+        open={editDialogOpen}
+        onOpenChange={setEditDialogOpen}
+        leadId={leadId}
+        consultation={editingConsultation}
+      />
+    </>
   );
 }

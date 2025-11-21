@@ -20,6 +20,7 @@ Complexity: HIGH (Casbin integration, atomic operations, policy validation)
 """
 
 from typing import List, Optional, Dict, Any
+from datetime import datetime, timezone
 
 import casbin
 import structlog
@@ -49,6 +50,8 @@ from app.utils.exceptions import (
     PermissionDeniedError,
     ResourceNotFoundError,
 )
+from app.socket_manager import sio
+from app.socket_metrics import socket_events_emitted_total
 
 log = structlog.get_logger(__name__)
 
@@ -96,6 +99,33 @@ async def log_admin_activity(
         ip_address=ip_address,
         user_agent=user_agent,
     )
+
+
+async def emit_policy_update(operation: str, data: dict):
+    """
+    Emit Socket.IO event for policy updates.
+
+    This notifies all connected clients (and potentially other workers)
+    that a policy has been changed, allowing them to:
+    1. Invalidate their React Query cache
+    2. Reload their Casbin enforcer
+
+    Args:
+        operation: Type of operation (create, delete, update)
+        data: Policy data that was changed
+    """
+    event_data = {
+        "resource_type": "policy",
+        "operation": operation,
+        "data": data,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        await sio.emit("data_updated", event_data)
+        socket_events_emitted_total.labels(event_type="data_updated").inc()
+        log.info("Emitted policy update event", operation=operation, data=data)
+    except Exception as e:
+        log.error("Failed to emit policy update event", error=str(e), operation=operation)
 
 
 # ============================================================================
@@ -148,6 +178,16 @@ async def add_new_policy(
         },
     )
 
+    # Emit socket event for frontend cache invalidation
+    await emit_policy_update("create", {
+        "subject": policy_in.subject,
+        "object": policy_in.object,
+        "action": policy_in.action,
+    })
+
+    # Reload policy for current worker to ensure consistency
+    await enforcer.load_policy()
+
     return {"detail": "Policy added successfully."}
 
 
@@ -199,6 +239,16 @@ async def delete_policy(
             "action": policy_in.action,
         },
     )
+
+    # Emit socket event for frontend cache invalidation
+    await emit_policy_update("delete", {
+        "subject": policy_in.subject,
+        "object": policy_in.object,
+        "action": policy_in.action,
+    })
+
+    # Reload policy for current worker to ensure consistency
+    await enforcer.load_policy()
 
     return {"detail": "Policy removed successfully."}
 

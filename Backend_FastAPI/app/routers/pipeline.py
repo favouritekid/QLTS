@@ -34,3 +34,24 @@ async def get_full_pipeline(
     stages = await pipeline_service.get_all_pipeline_stages(db)
     statuses = await pipeline_service.get_all_consultation_statuses(db)
     return {"stages": stages, "statuses": statuses}
+
+
+@router.get("/allowed-next-statuses", response_model=List[schemas.ConsultationStatus])
+async def get_allowed_next_statuses(
+    current_status_id: str | None = None,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = PermissionDep,
+):
+    """
+    Lấy danh sách các trạng thái được phép chuyển đến từ trạng thái hiện tại.
+
+    Sử dụng state machine workflow để xác định các trạng thái hợp lệ tiếp theo.
+    Nếu current_status_id không được cung cấp, trả về tất cả statuses (dành cho lead mới).
+
+    **Query Parameters:**
+    - current_status_id (optional): ID của consultation status hiện tại
+
+    **Returns:**
+    - Danh sách ConsultationStatus được phép chuyển đến
+    """
+    return await pipeline_service.get_allowed_next_statuses(db, current_status_id)

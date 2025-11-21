@@ -44,6 +44,10 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/leads/{lead_id}", "action": "GET"},
         {"subject": "{role}", "object": "/api/leads/{lead_id}/consultations", "action": "POST"},
         {"subject": "{role}", "object": "/api/leads/{lead_id}/action", "action": "POST"},
+        # Pipeline access (for consultation statuses in QuickDisposition)
+        {"subject": "{role}", "object": "/api/pipeline/stages", "action": "GET"},
+        {"subject": "{role}", "object": "/api/pipeline/all", "action": "GET"},
+        {"subject": "{role}", "object": "/api/pipeline/allowed-next-statuses", "action": "GET"},
         # Profile access
         {"subject": "{role}", "object": "/api/profile", "action": "GET"},
         {"subject": "{role}", "object": "/api/profile", "action": "PUT"},

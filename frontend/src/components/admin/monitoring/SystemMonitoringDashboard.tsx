@@ -1,7 +1,7 @@
 // src/components/admin/monitoring/SystemMonitoringDashboard.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
@@ -76,7 +76,7 @@ interface RedisInfo {
 
 export function SystemMonitoringDashboard() {
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [refreshInterval, setRefreshInterval] = useState(10000); // 10 seconds
+  const [refreshInterval] = useState(10000); // 10 seconds
 
   // System Overview Query
   const {

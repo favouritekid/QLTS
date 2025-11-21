@@ -84,7 +84,7 @@ export type AssignmentMethod =
 export interface Lead {
   id: number
   full_name: string
-  email: string
+  email?: string | null  // Email is optional - not all leads have email
   phone: string
   phone2?: string | null  // Số điện thoại phụ
   source: LeadSource
@@ -122,7 +122,7 @@ export interface Lead {
  */
 export interface LeadCreate {
   full_name: string
-  email: string
+  email?: string | null  // Email is optional - not all leads have email
   phone: string
   phone2?: string | null  // Số điện thoại phụ
   source: LeadSource
@@ -138,7 +138,7 @@ export interface LeadCreate {
  */
 export interface LeadUpdate {
   full_name?: string
-  email?: string
+  email?: string | null  // Email is optional and nullable
   phone?: string
   phone2?: string | null  // Số điện thoại phụ
   source?: LeadSource
@@ -226,14 +226,15 @@ export interface ConsultationCreate {
 
 /**
  * Consultation update payload
+ * All fields are optional - only provided fields will be updated
  */
 export interface ConsultationUpdate {
-  consultation_date?: string
   method?: ConsultationMethod
   notes?: string
   outcome?: ConsultationOutcome
   duration_minutes?: number
-  consultation_status_id?: string
+  status_id?: string // consultation status ID
+  scheduled_at?: string | null // ISO datetime - for follow-up scheduling
 }
 
 // ============================================

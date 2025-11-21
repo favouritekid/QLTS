@@ -29,6 +29,19 @@ class ConsultationCreate(ConsultationBase):
     scheduled_at: Optional[datetime] = None  # Quick Disposition: follow-up time
 
 
+class ConsultationUpdate(BaseModel):
+    """
+    Schema for updating a consultation.
+    All fields are optional - only provided fields will be updated.
+    """
+    method: Optional[str] = None
+    notes: Optional[str] = Field(None, strip_whitespace=True)
+    outcome: Optional[str] = None
+    duration_minutes: Optional[int] = None
+    status_id: Optional[str] = None
+    scheduled_at: Optional[datetime] = None
+
+
 class Consultation(ConsultationBase):
     id: int
     consultation_date: datetime
@@ -85,7 +98,7 @@ class LeadAction(BaseModel):
 class LeadBase(BaseModel):
     # ✅ SỬA: Thêm validation cho tất cả các trường string
     full_name: str = Field(..., min_length=1, max_length=255, strip_whitespace=True)
-    email: EmailStr  # EmailStr đã tự động strip và validate
+    email: Optional[EmailStr] = None  # Email is optional - not all leads have email
     phone: str = Field(..., min_length=1, max_length=20, strip_whitespace=True)
     phone2: Optional[str] = Field(None, max_length=20, strip_whitespace=True)  # Số điện thoại phụ
     source: str = Field(..., min_length=1, max_length=50, strip_whitespace=True)

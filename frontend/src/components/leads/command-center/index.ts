@@ -3,3 +3,4 @@ export { LeadStats } from "./LeadStats";
 export { LeadFilters } from "./LeadFilters";
 export { LeadListItem } from "./LeadListItem";
 export { LeadDetailSheet } from "./LeadDetailSheet";
+export { LeadDetailPanel } from "./LeadDetailPanel";

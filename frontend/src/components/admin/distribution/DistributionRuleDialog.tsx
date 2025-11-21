@@ -42,7 +42,6 @@ import { Switch } from "@/components/ui/switch";
 // Import existing hooks for component reuse
 import {
   useOrganizationUnits,
-  useDegreeLevels,
   flattenOrganizationTree,
 } from "@/hooks/useOrganization";
 
@@ -91,7 +90,7 @@ export function DistributionRuleDialog({ open, onOpenChange, rule }: Distributio
   const { data: units = [], isLoading: isLoadingUnits } = useOrganizationUnits();
 
   // 2. Fetch degree levels for grouping
-  const { data: degreeLevels = [], isLoading: isLoadingDegreeLevels } = useDegreeLevels(true);
+  // const { data: degreeLevels = [], isLoading: isLoadingDegreeLevels } = useDegreeLevels(true);
 
   // Flatten units for dropdown with hierarchy indication
   const flattenedUnits = useMemo(() => {
@@ -233,7 +232,7 @@ export function DistributionRuleDialog({ open, onOpenChange, rule }: Distributio
   });
 
   const onSubmit = (values: FormValues) => mutation.mutate(values);
-  const isLoadingDropdowns = isLoadingUnits || isLoadingDegreeLevels;
+  const isLoadingDropdowns = isLoadingUnits;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

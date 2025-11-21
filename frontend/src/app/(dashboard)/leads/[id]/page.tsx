@@ -256,7 +256,7 @@ export default function LeadDetailPage() {
         </TabsContent>
 
         <TabsContent value="timeline">
-          <LeadTimelineTab leadId={leadId} timeline={timeline} />
+          <LeadTimelineTab leadId={leadId} />
         </TabsContent>
 
         <TabsContent value="consultations">

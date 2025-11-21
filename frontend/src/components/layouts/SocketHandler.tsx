@@ -431,6 +431,109 @@ export function SocketHandler() {
       });
     };
 
+    // ✅ REAL-TIME CONSULTATION MANAGEMENT: Lắng nghe sự kiện consultation_created
+    const handleConsultationCreated = (data: {
+      lead_id: number;
+      consultation_id: number;
+      consultation_status_id: string;
+      created_by: string;
+      created_at: string;
+      message: string;
+    }) => {
+      console.log("[SocketHandler] Received consultation_created event:", data);
+
+      // Invalidate lead-related queries to refresh timeline and status
+      queryClient.invalidateQueries({ queryKey: ["leads"] });
+      queryClient.invalidateQueries({ queryKey: ["leads", data.lead_id] });
+      queryClient.invalidateQueries({ queryKey: ["leads", data.lead_id, "timeline"] });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+
+      // Show toast notification
+      toast.info("➕ New consultation added", {
+        description: `Added by ${data.created_by}`,
+        duration: 4000,
+      });
+    };
+
+    // ✅ REAL-TIME CONSULTATION MANAGEMENT: Lắng nghe sự kiện consultation_deleted
+    const handleConsultationDeleted = (data: {
+      lead_id: number;
+      consultation_id: number;
+      new_lead_status_id: string | null;
+      deleted_by: string;
+      deleted_at: string;
+      message: string;
+    }) => {
+      console.log("[SocketHandler] Received consultation_deleted event:", data);
+
+      // Invalidate lead-related queries to refresh timeline and status
+      queryClient.invalidateQueries({ queryKey: ["leads"] });
+      queryClient.invalidateQueries({ queryKey: ["leads", data.lead_id] });
+      queryClient.invalidateQueries({ queryKey: ["leads", data.lead_id, "timeline"] });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+
+      // Show toast notification
+      toast.info("🗑️ Consultation deleted", {
+        description: `Lead status reverted. Deleted by ${data.deleted_by}`,
+        duration: 4000,
+      });
+    };
+
+    // ✅ REAL-TIME CONSULTATION MANAGEMENT: Lắng nghe sự kiện consultation_updated
+    const handleConsultationUpdated = (data: {
+      lead_id: number;
+      consultation_id: number;
+      consultation_status_id: string;
+      updated_by: string;
+      updated_at: string;
+      message: string;
+    }) => {
+      console.log("[SocketHandler] Received consultation_updated event:", data);
+
+      // Invalidate lead-related queries to refresh timeline and status
+      queryClient.invalidateQueries({ queryKey: ["leads"] });
+      queryClient.invalidateQueries({ queryKey: ["leads", data.lead_id] });
+      queryClient.invalidateQueries({ queryKey: ["leads", data.lead_id, "timeline"] });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+
+      // Show toast notification
+      toast.info("✏️ Consultation updated", {
+        description: `Updated by ${data.updated_by}`,
+        duration: 4000,
+      });
+    };
+
+    // ✅ REAL-TIME LEAD MANAGEMENT: Lắng nghe sự kiện lead_updated
+    const handleLeadUpdated = (data: {
+      lead_id: number;
+      updated_fields: string[];
+      status_changed: boolean;
+      updated_by: string;
+      updated_at: string;
+      message: string;
+    }) => {
+      console.log("[SocketHandler] Received lead_updated event:", data);
+
+      // Invalidate lead-related queries to refresh all views
+      queryClient.invalidateQueries({ queryKey: ["leads"] });
+      queryClient.invalidateQueries({ queryKey: ["leads", data.lead_id] });
+      queryClient.invalidateQueries({ queryKey: ["leads", data.lead_id, "timeline"] });
+
+      // If status changed, also invalidate pipeline queries
+      if (data.status_changed) {
+        queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+      }
+
+      // Show toast notification with field summary
+      const fieldsText = data.updated_fields.slice(0, 3).join(", ");
+      const moreFields = data.updated_fields.length > 3 ? ` +${data.updated_fields.length - 3} more` : "";
+
+      toast.info("📝 Lead updated", {
+        description: `${fieldsText}${moreFields} by ${data.updated_by}`,
+        duration: 4000,
+      });
+    };
+
     // Đăng ký listeners
     socket.on("force_logout_batch", handleForceLogoutBatch);
     socket.on("force_logout_all", handleForceLogoutAll);
@@ -441,6 +544,10 @@ export function SocketHandler() {
     socket.on("application_status_changed", handleApplicationStatusChanged);
     socket.on("application_documents_updated", handleApplicationDocumentsUpdated);
     socket.on("pipeline_config_updated", handlePipelineConfigUpdated);
+    socket.on("consultation_created", handleConsultationCreated);
+    socket.on("consultation_deleted", handleConsultationDeleted);
+    socket.on("consultation_updated", handleConsultationUpdated);
+    socket.on("lead_updated", handleLeadUpdated);
 
     // Cleanup listeners khi effect này chạy lại hoặc component unmount
     return () => {
@@ -453,6 +560,10 @@ export function SocketHandler() {
       socket.off("application_status_changed", handleApplicationStatusChanged);
       socket.off("application_documents_updated", handleApplicationDocumentsUpdated);
       socket.off("pipeline_config_updated", handlePipelineConfigUpdated);
+      socket.off("consultation_created", handleConsultationCreated);
+      socket.off("consultation_deleted", handleConsultationDeleted);
+      socket.off("consultation_updated", handleConsultationUpdated);
+      socket.off("lead_updated", handleLeadUpdated);
     };
     // ✅ SECURITY FIX: Removed 'token' from dependencies, now use 'isAuthenticated'
   }, [isAuthenticated, addNotification, preferences, queryClient]);

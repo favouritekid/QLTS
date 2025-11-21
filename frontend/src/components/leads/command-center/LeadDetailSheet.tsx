@@ -25,7 +25,7 @@ import {
   Calendar,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useLead, useLeadTimeline } from "@/hooks/useLeads";
+import { useLead } from "@/hooks/useLeads";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { LeadConsultationsTab } from "@/components/leads/LeadConsultationsTab";
 import { ConsultationDialog } from "@/components/leads/ConsultationDialog";
@@ -86,7 +86,6 @@ export function LeadDetailSheet({
   onAssign,
 }: LeadDetailSheetProps) {
   const { data: lead, isLoading } = useLead(leadId || 0, open && !!leadId);
-  const { data: timeline = [] } = useLeadTimeline(leadId || 0);
   const [consultationDialogOpen, setConsultationDialogOpen] = useState(false);
 
   return (
@@ -216,7 +215,7 @@ export function LeadDetailSheet({
               </TabsContent>
 
               <TabsContent value="timeline" className="mt-4">
-                <LeadTimelineTab leadId={lead.id} timeline={timeline} />
+                <LeadTimelineTab leadId={lead.id} />
               </TabsContent>
 
               <TabsContent value="consultations" className="mt-4">
