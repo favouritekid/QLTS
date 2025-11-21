@@ -154,16 +154,32 @@ async def add_new_policy(
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
-    """(Admin only) Thêm một chính sách (quyền) mới với validation và logging."""
+    """
+    (Admin only) Add a new policy with validation, logging, and event consistency.
+
+    **Event Flow (Transaction Safety):**
+    1. Add policy to Casbin
+    2. Log activity to DB
+    3. COMMIT transaction ← CRITICAL CHECKPOINT
+    4. Emit socket event (error isolated)
+    5. Reload policy
+    6. Return success
+
+    **Security:**
+    - ✓ Role: Admin only (Casbin)
+    - ✓ Transaction: Commit before emit
+    - ✓ Error Isolation: Socket failures don't crash API
+    """
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
+    # 1. Add policy to Casbin
     added = await enforcer.add_policy(
         policy_in.subject, policy_in.object, policy_in.action
     )
     if not added:
         raise DuplicateResourceError("Policy already exists.")
 
-    # Log activity
+    # 2. Log activity to DB
     await log_admin_activity(
         db=db,
         request=request,
@@ -178,16 +194,21 @@ async def add_new_policy(
         },
     )
 
-    # Emit socket event for frontend cache invalidation
+    # 3. ✅ COMMIT TRANSACTION - Ensures audit log is persisted before event
+    await db.commit()
+
+    # 4. Emit socket event (error isolated via emit_policy_update)
+    # Note: emit_policy_update already has try-except, so failures won't crash API
     await emit_policy_update("create", {
         "subject": policy_in.subject,
         "object": policy_in.object,
         "action": policy_in.action,
     })
 
-    # Reload policy for current worker to ensure consistency
+    # 5. Reload policy for current worker to ensure consistency
     await enforcer.load_policy()
 
+    # 6. Return success
     return {"detail": "Policy added successfully."}
 
 
@@ -200,13 +221,30 @@ async def delete_policy(
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
-    """(Admin only) Xóa một chính sách (quyền) cụ thể với safety checks."""
+    """
+    (Admin only) Delete a policy with safety checks, logging, and event consistency.
+
+    **Event Flow (Transaction Safety):**
+    1. Validate policy removal (safety checks)
+    2. Remove policy from Casbin
+    3. Log activity to DB
+    4. COMMIT transaction ← CRITICAL CHECKPOINT
+    5. Emit socket event (error isolated)
+    6. Reload policy
+    7. Return success
+
+    **Security:**
+    - ✓ Role: Admin only (Casbin)
+    - ✓ Safety: Cannot remove critical policies
+    - ✓ Transaction: Commit before emit
+    - ✓ Error Isolation: Socket failures don't crash API
+    """
     from app.services.casbin_service import CasbinPolicyService
 
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
     casbin_service = CasbinPolicyService(db, enforcer)
 
-    # SAFETY CHECK: Validate removal operation
+    # 1. SAFETY CHECK: Validate removal operation
     validation = await casbin_service.validate_policy_removal(
         policy_in.subject,
         policy_in.object,
@@ -218,14 +256,14 @@ async def delete_policy(
             detail=f"Cannot remove this policy for safety reasons: {'; '.join(validation.warnings)}"
         )
 
-    # Remove policy
+    # 2. Remove policy from Casbin
     removed = await enforcer.remove_policy(
         policy_in.subject, policy_in.object, policy_in.action
     )
     if not removed:
         raise ResourceNotFoundError("Policy not found or could not be removed.")
 
-    # Log activity
+    # 3. Log activity to DB
     await log_admin_activity(
         db=db,
         request=request,
@@ -240,16 +278,21 @@ async def delete_policy(
         },
     )
 
-    # Emit socket event for frontend cache invalidation
+    # 4. ✅ COMMIT TRANSACTION - Ensures audit log is persisted before event
+    await db.commit()
+
+    # 5. Emit socket event (error isolated via emit_policy_update)
+    # Note: emit_policy_update already has try-except, so failures won't crash API
     await emit_policy_update("delete", {
         "subject": policy_in.subject,
         "object": policy_in.object,
         "action": policy_in.action,
     })
 
-    # Reload policy for current worker to ensure consistency
+    # 6. Reload policy for current worker to ensure consistency
     await enforcer.load_policy()
 
+    # 7. Return success
     return {"detail": "Policy removed successfully."}
 
 

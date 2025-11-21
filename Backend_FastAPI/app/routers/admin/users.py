@@ -705,8 +705,23 @@ async def get_user_details(
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
-    """(Admin only) Lấy thông tin chi tiết của một người dùng."""
-    db_user = await user_service.get_user_by_id(db, user_id)
+    """
+    (Admin/Manager) Get user details.
+
+    **Security:**
+    - ✓ Role: Admin or Manager (Casbin)
+    - ✓ Ownership: Manager limited to users in managed units
+    - ✓ IDOR Protection: Enabled
+
+    Admin: Can view all users
+    Manager: Can view users in managed units only
+    """
+    # Verify ownership
+    db_user = await deps.verify_user_management_permission(
+        target_user_id=user_id,
+        db=db,
+        current_user=current_admin
+    )
     return db_user
 
 
@@ -728,10 +743,23 @@ async def update_existing_user(
     max_capacity: Optional[int] = Form(None),
     unit_id: Optional[int] = Form(None),  # Organizational unit assignment
 ):
-    """(Admin only) Cập nhật người dùng, có hỗ trợ upload avatar."""
-    db_user = await user_service.get_user_by_id(db, user_id)
-    if not db_user:
-        raise ResourceNotFoundError(detail="User not found")
+    """
+    (Admin/Manager) Update user information.
+
+    **Security:**
+    - ✓ Role: Admin or Manager (Casbin)
+    - ✓ Ownership: Manager limited to users in managed units
+    - ✓ IDOR Protection: Enabled
+
+    Admin: Can update all users
+    Manager: Can update users in managed units only
+    """
+    # Verify ownership first
+    db_user = await deps.verify_user_management_permission(
+        target_user_id=user_id,
+        db=db,
+        current_user=current_admin
+    )
 
     # Xây dựng dict chỉ chứa các trường hợp lệ được cung cấp
     update_dict = {}
@@ -885,13 +913,38 @@ async def delete_existing_user(
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
-    """(Admin only) Xóa một người dùng."""
-    if user_id == current_admin.id:
-        raise PermissionDeniedError(detail="Admin cannot delete themselves")
+    """
+    (Admin/Manager) Delete a user.
 
-    # Get user info before deleting for activity log
-    db_user = await user_service.get_user_by_id(db, user_id)
+    **Security:**
+    - ✓ Role: Admin or Manager (Casbin)
+    - ✓ Ownership: Manager limited to users in managed units
+    - ✓ IDOR Protection: Enabled
+
+    **Business Rules:**
+    - Cannot delete yourself
+    - Cannot delete last admin (future enhancement)
+
+    Admin: Can delete all users (except self)
+    Manager: Can delete users in managed units only (except self)
+    """
+    # Safety check: Cannot delete self
+    if user_id == current_admin.id:
+        raise PermissionDeniedError(detail="You cannot delete your own account")
+
+    # Verify ownership
+    db_user = await deps.verify_user_management_permission(
+        target_user_id=user_id,
+        db=db,
+        current_user=current_admin
+    )
     username = db_user.username if db_user else f"User#{user_id}"
+
+    # TODO: Add business rule - prevent deletion of last admin
+    # if db_user.role == "admin":
+    #     admin_count = await count_admins(db)
+    #     if admin_count <= 1:
+    #         raise BadRequest("Cannot delete the last admin")
 
     # ⚠️ IMPORTANT: Log activity BEFORE deleting user to avoid FK constraint violation
     # The activity_log.target_user_id references user.id, so user must exist when logging

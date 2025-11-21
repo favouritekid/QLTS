@@ -327,8 +327,407 @@ async def get_lead_for_user(
     )
 
 
+# ============================================================================
+# OWNERSHIP VERIFICATION DEPENDENCIES (IDOR PREVENTION)
+# ============================================================================
+
+
+async def get_user_managed_units(
+    db: AsyncSession,
+    user_id: int
+) -> List[int]:
+    """
+    Get list of unit IDs that a user manages.
+
+    Returns all organizational units where the user has an active manager assignment.
+    This is used for ownership verification in IDOR prevention.
+
+    Args:
+        db: Database session
+        user_id: ID of the user to check
+
+    Returns:
+        List of unit IDs where user is an active manager
+
+    Example:
+        >>> managed_units = await get_user_managed_units(db, user_id=5)
+        >>> # [10, 20, 30]  # User 5 manages units 10, 20, and 30
+    """
+    from sqlalchemy import select
+    from ..models import UserUnitAssignment
+
+    # Query for active manager assignments
+    stmt = select(UserUnitAssignment.unit_id).where(
+        UserUnitAssignment.user_id == user_id,
+        UserUnitAssignment.role == "manager",
+        UserUnitAssignment.is_active == True
+    )
+
+    result = await db.execute(stmt)
+    managed_unit_ids = [row[0] for row in result.all()]
+
+    log.debug(
+        "Fetched managed units",
+        user_id=user_id,
+        managed_units=managed_unit_ids
+    )
+
+    return managed_unit_ids
+
+
+async def get_distribution_rule_for_user(
+    rule_id: int = Path(..., description="ID của Distribution Rule"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> models.OfferingDistributionConfig:
+    """
+    Verify ownership and retrieve a distribution rule.
+
+    **Security Levels:**
+    - **Admin**: Full access to all distribution rules
+    - **Manager**: Access only to rules in their managed units
+    - **Officer**: Denied (raises 403)
+
+    **IDOR Prevention:**
+    This dependency prevents Insecure Direct Object Reference attacks by verifying
+    that the current user has permission to access the specified distribution rule.
+
+    Args:
+        rule_id: ID of the distribution rule to access
+        db: Database session (injected)
+        current_user: Current authenticated user (injected)
+
+    Returns:
+        OfferingDistributionConfig model if access is permitted
+
+    Raises:
+        ResourceNotFoundError: If rule doesn't exist
+        PermissionDeniedError: If user doesn't have permission to access this rule
+
+    Example:
+        ```python
+        @router.delete("/distribution-rules/{rule_id}")
+        async def delete_rule(
+            rule: models.OfferingDistributionConfig = Depends(get_distribution_rule_for_user)
+        ):
+            # rule is guaranteed to be accessible by current user
+            await config_service.delete_distribution_rule(db, rule.id)
+        ```
+    """
+    from sqlalchemy import select
+    from ..services import config_service
+
+    # Fetch the distribution rule
+    try:
+        rule = await config_service.get_distribution_rule_by_id(db, rule_id)
+    except ResourceNotFoundError:
+        log.warning(
+            "Distribution rule not found",
+            rule_id=rule_id,
+            user_id=current_user.id
+        )
+        raise
+
+    # Admin has full access
+    if current_user.role == "admin":
+        log.debug(
+            "Admin accessing distribution rule",
+            rule_id=rule_id,
+            user_id=current_user.id
+        )
+        return rule
+
+    # Manager: check if rule belongs to their managed units
+    if current_user.role == "manager":
+        managed_units = await get_user_managed_units(db, current_user.id)
+
+        if rule.unit_id in managed_units:
+            log.debug(
+                "Manager accessing distribution rule in managed unit",
+                rule_id=rule_id,
+                unit_id=rule.unit_id,
+                user_id=current_user.id
+            )
+            return rule
+        else:
+            log.warning(
+                "IDOR attempt detected: Manager trying to access distribution rule outside managed units",
+                rule_id=rule_id,
+                rule_unit_id=rule.unit_id,
+                managed_units=managed_units,
+                user_id=current_user.id,
+                username=current_user.username
+            )
+            raise PermissionDeniedError(
+                detail=f"You do not have permission to access this distribution rule. "
+                       f"This rule belongs to unit {rule.unit_id}, which is not in your managed units."
+            )
+
+    # Officer or other roles: deny access
+    log.warning(
+        "IDOR attempt detected: Non-admin/manager user trying to access distribution rule",
+        rule_id=rule_id,
+        user_id=current_user.id,
+        user_role=current_user.role
+    )
+    raise PermissionDeniedError(
+        detail="You do not have permission to manage distribution rules. "
+               "Only Admins and Managers can access this resource."
+    )
+
+
+async def get_organizational_unit_for_user(
+    unit_id: int = Path(..., description="ID của Organization Unit"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+    allow_read_only: bool = False,
+) -> models.OrganizationUnit:
+    """
+    Verify ownership and retrieve an organizational unit.
+
+    **Security Levels:**
+    - **Admin**: Full access to all units
+    - **Manager**: Access to their managed units (+ descendants if implemented)
+    - **Officer**: Read-only access if allow_read_only=True, otherwise denied
+
+    **IDOR Prevention:**
+    This dependency prevents cross-unit access violations by verifying
+    organizational unit ownership.
+
+    Args:
+        unit_id: ID of the organizational unit to access
+        db: Database session (injected)
+        current_user: Current authenticated user (injected)
+        allow_read_only: If True, allows Officers to view units they belong to
+
+    Returns:
+        OrganizationUnit model if access is permitted
+
+    Raises:
+        ResourceNotFoundError: If unit doesn't exist
+        PermissionDeniedError: If user doesn't have permission to access this unit
+
+    Example:
+        ```python
+        # Write operation (managers only)
+        @router.put("/organization-units/{unit_id}")
+        async def update_unit(
+            unit: models.OrganizationUnit = Depends(get_organizational_unit_for_user)
+        ):
+            # Only admin/managers can reach here
+            ...
+
+        # Read operation (allow officers)
+        @router.get("/organization-units/{unit_id}")
+        async def get_unit(
+            unit: models.OrganizationUnit = Depends(
+                lambda **kwargs: get_organizational_unit_for_user(**kwargs, allow_read_only=True)
+            )
+        ):
+            # Admin, managers, and officers in this unit can view
+            ...
+        ```
+    """
+    from sqlalchemy import select
+    from ..services import organization_service
+
+    # Fetch the organizational unit
+    try:
+        unit = await organization_service.get_organization_unit_by_id(db, unit_id)
+    except ResourceNotFoundError:
+        log.warning(
+            "Organizational unit not found",
+            unit_id=unit_id,
+            user_id=current_user.id
+        )
+        raise
+
+    # Admin has full access
+    if current_user.role == "admin":
+        log.debug(
+            "Admin accessing organizational unit",
+            unit_id=unit_id,
+            user_id=current_user.id
+        )
+        return unit
+
+    # Manager: check if unit is in their managed units
+    if current_user.role == "manager":
+        managed_units = await get_user_managed_units(db, current_user.id)
+
+        if unit_id in managed_units:
+            log.debug(
+                "Manager accessing managed organizational unit",
+                unit_id=unit_id,
+                user_id=current_user.id
+            )
+            return unit
+        else:
+            log.warning(
+                "IDOR attempt detected: Manager trying to access organizational unit outside managed units",
+                unit_id=unit_id,
+                managed_units=managed_units,
+                user_id=current_user.id,
+                username=current_user.username
+            )
+            raise PermissionDeniedError(
+                detail=f"You do not have permission to access this organizational unit. "
+                       f"Unit {unit_id} is not in your managed units."
+            )
+
+    # Officer: allow read-only if enabled and user belongs to this unit
+    if current_user.role == "officer" and allow_read_only:
+        if current_user.unit_id == unit_id:
+            log.debug(
+                "Officer viewing own organizational unit (read-only)",
+                unit_id=unit_id,
+                user_id=current_user.id
+            )
+            return unit
+        else:
+            log.warning(
+                "IDOR attempt detected: Officer trying to view organizational unit they don't belong to",
+                unit_id=unit_id,
+                user_unit_id=current_user.unit_id,
+                user_id=current_user.id
+            )
+            raise PermissionDeniedError(
+                detail=f"You can only view your own organizational unit (Unit {current_user.unit_id})."
+            )
+
+    # Officer without read permission or other roles: deny access
+    log.warning(
+        "IDOR attempt detected: Insufficient permissions to access organizational unit",
+        unit_id=unit_id,
+        user_id=current_user.id,
+        user_role=current_user.role,
+        allow_read_only=allow_read_only
+    )
+    raise PermissionDeniedError(
+        detail="You do not have permission to access organizational units. "
+               "Only Admins and Managers can manage organizational units."
+    )
+
+
+async def verify_user_management_permission(
+    target_user_id: int,
+    db: AsyncSession,
+    current_user: models.User,
+) -> models.User:
+    """
+    Verify permission to manage a target user and return the user.
+
+    **Security Levels:**
+    - **Admin**: Can manage all users
+    - **Manager**: Can only manage users in their managed units
+    - **Officer**: Cannot manage users (denied)
+
+    **IDOR Prevention:**
+    This dependency prevents unauthorized user management by verifying
+    that managers can only manage users within their organizational scope.
+
+    Args:
+        target_user_id: ID of the user to manage
+        db: Database session
+        current_user: Current authenticated user
+
+    Returns:
+        Target User model if management is permitted
+
+    Raises:
+        ResourceNotFoundError: If target user doesn't exist
+        PermissionDeniedError: If current user cannot manage target user
+
+    Example:
+        ```python
+        @router.delete("/users/{user_id}")
+        async def delete_user(
+            user_id: int,
+            db: AsyncSession = Depends(database.get_db),
+            current_admin: models.User = PermissionDep,
+        ):
+            # Pre-verify ownership
+            target_user = await verify_user_management_permission(
+                target_user_id=user_id,
+                db=db,
+                current_user=current_admin
+            )
+            # Proceed with deletion
+            await user_service.delete_user(db, target_user.id)
+        ```
+    """
+    from sqlalchemy import select
+    from ..services import user_service
+
+    # Fetch target user
+    target_user = await user_service.get_user_by_id(db, target_user_id)
+    if not target_user:
+        log.warning(
+            "Target user not found for management verification",
+            target_user_id=target_user_id,
+            current_user_id=current_user.id
+        )
+        raise ResourceNotFoundError(detail=f"User {target_user_id} not found")
+
+    # Admin has full access
+    if current_user.role == "admin":
+        log.debug(
+            "Admin managing user",
+            target_user_id=target_user_id,
+            current_user_id=current_user.id
+        )
+        return target_user
+
+    # Manager: check if target user is in their managed units
+    if current_user.role == "manager":
+        managed_units = await get_user_managed_units(db, current_user.id)
+
+        # Check if target user belongs to any managed unit
+        if target_user.unit_id and target_user.unit_id in managed_units:
+            log.debug(
+                "Manager managing user in managed unit",
+                target_user_id=target_user_id,
+                target_unit_id=target_user.unit_id,
+                current_user_id=current_user.id
+            )
+            return target_user
+        else:
+            log.warning(
+                "IDOR attempt detected: Manager trying to manage user outside managed units",
+                target_user_id=target_user_id,
+                target_unit_id=target_user.unit_id,
+                managed_units=managed_units,
+                current_user_id=current_user.id,
+                current_username=current_user.username
+            )
+            raise PermissionDeniedError(
+                detail=f"You do not have permission to manage this user. "
+                       f"User belongs to unit {target_user.unit_id}, which is not in your managed units."
+            )
+
+    # Officer or other roles: deny access
+    log.warning(
+        "IDOR attempt detected: Non-admin/manager trying to manage user",
+        target_user_id=target_user_id,
+        current_user_id=current_user.id,
+        current_user_role=current_user.role
+    )
+    raise PermissionDeniedError(
+        detail="You do not have permission to manage users. "
+               "Only Admins and Managers can perform user management operations."
+    )
+
+
+# ============================================================================
+# DEPENDENCY SHORTCUTS
+# ============================================================================
+
 # (Giữ nguyên các dependency shortcuts)
 CurrentUser = Depends(get_current_user)
 AdminRequired = Depends(require_roles(["admin"]))
 AdminManagerRequired = Depends(require_roles(["admin", "manager"]))
 OfficerRequired = Depends(require_roles(["officer", "admin", "manager"]))
+
+# NEW: Ownership verification shortcuts for IDOR prevention
+DistributionRuleAccessDep = Depends(get_distribution_rule_for_user)
+OrgUnitAccessDep = Depends(get_organizational_unit_for_user)
