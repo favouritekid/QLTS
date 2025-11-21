@@ -336,9 +336,9 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                         const hasOfferings = program.offerings && program.offerings.length > 0;
 
                         return (
-                          <>
+                          <React.Fragment key={`active-${program.id}`}>
                             {/* Program Row */}
-                            <TableRow key={program.id} className="hover:bg-muted/30">
+                            <TableRow className="hover:bg-muted/30">
                               <TableCell className="p-2">
                                 <Button
                                   variant="ghost"
@@ -475,7 +475,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                                 </TableCell>
                               </TableRow>
                             ))}
-                          </>
+                          </React.Fragment>
                         );
                       })}
                     </TableBody>
@@ -511,9 +511,9 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                         const hasOfferings = program.offerings && program.offerings.length > 0;
 
                         return (
-                          <>
+                          <React.Fragment key={`inactive-${program.id}`}>
                             {/* Program Row */}
-                            <TableRow key={program.id} className="hover:bg-red-50/50">
+                            <TableRow className="hover:bg-red-50/50">
                               <TableCell className="p-2">
                                 <Button
                                   variant="ghost"
@@ -652,7 +652,7 @@ export function MajorListTab({ unit }: MajorListTabProps) {
                                 </TableCell>
                               </TableRow>
                             ))}
-                          </>
+                          </React.Fragment>
                         );
                       })}
                     </TableBody>

@@ -49,6 +49,17 @@ import { Checkbox as ShadcnCheckbox } from "@/components/ui/checkbox";
 // FORM VALIDATION SCHEMA
 // =====================================================================
 
+// Valid legacy status values for lead.status backward compatibility
+const VALID_LEGACY_STATUSES = [
+  { value: "new", label: "New" },
+  { value: "assigned", label: "Assigned" },
+  { value: "contacted", label: "Contacted" },
+  { value: "qualified", label: "Qualified" },
+  { value: "unqualified", label: "Unqualified" },
+  { value: "converted", label: "Converted" },
+  { value: "rejected", label: "Rejected" },
+] as const;
+
 const statusFormSchema = z.object({
   id: z
     .string()
@@ -70,6 +81,7 @@ const statusFormSchema = z.object({
   stage_id: z.string().min(1, "Stage is required"),
   outcome_type: z.enum(["positive", "neutral", "negative"]),
   is_final_status: z.boolean(),
+  legacy_status: z.string().nullable().optional(),
 });
 
 type StatusFormValues = z.infer<typeof statusFormSchema>;
@@ -127,6 +139,7 @@ export function ConsultationStatusDialog({
       stage_id: "",
       outcome_type: "neutral",
       is_final_status: false,
+      legacy_status: null,
     },
   });
 
@@ -141,6 +154,7 @@ export function ConsultationStatusDialog({
           stage_id: status.stage_id,
           outcome_type: status.outcome_type || "neutral",
           is_final_status: status.is_final_status || false,
+          legacy_status: status.legacy_status || null,
         });
       } else {
         form.reset({
@@ -150,6 +164,7 @@ export function ConsultationStatusDialog({
           stage_id: "",
           outcome_type: "neutral",
           is_final_status: false,
+          legacy_status: null,
         });
       }
     }
@@ -167,6 +182,7 @@ export function ConsultationStatusDialog({
             stage_id: values.stage_id,
             outcome_type: values.outcome_type as OutcomeType,
             is_final_status: values.is_final_status,
+            legacy_status: values.legacy_status || null,
           } as ConsultationStatusUpdate,
         });
       } else {
@@ -177,6 +193,7 @@ export function ConsultationStatusDialog({
           stage_id: values.stage_id,
           outcome_type: values.outcome_type as OutcomeType,
           is_final_status: values.is_final_status,
+          legacy_status: values.legacy_status || null,
         } as ConsultationStatusCreate);
       }
 
@@ -398,6 +415,43 @@ export function ConsultationStatusDialog({
                       pipeline.
                     </FormDescription>
                   </div>
+                </FormItem>
+              )}
+            />
+
+            {/* Legacy Status Field - For backward compatibility */}
+            <FormField
+              control={form.control}
+              name="legacy_status"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Legacy Status (Optional)</FormLabel>
+                  <Select
+                    onValueChange={(value) => field.onChange(value === "_none_" ? null : value)}
+                    value={field.value || "_none_"}
+                    disabled={isSubmitting}
+                  >
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Auto-derived from stage/outcome" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      <SelectItem value="_none_">
+                        <span className="text-muted-foreground">Auto-derived (recommended)</span>
+                      </SelectItem>
+                      {VALID_LEGACY_STATUSES.map((status) => (
+                        <SelectItem key={status.value} value={status.value}>
+                          {status.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <FormDescription>
+                    Maps to lead.status for backward compatibility. Leave empty to auto-derive from
+                    stage and outcome type.
+                  </FormDescription>
+                  <FormMessage />
                 </FormItem>
               )}
             />

@@ -78,6 +78,7 @@ export interface ConsultationStatus {
   stage_id: string // Foreign key to PipelineStage
   outcome_type: OutcomeType // Outcome classification
   is_final_status: boolean // Whether this status marks end of lead lifecycle
+  legacy_status?: string | null // Maps to lead.status for backward compatibility (Hybrid Approach)
 
   // Relationship
   stage?: PipelineStage
@@ -96,6 +97,7 @@ export interface ConsultationStatusCreate {
   stage_id: string
   outcome_type?: OutcomeType // Default: neutral
   is_final_status?: boolean // Default: false
+  legacy_status?: string | null // Maps to lead.status for backward compatibility
 }
 
 /**
@@ -107,6 +109,7 @@ export interface ConsultationStatusUpdate {
   stage_id?: string
   outcome_type?: OutcomeType
   is_final_status?: boolean
+  legacy_status?: string | null // Maps to lead.status for backward compatibility
 }
 
 // ============================================
