@@ -173,23 +173,28 @@ function convertApiToFormData(apiCriteria: AdmissionCriterion[]): AdmissionCrite
 }
 
 function convertFormToApiData(formCriteria: AdmissionCriterionFormData[]): AdmissionCriterion[] {
-  return formCriteria.map((criterion) => ({
-    id: criterion.id,
-    method_name: criterion.method_name,
-    program_type: criterion.program_type || "",
-    // Chuyển chuỗi "A00, B00" thành mảng ["A00", "B00"]
-    subject_groups: criterion.subject_groups
-      ? criterion.subject_groups
-          .split(",")
-          .map((s) => s.trim())
-          .filter((s) => s.length > 0)
-      : [],
-    min_score: criterion.min_score ?? null,
-    // Chuyển đổi required_documents
-    required_documents: criterion.required_documents
+  return formCriteria.map((criterion) => {
+    // Xử lý required_documents - lọc và đảm bảo có dữ liệu hợp lệ
+    const validDocuments = criterion.required_documents
       ? criterion.required_documents.filter((doc) => doc.code && doc.label)
-      : null,
-  }));
+      : [];
+
+    return {
+      id: criterion.id,
+      method_name: criterion.method_name,
+      program_type: criterion.program_type || "",
+      // Chuyển chuỗi "A00, B00" thành mảng ["A00", "B00"]
+      subject_groups: criterion.subject_groups
+        ? criterion.subject_groups
+            .split(",")
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0)
+        : [],
+      min_score: criterion.min_score ?? null,
+      // Chuyển đổi required_documents - trả về mảng rỗng thay vì null nếu không có
+      required_documents: validDocuments.length > 0 ? validDocuments : null,
+    };
+  });
 }
 
 // =====================================================================
@@ -629,21 +634,18 @@ export function OfferingAcademicInfoDialog({
                           Hồ sơ bắt buộc
                         </div>
 
-                        <FormField
-                          control={form.control}
-                          name={`admission_criteria.${index}.required_documents`}
-                          render={({ field }) => (
-                            <FormItem>
-                              <FormControl>
-                                <DocumentTypesSelector
-                                  value={field.value || []}
-                                  onChange={field.onChange}
-                                  disabled={isSubmitting}
-                                />
-                              </FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
+                        <DocumentTypesSelector
+                          value={
+                            form.watch(`admission_criteria.${index}.required_documents`) || []
+                          }
+                          onChange={(documents) => {
+                            form.setValue(
+                              `admission_criteria.${index}.required_documents`,
+                              documents,
+                              { shouldDirty: true, shouldValidate: true }
+                            );
+                          }}
+                          disabled={isSubmitting}
                         />
                       </div>
                     </CardContent>
