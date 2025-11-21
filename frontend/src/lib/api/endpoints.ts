@@ -115,10 +115,10 @@ export const API_ENDPOINTS = {
       DELETE_DEGREE_LEVEL: (id: number) => `/api/admin/degree-levels/${id}`,
 
       // Offering Types
-      LIST_OFFERING_TYPES: "/api/admin/config/offering-types",
-      CREATE_OFFERING_TYPE: "/api/admin/config/offering-types",
-      UPDATE_OFFERING_TYPE: (id: number) => `/api/admin/config/offering-types/${id}`,
-      DELETE_OFFERING_TYPE: (id: number) => `/api/admin/config/offering-types/${id}`,
+      LIST_OFFERING_TYPES: "/api/admin/offering-types",
+      CREATE_OFFERING_TYPE: "/api/admin/offering-types",
+      UPDATE_OFFERING_TYPE: (id: number) => `/api/admin/offering-types/${id}`,
+      DELETE_OFFERING_TYPE: (id: number) => `/api/admin/offering-types/${id}`,
 
       // Document Types ✨ MỚI THÊM
       LIST_DOCUMENT_TYPES: "/api/admin/document-types",
