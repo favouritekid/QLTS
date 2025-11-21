@@ -59,12 +59,30 @@ async def create_new_organization_unit(
     response_model=schemas.OrganizationUnit,
 )
 async def get_organization_unit_details(
-    unit_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_user: models.User = PermissionDep,
+    unit: models.OrganizationUnit = Depends(
+        lambda unit_id, db, current_user: deps.get_organizational_unit_for_user(
+            unit_id=unit_id,
+            db=db,
+            current_user=current_user,
+            allow_read_only=True
+        )
+    ),
 ):
-    """(Admin only) Lấy chi tiết một đơn vị tổ chức."""
-    return await organization_service.get_organization_unit_by_id(db, unit_id)
+    """
+    (Admin/Manager/Officer) Get organizational unit details.
+
+    **Security:**
+    - ✓ Role: Admin, Manager, or Officer (Casbin)
+    - ✓ Ownership: Manager limited to managed units, Officer can view own unit
+    - ✓ IDOR Protection: Enabled
+
+    Admin: Can view all units
+    Manager: Can view managed units
+    Officer: Can view their own unit (read-only)
+    """
+    return unit
 
 
 @router.put(
@@ -72,26 +90,56 @@ async def get_organization_unit_details(
     response_model=schemas.OrganizationUnit,
 )
 async def update_existing_organization_unit(
-    unit_id: int,
     unit_in: schemas.OrganizationUnitUpdate,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
+    unit: models.OrganizationUnit = deps.OrgUnitAccessDep,
 ):
-    """(Admin only) Cập nhật một đơn vị tổ chức."""
-    return await organization_service.update_organization_unit(db, unit_id, unit_in)
+    """
+    (Admin/Manager) Update an organizational unit.
+
+    **Security:**
+    - ✓ Role: Admin or Manager (Casbin)
+    - ✓ Ownership: Manager limited to managed units
+    - ✓ IDOR Protection: Enabled
+
+    Admin: Can update all units
+    Manager: Can update only managed units
+    """
+    return await organization_service.update_organization_unit(db, unit.id, unit_in)
 
 
 @router.delete(
     "/organization-units/{unit_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    responses={
+        204: {"description": "Deleted successfully (soft delete)"},
+        403: {"description": "Forbidden - IDOR or insufficient permission"},
+        404: {"description": "Not found"},
+        400: {"description": "Cannot delete - unit has dependencies"}
+    }
 )
 async def delete_existing_organization_unit(
-    unit_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
+    unit: models.OrganizationUnit = deps.OrgUnitAccessDep,
 ):
-    """(Admin only) Xóa một đơn vị tổ chức."""
-    await organization_service.delete_organization_unit(db, unit_id)
+    """
+    (Admin/Manager) Delete an organizational unit (soft delete).
+
+    **Security:**
+    - ✓ Role: Admin or Manager (Casbin)
+    - ✓ Ownership: Manager limited to managed units
+    - ✓ IDOR Protection: Enabled
+
+    **Business Rules:**
+    - Soft delete only (sets is_active=False)
+    - Cannot delete unit with active users or leads
+
+    Admin: Can delete all units
+    Manager: Can delete only managed units
+    """
+    await organization_service.delete_organization_unit(db, unit.id)
     return None
 
 

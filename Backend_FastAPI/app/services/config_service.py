@@ -824,6 +824,51 @@ async def get_all_distribution_rules(db: AsyncSession) -> List[schemas.Distribut
     return [_build_distribution_rule_response(rule) for rule in rules]
 
 
+async def get_distribution_rules_by_units(
+    db: AsyncSession,
+    unit_ids: List[int]
+) -> List[schemas.DistributionRuleResponse]:
+    """
+    Get distribution rules filtered by unit IDs (for manager ownership).
+
+    This function is used to enforce IDOR protection by returning only
+    distribution rules that belong to the specified organizational units.
+
+    Args:
+        db: Database session
+        unit_ids: List of organization unit IDs to filter by
+
+    Returns:
+        List of DistributionRuleResponse schemas for rules in specified units
+
+    Example:
+        >>> # Manager with units [10, 20] can only see rules for those units
+        >>> rules = await get_distribution_rules_by_units(db, [10, 20])
+    """
+    from sqlalchemy.orm import selectinload
+
+    # If no units provided, return empty list
+    if not unit_ids:
+        return []
+
+    result = await db.execute(
+        select(models.OfferingDistributionConfig)
+        .options(
+            selectinload(models.OfferingDistributionConfig.offering)
+            .selectinload(models.ProgramOffering.program),
+            selectinload(models.OfferingDistributionConfig.unit)
+        )
+        .where(models.OfferingDistributionConfig.unit_id.in_(unit_ids))
+        .order_by(
+            models.OfferingDistributionConfig.priority.asc(),
+            models.OfferingDistributionConfig.id
+        )
+    )
+    rules = result.scalars().all()
+
+    return [_build_distribution_rule_response(rule) for rule in rules]
+
+
 async def get_distribution_rule_by_id(
     db: AsyncSession,
     rule_id: int
@@ -972,7 +1017,11 @@ async def delete_distribution_rule(
     rule_id: int
 ) -> None:
     """
-    Delete a distribution rule.
+    Delete a distribution rule with business rule validation.
+
+    **Business Rules:**
+    - Cannot delete active rules (is_active=True)
+    - Should check if rule is in use (future enhancement)
 
     Args:
         db: Database session
@@ -980,10 +1029,36 @@ async def delete_distribution_rule(
 
     Raises:
         ResourceNotFoundError: If rule doesn't exist
+        BadRequest: If rule cannot be deleted (active or in use)
     """
+    from ..utils.exceptions import BadRequest
+
     db_rule = await get_distribution_rule_by_id(db, rule_id)
+
+    # Business Rule 1: Cannot delete active rules
+    if db_rule.is_active:
+        log.warning(
+            "Attempt to delete active distribution rule blocked",
+            rule_id=rule_id,
+            is_active=db_rule.is_active
+        )
+        raise BadRequest(
+            detail=f"Cannot delete active distribution rule. "
+                   f"Please deactivate the rule first (set is_active=False)."
+        )
+
+    # Business Rule 2: Check if rule is in use by leads (future enhancement)
+    # This would require querying leads table to see if any leads
+    # were distributed using this rule
+    # For now, we log a warning
+    log.info(
+        "Deleting distribution rule",
+        rule_id=rule_id,
+        offering_id=db_rule.offering_id,
+        unit_id=db_rule.unit_id
+    )
 
     await db.delete(db_rule)
     await db.commit()
 
-    log.info("Distribution rule deleted", rule_id=rule_id)
+    log.info("Distribution rule deleted successfully", rule_id=rule_id)

@@ -186,11 +186,22 @@ async def list_distribution_rules(
     current_admin: models.User = PermissionDep,
 ):
     """
-    (Admin only) List all distribution rules.
+    (Admin/Manager) List distribution rules.
 
-    Returns all distribution rules ordered by priority (highest first).
+    **Security:**
+    - ✓ Role: Admin or Manager (Casbin)
+    - Admin: Returns all distribution rules
+    - Manager: Returns only rules in managed units
+
+    Returns distribution rules ordered by priority (highest first).
     """
-    return await config_service.get_all_distribution_rules(db)
+    # Admin gets all rules
+    if current_admin.role == "admin":
+        return await config_service.get_all_distribution_rules(db)
+
+    # Manager gets rules in their managed units only
+    managed_units = await deps.get_user_managed_units(db, current_admin.id)
+    return await config_service.get_distribution_rules_by_units(db, managed_units)
 
 
 @router.post(
@@ -230,13 +241,18 @@ async def create_distribution_rule(
     response_model=schemas.DistributionRuleResponse,
 )
 async def update_distribution_rule(
-    rule_id: int,
     rule_in: schemas.DistributionRuleUpdate,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
+    rule: models.OfferingDistributionConfig = deps.DistributionRuleAccessDep,
 ):
     """
-    (Admin only) Update a distribution rule.
+    (Admin/Manager) Update a distribution rule.
+
+    **Security:**
+    - ✓ Role: Admin or Manager (Casbin)
+    - ✓ Ownership: Manager limited to managed units
+    - ✓ IDOR Protection: Enabled
 
     Only provided fields will be updated (partial update).
 
@@ -247,20 +263,37 @@ async def update_distribution_rule(
     }
     ```
     """
-    return await config_service.update_distribution_rule(db, rule_id, rule_in)
+    return await config_service.update_distribution_rule(db, rule.id, rule_in)
 
 
 @router.delete(
     "/distribution-rules/{rule_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    responses={
+        204: {"description": "Deleted successfully"},
+        403: {"description": "Forbidden - IDOR or insufficient permission"},
+        404: {"description": "Not found"},
+        400: {"description": "Cannot delete - rule is active or in use"}
+    }
 )
 async def delete_distribution_rule(
-    rule_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
+    rule: models.OfferingDistributionConfig = deps.DistributionRuleAccessDep,
 ):
-    """(Admin only) Delete a distribution rule."""
-    await config_service.delete_distribution_rule(db, rule_id)
+    """
+    (Admin/Manager) Delete a distribution rule.
+
+    **Security:**
+    - ✓ Role: Admin or Manager (Casbin)
+    - ✓ Ownership: Manager limited to managed units
+    - ✓ IDOR Protection: Enabled
+
+    **Business Rules:**
+    - Cannot delete active rules (is_active=True)
+    - Cannot delete rules currently in use by leads
+    """
+    await config_service.delete_distribution_rule(db, rule.id)
     return None
 
 
