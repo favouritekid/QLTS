@@ -45,7 +45,11 @@ export function UserListTab({ unit }: UserListTabProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [userDialogOpen, setUserDialogOpen] = useState(false);
 
+  // Check if unit has children (for hierarchical filtering)
+  const hasChildren = unit.children && unit.children.length > 0;
+
   // Fetch users with unit filter
+  // ✅ Hierarchical Filter: If unit has children, include users from all descendant units
   const {
     data: usersData,
     isLoading,
@@ -53,7 +57,8 @@ export function UserListTab({ unit }: UserListTabProps) {
   } = useAdminUsersList({
     page: 1,
     page_size: 100,
-    unit_id: unit.id, // Filter by current unit
+    unit_id: unit.id,
+    include_children: hasChildren, // Enable hierarchical filter for parent units
     search: searchQuery || undefined,
   });
 
@@ -95,7 +100,9 @@ export function UserListTab({ unit }: UserListTabProps) {
           <div>
             <h3 className="text-lg font-semibold">Người dùng</h3>
             <p className="text-sm text-muted-foreground">
-              {total} người dùng thuộc đơn vị này
+              {total} người dùng {hasChildren
+                ? "thuộc đơn vị này và các đơn vị con"
+                : "thuộc đơn vị này"}
             </p>
           </div>
           <Button onClick={handleAddUser}>

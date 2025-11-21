@@ -39,6 +39,7 @@ interface UseAdminUsersListParams {
   sort?: string;
   order?: "asc" | "desc";
   unit_id?: number; // Filter by organization unit
+  include_children?: boolean; // Include users from child units (hierarchical filter)
 }
 
 export function useAdminUsersList(params: UseAdminUsersListParams = {}) {
