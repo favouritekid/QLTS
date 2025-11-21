@@ -39,6 +39,7 @@ import type {
   ProgramOffering,
   AdmissionCriterion,
 } from "@/types/organization.types";
+import { DocumentTypesSelector } from "./DocumentTypesSelector"; // 👈 THÊM DÒNG NÀY
 
 // =====================================================================
 // FORM TYPES & SCHEMA
@@ -622,8 +623,8 @@ export function OfferingAcademicInfoDialog({
                       />
 
                       {/* Required Documents Section */}
-                      <div className="md:col-span-2 mt-4 pt-4 border-t">
-                        <div className="flex items-center justify-between mb-3">
+                      <div className="mt-4 border-t pt-4 md:col-span-2">
+                        <div className="mb-3 flex items-center justify-between">
                           <div className="flex items-center gap-2 text-sm font-medium">
                             <FileText className="h-4 w-4" />
                             Hồ sơ bắt buộc
@@ -633,7 +634,9 @@ export function OfferingAcademicInfoDialog({
                             variant="outline"
                             size="sm"
                             onClick={() => {
-                              const currentDocs = form.getValues(`admission_criteria.${index}.required_documents`) || [];
+                              const currentDocs =
+                                form.getValues(`admission_criteria.${index}.required_documents`) ||
+                                [];
                               form.setValue(`admission_criteria.${index}.required_documents`, [
                                 ...currentDocs,
                                 { code: "", label: "" },
@@ -647,67 +650,73 @@ export function OfferingAcademicInfoDialog({
                         </div>
 
                         {(!form.watch(`admission_criteria.${index}.required_documents`) ||
-                          form.watch(`admission_criteria.${index}.required_documents`)?.length === 0) && (
-                          <div className="text-muted-foreground text-xs text-center py-3 border border-dashed rounded">
+                          form.watch(`admission_criteria.${index}.required_documents`)?.length ===
+                            0) && (
+                          <div className="text-muted-foreground rounded border border-dashed py-3 text-center text-xs">
                             Chưa có hồ sơ bắt buộc. Nhấn &quot;Thêm&quot; để thêm.
                           </div>
                         )}
 
                         <div className="space-y-2">
-                          {form.watch(`admission_criteria.${index}.required_documents`)?.map((_, docIndex) => (
-                            <div key={docIndex} className="flex items-start gap-2">
-                              <FormField
-                                control={form.control}
-                                name={`admission_criteria.${index}.required_documents.${docIndex}.code`}
-                                render={({ field }) => (
-                                  <FormItem className="flex-1">
-                                    <FormControl>
-                                      <Input
-                                        placeholder="Mã (vd: hoc_ba)"
-                                        {...field}
-                                        disabled={isSubmitting}
-                                        className="text-xs h-8"
-                                      />
-                                    </FormControl>
-                                    <FormMessage />
-                                  </FormItem>
-                                )}
-                              />
-                              <FormField
-                                control={form.control}
-                                name={`admission_criteria.${index}.required_documents.${docIndex}.label`}
-                                render={({ field }) => (
-                                  <FormItem className="flex-[2]">
-                                    <FormControl>
-                                      <Input
-                                        placeholder="Tên hồ sơ (vd: Học bạ THPT)"
-                                        {...field}
-                                        disabled={isSubmitting}
-                                        className="text-xs h-8"
-                                      />
-                                    </FormControl>
-                                    <FormMessage />
-                                  </FormItem>
-                                )}
-                              />
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => {
-                                  const currentDocs = form.getValues(`admission_criteria.${index}.required_documents`) || [];
-                                  form.setValue(
-                                    `admission_criteria.${index}.required_documents`,
-                                    currentDocs.filter((_, i) => i !== docIndex)
-                                  );
-                                }}
-                                disabled={isSubmitting}
-                                className="h-8 w-8 p-0 text-destructive hover:text-destructive"
-                              >
-                                <Trash className="h-3 w-3" />
-                              </Button>
-                            </div>
-                          ))}
+                          {form
+                            .watch(`admission_criteria.${index}.required_documents`)
+                            ?.map((_, docIndex) => (
+                              <div key={docIndex} className="flex items-start gap-2">
+                                <FormField
+                                  control={form.control}
+                                  name={`admission_criteria.${index}.required_documents.${docIndex}.code`}
+                                  render={({ field }) => (
+                                    <FormItem className="flex-1">
+                                      <FormControl>
+                                        <Input
+                                          placeholder="Mã (vd: hoc_ba)"
+                                          {...field}
+                                          disabled={isSubmitting}
+                                          className="h-8 text-xs"
+                                        />
+                                      </FormControl>
+                                      <FormMessage />
+                                    </FormItem>
+                                  )}
+                                />
+                                <FormField
+                                  control={form.control}
+                                  name={`admission_criteria.${index}.required_documents.${docIndex}.label`}
+                                  render={({ field }) => (
+                                    <FormItem className="flex-[2]">
+                                      <FormControl>
+                                        <Input
+                                          placeholder="Tên hồ sơ (vd: Học bạ THPT)"
+                                          {...field}
+                                          disabled={isSubmitting}
+                                          className="h-8 text-xs"
+                                        />
+                                      </FormControl>
+                                      <FormMessage />
+                                    </FormItem>
+                                  )}
+                                />
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => {
+                                    const currentDocs =
+                                      form.getValues(
+                                        `admission_criteria.${index}.required_documents`
+                                      ) || [];
+                                    form.setValue(
+                                      `admission_criteria.${index}.required_documents`,
+                                      currentDocs.filter((_, i) => i !== docIndex)
+                                    );
+                                  }}
+                                  disabled={isSubmitting}
+                                  className="text-destructive hover:text-destructive h-8 w-8 p-0"
+                                >
+                                  <Trash className="h-3 w-3" />
+                                </Button>
+                              </div>
+                            ))}
                         </div>
                       </div>
                     </CardContent>

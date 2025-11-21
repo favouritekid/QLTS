@@ -332,6 +332,35 @@ export interface ConfigOfferingTypeUpdate {
   is_active?: boolean;
 }
 
+// =====================================================================
+// CONFIG DOCUMENT TYPE TYPES
+// =====================================================================
+
+export interface ConfigDocumentType {
+  id: number;
+  code: string; // e.g., "hoc_ba", "bang_tot_nghiep"
+  name: string; // e.g., "Học bạ", "Bằng tốt nghiệp"
+  description?: string | null; // Detailed description
+  display_order: number;
+  is_active: boolean;
+}
+
+export interface ConfigDocumentTypeCreate {
+  code: string;
+  name: string;
+  description?: string;
+  display_order?: number;
+  is_active?: boolean;
+}
+
+export interface ConfigDocumentTypeUpdate {
+  code?: string;
+  name?: string;
+  description?: string;
+  display_order?: number;
+  is_active?: boolean;
+}
+
 // =============================================================================
 // ASSIGNMENT CONFIG TYPES
 // =============================================================================

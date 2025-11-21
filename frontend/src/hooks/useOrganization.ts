@@ -230,10 +230,9 @@ export function useAllProgramOfferings(activeOnly: boolean = true) {
   return useQuery<ProgramOffering[], AxiosError<ApiErrorResponse>>({
     queryKey: [...organizationKeys.offerings(), "all", { activeOnly }],
     queryFn: async () => {
-      const response = await api.get<ProgramOffering[]>(
-        API_ENDPOINTS.ORGANIZATION.ALL_OFFERINGS,
-        { params: { is_active: activeOnly || undefined } }
-      );
+      const response = await api.get<ProgramOffering[]>(API_ENDPOINTS.ORGANIZATION.ALL_OFFERINGS, {
+        params: { is_active: activeOnly || undefined },
+      });
       return response.data;
     },
     staleTime: 1000 * 60 * 5, // 5 minutes
@@ -901,6 +900,27 @@ export function useDegreeLevels(activeOnly: boolean = true) {
 }
 
 /**
+ * Fetch document type configurations
+ */
+export function useDocumentTypes(activeOnly: boolean = true) {
+  return useQuery<ConfigDocumentType[], AxiosError<ApiErrorResponse>>({
+    queryKey: ["config", "document-types", activeOnly],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (activeOnly) params.append("active_only", "true");
+
+      const response = await api.get<ConfigDocumentType[]>(
+        `${API_ENDPOINTS.ADMIN.CONFIG.LIST_DOCUMENT_TYPES}${
+          params.toString() ? `?${params.toString()}` : ""
+        }`
+      );
+      return response.data;
+    },
+    staleTime: 1000 * 60 * 30, // Cache for 30 minutes (config changes infrequently)
+  });
+}
+
+/**
  * Fetch offering type configurations
  */
 export function useOfferingTypes(activeOnly: boolean = true) {
@@ -935,9 +955,7 @@ export function useAssignmentConfig(unitId: number | undefined) {
     queryFn: async () => {
       if (!unitId) throw new Error("Unit ID is required");
 
-      const response = await api.get<AssignmentConfig>(
-        `/api/admin/assignment-config/${unitId}`
-      );
+      const response = await api.get<AssignmentConfig>(`/api/admin/assignment-config/${unitId}`);
       return response.data;
     },
     enabled: !!unitId, // Only fetch if unitId is provided
@@ -959,10 +977,9 @@ export function useUpdateAssignmentConfig() {
     { unitId: number; params: AssignmentConfigUpdate["params"] }
   >({
     mutationFn: async ({ unitId, params }) => {
-      const response = await api.put<AssignmentConfig>(
-        `/api/admin/assignment-config/${unitId}`,
-        { params }
-      );
+      const response = await api.put<AssignmentConfig>(`/api/admin/assignment-config/${unitId}`, {
+        params,
+      });
       return response.data;
     },
     onSuccess: (_, { unitId }) => {
@@ -973,7 +990,7 @@ export function useUpdateAssignmentConfig() {
     onError: (error) => {
       const detail = error.response?.data?.detail;
       const message = Array.isArray(detail)
-        ? detail.map(item => item.msg).join(", ")
+        ? detail.map((item) => item.msg).join(", ")
         : detail || "Failed to update assignment config";
       toast.error(message);
     },
@@ -1019,7 +1036,7 @@ export function useCreateSkillRule() {
     onError: (error) => {
       const detail = error.response?.data?.detail;
       const message = Array.isArray(detail)
-        ? detail.map(item => item.msg).join(", ")
+        ? detail.map((item) => item.msg).join(", ")
         : detail || "Failed to create skill rule";
       toast.error(message);
     },
@@ -1045,7 +1062,7 @@ export function useDeleteSkillRule() {
     onError: (error) => {
       const detail = error.response?.data?.detail;
       const message = Array.isArray(detail)
-        ? detail.map(item => item.msg).join(", ")
+        ? detail.map((item) => item.msg).join(", ")
         : detail || "Failed to delete skill rule";
       toast.error(message);
     },
