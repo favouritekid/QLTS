@@ -622,102 +622,29 @@ export function OfferingAcademicInfoDialog({
                         )}
                       />
 
-                      {/* Required Documents Section */}
+                      {/* Required Documents Section - Using Standardized DocumentTypesSelector */}
                       <div className="mt-4 border-t pt-4 md:col-span-2">
-                        <div className="mb-3 flex items-center justify-between">
-                          <div className="flex items-center gap-2 text-sm font-medium">
-                            <FileText className="h-4 w-4" />
-                            Hồ sơ bắt buộc
-                          </div>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              const currentDocs =
-                                form.getValues(`admission_criteria.${index}.required_documents`) ||
-                                [];
-                              form.setValue(`admission_criteria.${index}.required_documents`, [
-                                ...currentDocs,
-                                { code: "", label: "" },
-                              ]);
-                            }}
-                            disabled={isSubmitting}
-                          >
-                            <Plus className="mr-1 h-3 w-3" />
-                            Thêm
-                          </Button>
+                        <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+                          <FileText className="h-4 w-4" />
+                          Hồ sơ bắt buộc
                         </div>
 
-                        {(!form.watch(`admission_criteria.${index}.required_documents`) ||
-                          form.watch(`admission_criteria.${index}.required_documents`)?.length ===
-                            0) && (
-                          <div className="text-muted-foreground rounded border border-dashed py-3 text-center text-xs">
-                            Chưa có hồ sơ bắt buộc. Nhấn &quot;Thêm&quot; để thêm.
-                          </div>
-                        )}
-
-                        <div className="space-y-2">
-                          {form
-                            .watch(`admission_criteria.${index}.required_documents`)
-                            ?.map((_, docIndex) => (
-                              <div key={docIndex} className="flex items-start gap-2">
-                                <FormField
-                                  control={form.control}
-                                  name={`admission_criteria.${index}.required_documents.${docIndex}.code`}
-                                  render={({ field }) => (
-                                    <FormItem className="flex-1">
-                                      <FormControl>
-                                        <Input
-                                          placeholder="Mã (vd: hoc_ba)"
-                                          {...field}
-                                          disabled={isSubmitting}
-                                          className="h-8 text-xs"
-                                        />
-                                      </FormControl>
-                                      <FormMessage />
-                                    </FormItem>
-                                  )}
-                                />
-                                <FormField
-                                  control={form.control}
-                                  name={`admission_criteria.${index}.required_documents.${docIndex}.label`}
-                                  render={({ field }) => (
-                                    <FormItem className="flex-[2]">
-                                      <FormControl>
-                                        <Input
-                                          placeholder="Tên hồ sơ (vd: Học bạ THPT)"
-                                          {...field}
-                                          disabled={isSubmitting}
-                                          className="h-8 text-xs"
-                                        />
-                                      </FormControl>
-                                      <FormMessage />
-                                    </FormItem>
-                                  )}
-                                />
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => {
-                                    const currentDocs =
-                                      form.getValues(
-                                        `admission_criteria.${index}.required_documents`
-                                      ) || [];
-                                    form.setValue(
-                                      `admission_criteria.${index}.required_documents`,
-                                      currentDocs.filter((_, i) => i !== docIndex)
-                                    );
-                                  }}
+                        <FormField
+                          control={form.control}
+                          name={`admission_criteria.${index}.required_documents`}
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormControl>
+                                <DocumentTypesSelector
+                                  value={field.value || []}
+                                  onChange={field.onChange}
                                   disabled={isSubmitting}
-                                  className="text-destructive hover:text-destructive h-8 w-8 p-0"
-                                >
-                                  <Trash className="h-3 w-3" />
-                                </Button>
-                              </div>
-                            ))}
-                        </div>
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
                       </div>
                     </CardContent>
                   </Card>
