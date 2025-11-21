@@ -866,11 +866,30 @@ async def add_consultation(
 ) -> models.Consultation:
     """
     Thêm consultation mới, cập nhật trạng thái Lead và ghi log lịch sử.
+
+    CONCURRENCY SAFE: Uses SELECT ... FOR UPDATE to prevent race conditions
+    when multiple requests try to update the same lead's pipeline_stage.
     """
     async with db.begin_nested():
         try:
-            # Lấy Lead (dùng get_lead_by_id để có relations)
-            lead = await get_lead_by_id(db, lead_id)
+            # ✅ FIX: Row-level lock để prevent race condition
+            # Sử dụng with_for_update() thay vì get_lead_by_id() đơn thuần
+            stmt = (
+                select(models.Lead)
+                .options(
+                    selectinload(models.Lead.assigned_officer),
+                    selectinload(models.Lead.pipeline_stage),
+                    selectinload(models.Lead.consultation_status),
+                )
+                .where(models.Lead.id == lead_id)
+                .where(models.Lead.deleted_at.is_(None))
+                .with_for_update()  # ROW LOCK - prevents concurrent modifications
+            )
+            result = await db.execute(stmt)
+            lead = result.scalar_one_or_none()
+
+            if not lead:
+                raise ResourceNotFoundError(f"Lead with id {lead_id} not found")
             # Lấy Officer
             officer = await db.get(models.User, officer_id)
             if not officer:
@@ -1108,170 +1127,184 @@ async def delete_consultation(
     Permission Rules:
     - Admin: Can delete any consultation
     - Officer: Can only delete the most recent consultation (prevents breaking consultation chain)
+
+    CONCURRENCY SAFE: Uses SELECT ... FOR UPDATE to prevent race conditions
+    when multiple requests try to update the same lead's pipeline_stage.
     """
-    try:
-        # Lấy Lead (không cần eager load consultations ở đây)
-        lead_query = select(models.Lead).where(models.Lead.id == lead_id)
-        lead_result = await db.execute(lead_query)
-        lead = lead_result.scalar_one_or_none()
-        if not lead:
-            raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found.")
-
-        # Lấy Consultation cần xóa
-        consultation = await db.get(models.Consultation, consultation_id)
-        if not consultation:
-            raise ResourceNotFoundError(
-                detail=f"Consultation with id {consultation_id} not found."
+    async with db.begin_nested():
+        try:
+            # ✅ FIX: Row-level lock để prevent race condition
+            lead_query = (
+                select(models.Lead)
+                .where(models.Lead.id == lead_id)
+                .where(models.Lead.deleted_at.is_(None))
+                .with_for_update()  # ROW LOCK - prevents concurrent modifications
             )
-        # Kiểm tra consultation thuộc đúng Lead
-        if consultation.lead_id != lead_id:
-            raise BadRequest(
-                detail="Consultation does not belong to the specified lead."
-            )
+            lead_result = await db.execute(lead_query)
+            lead = lead_result.scalar_one_or_none()
+            if not lead:
+                raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found.")
 
-        # Kiểm tra quyền
-        if current_user.role == "admin":
-            # Admin có quyền xóa bất kỳ consultation nào
-            pass
-        elif current_user.role == "officer":
-            # Officer chỉ được xóa consultation mới nhất
-            # Tìm consultation mới nhất của Lead này
-            latest_consultation_query = (
+            # Lấy Consultation cần xóa
+            consultation = await db.get(models.Consultation, consultation_id)
+            if not consultation:
+                raise ResourceNotFoundError(
+                    detail=f"Consultation with id {consultation_id} not found."
+                )
+            # Kiểm tra consultation thuộc đúng Lead
+            if consultation.lead_id != lead_id:
+                raise BadRequest(
+                    detail="Consultation does not belong to the specified lead."
+                )
+
+            # Kiểm tra quyền
+            if current_user.role == "admin":
+                # Admin có quyền xóa bất kỳ consultation nào
+                pass
+            elif current_user.role == "officer":
+                # Officer chỉ được xóa consultation mới nhất
+                # Tìm consultation mới nhất của Lead này
+                latest_consultation_query = (
+                    select(models.Consultation)
+                    .where(models.Consultation.lead_id == lead_id)
+                    .order_by(
+                        models.Consultation.consultation_date.desc(),
+                        models.Consultation.id.desc(),
+                    )
+                )
+                latest_consultation_result = await db.execute(latest_consultation_query)
+                latest_consultation = latest_consultation_result.scalars().first()
+
+                if not latest_consultation or latest_consultation.id != consultation_id:
+                    raise PermissionDeniedError(
+                        detail="Officers can only delete the most recent consultation to maintain consultation chain integrity."
+                    )
+
+                # Kiểm tra officer có được gán cho Lead này không
+                if lead.assigned_officer_id != current_user.id:
+                    raise PermissionDeniedError(
+                        detail="You are not assigned to this lead."
+                    )
+            else:
+                # Các role khác không có quyền xóa consultation
+                raise PermissionDeniedError(detail="You don't have permission to delete consultations.")
+
+            # Lưu trạng thái cũ của Lead trước khi xóa consultation
+            old_state = _get_current_lead_state(lead)
+
+            # Xóa consultation
+            await db.delete(consultation)
+            log.info("Consultation marked for deletion", consultation_id=consultation_id)
+
+            # Tìm consultation gần nhất còn lại để cập nhật trạng thái Lead
+            remaining_consultations_query = (
                 select(models.Consultation)
-                .where(models.Consultation.lead_id == lead_id)
+                .where(models.Consultation.lead_id == lead.id)
                 .order_by(
                     models.Consultation.consultation_date.desc(),
                     models.Consultation.id.desc(),
-                )
+                )  # Sắp xếp cả theo ID để ổn định
             )
-            latest_consultation_result = await db.execute(latest_consultation_query)
-            latest_consultation = latest_consultation_result.scalars().first()
+            remaining_consultations_result = await db.execute(remaining_consultations_query)
+            latest_remaining = remaining_consultations_result.scalars().first()
 
-            if not latest_consultation or latest_consultation.id != consultation_id:
-                raise PermissionDeniedError(
-                    detail="Officers can only delete the most recent consultation to maintain consultation chain integrity."
+            new_status_id = None
+            new_stage_id = None
+            # Nếu còn consultation khác
+            if latest_remaining and latest_remaining.consultation_status_id:
+                latest_status = await db.get(
+                    models.ConsultationStatus, latest_remaining.consultation_status_id
                 )
+                if latest_status:
+                    new_status_id = latest_status.id
+                    new_stage_id = latest_status.stage_id
+                    log.info(
+                        f"Reverting lead status to latest remaining consultation's status: {new_status_id}",
+                        lead_id=lead_id,
+                    )
+                else:
+                    log.warning(
+                        f"Status '{latest_remaining.consultation_status_id}' not found for latest consultation {latest_remaining.id}",
+                        lead_id=lead_id,
+                    )
+            # Nếu không còn consultation nào, revert về trạng thái ban đầu
+            else:
+                initial_status_id = settings.DEFAULT_INITIAL_LEAD_STATUS_ID
+                initial_status = await db.get(models.ConsultationStatus, initial_status_id)
+                if initial_status:
+                    new_status_id = initial_status.id
+                    new_stage_id = initial_status.stage_id
+                    log.info(
+                        f"Reverting lead status to initial status: {new_status_id}",
+                        lead_id=lead_id,
+                    )
+                else:
+                    log.warning(
+                        f"Initial status '{initial_status_id}' not found when reverting lead status.",
+                        lead_id=lead_id,
+                    )
+                    # Gán giá trị an toàn nếu không tìm thấy status ban đầu
+                    new_status_id = "unknown"
+                    new_stage_id = None
 
-            # Kiểm tra officer có được gán cho Lead này không
-            if lead.assigned_officer_id != current_user.id:
-                raise PermissionDeniedError(
-                    detail="You are not assigned to this lead."
-                )
-        else:
-            # Các role khác không có quyền xóa consultation
-            raise PermissionDeniedError(detail="You don't have permission to delete consultations.")
+            # Cập nhật trạng thái Lead
+            lead.consultation_status_id = new_status_id
+            lead.pipeline_stage_id = new_stage_id
+            # Cập nhật status dựa trên ngữ cảnh
+            if new_status_id is None:
+                lead.status = "unknown"
+            elif new_status_id == settings.DEFAULT_INITIAL_LEAD_STATUS_ID:
+                lead.status = "new"
+            # Giữ nguyên status hiện tại nếu đang revert về consultation khác
+            db.add(lead)  # Đánh dấu lead là dirty
 
-        # Lưu trạng thái cũ của Lead trước khi xóa consultation
-        old_state = _get_current_lead_state(lead)
+            # Lấy trạng thái mới sau khi cập nhật
+            new_state = _get_current_lead_state(lead)
 
-        # Xóa consultation
-        await db.delete(consultation)
-        log.info("Consultation marked for deletion", consultation_id=consultation_id)
-
-        # Tìm consultation gần nhất còn lại để cập nhật trạng thái Lead
-        remaining_consultations_query = (
-            select(models.Consultation)
-            .where(models.Consultation.lead_id == lead.id)
-            .order_by(
-                models.Consultation.consultation_date.desc(),
-                models.Consultation.id.desc(),
-            )  # Sắp xếp cả theo ID để ổn định
-        )
-        remaining_consultations_result = await db.execute(remaining_consultations_query)
-        latest_consultation = remaining_consultations_result.scalars().first()
-
-        new_status_id = None
-        new_stage_id = None
-        # Nếu còn consultation khác
-        if latest_consultation and latest_consultation.consultation_status_id:
-            latest_status = await db.get(
-                models.ConsultationStatus, latest_consultation.consultation_status_id
+            # Ghi log lịch sử thay đổi trạng thái Lead do xóa consultation
+            await _log_lead_state_change(
+                db,
+                lead,
+                old_state,
+                new_state,
+                changed_by=current_user,
+                reason=f"Deleted consultation ID {consultation_id}",
             )
-            if latest_status:
-                new_status_id = latest_status.id
-                new_stage_id = latest_status.stage_id
-                log.info(
-                    f"Reverting lead status to latest remaining consultation's status: {new_status_id}",
-                    lead_id=lead_id,
-                )
-            else:
-                log.warning(
-                    f"Status '{latest_consultation.consultation_status_id}' not found for latest consultation {latest_consultation.id}",
-                    lead_id=lead_id,
-                )
-        # Nếu không còn consultation nào, revert về trạng thái ban đầu
-        else:
-            initial_status_id = settings.DEFAULT_INITIAL_LEAD_STATUS_ID
-            initial_status = await db.get(models.ConsultationStatus, initial_status_id)
-            if initial_status:
-                new_status_id = initial_status.id
-                new_stage_id = initial_status.stage_id
-                log.info(
-                    f"Reverting lead status to initial status: {new_status_id}",
-                    lead_id=lead_id,
-                )
-            else:
-                log.warning(
-                    f"Initial status '{initial_status_id}' not found when reverting lead status.",
-                    lead_id=lead_id,
-                )
-                # Gán giá trị an toàn nếu không tìm thấy status ban đầu
-                new_status_id = "unknown"
-                new_stage_id = None
 
-        # Cập nhật trạng thái Lead
-        lead.consultation_status_id = new_status_id
-        lead.pipeline_stage_id = new_stage_id
-        # Cập nhật status dựa trên ngữ cảnh
-        if new_status_id is None:
-            lead.status = "unknown"
-        elif new_status_id == settings.DEFAULT_INITIAL_LEAD_STATUS_ID:
-            lead.status = "new"
-        # Giữ nguyên status hiện tại nếu đang revert về consultation khác
-        db.add(lead)  # Đánh dấu lead là dirty
+            # Store values for use after transaction
+            _lead_id = lead_id
+            _consultation_id = consultation_id
+            _officer_id = lead.assigned_officer_id
+            _new_status_id = new_status_id
 
-        # Lấy trạng thái mới sau khi cập nhật
-        new_state = _get_current_lead_state(lead)
+        except Exception as e:
+            # Rollback tự động by begin_nested context
+            log.error(
+                "Failed to delete consultation",
+                lead_id=lead_id,
+                consultation_id=consultation_id,
+                error=str(e),
+                exc_info=True,
+            )
+            raise e
 
-        # Ghi log lịch sử thay đổi trạng thái Lead do xóa consultation
-        await _log_lead_state_change(
-            db,
-            lead,
-            old_state,
-            new_state,
-            changed_by=current_user,
-            reason=f"Admin deleted consultation ID {consultation_id}",
-        )
+    # After successful transaction, log and emit events
+    log.info(
+        "Consultation deleted and lead status reverted",
+        user_id=current_user.id,
+        lead_id=_lead_id,
+        consultation_id=_consultation_id,
+        new_lead_status=_new_status_id,
+    )
 
-        # Commit transaction (xóa consultation và cập nhật lead)
-        await db.commit()
-        log.info(
-            "Consultation deleted and lead status reverted by admin",
-            admin_id=current_user.id,
-            lead_id=lead_id,
-            consultation_id=consultation_id,
-            new_lead_status=new_status_id,
-        )
-
-        # Emit Socket.IO event for real-time updates
-        await socket_manager.emit_consultation_deleted(
-            lead_id=lead_id,
-            consultation_id=consultation_id,
-            officer_id=lead.assigned_officer_id,
-            new_lead_status_id=new_status_id,
-            deleted_by_username=current_user.username,
-        )
-    except Exception as e:
-        # Rollback nếu có lỗi
-        await db.rollback()
-        log.error(
-            "Failed to delete consultation",
-            lead_id=lead_id,
-            consultation_id=consultation_id,
-            error=str(e),
-            exc_info=True,
-        )
-        raise e
+    # Emit Socket.IO event for real-time updates
+    await socket_manager.emit_consultation_deleted(
+        lead_id=_lead_id,
+        consultation_id=_consultation_id,
+        officer_id=_officer_id,
+        new_lead_status_id=_new_status_id,
+        deleted_by_username=current_user.username,
+    )
 
 
 async def update_consultation(
@@ -1292,33 +1325,38 @@ async def update_consultation(
     - If status_id is changed, update lead's consultation_status_id and pipeline_stage_id
     - Log the change in LeadStatusHistory if lead status changes
     - Emit Socket.IO event for real-time updates
+
+    CONCURRENCY SAFE: Uses SELECT ... FOR UPDATE to prevent race conditions
+    when multiple requests try to update the same lead's pipeline_stage.
     """
-    try:
-        # Lấy Lead
-        lead_query = select(models.Lead).where(models.Lead.id == lead_id)
-        lead_result = await db.execute(lead_query)
-        lead = lead_result.scalar_one_or_none()
-        if not lead:
-            raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found.")
-
-        # Lấy Consultation cần update
-        consultation = await db.get(models.Consultation, consultation_id)
-        if not consultation:
-            raise ResourceNotFoundError(
-                detail=f"Consultation with id {consultation_id} not found."
+    async with db.begin_nested():
+        try:
+            # ✅ FIX: Row-level lock để prevent race condition
+            lead_query = (
+                select(models.Lead)
+                .where(models.Lead.id == lead_id)
+                .where(models.Lead.deleted_at.is_(None))
+                .with_for_update()  # ROW LOCK - prevents concurrent modifications
             )
-        # Kiểm tra consultation thuộc đúng Lead
-        if consultation.lead_id != lead_id:
-            raise BadRequest(
-                detail="Consultation does not belong to the specified lead."
-            )
+            lead_result = await db.execute(lead_query)
+            lead = lead_result.scalar_one_or_none()
+            if not lead:
+                raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found.")
 
-        # Kiểm tra quyền
-        if current_user.role == "admin":
-            # Admin có quyền update bất kỳ consultation nào
-            pass
-        elif current_user.role == "officer":
-            # Officer chỉ được update consultation mới nhất
+            # Lấy Consultation cần update
+            consultation = await db.get(models.Consultation, consultation_id)
+            if not consultation:
+                raise ResourceNotFoundError(
+                    detail=f"Consultation with id {consultation_id} not found."
+                )
+            # Kiểm tra consultation thuộc đúng Lead
+            if consultation.lead_id != lead_id:
+                raise BadRequest(
+                    detail="Consultation does not belong to the specified lead."
+                )
+
+            # ✅ FIX: Single check for latest consultation (eliminates TOCTOU vulnerability)
+            # Query once and reuse the result for both permission check and status update
             latest_consultation_query = (
                 select(models.Consultation)
                 .where(models.Consultation.lead_id == lead_id)
@@ -1329,126 +1367,130 @@ async def update_consultation(
             )
             latest_consultation_result = await db.execute(latest_consultation_query)
             latest_consultation = latest_consultation_result.scalars().first()
-
-            if not latest_consultation or latest_consultation.id != consultation_id:
-                raise PermissionDeniedError(
-                    detail="Officers can only update the most recent consultation to maintain consultation chain integrity."
-                )
-
-            # Kiểm tra officer có được gán cho Lead này không
-            if lead.assigned_officer_id != current_user.id:
-                raise PermissionDeniedError(
-                    detail="You are not assigned to this lead."
-                )
-        else:
-            # Các role khác không có quyền update consultation
-            raise PermissionDeniedError(
-                detail="You don't have permission to update consultations."
+            is_latest_consultation = (
+                latest_consultation and latest_consultation.id == consultation_id
             )
 
-        # Lưu trạng thái cũ của Lead trước khi update
-        old_state = _get_current_lead_state(lead)
-        old_consultation_status_id = consultation.consultation_status_id
+            # Kiểm tra quyền
+            if current_user.role == "admin":
+                # Admin có quyền update bất kỳ consultation nào
+                pass
+            elif current_user.role == "officer":
+                # Officer chỉ được update consultation mới nhất
+                if not is_latest_consultation:
+                    raise PermissionDeniedError(
+                        detail="Officers can only update the most recent consultation to maintain consultation chain integrity."
+                    )
 
-        # Update các trường được cung cấp
-        update_data = consultation_in.model_dump(exclude_unset=True)
-        for field, value in update_data.items():
-            if field == "status_id":
-                # Đặt consultation_status_id
-                consultation.consultation_status_id = value
+                # Kiểm tra officer có được gán cho Lead này không
+                if lead.assigned_officer_id != current_user.id:
+                    raise PermissionDeniedError(
+                        detail="You are not assigned to this lead."
+                    )
             else:
-                setattr(consultation, field, value)
-
-        db.add(consultation)
-
-        # Nếu status_id thay đổi và đây là consultation mới nhất
-        # Cập nhật trạng thái Lead
-        status_changed = False
-        if "status_id" in update_data and update_data["status_id"] != old_consultation_status_id:
-            # Kiểm tra xem có phải consultation mới nhất không
-            latest_consultation_query = (
-                select(models.Consultation)
-                .where(models.Consultation.lead_id == lead_id)
-                .order_by(
-                    models.Consultation.consultation_date.desc(),
-                    models.Consultation.id.desc(),
+                # Các role khác không có quyền update consultation
+                raise PermissionDeniedError(
+                    detail="You don't have permission to update consultations."
                 )
-            )
-            latest_consultation_result = await db.execute(latest_consultation_query)
-            latest_consultation = latest_consultation_result.scalars().first()
 
-            if latest_consultation and latest_consultation.id == consultation_id:
-                # Đây là consultation mới nhất, cập nhật lead status
-                new_status = await db.get(
-                    models.ConsultationStatus, update_data["status_id"]
-                )
-                if new_status:
-                    lead.consultation_status_id = new_status.id
-                    lead.pipeline_stage_id = new_status.stage_id
-                    db.add(lead)
-                    status_changed = True
+            # Lưu trạng thái cũ của Lead trước khi update
+            old_state = _get_current_lead_state(lead)
+            old_consultation_status_id = consultation.consultation_status_id
 
-                    log.info(
-                        "Lead status updated via consultation update",
-                        lead_id=lead_id,
-                        consultation_id=consultation_id,
-                        old_status=old_consultation_status_id,
-                        new_status=new_status.id,
-                    )
+            # Update các trường được cung cấp
+            update_data = consultation_in.model_dump(exclude_unset=True)
+            for field, value in update_data.items():
+                if field == "status_id":
+                    # Đặt consultation_status_id
+                    consultation.consultation_status_id = value
                 else:
-                    log.warning(
-                        f"Status '{update_data['status_id']}' not found",
-                        lead_id=lead_id,
+                    setattr(consultation, field, value)
+
+            db.add(consultation)
+
+            # Nếu status_id thay đổi và đây là consultation mới nhất
+            # Cập nhật trạng thái Lead (reuse is_latest_consultation from above)
+            status_changed = False
+            if "status_id" in update_data and update_data["status_id"] != old_consultation_status_id:
+                if is_latest_consultation:
+                    # Đây là consultation mới nhất, cập nhật lead status
+                    new_status = await db.get(
+                        models.ConsultationStatus, update_data["status_id"]
                     )
+                    if new_status:
+                        lead.consultation_status_id = new_status.id
+                        lead.pipeline_stage_id = new_status.stage_id
+                        db.add(lead)
+                        status_changed = True
 
-        # Lấy trạng thái mới sau khi cập nhật
-        new_state = _get_current_lead_state(lead)
+                        log.info(
+                            "Lead status updated via consultation update",
+                            lead_id=lead_id,
+                            consultation_id=consultation_id,
+                            old_status=old_consultation_status_id,
+                            new_status=new_status.id,
+                        )
+                    else:
+                        log.warning(
+                            f"Status '{update_data['status_id']}' not found",
+                            lead_id=lead_id,
+                        )
 
-        # Ghi log lịch sử thay đổi trạng thái Lead (nếu có thay đổi)
-        if status_changed:
-            await _log_lead_state_change(
-                db,
-                lead,
-                old_state,
-                new_state,
-                changed_by=current_user,
-                reason=f"Updated consultation ID {consultation_id}",
+            # Lấy trạng thái mới sau khi cập nhật
+            new_state = _get_current_lead_state(lead)
+
+            # Ghi log lịch sử thay đổi trạng thái Lead (nếu có thay đổi)
+            if status_changed:
+                await _log_lead_state_change(
+                    db,
+                    lead,
+                    old_state,
+                    new_state,
+                    changed_by=current_user,
+                    reason=f"Updated consultation ID {consultation_id}",
+                )
+
+            # Flush to get changes ready (commit handled by begin_nested context)
+            await db.flush()
+            await db.refresh(consultation)
+
+            # Store values for use after transaction
+            _lead_id = lead_id
+            _consultation_id = consultation_id
+            _officer_id = lead.assigned_officer_id
+            _consultation_status_id = consultation.consultation_status_id or ""
+            _status_changed = status_changed
+
+        except Exception as e:
+            # Rollback tự động by begin_nested context
+            log.error(
+                "Failed to update consultation",
+                lead_id=lead_id,
+                consultation_id=consultation_id,
+                error=str(e),
+                exc_info=True,
             )
+            raise e
 
-        # Commit transaction
-        await db.commit()
-        await db.refresh(consultation)
+    # After successful transaction, log and emit events
+    log.info(
+        "Consultation updated successfully",
+        user_id=current_user.id,
+        lead_id=_lead_id,
+        consultation_id=_consultation_id,
+        status_changed=_status_changed,
+    )
 
-        log.info(
-            "Consultation updated successfully",
-            user_id=current_user.id,
-            lead_id=lead_id,
-            consultation_id=consultation_id,
-            status_changed=status_changed,
-        )
+    # Emit Socket.IO event for real-time updates
+    await socket_manager.emit_consultation_updated(
+        lead_id=_lead_id,
+        consultation_id=_consultation_id,
+        officer_id=_officer_id,
+        consultation_status_id=_consultation_status_id,
+        updated_by_username=current_user.username,
+    )
 
-        # Emit Socket.IO event for real-time updates
-        await socket_manager.emit_consultation_updated(
-            lead_id=lead_id,
-            consultation_id=consultation_id,
-            officer_id=lead.assigned_officer_id,
-            consultation_status_id=consultation.consultation_status_id or "",
-            updated_by_username=current_user.username,
-        )
-
-        return consultation
-
-    except Exception as e:
-        # Rollback nếu có lỗi
-        await db.rollback()
-        log.error(
-            "Failed to update consultation",
-            lead_id=lead_id,
-            consultation_id=consultation_id,
-            error=str(e),
-            exc_info=True,
-        )
-        raise e
+    return consultation
 
 
 async def process_officer_action(
