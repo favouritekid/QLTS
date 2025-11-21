@@ -41,7 +41,12 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { EditConsultationDialog } from "./EditConsultationDialog";
-import type { Consultation } from "@/types/lead.types";
+import type { Consultation, TimelineItem as TimelineItemBase } from "@/types/lead.types";
+
+// Extended timeline type for backward compatibility with old structure
+type TimelineItem = TimelineItemBase & {
+  data?: Consultation | { method?: string } | Record<string, unknown>;
+};
 
 interface LeadTimelineTabProps {
   leadId: number;
@@ -234,14 +239,15 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
               <div className="absolute left-[15px] top-3 bottom-3 w-0.5 bg-gradient-to-b from-border via-border to-transparent" />
 
               {groupedTimeline[dateKey].map((event, index) => {
-                const eventType = event.type || "unknown";
-                const eventData = event.data || {};
-                const isConsultation = eventType === "consultation";
-                const isAssignment = eventType === "assignment";
+                const eventType = event.type || "lead_created";
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const eventData = (event.data || {}) as any; // TODO: Refactor to use new TimelineItem structure
+                const isConsultation = eventType === "consultation_added" || eventType === "consultation_updated";
+                const isAssignment = eventType === "assigned";
 
                 const config = getEventConfig(
                   eventType,
-                  isConsultation ? eventData.method : undefined
+                  isConsultation ? (eventData.method as string) : undefined
                 );
                 const Icon = config.icon;
 

@@ -37,7 +37,7 @@ interface DocumentChecklistProps {
 export function DocumentChecklist({ control, admissionMethod }: DocumentChecklistProps) {
   const { fields, replace } = useFieldArray({
     control,
-    name: "documents.checklist" as "documents.checklist",
+    name: "documents.checklist" as const,
   });
 
   // Update checklist when admission method changes
