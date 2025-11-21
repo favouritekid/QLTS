@@ -19,6 +19,8 @@ from ..utils.exceptions import (
 )
 from ..services import pipeline_service, distribution_service
 from .. import socket_manager
+from ..core.status_mapping import sync_lead_status_from_consultation
+
 log = structlog.get_logger(__name__)
 
 
@@ -912,7 +914,8 @@ async def add_consultation(
             # Cập nhật trạng thái Lead theo status mới của consultation
             lead.consultation_status_id = new_status.id
             lead.pipeline_stage_id = new_status.stage_id
-            # Giữ nguyên status (đây là field riêng, không phải consultation_status_id)
+            # ✅ Sync lead.status từ consultation_status (Hybrid Approach)
+            sync_lead_status_from_consultation(lead, new_status)
 
             # Quick Disposition: Sync scheduled_at to lead.next_activity_at
             if data.scheduled_at:
@@ -1210,6 +1213,8 @@ async def delete_consultation(
 
             new_status_id = None
             new_stage_id = None
+            revert_status_obj = None  # ConsultationStatus object for sync
+
             # Nếu còn consultation khác
             if latest_remaining and latest_remaining.consultation_status_id:
                 latest_status = await db.get(
@@ -1218,6 +1223,7 @@ async def delete_consultation(
                 if latest_status:
                     new_status_id = latest_status.id
                     new_stage_id = latest_status.stage_id
+                    revert_status_obj = latest_status
                     log.info(
                         f"Reverting lead status to latest remaining consultation's status: {new_status_id}",
                         lead_id=lead_id,
@@ -1234,6 +1240,7 @@ async def delete_consultation(
                 if initial_status:
                     new_status_id = initial_status.id
                     new_stage_id = initial_status.stage_id
+                    revert_status_obj = initial_status
                     log.info(
                         f"Reverting lead status to initial status: {new_status_id}",
                         lead_id=lead_id,
@@ -1250,12 +1257,12 @@ async def delete_consultation(
             # Cập nhật trạng thái Lead
             lead.consultation_status_id = new_status_id
             lead.pipeline_stage_id = new_stage_id
-            # Cập nhật status dựa trên ngữ cảnh
-            if new_status_id is None:
-                lead.status = "unknown"
-            elif new_status_id == settings.DEFAULT_INITIAL_LEAD_STATUS_ID:
+            # ✅ Sync lead.status từ consultation_status (Hybrid Approach)
+            if revert_status_obj:
+                sync_lead_status_from_consultation(lead, revert_status_obj)
+            else:
+                # Fallback khi không tìm thấy status object
                 lead.status = "new"
-            # Giữ nguyên status hiện tại nếu đang revert về consultation khác
             db.add(lead)  # Đánh dấu lead là dirty
 
             # Lấy trạng thái mới sau khi cập nhật
@@ -1420,6 +1427,8 @@ async def update_consultation(
                     if new_status:
                         lead.consultation_status_id = new_status.id
                         lead.pipeline_stage_id = new_status.stage_id
+                        # ✅ Sync lead.status từ consultation_status (Hybrid Approach)
+                        sync_lead_status_from_consultation(lead, new_status)
                         db.add(lead)
                         status_changed = True
 

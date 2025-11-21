@@ -84,7 +84,11 @@ class ConsultationStatusBase(BaseModel):
         default=False,
         description="Whether this status marks end of lead lifecycle"
     )
-    
+    legacy_status: Optional[str] = Field(
+        default=None,
+        description="Maps to lead.status for backward compatibility. Valid values: new, assigned, contacted, qualified, unqualified, converted, rejected"
+    )
+
     # ✅ QUAN TRỌNG NHẤT: Fix lỗi "invalid input value ... NEUTRAL"
     model_config = ConfigDict(use_enum_values=True, from_attributes=True)
 
@@ -107,7 +111,11 @@ class ConsultationStatusUpdate(BaseModel):
     stage_id: Optional[str] = None
     outcome_type: Optional[OutcomeTypeEnum] = None
     is_final_status: Optional[bool] = None
-    
+    legacy_status: Optional[str] = Field(
+        default=None,
+        description="Maps to lead.status for backward compatibility"
+    )
+
     model_config = ConfigDict(use_enum_values=True)
 
 
