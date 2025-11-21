@@ -19,7 +19,7 @@ class OrganizationUnit(Base):
     name = Column(String(255), nullable=False)
     type = Column(String(50), nullable=False)
     description = Column(Text, nullable=True)
-    parent_id = Column(Integer, ForeignKey("organization_unit.id"), nullable=True)
+    parent_id = Column(Integer, ForeignKey("organization_unit.id"), nullable=True, index=True)
 
     # NEW: Soft delete support
     is_active = Column(
