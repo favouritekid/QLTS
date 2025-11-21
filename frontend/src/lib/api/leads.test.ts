@@ -167,9 +167,8 @@ describe("Leads API Client", () => {
       await expect(
         leadsApi.createLead({
           full_name: 'Incomplete Lead',
-          // @ts-expect-error - Testing validation error with undefined required fields
-          email: undefined,
-          // @ts-expect-error - Testing validation error with undefined required fields
+          email: undefined, // email is now optional
+          // @ts-expect-error - Testing validation error with undefined required field
           phone: undefined,
           source: 'website',
           unit_id: 1,

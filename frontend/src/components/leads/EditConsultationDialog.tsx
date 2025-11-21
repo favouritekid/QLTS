@@ -37,7 +37,7 @@ import { Textarea } from "@/components/ui/textarea";
 
 import { useUpdateConsultation } from "@/hooks/useLeads";
 import { useAllowedNextStatuses } from "@/hooks/usePipeline";
-import type { Consultation } from "@/types/lead.types";
+import type { Consultation, ConsultationUpdate } from "@/types/lead.types";
 
 // Validation schema (all fields optional for partial update)
 const editConsultationSchema = z.object({
@@ -105,7 +105,7 @@ export function EditConsultationDialog({
     if (!consultation) return;
 
     // Only send fields that have values (partial update)
-    const updateData: any = {};
+    const updateData: ConsultationUpdate = {};
     if (data.scheduled_at) updateData.scheduled_at = data.scheduled_at;
     if (data.status_id) updateData.status_id = data.status_id;
     if (data.notes !== undefined) updateData.notes = data.notes;

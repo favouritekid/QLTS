@@ -216,7 +216,7 @@ export function LeadDetailSheet({
               </TabsContent>
 
               <TabsContent value="timeline" className="mt-4">
-                <LeadTimelineTab leadId={lead.id} timeline={timeline} />
+                <LeadTimelineTab leadId={lead.id} />
               </TabsContent>
 
               <TabsContent value="consultations" className="mt-4">

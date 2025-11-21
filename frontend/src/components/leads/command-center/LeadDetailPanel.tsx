@@ -21,7 +21,6 @@ import {
   Calendar,
   User,
   Zap,
-  ExternalLink,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLead } from "@/hooks/useLeads";

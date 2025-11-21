@@ -138,7 +138,7 @@ export interface LeadCreate {
  */
 export interface LeadUpdate {
   full_name?: string
-  email?: string
+  email?: string | null  // Email is optional and nullable
   phone?: string
   phone2?: string | null  // Số điện thoại phụ
   source?: LeadSource

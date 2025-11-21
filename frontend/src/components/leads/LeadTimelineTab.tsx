@@ -125,11 +125,7 @@ const formatDateGroup = (dateString: string) => {
 };
 
 // Group timeline by date
-const groupTimelineByDate = (timeline: Array<{
-  type?: string;
-  timestamp?: string;
-  data?: any;
-}>) => {
+const groupTimelineByDate = (timeline: TimelineItem[]) => {
   const groups: Record<string, typeof timeline> = {};
 
   // Sort by date descending (newest first)
@@ -194,8 +190,8 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
   const groupedTimeline = groupTimelineByDate(timeline);
   const dateKeys = Object.keys(groupedTimeline).sort().reverse();
 
-  const handleEditConsultation = (consultation: any) => {
-    setEditingConsultation(consultation as Consultation);
+  const handleEditConsultation = (consultation: Consultation) => {
+    setEditingConsultation(consultation);
     setEditDialogOpen(true);
   };
 

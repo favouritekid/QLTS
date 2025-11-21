@@ -16,6 +16,7 @@ import type {
   LeadListParams,
   Consultation,
   ConsultationCreate,
+  ConsultationUpdate,
   TimelineItem,
   LeadInsights,
   LeadImportResult,
@@ -378,6 +379,7 @@ export const leadsApi = {
 
   // Consultations
   addConsultation,
+  updateConsultation,
   deleteConsultation,
 
   // Data Access

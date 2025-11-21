@@ -91,7 +91,7 @@ export function DistributionRuleDialog({ open, onOpenChange, rule }: Distributio
   const { data: units = [], isLoading: isLoadingUnits } = useOrganizationUnits();
 
   // 2. Fetch degree levels for grouping
-  const { data: degreeLevels = [], isLoading: isLoadingDegreeLevels } = useDegreeLevels(true);
+  // const { data: degreeLevels = [], isLoading: isLoadingDegreeLevels } = useDegreeLevels(true);
 
   // Flatten units for dropdown with hierarchy indication
   const flattenedUnits = useMemo(() => {

@@ -18,6 +18,7 @@ import type {
   LeadInsights,
   Consultation,
   ConsultationCreate,
+  ConsultationUpdate,
 } from "@/types/lead.types";
 
 // =====================================================================
@@ -551,7 +552,7 @@ export function useUpdateConsultation() {
         typeof detail === "string"
           ? detail
           : Array.isArray(detail)
-            ? detail.map((e: any) => e.msg).join(", ")
+            ? detail.map((e: { msg: string }) => e.msg).join(", ")
             : "Failed to update consultation";
       toast.error("Error", { description: message });
     },

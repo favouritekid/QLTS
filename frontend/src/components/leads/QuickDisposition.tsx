@@ -143,8 +143,8 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
 
   // Handle status button click - determine if simple or complex
   const handleStatusClick = (status: ConsultationStatus) => {
-    // Positive outcomes always need dialog for context
-    if (status.outcome_type === "positive" || COMPLEX_STATUS_IDS.includes(status.id)) {
+    // Complex statuses need dialog for additional context
+    if (COMPLEX_STATUS_IDS.includes(status.id)) {
       handleComplexDisposition(status);
     } else {
       handleSimpleDisposition(status);
