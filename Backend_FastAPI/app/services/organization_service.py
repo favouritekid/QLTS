@@ -57,6 +57,7 @@ class DecimalEncoder(json.JSONEncoder):
 
 # Cache configuration
 ORG_UNITS_CACHE_KEY = "org:all_units_tree"
+ORG_TREE_AGG_CACHE_KEY = "org:tree_with_aggregation"  # Cache key for aggregation tree
 CACHE_TTL = settings.CONFIG_CACHE_TTL_SECONDS
 # ✅ REMOVED (Priority 2 - Deep Dive Audit): asyncio.Lock() replaced with redis_distributed_lock
 # OLD: _org_cache_lock = asyncio.Lock()  # Only works within ONE process!
@@ -68,10 +69,12 @@ CACHE_TTL = settings.CONFIG_CACHE_TTL_SECONDS
 # =============================================================================
 
 async def invalidate_org_cache():
-    """Invalidate organization tree cache."""
+    """Invalidate all organization tree caches."""
     try:
+        # Invalidate both basic tree and aggregation caches
         await safe_redis_delete(ORG_UNITS_CACHE_KEY)
-        log.info("Organization cache invalidated", key=ORG_UNITS_CACHE_KEY)
+        await safe_redis_delete(ORG_TREE_AGG_CACHE_KEY)
+        log.info("Organization caches invalidated", keys=[ORG_UNITS_CACHE_KEY, ORG_TREE_AGG_CACHE_KEY])
     except Exception as e:
         log.error("Failed to invalidate organization cache", error=str(e))
 
@@ -320,8 +323,10 @@ async def check_circular_dependency(
     """
     Check if setting new_parent_id as parent of unit_id would create a circular dependency.
 
-    Algorithm: Traverse up the parent chain from new_parent_id. If we encounter unit_id,
-    it means setting this relationship would create a cycle.
+    Algorithm: Use Recursive CTE to fetch entire ancestor chain from new_parent_id in ONE query.
+    If unit_id appears in the ancestor chain, setting this relationship would create a cycle.
+
+    Performance: O(1) query instead of O(depth) queries.
 
     Args:
         db: Database session
@@ -339,35 +344,37 @@ async def check_circular_dependency(
             detail="Một đơn vị không thể là đơn vị cha của chính nó."
         )
 
-    # Traverse up from new_parent to check if we hit unit_id
-    current_id = new_parent_id
-    visited = set()  # Prevent infinite loop in case DB already has cycles
+    # ✅ PERFORMANCE FIX: Use Recursive CTE to fetch ALL ancestors in ONE query
+    # This replaces the O(depth) while loop with O(1) database query
+    ancestor_cte_sql = text("""
+        WITH RECURSIVE ancestor_chain AS (
+            -- Base case: start from the proposed new parent
+            SELECT id, parent_id, 1 as depth
+            FROM organization_unit
+            WHERE id = :new_parent_id
 
-    while current_id is not None:
-        if current_id in visited:
-            # Already visited this node - existing cycle in DB (should not happen)
-            log.warning(
-                "Detected existing cycle in organization tree",
-                current_id=current_id,
-                visited=list(visited)
-            )
-            break
+            UNION ALL
 
-        visited.add(current_id)
+            -- Recursive case: traverse up the parent chain
+            SELECT u.id, u.parent_id, ac.depth + 1
+            FROM organization_unit u
+            JOIN ancestor_chain ac ON u.id = ac.parent_id
+            WHERE ac.depth < 100  -- Safety limit to prevent infinite loops
+        )
+        SELECT id FROM ancestor_chain WHERE id = :unit_id LIMIT 1;
+    """)
 
-        # If we encounter the unit being updated, this would create a cycle
-        if current_id == unit_id:
-            raise DuplicateResourceError(
-                detail="Không thể tạo mối quan hệ vòng lặp trong cây đơn vị. "
-                       "Đơn vị cha được chọn là con/cháu của đơn vị hiện tại."
-            )
+    result = await db.execute(
+        ancestor_cte_sql,
+        {"new_parent_id": new_parent_id, "unit_id": unit_id}
+    )
+    found_cycle = result.scalar_one_or_none()
 
-        # Get parent of current node
-        parent = await db.get(models.OrganizationUnit, current_id)
-        if not parent:
-            break
-
-        current_id = parent.parent_id
+    if found_cycle:
+        raise DuplicateResourceError(
+            detail="Không thể tạo mối quan hệ vòng lặp trong cây đơn vị. "
+                   "Đơn vị cha được chọn là con/cháu của đơn vị hiện tại."
+        )
 
 
 async def update_organization_unit(
@@ -1093,6 +1100,8 @@ async def get_organization_tree_with_aggregation(
     """
     Get organization tree with aggregated statistics for 3-tier architecture.
 
+    ✅ PERFORMANCE: Uses Redis caching to avoid expensive aggregation computation.
+
     Args:
         db: Database session
         academic_year: Year for academic info (default: current year)
@@ -1106,6 +1115,23 @@ async def get_organization_tree_with_aggregation(
     # Determine academic year
     if academic_year is None:
         academic_year = datetime.now().year
+
+    # ✅ PERFORMANCE FIX: Use Redis cache for aggregation results
+    cache_key = f"{ORG_TREE_AGG_CACHE_KEY}:{academic_year}:{include_inactive}"
+
+    # Try cache first
+    try:
+        cached_data = await safe_redis_get(cache_key)
+        if cached_data:
+            log.debug("Cache hit for organization tree aggregation", cache_key=cache_key)
+            cached_list = json.loads(cached_data)
+            # Convert back to Pydantic models
+            return [
+                schemas.OrganizationTreeNodeWithAggregation.model_validate(item)
+                for item in cached_list
+            ]
+    except Exception as e:
+        log.error("Failed to get aggregation from cache", error=str(e))
 
     log.info(
         "Building organization tree with aggregation (3-tier)",
@@ -1262,6 +1288,18 @@ async def get_organization_tree_with_aggregation(
         total_units=len(all_units),
         academic_year=academic_year
     )
+
+    # ✅ PERFORMANCE FIX: Cache the result
+    try:
+        cache_data = [node.model_dump() for node in root_nodes]
+        await safe_redis_set(
+            cache_key,
+            json.dumps(cache_data, cls=DecimalEncoder),
+            ex=CACHE_TTL
+        )
+        log.debug("Cached organization tree aggregation", cache_key=cache_key, ttl=CACHE_TTL)
+    except Exception as e:
+        log.error("Failed to cache organization tree aggregation", error=str(e))
 
     return root_nodes
 

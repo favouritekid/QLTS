@@ -5,8 +5,10 @@
  * Supports role-based access control and nested navigation
  */
 import {
+  Activity,
   Bell,
   Building2,
+  Cog,
   Database,
   LayoutDashboard,
   Settings,
@@ -102,6 +104,18 @@ export const navigationConfig: NavigationConfig = {
     {
       title: "System",
       items: [
+        {
+          label: "System Config",
+          href: "/admin/config",
+          icon: Cog,
+          roles: ["admin"], // Only admin can access system configuration
+        },
+        {
+          label: "Monitoring",
+          href: "/admin/monitoring",
+          icon: Activity,
+          roles: ["admin"], // Only admin can access monitoring
+        },
         {
           label: "Settings",
           href: "/settings",

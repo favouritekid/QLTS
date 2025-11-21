@@ -85,6 +85,14 @@ class ConsultationStatus(Base):
         server_default="false",
         comment="Whether this status marks end of lead lifecycle"
     )
+    # Legacy status mapping for backward compatibility with lead.status field
+    # Valid values: "new", "assigned", "contacted", "qualified", "unqualified", "converted", "rejected"
+    legacy_status = Column(
+        String(50),
+        nullable=True,
+        default=None,
+        comment="Maps to lead.status for backward compatibility (auto-derived if NULL)"
+    )
 
     # Relationships
     stage = relationship("PipelineStage", back_populates="statuses")
