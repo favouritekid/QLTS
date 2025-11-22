@@ -84,9 +84,12 @@ const policyFormSchema = z.object({
   priority: z.number().int().min(0),
   max_usage: z.number().int().min(0).optional().nullable(),
   is_active: z.boolean(),
-  // JSON fields - simplified for now
+  // JSON fields - applicable_scope
   all_programs: z.boolean(),
   is_heavy_only: z.boolean(),
+  degree_levels: z.string().optional(), // Comma-separated: "Cao đẳng, Trung cấp"
+  major_program_codes: z.string().optional(), // Comma-separated: "6480201, 6510301"
+  offering_types: z.string().optional(), // Comma-separated: "Chính quy, Liên thông"
 });
 
 type PolicyFormValues = z.infer<typeof policyFormSchema>;
@@ -123,6 +126,9 @@ export default function TuitionDiscountPage() {
       is_active: true,
       all_programs: true,
       is_heavy_only: false,
+      degree_levels: "",
+      major_program_codes: "",
+      offering_types: "",
     },
   });
 
@@ -144,6 +150,9 @@ export default function TuitionDiscountPage() {
       is_active: true,
       all_programs: true,
       is_heavy_only: false,
+      degree_levels: "",
+      major_program_codes: "",
+      offering_types: "",
     });
     setDialogOpen(true);
   };
@@ -165,8 +174,17 @@ export default function TuitionDiscountPage() {
       is_active: policy.is_active,
       all_programs: scope.all_programs || false,
       is_heavy_only: scope.is_heavy_only || false,
+      degree_levels: Array.isArray(scope.degree_levels) ? scope.degree_levels.join(", ") : "",
+      major_program_codes: Array.isArray(scope.major_program_codes) ? scope.major_program_codes.join(", ") : "",
+      offering_types: Array.isArray(scope.offering_types) ? scope.offering_types.join(", ") : "",
     });
     setDialogOpen(true);
+  };
+
+  // Helper to parse comma-separated string to array
+  const parseCommaSeparated = (value: string | undefined): string[] | undefined => {
+    if (!value || value.trim() === "") return undefined;
+    return value.split(",").map(s => s.trim()).filter(s => s.length > 0);
   };
 
   const onSubmit = async (values: PolicyFormValues) => {
@@ -185,6 +203,9 @@ export default function TuitionDiscountPage() {
       applicable_scope: {
         all_programs: values.all_programs,
         is_heavy_only: values.is_heavy_only,
+        degree_levels: parseCommaSeparated(values.degree_levels),
+        major_program_codes: parseCommaSeparated(values.major_program_codes),
+        offering_types: parseCommaSeparated(values.offering_types),
       },
       target_criteria: {},
     };
@@ -658,6 +679,68 @@ export default function TuitionDiscountPage() {
                     </FormItem>
                   )}
                 />
+
+                {/* Additional Scope Options - shown when all_programs is false */}
+                {!form.watch("all_programs") && (
+                  <div className="space-y-3 border-t pt-3">
+                    <FormField
+                      control={form.control}
+                      name="degree_levels"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Trình độ cụ thể</FormLabel>
+                          <FormControl>
+                            <Input
+                              placeholder="VD: Cao đẳng, Trung cấp"
+                              {...field}
+                              disabled={isSubmitting}
+                            />
+                          </FormControl>
+                          <FormDescription>Phân cách bằng dấu phẩy</FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="major_program_codes"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Mã ngành cụ thể</FormLabel>
+                          <FormControl>
+                            <Input
+                              placeholder="VD: 6480201, 6510301"
+                              {...field}
+                              disabled={isSubmitting}
+                            />
+                          </FormControl>
+                          <FormDescription>Phân cách bằng dấu phẩy</FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="offering_types"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Loại hình đào tạo</FormLabel>
+                          <FormControl>
+                            <Input
+                              placeholder="VD: Chính quy, Liên thông"
+                              {...field}
+                              disabled={isSubmitting}
+                            />
+                          </FormControl>
+                          <FormDescription>Phân cách bằng dấu phẩy</FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                )}
               </div>
 
               {/* Status Options */}

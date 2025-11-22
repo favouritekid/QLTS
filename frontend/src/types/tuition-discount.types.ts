@@ -24,6 +24,7 @@ export interface ApplicableScope {
   major_program_codes?: string[];   // Danh sách mã ngành
   is_heavy_only?: boolean;          // Chỉ ngành nặng nhọc, độc hại
   offering_ids?: number[];          // Danh sách ID loại hình đào tạo
+  offering_types?: string[];        // Danh sách tên loại hình đào tạo (vd: ["Chính quy"])
 }
 
 /**
