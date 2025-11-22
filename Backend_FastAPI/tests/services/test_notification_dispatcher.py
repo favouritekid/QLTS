@@ -147,14 +147,22 @@ class TestDeduplication:
     """Tests for deduplication logic."""
 
     @pytest.mark.asyncio
-    async def test_deduplication_filters_existing(self):
+    @patch("app.services.notification_dispatcher.models")
+    @patch("app.services.notification_dispatcher.select")
+    @patch("app.services.notification_dispatcher.and_")
+    async def test_deduplication_filters_existing(
+        self, mock_and, mock_select, mock_models
+    ):
         """Should filter out users who already have notification."""
         db = AsyncMock()
         # The execute returns a result that has fetchall()
         mock_result = MagicMock()
         mock_result.fetchall.return_value = [(1,), (3,)]  # Users 1 and 3 already have it
-        # Make execute return the mock_result directly (not awaitable since we use AsyncMock)
         db.execute = AsyncMock(return_value=mock_result)
+
+        # Setup mock chain for select().where()
+        mock_where = MagicMock()
+        mock_select.return_value.where.return_value = mock_where
 
         result = await _apply_deduplication(
             db=db,
