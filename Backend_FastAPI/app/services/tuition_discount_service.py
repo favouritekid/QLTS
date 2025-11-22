@@ -141,17 +141,17 @@ async def create_policy(
     if existing:
         raise ValueError(f"Mã chính sách '{policy_data.code}' đã tồn tại")
 
-    # Map discount_type string to enum
-    discount_type_enum = DiscountTypeEnum.AMOUNT
+    # Map discount_type string to enum VALUE (lowercase for PostgreSQL)
+    discount_type_value = "amount"
     if policy_data.discount_type == DiscountType.PERCENTAGE:
-        discount_type_enum = DiscountTypeEnum.PERCENTAGE
+        discount_type_value = "percentage"
 
     # Create new policy
     db_policy = TuitionDiscountPolicy(
         code=policy_data.code.upper(),
         name=policy_data.name,
         description=policy_data.description,
-        discount_type=discount_type_enum,
+        discount_type=discount_type_value,  # Use string value directly
         discount_value=policy_data.discount_value,
         valid_from=policy_data.valid_from,
         valid_to=policy_data.valid_to,
@@ -206,11 +206,11 @@ async def update_policy(
 
     for field, value in update_data.items():
         if field == "discount_type" and value:
-            # Map string to enum
+            # Map to lowercase string value for PostgreSQL enum
             if value == DiscountType.PERCENTAGE or value == "percentage":
-                value = DiscountTypeEnum.PERCENTAGE
+                value = "percentage"
             else:
-                value = DiscountTypeEnum.AMOUNT
+                value = "amount"
         setattr(db_policy, field, value)
 
     db_policy.updated_by_user_id = updated_by_user_id
