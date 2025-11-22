@@ -6,7 +6,7 @@
  * filtering, and formatting. Based on the Smart Component architecture.
  *
  * Usage:
- *   import { SmartUnitSelector, SmartConsultationStatusSelector } from '@/components/common/selectors';
+ *   import { SmartUnitSelector, SmartConsultationStatusSelector, SmartOfferingSelector } from '@/components/common/selectors';
  */
 
 // Organization Unit Selector
@@ -16,3 +16,7 @@ export type { SmartUnitSelectorProps } from "./SmartUnitSelector";
 // Consultation Status Selector
 export { SmartConsultationStatusSelector } from "./SmartConsultationStatusSelector";
 export type { SmartConsultationStatusSelectorProps } from "./SmartConsultationStatusSelector";
+
+// Program Offering Selector
+export { SmartOfferingSelector } from "./SmartOfferingSelector";
+export type { SmartOfferingSelectorProps } from "./SmartOfferingSelector";
