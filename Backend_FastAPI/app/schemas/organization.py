@@ -38,6 +38,12 @@ class OrganizationUnitType(str, Enum):
 # SCHEMA VALIDATION CHO JSON (CẤP 3)
 # =============================================================================
 
+class RequiredDocument(BaseModel):
+    """Schema for required document in admission criteria"""
+    code: str = Field(..., min_length=1, max_length=50, description="Document code (e.g., 'hoc_ba')")
+    label: str = Field(..., min_length=1, max_length=200, description="Document label (e.g., 'Học bạ THPT')")
+
+
 class AdmissionCriterion(BaseModel):
     """Schema validation cho admission_criteria JSON field"""
     id: str = Field(..., description="Unique ID (e.g., 'hocba_2025')")
@@ -47,6 +53,11 @@ class AdmissionCriterion(BaseModel):
     min_score: Optional[float] = Field(None, ge=0, description="Điểm tối thiểu")
     conditions: Optional[str] = Field(None, max_length=1000, description="Điều kiện")
     profile_requirements: Optional[str] = Field(None, max_length=1000, description="Yêu cầu hồ sơ")
+    required_documents: Optional[List[RequiredDocument]] = Field(
+        None,
+        max_length=20,
+        description="Danh sách hồ sơ bắt buộc (e.g., [{'code': 'hoc_ba', 'label': 'Học bạ THPT'}])"
+    )
 
     @field_validator('subject_groups')
     @classmethod
