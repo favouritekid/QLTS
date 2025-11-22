@@ -39,9 +39,8 @@ import {
   useCreateUnit,
   useUpdateUnit,
   wouldCreateCircularDependency,
-  flattenOrganizationTree,
-  getAllDescendantIds,
 } from "@/hooks/useOrganization";
+import { SmartUnitSelector } from "@/components/common/selectors";
 import type {
   OrganizationUnit,
   OrganizationUnitCreate,
@@ -86,7 +85,8 @@ export function UnitDialog({ open, onOpenChange, unit }: UnitDialogProps) {
   const isEditMode = !!unit;
 
   // Queries
-  const { data: allUnits = [], isLoading: unitsLoading } = useOrganizationUnits();
+  // Note: allUnits still needed for circular dependency & duplicate name validation
+  const { data: allUnits = [] } = useOrganizationUnits();
   const { data: unitTypes = [], isLoading: typesLoading } = useOrganizationUnitTypes();
 
   // Mutations
@@ -186,45 +186,6 @@ export function UnitDialog({ open, onOpenChange, unit }: UnitDialogProps) {
     }
   };
 
-  // Get units available as parent (exclude self and descendants in edit mode)
-  // Also flatten hierarchy for better display
-  // Get available parent units using the shared flattenOrganizationTree helper
-  const availableParentUnits = (() => {
-    // Flatten the nested tree structure from API
-    const flattenedUnits = flattenOrganizationTree(allUnits);
-
-    // Filter to only active units
-    let filteredUnits = flattenedUnits.filter(item => item.unit.is_active);
-
-    // In edit mode, exclude self and descendants to prevent circular dependencies
-    if (isEditMode && unit) {
-      // Find the unit in the tree to get its descendants
-      const findUnit = (units: OrganizationUnit[], id: number): OrganizationUnit | null => {
-        for (const u of units) {
-          if (u.id === id) return u;
-          if (u.children) {
-            const found = findUnit(u.children, id);
-            if (found) return found;
-          }
-        }
-        return null;
-      };
-
-      const currentUnit = findUnit(allUnits, unit.id);
-      if (currentUnit) {
-        const excludedIds = getAllDescendantIds(currentUnit);
-        filteredUnits = filteredUnits.filter(item => !excludedIds.has(item.unit.id));
-      }
-    }
-
-    // Transform to the format expected by the Select component
-    return filteredUnits.map(item => ({
-      ...item.unit,
-      displayName: `${"└─ ".repeat(item.level)}${item.unit.name}`,
-      level: item.level,
-    }));
-  })();
-
   // Check if mutation is in progress
   const isSubmitting = createMutation.isPending || updateMutation.isPending;
 
@@ -310,53 +271,24 @@ export function UnitDialog({ open, onOpenChange, unit }: UnitDialogProps) {
               )}
             />
 
-            {/* Parent Unit Field */}
+            {/* Parent Unit Field - Using SmartUnitSelector */}
             <FormField
               control={form.control}
               name="parent_id"
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>Đơn vị cha</FormLabel>
-                  <Select
-                    onValueChange={field.onChange}
-                    value={field.value}
-                    disabled={isSubmitting || unitsLoading}
-                  >
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Chọn đơn vị cha (nếu có)" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent className="max-h-[300px]">
-                      <SelectItem value="none">
-                        <span className="font-semibold">📍 Không có (cấp cao nhất)</span>
-                      </SelectItem>
-                      {unitsLoading ? (
-                        <SelectItem value="loading" disabled>
-                          Đang tải danh sách đơn vị...
-                        </SelectItem>
-                      ) : availableParentUnits.length === 0 ? (
-                        <SelectItem value="empty" disabled>
-                          Không có đơn vị khả dụng
-                        </SelectItem>
-                      ) : (
-                        availableParentUnits.map((parentUnit) => (
-                          <SelectItem
-                            key={parentUnit.id}
-                            value={String(parentUnit.id)}
-                            className="font-mono text-sm"
-                          >
-                            <span className={parentUnit.level === 0 ? "font-semibold" : ""}>
-                              {parentUnit.displayName}
-                            </span>
-                            <span className="ml-2 text-xs text-muted-foreground">
-                              ({parentUnit.type})
-                            </span>
-                          </SelectItem>
-                        ))
-                      )}
-                    </SelectContent>
-                  </Select>
+                  <FormControl>
+                    <SmartUnitSelector
+                      value={field.value}
+                      onChange={field.onChange}
+                      placeholder="Chọn đơn vị cha (nếu có)"
+                      allowNone={true}
+                      noneLabel="Không có (cấp cao nhất)"
+                      excludeUnitId={isEditMode ? unit?.id : undefined}
+                      disabled={isSubmitting}
+                    />
+                  </FormControl>
                   <FormDescription>
                     Nếu bỏ trống, đơn vị này sẽ là cấp cao nhất
                   </FormDescription>

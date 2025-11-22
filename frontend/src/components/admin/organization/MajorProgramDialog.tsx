@@ -34,16 +34,15 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Loader2 } from "lucide-react";
 import {
-  useOrganizationUnits,
   useCreateMajorProgram,
   useUpdateMajorProgram,
   useDegreeLevels,
 } from "@/hooks/useOrganization";
+import { SmartUnitSelector } from "@/components/common/selectors";
 import type {
   MajorProgram,
   MajorProgramCreate,
   MajorProgramUpdate,
-  OrganizationUnit,
 } from "@/types/organization.types";
 
 // =====================================================================
@@ -97,7 +96,6 @@ export function MajorProgramDialog({
   const isEditMode = !!majorProgram;
 
   // Queries
-  const { data: allUnits = [], isLoading: unitsLoading } = useOrganizationUnits();
   const { data: degreeLevels = [], isLoading: degreeLevelsLoading } = useDegreeLevels(true); // Only active
 
   // Mutations
@@ -177,31 +175,6 @@ export function MajorProgramDialog({
 
   // Check if mutation is in progress
   const isSubmitting = createMutation.isPending || updateMutation.isPending;
-
-  // Flatten organization tree for dropdown (only active units)
-  const flattenUnits = (units: OrganizationUnit[], level = 0): Array<OrganizationUnit & { displayName: string }> => {
-    const result: Array<OrganizationUnit & { displayName: string }> = [];
-    const indent = "└─ ".repeat(level);
-
-    for (const unit of units) {
-      // Only include active units
-      if (unit.is_active) {
-        result.push({
-          ...unit,
-          displayName: `${indent}${unit.name}`,
-        });
-
-        // Recursively process active children
-        if (unit.children && unit.children.length > 0) {
-          result.push(...flattenUnits(unit.children, level + 1));
-        }
-      }
-    }
-
-    return result;
-  };
-
-  const flattenedUnits = flattenUnits(allUnits);
 
   // Helper to format code as user types (uppercase, no spaces)
   const handleCodeChange = (value: string) => {
@@ -330,7 +303,7 @@ export function MajorProgramDialog({
               )}
             />
 
-            {/* Unit Field */}
+            {/* Unit Field - Using SmartUnitSelector */}
             <FormField
               control={form.control}
               name="unit_id"
@@ -339,24 +312,14 @@ export function MajorProgramDialog({
                   <FormLabel>
                     Đơn vị quản lý <span className="text-red-500">*</span>
                   </FormLabel>
-                  <Select
-                    onValueChange={field.onChange}
-                    value={field.value}
-                    disabled={isSubmitting || unitsLoading}
-                  >
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Chọn đơn vị quản lý" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {flattenedUnits.map((unit) => (
-                        <SelectItem key={unit.id} value={String(unit.id)}>
-                          {unit.displayName} ({unit.type})
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <FormControl>
+                    <SmartUnitSelector
+                      value={field.value}
+                      onChange={field.onChange}
+                      placeholder="Chọn đơn vị quản lý"
+                      disabled={isSubmitting}
+                    />
+                  </FormControl>
                   <FormDescription>
                     Đơn vị tổ chức quản lý chương trình này
                   </FormDescription>
