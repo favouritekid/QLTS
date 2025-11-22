@@ -8,8 +8,6 @@
 import { useState } from "react";
 import { Check, ChevronsUpDown, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Command,
   CommandEmpty,
@@ -28,8 +26,6 @@ import { useDocumentTypes } from "@/hooks/useOrganization";
 interface RequiredDocument {
   code: string;
   label: string;
-  discount_amount?: number | null;
-  discount_percentage?: number | null;
 }
 
 interface DocumentTypesSelectorProps {
@@ -68,35 +64,6 @@ export function DocumentTypesSelector({
   // Handle removing a document
   const handleRemoveDocument = (code: string) => {
     onChange(value.filter((doc) => doc.code !== code));
-  };
-
-  // Handle updating discount for a document
-  const handleDiscountChange = (
-    code: string,
-    discountType: "amount" | "percentage",
-    discountValue: string
-  ) => {
-    onChange(
-      value.map((doc) => {
-        if (doc.code !== code) return doc;
-
-        const numValue = discountValue === "" ? null : parseFloat(discountValue);
-
-        if (discountType === "amount") {
-          return {
-            ...doc,
-            discount_amount: numValue,
-            discount_percentage: null, // Clear percentage if setting amount
-          };
-        } else {
-          return {
-            ...doc,
-            discount_percentage: numValue,
-            discount_amount: null, // Clear amount if setting percentage
-          };
-        }
-      })
-    );
   };
 
   return (
@@ -171,65 +138,26 @@ export function DocumentTypesSelector({
             return (
               <div
                 key={doc.code}
-                className="bg-muted/30 rounded-md border p-3 transition-colors"
+                className="bg-muted/30 flex items-start justify-between gap-2 rounded-md border p-3 transition-colors"
               >
-                {/* Header row with name and delete button */}
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium">{doc.label}</div>
-                    {docType?.description && (
-                      <div className="text-muted-foreground truncate text-xs">
-                        {docType.description}
-                      </div>
-                    )}
-                  </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleRemoveDocument(doc.code)}
-                    disabled={disabled}
-                    className="text-destructive hover:text-destructive hover:bg-destructive/10 h-7 w-7 shrink-0 p-0"
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium">{doc.label}</div>
+                  {docType?.description && (
+                    <div className="text-muted-foreground truncate text-xs">
+                      {docType.description}
+                    </div>
+                  )}
                 </div>
-
-                {/* Discount inputs row */}
-                <div className="mt-2 grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <Label className="text-muted-foreground text-xs">
-                      Ưu đãi (VNĐ)
-                    </Label>
-                    <Input
-                      type="number"
-                      placeholder="vd: 2000000"
-                      value={doc.discount_amount ?? ""}
-                      onChange={(e) =>
-                        handleDiscountChange(doc.code, "amount", e.target.value)
-                      }
-                      disabled={disabled || doc.discount_percentage != null}
-                      className="h-8 text-xs"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-muted-foreground text-xs">
-                      Ưu đãi (%)
-                    </Label>
-                    <Input
-                      type="number"
-                      placeholder="vd: 10"
-                      min={0}
-                      max={100}
-                      value={doc.discount_percentage ?? ""}
-                      onChange={(e) =>
-                        handleDiscountChange(doc.code, "percentage", e.target.value)
-                      }
-                      disabled={disabled || doc.discount_amount != null}
-                      className="h-8 text-xs"
-                    />
-                  </div>
-                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleRemoveDocument(doc.code)}
+                  disabled={disabled}
+                  className="text-destructive hover:text-destructive hover:bg-destructive/10 h-7 w-7 shrink-0 p-0"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
               </div>
             );
           })}

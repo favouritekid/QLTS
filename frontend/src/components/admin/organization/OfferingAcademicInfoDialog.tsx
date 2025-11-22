@@ -48,8 +48,6 @@ import { DocumentTypesSelector } from "./DocumentTypesSelector"; // 👈 THÊM D
 interface RequiredDocumentFormData {
   code: string;
   label: string;
-  discount_amount?: number | null;
-  discount_percentage?: number | null;
 }
 
 interface AdmissionCriterionFormData {
@@ -65,12 +63,7 @@ interface AdmissionCriterionFormData {
 const requiredDocumentSchema = z.object({
   code: z.string().min(1, "Mã hồ sơ là bắt buộc"),
   label: z.string().min(1, "Tên hồ sơ là bắt buộc"),
-  discount_amount: z.number().min(0).nullable().optional(),
-  discount_percentage: z.number().min(0).max(100).nullable().optional(),
-}).refine(
-  (data) => !(data.discount_amount && data.discount_percentage),
-  { message: "Chỉ được nhập số tiền HOẶC phần trăm ưu đãi" }
-);
+});
 
 // 1. Schema cho từng item
 const admissionCriterionSchema = z.object({
@@ -169,13 +162,11 @@ function convertApiToFormData(apiCriteria: AdmissionCriterion[]): AdmissionCrite
       criterion.min_score !== null && criterion.min_score !== undefined
         ? Number(criterion.min_score)
         : null,
-    // Chuyển đổi required_documents (bao gồm discount fields)
+    // Chuyển đổi required_documents
     required_documents: Array.isArray(criterion.required_documents)
       ? criterion.required_documents.map((doc) => ({
           code: doc.code || "",
           label: doc.label || "",
-          discount_amount: doc.discount_amount ?? null,
-          discount_percentage: doc.discount_percentage ?? null,
         }))
       : [],
   }));
@@ -183,15 +174,13 @@ function convertApiToFormData(apiCriteria: AdmissionCriterion[]): AdmissionCrite
 
 function convertFormToApiData(formCriteria: AdmissionCriterionFormData[]): AdmissionCriterion[] {
   return formCriteria.map((criterion) => {
-    // Xử lý required_documents - lọc và đảm bảo có dữ liệu hợp lệ, bao gồm discount
+    // Xử lý required_documents - lọc và đảm bảo có dữ liệu hợp lệ
     const validDocuments = criterion.required_documents
       ? criterion.required_documents
           .filter((doc) => doc.code && doc.label)
           .map((doc) => ({
             code: doc.code,
             label: doc.label,
-            discount_amount: doc.discount_amount ?? null,
-            discount_percentage: doc.discount_percentage ?? null,
           }))
       : [];
 

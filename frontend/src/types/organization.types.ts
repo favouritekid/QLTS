@@ -21,8 +21,6 @@ export interface AdmissionCriterion {
   required_documents?: Array<{
     code: string; // vd: "hoc_ba"
     label: string; // vd: "Học bạ THPT (chứng thực)"
-    discount_amount?: number | null; // Số tiền ưu đãi (VND)
-    discount_percentage?: number | null; // Phần trăm ưu đãi (0-100)
   }> | null;
 }
 
