@@ -335,10 +335,31 @@ async def delete_existing_academic_info(
     current_admin: models.User = PermissionDep,
 ):
     """
-    (Admin only) Xóa thông tin tuyển sinh.
+    (Admin only) Soft delete thông tin tuyển sinh.
 
-    Note: Đây là hard delete. Nên cân nhắc đánh dấu unpublished thay vì xóa.
+    Note: Đây là soft delete (đánh dấu is_deleted=True).
+    Có thể khôi phục bằng endpoint POST /academic-info/{id}/restore.
     Returns 404 nếu academic info không tồn tại.
     """
     await organization_service.delete_academic_info(db, academic_info_id=academic_info_id)
     return None
+
+
+@router.post(
+    "/academic-info/{academic_info_id}/restore",
+    response_model=schemas.OfferingAcademicInfo,
+)
+async def restore_deleted_academic_info(
+    academic_info_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    (Admin only) Khôi phục thông tin tuyển sinh đã bị soft delete.
+
+    Đặt is_deleted = False, cho phép bản ghi hiển thị và chỉnh sửa lại.
+    Hữu ích khi người dùng lỡ tay xóa.
+    Returns 400 nếu bản ghi chưa bị xóa.
+    Returns 404 nếu academic info không tồn tại.
+    """
+    return await organization_service.restore_academic_info(db, academic_info_id=academic_info_id)

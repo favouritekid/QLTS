@@ -21,6 +21,8 @@ export interface AdmissionCriterion {
   required_documents?: Array<{
     code: string; // vd: "hoc_ba"
     label: string; // vd: "Học bạ THPT (chứng thực)"
+    discount_amount?: number | null; // Số tiền ưu đãi (VND)
+    discount_percentage?: number | null; // Phần trăm ưu đãi (0-100)
   }> | null;
 }
 
@@ -130,6 +132,7 @@ export interface MajorProgram {
   degree_level: string; // Trình độ (vd: "Cao đẳng")
   code: string; // Mã ngành tuyển sinh (vd: "6480201") - UNIQUE
   is_active: boolean; // Soft delete flag
+  is_heavy: boolean; // Ngành nghề nặng nhọc, độc hại, nguy hiểm
   unit_id: number; // Foreign key to OrganizationUnit
 
   // Nested: Offerings (Tier 2)
@@ -148,6 +151,7 @@ export interface MajorProgramCreate {
   code: string;
   unit_id: number;
   is_active?: boolean;
+  is_heavy?: boolean; // Ngành nghề nặng nhọc, độc hại
 }
 
 /**
@@ -158,6 +162,7 @@ export interface MajorProgramUpdate {
   degree_level?: string;
   unit_id?: number;
   is_active?: boolean;
+  is_heavy?: boolean; // Ngành nghề nặng nhọc, độc hại
   // Note: 'code' cannot be updated (business rule)
 }
 

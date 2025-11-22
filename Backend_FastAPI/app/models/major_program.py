@@ -52,6 +52,14 @@ class MajorProgram(Base):
         index=True,
         comment="Cờ Soft Delete"
     )
+    is_heavy = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+        index=True,
+        comment="Ngành nghề nặng nhọc, độc hại, nguy hiểm (được hưởng chính sách đặc biệt)"
+    )
 
     # Liên kết với Khoa/Đơn vị
     unit_id = Column(Integer, ForeignKey("organization_unit.id"), nullable=False)

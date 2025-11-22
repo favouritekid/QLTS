@@ -797,6 +797,45 @@ export function useDeleteOfferingAcademicInfo() {
   });
 }
 
+/**
+ * Restore a soft-deleted academic info record
+ */
+export function useRestoreOfferingAcademicInfo() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    OfferingAcademicInfo,
+    AxiosError<ApiErrorResponse>,
+    { id: number; offeringId: number }
+  >({
+    mutationFn: async ({ id }) => {
+      const response = await api.post<OfferingAcademicInfo>(
+        API_ENDPOINTS.ADMIN.ORGANIZATION.RESTORE_ACADEMIC_INFO(id)
+      );
+      return response.data;
+    },
+    onSuccess: (restoredInfo, variables) => {
+      toast.success("Thông tin tuyển sinh đã được khôi phục!", {
+        description: `Năm học ${restoredInfo.academic_year}`,
+      });
+      // Invalidate academic info list
+      queryClient.invalidateQueries({
+        queryKey: organizationKeys.academicInfoList(variables.offeringId),
+      });
+    },
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Khôi phục thông tin tuyển sinh thất bại";
+      toast.error("Lỗi", { description: message });
+    },
+  });
+}
+
 // =====================================================================
 
 // =====================================================================

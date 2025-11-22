@@ -42,6 +42,25 @@ class RequiredDocument(BaseModel):
     """Schema for required document in admission criteria"""
     code: str = Field(..., min_length=1, max_length=50, description="Document code (e.g., 'hoc_ba')")
     label: str = Field(..., min_length=1, max_length=200, description="Document label (e.g., 'Học bạ THPT')")
+    # Ưu đãi học phí - có thể nhập số tiền hoặc phần trăm (chỉ nhập 1 trong 2)
+    discount_amount: Optional[Decimal] = Field(
+        None,
+        ge=0,
+        description="Số tiền ưu đãi học phí (VND). Ví dụ: 2000000 = giảm 2 triệu"
+    )
+    discount_percentage: Optional[float] = Field(
+        None,
+        ge=0,
+        le=100,
+        description="Phần trăm ưu đãi học phí (0-100). Ví dụ: 10 = giảm 10%"
+    )
+
+    @model_validator(mode='after')
+    def validate_discount(self):
+        """Chỉ cho phép nhập 1 trong 2 loại ưu đãi"""
+        if self.discount_amount is not None and self.discount_percentage is not None:
+            raise ValueError("Chỉ được nhập số tiền HOẶC phần trăm ưu đãi, không được nhập cả hai")
+        return self
 
 
 class AdmissionCriterion(BaseModel):
@@ -170,6 +189,10 @@ class MajorProgramBase(BaseModel):
     code: str = Field(..., max_length=50, description="Mã ngành (e.g., '6480201')")
     unit_id: int = Field(..., gt=0)
     is_active: bool = Field(default=True)
+    is_heavy: bool = Field(
+        default=False,
+        description="Ngành nghề nặng nhọc, độc hại, nguy hiểm (được hưởng chính sách đặc biệt)"
+    )
 
 
 class MajorProgramCreate(MajorProgramBase):
@@ -181,6 +204,10 @@ class MajorProgramUpdate(BaseModel):
     degree_level: Optional[str] = Field(None, max_length=50)
     unit_id: Optional[int] = Field(None, gt=0)
     is_active: Optional[bool] = None
+    is_heavy: Optional[bool] = Field(
+        None,
+        description="Ngành nghề nặng nhọc, độc hại, nguy hiểm"
+    )
     # 'code' (Mã ngành) không cho phép cập nhật
 
 
@@ -191,6 +218,7 @@ class MajorProgramShallow(BaseModel):
     degree_level: str
     code: str
     is_active: bool
+    is_heavy: bool = False
     model_config = ConfigDict(from_attributes=True)
 
 

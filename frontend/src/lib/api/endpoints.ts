@@ -103,6 +103,8 @@ export const API_ENDPOINTS = {
         `/api/admin/academic-info/${academicInfoId}`,
       DELETE_ACADEMIC_INFO: (academicInfoId: number) =>
         `/api/admin/academic-info/${academicInfoId}`,
+      RESTORE_ACADEMIC_INFO: (academicInfoId: number) =>
+        `/api/admin/academic-info/${academicInfoId}/restore`,
 
       // === LEGACY (DEPRECATED) ===
     },
