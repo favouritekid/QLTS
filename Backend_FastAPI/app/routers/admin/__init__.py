@@ -35,6 +35,9 @@ from . import sync
 # Tuition Discount Policy router
 from . import tuition_discount
 
+# Cache Management router
+from . import cache
+
 # Create main admin router
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -94,3 +97,6 @@ router.include_router(sync.router)          # /api/admin/sync/status, /api/admin
 
 # Include Tuition Discount Policy router
 router.include_router(tuition_discount.router)  # /api/admin/tuition-discount-policies/*
+
+# Include Cache Management router
+router.include_router(cache.router)  # /api/admin/cache/*
