@@ -68,6 +68,7 @@ const majorProgramFormSchema = z.object({
     .regex(/^[A-Z0-9_-]+$/, "Mã ngành chỉ bao gồm chữ in hoa, số, dấu gạch ngang và gạch dưới"),
   unit_id: z.string().min(1, "Đơn vị quản lý là bắt buộc"), // String vì Select dùng string
   is_active: z.boolean(),
+  is_heavy: z.boolean(), // Ngành nghề nặng nhọc, độc hại
 });
 
 type MajorProgramFormValues = z.infer<typeof majorProgramFormSchema>;
@@ -112,6 +113,7 @@ export function MajorProgramDialog({
       code: "",
       unit_id: "",
       is_active: true,
+      is_heavy: false,
     },
   });
 
@@ -125,6 +127,7 @@ export function MajorProgramDialog({
           code: majorProgram.code || "",
           unit_id: String(majorProgram.unit_id),
           is_active: majorProgram.is_active,
+          is_heavy: majorProgram.is_heavy ?? false,
         });
       } else {
         form.reset({
@@ -133,6 +136,7 @@ export function MajorProgramDialog({
           code: "",
           unit_id: preselectedUnitId ? String(preselectedUnitId) : "",
           is_active: true,
+          is_heavy: false,
         });
       }
     }
@@ -146,6 +150,7 @@ export function MajorProgramDialog({
       code: values.code.toUpperCase(), // Ensure uppercase
       unit_id: Number(values.unit_id),
       is_active: values.is_active,
+      is_heavy: values.is_heavy,
     };
 
     try {
@@ -370,6 +375,29 @@ export function MajorProgramDialog({
                     <FormLabel className="text-base">Trạng thái hoạt động</FormLabel>
                     <FormDescription>
                       Chương trình có đang hoạt động hay không
+                    </FormDescription>
+                  </div>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                      disabled={isSubmitting}
+                    />
+                  </FormControl>
+                </FormItem>
+              )}
+            />
+
+            {/* Is Heavy Switch - Ngành nghề nặng nhọc, độc hại */}
+            <FormField
+              control={form.control}
+              name="is_heavy"
+              render={({ field }) => (
+                <FormItem className="flex flex-row items-center justify-between rounded-lg border border-amber-200 bg-amber-50/50 p-4">
+                  <div className="space-y-0.5">
+                    <FormLabel className="text-base">Ngành nghề nặng nhọc, độc hại</FormLabel>
+                    <FormDescription>
+                      Ngành nghề nặng nhọc, độc hại, nguy hiểm (được hưởng chính sách đặc biệt)
                     </FormDescription>
                   </div>
                   <FormControl>
