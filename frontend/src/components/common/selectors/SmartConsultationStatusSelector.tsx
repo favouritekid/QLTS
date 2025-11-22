@@ -68,6 +68,8 @@ export interface SmartConsultationStatusSelectorProps {
   filterOutcomeType?: OutcomeType;
   /** Exclude specific status IDs */
   excludeStatusIds?: string[];
+  /** Only show these specific status IDs (for status transitions) */
+  allowedStatusIds?: string[];
   /** Filter to only show final statuses */
   finalOnly?: boolean;
   /** Filter to only show non-final statuses */
@@ -101,11 +103,12 @@ function processStatuses(
     filterStageId?: string;
     filterOutcomeType?: OutcomeType;
     excludeStatusIds?: string[];
+    allowedStatusIds?: string[];
     finalOnly?: boolean;
     nonFinalOnly?: boolean;
   }
 ): StatusWithStage[] {
-  const { filterStageId, filterOutcomeType, excludeStatusIds, finalOnly, nonFinalOnly } = options;
+  const { filterStageId, filterOutcomeType, excludeStatusIds, allowedStatusIds, finalOnly, nonFinalOnly } = options;
 
   // Create stage lookup
   const stageMap = new Map(stages.map((s) => [s.id, s]));
@@ -120,6 +123,9 @@ function processStatuses(
       };
     })
     .filter((status) => {
+      // Filter by allowed IDs (for status transitions)
+      if (allowedStatusIds && allowedStatusIds.length > 0 && !allowedStatusIds.includes(status.id)) return false;
+
       // Filter by stage
       if (filterStageId && status.stage_id !== filterStageId) return false;
 
@@ -374,6 +380,7 @@ export function SmartConsultationStatusSelector({
   filterStageId,
   filterOutcomeType,
   excludeStatusIds,
+  allowedStatusIds,
   finalOnly = false,
   nonFinalOnly = false,
   disabled = false,
@@ -394,10 +401,11 @@ export function SmartConsultationStatusSelector({
         filterStageId,
         filterOutcomeType,
         excludeStatusIds,
+        allowedStatusIds,
         finalOnly,
         nonFinalOnly,
       }),
-    [statuses, stages, filterStageId, filterOutcomeType, excludeStatusIds, finalOnly, nonFinalOnly]
+    [statuses, stages, filterStageId, filterOutcomeType, excludeStatusIds, allowedStatusIds, finalOnly, nonFinalOnly]
   );
 
   // Render based on variant

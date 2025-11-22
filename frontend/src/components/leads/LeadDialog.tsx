@@ -35,8 +35,9 @@ import {
 } from "@/components/ui/select";
 
 import { useCreateLead, useUpdateLead } from "@/hooks/useLeads";
-import { useOrganizationUnits, useAllProgramOfferings } from "@/hooks/useOrganization";
 import { useAuth } from "@/hooks/useAuth";
+import { SmartUnitSelector, SmartOfferingSelector } from "@/components/common/selectors";
+import { LEAD_SOURCE_OPTIONS } from "@/constants";
 import type { Lead } from "@/types/lead.types";
 
 // Validation schema
@@ -107,8 +108,6 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
   const createMutation = useCreateLead();
   const updateMutation = useUpdateLead();
   const { user } = useAuth(); // Get current user for unit auto-fill
-  const { data: units, isLoading: unitsLoading } = useOrganizationUnits();
-  const { data: offerings = [], isLoading: offeringsLoading } = useAllProgramOfferings(true);
 
   const isCreate = mode === "create";
   const isEdit = mode === "edit";
@@ -301,14 +300,11 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          <SelectItem value="website">Website</SelectItem>
-                          <SelectItem value="referral">Referral</SelectItem>
-                          <SelectItem value="social_media">Social Media</SelectItem>
-                          <SelectItem value="walk_in">Walk-in</SelectItem>
-                          <SelectItem value="email">Email</SelectItem>
-                          <SelectItem value="phone">Phone</SelectItem>
-                          <SelectItem value="event">Event</SelectItem>
-                          <SelectItem value="other">Other</SelectItem>
+                          {LEAD_SOURCE_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                       <FormMessage />
@@ -322,24 +318,15 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Organization Unit *</FormLabel>
-                      <Select
-                        onValueChange={field.onChange}
-                        value={field.value}
-                        disabled={unitsLoading || isOfficer} // Officers can only create in their own unit
-                      >
-                        <FormControl>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select unit" />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          {units?.map((unit) => (
-                            <SelectItem key={unit.id} value={unit.id.toString()}>
-                              {unit.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <FormControl>
+                        <SmartUnitSelector
+                          value={field.value}
+                          onChange={(val) => field.onChange(val || "")}
+                          placeholder="Select unit"
+                          disabled={isOfficer}
+                          variant="select"
+                        />
+                      </FormControl>
                       {isOfficer && (
                         <FormDescription>
                           You can only create leads in your assigned unit
@@ -357,26 +344,16 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Program Offering</FormLabel>
-                    <Select
-                      onValueChange={(value) => field.onChange(value === "none" ? null : parseInt(value, 10))}
-                      value={field.value?.toString() || "none"}
-                      disabled={offeringsLoading}
-                    >
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select offering (optional)" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="none">None</SelectItem>
-                        {offerings.map((offering) => (
-                          <SelectItem key={offering.id} value={offering.id.toString()}>
-                            {offering.program?.name || offering.offering_type}
-                            {offering.program && ` (${offering.offering_type})`}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <FormControl>
+                      <SmartOfferingSelector
+                        value={field.value?.toString()}
+                        onChange={(val) => field.onChange(val ? parseInt(val, 10) : null)}
+                        placeholder="Select offering (optional)"
+                        allowAll
+                        allLabel="None"
+                        variant="select"
+                      />
+                    </FormControl>
                     <FormDescription>The program/offering the lead is interested in</FormDescription>
                     <FormMessage />
                   </FormItem>

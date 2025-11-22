@@ -26,17 +26,10 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 
 import { useAddConsultation } from "@/hooks/useLeads";
-import { useConsultationStatuses } from "@/hooks/usePipeline";
+import { SmartConsultationStatusSelector } from "@/components/common/selectors";
 
 // Validation schema
 const consultationSchema = z.object({
@@ -62,7 +55,6 @@ export function ConsultationDialog({
   leadId,
 }: ConsultationDialogProps) {
   const addMutation = useAddConsultation();
-  const { data: statuses, isLoading: statusesLoading } = useConsultationStatuses();
 
   const form = useForm<ConsultationFormValues>({
     resolver: zodResolver(consultationSchema),
@@ -140,36 +132,15 @@ export function ConsultationDialog({
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>Status *</FormLabel>
-                  <Select
-                    onValueChange={field.onChange}
-                    value={field.value}
-                    disabled={statusesLoading}
-                  >
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select status" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {statuses?.length === 0 ? (
-                        <div className="p-2 text-sm text-muted-foreground">
-                          No statuses available
-                        </div>
-                      ) : (
-                        statuses?.map((status) => (
-                          <SelectItem key={status.id} value={status.id}>
-                            <div className="flex items-center gap-2">
-                              <div
-                                className="w-3 h-3 rounded-full"
-                                style={{ backgroundColor: status.color_code }}
-                              />
-                              {status.name}
-                            </div>
-                          </SelectItem>
-                        ))
-                      )}
-                    </SelectContent>
-                  </Select>
+                  <FormControl>
+                    <SmartConsultationStatusSelector
+                      value={field.value}
+                      onChange={field.onChange}
+                      placeholder="Select status"
+                      variant="select"
+                      showOutcomeType
+                    />
+                  </FormControl>
                   <FormDescription>
                     Current status of this consultation
                   </FormDescription>
@@ -209,7 +180,7 @@ export function ConsultationDialog({
               >
                 Cancel
               </Button>
-              <Button type="submit" disabled={isSubmitting || statuses?.length === 0}>
+              <Button type="submit" disabled={isSubmitting}>
                 {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Schedule Consultation
               </Button>

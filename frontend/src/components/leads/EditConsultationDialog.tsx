@@ -37,6 +37,7 @@ import { Textarea } from "@/components/ui/textarea";
 
 import { useUpdateConsultation } from "@/hooks/useLeads";
 import { useAllowedNextStatuses } from "@/hooks/usePipeline";
+import { SmartConsultationStatusSelector } from "@/components/common/selectors";
 import type { Consultation, ConsultationUpdate } from "@/types/lead.types";
 
 // Validation schema (all fields optional for partial update)
@@ -176,36 +177,17 @@ export function EditConsultationDialog({
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>Trạng thái</FormLabel>
-                  <Select
-                    onValueChange={field.onChange}
-                    value={field.value}
-                    disabled={statusesLoading}
-                  >
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Chọn trạng thái" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {statuses?.length === 0 ? (
-                        <div className="p-2 text-sm text-muted-foreground">
-                          Không có trạng thái khả dụng
-                        </div>
-                      ) : (
-                        statuses?.map((status) => (
-                          <SelectItem key={status.id} value={status.id}>
-                            <div className="flex items-center gap-2">
-                              <div
-                                className="w-3 h-3 rounded-full"
-                                style={{ backgroundColor: status.color_code }}
-                              />
-                              {status.name}
-                            </div>
-                          </SelectItem>
-                        ))
-                      )}
-                    </SelectContent>
-                  </Select>
+                  <FormControl>
+                    <SmartConsultationStatusSelector
+                      value={field.value}
+                      onChange={field.onChange}
+                      placeholder="Chọn trạng thái"
+                      allowedStatusIds={statuses?.map(s => s.id)}
+                      disabled={statusesLoading}
+                      variant="select"
+                      showOutcomeType
+                    />
+                  </FormControl>
                   <FormDescription>
                     Trạng thái tư vấn hiện tại
                   </FormDescription>
