@@ -11,7 +11,7 @@ from datetime import datetime
 from decimal import Decimal
 import re
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # --- Enum cho các loại đơn vị (không đổi) ---
@@ -38,6 +38,12 @@ class OrganizationUnitType(str, Enum):
 # SCHEMA VALIDATION CHO JSON (CẤP 3)
 # =============================================================================
 
+class RequiredDocument(BaseModel):
+    """Schema for required document in admission criteria"""
+    code: str = Field(..., min_length=1, max_length=50, description="Document code (e.g., 'hoc_ba')")
+    label: str = Field(..., min_length=1, max_length=200, description="Document label (e.g., 'Học bạ THPT')")
+
+
 class AdmissionCriterion(BaseModel):
     """Schema validation cho admission_criteria JSON field"""
     id: str = Field(..., description="Unique ID (e.g., 'hocba_2025')")
@@ -47,6 +53,11 @@ class AdmissionCriterion(BaseModel):
     min_score: Optional[float] = Field(None, ge=0, description="Điểm tối thiểu")
     conditions: Optional[str] = Field(None, max_length=1000, description="Điều kiện")
     profile_requirements: Optional[str] = Field(None, max_length=1000, description="Yêu cầu hồ sơ")
+    required_documents: Optional[List[RequiredDocument]] = Field(
+        None,
+        max_length=20,
+        description="Danh sách hồ sơ bắt buộc (e.g., [{'code': 'hoc_ba', 'label': 'Học bạ THPT'}])"
+    )
 
     @field_validator('subject_groups')
     @classmethod
@@ -70,6 +81,7 @@ class OfferingAcademicInfoBase(BaseModel):
     admission_criteria: Optional[List[AdmissionCriterion]] = Field(None, description="Tiêu chí tuyển sinh")
     target_audience: Optional[str] = Field(None, max_length=1000, description="Đối tượng phù hợp")
     cutoff_score_previous_year: Optional[Decimal] = Field(None, ge=0, description="Điểm chuẩn năm trước")
+    applied_discount_policy_ids: Optional[List[int]] = Field(None, description="Danh sách ID chính sách ưu đãi áp dụng")
 
     @field_validator('admission_criteria', mode='before')
     @classmethod
@@ -103,6 +115,7 @@ class OfferingAcademicInfoUpdate(BaseModel):
     admission_criteria: Optional[List[AdmissionCriterion]] = None
     target_audience: Optional[str] = Field(None, max_length=1000)
     cutoff_score_previous_year: Optional[Decimal] = Field(None, ge=0)
+    applied_discount_policy_ids: Optional[List[int]] = None
 
 
 class OfferingAcademicInfo(OfferingAcademicInfoBase):
@@ -159,6 +172,10 @@ class MajorProgramBase(BaseModel):
     code: str = Field(..., max_length=50, description="Mã ngành (e.g., '6480201')")
     unit_id: int = Field(..., gt=0)
     is_active: bool = Field(default=True)
+    is_heavy: bool = Field(
+        default=False,
+        description="Ngành nghề nặng nhọc, độc hại, nguy hiểm (được hưởng chính sách đặc biệt)"
+    )
 
 
 class MajorProgramCreate(MajorProgramBase):
@@ -170,6 +187,10 @@ class MajorProgramUpdate(BaseModel):
     degree_level: Optional[str] = Field(None, max_length=50)
     unit_id: Optional[int] = Field(None, gt=0)
     is_active: Optional[bool] = None
+    is_heavy: Optional[bool] = Field(
+        None,
+        description="Ngành nghề nặng nhọc, độc hại, nguy hiểm"
+    )
     # 'code' (Mã ngành) không cho phép cập nhật
 
 
@@ -180,6 +201,7 @@ class MajorProgramShallow(BaseModel):
     degree_level: str
     code: str
     is_active: bool
+    is_heavy: bool = False
     model_config = ConfigDict(from_attributes=True)
 
 

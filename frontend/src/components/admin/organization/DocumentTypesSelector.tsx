@@ -16,7 +16,6 @@ import {
   CommandItem,
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useDocumentTypes } from "@/hooks/useOrganization";
 
@@ -106,20 +105,17 @@ export function DocumentTypesSelector({
                     }}
                     disabled={isSelected}
                     className={cn(
-                      "flex cursor-pointer items-center justify-between",
+                      "flex cursor-pointer items-center gap-2",
                       isSelected && "cursor-not-allowed opacity-50"
                     )}
                   >
-                    <div className="flex items-center gap-2">
-                      <Check className={cn("h-4 w-4", isSelected ? "opacity-100" : "opacity-0")} />
-                      <div>
-                        <div className="font-medium">{docType.name}</div>
-                        {docType.description && (
-                          <div className="text-muted-foreground text-xs">{docType.description}</div>
-                        )}
-                      </div>
+                    <Check className={cn("h-4 w-4 shrink-0", isSelected ? "opacity-100" : "opacity-0")} />
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium">{docType.name}</div>
+                      {docType.description && (
+                        <div className="text-muted-foreground truncate text-xs">{docType.description}</div>
+                      )}
                     </div>
-                    <code className="bg-muted rounded px-2 py-1 text-xs">{docType.code}</code>
                   </CommandItem>
                 );
               })}
@@ -134,7 +130,7 @@ export function DocumentTypesSelector({
           Chưa có hồ sơ bắt buộc. Nhấn &quot;Thêm hồ sơ bắt buộc&quot; để chọn.
         </div>
       ) : (
-        <div className="space-y-1.5">
+        <div className="space-y-3">
           {value.map((doc) => {
             // Find full document info
             const docType = documentTypes.find((dt) => dt.code === doc.code);
@@ -142,20 +138,15 @@ export function DocumentTypesSelector({
             return (
               <div
                 key={doc.code}
-                className="bg-muted/30 hover:bg-muted/50 flex items-center justify-between rounded-md border p-2 transition-colors"
+                className="bg-muted/30 flex items-start justify-between gap-2 rounded-md border p-3 transition-colors"
               >
-                <div className="flex min-w-0 flex-1 items-center gap-2">
-                  <Badge variant="outline" className="shrink-0 text-xs">
-                    {doc.code}
-                  </Badge>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium">{doc.label}</div>
-                    {docType?.description && (
-                      <div className="text-muted-foreground truncate text-xs">
-                        {docType.description}
-                      </div>
-                    )}
-                  </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium">{doc.label}</div>
+                  {docType?.description && (
+                    <div className="text-muted-foreground truncate text-xs">
+                      {docType.description}
+                    </div>
+                  )}
                 </div>
                 <Button
                   type="button"

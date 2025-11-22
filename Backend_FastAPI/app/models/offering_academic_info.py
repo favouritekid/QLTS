@@ -63,6 +63,13 @@ class OfferingAcademicInfo(Base):
         comment="Tiêu chí tuyển sinh (JSON)"
     )
 
+    # Tuition discount policies
+    applied_discount_policy_ids = Column(
+        JSON,
+        nullable=True,
+        comment="Danh sách ID chính sách ưu đãi áp dụng (JSON array of integers)"
+    )
+
     # Additional fields for compatibility with old system
     target_audience = Column(
         String(1000),

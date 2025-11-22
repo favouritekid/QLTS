@@ -236,11 +236,29 @@ async def pydantic_validation_error_handler(
 
     Formats Pydantic errors into a consistent structure.
     """
+    # Safely serialize errors - convert any non-JSON-serializable objects to strings
+    def serialize_error(error: dict) -> dict:
+        serialized = {}
+        for key, value in error.items():
+            if key == "ctx" and isinstance(value, dict):
+                # Context might contain non-serializable objects like ValueError
+                serialized[key] = {
+                    k: str(v) if not isinstance(v, (str, int, float, bool, list, dict, type(None))) else v
+                    for k, v in value.items()
+                }
+            elif isinstance(value, Exception):
+                serialized[key] = str(value)
+            else:
+                serialized[key] = value
+        return serialized
+
+    safe_errors = [serialize_error(e) for e in exc.errors()]
+
     logger.info(
-        f"Request validation error: {len(exc.errors())} errors",
+        f"Request validation error: {len(safe_errors)} errors",
         extra={
             "path": request.url.path,
-            "errors": exc.errors(),
+            "errors": safe_errors,
         },
     )
 
@@ -249,7 +267,7 @@ async def pydantic_validation_error_handler(
         content={
             "detail": "Request validation failed",
             "error_code": "VALIDATION_ERROR",
-            "errors": exc.errors(),
+            "errors": safe_errors,
         },
     )
 

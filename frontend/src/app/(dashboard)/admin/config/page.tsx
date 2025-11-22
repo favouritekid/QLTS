@@ -153,6 +153,12 @@ function ConfigTable({ title, description, icon, endpoint, queryKey }: ConfigTab
     setDialogOpen(true);
   };
 
+  const handleDelete = (id: number) => {
+    if (confirm(`Are you sure you want to delete this ${title.toLowerCase()}?`)) {
+      deleteMutation.mutate(id);
+    }
+  };
+
   // 4. handleCloseDialog (dòng ~617)
   const handleCloseDialog = () => {
     setDialogOpen(false);

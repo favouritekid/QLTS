@@ -1065,6 +1065,7 @@ async def delete_academic_info(db: AsyncSession, academic_info_id: int):
 
         # Soft delete - set flag instead of removing from database
         db_academic_info.is_deleted = True
+        db_academic_info.updated_at = datetime.now()  # ✅ FIX: Explicitly update timestamp
         await db.commit()
 
         log.info(
@@ -1085,6 +1086,52 @@ async def delete_academic_info(db: AsyncSession, academic_info_id: int):
     except Exception as e:
         await db.rollback()
         log.error("Failed to delete academic info", error=str(e), exc_info=True)
+        raise
+
+
+async def restore_academic_info(db: AsyncSession, academic_info_id: int):
+    """
+    Restore a soft-deleted academic info record.
+
+    Sets is_deleted back to False, allowing the record to be visible and editable again.
+    This is useful when a user accidentally deletes a record.
+    """
+    try:
+        db_academic_info = await get_academic_info_by_id(db, academic_info_id)
+        offering_id = db_academic_info.offering_id
+        academic_year = db_academic_info.academic_year
+
+        if not db_academic_info.is_deleted:
+            raise BadRequest(
+                detail=f"Bản ghi năm học {academic_year} không bị xóa, không cần khôi phục."
+            )
+
+        # Restore - set flag back to False
+        db_academic_info.is_deleted = False
+        db_academic_info.updated_at = datetime.now()
+        await db.commit()
+        await db.refresh(db_academic_info)
+
+        log.info(
+            "Academic info restored (is_deleted=False)",
+            academic_info_id=academic_info_id,
+            offering_id=offering_id,
+            academic_year=academic_year
+        )
+
+        await invalidate_org_cache()
+        await emit_organization_updated(
+            operation="update",
+            resource_type="academic_info",
+            resource_id=academic_info_id,
+            resource_name=f"Năm {academic_year}"
+        )
+
+        return db_academic_info
+
+    except Exception as e:
+        await db.rollback()
+        log.error("Failed to restore academic info", error=str(e), exc_info=True)
         raise
 
 

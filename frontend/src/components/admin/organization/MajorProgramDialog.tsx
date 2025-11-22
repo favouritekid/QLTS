@@ -34,16 +34,15 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Loader2 } from "lucide-react";
 import {
-  useOrganizationUnits,
   useCreateMajorProgram,
   useUpdateMajorProgram,
   useDegreeLevels,
 } from "@/hooks/useOrganization";
+import { SmartUnitSelector } from "@/components/common/selectors";
 import type {
   MajorProgram,
   MajorProgramCreate,
   MajorProgramUpdate,
-  OrganizationUnit,
 } from "@/types/organization.types";
 
 // =====================================================================
@@ -68,6 +67,7 @@ const majorProgramFormSchema = z.object({
     .regex(/^[A-Z0-9_-]+$/, "Mã ngành chỉ bao gồm chữ in hoa, số, dấu gạch ngang và gạch dưới"),
   unit_id: z.string().min(1, "Đơn vị quản lý là bắt buộc"), // String vì Select dùng string
   is_active: z.boolean(),
+  is_heavy: z.boolean(), // Ngành nghề nặng nhọc, độc hại
 });
 
 type MajorProgramFormValues = z.infer<typeof majorProgramFormSchema>;
@@ -96,7 +96,6 @@ export function MajorProgramDialog({
   const isEditMode = !!majorProgram;
 
   // Queries
-  const { data: allUnits = [], isLoading: unitsLoading } = useOrganizationUnits();
   const { data: degreeLevels = [], isLoading: degreeLevelsLoading } = useDegreeLevels(true); // Only active
 
   // Mutations
@@ -112,6 +111,7 @@ export function MajorProgramDialog({
       code: "",
       unit_id: "",
       is_active: true,
+      is_heavy: false,
     },
   });
 
@@ -125,6 +125,7 @@ export function MajorProgramDialog({
           code: majorProgram.code || "",
           unit_id: String(majorProgram.unit_id),
           is_active: majorProgram.is_active,
+          is_heavy: majorProgram.is_heavy ?? false,
         });
       } else {
         form.reset({
@@ -133,6 +134,7 @@ export function MajorProgramDialog({
           code: "",
           unit_id: preselectedUnitId ? String(preselectedUnitId) : "",
           is_active: true,
+          is_heavy: false,
         });
       }
     }
@@ -146,6 +148,7 @@ export function MajorProgramDialog({
       code: values.code.toUpperCase(), // Ensure uppercase
       unit_id: Number(values.unit_id),
       is_active: values.is_active,
+      is_heavy: values.is_heavy,
     };
 
     try {
@@ -172,31 +175,6 @@ export function MajorProgramDialog({
 
   // Check if mutation is in progress
   const isSubmitting = createMutation.isPending || updateMutation.isPending;
-
-  // Flatten organization tree for dropdown (only active units)
-  const flattenUnits = (units: OrganizationUnit[], level = 0): Array<OrganizationUnit & { displayName: string }> => {
-    const result: Array<OrganizationUnit & { displayName: string }> = [];
-    const indent = "└─ ".repeat(level);
-
-    for (const unit of units) {
-      // Only include active units
-      if (unit.is_active) {
-        result.push({
-          ...unit,
-          displayName: `${indent}${unit.name}`,
-        });
-
-        // Recursively process active children
-        if (unit.children && unit.children.length > 0) {
-          result.push(...flattenUnits(unit.children, level + 1));
-        }
-      }
-    }
-
-    return result;
-  };
-
-  const flattenedUnits = flattenUnits(allUnits);
 
   // Helper to format code as user types (uppercase, no spaces)
   const handleCodeChange = (value: string) => {
@@ -325,7 +303,7 @@ export function MajorProgramDialog({
               )}
             />
 
-            {/* Unit Field */}
+            {/* Unit Field - Using SmartUnitSelector */}
             <FormField
               control={form.control}
               name="unit_id"
@@ -334,24 +312,14 @@ export function MajorProgramDialog({
                   <FormLabel>
                     Đơn vị quản lý <span className="text-red-500">*</span>
                   </FormLabel>
-                  <Select
-                    onValueChange={field.onChange}
-                    value={field.value}
-                    disabled={isSubmitting || unitsLoading}
-                  >
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Chọn đơn vị quản lý" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {flattenedUnits.map((unit) => (
-                        <SelectItem key={unit.id} value={String(unit.id)}>
-                          {unit.displayName} ({unit.type})
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <FormControl>
+                    <SmartUnitSelector
+                      value={field.value}
+                      onChange={field.onChange}
+                      placeholder="Chọn đơn vị quản lý"
+                      disabled={isSubmitting}
+                    />
+                  </FormControl>
                   <FormDescription>
                     Đơn vị tổ chức quản lý chương trình này
                   </FormDescription>
@@ -370,6 +338,29 @@ export function MajorProgramDialog({
                     <FormLabel className="text-base">Trạng thái hoạt động</FormLabel>
                     <FormDescription>
                       Chương trình có đang hoạt động hay không
+                    </FormDescription>
+                  </div>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                      disabled={isSubmitting}
+                    />
+                  </FormControl>
+                </FormItem>
+              )}
+            />
+
+            {/* Is Heavy Switch - Ngành nghề nặng nhọc, độc hại */}
+            <FormField
+              control={form.control}
+              name="is_heavy"
+              render={({ field }) => (
+                <FormItem className="flex flex-row items-center justify-between rounded-lg border border-amber-200 bg-amber-50/50 p-4">
+                  <div className="space-y-0.5">
+                    <FormLabel className="text-base">Ngành nghề nặng nhọc, độc hại</FormLabel>
+                    <FormDescription>
+                      Ngành nghề nặng nhọc, độc hại, nguy hiểm (được hưởng chính sách đặc biệt)
                     </FormDescription>
                   </div>
                   <FormControl>

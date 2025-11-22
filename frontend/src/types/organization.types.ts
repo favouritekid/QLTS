@@ -39,6 +39,7 @@ export interface OfferingAcademicInfo {
   admission_criteria?: AdmissionCriterion[] | null; // Tiêu chí tuyển sinh (JSON)
   target_audience?: string | null; // Đối tượng tuyển sinh
   cutoff_score_previous_year?: number | null; // Điểm chuẩn năm trước
+  applied_discount_policy_ids?: number[] | null; // Danh sách ID chính sách ưu đãi áp dụng
 
   // Audit trail
   created_at?: string | null;
@@ -59,6 +60,7 @@ export interface OfferingAcademicInfoCreate {
   admission_criteria?: AdmissionCriterion[] | null;
   target_audience?: string | null;
   cutoff_score_previous_year?: number | null;
+  applied_discount_policy_ids?: number[] | null;
 }
 
 /**
@@ -72,6 +74,7 @@ export interface OfferingAcademicInfoUpdate {
   admission_criteria?: AdmissionCriterion[] | null;
   target_audience?: string | null;
   cutoff_score_previous_year?: number | null;
+  applied_discount_policy_ids?: number[] | null;
 }
 
 /**
@@ -130,6 +133,7 @@ export interface MajorProgram {
   degree_level: string; // Trình độ (vd: "Cao đẳng")
   code: string; // Mã ngành tuyển sinh (vd: "6480201") - UNIQUE
   is_active: boolean; // Soft delete flag
+  is_heavy: boolean; // Ngành nghề nặng nhọc, độc hại, nguy hiểm
   unit_id: number; // Foreign key to OrganizationUnit
 
   // Nested: Offerings (Tier 2)
@@ -148,6 +152,7 @@ export interface MajorProgramCreate {
   code: string;
   unit_id: number;
   is_active?: boolean;
+  is_heavy?: boolean; // Ngành nghề nặng nhọc, độc hại
 }
 
 /**
@@ -158,6 +163,7 @@ export interface MajorProgramUpdate {
   degree_level?: string;
   unit_id?: number;
   is_active?: boolean;
+  is_heavy?: boolean; // Ngành nghề nặng nhọc, độc hại
   // Note: 'code' cannot be updated (business rule)
 }
 

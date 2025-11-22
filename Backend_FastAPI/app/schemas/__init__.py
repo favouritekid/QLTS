@@ -210,3 +210,19 @@ from .officer import (
     FunnelStage,
     UpcomingConsultation
 )
+
+# --- Từ tuition_discount_policy.py ---
+from .tuition_discount_policy import (
+    DiscountType,
+    ApplicableScope,
+    TargetCriteria,
+    TuitionDiscountPolicy,
+    TuitionDiscountPolicyBase,
+    TuitionDiscountPolicyCreate,
+    TuitionDiscountPolicyUpdate,
+    TuitionDiscountPolicyWithCreator,
+    TuitionDiscountPolicyListResponse,
+    DiscountCalculationRequest,
+    DiscountCalculationResponse,
+    AppliedDiscount,
+)

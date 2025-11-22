@@ -21,8 +21,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { LeadStatus, LeadSource } from "@/types/lead.types";
+import type { LeadStatus } from "@/types/lead.types";
 import type { ProgramOffering } from "@/types/organization.types";
+import { LEAD_STATUS_OPTIONS, LEAD_SOURCE_OPTIONS } from "@/constants";
 
 interface LeadFiltersProps {
   search: string;
@@ -39,26 +40,8 @@ interface LeadFiltersProps {
   onReset: () => void;
 }
 
-const STATUS_OPTIONS: { value: LeadStatus; label: string; color: string }[] = [
-  { value: "new", label: "New", color: "bg-blue-500" },
-  { value: "assigned", label: "Assigned", color: "bg-purple-500" },
-  { value: "contacted", label: "Contacted", color: "bg-cyan-500" },
-  { value: "qualified", label: "Qualified", color: "bg-emerald-500" },
-  { value: "unqualified", label: "Unqualified", color: "bg-gray-500" },
-  { value: "converted", label: "Converted", color: "bg-green-500" },
-  { value: "rejected", label: "Rejected", color: "bg-red-500" },
-];
-
-const SOURCE_OPTIONS: { value: LeadSource; label: string }[] = [
-  { value: "website", label: "Website" },
-  { value: "referral", label: "Referral" },
-  { value: "social_media", label: "Social Media" },
-  { value: "walk_in", label: "Walk-in" },
-  { value: "email", label: "Email" },
-  { value: "phone", label: "Phone" },
-  { value: "event", label: "Event" },
-  { value: "other", label: "Other" },
-];
+// Using centralized constants from @/constants
+// STATUS_OPTIONS and SOURCE_OPTIONS are now imported as LEAD_STATUS_OPTIONS and LEAD_SOURCE_OPTIONS
 
 export const LeadFilters = React.memo(function LeadFilters({
   search,
@@ -142,7 +125,7 @@ export const LeadFilters = React.memo(function LeadFilters({
             </AccordionTrigger>
             <AccordionContent className="pb-3">
               <div className="space-y-2">
-                {STATUS_OPTIONS.map((option) => (
+                {LEAD_STATUS_OPTIONS.map((option) => (
                   <div key={option.value} className="flex items-center space-x-2">
                     <Checkbox
                       id={`status-${option.value}`}
@@ -174,7 +157,7 @@ export const LeadFilters = React.memo(function LeadFilters({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Sources</SelectItem>
-                  {SOURCE_OPTIONS.map((option) => (
+                  {LEAD_SOURCE_OPTIONS.map((option) => (
                     <SelectItem key={option.value} value={option.value}>
                       {option.label}
                     </SelectItem>

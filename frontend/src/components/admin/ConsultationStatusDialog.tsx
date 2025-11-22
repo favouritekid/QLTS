@@ -44,21 +44,15 @@ import type {
   OutcomeType,
 } from "@/types/pipeline.types";
 import { Checkbox as ShadcnCheckbox } from "@/components/ui/checkbox";
+import {
+  LEGACY_STATUS_OPTIONS,
+  PRESET_COLORS,
+  DEFAULT_STATUS_COLOR,
+} from "@/constants";
 
 // =====================================================================
 // FORM VALIDATION SCHEMA
 // =====================================================================
-
-// Valid legacy status values for lead.status backward compatibility
-const VALID_LEGACY_STATUSES = [
-  { value: "new", label: "New" },
-  { value: "assigned", label: "Assigned" },
-  { value: "contacted", label: "Contacted" },
-  { value: "qualified", label: "Qualified" },
-  { value: "unqualified", label: "Unqualified" },
-  { value: "converted", label: "Converted" },
-  { value: "rejected", label: "Rejected" },
-] as const;
 
 const statusFormSchema = z.object({
   id: z
@@ -96,20 +90,7 @@ interface ConsultationStatusDialogProps {
   status?: ConsultationStatus | null; // null = create mode, non-null = edit mode
 }
 
-// =====================================================================
-// PRESET COLORS
-// =====================================================================
-
-const PRESET_COLORS = [
-  { name: "Blue", value: "#3B82F6" },
-  { name: "Green", value: "#10B981" },
-  { name: "Yellow", value: "#F59E0B" },
-  { name: "Red", value: "#EF4444" },
-  { name: "Purple", value: "#8B5CF6" },
-  { name: "Pink", value: "#EC4899" },
-  { name: "Indigo", value: "#6366F1" },
-  { name: "Gray", value: "#6B7280" },
-];
+// Using centralized PRESET_COLORS and LEGACY_STATUS_OPTIONS from @/constants
 
 // =====================================================================
 // MAIN COMPONENT
@@ -135,7 +116,7 @@ export function ConsultationStatusDialog({
     defaultValues: {
       id: "",
       name: "",
-      color_code: "#3B82F6",
+      color_code: DEFAULT_STATUS_COLOR,
       stage_id: "",
       outcome_type: "neutral",
       is_final_status: false,
@@ -160,7 +141,7 @@ export function ConsultationStatusDialog({
         form.reset({
           id: "",
           name: "",
-          color_code: "#3B82F6",
+          color_code: DEFAULT_STATUS_COLOR,
           stage_id: "",
           outcome_type: "neutral",
           is_final_status: false,
@@ -440,7 +421,7 @@ export function ConsultationStatusDialog({
                       <SelectItem value="_none_">
                         <span className="text-muted-foreground">Auto-derived (recommended)</span>
                       </SelectItem>
-                      {VALID_LEGACY_STATUSES.map((status) => (
+                      {LEGACY_STATUS_OPTIONS.map((status) => (
                         <SelectItem key={status.value} value={status.value}>
                           {status.label}
                         </SelectItem>

@@ -29,11 +29,14 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Plus, Trash, Save, SaveAll, FileText } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Loader2, Plus, Trash, Save, SaveAll, FileText, Percent } from "lucide-react";
 import {
   useCreateOfferingAcademicInfo,
   useUpdateOfferingAcademicInfo,
 } from "@/hooks/useOrganization";
+import { useTuitionDiscountPolicies } from "@/hooks/useTuitionDiscount";
 import type {
   OfferingAcademicInfo,
   ProgramOffering,
@@ -86,6 +89,9 @@ const academicInfoFormSchema = z.object({
   annual_admission_quota: z.number().int().min(0, "Chỉ tiêu không được âm").nullish(),
   target_audience: z.string().max(1000).optional(),
   cutoff_score_previous_year: z.number().min(0).max(30).nullish(),
+
+  // Chính sách ưu đãi học phí
+  applied_discount_policy_ids: z.array(z.number()).optional().nullable(),
 
   // 👇 VALIDATE DANH SÁCH: Không cho phép trùng ID hoặc Tên
   admission_criteria: z.array(admissionCriterionSchema).superRefine((items, ctx) => {
@@ -173,23 +179,33 @@ function convertApiToFormData(apiCriteria: AdmissionCriterion[]): AdmissionCrite
 }
 
 function convertFormToApiData(formCriteria: AdmissionCriterionFormData[]): AdmissionCriterion[] {
-  return formCriteria.map((criterion) => ({
-    id: criterion.id,
-    method_name: criterion.method_name,
-    program_type: criterion.program_type || "",
-    // Chuyển chuỗi "A00, B00" thành mảng ["A00", "B00"]
-    subject_groups: criterion.subject_groups
-      ? criterion.subject_groups
-          .split(",")
-          .map((s) => s.trim())
-          .filter((s) => s.length > 0)
-      : [],
-    min_score: criterion.min_score ?? null,
-    // Chuyển đổi required_documents
-    required_documents: criterion.required_documents
-      ? criterion.required_documents.filter((doc) => doc.code && doc.label)
-      : null,
-  }));
+  return formCriteria.map((criterion) => {
+    // Xử lý required_documents - lọc và đảm bảo có dữ liệu hợp lệ
+    const validDocuments = criterion.required_documents
+      ? criterion.required_documents
+          .filter((doc) => doc.code && doc.label)
+          .map((doc) => ({
+            code: doc.code,
+            label: doc.label,
+          }))
+      : [];
+
+    return {
+      id: criterion.id,
+      method_name: criterion.method_name,
+      program_type: criterion.program_type || "",
+      // Chuyển chuỗi "A00, B00" thành mảng ["A00", "B00"]
+      subject_groups: criterion.subject_groups
+        ? criterion.subject_groups
+            .split(",")
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0)
+        : [],
+      min_score: criterion.min_score ?? null,
+      // Chuyển đổi required_documents - trả về mảng rỗng thay vì null nếu không có
+      required_documents: validDocuments.length > 0 ? validDocuments : null,
+    };
+  });
 }
 
 // =====================================================================
@@ -224,9 +240,16 @@ export function OfferingAcademicInfoDialog({
       annual_admission_quota: null,
       target_audience: "",
       cutoff_score_previous_year: null,
+      applied_discount_policy_ids: [],
       admission_criteria: [],
       is_published: false,
     },
+  });
+
+  // Fetch discount policies for selection
+  const { data: discountPoliciesData, isLoading: isLoadingDiscounts } = useTuitionDiscountPolicies({
+    isActive: true,
+    includeExpired: false,
   });
 
   const { fields, append, remove } = useFieldArray({
@@ -272,6 +295,7 @@ export function OfferingAcademicInfoDialog({
               ? Number(academicInfo.cutoff_score_previous_year)
               : null,
           target_audience: academicInfo.target_audience || "",
+          applied_discount_policy_ids: academicInfo.applied_discount_policy_ids || [],
           admission_criteria: parsedCriteria,
           is_published: academicInfo.is_published,
         });
@@ -289,6 +313,7 @@ export function OfferingAcademicInfoDialog({
           annual_admission_quota: null,
           target_audience: "",
           cutoff_score_previous_year: null,
+          applied_discount_policy_ids: [],
           admission_criteria: [],
           is_published: false,
         });
@@ -454,6 +479,72 @@ export function OfferingAcademicInfoDialog({
                 )}
               />
             </div>
+
+            {/* Tuition Discount Policies */}
+            <FormField
+              control={form.control}
+              name="applied_discount_policy_ids"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="flex items-center gap-2">
+                    <Percent className="h-4 w-4" />
+                    Chính sách ưu đãi học phí
+                  </FormLabel>
+                  <FormDescription>
+                    Chọn các chính sách ưu đãi áp dụng cho chương trình này
+                  </FormDescription>
+                  {isLoadingDiscounts ? (
+                    <div className="space-y-2">
+                      <Skeleton className="h-8 w-full" />
+                      <Skeleton className="h-8 w-full" />
+                    </div>
+                  ) : discountPoliciesData?.items && discountPoliciesData.items.length > 0 ? (
+                    <div className="max-h-[200px] overflow-y-auto rounded-md border p-3 space-y-2">
+                      {discountPoliciesData.items.map((policy) => {
+                        const isChecked = (field.value || []).includes(policy.id);
+                        return (
+                          <div
+                            key={policy.id}
+                            className="flex items-center space-x-3 rounded-md p-2 hover:bg-muted/50"
+                          >
+                            <Checkbox
+                              id={`policy-${policy.id}`}
+                              checked={isChecked}
+                              onCheckedChange={(checked) => {
+                                const currentIds = field.value || [];
+                                if (checked) {
+                                  field.onChange([...currentIds, policy.id]);
+                                } else {
+                                  field.onChange(currentIds.filter((id: number) => id !== policy.id));
+                                }
+                              }}
+                              disabled={isSubmitting}
+                            />
+                            <label
+                              htmlFor={`policy-${policy.id}`}
+                              className="flex-1 cursor-pointer text-sm"
+                            >
+                              <div className="font-medium">{policy.name}</div>
+                              <div className="text-muted-foreground text-xs">
+                                {policy.code} -{" "}
+                                {policy.discount_type === "percentage"
+                                  ? `${policy.discount_value}%`
+                                  : `${new Intl.NumberFormat("vi-VN").format(policy.discount_value)} VNĐ`}
+                              </div>
+                            </label>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="text-muted-foreground rounded-md border border-dashed p-4 text-center text-sm">
+                      Chưa có chính sách ưu đãi nào. Vui lòng tạo chính sách trong mục Quản lý Ưu đãi.
+                    </div>
+                  )}
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
             {/* Target Audience */}
             <FormField
@@ -622,102 +713,26 @@ export function OfferingAcademicInfoDialog({
                         )}
                       />
 
-                      {/* Required Documents Section */}
+                      {/* Required Documents Section - Using Standardized DocumentTypesSelector */}
                       <div className="mt-4 border-t pt-4 md:col-span-2">
-                        <div className="mb-3 flex items-center justify-between">
-                          <div className="flex items-center gap-2 text-sm font-medium">
-                            <FileText className="h-4 w-4" />
-                            Hồ sơ bắt buộc
-                          </div>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              const currentDocs =
-                                form.getValues(`admission_criteria.${index}.required_documents`) ||
-                                [];
-                              form.setValue(`admission_criteria.${index}.required_documents`, [
-                                ...currentDocs,
-                                { code: "", label: "" },
-                              ]);
-                            }}
-                            disabled={isSubmitting}
-                          >
-                            <Plus className="mr-1 h-3 w-3" />
-                            Thêm
-                          </Button>
+                        <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+                          <FileText className="h-4 w-4" />
+                          Hồ sơ bắt buộc
                         </div>
 
-                        {(!form.watch(`admission_criteria.${index}.required_documents`) ||
-                          form.watch(`admission_criteria.${index}.required_documents`)?.length ===
-                            0) && (
-                          <div className="text-muted-foreground rounded border border-dashed py-3 text-center text-xs">
-                            Chưa có hồ sơ bắt buộc. Nhấn &quot;Thêm&quot; để thêm.
-                          </div>
-                        )}
-
-                        <div className="space-y-2">
-                          {form
-                            .watch(`admission_criteria.${index}.required_documents`)
-                            ?.map((_, docIndex) => (
-                              <div key={docIndex} className="flex items-start gap-2">
-                                <FormField
-                                  control={form.control}
-                                  name={`admission_criteria.${index}.required_documents.${docIndex}.code`}
-                                  render={({ field }) => (
-                                    <FormItem className="flex-1">
-                                      <FormControl>
-                                        <Input
-                                          placeholder="Mã (vd: hoc_ba)"
-                                          {...field}
-                                          disabled={isSubmitting}
-                                          className="h-8 text-xs"
-                                        />
-                                      </FormControl>
-                                      <FormMessage />
-                                    </FormItem>
-                                  )}
-                                />
-                                <FormField
-                                  control={form.control}
-                                  name={`admission_criteria.${index}.required_documents.${docIndex}.label`}
-                                  render={({ field }) => (
-                                    <FormItem className="flex-[2]">
-                                      <FormControl>
-                                        <Input
-                                          placeholder="Tên hồ sơ (vd: Học bạ THPT)"
-                                          {...field}
-                                          disabled={isSubmitting}
-                                          className="h-8 text-xs"
-                                        />
-                                      </FormControl>
-                                      <FormMessage />
-                                    </FormItem>
-                                  )}
-                                />
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => {
-                                    const currentDocs =
-                                      form.getValues(
-                                        `admission_criteria.${index}.required_documents`
-                                      ) || [];
-                                    form.setValue(
-                                      `admission_criteria.${index}.required_documents`,
-                                      currentDocs.filter((_, i) => i !== docIndex)
-                                    );
-                                  }}
-                                  disabled={isSubmitting}
-                                  className="text-destructive hover:text-destructive h-8 w-8 p-0"
-                                >
-                                  <Trash className="h-3 w-3" />
-                                </Button>
-                              </div>
-                            ))}
-                        </div>
+                        <DocumentTypesSelector
+                          value={
+                            form.watch(`admission_criteria.${index}.required_documents`) || []
+                          }
+                          onChange={(documents) => {
+                            form.setValue(
+                              `admission_criteria.${index}.required_documents`,
+                              documents,
+                              { shouldDirty: true, shouldValidate: true }
+                            );
+                          }}
+                          disabled={isSubmitting}
+                        />
                       </div>
                     </CardContent>
                   </Card>

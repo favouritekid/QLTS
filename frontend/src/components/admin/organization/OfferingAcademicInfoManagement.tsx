@@ -48,10 +48,12 @@ import {
   DollarSign,
   Users,
   TrendingUp,
+  RotateCcw,
 } from "lucide-react";
 import {
   useOfferingAcademicInfoList,
   useDeleteOfferingAcademicInfo,
+  useRestoreOfferingAcademicInfo,
 } from "@/hooks/useOrganization";
 import { OfferingAcademicInfoDialog } from "./OfferingAcademicInfoDialog";
 import type { ProgramOffering, OfferingAcademicInfo } from "@/types/organization.types";
@@ -91,6 +93,7 @@ export function OfferingAcademicInfoManagement({
   const hasData = academicInfos.length > 0;
 
   const deleteAcademicInfoMutation = useDeleteOfferingAcademicInfo();
+  const restoreAcademicInfoMutation = useRestoreOfferingAcademicInfo();
 
   // ✨ Tính toán danh sách các năm đã tồn tại
   const existingYears = useMemo(() => {
@@ -124,6 +127,17 @@ export function OfferingAcademicInfoManagement({
       setItemToDelete(null);
     } catch (error) {
       console.error("Delete failed:", error);
+    }
+  };
+
+  const handleRestore = async (info: OfferingAcademicInfo) => {
+    try {
+      await restoreAcademicInfoMutation.mutateAsync({
+        id: info.id,
+        offeringId: offering.id,
+      });
+    } catch (error) {
+      console.error("Restore failed:", error);
     }
   };
 
@@ -228,9 +242,16 @@ export function OfferingAcademicInfoManagement({
                             </div>
                           </TableCell>
                           <TableCell>
-                            <Badge variant={info.is_published ? "default" : "secondary"}>
-                              {info.is_published ? "Công khai" : "Nháp"}
-                            </Badge>
+                            <div className="flex flex-col gap-1">
+                              {info.is_deleted && (
+                                <Badge variant="destructive" className="w-fit">
+                                  Đã xóa
+                                </Badge>
+                              )}
+                              <Badge variant={info.is_published ? "default" : "secondary"}>
+                                {info.is_published ? "Công khai" : "Nháp"}
+                              </Badge>
+                            </div>
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-2">
@@ -266,13 +287,24 @@ export function OfferingAcademicInfoManagement({
                                   <Edit className="mr-2 h-4 w-4" />
                                   Chỉnh sửa
                                 </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() => handleDeleteClick(info)}
-                                  className="text-red-600"
-                                >
-                                  <Trash2 className="mr-2 h-4 w-4" />
-                                  Xóa
-                                </DropdownMenuItem>
+                                {info.is_deleted ? (
+                                  <DropdownMenuItem
+                                    onClick={() => handleRestore(info)}
+                                    className="text-green-600"
+                                    disabled={restoreAcademicInfoMutation.isPending}
+                                  >
+                                    <RotateCcw className="mr-2 h-4 w-4" />
+                                    Khôi phục
+                                  </DropdownMenuItem>
+                                ) : (
+                                  <DropdownMenuItem
+                                    onClick={() => handleDeleteClick(info)}
+                                    className="text-red-600"
+                                  >
+                                    <Trash2 className="mr-2 h-4 w-4" />
+                                    Xóa
+                                  </DropdownMenuItem>
+                                )}
                               </DropdownMenuContent>
                             </DropdownMenu>
                           </TableCell>
@@ -305,7 +337,9 @@ export function OfferingAcademicInfoManagement({
               Bạn có chắc chắn muốn xóa thông tin tuyển sinh cho năm{" "}
               <strong>{itemToDelete?.academic_year}</strong>?
               <br />
-              Hành động này không thể hoàn tác.
+              <span className="text-muted-foreground mt-2 block text-sm">
+                Lưu ý: Đây là xóa mềm (soft delete). Bạn có thể khôi phục lại bản ghi này sau.
+              </span>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
