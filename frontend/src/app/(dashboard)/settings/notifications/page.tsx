@@ -1,8 +1,8 @@
 // src/app/(dashboard)/settings/notifications/page.tsx
 "use client";
 
-import { useState } from "react";
-import { Bell, Save, Volume2 } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Bell, Save, Volume2, Mail, Monitor } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -18,35 +18,35 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
+import { Badge } from "@/components/ui/badge";
 import {
   useNotificationPreferences,
   useUpdateNotificationPreferences,
+  useEventGroupPreferences,
+  useUpdateEventGroupPreference,
 } from "@/hooks/useNotificationPreferences";
 import type { NotificationPreferenceUpdate } from "@/types/api.types";
 
 export default function NotificationSettingsPage() {
-  const { data: preferences, isLoading } = useNotificationPreferences();
+  // General preferences
+  const { data: preferences, isLoading: isLoadingPreferences } = useNotificationPreferences();
   const updatePreferences = useUpdateNotificationPreferences();
 
-  const [emailEnabled, setEmailEnabled] = useState(preferences?.email_enabled ?? true);
-  const [soundEnabled, setSoundEnabled] = useState(preferences?.sound_enabled ?? true);
-  const [browserEnabled, setBrowserEnabled] = useState(preferences?.browser_enabled ?? true);
-  const [emailDigest, setEmailDigest] = useState(preferences?.email_digest ?? "instant");
-  const [quietHoursEnabled, setQuietHoursEnabled] = useState(
-    preferences?.quiet_hours_enabled ?? false
-  );
-  const [quietHoursStart, setQuietHoursStart] = useState(
-    preferences?.quiet_hours_start ?? "22:00"
-  );
-  const [quietHoursEnd, setQuietHoursEnd] = useState(preferences?.quiet_hours_end ?? "08:00");
+  // Event group preferences (NEW)
+  const { data: eventGroupData, isLoading: isLoadingEventGroups } = useEventGroupPreferences();
+  const updateEventGroupPreference = useUpdateEventGroupPreference();
 
-  // Notification type preferences
-  const [typePreferences, setTypePreferences] = useState(
-    preferences?.type_preferences ?? {}
-  );
+  // General settings state
+  const [emailEnabled, setEmailEnabled] = useState(true);
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [browserEnabled, setBrowserEnabled] = useState(true);
+  const [emailDigest, setEmailDigest] = useState("instant");
+  const [quietHoursEnabled, setQuietHoursEnabled] = useState(false);
+  const [quietHoursStart, setQuietHoursStart] = useState("22:00");
+  const [quietHoursEnd, setQuietHoursEnd] = useState("08:00");
 
   // Update local state when preferences load
-  useState(() => {
+  useEffect(() => {
     if (preferences) {
       setEmailEnabled(preferences.email_enabled);
       setSoundEnabled(preferences.sound_enabled);
@@ -55,11 +55,10 @@ export default function NotificationSettingsPage() {
       setQuietHoursEnabled(preferences.quiet_hours_enabled);
       setQuietHoursStart(preferences.quiet_hours_start ?? "22:00");
       setQuietHoursEnd(preferences.quiet_hours_end ?? "08:00");
-      setTypePreferences(preferences.type_preferences ?? {});
     }
-  });
+  }, [preferences]);
 
-  const handleSave = async () => {
+  const handleSaveGeneralSettings = async () => {
     const updateData: NotificationPreferenceUpdate = {
       email_enabled: emailEnabled,
       sound_enabled: soundEnabled,
@@ -68,38 +67,34 @@ export default function NotificationSettingsPage() {
       quiet_hours_enabled: quietHoursEnabled,
       quiet_hours_start: quietHoursEnabled ? quietHoursStart : null,
       quiet_hours_end: quietHoursEnabled ? quietHoursEnd : null,
-      type_preferences: typePreferences,
     };
 
     try {
       await updatePreferences.mutateAsync(updateData);
-      toast.success("Notification preferences updated successfully!");
+      toast.success("General settings updated successfully!");
     } catch {
-      toast.error("Failed to update notification preferences");
+      toast.error("Failed to update general settings");
     }
   };
 
-  const toggleTypePreference = (type: string, channel: "email" | "browser" | "sound") => {
-    setTypePreferences((prev) => {
-      const currentPref = prev[type] || { email: true, browser: true, sound: true };
-      return {
-        ...prev,
-        [type]: {
-          ...currentPref,
-          [channel]: !currentPref[channel],
-        },
-      };
-    });
+  const handleToggleGroupPreference = async (
+    group: string,
+    channel: string,
+    enabled: boolean
+  ) => {
+    try {
+      await updateEventGroupPreference.mutateAsync({
+        event_group: group,
+        channel,
+        enabled,
+      });
+      // No toast for individual toggles - they update instantly
+    } catch {
+      toast.error(`Failed to update ${group} ${channel} preference`);
+    }
   };
 
-  const notificationTypes = [
-    { value: "info", label: "Information" },
-    { value: "success", label: "Success" },
-    { value: "warning", label: "Warning" },
-    { value: "error", label: "Error" },
-    { value: "admin_update", label: "Admin Updates" },
-    { value: "system", label: "System" },
-  ];
+  const isLoading = isLoadingPreferences || isLoadingEventGroups;
 
   if (isLoading) {
     return (
@@ -120,28 +115,33 @@ export default function NotificationSettingsPage() {
 
   return (
     <div className="space-y-6">
-      {/* Save Button */}
-      <div className="flex justify-end max-w-4xl">
-        <Button onClick={handleSave} disabled={updatePreferences.isPending}>
-          <Save className="mr-2 h-4 w-4" />
-          Save Changes
-        </Button>
-      </div>
-
       {/* General Settings */}
       <Card className="max-w-4xl">
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Bell className="h-5 w-5" />
-            General Settings
-          </CardTitle>
-          <CardDescription>Choose how you want to receive notifications</CardDescription>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Bell className="h-5 w-5" />
+                General Settings
+              </CardTitle>
+              <CardDescription>Choose how you want to receive notifications</CardDescription>
+            </div>
+            <Button
+              onClick={handleSaveGeneralSettings}
+              disabled={updatePreferences.isPending}
+              size="sm"
+            >
+              <Save className="mr-2 h-4 w-4" />
+              Save
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="space-y-6">
           {/* Email Notifications */}
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
-              <Label htmlFor="email-enabled" className="text-base">
+              <Label htmlFor="email-enabled" className="text-base flex items-center gap-2">
+                <Mail className="h-4 w-4" />
                 Email Notifications
               </Label>
               <p className="text-sm text-muted-foreground">
@@ -185,6 +185,26 @@ export default function NotificationSettingsPage() {
 
           <Separator />
 
+          {/* Browser Notifications */}
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label htmlFor="browser-enabled" className="text-base flex items-center gap-2">
+                <Monitor className="h-4 w-4" />
+                Browser Notifications
+              </Label>
+              <p className="text-sm text-muted-foreground">
+                Show in-app notifications
+              </p>
+            </div>
+            <Switch
+              id="browser-enabled"
+              checked={browserEnabled}
+              onCheckedChange={setBrowserEnabled}
+            />
+          </div>
+
+          <Separator />
+
           {/* Sound Notifications */}
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
@@ -200,25 +220,6 @@ export default function NotificationSettingsPage() {
               id="sound-enabled"
               checked={soundEnabled}
               onCheckedChange={setSoundEnabled}
-            />
-          </div>
-
-          <Separator />
-
-          {/* Browser Notifications */}
-          <div className="flex items-center justify-between">
-            <div className="space-y-0.5">
-              <Label htmlFor="browser-enabled" className="text-base">
-                Browser Notifications
-              </Label>
-              <p className="text-sm text-muted-foreground">
-                Show browser push notifications
-              </p>
-            </div>
-            <Switch
-              id="browser-enabled"
-              checked={browserEnabled}
-              onCheckedChange={setBrowserEnabled}
             />
           </div>
         </CardContent>
@@ -276,57 +277,98 @@ export default function NotificationSettingsPage() {
         </CardContent>
       </Card>
 
-      {/* Per-Type Preferences */}
+      {/* Event Group Preferences (NEW) */}
       <Card className="max-w-4xl">
         <CardHeader>
-          <CardTitle>Notification Type Preferences</CardTitle>
+          <CardTitle>Notification Categories</CardTitle>
           <CardDescription>
-            Customize notification channels for each type
+            Customize notifications for each category. Changes are saved automatically.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-1 text-sm font-medium mb-4">
-            <div className="grid grid-cols-4 gap-4 px-4">
-              <div>Type</div>
-              <div className="text-center">Email</div>
-              <div className="text-center">Browser</div>
-              <div className="text-center">Sound</div>
+          {/* Header */}
+          <div className="grid grid-cols-4 gap-4 px-4 text-sm font-medium text-muted-foreground">
+            <div>Category</div>
+            <div className="text-center flex items-center justify-center gap-1">
+              <Monitor className="h-4 w-4" />
+              Browser
+            </div>
+            <div className="text-center flex items-center justify-center gap-1">
+              <Mail className="h-4 w-4" />
+              Email
+            </div>
+            <div className="text-center flex items-center justify-center gap-1">
+              <Volume2 className="h-4 w-4" />
+              Sound
             </div>
           </div>
-          {notificationTypes.map((type) => {
-            const prefs = typePreferences[type.value] || {
-              email: true,
+
+          <Separator />
+
+          {/* Event Groups */}
+          {eventGroupData?.groups.map((group) => {
+            const prefs = eventGroupData.preferences[group.id] || {
               browser: true,
-              sound: true,
+              email: true,
+              sms: false,
             };
 
             return (
-              <div key={type.value} className="grid grid-cols-4 gap-4 items-center px-4 py-2 rounded-lg hover:bg-muted/50">
-                <div className="font-medium">{type.label}</div>
-                <div className="flex justify-center">
-                  <Switch
-                    checked={prefs.email ?? true}
-                    onCheckedChange={() => toggleTypePreference(type.value, "email")}
-                    disabled={!emailEnabled}
-                  />
+              <div
+                key={group.id}
+                className="grid grid-cols-4 gap-4 items-center px-4 py-3 rounded-lg hover:bg-muted/50 transition-colors"
+              >
+                <div>
+                  <div className="font-medium flex items-center gap-2">
+                    {group.name_en}
+                    {group.id === "system" && (
+                      <Badge variant="secondary" className="text-xs">
+                        Important
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {group.description_en}
+                  </p>
                 </div>
                 <div className="flex justify-center">
                   <Switch
                     checked={prefs.browser ?? true}
-                    onCheckedChange={() => toggleTypePreference(type.value, "browser")}
-                    disabled={!browserEnabled}
+                    onCheckedChange={(enabled) =>
+                      handleToggleGroupPreference(group.id, "browser", enabled)
+                    }
+                    disabled={!browserEnabled || updateEventGroupPreference.isPending}
                   />
                 </div>
                 <div className="flex justify-center">
                   <Switch
-                    checked={prefs.sound ?? true}
-                    onCheckedChange={() => toggleTypePreference(type.value, "sound")}
-                    disabled={!soundEnabled}
+                    checked={prefs.email ?? true}
+                    onCheckedChange={(enabled) =>
+                      handleToggleGroupPreference(group.id, "email", enabled)
+                    }
+                    disabled={!emailEnabled || updateEventGroupPreference.isPending}
+                  />
+                </div>
+                <div className="flex justify-center">
+                  <Switch
+                    checked={prefs.sms ?? false}
+                    onCheckedChange={(enabled) =>
+                      handleToggleGroupPreference(group.id, "sms", enabled)
+                    }
+                    disabled={true} // SMS not yet implemented
                   />
                 </div>
               </div>
             );
           })}
+
+          {/* Legend */}
+          <div className="pt-4 border-t">
+            <p className="text-xs text-muted-foreground">
+              * Browser notifications appear in the notification bell. Email notifications are sent to your registered email.
+              SMS notifications are coming soon.
+            </p>
+          </div>
         </CardContent>
       </Card>
     </div>

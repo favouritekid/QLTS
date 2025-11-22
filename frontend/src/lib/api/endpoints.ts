@@ -146,6 +146,9 @@ export const API_ENDPOINTS = {
     MARK_ALL_AS_READ: "/api/notifications/mark-all-as-read",
     DELETE: (id: number) => `/api/notifications/${id}`,
     PREFERENCES: "/api/notifications/preferences",
+    // Event Groups (NEW - Event-Driven Architecture)
+    EVENT_GROUPS: "/api/notifications/event-groups",
+    EVENT_GROUPS_METADATA: "/api/notifications/event-groups/metadata",
   },
   // Applications (Hồ sơ Tuyển sinh)
   APPLICATIONS: {

@@ -382,3 +382,195 @@ def process_automatic_lead_assignment_task(self, lead_id: int):  # <--- QUAY Láº
     except Exception as e:
         task_log.error(f"Task failed for lead_id: {lead_id}", exc_info=True)
         raise e
+
+
+# ==================================================================
+# === NEW: Broadcast Notification Task (Event-Driven Architecture) ===
+# ==================================================================
+
+@celery_app.task(
+    name="broadcast_notification_task",
+    bind=True,
+    autoretry_for=(Exception,),
+    max_retries=3,
+    default_retry_delay=30,
+)
+def broadcast_notification_task(
+    self,
+    notification_ids: list,
+    channels: list,
+    event: str = "notification"
+):
+    """
+    Celery task to broadcast notifications via Socket.IO and Email.
+
+    This task is called by the notification dispatcher after notifications
+    are committed to the database. It handles the actual delivery.
+
+    Args:
+        notification_ids: List of notification IDs to broadcast
+        channels: List of channels to use (browser, email, sms)
+        event: Event name for logging/metrics
+
+    Flow:
+        1. Query notifications from database
+        2. For each notification:
+            a. Emit via Socket.IO (if browser channel)
+            b. Send email (if email channel enabled)
+        3. Update sent_attempts and last_sent_at
+        4. Idempotent: check if already sent before sending
+
+    Returns:
+        Dict with status and counts
+    """
+    task_log = logging.getLogger("broadcast_notification_task")
+    task_log.info(
+        f"Broadcast task started: {len(notification_ids)} notifications, "
+        f"channels={channels}, event={event}"
+    )
+
+    if not CeleryScopedSessionMaker:
+        task_log.error("CeleryScopedSessionMaker not initialized. Retrying...")
+        raise self.retry(exc=Exception("DB Engine not ready"), countdown=10)
+
+    async def _run_broadcast():
+        from sqlalchemy import select, update
+        from datetime import datetime, timezone
+        from . import models
+        from .services.email_service import EmailService
+
+        sent_count = 0
+        email_count = 0
+        failed_count = 0
+
+        async with CeleryScopedSessionMaker() as session:
+            # Fetch notifications
+            result = await session.execute(
+                select(models.Notification)
+                .where(models.Notification.id.in_(notification_ids))
+            )
+            notifications = result.scalars().all()
+
+            if not notifications:
+                task_log.warning(f"No notifications found for IDs: {notification_ids}")
+                return {"sent": 0, "email": 0, "failed": 0}
+
+            # Process each notification
+            for notification in notifications:
+                try:
+                    # Get user info for email
+                    user = await session.get(models.User, notification.user_id)
+                    if not user:
+                        task_log.warning(f"User {notification.user_id} not found")
+                        failed_count += 1
+                        continue
+
+                    # Check if already sent (idempotency via data field)
+                    notification_data = notification.data or {}
+                    if notification_data.get("_broadcast_sent"):
+                        task_log.debug(f"Notification {notification.id} already broadcast")
+                        continue
+
+                    # === Browser/Socket.IO Channel ===
+                    if "browser" in channels:
+                        try:
+                            # Import here to avoid circular imports
+                            from .socket_manager import sio
+
+                            room_name = f"user_room_{notification.user_id}"
+                            await sio.emit(
+                                "notification",
+                                {
+                                    "id": notification.id,
+                                    "type": notification.type,
+                                    "title": notification.title,
+                                    "message": notification.message,
+                                    "link": notification.link,
+                                    "data": notification.data,
+                                    "created_at": notification.created_at.isoformat()
+                                    if notification.created_at else None,
+                                    "is_read": notification.is_read,
+                                },
+                                room=room_name
+                            )
+                            sent_count += 1
+                            task_log.debug(
+                                f"Socket emit success for notification {notification.id} "
+                                f"to room {room_name}"
+                            )
+                        except Exception as e:
+                            task_log.error(
+                                f"Socket emit failed for notification {notification.id}: {e}"
+                            )
+
+                    # === Email Channel ===
+                    if "email" in channels:
+                        try:
+                            # Check user preference for email
+                            pref_result = await session.execute(
+                                select(models.NotificationPreference)
+                                .where(
+                                    models.NotificationPreference.user_id == user.id
+                                )
+                            )
+                            pref = pref_result.scalar_one_or_none()
+
+                            # Check if email is enabled
+                            should_send_email = True
+                            if pref:
+                                if not pref.email_enabled:
+                                    should_send_email = False
+                                # Check group-specific email preference
+                                if notification_data.get("group"):
+                                    group_prefs = (pref.type_preferences or {}).get(
+                                        notification_data["group"], {}
+                                    )
+                                    if group_prefs.get("email") is False:
+                                        should_send_email = False
+
+                            if should_send_email and user.email:
+                                email_service = EmailService()
+                                email_sent = email_service.send_notification_email(
+                                    user.email,
+                                    user.full_name or user.username,
+                                    notification
+                                )
+                                if email_sent:
+                                    email_count += 1
+                                    task_log.debug(
+                                        f"Email sent for notification {notification.id}"
+                                    )
+                        except Exception as e:
+                            task_log.error(
+                                f"Email failed for notification {notification.id}: {e}"
+                            )
+
+                    # Mark as broadcast (idempotency)
+                    if notification.data is None:
+                        notification.data = {}
+                    notification.data["_broadcast_sent"] = True
+                    notification.data["_broadcast_at"] = datetime.now(
+                        timezone.utc
+                    ).isoformat()
+
+                except Exception as e:
+                    task_log.error(
+                        f"Failed to process notification {notification.id}: {e}"
+                    )
+                    failed_count += 1
+
+            # Commit changes
+            await session.commit()
+
+        return {"sent": sent_count, "email": email_count, "failed": failed_count}
+
+    try:
+        result = asyncio.run(_run_broadcast())
+        task_log.info(
+            f"Broadcast task completed: sent={result['sent']}, "
+            f"email={result['email']}, failed={result['failed']}"
+        )
+        return result
+    except Exception as e:
+        task_log.error(f"Broadcast task failed: {e}", exc_info=True)
+        raise e
