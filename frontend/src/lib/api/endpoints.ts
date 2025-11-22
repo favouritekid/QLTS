@@ -128,6 +128,15 @@ export const API_ENDPOINTS = {
       UPDATE_DOCUMENT_TYPE: (id: number) => `/api/admin/document-types/${id}`,
       DELETE_DOCUMENT_TYPE: (id: number) => `/api/admin/document-types/${id}`,
     },
+    // Tuition Discount Policy
+    TUITION_DISCOUNT: {
+      LIST: "/api/admin/tuition-discount-policies",
+      CREATE: "/api/admin/tuition-discount-policies",
+      GET: (id: number) => `/api/admin/tuition-discount-policies/${id}`,
+      UPDATE: (id: number) => `/api/admin/tuition-discount-policies/${id}`,
+      DELETE: (id: number) => `/api/admin/tuition-discount-policies/${id}`,
+      CALCULATE: "/api/admin/tuition-discount-policies/calculate",
+    },
     ACTIVITY_LOGS: "/api/admin/activity-logs",
     STATISTICS: "/api/admin/users/statistics",
   },

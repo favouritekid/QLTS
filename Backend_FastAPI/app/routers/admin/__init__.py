@@ -32,6 +32,9 @@ from . import pipeline
 # PHASE 2D routers (Backward compatibility)
 from . import sync
 
+# Tuition Discount Policy router
+from . import tuition_discount
+
 # Create main admin router
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -88,3 +91,6 @@ router.include_router(pipeline.router)      # /api/admin/pipeline-stages/*, /api
 
 # Include PHASE 2D routers (Backward compatibility aliases)
 router.include_router(sync.router)          # /api/admin/sync/status, /api/admin/sync (aliases to users router)
+
+# Include Tuition Discount Policy router
+router.include_router(tuition_discount.router)  # /api/admin/tuition-discount-policies/*

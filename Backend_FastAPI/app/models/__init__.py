@@ -26,10 +26,13 @@ from .notification_preference import NotificationPreference
 # OLD: from .organization import Major  # REMOVED after 3-tier migration
 from .organization import OfferingDistributionConfig, OrganizationUnit
 
-# NEW: 3-tier architecture models
+# Organization (NEW 3-tier)
 from .major_program import MajorProgram  # Level 1
 from .program_offering import ProgramOffering  # Level 2
 from .offering_academic_info import OfferingAcademicInfo  # Level 3
+
+# Tuition Discount Policy
+from .tuition_discount_policy import TuitionDiscountPolicy, DiscountTypeEnum
 
 # OLD: Legacy models (REMOVED after migration k6l7m8n9o0p1)
 # from .major_academic_info import MajorAcademicInfo  # Table dropped, references Major model
@@ -74,6 +77,9 @@ __all__ = [
     "MajorProgram",
     "ProgramOffering",
     "OfferingAcademicInfo",
+    # Tuition Discount Policy
+    "TuitionDiscountPolicy",
+    "DiscountTypeEnum",
     # Pipeline
     "AllowedTransition",
     "ConsultationStatus",
