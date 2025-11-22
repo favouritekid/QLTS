@@ -64,7 +64,11 @@ class TuitionDiscountPolicy(Base):
 
     # === Loại và giá trị ưu đãi ===
     discount_type = Column(
-        Enum(DiscountTypeEnum, name="discount_type_enum"),
+        Enum(
+            DiscountTypeEnum,
+            name="discount_type_enum",
+            values_callable=lambda obj: [e.value for e in obj]
+        ),
         nullable=False,
         comment="Loại ưu đãi: 'amount' (VND) hoặc 'percentage' (%)"
     )
