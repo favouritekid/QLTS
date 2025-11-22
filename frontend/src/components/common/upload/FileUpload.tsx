@@ -131,6 +131,43 @@ export function FileUpload({
     [maxSize, accept]
   );
 
+  // Upload a single file (defined before handleFiles to avoid hoisting issue)
+  const uploadFile = React.useCallback(
+    async (fileItem: FileItem, currentFiles: FileItem[]) => {
+      if (!onUpload) return;
+
+      // Update status to uploading
+      const updateFile = (updates: Partial<FileItem>) => {
+        onChange?.(
+          currentFiles.map((f) =>
+            f.id === fileItem.id ? { ...f, ...updates } : f
+          )
+        );
+      };
+
+      updateFile({ status: "uploading", progress: 10 });
+
+      try {
+        // Simulate progress (since we don't have real progress events)
+        const progressInterval = setInterval(() => {
+          updateFile({ progress: Math.min(90, fileItem.progress + 10) });
+        }, 200);
+
+        const url = await onUpload(fileItem.file);
+
+        clearInterval(progressInterval);
+        updateFile({ status: "success", progress: 100, url });
+      } catch (err) {
+        updateFile({
+          status: "error",
+          progress: 0,
+          error: err instanceof Error ? err.message : "Upload that bai",
+        });
+      }
+    },
+    [onUpload, onChange]
+  );
+
   // Handle file selection
   const handleFiles = React.useCallback(
     async (files: FileList | null) => {
@@ -167,44 +204,7 @@ export function FileUpload({
         }
       }
     },
-    [value, onChange, onUpload, multiple, maxFiles, validateFile, disabled]
-  );
-
-  // Upload a single file
-  const uploadFile = React.useCallback(
-    async (fileItem: FileItem, currentFiles: FileItem[]) => {
-      if (!onUpload) return;
-
-      // Update status to uploading
-      const updateFile = (updates: Partial<FileItem>) => {
-        onChange?.(
-          currentFiles.map((f) =>
-            f.id === fileItem.id ? { ...f, ...updates } : f
-          )
-        );
-      };
-
-      updateFile({ status: "uploading", progress: 10 });
-
-      try {
-        // Simulate progress (since we don't have real progress events)
-        const progressInterval = setInterval(() => {
-          updateFile({ progress: Math.min(90, fileItem.progress + 10) });
-        }, 200);
-
-        const url = await onUpload(fileItem.file);
-
-        clearInterval(progressInterval);
-        updateFile({ status: "success", progress: 100, url });
-      } catch (err) {
-        updateFile({
-          status: "error",
-          progress: 0,
-          error: err instanceof Error ? err.message : "Upload that bai",
-        });
-      }
-    },
-    [onUpload, onChange]
+    [value, onChange, onUpload, multiple, maxFiles, validateFile, disabled, uploadFile]
   );
 
   // Handle remove file

@@ -112,7 +112,8 @@ export const FormNumber = React.forwardRef<HTMLInputElement, FormNumberProps>(
     },
     ref
   ) => {
-    const inputId = id || React.useId();
+    const generatedId = React.useId();
+    const inputId = id || generatedId;
     const [displayValue, setDisplayValue] = React.useState<string>("");
 
     // Sync display value with external value

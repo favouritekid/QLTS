@@ -92,7 +92,8 @@ export const FormTextarea = React.forwardRef<HTMLTextAreaElement, FormTextareaPr
     },
     ref
   ) => {
-    const inputId = id || React.useId();
+    const generatedId = React.useId();
+    const inputId = id || generatedId;
     const internalRef = React.useRef<HTMLTextAreaElement>(null);
     const textareaRef = (ref as React.RefObject<HTMLTextAreaElement>) || internalRef;
 
