@@ -77,12 +77,12 @@ const policyFormSchema = z.object({
   name: z.string().min(1, "Tên chính sách là bắt buộc").max(200),
   description: z.string().max(2000).optional(),
   discount_type: z.enum(["amount", "percentage"]),
-  discount_value: z.coerce.number().min(0, "Giá trị phải >= 0"),
+  discount_value: z.number().min(0, "Giá trị phải >= 0"),
   valid_from: z.date().optional().nullable(),
   valid_to: z.date().optional().nullable(),
   is_stackable: z.boolean(),
-  priority: z.coerce.number().int().min(0),
-  max_usage: z.coerce.number().int().min(0).optional().nullable(),
+  priority: z.number().int().min(0),
+  max_usage: z.number().int().min(0).optional().nullable(),
   is_active: z.boolean(),
   // JSON fields - simplified for now
   all_programs: z.boolean(),
@@ -401,7 +401,8 @@ export default function TuitionDiscountPage() {
                         <Input
                           type="number"
                           placeholder="0"
-                          {...field}
+                          value={field.value}
+                          onChange={(e) => field.onChange(e.target.valueAsNumber || 0)}
                           disabled={isSubmitting}
                         />
                       </FormControl>
@@ -492,7 +493,8 @@ export default function TuitionDiscountPage() {
                           placeholder={
                             form.watch("discount_type") === "percentage" ? "VD: 15" : "VD: 2000000"
                           }
-                          {...field}
+                          value={field.value}
+                          onChange={(e) => field.onChange(e.target.valueAsNumber || 0)}
                           disabled={isSubmitting}
                         />
                       </FormControl>

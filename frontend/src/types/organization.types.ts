@@ -39,6 +39,7 @@ export interface OfferingAcademicInfo {
   admission_criteria?: AdmissionCriterion[] | null; // Tiêu chí tuyển sinh (JSON)
   target_audience?: string | null; // Đối tượng tuyển sinh
   cutoff_score_previous_year?: number | null; // Điểm chuẩn năm trước
+  applied_discount_policy_ids?: number[] | null; // Danh sách ID chính sách ưu đãi áp dụng
 
   // Audit trail
   created_at?: string | null;
@@ -59,6 +60,7 @@ export interface OfferingAcademicInfoCreate {
   admission_criteria?: AdmissionCriterion[] | null;
   target_audience?: string | null;
   cutoff_score_previous_year?: number | null;
+  applied_discount_policy_ids?: number[] | null;
 }
 
 /**
@@ -72,6 +74,7 @@ export interface OfferingAcademicInfoUpdate {
   admission_criteria?: AdmissionCriterion[] | null;
   target_audience?: string | null;
   cutoff_score_previous_year?: number | null;
+  applied_discount_policy_ids?: number[] | null;
 }
 
 /**

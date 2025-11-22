@@ -81,6 +81,7 @@ class OfferingAcademicInfoBase(BaseModel):
     admission_criteria: Optional[List[AdmissionCriterion]] = Field(None, description="Tiêu chí tuyển sinh")
     target_audience: Optional[str] = Field(None, max_length=1000, description="Đối tượng phù hợp")
     cutoff_score_previous_year: Optional[Decimal] = Field(None, ge=0, description="Điểm chuẩn năm trước")
+    applied_discount_policy_ids: Optional[List[int]] = Field(None, description="Danh sách ID chính sách ưu đãi áp dụng")
 
     @field_validator('admission_criteria', mode='before')
     @classmethod
@@ -114,6 +115,7 @@ class OfferingAcademicInfoUpdate(BaseModel):
     admission_criteria: Optional[List[AdmissionCriterion]] = None
     target_audience: Optional[str] = Field(None, max_length=1000)
     cutoff_score_previous_year: Optional[Decimal] = Field(None, ge=0)
+    applied_discount_policy_ids: Optional[List[int]] = None
 
 
 class OfferingAcademicInfo(OfferingAcademicInfoBase):

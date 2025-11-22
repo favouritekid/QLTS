@@ -26,6 +26,7 @@ import type {
   // System Configuration
   ConfigDegreeLevel,
   ConfigOfferingType,
+  ConfigDocumentType,
 
   // Assignment Config & Skill Rules
   AssignmentConfig,

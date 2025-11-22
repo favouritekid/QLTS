@@ -29,11 +29,14 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Plus, Trash, Save, SaveAll, FileText } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Loader2, Plus, Trash, Save, SaveAll, FileText, Percent } from "lucide-react";
 import {
   useCreateOfferingAcademicInfo,
   useUpdateOfferingAcademicInfo,
 } from "@/hooks/useOrganization";
+import { useTuitionDiscountPolicies } from "@/hooks/useTuitionDiscount";
 import type {
   OfferingAcademicInfo,
   ProgramOffering,
@@ -86,6 +89,9 @@ const academicInfoFormSchema = z.object({
   annual_admission_quota: z.number().int().min(0, "Chỉ tiêu không được âm").nullish(),
   target_audience: z.string().max(1000).optional(),
   cutoff_score_previous_year: z.number().min(0).max(30).nullish(),
+
+  // Chính sách ưu đãi học phí
+  applied_discount_policy_ids: z.array(z.number()).optional().nullable(),
 
   // 👇 VALIDATE DANH SÁCH: Không cho phép trùng ID hoặc Tên
   admission_criteria: z.array(admissionCriterionSchema).superRefine((items, ctx) => {
@@ -234,9 +240,16 @@ export function OfferingAcademicInfoDialog({
       annual_admission_quota: null,
       target_audience: "",
       cutoff_score_previous_year: null,
+      applied_discount_policy_ids: [],
       admission_criteria: [],
       is_published: false,
     },
+  });
+
+  // Fetch discount policies for selection
+  const { data: discountPoliciesData, isLoading: isLoadingDiscounts } = useTuitionDiscountPolicies({
+    isActive: true,
+    includeExpired: false,
   });
 
   const { fields, append, remove } = useFieldArray({
@@ -282,6 +295,7 @@ export function OfferingAcademicInfoDialog({
               ? Number(academicInfo.cutoff_score_previous_year)
               : null,
           target_audience: academicInfo.target_audience || "",
+          applied_discount_policy_ids: academicInfo.applied_discount_policy_ids || [],
           admission_criteria: parsedCriteria,
           is_published: academicInfo.is_published,
         });
@@ -299,6 +313,7 @@ export function OfferingAcademicInfoDialog({
           annual_admission_quota: null,
           target_audience: "",
           cutoff_score_previous_year: null,
+          applied_discount_policy_ids: [],
           admission_criteria: [],
           is_published: false,
         });
@@ -464,6 +479,72 @@ export function OfferingAcademicInfoDialog({
                 )}
               />
             </div>
+
+            {/* Tuition Discount Policies */}
+            <FormField
+              control={form.control}
+              name="applied_discount_policy_ids"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="flex items-center gap-2">
+                    <Percent className="h-4 w-4" />
+                    Chính sách ưu đãi học phí
+                  </FormLabel>
+                  <FormDescription>
+                    Chọn các chính sách ưu đãi áp dụng cho chương trình này
+                  </FormDescription>
+                  {isLoadingDiscounts ? (
+                    <div className="space-y-2">
+                      <Skeleton className="h-8 w-full" />
+                      <Skeleton className="h-8 w-full" />
+                    </div>
+                  ) : discountPoliciesData?.items && discountPoliciesData.items.length > 0 ? (
+                    <div className="max-h-[200px] overflow-y-auto rounded-md border p-3 space-y-2">
+                      {discountPoliciesData.items.map((policy) => {
+                        const isChecked = (field.value || []).includes(policy.id);
+                        return (
+                          <div
+                            key={policy.id}
+                            className="flex items-center space-x-3 rounded-md p-2 hover:bg-muted/50"
+                          >
+                            <Checkbox
+                              id={`policy-${policy.id}`}
+                              checked={isChecked}
+                              onCheckedChange={(checked) => {
+                                const currentIds = field.value || [];
+                                if (checked) {
+                                  field.onChange([...currentIds, policy.id]);
+                                } else {
+                                  field.onChange(currentIds.filter((id: number) => id !== policy.id));
+                                }
+                              }}
+                              disabled={isSubmitting}
+                            />
+                            <label
+                              htmlFor={`policy-${policy.id}`}
+                              className="flex-1 cursor-pointer text-sm"
+                            >
+                              <div className="font-medium">{policy.name}</div>
+                              <div className="text-muted-foreground text-xs">
+                                {policy.code} -{" "}
+                                {policy.discount_type === "percentage"
+                                  ? `${policy.discount_value}%`
+                                  : `${new Intl.NumberFormat("vi-VN").format(policy.discount_value)} VNĐ`}
+                              </div>
+                            </label>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="text-muted-foreground rounded-md border border-dashed p-4 text-center text-sm">
+                      Chưa có chính sách ưu đãi nào. Vui lòng tạo chính sách trong mục Quản lý Ưu đãi.
+                    </div>
+                  )}
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
             {/* Target Audience */}
             <FormField
