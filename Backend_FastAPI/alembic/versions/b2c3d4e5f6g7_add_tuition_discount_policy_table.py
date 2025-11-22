@@ -31,13 +31,20 @@ def upgrade() -> None:
     - Usage quota tracking
     """
 
-    # Create enum type for discount_type
+    # Create enum type for discount_type (if not exists)
     discount_type_enum = postgresql.ENUM(
         'amount', 'percentage',
         name='discount_type_enum',
-        create_type=True
+        create_type=False  # Don't auto-create, we'll handle it manually
     )
-    discount_type_enum.create(op.get_bind(), checkfirst=True)
+
+    # Check if enum exists before creating
+    conn = op.get_bind()
+    result = conn.execute(sa.text(
+        "SELECT 1 FROM pg_type WHERE typname = 'discount_type_enum'"
+    ))
+    if not result.fetchone():
+        discount_type_enum.create(conn)
 
     # Create table
     op.create_table(
@@ -55,7 +62,7 @@ def upgrade() -> None:
 
         # Discount type and value
         sa.Column('discount_type',
-                  sa.Enum('amount', 'percentage', name='discount_type_enum'),
+                  discount_type_enum,
                   nullable=False,
                   comment="Loại ưu đãi: 'amount' (VND) hoặc 'percentage' (%)"),
         sa.Column('discount_value', sa.Numeric(precision=15, scale=2), nullable=False,
