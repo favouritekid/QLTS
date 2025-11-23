@@ -188,6 +188,8 @@ export interface OrganizationUnit {
   major_programs: MajorProgram[]; // ⬅ Changed from 'majors'
   // Relationship fields (computed)
   parent?: OrganizationUnit | null;
+  // Aggregated user count (populated by backend)
+  user_count?: number;
 }
 
 /**

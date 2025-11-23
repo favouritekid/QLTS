@@ -23,11 +23,15 @@ interface UnitDetailPanelProps {
 // =====================================================================
 
 export function UnitDetailPanel({ unit, onUnitDeleted }: UnitDetailPanelProps) {
-  // Fetch user count for this unit
+  // Check if unit has children (for hierarchical filtering)
+  const hasChildren = unit?.children && unit.children.length > 0;
+
+  // Fetch user count for this unit (including children if applicable)
   const { data: usersData } = useAdminUsersList({
     page: 1,
     page_size: 1, // Only need count, not data
     unit_id: unit?.id,
+    include_children: hasChildren, // Include users from child units
   });
   const userCount = usersData?.total_count || 0;
 

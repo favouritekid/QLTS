@@ -100,9 +100,10 @@ function UnitTreeItem({
               Đã xóa
             </Badge>
           )}
-          {unit.major_programs && unit.major_programs.length > 0 && (
+          {/* Show user count badge */}
+          {unit.user_count !== undefined && unit.user_count > 0 && (
             <Badge variant="secondary" className="text-xs">
-              {unit.major_programs.length}
+              {unit.user_count}
             </Badge>
           )}
         </div>

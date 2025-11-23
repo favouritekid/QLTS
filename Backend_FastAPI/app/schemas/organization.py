@@ -298,6 +298,9 @@ class OrganizationUnit(BaseModel):
     children: List['OrganizationUnit'] = Field(default_factory=list)
     major_programs: List[MajorProgram] = Field(default_factory=list)  # Cập nhật từ 'majors' sang 'major_programs'
 
+    # Aggregated user count (populated by service layer)
+    user_count: Optional[int] = None
+
     model_config = ConfigDict(from_attributes=True)
 
 
