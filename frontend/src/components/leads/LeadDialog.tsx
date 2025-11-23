@@ -171,15 +171,19 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
   // Watch unit_id and offering_id
   const selectedUnitId = form.watch("unit_id");
   const selectedOfferingId = form.watch("offering_id");
+  const selectedOfficerId = form.watch("assigned_officer_id");
 
-  // Fetch distribution preview when offering is selected (Admin only for create mode)
+  // Manager uses distribution when they select "auto" (not a specific officer)
+  const managerUsesDistribution = isManager && (!selectedOfficerId || selectedOfficerId === "auto");
+
+  // Fetch distribution preview when offering is selected (Admin or Manager with auto-assign)
   const { data: distributionPreview, isLoading: isLoadingPreview } = useQuery<DistributionPreview>({
     queryKey: ["distribution-preview", selectedOfferingId],
     queryFn: async () => {
       const response = await leadsApi.getDistributionPreview(selectedOfferingId!);
       return response;
     },
-    enabled: isCreate && isAdmin && !!selectedOfferingId,
+    enabled: isCreate && (isAdmin || managerUsesDistribution) && !!selectedOfferingId,
     staleTime: 30000, // Cache for 30 seconds
   });
 
@@ -441,8 +445,8 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                 )}
               />
 
-              {/* Distribution Preview - Show when Admin selects an offering */}
-              {isCreate && isAdmin && selectedOfferingId && (
+              {/* Distribution Preview - Show when Admin/Manager(auto) selects an offering */}
+              {isCreate && (isAdmin || managerUsesDistribution) && selectedOfferingId && (
                 <div className="rounded-lg border bg-muted/50 p-4 space-y-2">
                   <div className="flex items-center gap-2 text-sm font-medium">
                     <Info className="h-4 w-4 text-blue-500" />
@@ -467,12 +471,16 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                         ).join(", ")}
                       </div>
                       <div className="text-xs text-blue-600">
-                        Unit will be auto-determined. You don&apos;t need to select unit manually.
+                        {isManager
+                          ? "Lead will be routed to this unit via distribution config."
+                          : "Unit will be auto-determined. You don't need to select unit manually."}
                       </div>
                     </div>
                   ) : (
                     <div className="text-sm text-amber-600">
-                      No distribution config for this offering. Please select a unit manually.
+                      {isManager
+                        ? "No distribution config. Lead will stay in your unit."
+                        : "No distribution config for this offering. Please select a unit manually."}
                     </div>
                   )}
                 </div>
