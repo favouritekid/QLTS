@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from . import models, security
 from .config import settings
 from .database import AsyncSessionLocal, redis_client, safe_redis_get
-from .services import user_service
+# NOTE: user_service import moved inside function to avoid circular import
 from .socket_metrics import track_event_latency  # ✅ Thêm latency tracker
 from .socket_metrics import (
     socket_auth_failures_total,
@@ -162,6 +162,8 @@ async def _get_user_from_token(token: str) -> models.User:
             raise HTTPException(status_code=401, detail="Session revoked or expired")
 
         async with AsyncSessionLocal() as db:
+            # Import here to avoid circular import
+            from .services import user_service
             user = await user_service.get_user_by_username(
                 db, username=username
             )
@@ -262,9 +264,39 @@ async def connect(sid, environ, auth):
 
             user = await _get_user_from_token(token)
 
-            await sio.save_session(sid, {"user_id": user.id, "username": user.username})
+            # Save session with extended info
+            await sio.save_session(sid, {
+                "user_id": user.id,
+                "username": user.username,
+                "role": user.role,
+                "unit_id": user.unit_id
+            })
+
+            # === Join rooms based on user attributes ===
+            rooms_joined = []
+
+            # 1. Personal room (always)
             room_name = f"user_room_{user.id}"
             await sio.enter_room(sid, room_name)
+            rooms_joined.append(room_name)
+
+            # 2. Role-based room (for role-specific broadcasts)
+            if user.role:
+                role_room = f"role_{user.role}"
+                await sio.enter_room(sid, role_room)
+                rooms_joined.append(role_room)
+
+            # 3. Unit-based room (for unit-specific broadcasts)
+            if user.unit_id:
+                unit_room = f"unit_{user.unit_id}"
+                await sio.enter_room(sid, unit_room)
+                rooms_joined.append(unit_room)
+
+            # 4. Admin room (for all admin users)
+            if user.role == "admin":
+                await sio.enter_room(sid, "role_admin")
+                if "role_admin" not in rooms_joined:
+                    rooms_joined.append("role_admin")
 
             socket_connections_active.inc()
 
@@ -273,7 +305,7 @@ async def connect(sid, environ, auth):
                 sid=sid,
                 user_id=user.id,
                 username=user.username,
-                room=room_name,
+                rooms=rooms_joined,
                 token_source=token_source,  # ✅ Log source for monitoring
                 token=sanitize_token(token),  # ✅ Log an toàn
             )
@@ -293,18 +325,42 @@ async def disconnect(sid):
         session = await sio.get_session(sid)
         if session:
             user_id = session.get("user_id")
+            role = session.get("role")
+            unit_id = session.get("unit_id")
             socket_connections_active.dec()  # Giảm bộ đếm
 
-            # ✅ CẢI TIẾN: Rời phòng một cách tường minh
+            # === Leave all rooms ===
+            rooms_left = []
+
+            # 1. Personal room
             room_name = f"user_room_{user_id}"
             await sio.leave_room(sid, room_name)
+            rooms_left.append(room_name)
+
+            # 2. Role room
+            if role:
+                role_room = f"role_{role}"
+                await sio.leave_room(sid, role_room)
+                rooms_left.append(role_room)
+
+            # 3. Unit room
+            if unit_id:
+                unit_room = f"unit_{unit_id}"
+                await sio.leave_room(sid, unit_room)
+                rooms_left.append(unit_room)
+
+            # 4. Admin room
+            if role == "admin":
+                await sio.leave_room(sid, "role_admin")
+                if "role_admin" not in rooms_left:
+                    rooms_left.append("role_admin")
 
             log.info(
                 "Socket client disconnected",
                 sid=sid,
                 user_id=user_id,
                 username=session.get("username"),
-                room=room_name,
+                rooms=rooms_left,
             )
 
 

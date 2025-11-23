@@ -151,12 +151,65 @@ async def check_duplicate_unit_name(
         )
 
 
+async def _get_user_counts_by_unit(db: AsyncSession) -> dict:
+    """
+    Get user counts grouped by unit_id.
+
+    Returns:
+        Dict mapping unit_id -> user_count
+    """
+    from sqlalchemy import func
+
+    query = (
+        select(
+            models.User.unit_id,
+            func.count(models.User.id).label("user_count")
+        )
+        .where(
+            models.User.unit_id.isnot(None),
+            models.User.status == "active"
+        )
+        .group_by(models.User.unit_id)
+    )
+
+    result = await db.execute(query)
+    return {row.unit_id: row.user_count for row in result.all()}
+
+
+def _add_user_counts_to_tree(units_data: List[dict], user_counts: dict) -> List[dict]:
+    """
+    Recursively add user_count to each unit in the tree.
+    Parent units show aggregated counts from all descendants.
+
+    Args:
+        units_data: List of unit dicts (tree structure)
+        user_counts: Dict mapping unit_id -> direct user_count
+
+    Returns:
+        Updated units_data with aggregated user_count field
+    """
+    def calculate_total_users(unit: dict) -> int:
+        """Calculate total users for a unit including all descendants."""
+        direct_count = user_counts.get(unit["id"], 0)
+        children_count = 0
+        if unit.get("children"):
+            for child in unit["children"]:
+                children_count += calculate_total_users(child)
+        total = direct_count + children_count
+        unit["user_count"] = total
+        return total
+
+    for unit in units_data:
+        calculate_total_users(unit)
+    return units_data
+
+
 async def get_all_organization_units(db: AsyncSession) -> List[dict]:
     """
     Get all organization units as a tree structure with caching support.
 
     Returns:
-        List of root organization units with nested children and major_programs
+        List of root organization units with nested children, major_programs, and user_count
     """
     log.debug("Fetching all organization units", cache_key=ORG_UNITS_CACHE_KEY)
 
@@ -225,6 +278,10 @@ async def get_all_organization_units(db: AsyncSession) -> List[dict]:
         result = await db.execute(query)
         root_units = result.scalars().unique().all()
 
+        # Get user counts per unit
+        user_counts = await _get_user_counts_by_unit(db)
+        log.debug("Got user counts for units", total_units_with_users=len(user_counts))
+
         # Serialize to JSON using Pydantic schemas
         try:
             units_data = [
@@ -234,6 +291,9 @@ async def get_all_organization_units(db: AsyncSession) -> List[dict]:
         except Exception as e:
             log.error("Failed to serialize organization tree", error=str(e), exc_info=True)
             raise
+
+        # Add user counts to each unit in the tree
+        units_data = _add_user_counts_to_tree(units_data, user_counts)
 
         # Cache the result
         try:

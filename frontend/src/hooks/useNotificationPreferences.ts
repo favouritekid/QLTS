@@ -10,10 +10,34 @@ import type {
   NotificationPreferenceUpdate,
 } from "@/types/api.types";
 
+// ============================================================================
+// TYPES FOR EVENT GROUPS (NEW)
+// ============================================================================
+
+export interface EventGroupInfo {
+  id: string;
+  name_en: string;
+  name_vi: string;
+  description_en: string;
+  description_vi: string;
+}
+
+export interface EventGroupPreferencesResponse {
+  groups: EventGroupInfo[];
+  preferences: Record<string, Record<string, boolean>>;
+}
+
+export interface UpdateGroupPreferenceRequest {
+  event_group: string;
+  channel: string;
+  enabled: boolean;
+}
+
 // Query keys
 export const notificationPreferenceKeys = {
   all: ["notificationPreferences"] as const,
   detail: () => [...notificationPreferenceKeys.all, "detail"] as const,
+  eventGroups: () => [...notificationPreferenceKeys.all, "eventGroups"] as const,
 };
 
 /**
@@ -58,6 +82,67 @@ export function useUpdateNotificationPreferences() {
       queryClient.invalidateQueries({
         queryKey: notificationPreferenceKeys.all,
       });
+    },
+  });
+}
+
+// ============================================================================
+// EVENT GROUPS HOOKS (NEW - Event-Driven Architecture)
+// ============================================================================
+
+/**
+ * Hook to fetch event group preferences
+ * Returns both group metadata and user's preferences
+ */
+export function useEventGroupPreferences() {
+  return useQuery<EventGroupPreferencesResponse, AxiosError<ApiErrorResponse>>({
+    queryKey: notificationPreferenceKeys.eventGroups(),
+    queryFn: async () => {
+      const response = await api.get<EventGroupPreferencesResponse>(
+        API_ENDPOINTS.NOTIFICATIONS.EVENT_GROUPS
+      );
+      return response.data;
+    },
+    staleTime: 5 * 60 * 1000, // 5 minutes
+  });
+}
+
+/**
+ * Hook to update a single event group/channel preference
+ */
+export function useUpdateEventGroupPreference() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    { success: boolean; group: string; channel: string; enabled: boolean },
+    AxiosError<ApiErrorResponse>,
+    UpdateGroupPreferenceRequest
+  >({
+    mutationFn: async (data: UpdateGroupPreferenceRequest) => {
+      const response = await api.patch(
+        API_ENDPOINTS.NOTIFICATIONS.EVENT_GROUPS,
+        data
+      );
+      return response.data;
+    },
+    onSuccess: (data) => {
+      // Optimistically update the cache
+      queryClient.setQueryData<EventGroupPreferencesResponse>(
+        notificationPreferenceKeys.eventGroups(),
+        (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            preferences: {
+              ...old.preferences,
+              [data.group]: {
+                ...old.preferences[data.group],
+                [data.channel]: data.enabled,
+              },
+            },
+          };
+        }
+      );
     },
   });
 }
