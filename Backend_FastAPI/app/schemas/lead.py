@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from .organization import ProgramOffering, OrganizationUnitShallow
 from .pipeline import ConsultationStatus, PipelineStage
@@ -105,6 +105,14 @@ class LeadBase(BaseModel):
     unit_id: int
     offering_id: Optional[int] = None
 
+    @field_validator("email", mode="before")
+    @classmethod
+    def empty_string_to_none(cls, v):
+        """Convert empty string to None so EmailStr validation passes."""
+        if v == "":
+            return None
+        return v
+
 
 class LeadCreate(LeadBase):
     """
@@ -136,6 +144,14 @@ class LeadUpdate(BaseModel):
     location: Optional[str] = None
     officer_rating: Optional[int] = None
     officer_summary: Optional[str] = None
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def empty_string_to_none(cls, v):
+        """Convert empty string to None so EmailStr validation passes."""
+        if v == "":
+            return None
+        return v
 
 
 class Lead(LeadBase):
