@@ -312,7 +312,7 @@ def process_automatic_lead_assignment_task(self, lead_id: int):
     task_log = logging.getLogger("process_automatic_lead_assignment_task")
     task_log.info(f"Task received for lead_id: {lead_id}")
 
-    async def _run_async_assignment():
+    async def _run_async_assignment() -> dict:
         async_task_log = logging.getLogger("assignment_task_async")
 
         # Import locally to avoid circular imports
@@ -322,13 +322,14 @@ def process_automatic_lead_assignment_task(self, lead_id: int):
         engine = _create_task_async_engine()
         session_maker = _create_task_session_maker(engine)
 
+        result = {"status": "error", "lead_id": lead_id, "reason": "unknown"}
         try:
             async_task_log.info(f"Creating session for lead_id: {lead_id}")
             async with session_maker() as session:
                 async_task_log.debug(
                     f"Session created, calling service for lead_id: {lead_id}"
                 )
-                await assignment_service.automatically_assign_lead(
+                result = await assignment_service.automatically_assign_lead(
                     lead_id, session, logger=async_task_log
                 )
                 async_task_log.debug(
@@ -342,10 +343,11 @@ def process_automatic_lead_assignment_task(self, lead_id: int):
             await engine.dispose()
             async_task_log.debug(f"Engine disposed for lead_id: {lead_id}")
 
+        return result
+
     try:
-        asyncio.run(_run_async_assignment())
-        result = {"status": "assigned", "lead_id": lead_id}
-        task_log.info(f"Task success for lead_id: {lead_id}. Result: {result}")
+        result = asyncio.run(_run_async_assignment())
+        task_log.info(f"Task completed for lead_id: {lead_id}. Result: {result}")
         return result
     except Exception as e:
         task_log.error(f"Task failed for lead_id: {lead_id}", exc_info=True)
