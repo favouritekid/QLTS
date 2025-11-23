@@ -685,75 +685,71 @@ async def create_lead(
             "New lead created successfully", lead_id=db_lead.id, email=db_lead.email
         )
 
-        # === BROADCAST: Lead Created Event (Real-time Dashboard Update) ===
+        # === ✅ REFACTOR: Dispatch LEAD_CREATED notification ===
         try:
-            # Load relationships for event payload
+            from ..core.events import SystemEvents
+            from .notification_dispatcher import dispatch
+
+            # Load relationships for notification payload
             offering_name = ""
-            unit_name = ""
             if db_lead.offering_id:
                 offering = await db.get(models.ProgramOffering, db_lead.offering_id)
                 if offering:
                     offering_name = f"{offering.program.name} - {offering.offering_type}" if offering.program else offering.offering_type
-            if db_lead.unit_id:
-                unit = await db.get(models.OrganizationUnit, db_lead.unit_id)
-                if unit:
-                    unit_name = unit.name
 
-            lead_event_data = {
-                "name": db_lead.full_name,
-                "phone": db_lead.phone,
-                "email": db_lead.email,
-                "offering_name": offering_name,
-                "unit_name": unit_name,
-                "assignment_status": db_lead.assignment_status,
-            }
-            await socket_manager.emit_lead_created(
-                lead_id=db_lead.id,
-                lead_data=lead_event_data,
-                created_by_username=created_by.username if created_by else "system",
-                unit_id=db_lead.unit_id
+            await dispatch(
+                db=db,
+                event=SystemEvents.LEAD_CREATED,
+                payload={
+                    "lead_id": db_lead.id,
+                    "unit_id": db_lead.unit_id,
+                    "lead_name": db_lead.full_name or "Unknown",
+                    "source": db_lead.source or "Unknown",
+                    "actor_id": created_by.id if created_by else 0
+                },
+                dedupe_key=f"lead_created:{db_lead.id}"
             )
+            log.info("Lead creation notification dispatched", lead_id=db_lead.id)
         except Exception as e:
-            log.warning("Failed to emit lead_created event", lead_id=db_lead.id, error=str(e))
+            log.warning("Failed to dispatch lead_created notification", lead_id=db_lead.id, error=str(e))
 
         # === POST-COMMIT ACTIONS ===
         if skip_auto_assignment:
-            # Direct assignment was done - emit socket notification
+            # Direct assignment was done - dispatch LEAD_ASSIGNED notification
             if direct_assignment_officer_id:
                 try:
-                    from .. import socket_manager
-                    # Get lead data for notification
-                    lead_data = {
-                        "lead_name": db_lead.full_name,
-                        "lead_phone": db_lead.phone,
-                        "lead_email": db_lead.email,
-                    }
+                    from ..core.events import SystemEvents
+                    from .notification_dispatcher import dispatch
+
                     # Load offering name if available
+                    offering_name = ""
                     if db_lead.offering_id:
                         offering = await db.get(models.ProgramOffering, db_lead.offering_id)
                         if offering:
-                            lead_data["offering_name"] = f"{offering.program.name} - {offering.offering_type}" if offering.program else offering.offering_type
-                    # Load unit name
-                    if db_lead.unit_id:
-                        unit = await db.get(models.OrganizationUnit, db_lead.unit_id)
-                        if unit:
-                            lead_data["unit_name"] = unit.name
+                            offering_name = f"{offering.program.name} - {offering.offering_type}" if offering.program else offering.offering_type
 
-                    await socket_manager.emit_lead_assigned(
-                        lead_id=db_lead.id,
-                        officer_id=direct_assignment_officer_id,
-                        lead_data=lead_data,
-                        assignment_type="direct"
+                    await dispatch(
+                        db=db,
+                        event=SystemEvents.LEAD_ASSIGNED,
+                        payload={
+                            "lead_id": db_lead.id,
+                            "officer_id": direct_assignment_officer_id,
+                            "actor_id": created_by.id if created_by else 0,
+                            "lead_name": db_lead.full_name or "Unknown",
+                            "lead_phone": db_lead.phone or "",
+                            "offering_name": offering_name
+                        },
+                        dedupe_key=f"lead_assigned:{db_lead.id}:{direct_assignment_officer_id}"
                     )
                     log.info(
-                        "Socket notification sent for direct assignment",
+                        "Direct assignment notification dispatched",
                         lead_id=db_lead.id,
                         officer_id=direct_assignment_officer_id
                     )
                 except Exception as e:
-                    # Non-blocking - don't fail if socket emit fails
+                    # Non-blocking - don't fail if notification dispatch fails
                     log.warning(
-                        "Failed to emit socket notification for direct assignment",
+                        "Failed to dispatch direct assignment notification",
                         lead_id=db_lead.id,
                         error=str(e)
                     )
