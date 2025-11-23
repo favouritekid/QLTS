@@ -75,7 +75,7 @@ export function UserAssignmentDialog({
     error,
   } = useAdminUsersList({
     page: 1,
-    page_size: 500, // Get more users for assignment
+    page_size: 100, // Max allowed by backend
     search: searchQuery || undefined,
     status: "active", // Only active users
   });
