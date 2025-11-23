@@ -14,11 +14,19 @@ class Lead(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     full_name = Column(String(255), nullable=False)
-    email = Column(String(255), nullable=False, index=True)
+    email = Column(String(255), nullable=True, index=True)  # Email is optional
     phone = Column(String(20), nullable=False, index=True)
     phone2 = Column(String(20), nullable=True, index=True)  # Số điện thoại phụ
     source = Column(String(50), nullable=False)
     status = Column(String(50), nullable=False, default="new", index=True)
+    # Assignment workflow status: pending, assigned, failed, reassign_pending
+    assignment_status = Column(
+        String(20),
+        nullable=False,
+        default="pending",
+        index=True,
+        comment="Assignment workflow: pending, assigned, failed, reassign_pending"
+    )
     lead_score = Column(Integer, default=0, nullable=False)
     education_level = Column(String(100), nullable=True)
     gpa = Column(Float, nullable=True)

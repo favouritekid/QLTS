@@ -103,12 +103,15 @@ class Settings(BaseSettings):
     AVATAR_UPLOAD_FOLDER: str = _AVATAR_UPLOAD_FOLDER
 
     # -- Lead Assignment Defaults (Không từ env) --
-    # ✅ REMOVED: ACTIVE_LEAD_STATUSES_FOR_WORKLOAD (now using ConsultationStatus.is_final_status)
-    DEFAULT_INITIAL_LEAD_STATUS_ID: str = "TTHV000"
-    DEFAULT_LOST_LEAD_STATUS_ID: str = "TTHV004"
-    DEFAULT_UNASSIGNED_LEAD_STATUS: str = "unassigned_pending"
-    DEFAULT_ASSIGNED_LEAD_STATUS: str = "assigned"
-    DEFAULT_REASSIGN_LEAD_STATUS: str = "reassigned_pending"
+    # ⚠️ DEPRECATED: These status constants are deprecated.
+    # Production code now uses StatusHelper (database-driven) + AssignmentStatus enum.
+    # These remain for test compatibility only and will be removed in future.
+    # @see app/services/status_helper.py for the new approach.
+    DEFAULT_INITIAL_LEAD_STATUS_ID: str = "TTHV000"  # DEPRECATED: Use StatusHelper.get_initial_status()
+    DEFAULT_LOST_LEAD_STATUS_ID: str = "TTHV004"  # DEPRECATED: Use StatusHelper.get_rejected_status()
+    DEFAULT_UNASSIGNED_LEAD_STATUS: str = "unassigned_pending"  # DEPRECATED: Use AssignmentStatus.FAILED
+    DEFAULT_ASSIGNED_LEAD_STATUS: str = "assigned"  # DEPRECATED: Use AssignmentStatus.ASSIGNED
+    DEFAULT_REASSIGN_LEAD_STATUS: str = "reassigned_pending"  # DEPRECATED: Use AssignmentStatus.REASSIGN_PENDING
     DEFAULT_ADMISSIONS_UNIT_ID: int = 1  # Fallback unit when no distribution config found
 
     # -- Lead Scoring Defaults (Không từ env) --

@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from .organization import ProgramOffering, OrganizationUnitShallow
 from .pipeline import ConsultationStatus, PipelineStage
@@ -102,12 +102,37 @@ class LeadBase(BaseModel):
     phone: str = Field(..., min_length=1, max_length=20, strip_whitespace=True)
     phone2: Optional[str] = Field(None, max_length=20, strip_whitespace=True)  # Số điện thoại phụ
     source: str = Field(..., min_length=1, max_length=50, strip_whitespace=True)
-    unit_id: int
+    unit_id: Optional[int] = None  # Optional - can be auto-determined from offering or user's unit
     offering_id: Optional[int] = None
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def empty_string_to_none(cls, v):
+        """Convert empty string to None so EmailStr validation passes."""
+        if v == "":
+            return None
+        return v
 
 
 class LeadCreate(LeadBase):
-    pass
+    """
+    Schema for creating a new Lead.
+
+    unit_id determination (in order of priority):
+    1. Officer/Manager: Always use their own unit (unit_id from form is ignored)
+    2. Admin with offering_id: Use distribution config if exists, else fallback to unit_id
+    3. Admin without offering_id: Must provide unit_id
+
+    Role-based behavior:
+    - Admin: Can set any unit_id, can assign to any officer or use auto-assignment
+    - Manager: unit defaults to their unit, can assign to officers in their unit
+    - Officer: unit forced to their unit, auto-assigned to themselves
+
+    assigned_officer_id:
+    - None (default): Use automatic distribution/assignment (Celery task)
+    - Integer: Directly assign to specified officer (skip auto-assignment)
+    """
+    assigned_officer_id: Optional[int] = None  # None = auto-assign, Integer = direct assign
 
 
 class LeadUpdate(BaseModel):
@@ -125,10 +150,20 @@ class LeadUpdate(BaseModel):
     officer_rating: Optional[int] = None
     officer_summary: Optional[str] = None
 
+    @field_validator("email", mode="before")
+    @classmethod
+    def empty_string_to_none(cls, v):
+        """Convert empty string to None so EmailStr validation passes."""
+        if v == "":
+            return None
+        return v
+
 
 class Lead(LeadBase):
     id: int
     status: str
+    # Assignment workflow status: pending, assigned, failed, reassign_pending
+    assignment_status: str = "pending"
     lead_score: int
     created_at: datetime
     updated_at: datetime

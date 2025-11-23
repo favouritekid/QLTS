@@ -534,12 +534,77 @@ export function SocketHandler() {
       });
     };
 
+    // ✅ REAL-TIME LEAD CREATION: Lắng nghe sự kiện lead_created
+    const handleLeadCreated = (data: {
+      lead_id: number;
+      lead_name: string;
+      lead_phone: string;
+      lead_email: string;
+      offering_name: string;
+      unit_id: number;
+      unit_name: string;
+      created_by: string;
+      created_at: string;
+      assignment_status: string;
+      message: string;
+    }) => {
+      console.log("[SocketHandler] Received lead_created event:", data);
+
+      // Invalidate lead-related queries to refresh dashboard
+      queryClient.invalidateQueries({ queryKey: ["leads"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+
+      // Show toast notification for admin/manager
+      toast.success(`🆕 ${data.message}`, {
+        description: `${data.offering_name || "N/A"} • ${data.unit_name || "N/A"} • by ${data.created_by}`,
+        duration: 5000,
+        action: {
+          label: "Xem Lead",
+          onClick: () => {
+            window.location.href = `/dashboard/admin/leads/${data.lead_id}`;
+          },
+        },
+      });
+    };
+
+    // ✅ REAL-TIME ASSIGNMENT FAILURE: Lắng nghe sự kiện lead_assignment_failed
+    const handleLeadAssignmentFailed = (data: {
+      lead_id: number;
+      unit_id: number;
+      reason: string;
+      reason_display: string;
+      lead_name: string;
+      failed_at: string;
+      assignment_status: string;
+      message: string;
+    }) => {
+      console.log("[SocketHandler] Received lead_assignment_failed event:", data);
+
+      // Invalidate lead-related queries to refresh dashboard
+      queryClient.invalidateQueries({ queryKey: ["leads"] });
+      queryClient.invalidateQueries({ queryKey: ["leads", data.lead_id] });
+
+      // Show warning toast for admin/manager
+      toast.warning(`⚠️ Assignment Failed`, {
+        description: `Lead #${data.lead_id} (${data.lead_name}): ${data.reason_display}`,
+        duration: 8000,
+        action: {
+          label: "Xem Chi Tiết",
+          onClick: () => {
+            window.location.href = `/dashboard/admin/leads/${data.lead_id}`;
+          },
+        },
+      });
+    };
+
     // Đăng ký listeners
     socket.on("force_logout_batch", handleForceLogoutBatch);
     socket.on("force_logout_all", handleForceLogoutAll);
     socket.on("notification", handleNewNotification);
     socket.on("data_updated", handleDataUpdated);
     socket.on("lead_assigned", handleLeadAssigned);
+    socket.on("lead_created", handleLeadCreated);
+    socket.on("lead_assignment_failed", handleLeadAssignmentFailed);
     socket.on("application_created", handleApplicationCreated);
     socket.on("application_status_changed", handleApplicationStatusChanged);
     socket.on("application_documents_updated", handleApplicationDocumentsUpdated);
@@ -556,6 +621,8 @@ export function SocketHandler() {
       socket.off("notification", handleNewNotification);
       socket.off("data_updated", handleDataUpdated);
       socket.off("lead_assigned", handleLeadAssigned);
+      socket.off("lead_created", handleLeadCreated);
+      socket.off("lead_assignment_failed", handleLeadAssignmentFailed);
       socket.off("application_created", handleApplicationCreated);
       socket.off("application_status_changed", handleApplicationStatusChanged);
       socket.off("application_documents_updated", handleApplicationDocumentsUpdated);

@@ -20,6 +20,7 @@ from ..utils.exceptions import (
 from ..services import pipeline_service, distribution_service
 from .. import socket_manager
 from ..core.status_mapping import sync_lead_status_from_consultation
+from .status_helper import StatusHelper, AssignmentStatus
 
 log = structlog.get_logger(__name__)
 
@@ -202,6 +203,7 @@ def _get_current_lead_state(lead: models.Lead) -> dict:
     """Helper để chụp nhanh trạng thái hiện tại của Lead."""
     return {
         "status": lead.status,
+        "assignment_status": getattr(lead, "assignment_status", "pending"),
         "consultation_status_id": lead.consultation_status_id,
         "pipeline_stage_id": lead.pipeline_stage_id,
         "assigned_officer_id": lead.assigned_officer_id,
@@ -417,12 +419,134 @@ async def get_leads(
     return total_count, leads
 
 
-async def create_lead(db: AsyncSession, lead_in: schemas.LeadCreate) -> models.Lead:
-    """Tạo Lead mới, ném DuplicateResourceError nếu trùng."""
+async def create_lead(
+    db: AsyncSession,
+    lead_in: schemas.LeadCreate,
+    created_by: models.User = None
+) -> models.Lead:
+    """
+    Tạo Lead mới với role-based logic.
+
+    Role-based behavior:
+    - Admin: Can set any unit_id, can assign to any officer or use auto-assignment
+    - Manager: Can assign to officers in their unit or use auto-assignment
+    - Officer: Auto-assigned to themselves, unit forced to their unit
+
+    Args:
+        db: Database session
+        lead_in: Lead creation data
+        created_by: User creating the lead (determines role-based behavior)
+
+    Returns:
+        Created Lead model
+
+    Raises:
+        DuplicateResourceError: If lead with same email/phone exists in unit
+        PermissionDeniedError: If user tries to assign to officer outside their scope
+    """
     # Di chuyển import vào đây để phá vỡ circular import
     from ..celery_utils import process_automatic_lead_assignment_task
+    from datetime import datetime, timezone
 
     try:
+        # === ROLE-BASED PREPROCESSING ===
+        create_data = lead_in.model_dump()
+        direct_assignment_officer_id = None  # Will be set if direct assignment is needed
+        skip_auto_assignment = False
+        unit_already_distributed = False  # Flag to skip second distribution call
+
+        if created_by:
+            user_role = created_by.role
+
+            if user_role == "officer":
+                # Officer: Force unit to their unit, auto-assign to themselves
+                create_data["unit_id"] = created_by.unit_id
+                direct_assignment_officer_id = created_by.id
+                skip_auto_assignment = True
+                log.info(
+                    "Officer creating lead - will be assigned to themselves",
+                    officer_id=created_by.id,
+                    unit_id=created_by.unit_id
+                )
+
+            elif user_role == "manager":
+                # Manager: Always use their unit
+                create_data["unit_id"] = created_by.unit_id
+                # Can choose officer in their unit or use auto-assignment
+                if create_data.get("assigned_officer_id"):
+                    # Validate officer belongs to manager's unit
+                    officer = await db.get(models.User, create_data["assigned_officer_id"])
+                    if not officer or officer.unit_id != created_by.unit_id:
+                        raise PermissionDeniedError(
+                            detail="Manager can only assign leads to officers in their unit"
+                        )
+                    if officer.role != "officer":
+                        raise PermissionDeniedError(
+                            detail="Can only assign leads to users with 'officer' role"
+                        )
+                    direct_assignment_officer_id = create_data["assigned_officer_id"]
+                    skip_auto_assignment = True
+                    log.info(
+                        "Manager directly assigning lead to officer",
+                        manager_id=created_by.id,
+                        officer_id=direct_assignment_officer_id
+                    )
+                # If no officer specified, use auto-assignment (Celery)
+
+            elif user_role == "admin":
+                # Admin: unit_id can be auto-determined from offering distribution
+                # If offering_id is provided, try to get unit from distribution config FIRST
+                if create_data.get("offering_id") and not create_data.get("unit_id"):
+                    # Try to get target unit from distribution config
+                    target_unit_id = await distribution_service.get_target_unit_for_offering(
+                        db,
+                        offering_id=create_data["offering_id"],
+                        fallback_unit_id=None  # No fallback - we want to know if config exists
+                    )
+                    if target_unit_id:
+                        create_data["unit_id"] = target_unit_id
+                        unit_already_distributed = True  # Skip second distribution call
+                        log.info(
+                            "Admin: unit auto-determined from offering distribution",
+                            offering_id=create_data["offering_id"],
+                            unit_id=target_unit_id
+                        )
+                    else:
+                        raise BadRequest(
+                            detail="Cannot determine unit: No distribution config for this offering. Please select a unit manually."
+                        )
+
+                # If still no unit_id after trying offering distribution, error
+                if not create_data.get("unit_id"):
+                    raise BadRequest(
+                        detail="unit_id is required when no offering_id is provided"
+                    )
+
+                # Admin: Full control - can assign to any officer or use auto
+                if create_data.get("assigned_officer_id"):
+                    # Validate officer exists and has correct role
+                    officer = await db.get(models.User, create_data["assigned_officer_id"])
+                    if not officer:
+                        raise ResourceNotFoundError(
+                            detail=f"Officer with id {create_data['assigned_officer_id']} not found"
+                        )
+                    if officer.role != "officer":
+                        raise PermissionDeniedError(
+                            detail="Can only assign leads to users with 'officer' role"
+                        )
+                    direct_assignment_officer_id = create_data["assigned_officer_id"]
+                    skip_auto_assignment = True
+                    log.info(
+                        "Admin directly assigning lead to officer",
+                        admin_id=created_by.id,
+                        officer_id=direct_assignment_officer_id
+                    )
+                # If no officer specified, use auto-assignment (Celery)
+
+        # Remove assigned_officer_id from create_data (it's not a Lead model field for creation)
+        create_data.pop("assigned_officer_id", None)
+
+        # === DUPLICATE CHECK ===
         # Kiểm tra trùng lặp email hoặc phone trong cùng unit
         # Build phone conditions
         phone_conditions = [models.Lead.phone == lead_in.phone]
@@ -431,15 +555,21 @@ async def create_lead(db: AsyncSession, lead_in: schemas.LeadCreate) -> models.L
             phone_conditions.append(models.Lead.phone2 == lead_in.phone)
             phone_conditions.append(models.Lead.phone2 == lead_in.phone2)
 
+        # Build email condition - only check if email is provided
+        email_condition = models.Lead.email == lead_in.email if lead_in.email else None
+
+        # Build OR conditions
+        if email_condition is not None:
+            duplicate_conditions = or_(email_condition, *phone_conditions)
+        else:
+            duplicate_conditions = or_(*phone_conditions)
+
         existing_lead_query = (
             select(models.Lead)
             .where(
-                models.Lead.unit_id == lead_in.unit_id,
+                models.Lead.unit_id == create_data["unit_id"],
                 models.Lead.deleted_at.is_(None),  # Exclude soft-deleted
-                or_(
-                    models.Lead.email == lead_in.email,
-                    *phone_conditions  # Check all phone combinations
-                )
+                duplicate_conditions
             )
             .with_for_update()  # Khóa để tránh race condition khi tạo
         )
@@ -447,7 +577,7 @@ async def create_lead(db: AsyncSession, lead_in: schemas.LeadCreate) -> models.L
         existing_lead = existing_lead_result.scalar_one_or_none()
         if existing_lead:
             # Determine which field caused the duplicate
-            if existing_lead.email == lead_in.email:
+            if lead_in.email and existing_lead.email == lead_in.email:
                 raise DuplicateResourceError(
                     detail="Lead with this email already exists in the unit."
                 )
@@ -456,13 +586,12 @@ async def create_lead(db: AsyncSession, lead_in: schemas.LeadCreate) -> models.L
                     detail="Lead with this phone number already exists in the unit."
                 )
 
-        # Chuẩn bị dữ liệu và tạo đối tượng Lead
-        create_data = lead_in.model_dump()
-
         # === NEW FEATURE: Shared Offering Distribution ===
         # If Lead has offering_id, determine target unit via distribution config
         # This overrides the unit_id provided by user (if any offering-based routing exists)
-        if create_data.get("offering_id"):
+        # SKIP distribution if officer/manager is creating lead (they keep lead in their unit)
+        # SKIP if unit was already determined via distribution in role preprocessing
+        if create_data.get("offering_id") and not skip_auto_assignment and not unit_already_distributed:
             original_unit_id = create_data.get("unit_id")
             target_unit_id = await distribution_service.get_target_unit_for_offering(
                 db,
@@ -495,27 +624,27 @@ async def create_lead(db: AsyncSession, lead_in: schemas.LeadCreate) -> models.L
         create_data["lead_score"] = calculated_score
         db_lead = models.Lead(**create_data)
 
-        # Lấy trạng thái ban đầu từ DB
-        initial_status_id = settings.DEFAULT_INITIAL_LEAD_STATUS_ID
-        initial_status = await db.get(models.ConsultationStatus, initial_status_id)
+        # Lấy trạng thái ban đầu từ DB (database-driven, không hardcode ID)
+        initial_status = await StatusHelper.get_initial_status(db)
 
         # Trạng thái "trước khi tạo"
         old_state = _get_current_lead_state(models.Lead())  # Trạng thái rỗng
 
         # Gán trạng thái ban đầu cho Lead mới
-        db_lead.status = "new"  # Trạng thái text mặc định
         if initial_status:
-            db_lead.consultation_status_id = initial_status_id
-            db_lead.pipeline_stage_id = initial_status.stage_id
+            await StatusHelper.sync_lead_status(db_lead, initial_status)
         else:
             # Ghi log cảnh báo nếu không tìm thấy status mặc định
             log.warning(
-                "Initial consultation status not found during lead creation.",
-                status_id=initial_status_id,
+                "Initial consultation status not found during lead creation."
             )
             # Gán giá trị mặc định an toàn
+            db_lead.status = "new"
             db_lead.consultation_status_id = None
             db_lead.pipeline_stage_id = None
+
+        # Set initial assignment status
+        StatusHelper.set_assignment_status(db_lead, AssignmentStatus.PENDING)
 
         # Trạng thái "sau khi gán"
         new_state = _get_current_lead_state(db_lead)
@@ -533,6 +662,21 @@ async def create_lead(db: AsyncSession, lead_in: schemas.LeadCreate) -> models.L
             reason="Lead created",
         )
 
+        # === DIRECT ASSIGNMENT (if specified) ===
+        # If direct assignment is needed, set it before commit
+        if direct_assignment_officer_id:
+            db_lead.assigned_officer_id = direct_assignment_officer_id
+            db_lead.assigned_at = datetime.now(timezone.utc)
+            # Update assignment_status to "assigned" (workflow status)
+            StatusHelper.set_assignment_status(db_lead, AssignmentStatus.ASSIGNED)
+            log.info(
+                "Lead directly assigned to officer",
+                lead_id=db_lead.id,
+                officer_id=direct_assignment_officer_id,
+                assignment_type="direct",
+                assignment_status=db_lead.assignment_status
+            )
+
         # Commit transaction
         await db.commit()
         # Refresh để lấy dữ liệu mới nhất (bao gồm cả ID nếu chưa flush)
@@ -541,18 +685,91 @@ async def create_lead(db: AsyncSession, lead_in: schemas.LeadCreate) -> models.L
             "New lead created successfully", lead_id=db_lead.id, email=db_lead.email
         )
 
-        # Dispatch Celery task SAU KHI commit thành công
+        # === BROADCAST: Lead Created Event (Real-time Dashboard Update) ===
         try:
-            process_automatic_lead_assignment_task.delay(db_lead.id)
-            log.info("Auto-assignment task dispatched successfully", lead_id=db_lead.id)
-        except Exception as e:
-            # Ghi log lỗi nếu không dispatch được, nhưng không rollback transaction
-            log.error(
-                "Failed to dispatch Celery auto-assignment task",
+            # Load relationships for event payload
+            offering_name = ""
+            unit_name = ""
+            if db_lead.offering_id:
+                offering = await db.get(models.ProgramOffering, db_lead.offering_id)
+                if offering:
+                    offering_name = f"{offering.program.name} - {offering.offering_type}" if offering.program else offering.offering_type
+            if db_lead.unit_id:
+                unit = await db.get(models.OrganizationUnit, db_lead.unit_id)
+                if unit:
+                    unit_name = unit.name
+
+            lead_event_data = {
+                "name": db_lead.full_name,
+                "phone": db_lead.phone,
+                "email": db_lead.email,
+                "offering_name": offering_name,
+                "unit_name": unit_name,
+                "assignment_status": db_lead.assignment_status,
+            }
+            await socket_manager.emit_lead_created(
                 lead_id=db_lead.id,
-                error=str(e),
-                exc_info=True,
+                lead_data=lead_event_data,
+                created_by_username=created_by.username if created_by else "system",
+                unit_id=db_lead.unit_id
             )
+        except Exception as e:
+            log.warning("Failed to emit lead_created event", lead_id=db_lead.id, error=str(e))
+
+        # === POST-COMMIT ACTIONS ===
+        if skip_auto_assignment:
+            # Direct assignment was done - emit socket notification
+            if direct_assignment_officer_id:
+                try:
+                    from .. import socket_manager
+                    # Get lead data for notification
+                    lead_data = {
+                        "lead_name": db_lead.full_name,
+                        "lead_phone": db_lead.phone,
+                        "lead_email": db_lead.email,
+                    }
+                    # Load offering name if available
+                    if db_lead.offering_id:
+                        offering = await db.get(models.ProgramOffering, db_lead.offering_id)
+                        if offering:
+                            lead_data["offering_name"] = f"{offering.program.name} - {offering.offering_type}" if offering.program else offering.offering_type
+                    # Load unit name
+                    if db_lead.unit_id:
+                        unit = await db.get(models.OrganizationUnit, db_lead.unit_id)
+                        if unit:
+                            lead_data["unit_name"] = unit.name
+
+                    await socket_manager.emit_lead_assigned(
+                        lead_id=db_lead.id,
+                        officer_id=direct_assignment_officer_id,
+                        lead_data=lead_data,
+                        assignment_type="direct"
+                    )
+                    log.info(
+                        "Socket notification sent for direct assignment",
+                        lead_id=db_lead.id,
+                        officer_id=direct_assignment_officer_id
+                    )
+                except Exception as e:
+                    # Non-blocking - don't fail if socket emit fails
+                    log.warning(
+                        "Failed to emit socket notification for direct assignment",
+                        lead_id=db_lead.id,
+                        error=str(e)
+                    )
+        else:
+            # Dispatch Celery task for auto-assignment
+            try:
+                process_automatic_lead_assignment_task.delay(db_lead.id)
+                log.info("Auto-assignment task dispatched successfully", lead_id=db_lead.id)
+            except Exception as e:
+                # Ghi log lỗi nếu không dispatch được, nhưng không rollback transaction
+                log.error(
+                    "Failed to dispatch Celery auto-assignment task",
+                    lead_id=db_lead.id,
+                    error=str(e),
+                    exc_info=True,
+                )
 
         # Trả về đối tượng Lead đã được load đầy đủ (bao gồm relations)
         return await get_lead_by_id(db, db_lead.id)
@@ -760,8 +977,8 @@ async def update_lead(
                     db_lead.assigned_officer_id = None
                     db_lead.assigned_at = None
 
-                    # 3. Set status to unassigned
-                    db_lead.status = settings.DEFAULT_UNASSIGNED_LEAD_STATUS
+                    # 3. Set assignment_status to pending (waiting for new assignment)
+                    StatusHelper.set_assignment_status(db_lead, AssignmentStatus.PENDING)
 
                     # 4. Create system AssignmentLog
                     reassignment_log = models.AssignmentLog(
@@ -782,7 +999,7 @@ async def update_lead(
                         lead_id=lead_id,
                         new_unit_id=new_target_unit_id,
                         old_officer_id=old_officer_id,
-                        new_status=settings.DEFAULT_UNASSIGNED_LEAD_STATUS
+                        assignment_status=db_lead.assignment_status
                     )
 
             # Lấy trạng thái mới sau khi cập nhật
@@ -1010,17 +1227,8 @@ async def assign_lead_manually(
             # Cập nhật Lead
             lead.assigned_officer_id = officer.id
             lead.assigned_at = datetime.now(timezone.utc)
-            # Cập nhật status thành 'assigned' nếu đang ở trạng thái ban đầu/chờ gán lại
-            if (
-                lead.status
-                in [
-                    settings.DEFAULT_INITIAL_LEAD_STATUS_ID,
-                    settings.DEFAULT_REASSIGN_LEAD_STATUS,
-                    "new",
-                ]
-                or not lead.status
-            ):
-                lead.status = settings.DEFAULT_ASSIGNED_LEAD_STATUS
+            # Cập nhật assignment_status thành 'assigned'
+            StatusHelper.set_assignment_status(lead, AssignmentStatus.ASSIGNED)
 
             # Cập nhật Officer
             officer.last_assigned_at = datetime.now(timezone.utc)
@@ -1235,23 +1443,23 @@ async def delete_consultation(
                     )
             # Nếu không còn consultation nào, revert về trạng thái ban đầu
             else:
-                initial_status_id = settings.DEFAULT_INITIAL_LEAD_STATUS_ID
-                initial_status = await db.get(models.ConsultationStatus, initial_status_id)
+                initial_status = await StatusHelper.get_initial_status(db)
                 if initial_status:
                     new_status_id = initial_status.id
                     new_stage_id = initial_status.stage_id
                     revert_status_obj = initial_status
                     log.info(
-                        f"Reverting lead status to initial status: {new_status_id}",
+                        "Reverting lead status to initial status",
                         lead_id=lead_id,
+                        status_id=new_status_id,
                     )
                 else:
                     log.warning(
-                        f"Initial status '{initial_status_id}' not found when reverting lead status.",
+                        "Initial status not found when reverting lead status.",
                         lead_id=lead_id,
                     )
                     # Gán giá trị an toàn nếu không tìm thấy status ban đầu
-                    new_status_id = "unknown"
+                    new_status_id = None
                     new_stage_id = None
 
             # Cập nhật trạng thái Lead
@@ -1536,44 +1744,48 @@ async def process_officer_action(
             new_state = old_state.copy()  # Tạo bản sao để sửa đổi
 
             if action == "reassign":
-                new_state["status"] = settings.DEFAULT_REASSIGN_LEAD_STATUS
                 new_state["assigned_officer_id"] = None
-                # Giữ nguyên consult/stage
+                # Giữ nguyên consult/stage và status (không đổi consultation workflow)
                 new_state["consultation_status_id"] = lead.consultation_status_id
                 new_state["pipeline_stage_id"] = lead.pipeline_stage_id
+                new_state["status"] = lead.status  # Keep status synced from consultation
                 lead.assigned_at = None
-                # THÊM DÒNG NÀY:
-                lead.assigned_officer = None  # <-- Set cả relationship thành None
+                lead.assigned_officer = None  # Set cả relationship thành None
+                # Update assignment_status to reassign_pending
+                StatusHelper.set_assignment_status(lead, AssignmentStatus.REASSIGN_PENDING)
                 log_method = "officer_reassign"
                 trigger_reassignment = True
                 log.info(
                     "Officer requested lead reassignment",
                     lead_id=lead_id,
                     officer_id=officer.id,
+                    assignment_status=lead.assignment_status,
                 )
 
             elif action == "reject":
-                lost_status_id = settings.DEFAULT_LOST_LEAD_STATUS_ID
-                new_state["status"] = lost_status_id  # Chuyển status chính sang LOST
+                # Get rejected status from database (database-driven)
+                rejected_status = await StatusHelper.get_rejected_status(db)
                 log_method = "officer_reject"
 
-                # Tìm ConsultationStatus tương ứng với LOST
-                lost_consult_status = await db.get(
-                    models.ConsultationStatus, lost_status_id
-                )
-                if lost_consult_status:
-                    new_state["consultation_status_id"] = lost_consult_status.id
-                    new_state["pipeline_stage_id"] = lost_consult_status.stage_id
+                if rejected_status:
+                    # Sync lead status from consultation_status
+                    await StatusHelper.sync_lead_status(lead, rejected_status)
+                    new_state["status"] = lead.status
+                    new_state["consultation_status_id"] = rejected_status.id
+                    new_state["pipeline_stage_id"] = rejected_status.stage_id
                     log.info(
-                        f"Setting consultation status and stage to LOST status '{lost_status_id}'",
+                        "Setting consultation status to rejected",
                         lead_id=lead_id,
+                        status_id=rejected_status.id,
+                        legacy_status=rejected_status.legacy_status,
                     )
                 else:
                     log.warning(
-                        f"Consultation status '{lost_status_id}' (Lost) not found. Lead status set, but consult/stage might be inconsistent.",
+                        "Rejected consultation status not found in database.",
                         lead_id=lead_id,
                     )
-                    # Giữ nguyên consult/stage cũ hoặc set là None/unknown nếu cần
+                    # Fallback: set status directly
+                    new_state["status"] = "rejected"
                     new_state["consultation_status_id"] = None
                     new_state["pipeline_stage_id"] = None
 
@@ -1913,21 +2125,19 @@ async def import_leads_from_file_content(
     errors: List[schemas.LeadImportError] = []
     processed_row_count = 0
 
-    # Get default initial status
-    from app.config import settings
-    initial_status_id = settings.DEFAULT_INITIAL_LEAD_STATUS_ID
-
-    # Get stage_id corresponding to initial_status_id
-    initial_status_obj = await db.get(models.ConsultationStatus, initial_status_id)
-    initial_stage_id = initial_status_obj.stage_id if initial_status_obj else None
-
-    if not initial_stage_id:
+    # Get default initial status (database-driven)
+    initial_status_obj = await StatusHelper.get_initial_status(db)
+    if not initial_status_obj:
         log.error(
-            f"FATAL: Initial status {initial_status_id} not found in DB. Cannot determine initial stage."
+            "FATAL: Initial consultation status not found in DB. Cannot import leads."
         )
         raise ValueError(
             "System configuration error: Initial lead status not found."
         )
+
+    initial_status_id = initial_status_obj.id
+    initial_stage_id = initial_status_obj.stage_id
+    initial_legacy_status = initial_status_obj.legacy_status or "new"
 
     # Get existing emails to check for duplicates efficiently
     existing_emails_in_db = set()
@@ -2003,7 +2213,7 @@ async def import_leads_from_file_content(
 
             # Prepare dict for bulk insert
             lead_dict = lead_in.model_dump()
-            lead_dict["status"] = initial_status_id
+            lead_dict["status"] = initial_legacy_status  # Use legacy_status from DB
             lead_dict["consultation_status_id"] = initial_status_id
             lead_dict["pipeline_stage_id"] = initial_stage_id
 
@@ -2011,10 +2221,11 @@ async def import_leads_from_file_content(
             if auto_assign_officer_id:
                 lead_dict["assigned_officer_id"] = auto_assign_officer_id
                 lead_dict["assigned_at"] = datetime.now(timezone.utc)
-                lead_dict["status"] = "assigned"  # Update status to assigned
+                lead_dict["assignment_status"] = AssignmentStatus.ASSIGNED
             else:
                 lead_dict["assigned_officer_id"] = None
                 lead_dict["assigned_at"] = None
+                lead_dict["assignment_status"] = AssignmentStatus.PENDING
 
             leads_to_insert.append(lead_dict)
 

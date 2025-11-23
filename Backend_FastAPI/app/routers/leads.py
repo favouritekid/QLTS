@@ -10,7 +10,7 @@ import structlog
 
 from .. import database, models, schemas
 from ..core import deps
-from ..services import insights_service, lead_service
+from ..services import distribution_service, insights_service, lead_service
 
 log = structlog.get_logger(__name__)
 
@@ -26,8 +26,65 @@ async def create_new_lead(
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
 ):
-    """Tạo một Lead mới."""
-    return await lead_service.create_lead(db, lead_in)
+    """
+    Tạo một Lead mới.
+
+    Role-based behavior:
+    - Admin: Can set any unit_id, can assign to any officer or use auto-assignment
+    - Manager: Can assign to officers in their unit or use auto-assignment
+    - Officer: Auto-assigned to themselves, unit forced to their unit
+    """
+    return await lead_service.create_lead(db, lead_in, created_by=current_user)
+
+
+@router.get("/distribution-preview")
+async def get_distribution_preview(
+    offering_id: int = Query(..., description="Offering ID to preview distribution"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = PermissionDep,
+):
+    """
+    Preview which unit will receive the next lead based on distribution config.
+
+    This does NOT increment the distribution cursor - it's read-only.
+
+    Returns:
+    - offering_id: The offering being queried
+    - has_config: Whether distribution config exists for this offering
+    - next_unit_id: Unit that will receive the next lead
+    - next_unit_name: Name of the unit
+    - configs: List of active distribution configs with weights
+    - total_slots: Total weighted slots in distribution cycle
+    """
+    stats = await distribution_service.get_distribution_stats(db, offering_id)
+
+    # Enhance response with unit name for next_unit
+    next_unit_name = None
+    if stats.get("next_unit_id"):
+        unit = await db.get(models.OrganizationUnit, stats["next_unit_id"])
+        next_unit_name = unit.name if unit else "Unknown"
+
+    # If no cursor yet (first lead), calculate which unit would get it
+    if stats.get("next_unit_id") is None and stats.get("configs"):
+        # First lead goes to first slot (index 0)
+        # Build weighted list and get first unit
+        weighted_units = []
+        for config in stats["configs"]:
+            weighted_units.extend([config["unit_id"]] * config["weight"])
+        if weighted_units:
+            stats["next_unit_id"] = weighted_units[0]
+            unit = await db.get(models.OrganizationUnit, stats["next_unit_id"])
+            next_unit_name = unit.name if unit else "Unknown"
+
+    return {
+        "offering_id": offering_id,
+        "has_config": len(stats.get("configs", [])) > 0,
+        "next_unit_id": stats.get("next_unit_id"),
+        "next_unit_name": next_unit_name,
+        "configs": stats.get("configs", []),
+        "total_slots": stats.get("total_slots", 0),
+        "cursor_position": stats.get("cursor_value"),
+    }
 
 
 @router.get("", response_model=schemas.LeadsPage)

@@ -8,8 +8,8 @@ from sqlalchemy.exc import OperationalError  # Dùng để bắt LockNotAvailabl
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models
-from ..config import settings
-from ..socket_manager import emit_lead_assigned
+from ..socket_manager import emit_lead_assigned, emit_lead_assignment_failed
+from .status_helper import StatusHelper, AssignmentStatus
 
 # Lấy logger chuẩn ở đây, dùng làm fallback
 default_log = logging.getLogger(__name__)
@@ -18,12 +18,18 @@ default_log = logging.getLogger(__name__)
 # Thêm tham số logger=None
 async def automatically_assign_lead(
     lead_id: int, db: AsyncSession, logger: logging.Logger = None
-):
+) -> dict:
     """
     Logic nghiệp vụ chính để tự động phân công Lead.
     Sử dụng logger được truyền vào hoặc logger mặc định.
     Sử dụng 'SKIP LOCKED' để xử lý concurrency khi khóa officers.
     Xử lý lock contention trên Lead bằng Celery Retry.
+
+    Returns:
+        dict: Result with "status" key:
+            - "assigned": Lead successfully assigned to officer
+            - "failed": No officers available or all at capacity
+            - "skipped": Lead already assigned or not found
     """
     log = logger or default_log
     log.info(f"[Lead ID: {lead_id}] Auto-assign task started")
@@ -47,12 +53,12 @@ async def automatically_assign_lead(
                 log.warning(
                     f"[Lead ID: {lead_id}] Lead not found, skipping assignment."
                 )
-                return  # Kết thúc task nếu lead không tồn tại
+                return {"status": "skipped", "reason": "lead_not_found", "lead_id": lead_id}
             elif lead.assigned_officer_id:
                 log.info(
                     f"[Lead ID: {lead_id}] Lead already assigned to officer {lead.assigned_officer_id}, skipping."
                 )
-                return  # Kết thúc task nếu lead đã được gán
+                return {"status": "skipped", "reason": "already_assigned", "lead_id": lead_id, "officer_id": lead.assigned_officer_id}
             else:
                 lead_unit_id = lead.unit_id
                 log.debug(
@@ -78,15 +84,21 @@ async def automatically_assign_lead(
                 # --- Xử lý khi không có Officer ---
                 if not available_officers:
                     log.warning(
-                        f"[Lead ID: {lead_id}] No available (and unlocked) officers found for unit {lead_unit_id}. Setting status to unassigned."
+                        f"[Lead ID: {lead_id}] No available (and unlocked) officers found for unit {lead_unit_id}. Setting assignment_status to failed."
                     )
-                    lead.status = settings.DEFAULT_UNASSIGNED_LEAD_STATUS
-                    # Ghi lại lịch sử thay đổi trạng thái (Optional nhưng nên có)
-                    # await _log_lead_state_change(...) # Cần hàm helper này nếu muốn log
+                    # Update assignment_status to "failed" (no officers available)
+                    StatusHelper.set_assignment_status(lead, AssignmentStatus.FAILED)
                     db.add(lead)
-                    # Commit transaction lồng nhau ở đây vì đã kết thúc logic
-                    # await db.commit() # Không cần commit tường minh khi dùng `async with`
-                    return  # Kết thúc task
+
+                    # Emit socket event for real-time dashboard update
+                    await emit_lead_assignment_failed(
+                        lead_id=lead_id,
+                        unit_id=lead_unit_id,
+                        reason="no_officers_available",
+                        lead_data={"name": lead.full_name or "Unknown"}
+                    )
+
+                    return {"status": "failed", "reason": "no_officers_available", "lead_id": lead_id, "unit_id": lead_unit_id}
 
                 log.debug(
                     f"[Lead ID: {lead_id}] Found {len(available_officers)} available officers for unit {lead_unit_id}."
@@ -154,13 +166,21 @@ async def automatically_assign_lead(
                 # --- Xử lý khi tất cả Officer đã đầy tải ---
                 if not officer_loads:
                     log.warning(
-                        f"[Lead ID: {lead_id}] All available officers ({len(available_officers)}) in unit {lead_unit_id} are at full capacity. Setting status to unassigned."
+                        f"[Lead ID: {lead_id}] All available officers ({len(available_officers)}) in unit {lead_unit_id} are at full capacity. Setting assignment_status to failed."
                     )
-                    lead.status = settings.DEFAULT_UNASSIGNED_LEAD_STATUS
-                    # await _log_lead_state_change(...)
+                    # Update assignment_status to "failed" (all at capacity)
+                    StatusHelper.set_assignment_status(lead, AssignmentStatus.FAILED)
                     db.add(lead)
-                    # await db.commit()
-                    return  # Kết thúc task
+
+                    # Emit socket event for real-time dashboard update
+                    await emit_lead_assignment_failed(
+                        lead_id=lead_id,
+                        unit_id=lead_unit_id,
+                        reason="all_officers_at_capacity",
+                        lead_data={"name": lead.full_name or "Unknown"}
+                    )
+
+                    return {"status": "failed", "reason": "all_officers_at_capacity", "lead_id": lead_id, "unit_id": lead_unit_id}
 
                 # === BƯỚC 5: Sắp xếp và Chọn Officer (HYBRID THRESHOLD ROUND ROBIN) ===
                 # ✅ REFACTORED: Thuật toán mới chống "Flooding" cho nhân viên mới
@@ -190,7 +210,8 @@ async def automatically_assign_lead(
                 now_utc = datetime.now(timezone.utc)
                 lead.assigned_officer_id = chosen_one.id
                 lead.assigned_at = now_utc
-                lead.status = settings.DEFAULT_ASSIGNED_LEAD_STATUS
+                # Update assignment_status to "assigned"
+                StatusHelper.set_assignment_status(lead, AssignmentStatus.ASSIGNED)
 
                 chosen_one.last_assigned_at = now_utc
 
@@ -235,6 +256,9 @@ async def automatically_assign_lead(
                     f"[Lead ID: {lead_id}] Socket.IO 'lead_assigned' event emitted to officer {chosen_one.id}."
                 )
 
+                # Return success result
+                return {"status": "assigned", "lead_id": lead_id, "officer_id": chosen_one.id}
+
         # Kết thúc `async with db.begin_nested()` - Tự động commit nếu không có lỗi
 
     except OperationalError as e:
@@ -264,5 +288,3 @@ async def automatically_assign_lead(
         )
         # Rollback tự động
         raise e  # Ném lại lỗi để Celery biết task thất bại
-
-    log.info(f"[Lead ID: {lead_id}] Auto-assign task finished successfully.")
