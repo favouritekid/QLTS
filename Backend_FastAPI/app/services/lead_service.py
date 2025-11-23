@@ -20,6 +20,7 @@ from ..utils.exceptions import (
 from ..services import pipeline_service, distribution_service
 from .. import socket_manager
 from ..core.status_mapping import sync_lead_status_from_consultation
+from .status_helper import StatusHelper, AssignmentStatus
 
 log = structlog.get_logger(__name__)
 
@@ -202,6 +203,7 @@ def _get_current_lead_state(lead: models.Lead) -> dict:
     """Helper để chụp nhanh trạng thái hiện tại của Lead."""
     return {
         "status": lead.status,
+        "assignment_status": getattr(lead, "assignment_status", "pending"),
         "consultation_status_id": lead.consultation_status_id,
         "pipeline_stage_id": lead.pipeline_stage_id,
         "assigned_officer_id": lead.assigned_officer_id,
@@ -622,27 +624,27 @@ async def create_lead(
         create_data["lead_score"] = calculated_score
         db_lead = models.Lead(**create_data)
 
-        # Lấy trạng thái ban đầu từ DB
-        initial_status_id = settings.DEFAULT_INITIAL_LEAD_STATUS_ID
-        initial_status = await db.get(models.ConsultationStatus, initial_status_id)
+        # Lấy trạng thái ban đầu từ DB (database-driven, không hardcode ID)
+        initial_status = await StatusHelper.get_initial_status(db)
 
         # Trạng thái "trước khi tạo"
         old_state = _get_current_lead_state(models.Lead())  # Trạng thái rỗng
 
         # Gán trạng thái ban đầu cho Lead mới
-        db_lead.status = "new"  # Trạng thái text mặc định
         if initial_status:
-            db_lead.consultation_status_id = initial_status_id
-            db_lead.pipeline_stage_id = initial_status.stage_id
+            await StatusHelper.sync_lead_status(db_lead, initial_status)
         else:
             # Ghi log cảnh báo nếu không tìm thấy status mặc định
             log.warning(
-                "Initial consultation status not found during lead creation.",
-                status_id=initial_status_id,
+                "Initial consultation status not found during lead creation."
             )
             # Gán giá trị mặc định an toàn
+            db_lead.status = "new"
             db_lead.consultation_status_id = None
             db_lead.pipeline_stage_id = None
+
+        # Set initial assignment status
+        StatusHelper.set_assignment_status(db_lead, AssignmentStatus.PENDING)
 
         # Trạng thái "sau khi gán"
         new_state = _get_current_lead_state(db_lead)
@@ -665,12 +667,14 @@ async def create_lead(
         if direct_assignment_officer_id:
             db_lead.assigned_officer_id = direct_assignment_officer_id
             db_lead.assigned_at = datetime.now(timezone.utc)
-            db_lead.status = "assigned"
+            # Update assignment_status to "assigned" (workflow status)
+            StatusHelper.set_assignment_status(db_lead, AssignmentStatus.ASSIGNED)
             log.info(
                 "Lead directly assigned to officer",
                 lead_id=db_lead.id,
                 officer_id=direct_assignment_officer_id,
-                assignment_type="direct"
+                assignment_type="direct",
+                assignment_status=db_lead.assignment_status
             )
 
         # Commit transaction
@@ -942,8 +946,8 @@ async def update_lead(
                     db_lead.assigned_officer_id = None
                     db_lead.assigned_at = None
 
-                    # 3. Set status to unassigned
-                    db_lead.status = settings.DEFAULT_UNASSIGNED_LEAD_STATUS
+                    # 3. Set assignment_status to pending (waiting for new assignment)
+                    StatusHelper.set_assignment_status(db_lead, AssignmentStatus.PENDING)
 
                     # 4. Create system AssignmentLog
                     reassignment_log = models.AssignmentLog(
@@ -964,7 +968,7 @@ async def update_lead(
                         lead_id=lead_id,
                         new_unit_id=new_target_unit_id,
                         old_officer_id=old_officer_id,
-                        new_status=settings.DEFAULT_UNASSIGNED_LEAD_STATUS
+                        assignment_status=db_lead.assignment_status
                     )
 
             # Lấy trạng thái mới sau khi cập nhật
@@ -1192,17 +1196,8 @@ async def assign_lead_manually(
             # Cập nhật Lead
             lead.assigned_officer_id = officer.id
             lead.assigned_at = datetime.now(timezone.utc)
-            # Cập nhật status thành 'assigned' nếu đang ở trạng thái ban đầu/chờ gán lại
-            if (
-                lead.status
-                in [
-                    settings.DEFAULT_INITIAL_LEAD_STATUS_ID,
-                    settings.DEFAULT_REASSIGN_LEAD_STATUS,
-                    "new",
-                ]
-                or not lead.status
-            ):
-                lead.status = settings.DEFAULT_ASSIGNED_LEAD_STATUS
+            # Cập nhật assignment_status thành 'assigned'
+            StatusHelper.set_assignment_status(lead, AssignmentStatus.ASSIGNED)
 
             # Cập nhật Officer
             officer.last_assigned_at = datetime.now(timezone.utc)
@@ -1417,23 +1412,23 @@ async def delete_consultation(
                     )
             # Nếu không còn consultation nào, revert về trạng thái ban đầu
             else:
-                initial_status_id = settings.DEFAULT_INITIAL_LEAD_STATUS_ID
-                initial_status = await db.get(models.ConsultationStatus, initial_status_id)
+                initial_status = await StatusHelper.get_initial_status(db)
                 if initial_status:
                     new_status_id = initial_status.id
                     new_stage_id = initial_status.stage_id
                     revert_status_obj = initial_status
                     log.info(
-                        f"Reverting lead status to initial status: {new_status_id}",
+                        "Reverting lead status to initial status",
                         lead_id=lead_id,
+                        status_id=new_status_id,
                     )
                 else:
                     log.warning(
-                        f"Initial status '{initial_status_id}' not found when reverting lead status.",
+                        "Initial status not found when reverting lead status.",
                         lead_id=lead_id,
                     )
                     # Gán giá trị an toàn nếu không tìm thấy status ban đầu
-                    new_status_id = "unknown"
+                    new_status_id = None
                     new_stage_id = None
 
             # Cập nhật trạng thái Lead
@@ -1718,44 +1713,48 @@ async def process_officer_action(
             new_state = old_state.copy()  # Tạo bản sao để sửa đổi
 
             if action == "reassign":
-                new_state["status"] = settings.DEFAULT_REASSIGN_LEAD_STATUS
                 new_state["assigned_officer_id"] = None
-                # Giữ nguyên consult/stage
+                # Giữ nguyên consult/stage và status (không đổi consultation workflow)
                 new_state["consultation_status_id"] = lead.consultation_status_id
                 new_state["pipeline_stage_id"] = lead.pipeline_stage_id
+                new_state["status"] = lead.status  # Keep status synced from consultation
                 lead.assigned_at = None
-                # THÊM DÒNG NÀY:
-                lead.assigned_officer = None  # <-- Set cả relationship thành None
+                lead.assigned_officer = None  # Set cả relationship thành None
+                # Update assignment_status to reassign_pending
+                StatusHelper.set_assignment_status(lead, AssignmentStatus.REASSIGN_PENDING)
                 log_method = "officer_reassign"
                 trigger_reassignment = True
                 log.info(
                     "Officer requested lead reassignment",
                     lead_id=lead_id,
                     officer_id=officer.id,
+                    assignment_status=lead.assignment_status,
                 )
 
             elif action == "reject":
-                lost_status_id = settings.DEFAULT_LOST_LEAD_STATUS_ID
-                new_state["status"] = lost_status_id  # Chuyển status chính sang LOST
+                # Get rejected status from database (database-driven)
+                rejected_status = await StatusHelper.get_rejected_status(db)
                 log_method = "officer_reject"
 
-                # Tìm ConsultationStatus tương ứng với LOST
-                lost_consult_status = await db.get(
-                    models.ConsultationStatus, lost_status_id
-                )
-                if lost_consult_status:
-                    new_state["consultation_status_id"] = lost_consult_status.id
-                    new_state["pipeline_stage_id"] = lost_consult_status.stage_id
+                if rejected_status:
+                    # Sync lead status from consultation_status
+                    await StatusHelper.sync_lead_status(lead, rejected_status)
+                    new_state["status"] = lead.status
+                    new_state["consultation_status_id"] = rejected_status.id
+                    new_state["pipeline_stage_id"] = rejected_status.stage_id
                     log.info(
-                        f"Setting consultation status and stage to LOST status '{lost_status_id}'",
+                        "Setting consultation status to rejected",
                         lead_id=lead_id,
+                        status_id=rejected_status.id,
+                        legacy_status=rejected_status.legacy_status,
                     )
                 else:
                     log.warning(
-                        f"Consultation status '{lost_status_id}' (Lost) not found. Lead status set, but consult/stage might be inconsistent.",
+                        "Rejected consultation status not found in database.",
                         lead_id=lead_id,
                     )
-                    # Giữ nguyên consult/stage cũ hoặc set là None/unknown nếu cần
+                    # Fallback: set status directly
+                    new_state["status"] = "rejected"
                     new_state["consultation_status_id"] = None
                     new_state["pipeline_stage_id"] = None
 
@@ -2095,21 +2094,19 @@ async def import_leads_from_file_content(
     errors: List[schemas.LeadImportError] = []
     processed_row_count = 0
 
-    # Get default initial status
-    from app.config import settings
-    initial_status_id = settings.DEFAULT_INITIAL_LEAD_STATUS_ID
-
-    # Get stage_id corresponding to initial_status_id
-    initial_status_obj = await db.get(models.ConsultationStatus, initial_status_id)
-    initial_stage_id = initial_status_obj.stage_id if initial_status_obj else None
-
-    if not initial_stage_id:
+    # Get default initial status (database-driven)
+    initial_status_obj = await StatusHelper.get_initial_status(db)
+    if not initial_status_obj:
         log.error(
-            f"FATAL: Initial status {initial_status_id} not found in DB. Cannot determine initial stage."
+            "FATAL: Initial consultation status not found in DB. Cannot import leads."
         )
         raise ValueError(
             "System configuration error: Initial lead status not found."
         )
+
+    initial_status_id = initial_status_obj.id
+    initial_stage_id = initial_status_obj.stage_id
+    initial_legacy_status = initial_status_obj.legacy_status or "new"
 
     # Get existing emails to check for duplicates efficiently
     existing_emails_in_db = set()
@@ -2185,7 +2182,7 @@ async def import_leads_from_file_content(
 
             # Prepare dict for bulk insert
             lead_dict = lead_in.model_dump()
-            lead_dict["status"] = initial_status_id
+            lead_dict["status"] = initial_legacy_status  # Use legacy_status from DB
             lead_dict["consultation_status_id"] = initial_status_id
             lead_dict["pipeline_stage_id"] = initial_stage_id
 
@@ -2193,10 +2190,11 @@ async def import_leads_from_file_content(
             if auto_assign_officer_id:
                 lead_dict["assigned_officer_id"] = auto_assign_officer_id
                 lead_dict["assigned_at"] = datetime.now(timezone.utc)
-                lead_dict["status"] = "assigned"  # Update status to assigned
+                lead_dict["assignment_status"] = AssignmentStatus.ASSIGNED
             else:
                 lead_dict["assigned_officer_id"] = None
                 lead_dict["assigned_at"] = None
+                lead_dict["assignment_status"] = AssignmentStatus.PENDING
 
             leads_to_insert.append(lead_dict)
 

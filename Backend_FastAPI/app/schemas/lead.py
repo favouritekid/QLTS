@@ -162,6 +162,8 @@ class LeadUpdate(BaseModel):
 class Lead(LeadBase):
     id: int
     status: str
+    # Assignment workflow status: pending, assigned, failed, reassign_pending
+    assignment_status: str = "pending"
     lead_score: int
     created_at: datetime
     updated_at: datetime

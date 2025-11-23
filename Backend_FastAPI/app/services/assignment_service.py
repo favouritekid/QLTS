@@ -8,8 +8,8 @@ from sqlalchemy.exc import OperationalError  # Dùng để bắt LockNotAvailabl
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models
-from ..config import settings
 from ..socket_manager import emit_lead_assigned
+from .status_helper import StatusHelper, AssignmentStatus
 
 # Lấy logger chuẩn ở đây, dùng làm fallback
 default_log = logging.getLogger(__name__)
@@ -78,14 +78,11 @@ async def automatically_assign_lead(
                 # --- Xử lý khi không có Officer ---
                 if not available_officers:
                     log.warning(
-                        f"[Lead ID: {lead_id}] No available (and unlocked) officers found for unit {lead_unit_id}. Setting status to unassigned."
+                        f"[Lead ID: {lead_id}] No available (and unlocked) officers found for unit {lead_unit_id}. Setting assignment_status to failed."
                     )
-                    lead.status = settings.DEFAULT_UNASSIGNED_LEAD_STATUS
-                    # Ghi lại lịch sử thay đổi trạng thái (Optional nhưng nên có)
-                    # await _log_lead_state_change(...) # Cần hàm helper này nếu muốn log
+                    # Update assignment_status to "failed" (no officers available)
+                    StatusHelper.set_assignment_status(lead, AssignmentStatus.FAILED)
                     db.add(lead)
-                    # Commit transaction lồng nhau ở đây vì đã kết thúc logic
-                    # await db.commit() # Không cần commit tường minh khi dùng `async with`
                     return  # Kết thúc task
 
                 log.debug(
@@ -154,12 +151,11 @@ async def automatically_assign_lead(
                 # --- Xử lý khi tất cả Officer đã đầy tải ---
                 if not officer_loads:
                     log.warning(
-                        f"[Lead ID: {lead_id}] All available officers ({len(available_officers)}) in unit {lead_unit_id} are at full capacity. Setting status to unassigned."
+                        f"[Lead ID: {lead_id}] All available officers ({len(available_officers)}) in unit {lead_unit_id} are at full capacity. Setting assignment_status to failed."
                     )
-                    lead.status = settings.DEFAULT_UNASSIGNED_LEAD_STATUS
-                    # await _log_lead_state_change(...)
+                    # Update assignment_status to "failed" (all at capacity)
+                    StatusHelper.set_assignment_status(lead, AssignmentStatus.FAILED)
                     db.add(lead)
-                    # await db.commit()
                     return  # Kết thúc task
 
                 # === BƯỚC 5: Sắp xếp và Chọn Officer (HYBRID THRESHOLD ROUND ROBIN) ===
@@ -190,7 +186,8 @@ async def automatically_assign_lead(
                 now_utc = datetime.now(timezone.utc)
                 lead.assigned_officer_id = chosen_one.id
                 lead.assigned_at = now_utc
-                lead.status = settings.DEFAULT_ASSIGNED_LEAD_STATUS
+                # Update assignment_status to "assigned"
+                StatusHelper.set_assignment_status(lead, AssignmentStatus.ASSIGNED)
 
                 chosen_one.last_assigned_at = now_utc
 

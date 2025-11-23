@@ -19,6 +19,14 @@ class Lead(Base):
     phone2 = Column(String(20), nullable=True, index=True)  # Số điện thoại phụ
     source = Column(String(50), nullable=False)
     status = Column(String(50), nullable=False, default="new", index=True)
+    # Assignment workflow status: pending, assigned, failed, reassign_pending
+    assignment_status = Column(
+        String(20),
+        nullable=False,
+        default="pending",
+        index=True,
+        comment="Assignment workflow: pending, assigned, failed, reassign_pending"
+    )
     lead_score = Column(Integer, default=0, nullable=False)
     education_level = Column(String(100), nullable=True)
     gpa = Column(Float, nullable=True)
