@@ -24,9 +24,11 @@ import {
   Phone,
   AlertCircle,
   UserPlus,
+  Link as LinkIcon,
 } from "lucide-react";
 import { useAdminUsersList } from "@/hooks/useAdminUsers";
 import { UserDialog } from "@/components/admin/UserDialog";
+import { UserAssignmentDialog } from "./UserAssignmentDialog";
 import type { OrganizationUnit } from "@/types/organization.types";
 
 // =====================================================================
@@ -44,6 +46,7 @@ interface UserListTabProps {
 export function UserListTab({ unit }: UserListTabProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [userDialogOpen, setUserDialogOpen] = useState(false);
+  const [assignDialogOpen, setAssignDialogOpen] = useState(false);
 
   // Check if unit has children (for hierarchical filtering)
   const hasChildren = unit.children && unit.children.length > 0;
@@ -68,6 +71,11 @@ export function UserListTab({ unit }: UserListTabProps) {
   // Handle add user
   const handleAddUser = () => {
     setUserDialogOpen(true);
+  };
+
+  // Handle assign users
+  const handleAssignUser = () => {
+    setAssignDialogOpen(true);
   };
 
   // Get user initials for avatar
@@ -105,10 +113,16 @@ export function UserListTab({ unit }: UserListTabProps) {
                 : "thuộc đơn vị này"}
             </p>
           </div>
-          <Button onClick={handleAddUser}>
-            <UserPlus className="h-4 w-4 mr-2" />
-            Thêm người dùng
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={handleAssignUser}>
+              <LinkIcon className="h-4 w-4 mr-2" />
+              Gán nhân sự
+            </Button>
+            <Button onClick={handleAddUser}>
+              <UserPlus className="h-4 w-4 mr-2" />
+              Tạo mới
+            </Button>
+          </div>
         </div>
 
         {/* Search */}
@@ -149,13 +163,19 @@ export function UserListTab({ unit }: UserListTabProps) {
             <p className="text-sm text-muted-foreground mb-4">
               {searchQuery
                 ? "Thử tìm kiếm với từ khóa khác"
-                : "Thêm người dùng vào đơn vị này"}
+                : "Thêm hoặc gán người dùng vào đơn vị này"}
             </p>
             {!searchQuery && (
-              <Button size="sm" onClick={handleAddUser}>
-                <UserPlus className="h-4 w-4 mr-2" />
-                Thêm người dùng
-              </Button>
+              <div className="flex justify-center gap-2">
+                <Button variant="outline" size="sm" onClick={handleAssignUser}>
+                  <LinkIcon className="h-4 w-4 mr-2" />
+                  Gán nhân sự
+                </Button>
+                <Button size="sm" onClick={handleAddUser}>
+                  <UserPlus className="h-4 w-4 mr-2" />
+                  Tạo người dùng
+                </Button>
+              </div>
             )}
           </div>
         )}
@@ -287,6 +307,13 @@ export function UserListTab({ unit }: UserListTabProps) {
         onOpenChange={setUserDialogOpen}
         user={null}
         mode="create"
+      />
+
+      {/* User Assignment Dialog */}
+      <UserAssignmentDialog
+        open={assignDialogOpen}
+        onOpenChange={setAssignDialogOpen}
+        unit={unit}
       />
     </div>
   );
