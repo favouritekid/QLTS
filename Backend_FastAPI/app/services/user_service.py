@@ -6,7 +6,7 @@ import structlog
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 from fastapi import UploadFile
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 import casbin  # ← PHASE 1: Import casbin
@@ -482,27 +482,63 @@ async def get_users(
         "status": models.User.status,
     }
 
-    # Integer filters need type conversion (query params come as strings)
-    integer_filters = {
-        "unit_id": models.User.unit_id,
-    }
+    # =========================================================================
+    # ✅ HIERARCHICAL UNIT FILTER: Support include_children parameter
+    # =========================================================================
+    # Check if we should include users from child units
+    include_children = str(params.get("include_children", "")).lower() == "true"
 
+    if "unit_id" in params and params["unit_id"]:
+        try:
+            unit_id = int(params["unit_id"])
+
+            if include_children:
+                # ✅ Recursive CTE to get all descendant unit IDs
+                # This allows filtering users from parent unit + all children
+                cte_query = text("""
+                    WITH RECURSIVE unit_hierarchy AS (
+                        -- Base case: the selected unit
+                        SELECT id FROM organization_unit WHERE id = :unit_id
+                        UNION ALL
+                        -- Recursive case: child units
+                        SELECT u.id FROM organization_unit u
+                        JOIN unit_hierarchy uh ON u.parent_id = uh.id
+                    )
+                    SELECT id FROM unit_hierarchy
+                """)
+
+                # Execute CTE to get list of unit IDs
+                hierarchy_result = await db.execute(cte_query, {"unit_id": unit_id})
+                all_unit_ids = [row[0] for row in hierarchy_result.fetchall()]
+
+                if all_unit_ids:
+                    query = query.filter(models.User.unit_id.in_(all_unit_ids))
+                    log.debug(
+                        "Hierarchical unit filter applied",
+                        parent_unit_id=unit_id,
+                        total_units=len(all_unit_ids)
+                    )
+            else:
+                # Simple exact match (for leaf units or when include_children=false)
+                query = query.filter(models.User.unit_id == unit_id)
+
+        except ValueError:
+            log.warning(f"Invalid unit_id value: {params['unit_id']}")
+
+    # =========================================================================
     # ✅ SECURITY FIX: Search DoS Prevention (CVSS 7.5 HIGH)
     # Old code used ILIKE '%term%' which caused full table scan (500ms per query)
     # New code uses PostgreSQL Full-Text Search with GIN index (2ms per query)
     # See migration: p1q2r3s4t5u6_add_user_search_indexes.py
+    # =========================================================================
     for key, value in params.items():
+        # Skip unit_id - already handled above
+        if key in ["unit_id", "include_children"]:
+            continue
+
         if key in allowed_filters and value:
             values_to_filter = [v.strip() for v in value.split(",")]
             query = query.filter(allowed_filters[key].in_(values_to_filter))
-        elif key in integer_filters and value:
-            # Convert string values to integers for integer columns
-            try:
-                int_values = [int(v.strip()) for v in value.split(",")]
-                query = query.filter(integer_filters[key].in_(int_values))
-            except ValueError:
-                # Invalid integer value - skip this filter
-                log.warning(f"Invalid integer value for filter {key}: {value}")
         elif key == "search" and value:
             # ✅ NEW: Use full-text search with search_vector column
             # Convert spaces to AND operator for multi-word search
