@@ -597,6 +597,125 @@ export function SocketHandler() {
       });
     };
 
+    // ✅ REAL-TIME OFFICER STATUS: Lắng nghe sự kiện officer_availability_changed
+    const handleOfficerAvailabilityChanged = (data: {
+      officer_id: number;
+      new_status: string;
+      old_status?: string;
+      username: string;
+      unit_id?: number;
+    }) => {
+      console.log("[SocketHandler] Received officer_availability_changed event:", data);
+
+      // Invalidate officer-related queries for admin dashboard
+      queryClient.invalidateQueries({ queryKey: ["admin", "officers"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+      queryClient.invalidateQueries({ queryKey: ["officer", "stats"] });
+
+      // Show toast notification
+      const statusEmoji = data.new_status === "available" ? "🟢" :
+                         data.new_status === "busy" ? "🟡" : "🔴";
+      toast.info(`${statusEmoji} Officer Status Changed`, {
+        description: `${data.username} is now ${data.new_status}`,
+        duration: 4000,
+      });
+    };
+
+    // ✅ REAL-TIME LEAD STATUS: Lắng nghe sự kiện lead_status_changed
+    const handleLeadStatusChanged = (data: {
+      lead_id: number;
+      officer_id?: number;
+      old_status: string;
+      new_status: string;
+    }) => {
+      console.log("[SocketHandler] Received lead_status_changed event:", data);
+
+      // Invalidate lead-related queries
+      queryClient.invalidateQueries({ queryKey: ["leads"] });
+      queryClient.invalidateQueries({ queryKey: ["leads", data.lead_id] });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+
+      // Show toast notification
+      toast.info("📊 Lead Status Changed", {
+        description: `Lead #${data.lead_id}: ${data.old_status || "N/A"} → ${data.new_status || "N/A"}`,
+        duration: 4000,
+      });
+    };
+
+    // ✅ REAL-TIME USER ROLE: Lắng nghe sự kiện user_role_changed
+    const handleUserRoleChanged = (data: {
+      user_id: number;
+      old_role: string;
+      new_role: string;
+    }) => {
+      console.log("[SocketHandler] Received user_role_changed event:", data);
+
+      // Important: User's role changed, should refresh permissions
+      queryClient.invalidateQueries({ queryKey: ["me"] });
+      queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
+
+      // Show prominent toast
+      toast.warning("🔔 Your role has been changed", {
+        description: `${data.old_role} → ${data.new_role}. Please refresh the page.`,
+        duration: 10000,
+        action: {
+          label: "Refresh",
+          onClick: () => window.location.reload(),
+        },
+      });
+    };
+
+    // ✅ REAL-TIME SYSTEM ALERTS: Lắng nghe sự kiện system_alert
+    const handleSystemAlert = (data: {
+      severity: "info" | "warning" | "error";
+      message: string;
+      action_url?: string;
+    }) => {
+      console.log("[SocketHandler] Received system_alert event:", data);
+
+      // Show toast based on severity
+      const toastFn = data.severity === "error" ? toast.error :
+                     data.severity === "warning" ? toast.warning : toast.info;
+
+      toastFn(`🚨 System Alert`, {
+        description: data.message,
+        duration: 10000,
+        action: data.action_url ? {
+          label: "View",
+          onClick: () => window.location.href = data.action_url!,
+        } : undefined,
+      });
+
+      // Play sound for important alerts
+      if (preferences?.sound_enabled && data.severity !== "info") {
+        playNotificationSound();
+      }
+    };
+
+    // ✅ REAL-TIME SYSTEM ANNOUNCEMENTS: Lắng nghe sự kiện system_announcement
+    const handleSystemAnnouncement = (data: {
+      title: string;
+      message: string;
+      priority?: string;
+    }) => {
+      console.log("[SocketHandler] Received system_announcement event:", data);
+
+      // Show prominent toast for announcements
+      toast.info(`📢 ${data.title}`, {
+        description: data.message,
+        duration: 15000, // Long duration for announcements
+      });
+
+      // Show browser notification
+      if (preferences?.browser_enabled) {
+        showBrowserNotification(data.title, {
+          body: data.message,
+          icon: "/favicon.ico",
+          tag: `system-announcement-${Date.now()}`,
+        });
+      }
+    };
+
     // Đăng ký listeners
     socket.on("force_logout_batch", handleForceLogoutBatch);
     socket.on("force_logout_all", handleForceLogoutAll);
@@ -605,6 +724,7 @@ export function SocketHandler() {
     socket.on("lead_assigned", handleLeadAssigned);
     socket.on("lead_created", handleLeadCreated);
     socket.on("lead_assignment_failed", handleLeadAssignmentFailed);
+    socket.on("lead_status_changed", handleLeadStatusChanged);
     socket.on("application_created", handleApplicationCreated);
     socket.on("application_status_changed", handleApplicationStatusChanged);
     socket.on("application_documents_updated", handleApplicationDocumentsUpdated);
@@ -613,6 +733,10 @@ export function SocketHandler() {
     socket.on("consultation_deleted", handleConsultationDeleted);
     socket.on("consultation_updated", handleConsultationUpdated);
     socket.on("lead_updated", handleLeadUpdated);
+    socket.on("officer_availability_changed", handleOfficerAvailabilityChanged);
+    socket.on("user_role_changed", handleUserRoleChanged);
+    socket.on("system_alert", handleSystemAlert);
+    socket.on("system_announcement", handleSystemAnnouncement);
 
     // Cleanup listeners khi effect này chạy lại hoặc component unmount
     return () => {
@@ -623,6 +747,7 @@ export function SocketHandler() {
       socket.off("lead_assigned", handleLeadAssigned);
       socket.off("lead_created", handleLeadCreated);
       socket.off("lead_assignment_failed", handleLeadAssignmentFailed);
+      socket.off("lead_status_changed", handleLeadStatusChanged);
       socket.off("application_created", handleApplicationCreated);
       socket.off("application_status_changed", handleApplicationStatusChanged);
       socket.off("application_documents_updated", handleApplicationDocumentsUpdated);
@@ -631,6 +756,10 @@ export function SocketHandler() {
       socket.off("consultation_deleted", handleConsultationDeleted);
       socket.off("consultation_updated", handleConsultationUpdated);
       socket.off("lead_updated", handleLeadUpdated);
+      socket.off("officer_availability_changed", handleOfficerAvailabilityChanged);
+      socket.off("user_role_changed", handleUserRoleChanged);
+      socket.off("system_alert", handleSystemAlert);
+      socket.off("system_announcement", handleSystemAnnouncement);
     };
     // ✅ SECURITY FIX: Removed 'token' from dependencies, now use 'isAuthenticated'
   }, [isAuthenticated, addNotification, preferences, queryClient]);

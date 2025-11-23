@@ -107,20 +107,20 @@ export default function OfficerDashboardPage() {
       }
     };
 
-    // Listen for lead reassignment events
-    const handleLeadReassigned = () => {
+    // Listen for lead assignment/status events that affect officer workload
+    const handleLeadChange = () => {
       queryClient.invalidateQueries({ queryKey: ["officer", "stats"] });
-      console.log("Officer stats invalidated due to lead reassignment");
+      console.log("Officer stats invalidated due to lead change");
     };
 
     socket.on("data_updated", handleDataUpdate);
-    socket.on("lead_reassigned", handleLeadReassigned);
-    socket.on("lead_transferred_in", handleLeadReassigned);
+    socket.on("lead_assigned", handleLeadChange);
+    socket.on("lead_status_changed", handleLeadChange);
 
     return () => {
       socket.off("data_updated", handleDataUpdate);
-      socket.off("lead_reassigned", handleLeadReassigned);
-      socket.off("lead_transferred_in", handleLeadReassigned);
+      socket.off("lead_assigned", handleLeadChange);
+      socket.off("lead_status_changed", handleLeadChange);
     };
   }, [queryClient]);
 
