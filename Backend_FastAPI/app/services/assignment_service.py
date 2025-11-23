@@ -212,7 +212,7 @@ async def automatically_assign_lead(
 
                 # === BƯỚC 7: Emit Socket.IO Event for Real-time Notification ===
                 # Load relationships để lấy thông tin đầy đủ cho event payload
-                await db.refresh(lead, ["unit", "program_offering"])
+                await db.refresh(lead, ["unit", "offering"])
 
                 # Prepare lead data for socket event
                 lead_data = {
