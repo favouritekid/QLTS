@@ -216,12 +216,12 @@ async def automatically_assign_lead(
 
                 # Prepare lead data for socket event
                 lead_data = {
-                    "name": f"{lead.first_name or ''} {lead.last_name or ''}".strip() or "Unknown",
+                    "name": lead.full_name or "Unknown",
                     "phone": lead.phone or "",
                     "email": lead.email or "",
-                    "offering_name": lead.program_offering.name if lead.program_offering else "N/A",
+                    "offering_name": lead.offering.offering_type if lead.offering else "N/A",
                     "unit_name": lead.unit.name if lead.unit else "N/A",
-                    "priority": "normal"  # Can be enhanced with actual priority field
+                    "priority": "normal",  # Can be enhanced with actual priority field
                 }
 
                 # Emit event to officer's room
