@@ -18,7 +18,6 @@ from ..utils.exceptions import (
     ResourceNotFoundError,
 )
 from ..services import pipeline_service, distribution_service
-from .. import socket_manager
 from ..core.status_mapping import sync_lead_status_from_consultation
 from .status_helper import StatusHelper, AssignmentStatus
 
