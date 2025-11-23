@@ -173,15 +173,28 @@ async def update_existing_lead(
     result = await lead_service.update_lead(db, lead.id, lead_in, updated_by=current_user)
     await db.commit()
 
-    # Emit Socket.IO event for real-time updates
-    from ..socket_manager import emit_lead_updated
-    await emit_lead_updated(
-        lead_id=lead.id,
-        officer_id=result.assigned_officer_id,
-        updated_fields=updated_fields,
-        updated_by_username=current_user.username,
-        status_changed=status_changed,
-    )
+    # Dispatch notification if status changed
+    if status_changed:
+        try:
+            from ..services.notification_dispatcher import dispatch
+            from ..core.events import SystemEvents
+            await dispatch(
+                db=db,
+                event=SystemEvents.LEAD_STATUS_CHANGED,
+                payload={
+                    "lead_id": lead.id,
+                    "officer_id": result.assigned_officer_id,
+                    "old_status": lead.consultation_status_id or "",
+                    "new_status": result.consultation_status_id or "",
+                    "actor_id": current_user.id,
+                }
+            )
+        except Exception as e:
+            log.warning(
+                "Failed to dispatch lead status changed notification",
+                lead_id=lead.id,
+                error=str(e)
+            )
 
     return result
 
@@ -231,15 +244,29 @@ async def add_new_consultation(
     )
     await db.commit()
 
-    # Emit Socket.IO event for real-time updates
-    from ..socket_manager import emit_consultation_created
-    await emit_consultation_created(
-        lead_id=lead.id,
-        consultation_id=result.id,
-        officer_id=lead.assigned_officer_id,
-        consultation_status_id=result.consultation_status_id or "",
-        created_by_username=current_user.username,
-    )
+    # Dispatch notification for consultation created
+    try:
+        from ..services.notification_dispatcher import dispatch
+        from ..core.events import SystemEvents
+        await dispatch(
+            db=db,
+            event=SystemEvents.CONSULTATION_CREATED,
+            payload={
+                "consultation_id": result.id,
+                "lead_id": lead.id,
+                "officer_id": lead.assigned_officer_id,
+                "status_id": result.consultation_status_id or "",
+                "actor_id": current_user.id,
+                "unit_id": lead.unit_id,  # For unit managers notification
+            }
+        )
+    except Exception as e:
+        log.warning(
+            "Failed to dispatch consultation created notification",
+            lead_id=lead.id,
+            consultation_id=result.id,
+            error=str(e)
+        )
 
     return result
 
