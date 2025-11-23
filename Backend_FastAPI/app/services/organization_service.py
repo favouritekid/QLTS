@@ -179,18 +179,28 @@ async def _get_user_counts_by_unit(db: AsyncSession) -> dict:
 def _add_user_counts_to_tree(units_data: List[dict], user_counts: dict) -> List[dict]:
     """
     Recursively add user_count to each unit in the tree.
+    Parent units show aggregated counts from all descendants.
 
     Args:
         units_data: List of unit dicts (tree structure)
-        user_counts: Dict mapping unit_id -> user_count
+        user_counts: Dict mapping unit_id -> direct user_count
 
     Returns:
-        Updated units_data with user_count field
+        Updated units_data with aggregated user_count field
     """
-    for unit in units_data:
-        unit["user_count"] = user_counts.get(unit["id"], 0)
+    def calculate_total_users(unit: dict) -> int:
+        """Calculate total users for a unit including all descendants."""
+        direct_count = user_counts.get(unit["id"], 0)
+        children_count = 0
         if unit.get("children"):
-            _add_user_counts_to_tree(unit["children"], user_counts)
+            for child in unit["children"]:
+                children_count += calculate_total_users(child)
+        total = direct_count + children_count
+        unit["user_count"] = total
+        return total
+
+    for unit in units_data:
+        calculate_total_users(unit)
     return units_data
 
 
