@@ -8,7 +8,7 @@ from sqlalchemy.exc import OperationalError  # Dùng để bắt LockNotAvailabl
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models
-from ..socket_manager import emit_lead_assigned
+from ..socket_manager import emit_lead_assigned, emit_lead_assignment_failed
 from .status_helper import StatusHelper, AssignmentStatus
 
 # Lấy logger chuẩn ở đây, dùng làm fallback
@@ -89,6 +89,15 @@ async def automatically_assign_lead(
                     # Update assignment_status to "failed" (no officers available)
                     StatusHelper.set_assignment_status(lead, AssignmentStatus.FAILED)
                     db.add(lead)
+
+                    # Emit socket event for real-time dashboard update
+                    await emit_lead_assignment_failed(
+                        lead_id=lead_id,
+                        unit_id=lead_unit_id,
+                        reason="no_officers_available",
+                        lead_data={"name": lead.full_name or "Unknown"}
+                    )
+
                     return {"status": "failed", "reason": "no_officers_available", "lead_id": lead_id, "unit_id": lead_unit_id}
 
                 log.debug(
@@ -162,6 +171,15 @@ async def automatically_assign_lead(
                     # Update assignment_status to "failed" (all at capacity)
                     StatusHelper.set_assignment_status(lead, AssignmentStatus.FAILED)
                     db.add(lead)
+
+                    # Emit socket event for real-time dashboard update
+                    await emit_lead_assignment_failed(
+                        lead_id=lead_id,
+                        unit_id=lead_unit_id,
+                        reason="all_officers_at_capacity",
+                        lead_data={"name": lead.full_name or "Unknown"}
+                    )
+
                     return {"status": "failed", "reason": "all_officers_at_capacity", "lead_id": lead_id, "unit_id": lead_unit_id}
 
                 # === BƯỚC 5: Sắp xếp và Chọn Officer (HYBRID THRESHOLD ROUND ROBIN) ===

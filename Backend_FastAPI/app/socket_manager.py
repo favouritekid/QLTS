@@ -597,6 +597,143 @@ async def emit_lead_reassigned(
 
 
 # =====================================================================
+# UTILITY FUNCTIONS FOR LEAD CREATION & ASSIGNMENT STATUS
+# =====================================================================
+
+async def emit_lead_created(
+    lead_id: int,
+    lead_data: dict,
+    created_by_username: str,
+    unit_id: int
+):
+    """
+    Emit Socket.IO event when a new lead is created.
+
+    This function broadcasts to all connected clients (Admin/Manager dashboards)
+    enabling real-time updates when new leads enter the system.
+
+    Args:
+        lead_id: ID of the newly created lead
+        lead_data: Dictionary containing lead details (name, phone, email, etc.)
+        created_by_username: Username of the user who created the lead
+        unit_id: Unit ID where the lead was created
+
+    Events emitted:
+        - "lead_created" to all connected clients (broadcast)
+    """
+    try:
+        from datetime import datetime, timezone
+
+        # Prepare event payload
+        event_payload = {
+            "lead_id": lead_id,
+            "lead_name": lead_data.get("name", "Unknown"),
+            "lead_phone": lead_data.get("phone", ""),
+            "lead_email": lead_data.get("email", ""),
+            "offering_name": lead_data.get("offering_name", ""),
+            "unit_id": unit_id,
+            "unit_name": lead_data.get("unit_name", ""),
+            "created_by": created_by_username,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "assignment_status": lead_data.get("assignment_status", "pending"),
+            "message": f"New lead created: {lead_data.get('name', 'Unknown')}"
+        }
+
+        # Broadcast to all connected clients for dashboard refresh
+        await sio.emit(
+            "lead_created",
+            event_payload,
+            namespace="/"
+        )
+
+        # Track metrics
+        socket_events_emitted_total.labels(event_type="lead_created").inc()
+
+        log.info(
+            "Lead created notification broadcast",
+            lead_id=lead_id,
+            unit_id=unit_id,
+            created_by=created_by_username
+        )
+
+    except Exception as e:
+        socket_emit_failures_total.labels(event_type="lead_created").inc()
+        log.error(
+            "Failed to emit lead_created Socket.IO event",
+            lead_id=lead_id,
+            error=str(e),
+            exc_info=True
+        )
+
+
+async def emit_lead_assignment_failed(
+    lead_id: int,
+    unit_id: int,
+    reason: str,
+    lead_data: dict = None
+):
+    """
+    Emit Socket.IO event when automatic lead assignment fails.
+
+    This function notifies admins/managers when a lead couldn't be assigned
+    due to no available officers or all officers at capacity.
+
+    Args:
+        lead_id: ID of the lead that failed assignment
+        unit_id: Unit ID where assignment was attempted
+        reason: Reason for failure ("no_officers_available" | "all_officers_at_capacity")
+        lead_data: Optional lead details for display
+
+    Events emitted:
+        - "lead_assignment_failed" to all connected clients (broadcast)
+    """
+    try:
+        from datetime import datetime, timezone
+
+        reason_messages = {
+            "no_officers_available": "Không có nhân viên khả dụng trong đơn vị",
+            "all_officers_at_capacity": "Tất cả nhân viên đã đầy tải"
+        }
+
+        event_payload = {
+            "lead_id": lead_id,
+            "unit_id": unit_id,
+            "reason": reason,
+            "reason_display": reason_messages.get(reason, reason),
+            "lead_name": lead_data.get("name", "Unknown") if lead_data else "Unknown",
+            "failed_at": datetime.now(timezone.utc).isoformat(),
+            "assignment_status": "failed",
+            "message": f"Lead assignment failed: {reason_messages.get(reason, reason)}"
+        }
+
+        # Broadcast to all clients so admin dashboard can update
+        await sio.emit(
+            "lead_assignment_failed",
+            event_payload,
+            namespace="/"
+        )
+
+        # Track metrics
+        socket_events_emitted_total.labels(event_type="lead_assignment_failed").inc()
+
+        log.info(
+            "Lead assignment failure notification broadcast",
+            lead_id=lead_id,
+            unit_id=unit_id,
+            reason=reason
+        )
+
+    except Exception as e:
+        socket_emit_failures_total.labels(event_type="lead_assignment_failed").inc()
+        log.error(
+            "Failed to emit lead_assignment_failed Socket.IO event",
+            lead_id=lead_id,
+            error=str(e),
+            exc_info=True
+        )
+
+
+# =====================================================================
 # UTILITY FUNCTIONS FOR LEAD ASSIGNMENT
 # =====================================================================
 

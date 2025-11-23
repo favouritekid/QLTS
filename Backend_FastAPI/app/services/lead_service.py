@@ -685,6 +685,37 @@ async def create_lead(
             "New lead created successfully", lead_id=db_lead.id, email=db_lead.email
         )
 
+        # === BROADCAST: Lead Created Event (Real-time Dashboard Update) ===
+        try:
+            # Load relationships for event payload
+            offering_name = ""
+            unit_name = ""
+            if db_lead.offering_id:
+                offering = await db.get(models.ProgramOffering, db_lead.offering_id)
+                if offering:
+                    offering_name = f"{offering.program.name} - {offering.offering_type}" if offering.program else offering.offering_type
+            if db_lead.unit_id:
+                unit = await db.get(models.OrganizationUnit, db_lead.unit_id)
+                if unit:
+                    unit_name = unit.name
+
+            lead_event_data = {
+                "name": db_lead.full_name,
+                "phone": db_lead.phone,
+                "email": db_lead.email,
+                "offering_name": offering_name,
+                "unit_name": unit_name,
+                "assignment_status": db_lead.assignment_status,
+            }
+            await socket_manager.emit_lead_created(
+                lead_id=db_lead.id,
+                lead_data=lead_event_data,
+                created_by_username=created_by.username if created_by else "system",
+                unit_id=db_lead.unit_id
+            )
+        except Exception as e:
+            log.warning("Failed to emit lead_created event", lead_id=db_lead.id, error=str(e))
+
         # === POST-COMMIT ACTIONS ===
         if skip_auto_assignment:
             # Direct assignment was done - emit socket notification
