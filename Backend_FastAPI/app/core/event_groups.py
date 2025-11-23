@@ -64,6 +64,7 @@ EVENT_GROUP_MAPPING: Dict[SystemEvents, NotificationEventGroup] = {
     SystemEvents.LEAD_STATUS_CHANGED: NotificationEventGroup.LEAD,
     SystemEvents.LEAD_CREATED: NotificationEventGroup.LEAD,
     SystemEvents.LEAD_ASSIGNMENT_FAILED: NotificationEventGroup.LEAD,
+    SystemEvents.LEAD_DELETED: NotificationEventGroup.LEAD,
     SystemEvents.OFFICER_AVAILABILITY_CHANGED: NotificationEventGroup.LEAD,  # Affects lead distribution
 
     # Consultation events
@@ -75,6 +76,7 @@ EVENT_GROUP_MAPPING: Dict[SystemEvents, NotificationEventGroup] = {
     SystemEvents.APPLICATION_CREATED: NotificationEventGroup.APPLICATION,
     SystemEvents.APPLICATION_STATUS_CHANGED: NotificationEventGroup.APPLICATION,
     SystemEvents.APPLICATION_DOCUMENTS_UPDATED: NotificationEventGroup.APPLICATION,
+    SystemEvents.APPLICATION_DELETED: NotificationEventGroup.APPLICATION,
 
     # Finance events
     SystemEvents.DORM_FEE_CREATED: NotificationEventGroup.FINANCE,
@@ -93,6 +95,7 @@ EVENT_GROUP_MAPPING: Dict[SystemEvents, NotificationEventGroup] = {
     SystemEvents.SYSTEM_ALERT: NotificationEventGroup.SYSTEM,
     SystemEvents.SYSTEM_ANNOUNCEMENT: NotificationEventGroup.SYSTEM,
     SystemEvents.USER_ROLE_CHANGED: NotificationEventGroup.SYSTEM,
+    SystemEvents.USER_DEACTIVATED: NotificationEventGroup.SYSTEM,
 
     # Pipeline events
     SystemEvents.PIPELINE_CONFIG_UPDATED: NotificationEventGroup.PIPELINE,

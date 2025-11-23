@@ -160,6 +160,21 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         link_template="/leads/${lead_id}"
     ),
 
+    SystemEvents.LEAD_DELETED: NotificationConfig(
+        group=NotificationEventGroup.LEAD,
+        resolver=ActorExcludedResolver(CompositeResolver([
+            SpecificUsersResolver(),  # Will use officer_id from payload
+            UnitManagersResolver()
+        ])),
+        template={
+            "title": "Lead Deleted",
+            "message": "Lead #${lead_id} (${lead_name}) has been deleted."
+        },
+        channels=["browser"],
+        notification_type="warning",
+        link_template="/leads"  # No specific lead page since it's deleted
+    ),
+
     # =========================================================================
     # CONSULTATION EVENTS
     # =========================================================================
@@ -250,6 +265,21 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         channels=["browser"],
         notification_type="info",
         link_template="/applications/${application_id}"
+    ),
+
+    SystemEvents.APPLICATION_DELETED: NotificationConfig(
+        group=NotificationEventGroup.APPLICATION,
+        resolver=ActorExcludedResolver(CompositeResolver([
+            SpecificUsersResolver(),  # Will use officer_id from payload
+            AllAdminsResolver()
+        ])),
+        template={
+            "title": "Application Deleted",
+            "message": "Application #${application_id} for ${lead_name} has been deleted."
+        },
+        channels=["browser"],
+        notification_type="warning",
+        link_template="/applications"  # No specific page since deleted
     ),
 
     # =========================================================================
@@ -386,6 +416,18 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         channels=["browser", "email"],
         notification_type="info",
         link_template="/profile"
+    ),
+
+    SystemEvents.USER_DEACTIVATED: NotificationConfig(
+        group=NotificationEventGroup.SYSTEM,
+        resolver=SpecificUsersResolver(),  # Target the deactivated user
+        template={
+            "title": "Account Deactivated",
+            "message": "Your account has been deactivated. Reason: ${reason}. Please contact administrator if you believe this is an error."
+        },
+        channels=["browser"],  # Only browser - will be logged out soon
+        notification_type="error",
+        link_template=None  # No link needed
     ),
 
     # =========================================================================

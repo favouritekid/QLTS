@@ -220,8 +220,30 @@ async def delete_lead(
     - 404 Not Found: If lead doesn't exist or already deleted
     - 403 Forbidden: If user doesn't have admin permission
     """
-    await lead_service.delete_lead(db, lead_id, deleted_by=current_user)
+    deleted_lead = await lead_service.delete_lead(db, lead_id, deleted_by=current_user)
     await db.commit()
+
+    # Dispatch notification for lead deletion
+    try:
+        from ..services.notification_dispatcher import dispatch
+        from ..core.events import SystemEvents
+        await dispatch(
+            db=db,
+            event=SystemEvents.LEAD_DELETED,
+            payload={
+                "lead_id": deleted_lead.id,
+                "lead_name": deleted_lead.full_name or "Unknown",
+                "unit_id": deleted_lead.unit_id,
+                "officer_id": deleted_lead.assigned_officer_id,  # May be None
+                "actor_id": current_user.id,
+            },
+            dedupe_key=f"lead_deleted:{deleted_lead.id}"
+        )
+    except Exception as e:
+        # Log but don't fail - deletion already succeeded
+        import logging
+        logging.warning(f"Failed to dispatch lead deletion notification: {e}")
+
     return None
 
 

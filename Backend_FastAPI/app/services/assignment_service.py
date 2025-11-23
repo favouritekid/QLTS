@@ -264,44 +264,44 @@ async def automatically_assign_lead(
 
         # Kết thúc `async with db.begin_nested()` - Nested transaction commits (savepoint)
 
-    # === ✅ REFACTOR: Dispatch notification after nested transaction ===
-    # This happens after DB changes are saved (in nested transaction)
-    # Dispatcher will commit the outer transaction and send notifications
-    try:
-        # Load relationships for notification payload
-        await db.refresh(lead, ["unit", "offering"])
+        # === ✅ REFACTOR: Dispatch notification after nested transaction ===
+        # This happens after DB changes are saved (in nested transaction)
+        # Dispatcher will commit the outer transaction and send notifications
+        try:
+            # Load relationships for notification payload
+            await db.refresh(lead, ["unit", "offering"])
 
-        # Prepare notification payload according to LEAD_ASSIGNED schema
-        notification_payload = {
-            "lead_id": lead.id,
-            "officer_id": chosen_one.id,
-            "actor_id": 0,  # System actor for automatic assignments
-            "lead_name": lead.full_name or "Unknown",
-            "lead_phone": lead.phone or "",
-            "offering_name": f"{lead.offering.program.name} - {lead.offering.offering_type}" if lead.offering and hasattr(lead.offering, 'program') and lead.offering.program else (lead.offering.offering_type if lead.offering else "N/A")
-        }
+            # Prepare notification payload according to LEAD_ASSIGNED schema
+            notification_payload = {
+                "lead_id": lead.id,
+                "officer_id": chosen_one.id,
+                "actor_id": 0,  # System actor for automatic assignments
+                "lead_name": lead.full_name or "Unknown",
+                "lead_phone": lead.phone or "",
+                "offering_name": f"{lead.offering.program.name} - {lead.offering.offering_type}" if lead.offering and hasattr(lead.offering, 'program') and lead.offering.program else (lead.offering.offering_type if lead.offering else "N/A")
+            }
 
-        # Dispatch notification (saves to DB + commits + sends via Socket.IO/Email)
-        await dispatch(
-            db=db,
-            event=SystemEvents.LEAD_ASSIGNED,
-            payload=notification_payload,
-            dedupe_key=f"lead_assigned:{lead.id}:{chosen_one.id}"
-        )
+            # Dispatch notification (saves to DB + commits + sends via Socket.IO/Email)
+            await dispatch(
+                db=db,
+                event=SystemEvents.LEAD_ASSIGNED,
+                payload=notification_payload,
+                dedupe_key=f"lead_assigned:{lead.id}:{chosen_one.id}"
+            )
 
-        log.info(
-            f"[Lead ID: {lead_id}] Automatic assignment notification dispatched to officer {chosen_one.id}."
-        )
-    except Exception as e:
-        # Log but don't fail - lead assignment already succeeded
-        log.error(
-            f"[Lead ID: {lead_id}] Failed to dispatch assignment notification (lead still assigned successfully)",
-            error=str(e),
-            exc_info=True
-        )
+            log.info(
+                f"[Lead ID: {lead_id}] Automatic assignment notification dispatched to officer {chosen_one.id}."
+            )
+        except Exception as e:
+            # Log but don't fail - lead assignment already succeeded
+            log.error(
+                f"[Lead ID: {lead_id}] Failed to dispatch assignment notification (lead still assigned successfully)",
+                error=str(e),
+                exc_info=True
+            )
 
-    # Return success result
-    return {"status": "assigned", "lead_id": lead_id, "officer_id": chosen_one.id}
+        # Return success result
+        return {"status": "assigned", "lead_id": lead_id, "officer_id": chosen_one.id}
 
     except OperationalError as e:
         # Bắt lỗi "LockNotAvailableError" (chủ yếu cho việc khóa Lead ban đầu)
