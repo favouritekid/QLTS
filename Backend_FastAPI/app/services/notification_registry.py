@@ -109,6 +109,18 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         link_template="/leads/${lead_id}"
     ),
 
+    SystemEvents.LEAD_ASSIGNMENT_FAILED: NotificationConfig(
+        group=NotificationEventGroup.LEAD,
+        resolver=ActorExcludedResolver(UnitManagersResolver()),
+        template={
+            "title": "Lead Assignment Failed",
+            "message": "Lead #${lead_id} (${lead_name}) could not be assigned automatically. Reason: ${reason}. Please assign manually or adjust officer capacity."
+        },
+        channels=["browser"],
+        notification_type="error",
+        link_template="/leads/${lead_id}"
+    ),
+
     SystemEvents.LEAD_REASSIGNED: NotificationConfig(
         group=NotificationEventGroup.LEAD,
         resolver=CompositeResolver([

@@ -677,6 +677,27 @@ async def create_lead(
                 assignment_status=db_lead.assignment_status
             )
 
+        # === ✅ CRITICAL: Load relationships BEFORE commit to avoid greenlet errors ===
+        # Must load offering while we're still in transaction context
+        # Store relationship references immediately to avoid triggering lazy loads
+        offering_name = ""
+        if db_lead.offering_id:
+            await db.refresh(db_lead, ["offering"])
+            offering_obj = db_lead.offering  # Store reference immediately
+
+            if offering_obj is not None:
+                # Check if offering has program_id before attempting to load
+                if hasattr(offering_obj, 'program_id') and offering_obj.program_id:
+                    await db.refresh(offering_obj, ["program"])
+                    program_obj = offering_obj.program  # Store reference
+
+                    if program_obj is not None:
+                        offering_name = f"{program_obj.name} - {offering_obj.offering_type}"
+                    else:
+                        offering_name = offering_obj.offering_type
+                else:
+                    offering_name = offering_obj.offering_type
+
         # Commit transaction
         await db.commit()
         # Refresh để lấy dữ liệu mới nhất (bao gồm cả ID nếu chưa flush)
@@ -685,75 +706,59 @@ async def create_lead(
             "New lead created successfully", lead_id=db_lead.id, email=db_lead.email
         )
 
-        # === BROADCAST: Lead Created Event (Real-time Dashboard Update) ===
+        # === ✅ REFACTOR: Dispatch LEAD_CREATED notification ===
+        # offering_name already loaded before commit to avoid greenlet errors
         try:
-            # Load relationships for event payload
-            offering_name = ""
-            unit_name = ""
-            if db_lead.offering_id:
-                offering = await db.get(models.ProgramOffering, db_lead.offering_id)
-                if offering:
-                    offering_name = f"{offering.program.name} - {offering.offering_type}" if offering.program else offering.offering_type
-            if db_lead.unit_id:
-                unit = await db.get(models.OrganizationUnit, db_lead.unit_id)
-                if unit:
-                    unit_name = unit.name
+            from ..core.events import SystemEvents
+            from .notification_dispatcher import dispatch
 
-            lead_event_data = {
-                "name": db_lead.full_name,
-                "phone": db_lead.phone,
-                "email": db_lead.email,
-                "offering_name": offering_name,
-                "unit_name": unit_name,
-                "assignment_status": db_lead.assignment_status,
-            }
-            await socket_manager.emit_lead_created(
-                lead_id=db_lead.id,
-                lead_data=lead_event_data,
-                created_by_username=created_by.username if created_by else "system",
-                unit_id=db_lead.unit_id
+            await dispatch(
+                db=db,
+                event=SystemEvents.LEAD_CREATED,
+                payload={
+                    "lead_id": db_lead.id,
+                    "unit_id": db_lead.unit_id,
+                    "lead_name": db_lead.full_name or "Unknown",
+                    "source": db_lead.source or "Unknown",
+                    "actor_id": created_by.id if created_by else 0
+                },
+                dedupe_key=f"lead_created:{db_lead.id}"
             )
+            log.info("Lead creation notification dispatched", lead_id=db_lead.id)
         except Exception as e:
-            log.warning("Failed to emit lead_created event", lead_id=db_lead.id, error=str(e))
+            log.warning("Failed to dispatch lead_created notification", lead_id=db_lead.id, error=str(e))
 
         # === POST-COMMIT ACTIONS ===
         if skip_auto_assignment:
-            # Direct assignment was done - emit socket notification
+            # Direct assignment was done - dispatch LEAD_ASSIGNED notification
+            # offering_name already loaded before commit to avoid greenlet errors
             if direct_assignment_officer_id:
                 try:
-                    from .. import socket_manager
-                    # Get lead data for notification
-                    lead_data = {
-                        "lead_name": db_lead.full_name,
-                        "lead_phone": db_lead.phone,
-                        "lead_email": db_lead.email,
-                    }
-                    # Load offering name if available
-                    if db_lead.offering_id:
-                        offering = await db.get(models.ProgramOffering, db_lead.offering_id)
-                        if offering:
-                            lead_data["offering_name"] = f"{offering.program.name} - {offering.offering_type}" if offering.program else offering.offering_type
-                    # Load unit name
-                    if db_lead.unit_id:
-                        unit = await db.get(models.OrganizationUnit, db_lead.unit_id)
-                        if unit:
-                            lead_data["unit_name"] = unit.name
+                    from ..core.events import SystemEvents
+                    from .notification_dispatcher import dispatch
 
-                    await socket_manager.emit_lead_assigned(
-                        lead_id=db_lead.id,
-                        officer_id=direct_assignment_officer_id,
-                        lead_data=lead_data,
-                        assignment_type="direct"
+                    await dispatch(
+                        db=db,
+                        event=SystemEvents.LEAD_ASSIGNED,
+                        payload={
+                            "lead_id": db_lead.id,
+                            "officer_id": direct_assignment_officer_id,
+                            "actor_id": created_by.id if created_by else 0,
+                            "lead_name": db_lead.full_name or "Unknown",
+                            "lead_phone": db_lead.phone or "",
+                            "offering_name": offering_name
+                        },
+                        dedupe_key=f"lead_assigned:{db_lead.id}:{direct_assignment_officer_id}"
                     )
                     log.info(
-                        "Socket notification sent for direct assignment",
+                        "Direct assignment notification dispatched",
                         lead_id=db_lead.id,
                         officer_id=direct_assignment_officer_id
                     )
                 except Exception as e:
-                    # Non-blocking - don't fail if socket emit fails
+                    # Non-blocking - don't fail if notification dispatch fails
                     log.warning(
-                        "Failed to emit socket notification for direct assignment",
+                        "Failed to dispatch direct assignment notification",
                         lead_id=db_lead.id,
                         error=str(e)
                     )
@@ -1204,6 +1209,9 @@ async def assign_lead_manually(
 ) -> models.Lead:
     """
     Gán lead thủ công cho một officer, cập nhật trạng thái và ghi logs.
+
+    ✅ REFACTORED: Now uses notification_dispatcher instead of direct socket calls.
+    This ensures notifications are persisted to database AND sent via Socket.IO/Email.
     """
     async with db.begin_nested():
         try:
@@ -1260,7 +1268,7 @@ async def assign_lead_manually(
                 officer_id=officer_id,
                 assigner_id=assigner.id,
             )
-            # Commit transaction
+            # Commit nested transaction (auto-commits on context exit)
 
         except Exception as e:
             # Rollback tự động
@@ -1273,8 +1281,50 @@ async def assign_lead_manually(
             )
             raise e
 
-        # Trả về lead đã được tải đầy đủ sau khi commit thành công
-        return await get_lead_by_id(db, lead_id)
+    # === ✅ REFACTOR: Dispatch notification after transaction commit ===
+    try:
+        from ..core.events import SystemEvents
+        from .notification_dispatcher import dispatch
+
+        # Load lead relationships for notification payload
+        await db.refresh(lead, ["offering", "unit"])
+
+        # Prepare notification payload according to LEAD_ASSIGNED schema
+        notification_payload = {
+            "lead_id": lead.id,
+            "officer_id": officer.id,
+            "actor_id": assigner.id,
+            "lead_name": lead.full_name or "Unknown",
+            "lead_phone": lead.phone or "",
+            "offering_name": f"{lead.offering.program.name} - {lead.offering.offering_type}" if lead.offering and lead.offering.program else (lead.offering.offering_type if lead.offering else "N/A")
+        }
+
+        # Dispatch notification (saves to DB + sends via Socket.IO/Email)
+        await dispatch(
+            db=db,
+            event=SystemEvents.LEAD_ASSIGNED,
+            payload=notification_payload,
+            dedupe_key=f"lead_assigned:{lead.id}:{officer.id}"
+        )
+
+        log.info(
+            "Manual assignment notification dispatched",
+            lead_id=lead.id,
+            officer_id=officer.id,
+            assigner_id=assigner.id
+        )
+    except Exception as e:
+        # Log but don't fail - lead assignment already succeeded
+        log.error(
+            "Failed to dispatch assignment notification (lead still assigned successfully)",
+            lead_id=lead.id,
+            officer_id=officer.id,
+            error=str(e),
+            exc_info=True
+        )
+
+    # Trả về lead đã được tải đầy đủ sau khi commit thành công
+    return await get_lead_by_id(db, lead_id)
 
 
 async def get_lead_timeline(db: AsyncSession, lead_id: int) -> List[dict]:

@@ -1,4 +1,10 @@
 # app/services/assignment_service.py
+"""
+Lead Assignment Service - Automatic lead distribution logic.
+
+✅ REFACTORED: Now uses notification_dispatcher for all notifications.
+This ensures notifications are persisted to database AND sent via Socket.IO/Email.
+"""
 import logging
 from datetime import datetime, timezone
 
@@ -8,7 +14,8 @@ from sqlalchemy.exc import OperationalError  # Dùng để bắt LockNotAvailabl
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models
-from ..socket_manager import emit_lead_assigned, emit_lead_assignment_failed
+from ..core.events import SystemEvents
+from .notification_dispatcher import dispatch
 from .status_helper import StatusHelper, AssignmentStatus
 
 # Lấy logger chuẩn ở đây, dùng làm fallback
@@ -90,13 +97,25 @@ async def automatically_assign_lead(
                     StatusHelper.set_assignment_status(lead, AssignmentStatus.FAILED)
                     db.add(lead)
 
-                    # Emit socket event for real-time dashboard update
-                    await emit_lead_assignment_failed(
-                        lead_id=lead_id,
-                        unit_id=lead_unit_id,
-                        reason="no_officers_available",
-                        lead_data={"name": lead.full_name or "Unknown"}
-                    )
+                    # ✅ REFACTOR: Dispatch notification for assignment failure
+                    try:
+                        await dispatch(
+                            db=db,
+                            event=SystemEvents.LEAD_ASSIGNMENT_FAILED,
+                            payload={
+                                "lead_id": lead_id,
+                                "unit_id": lead_unit_id,
+                                "reason": "No officers available",
+                                "lead_name": lead.full_name or "Unknown",
+                                "actor_id": 0  # System actor
+                            },
+                            dedupe_key=f"lead_assignment_failed:{lead_id}:no_officers"
+                        )
+                    except Exception as e:
+                        log.error(
+                            f"[Lead ID: {lead_id}] Failed to dispatch assignment failure notification",
+                            error=str(e)
+                        )
 
                     return {"status": "failed", "reason": "no_officers_available", "lead_id": lead_id, "unit_id": lead_unit_id}
 
@@ -172,13 +191,25 @@ async def automatically_assign_lead(
                     StatusHelper.set_assignment_status(lead, AssignmentStatus.FAILED)
                     db.add(lead)
 
-                    # Emit socket event for real-time dashboard update
-                    await emit_lead_assignment_failed(
-                        lead_id=lead_id,
-                        unit_id=lead_unit_id,
-                        reason="all_officers_at_capacity",
-                        lead_data={"name": lead.full_name or "Unknown"}
-                    )
+                    # ✅ REFACTOR: Dispatch notification for assignment failure
+                    try:
+                        await dispatch(
+                            db=db,
+                            event=SystemEvents.LEAD_ASSIGNMENT_FAILED,
+                            payload={
+                                "lead_id": lead_id,
+                                "unit_id": lead_unit_id,
+                                "reason": "All officers at full capacity",
+                                "lead_name": lead.full_name or "Unknown",
+                                "actor_id": 0  # System actor
+                            },
+                            dedupe_key=f"lead_assignment_failed:{lead_id}:capacity"
+                        )
+                    except Exception as e:
+                        log.error(
+                            f"[Lead ID: {lead_id}] Failed to dispatch assignment failure notification",
+                            error=str(e)
+                        )
 
                     return {"status": "failed", "reason": "all_officers_at_capacity", "lead_id": lead_id, "unit_id": lead_unit_id}
 
@@ -231,35 +262,46 @@ async def automatically_assign_lead(
                     f"[Lead ID: {lead_id}] Lead assignment successful to officer {chosen_one.id}."
                 )
 
-                # === BƯỚC 7: Emit Socket.IO Event for Real-time Notification ===
-                # Load relationships để lấy thông tin đầy đủ cho event payload
-                await db.refresh(lead, ["unit", "offering"])
+        # Kết thúc `async with db.begin_nested()` - Nested transaction commits (savepoint)
 
-                # Prepare lead data for socket event
-                lead_data = {
-                    "name": lead.full_name or "Unknown",
-                    "phone": lead.phone or "",
-                    "email": lead.email or "",
-                    "offering_name": lead.offering.offering_type if lead.offering else "N/A",
-                    "unit_name": lead.unit.name if lead.unit else "N/A",
-                    "priority": "normal",  # Can be enhanced with actual priority field
-                }
+    # === ✅ REFACTOR: Dispatch notification after nested transaction ===
+    # This happens after DB changes are saved (in nested transaction)
+    # Dispatcher will commit the outer transaction and send notifications
+    try:
+        # Load relationships for notification payload
+        await db.refresh(lead, ["unit", "offering"])
 
-                # Emit event to officer's room
-                await emit_lead_assigned(
-                    lead_id=lead.id,
-                    officer_id=chosen_one.id,
-                    lead_data=lead_data,
-                    assignment_type="automatic"
-                )
-                log.info(
-                    f"[Lead ID: {lead_id}] Socket.IO 'lead_assigned' event emitted to officer {chosen_one.id}."
-                )
+        # Prepare notification payload according to LEAD_ASSIGNED schema
+        notification_payload = {
+            "lead_id": lead.id,
+            "officer_id": chosen_one.id,
+            "actor_id": 0,  # System actor for automatic assignments
+            "lead_name": lead.full_name or "Unknown",
+            "lead_phone": lead.phone or "",
+            "offering_name": f"{lead.offering.program.name} - {lead.offering.offering_type}" if lead.offering and hasattr(lead.offering, 'program') and lead.offering.program else (lead.offering.offering_type if lead.offering else "N/A")
+        }
 
-                # Return success result
-                return {"status": "assigned", "lead_id": lead_id, "officer_id": chosen_one.id}
+        # Dispatch notification (saves to DB + commits + sends via Socket.IO/Email)
+        await dispatch(
+            db=db,
+            event=SystemEvents.LEAD_ASSIGNED,
+            payload=notification_payload,
+            dedupe_key=f"lead_assigned:{lead.id}:{chosen_one.id}"
+        )
 
-        # Kết thúc `async with db.begin_nested()` - Tự động commit nếu không có lỗi
+        log.info(
+            f"[Lead ID: {lead_id}] Automatic assignment notification dispatched to officer {chosen_one.id}."
+        )
+    except Exception as e:
+        # Log but don't fail - lead assignment already succeeded
+        log.error(
+            f"[Lead ID: {lead_id}] Failed to dispatch assignment notification (lead still assigned successfully)",
+            error=str(e),
+            exc_info=True
+        )
+
+    # Return success result
+    return {"status": "assigned", "lead_id": lead_id, "officer_id": chosen_one.id}
 
     except OperationalError as e:
         # Bắt lỗi "LockNotAvailableError" (chủ yếu cho việc khóa Lead ban đầu)

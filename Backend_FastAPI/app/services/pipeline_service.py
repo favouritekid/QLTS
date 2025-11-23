@@ -1,4 +1,10 @@
 # app/services/pipeline_service.py
+"""
+Pipeline Configuration Service - Manages pipeline stages and consultation statuses.
+
+✅ REFACTORED: Now uses notification_dispatcher for all config change notifications.
+This ensures notifications are persisted to database AND sent via Socket.IO.
+"""
 import json  # ✅ For JSON serialization
 from typing import List, Optional
 
@@ -9,6 +15,8 @@ from sqlalchemy.orm import selectinload
 
 from .. import models, schemas
 from ..config import settings  # ✅ For cache TTL
+from ..core.events import SystemEvents
+from .notification_dispatcher import dispatch
 # ✅ Import Redis utilities including distributed lock
 from ..database import (
     safe_redis_delete,
@@ -17,7 +25,6 @@ from ..database import (
     redis_distributed_lock,  # ✅ TASK 5.4: Replace asyncio.Lock with Redis distributed lock
 )
 from ..utils.exceptions import DuplicateResourceError, ResourceNotFoundError
-from ..socket_manager import emit_pipeline_config_updated
 
 log = structlog.get_logger(__name__)
 
