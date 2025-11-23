@@ -417,12 +417,103 @@ async def get_leads(
     return total_count, leads
 
 
-async def create_lead(db: AsyncSession, lead_in: schemas.LeadCreate) -> models.Lead:
-    """Tạo Lead mới, ném DuplicateResourceError nếu trùng."""
+async def create_lead(
+    db: AsyncSession,
+    lead_in: schemas.LeadCreate,
+    created_by: models.User = None
+) -> models.Lead:
+    """
+    Tạo Lead mới với role-based logic.
+
+    Role-based behavior:
+    - Admin: Can set any unit_id, can assign to any officer or use auto-assignment
+    - Manager: Can assign to officers in their unit or use auto-assignment
+    - Officer: Auto-assigned to themselves, unit forced to their unit
+
+    Args:
+        db: Database session
+        lead_in: Lead creation data
+        created_by: User creating the lead (determines role-based behavior)
+
+    Returns:
+        Created Lead model
+
+    Raises:
+        DuplicateResourceError: If lead with same email/phone exists in unit
+        PermissionDeniedError: If user tries to assign to officer outside their scope
+    """
     # Di chuyển import vào đây để phá vỡ circular import
     from ..celery_utils import process_automatic_lead_assignment_task
+    from datetime import datetime, timezone
 
     try:
+        # === ROLE-BASED PREPROCESSING ===
+        create_data = lead_in.model_dump()
+        direct_assignment_officer_id = None  # Will be set if direct assignment is needed
+        skip_auto_assignment = False
+
+        if created_by:
+            user_role = created_by.role
+
+            if user_role == "officer":
+                # Officer: Force unit to their unit, auto-assign to themselves
+                create_data["unit_id"] = created_by.unit_id
+                direct_assignment_officer_id = created_by.id
+                skip_auto_assignment = True
+                log.info(
+                    "Officer creating lead - will be assigned to themselves",
+                    officer_id=created_by.id,
+                    unit_id=created_by.unit_id
+                )
+
+            elif user_role == "manager":
+                # Manager: Can choose officer in their unit or use auto-assignment
+                if create_data.get("assigned_officer_id"):
+                    # Validate officer belongs to manager's unit
+                    officer = await db.get(models.User, create_data["assigned_officer_id"])
+                    if not officer or officer.unit_id != created_by.unit_id:
+                        raise PermissionDeniedError(
+                            detail="Manager can only assign leads to officers in their unit"
+                        )
+                    if officer.role != "officer":
+                        raise PermissionDeniedError(
+                            detail="Can only assign leads to users with 'officer' role"
+                        )
+                    direct_assignment_officer_id = create_data["assigned_officer_id"]
+                    skip_auto_assignment = True
+                    log.info(
+                        "Manager directly assigning lead to officer",
+                        manager_id=created_by.id,
+                        officer_id=direct_assignment_officer_id
+                    )
+                # If no officer specified, use auto-assignment (Celery)
+
+            elif user_role == "admin":
+                # Admin: Full control - can assign to any officer or use auto
+                if create_data.get("assigned_officer_id"):
+                    # Validate officer exists and has correct role
+                    officer = await db.get(models.User, create_data["assigned_officer_id"])
+                    if not officer:
+                        raise ResourceNotFoundError(
+                            detail=f"Officer with id {create_data['assigned_officer_id']} not found"
+                        )
+                    if officer.role != "officer":
+                        raise PermissionDeniedError(
+                            detail="Can only assign leads to users with 'officer' role"
+                        )
+                    direct_assignment_officer_id = create_data["assigned_officer_id"]
+                    skip_auto_assignment = True
+                    log.info(
+                        "Admin directly assigning lead to officer",
+                        admin_id=created_by.id,
+                        officer_id=direct_assignment_officer_id
+                    )
+                # If no officer specified, use auto-assignment (Celery)
+
+        # Remove assigned_officer_id from create_data (it's not a Lead model field for creation)
+        create_data.pop("assigned_officer_id", None)
+
+        # === DUPLICATE CHECK ===
         # Kiểm tra trùng lặp email hoặc phone trong cùng unit
         # Build phone conditions
         phone_conditions = [models.Lead.phone == lead_in.phone]
@@ -431,15 +522,21 @@ async def create_lead(db: AsyncSession, lead_in: schemas.LeadCreate) -> models.L
             phone_conditions.append(models.Lead.phone2 == lead_in.phone)
             phone_conditions.append(models.Lead.phone2 == lead_in.phone2)
 
+        # Build email condition - only check if email is provided
+        email_condition = models.Lead.email == lead_in.email if lead_in.email else None
+
+        # Build OR conditions
+        if email_condition is not None:
+            duplicate_conditions = or_(email_condition, *phone_conditions)
+        else:
+            duplicate_conditions = or_(*phone_conditions)
+
         existing_lead_query = (
             select(models.Lead)
             .where(
-                models.Lead.unit_id == lead_in.unit_id,
+                models.Lead.unit_id == create_data["unit_id"],
                 models.Lead.deleted_at.is_(None),  # Exclude soft-deleted
-                or_(
-                    models.Lead.email == lead_in.email,
-                    *phone_conditions  # Check all phone combinations
-                )
+                duplicate_conditions
             )
             .with_for_update()  # Khóa để tránh race condition khi tạo
         )
@@ -447,7 +544,7 @@ async def create_lead(db: AsyncSession, lead_in: schemas.LeadCreate) -> models.L
         existing_lead = existing_lead_result.scalar_one_or_none()
         if existing_lead:
             # Determine which field caused the duplicate
-            if existing_lead.email == lead_in.email:
+            if lead_in.email and existing_lead.email == lead_in.email:
                 raise DuplicateResourceError(
                     detail="Lead with this email already exists in the unit."
                 )
@@ -456,13 +553,11 @@ async def create_lead(db: AsyncSession, lead_in: schemas.LeadCreate) -> models.L
                     detail="Lead with this phone number already exists in the unit."
                 )
 
-        # Chuẩn bị dữ liệu và tạo đối tượng Lead
-        create_data = lead_in.model_dump()
-
         # === NEW FEATURE: Shared Offering Distribution ===
         # If Lead has offering_id, determine target unit via distribution config
         # This overrides the unit_id provided by user (if any offering-based routing exists)
-        if create_data.get("offering_id"):
+        # SKIP distribution if officer is creating lead (they keep lead in their unit)
+        if create_data.get("offering_id") and not skip_auto_assignment:
             original_unit_id = create_data.get("unit_id")
             target_unit_id = await distribution_service.get_target_unit_for_offering(
                 db,
@@ -533,6 +628,19 @@ async def create_lead(db: AsyncSession, lead_in: schemas.LeadCreate) -> models.L
             reason="Lead created",
         )
 
+        # === DIRECT ASSIGNMENT (if specified) ===
+        # If direct assignment is needed, set it before commit
+        if direct_assignment_officer_id:
+            db_lead.assigned_officer_id = direct_assignment_officer_id
+            db_lead.assigned_at = datetime.now(timezone.utc)
+            db_lead.status = "assigned"
+            log.info(
+                "Lead directly assigned to officer",
+                lead_id=db_lead.id,
+                officer_id=direct_assignment_officer_id,
+                assignment_type="direct"
+            )
+
         # Commit transaction
         await db.commit()
         # Refresh để lấy dữ liệu mới nhất (bao gồm cả ID nếu chưa flush)
@@ -541,18 +649,60 @@ async def create_lead(db: AsyncSession, lead_in: schemas.LeadCreate) -> models.L
             "New lead created successfully", lead_id=db_lead.id, email=db_lead.email
         )
 
-        # Dispatch Celery task SAU KHI commit thành công
-        try:
-            process_automatic_lead_assignment_task.delay(db_lead.id)
-            log.info("Auto-assignment task dispatched successfully", lead_id=db_lead.id)
-        except Exception as e:
-            # Ghi log lỗi nếu không dispatch được, nhưng không rollback transaction
-            log.error(
-                "Failed to dispatch Celery auto-assignment task",
-                lead_id=db_lead.id,
-                error=str(e),
-                exc_info=True,
-            )
+        # === POST-COMMIT ACTIONS ===
+        if skip_auto_assignment:
+            # Direct assignment was done - emit socket notification
+            if direct_assignment_officer_id:
+                try:
+                    from .. import socket_manager
+                    # Get lead data for notification
+                    lead_data = {
+                        "lead_name": db_lead.full_name,
+                        "lead_phone": db_lead.phone,
+                        "lead_email": db_lead.email,
+                    }
+                    # Load offering name if available
+                    if db_lead.offering_id:
+                        offering = await db.get(models.ProgramOffering, db_lead.offering_id)
+                        if offering:
+                            lead_data["offering_name"] = f"{offering.program.name} - {offering.offering_type}" if offering.program else offering.offering_type
+                    # Load unit name
+                    if db_lead.unit_id:
+                        unit = await db.get(models.OrganizationUnit, db_lead.unit_id)
+                        if unit:
+                            lead_data["unit_name"] = unit.name
+
+                    await socket_manager.emit_lead_assigned(
+                        lead_id=db_lead.id,
+                        officer_id=direct_assignment_officer_id,
+                        lead_data=lead_data,
+                        assignment_type="direct"
+                    )
+                    log.info(
+                        "Socket notification sent for direct assignment",
+                        lead_id=db_lead.id,
+                        officer_id=direct_assignment_officer_id
+                    )
+                except Exception as e:
+                    # Non-blocking - don't fail if socket emit fails
+                    log.warning(
+                        "Failed to emit socket notification for direct assignment",
+                        lead_id=db_lead.id,
+                        error=str(e)
+                    )
+        else:
+            # Dispatch Celery task for auto-assignment
+            try:
+                process_automatic_lead_assignment_task.delay(db_lead.id)
+                log.info("Auto-assignment task dispatched successfully", lead_id=db_lead.id)
+            except Exception as e:
+                # Ghi log lỗi nếu không dispatch được, nhưng không rollback transaction
+                log.error(
+                    "Failed to dispatch Celery auto-assignment task",
+                    lead_id=db_lead.id,
+                    error=str(e),
+                    exc_info=True,
+                )
 
         # Trả về đối tượng Lead đã được load đầy đủ (bao gồm relations)
         return await get_lead_by_id(db, db_lead.id)

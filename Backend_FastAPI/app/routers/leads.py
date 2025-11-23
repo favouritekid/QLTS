@@ -26,8 +26,15 @@ async def create_new_lead(
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
 ):
-    """Tạo một Lead mới."""
-    return await lead_service.create_lead(db, lead_in)
+    """
+    Tạo một Lead mới.
+
+    Role-based behavior:
+    - Admin: Can set any unit_id, can assign to any officer or use auto-assignment
+    - Manager: Can assign to officers in their unit or use auto-assignment
+    - Officer: Auto-assigned to themselves, unit forced to their unit
+    """
+    return await lead_service.create_lead(db, lead_in, created_by=current_user)
 
 
 @router.get("", response_model=schemas.LeadsPage)

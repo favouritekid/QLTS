@@ -36,6 +36,7 @@ import {
 
 import { useCreateLead, useUpdateLead } from "@/hooks/useLeads";
 import { useAuth } from "@/hooks/useAuth";
+import { useAdminUsersList } from "@/hooks/useAdminUsers";
 import { SmartUnitSelector, SmartOfferingSelector } from "@/components/common/selectors";
 import { LEAD_SOURCE_OPTIONS } from "@/constants";
 import type { Lead } from "@/types/lead.types";
@@ -93,6 +94,9 @@ const leadSchema = z.object({
   location: z.string().max(255, "Location must be less than 255 characters").optional().nullable(),
   offering_id: z.number().optional().nullable(),
   unit_id: z.string().min(1, "Organization unit is required"),
+  // For Admin/Manager: choose officer or use auto-assignment
+  // "auto" = automatic distribution, number string = specific officer ID
+  assigned_officer_id: z.string().optional().nullable(),
 });
 
 type LeadFormValues = z.infer<typeof leadSchema>;
@@ -112,6 +116,9 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
   const isCreate = mode === "create";
   const isEdit = mode === "edit";
   const isOfficer = user?.role === "officer"; // Officers can only create in their own unit
+  const isAdmin = user?.role === "admin";
+  const isManager = user?.role === "manager";
+  const canSelectOfficer = isCreate && (isAdmin || isManager); // Only Admin/Manager can select officer when creating
 
   const form = useForm<LeadFormValues>({
     resolver: zodResolver(leadSchema),
@@ -139,8 +146,25 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
           location: null,
           offering_id: null,
           unit_id: user?.unit_id?.toString() || "", // Auto-fill with current user's unit
+          assigned_officer_id: "auto", // Default to auto-assignment
         },
   });
+
+  // Watch unit_id to fetch officers for that unit
+  const selectedUnitId = form.watch("unit_id");
+
+  // Fetch officers for the selected unit (only for Admin/Manager when creating)
+  const { data: officersData } = useAdminUsersList({
+    unit_id: selectedUnitId ? parseInt(selectedUnitId, 10) : undefined,
+    role: "officer",
+    status: "active",
+    page_size: 100, // Get all officers in unit
+  });
+
+  // Filter to only show available officers
+  const availableOfficers = officersData?.users?.filter(
+    (u) => u.availability_status === "available" || u.availability_status === undefined
+  ) || [];
 
   // Reset form when dialog opens or lead changes
   useEffect(() => {
@@ -174,15 +198,21 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
         location: null,
         offering_id: null,
         unit_id: user?.unit_id?.toString() || "", // Auto-fill with current user's unit
+        assigned_officer_id: "auto", // Default to auto-assignment
       });
     }
   }, [open, lead, isEdit, isCreate, form, user]);
 
   const onSubmit = async (data: LeadFormValues) => {
     // Convert unit_id string to number for API
+    // Convert assigned_officer_id: "auto" -> null, number string -> number
     const apiData = {
       ...data,
       unit_id: parseInt(data.unit_id, 10),
+      assigned_officer_id:
+        data.assigned_officer_id && data.assigned_officer_id !== "auto"
+          ? parseInt(data.assigned_officer_id, 10)
+          : null, // null = auto-assignment
     };
 
     if (isCreate) {
@@ -192,8 +222,10 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
         },
       });
     } else if (isEdit && lead) {
+      // Don't send assigned_officer_id for updates (use separate assign endpoint)
+      const { assigned_officer_id, ...updateData } = apiData;
       updateMutation.mutate(
-        { id: lead.id, data: apiData },
+        { id: lead.id, data: updateData },
         {
           onSuccess: () => {
             onOpenChange(false);
@@ -359,6 +391,45 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                   </FormItem>
                 )}
               />
+
+              {/* Officer Assignment - Only for Admin/Manager when creating */}
+              {canSelectOfficer && (
+                <FormField
+                  control={form.control}
+                  name="assigned_officer_id"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Assign to Officer</FormLabel>
+                      <Select
+                        onValueChange={field.onChange}
+                        value={field.value || "auto"}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select officer" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="auto">
+                            🔄 Automatic Assignment (Round Robin)
+                          </SelectItem>
+                          {availableOfficers.map((officer) => (
+                            <SelectItem key={officer.id} value={officer.id.toString()}>
+                              {officer.full_name} ({officer.email})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormDescription>
+                        {field.value === "auto" || !field.value
+                          ? "System will automatically assign to an available officer"
+                          : "Lead will be directly assigned to the selected officer"}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
             </div>
 
             {/* Academic Information */}

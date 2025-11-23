@@ -119,6 +119,11 @@ export interface Lead {
 
 /**
  * Lead creation payload
+ *
+ * Role-based behavior:
+ * - Admin: Can set any unit_id, can assign to any officer or use auto-assignment
+ * - Manager: Can assign to officers in their unit or use auto-assignment
+ * - Officer: Auto-assigned to themselves, unit forced to their unit
  */
 export interface LeadCreate {
   full_name: string
@@ -131,6 +136,8 @@ export interface LeadCreate {
   location?: string | null
   offering_id?: number | null
   unit_id: number
+  // Direct assignment: null = auto-assign (Celery), number = assign to specific officer
+  assigned_officer_id?: number | null
 }
 
 /**

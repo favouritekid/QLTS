@@ -14,7 +14,7 @@ class Lead(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     full_name = Column(String(255), nullable=False)
-    email = Column(String(255), nullable=False, index=True)
+    email = Column(String(255), nullable=True, index=True)  # Email is optional
     phone = Column(String(20), nullable=False, index=True)
     phone2 = Column(String(20), nullable=True, index=True)  # Số điện thoại phụ
     source = Column(String(50), nullable=False)

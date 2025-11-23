@@ -107,7 +107,19 @@ class LeadBase(BaseModel):
 
 
 class LeadCreate(LeadBase):
-    pass
+    """
+    Schema for creating a new Lead.
+
+    Role-based behavior:
+    - Admin: Can set any unit_id, can assign to any officer or use auto-assignment
+    - Manager: unit_id defaults to their unit, can assign to officers in their unit
+    - Officer: unit_id forced to their unit, auto-assigned to themselves
+
+    assigned_officer_id:
+    - None (default): Use automatic distribution/assignment (Celery task)
+    - Integer: Directly assign to specified officer (skip auto-assignment)
+    """
+    assigned_officer_id: Optional[int] = None  # None = auto-assign, Integer = direct assign
 
 
 class LeadUpdate(BaseModel):
