@@ -46,6 +46,22 @@ class SystemEvents(str, Enum):
     Recipients: The assigned officer (officer_id)
     """
 
+    LEAD_ASSIGNMENT_FAILED = "lead_assignment_failed"
+    """
+    Triggered when automatic lead assignment fails.
+
+    Payload Schema:
+        {
+            "lead_id": int,           # Required: ID of the lead that couldn't be assigned
+            "unit_id": int,           # Required: Unit that was trying to assign
+            "reason": str,            # Required: Failure reason ("no_officers_available" | "all_officers_at_capacity")
+            "lead_name": Optional[str],    # Name of the lead
+            "actor_id": int           # System actor (0 for automatic assignments)
+        }
+
+    Recipients: Unit managers (need to take action)
+    """
+
     LEAD_REASSIGNED = "lead_reassigned"
     """
     Triggered when a lead is transferred to a different unit/officer.

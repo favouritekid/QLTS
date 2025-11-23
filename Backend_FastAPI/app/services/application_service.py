@@ -2,6 +2,9 @@
 """
 Service layer cho Application (Hồ sơ Tuyển sinh).
 
+✅ REFACTORED: Now uses notification_dispatcher for all notifications.
+This ensures notifications are persisted to database AND sent via Socket.IO/Email.
+
 Tuân thủ kiến trúc phân lớp:
 - Service chứa 100% logic nghiệp vụ và truy vấn Database
 - Không phụ thuộc vào Request/Response của FastAPI
@@ -16,12 +19,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from .. import models, schemas
+from ..core.events import SystemEvents
+from .notification_dispatcher import dispatch
 from ..utils.exceptions import ResourceNotFoundError, BadRequest
-from ..socket_manager import (
-    emit_application_created,
-    emit_application_status_changed,
-    emit_application_documents_updated,
-)
 
 log = structlog.get_logger(__name__)
 
@@ -98,22 +98,27 @@ async def create_application(
         officer_id=current_user.id,
     )
 
-    # === SOCKET.IO EVENT: Emit application_created event ===
-    lead_name = new_application.lead.full_name or "Unknown"
-    major_program_name = new_application.major_program.name if new_application.major_program else "N/A"
-
-    application_data = {
-        "lead_name": lead_name,
-        "major_program_name": major_program_name,
-        "status": new_application.status,
-    }
-
-    await emit_application_created(
-        application_id=new_application.id,
-        lead_id=lead_id,
-        officer_id=current_user.id,
-        application_data=application_data,
-    )
+    # === ✅ REFACTOR: Dispatch notification instead of direct socket emit ===
+    try:
+        await dispatch(
+            db=db,
+            event=SystemEvents.APPLICATION_CREATED,
+            payload={
+                "application_id": new_application.id,
+                "lead_id": lead_id,
+                "officer_id": current_user.id,
+                "major_program_name": new_application.major_program.name if new_application.major_program else "N/A",
+                "actor_id": current_user.id
+            },
+            dedupe_key=f"application_created:{new_application.id}"
+        )
+        log.info("Application creation notification dispatched", application_id=new_application.id)
+    except Exception as e:
+        log.error(
+            "Failed to dispatch application creation notification",
+            application_id=new_application.id,
+            error=str(e)
+        )
 
     return new_application
 
@@ -229,28 +234,54 @@ async def update_application(
         updated_fields=list(update_dict.keys()),
     )
 
-    # === SOCKET.IO EVENTS: Emit events based on what changed ===
+    # === ✅ REFACTOR: Dispatch notifications instead of direct socket emits ===
     if current_user and application.officer_id:
-        # Emit status changed event
+        # Dispatch status changed notification
         if status_changed and old_status != application.status:
-            await emit_application_status_changed(
-                application_id=application.id,
-                lead_id=application.lead_id,
-                officer_id=application.officer_id,
-                old_status=old_status,
-                new_status=application.status,
-                changed_by_username=current_user.username,
-            )
+            try:
+                await dispatch(
+                    db=db,
+                    event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                    payload={
+                        "application_id": application.id,
+                        "lead_id": application.lead_id,
+                        "officer_id": application.officer_id,
+                        "old_status": old_status,
+                        "new_status": application.status,
+                        "actor_id": current_user.id
+                    },
+                    dedupe_key=f"application_status_changed:{application.id}:{application.status}"
+                )
+                log.info("Application status change notification dispatched", application_id=application.id)
+            except Exception as e:
+                log.error(
+                    "Failed to dispatch application status change notification",
+                    application_id=application.id,
+                    error=str(e)
+                )
 
-        # Emit documents updated event
+        # Dispatch documents updated notification
         if documents_changed and old_documents != application.documents:
-            await emit_application_documents_updated(
-                application_id=application.id,
-                lead_id=application.lead_id,
-                officer_id=application.officer_id,
-                updated_by_username=current_user.username,
-                documents_summary="Documents checklist updated",
-            )
+            try:
+                await dispatch(
+                    db=db,
+                    event=SystemEvents.APPLICATION_DOCUMENTS_UPDATED,
+                    payload={
+                        "application_id": application.id,
+                        "lead_id": application.lead_id,
+                        "officer_id": application.officer_id,
+                        "document_summary": "Documents checklist updated",
+                        "actor_id": current_user.id
+                    },
+                    dedupe_key=f"application_documents_updated:{application.id}:{datetime.now(timezone.utc).isoformat()}"
+                )
+                log.info("Application documents update notification dispatched", application_id=application.id)
+            except Exception as e:
+                log.error(
+                    "Failed to dispatch application documents update notification",
+                    application_id=application.id,
+                    error=str(e)
+                )
 
     return application
 

@@ -1204,6 +1204,9 @@ async def assign_lead_manually(
 ) -> models.Lead:
     """
     Gán lead thủ công cho một officer, cập nhật trạng thái và ghi logs.
+
+    ✅ REFACTORED: Now uses notification_dispatcher instead of direct socket calls.
+    This ensures notifications are persisted to database AND sent via Socket.IO/Email.
     """
     async with db.begin_nested():
         try:
@@ -1260,7 +1263,7 @@ async def assign_lead_manually(
                 officer_id=officer_id,
                 assigner_id=assigner.id,
             )
-            # Commit transaction
+            # Commit nested transaction (auto-commits on context exit)
 
         except Exception as e:
             # Rollback tự động
@@ -1273,8 +1276,50 @@ async def assign_lead_manually(
             )
             raise e
 
-        # Trả về lead đã được tải đầy đủ sau khi commit thành công
-        return await get_lead_by_id(db, lead_id)
+    # === ✅ REFACTOR: Dispatch notification after transaction commit ===
+    try:
+        from ..core.events import SystemEvents
+        from .notification_dispatcher import dispatch
+
+        # Load lead relationships for notification payload
+        await db.refresh(lead, ["offering", "unit"])
+
+        # Prepare notification payload according to LEAD_ASSIGNED schema
+        notification_payload = {
+            "lead_id": lead.id,
+            "officer_id": officer.id,
+            "actor_id": assigner.id,
+            "lead_name": lead.full_name or "Unknown",
+            "lead_phone": lead.phone or "",
+            "offering_name": f"{lead.offering.program.name} - {lead.offering.offering_type}" if lead.offering and lead.offering.program else (lead.offering.offering_type if lead.offering else "N/A")
+        }
+
+        # Dispatch notification (saves to DB + sends via Socket.IO/Email)
+        await dispatch(
+            db=db,
+            event=SystemEvents.LEAD_ASSIGNED,
+            payload=notification_payload,
+            dedupe_key=f"lead_assigned:{lead.id}:{officer.id}"
+        )
+
+        log.info(
+            "Manual assignment notification dispatched",
+            lead_id=lead.id,
+            officer_id=officer.id,
+            assigner_id=assigner.id
+        )
+    except Exception as e:
+        # Log but don't fail - lead assignment already succeeded
+        log.error(
+            "Failed to dispatch assignment notification (lead still assigned successfully)",
+            lead_id=lead.id,
+            officer_id=officer.id,
+            error=str(e),
+            exc_info=True
+        )
+
+    # Trả về lead đã được tải đầy đủ sau khi commit thành công
+    return await get_lead_by_id(db, lead_id)
 
 
 async def get_lead_timeline(db: AsyncSession, lead_id: int) -> List[dict]:
