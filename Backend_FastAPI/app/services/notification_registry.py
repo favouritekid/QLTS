@@ -403,6 +403,22 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         notification_type="info",
         link_template="/admin/pipeline"
     ),
+
+    # =========================================================================
+    # OFFICER/OPERATIONAL EVENTS
+    # =========================================================================
+
+    SystemEvents.OFFICER_AVAILABILITY_CHANGED: NotificationConfig(
+        group=NotificationEventGroup.LEAD,
+        resolver=ActorExcludedResolver(AllAdminsResolver()),
+        template={
+            "title": "Officer Availability Changed",
+            "message": "${username} is now ${new_status}."
+        },
+        channels=["browser"],
+        notification_type="info",
+        link_template="/admin/officers"
+    ),
 }
 
 

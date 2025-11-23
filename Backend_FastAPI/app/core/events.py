@@ -410,3 +410,24 @@ class SystemEvents(str, Enum):
 
     Recipients: All admins
     """
+
+    # =========================================================================
+    # OFFICER/OPERATIONAL EVENTS
+    # =========================================================================
+
+    OFFICER_AVAILABILITY_CHANGED = "officer_availability_changed"
+    """
+    Triggered when an officer changes their availability status.
+
+    Payload Schema:
+        {
+            "officer_id": int,            # Required: ID of the officer
+            "new_status": str,            # Required: New availability status (available, busy, away)
+            "old_status": Optional[str],  # Previous status (if known)
+            "username": str,              # Officer's username
+            "unit_id": Optional[int],     # Officer's unit ID
+            "actor_id": int               # User who changed the status (usually the officer themselves)
+        }
+
+    Recipients: All admins and managers (for workload visibility)
+    """
