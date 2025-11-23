@@ -677,6 +677,17 @@ async def create_lead(
                 assignment_status=db_lead.assignment_status
             )
 
+        # === ✅ CRITICAL: Load relationships BEFORE commit to avoid greenlet errors ===
+        # Must load offering while we're still in transaction context
+        offering_name = ""
+        if db_lead.offering_id:
+            await db.refresh(db_lead, ["offering"])
+            if db_lead.offering and hasattr(db_lead.offering, 'program'):
+                await db.refresh(db_lead.offering, ["program"])
+                offering_name = f"{db_lead.offering.program.name} - {db_lead.offering.offering_type}" if db_lead.offering.program else db_lead.offering.offering_type
+            elif db_lead.offering:
+                offering_name = db_lead.offering.offering_type
+
         # Commit transaction
         await db.commit()
         # Refresh để lấy dữ liệu mới nhất (bao gồm cả ID nếu chưa flush)
@@ -686,16 +697,10 @@ async def create_lead(
         )
 
         # === ✅ REFACTOR: Dispatch LEAD_CREATED notification ===
+        # offering_name already loaded before commit to avoid greenlet errors
         try:
             from ..core.events import SystemEvents
             from .notification_dispatcher import dispatch
-
-            # Load relationships for notification payload
-            offering_name = ""
-            if db_lead.offering_id:
-                offering = await db.get(models.ProgramOffering, db_lead.offering_id)
-                if offering:
-                    offering_name = f"{offering.program.name} - {offering.offering_type}" if offering.program else offering.offering_type
 
             await dispatch(
                 db=db,
@@ -716,17 +721,11 @@ async def create_lead(
         # === POST-COMMIT ACTIONS ===
         if skip_auto_assignment:
             # Direct assignment was done - dispatch LEAD_ASSIGNED notification
+            # offering_name already loaded before commit to avoid greenlet errors
             if direct_assignment_officer_id:
                 try:
                     from ..core.events import SystemEvents
                     from .notification_dispatcher import dispatch
-
-                    # Load offering name if available
-                    offering_name = ""
-                    if db_lead.offering_id:
-                        offering = await db.get(models.ProgramOffering, db_lead.offering_id)
-                        if offering:
-                            offering_name = f"{offering.program.name} - {offering.offering_type}" if offering.program else offering.offering_type
 
                     await dispatch(
                         db=db,
