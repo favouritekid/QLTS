@@ -8,11 +8,19 @@ The dispatcher is the entry point for publishing events. It handles:
 3. Preference filtering
 4. Deduplication
 5. Bulk notification creation
-6. Celery task dispatch for async delivery
+6. Database commit
+7. Immediate Socket.IO emission (for real-time browser notifications)
+8. Celery task dispatch for email delivery and retries
 
 Transaction Safety:
-- All database operations are committed BEFORE Celery tasks are dispatched
-- If DB commit fails, no Celery tasks are sent (prevents ghost notifications)
+- All database operations are committed BEFORE any notifications are sent
+- Socket.IO notifications are emitted immediately after DB commit (no delay)
+- Celery tasks handle email delivery and retries in background
+- If DB commit fails, no notifications are sent (prevents ghost notifications)
+
+Real-time Delivery:
+- Browser notifications: Sent immediately via Socket.IO (instant toast)
+- Email notifications: Sent via Celery task (background processing)
 
 Usage:
     from app.services.notification_dispatcher import dispatch
@@ -181,7 +189,7 @@ async def dispatch(
         log.error(f"Failed to create notifications for event {event}")
         return []
 
-    # Step 7: Commit transaction BEFORE dispatching Celery tasks
+    # Step 7: Commit transaction BEFORE dispatching notifications
     try:
         await db.commit()
         log.info(f"Committed {len(notification_ids)} notifications for event {event}")
@@ -192,7 +200,19 @@ async def dispatch(
         await db.rollback()
         return []
 
-    # Step 8: Dispatch Celery task for async delivery
+    # Step 8: Emit Socket.IO notifications IMMEDIATELY for real-time delivery
+    # This ensures users see toast notifications without delay
+    if "browser" in config.channels:
+        try:
+            await _emit_notifications_immediate(db, notification_ids)
+        except Exception as e:
+            # Log but don't fail - notifications are in DB and Celery will retry
+            log.warning(
+                f"Failed to emit immediate Socket.IO for event {event}: {str(e)}. "
+                "Celery task will handle delivery."
+            )
+
+    # Step 9: Dispatch Celery task for email delivery and retries
     try:
         _dispatch_broadcast_task(
             notification_ids=notification_ids,
@@ -323,6 +343,77 @@ async def _bulk_create_notifications(
     return notification_ids
 
 
+async def _emit_notifications_immediate(
+    db: AsyncSession,
+    notification_ids: List[int]
+):
+    """
+    Emit Socket.IO notifications immediately for real-time delivery.
+
+    This function sends notifications to connected users via Socket.IO
+    without waiting for Celery task processing. This ensures users see
+    toast notifications instantly.
+
+    Args:
+        db: Database session
+        notification_ids: List of notification IDs to emit
+
+    Note:
+        This function only handles Socket.IO emission. Email delivery
+        is still handled by the Celery task for proper queueing.
+    """
+    if not notification_ids:
+        return
+
+    try:
+        from app.socket_manager import sio
+
+        # Fetch notifications from database
+        result = await db.execute(
+            select(models.Notification)
+            .where(models.Notification.id.in_(notification_ids))
+        )
+        notifications = result.scalars().all()
+
+        if not notifications:
+            log.warning(f"No notifications found for immediate emit: {notification_ids}")
+            return
+
+        # Emit each notification to the user's Socket.IO room
+        emitted_count = 0
+        for notification in notifications:
+            try:
+                room_name = f"user_room_{notification.user_id}"
+                await sio.emit(
+                    "notification",
+                    {
+                        "id": notification.id,
+                        "type": notification.type,
+                        "title": notification.title,
+                        "message": notification.message,
+                        "link": notification.link,
+                        "data": notification.data,
+                        "created_at": notification.created_at.isoformat()
+                        if notification.created_at else None,
+                        "is_read": notification.is_read,
+                    },
+                    room=room_name
+                )
+                emitted_count += 1
+            except Exception as e:
+                log.warning(
+                    f"Failed to emit notification {notification.id} to room {room_name}: {e}"
+                )
+
+        log.info(
+            f"Emitted {emitted_count}/{len(notifications)} notifications immediately via Socket.IO"
+        )
+
+    except Exception as e:
+        log.error(f"Failed to emit immediate Socket.IO notifications: {str(e)}")
+        raise
+
+
 def _dispatch_broadcast_task(
     notification_ids: List[int],
     channels: List[str],
@@ -332,7 +423,8 @@ def _dispatch_broadcast_task(
     Dispatch Celery task to broadcast notifications.
 
     This function queues the notification delivery for async processing.
-    Socket.IO push and email sending happen in the Celery worker.
+    Email sending happens in the Celery worker. Socket.IO is sent immediately
+    before this task is queued (see _emit_notifications_immediate).
 
     Args:
         notification_ids: List of notification IDs to broadcast
