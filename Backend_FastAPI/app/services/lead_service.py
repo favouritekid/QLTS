@@ -679,14 +679,24 @@ async def create_lead(
 
         # === ✅ CRITICAL: Load relationships BEFORE commit to avoid greenlet errors ===
         # Must load offering while we're still in transaction context
+        # Store relationship references immediately to avoid triggering lazy loads
         offering_name = ""
         if db_lead.offering_id:
             await db.refresh(db_lead, ["offering"])
-            if db_lead.offering and hasattr(db_lead.offering, 'program'):
-                await db.refresh(db_lead.offering, ["program"])
-                offering_name = f"{db_lead.offering.program.name} - {db_lead.offering.offering_type}" if db_lead.offering.program else db_lead.offering.offering_type
-            elif db_lead.offering:
-                offering_name = db_lead.offering.offering_type
+            offering_obj = db_lead.offering  # Store reference immediately
+
+            if offering_obj is not None:
+                # Check if offering has program_id before attempting to load
+                if hasattr(offering_obj, 'program_id') and offering_obj.program_id:
+                    await db.refresh(offering_obj, ["program"])
+                    program_obj = offering_obj.program  # Store reference
+
+                    if program_obj is not None:
+                        offering_name = f"{program_obj.name} - {offering_obj.offering_type}"
+                    else:
+                        offering_name = offering_obj.offering_type
+                else:
+                    offering_name = offering_obj.offering_type
 
         # Commit transaction
         await db.commit()
