@@ -355,6 +355,42 @@ export async function exportLeads(params?: LeadListParams): Promise<Blob> {
 }
 
 // ============================================
+// DISTRIBUTION PREVIEW
+// ============================================
+
+/**
+ * Distribution preview response type
+ */
+export interface DistributionPreviewResponse {
+  offering_id: number;
+  has_config: boolean;
+  next_unit_id: number | null;
+  next_unit_name: string | null;
+  configs: Array<{
+    unit_id: number;
+    unit_name: string;
+    weight: number;
+    priority: number;
+  }>;
+  total_slots: number;
+  cursor_position: number | null;
+}
+
+/**
+ * Get distribution preview for an offering
+ * Shows which unit will receive the next lead based on distribution config
+ *
+ * @param offeringId - Program offering ID to preview
+ * @returns Distribution preview data
+ */
+export async function getDistributionPreview(offeringId: number): Promise<DistributionPreviewResponse> {
+  const response = await api.get<DistributionPreviewResponse>('/api/leads/distribution-preview', {
+    params: { offering_id: offeringId }
+  })
+  return response.data
+}
+
+// ============================================
 // AGGREGATED EXPORTS
 // ============================================
 
@@ -389,6 +425,9 @@ export const leadsApi = {
   // Import/Export
   importLeads,
   exportLeads,
+
+  // Distribution
+  getDistributionPreview,
 }
 
 // Default export for convenience

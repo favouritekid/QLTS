@@ -451,6 +451,7 @@ async def create_lead(
         create_data = lead_in.model_dump()
         direct_assignment_officer_id = None  # Will be set if direct assignment is needed
         skip_auto_assignment = False
+        unit_already_distributed = False  # Flag to skip second distribution call
 
         if created_by:
             user_role = created_by.role
@@ -467,7 +468,9 @@ async def create_lead(
                 )
 
             elif user_role == "manager":
-                # Manager: Can choose officer in their unit or use auto-assignment
+                # Manager: Always use their unit
+                create_data["unit_id"] = created_by.unit_id
+                # Can choose officer in their unit or use auto-assignment
                 if create_data.get("assigned_officer_id"):
                     # Validate officer belongs to manager's unit
                     officer = await db.get(models.User, create_data["assigned_officer_id"])
@@ -489,6 +492,34 @@ async def create_lead(
                 # If no officer specified, use auto-assignment (Celery)
 
             elif user_role == "admin":
+                # Admin: unit_id can be auto-determined from offering distribution
+                # If offering_id is provided, try to get unit from distribution config FIRST
+                if create_data.get("offering_id") and not create_data.get("unit_id"):
+                    # Try to get target unit from distribution config
+                    target_unit_id = await distribution_service.get_target_unit_for_offering(
+                        db,
+                        offering_id=create_data["offering_id"],
+                        fallback_unit_id=None  # No fallback - we want to know if config exists
+                    )
+                    if target_unit_id:
+                        create_data["unit_id"] = target_unit_id
+                        unit_already_distributed = True  # Skip second distribution call
+                        log.info(
+                            "Admin: unit auto-determined from offering distribution",
+                            offering_id=create_data["offering_id"],
+                            unit_id=target_unit_id
+                        )
+                    else:
+                        raise BadRequest(
+                            detail="Cannot determine unit: No distribution config for this offering. Please select a unit manually."
+                        )
+
+                # If still no unit_id after trying offering distribution, error
+                if not create_data.get("unit_id"):
+                    raise BadRequest(
+                        detail="unit_id is required when no offering_id is provided"
+                    )
+
                 # Admin: Full control - can assign to any officer or use auto
                 if create_data.get("assigned_officer_id"):
                     # Validate officer exists and has correct role
@@ -556,8 +587,9 @@ async def create_lead(
         # === NEW FEATURE: Shared Offering Distribution ===
         # If Lead has offering_id, determine target unit via distribution config
         # This overrides the unit_id provided by user (if any offering-based routing exists)
-        # SKIP distribution if officer is creating lead (they keep lead in their unit)
-        if create_data.get("offering_id") and not skip_auto_assignment:
+        # SKIP distribution if officer/manager is creating lead (they keep lead in their unit)
+        # SKIP if unit was already determined via distribution in role preprocessing
+        if create_data.get("offering_id") and not skip_auto_assignment and not unit_already_distributed:
             original_unit_id = create_data.get("unit_id")
             target_unit_id = await distribution_service.get_target_unit_for_offering(
                 db,

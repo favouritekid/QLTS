@@ -1,11 +1,13 @@
 // src/components/leads/LeadDialog.tsx
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Loader2 } from "lucide-react";
+import { Loader2, Info } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { leadsApi } from "@/lib/api/leads";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -41,7 +43,7 @@ import { SmartUnitSelector, SmartOfferingSelector } from "@/components/common/se
 import { LEAD_SOURCE_OPTIONS } from "@/constants";
 import type { Lead } from "@/types/lead.types";
 
-// Validation schema
+// Validation schema - unit_id is optional (can be auto-determined from offering)
 const leadSchema = z.object({
   full_name: z
     .string()
@@ -93,11 +95,27 @@ const leadSchema = z.object({
     .nullable(),
   location: z.string().max(255, "Location must be less than 255 characters").optional().nullable(),
   offering_id: z.number().optional().nullable(),
-  unit_id: z.string().min(1, "Organization unit is required"),
+  // unit_id is optional for Admin when offering_id is provided (auto-determined from distribution config)
+  unit_id: z.string().optional().nullable(),
   // For Admin/Manager: choose officer or use auto-assignment
   // "auto" = automatic distribution, number string = specific officer ID
   assigned_officer_id: z.string().optional().nullable(),
 });
+
+// Distribution preview response type
+interface DistributionPreview {
+  offering_id: number;
+  has_config: boolean;
+  next_unit_id: number | null;
+  next_unit_name: string | null;
+  configs: Array<{
+    unit_id: number;
+    unit_name: string;
+    weight: number;
+    priority: number;
+  }>;
+  total_slots: number;
+}
 
 type LeadFormValues = z.infer<typeof leadSchema>;
 
@@ -150,8 +168,20 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
         },
   });
 
-  // Watch unit_id to fetch officers for that unit
+  // Watch unit_id and offering_id
   const selectedUnitId = form.watch("unit_id");
+  const selectedOfferingId = form.watch("offering_id");
+
+  // Fetch distribution preview when offering is selected (Admin only for create mode)
+  const { data: distributionPreview, isLoading: isLoadingPreview } = useQuery<DistributionPreview>({
+    queryKey: ["distribution-preview", selectedOfferingId],
+    queryFn: async () => {
+      const response = await leadsApi.getDistributionPreview(selectedOfferingId!);
+      return response;
+    },
+    enabled: isCreate && isAdmin && !!selectedOfferingId,
+    staleTime: 30000, // Cache for 30 seconds
+  });
 
   // Fetch officers for the selected unit (only for Admin/Manager when creating)
   const { data: officersData } = useAdminUsersList({
@@ -204,11 +234,11 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
   }, [open, lead, isEdit, isCreate, form, user]);
 
   const onSubmit = async (data: LeadFormValues) => {
-    // Convert unit_id string to number for API
+    // Convert unit_id string to number for API (null if not provided - will be auto-determined)
     // Convert assigned_officer_id: "auto" -> null, number string -> number
     const apiData = {
       ...data,
-      unit_id: parseInt(data.unit_id, 10),
+      unit_id: data.unit_id ? parseInt(data.unit_id, 10) : null,
       assigned_officer_id:
         data.assigned_officer_id && data.assigned_officer_id !== "auto"
           ? parseInt(data.assigned_officer_id, 10)
@@ -347,26 +377,45 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                 <FormField
                   control={form.control}
                   name="unit_id"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Organization Unit *</FormLabel>
-                      <FormControl>
-                        <SmartUnitSelector
-                          value={field.value}
-                          onChange={(val) => field.onChange(val || "")}
-                          placeholder="Select unit"
-                          disabled={isOfficer}
-                          variant="select"
-                        />
-                      </FormControl>
-                      {isOfficer && (
-                        <FormDescription>
-                          You can only create leads in your assigned unit
-                        </FormDescription>
-                      )}
-                      <FormMessage />
-                    </FormItem>
-                  )}
+                  render={({ field }) => {
+                    // Unit is optional for Admin when offering has distribution config
+                    const unitOptional = isAdmin && distributionPreview?.has_config;
+                    // Hide unit selector for Officer/Manager (auto-filled)
+                    const hideUnitSelector = isOfficer || isManager;
+
+                    return (
+                      <FormItem>
+                        <FormLabel>
+                          Organization Unit {!unitOptional && !hideUnitSelector && "*"}
+                        </FormLabel>
+                        <FormControl>
+                          <SmartUnitSelector
+                            value={field.value ?? ""}
+                            onChange={(val) => field.onChange(val || "")}
+                            placeholder={unitOptional ? "Auto (from distribution)" : "Select unit"}
+                            disabled={hideUnitSelector}
+                            variant="select"
+                          />
+                        </FormControl>
+                        {isOfficer && (
+                          <FormDescription>
+                            You can only create leads in your assigned unit
+                          </FormDescription>
+                        )}
+                        {isManager && (
+                          <FormDescription>
+                            Leads will be created in your unit
+                          </FormDescription>
+                        )}
+                        {unitOptional && (
+                          <FormDescription className="text-blue-600">
+                            Optional - unit will be determined from distribution config
+                          </FormDescription>
+                        )}
+                        <FormMessage />
+                      </FormItem>
+                    );
+                  }}
                 />
               </div>
 
@@ -391,6 +440,43 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                   </FormItem>
                 )}
               />
+
+              {/* Distribution Preview - Show when Admin selects an offering */}
+              {isCreate && isAdmin && selectedOfferingId && (
+                <div className="rounded-lg border bg-muted/50 p-4 space-y-2">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <Info className="h-4 w-4 text-blue-500" />
+                    Distribution Preview
+                  </div>
+                  {isLoadingPreview ? (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Loading distribution config...
+                    </div>
+                  ) : distributionPreview?.has_config ? (
+                    <div className="space-y-2 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">Next unit to receive lead:</span>
+                        <span className="font-medium text-green-600">
+                          {distributionPreview.next_unit_name}
+                        </span>
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        Distribution: {distributionPreview.configs.map(c =>
+                          `${c.unit_name} (weight: ${c.weight})`
+                        ).join(", ")}
+                      </div>
+                      <div className="text-xs text-blue-600">
+                        Unit will be auto-determined. You don&apos;t need to select unit manually.
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-sm text-amber-600">
+                      No distribution config for this offering. Please select a unit manually.
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Officer Assignment - Only for Admin/Manager when creating */}
               {canSelectOfficer && (

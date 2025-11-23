@@ -135,7 +135,8 @@ export interface LeadCreate {
   gpa?: number | null
   location?: string | null
   offering_id?: number | null
-  unit_id: number
+  // unit_id is optional for Admin when offering_id has distribution config (auto-determined)
+  unit_id?: number | null
   // Direct assignment: null = auto-assign (Celery), number = assign to specific officer
   assigned_officer_id?: number | null
 }
