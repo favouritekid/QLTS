@@ -34,8 +34,7 @@ import { SmartConsultationStatusSelector } from "@/components/common/selectors";
 // Validation schema - using Date object for scheduled_at
 const consultationSchema = z.object({
   scheduled_at: z.date({
-    required_error: "Vui lòng chọn ngày giờ",
-    invalid_type_error: "Ngày giờ không hợp lệ",
+    message: "Vui lòng chọn ngày giờ",
   }),
   status_id: z.string().min(1, "Vui lòng chọn trạng thái"),
   notes: z

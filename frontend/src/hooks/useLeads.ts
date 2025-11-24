@@ -212,7 +212,7 @@ export function useUpdateLead() {
         queryClient.setQueryData<Lead>(leadsKeys.detail(id), {
           ...previousLead,
           ...data,
-        });
+        } as Lead);
       }
 
       return { previousLead };

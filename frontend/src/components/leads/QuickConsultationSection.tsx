@@ -202,9 +202,6 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
               )}
               onClick={() => {
                 setScheduleOption(option.value);
-                if (option.value === "custom") {
-                  setCustomDateOpen(true);
-                }
               }}
             >
               {option.icon && <span className="mr-1">{option.icon}</span>}
