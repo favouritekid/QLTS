@@ -578,13 +578,14 @@ def check_consultation_reminders_task(self):
            - Mark reminder_sent = True
         3. Commit transaction
     """
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
+    import pytz
 
     task_log = logging.getLogger("check_consultation_reminders_task")
     task_log.info("Starting consultation reminder check...")
 
     async def _run_reminder_check() -> dict:
-        from sqlalchemy import and_, select, update
+        from sqlalchemy import and_, select
 
         from .core.events import SystemEvents
         from .models.lead import Consultation, Lead
@@ -598,8 +599,12 @@ def check_consultation_reminders_task(self):
 
         try:
             async with session_maker() as session:
-                now = datetime.now(timezone.utc)
+                # Use Vietnam timezone for consistency with stored data
+                vn_tz = pytz.timezone("Asia/Ho_Chi_Minh")
+                now = datetime.now(vn_tz)
                 reminder_window = now + timedelta(minutes=15)
+
+                task_log.info(f"Checking consultations between {now} and {reminder_window}")
 
                 # Query consultations due within the reminder window
                 query = (
@@ -691,4 +696,6 @@ celery_app.conf.beat_schedule = {
     },
 }
 
-celery_app.conf.timezone = "UTC"
+# Use Vietnam timezone for consistency with local time
+celery_app.conf.timezone = "Asia/Ho_Chi_Minh"
+celery_app.conf.enable_utc = False
