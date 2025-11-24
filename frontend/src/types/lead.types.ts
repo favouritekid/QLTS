@@ -157,7 +157,7 @@ export interface LeadUpdate {
   officer_rating?: number | null
   officer_summary?: string | null
   offering_id?: number | null
-  unit_id?: number
+  unit_id?: number | null  // Allow null for unit reassignment
   pipeline_stage_id?: string | null
 }
 
@@ -365,6 +365,8 @@ export type TimelineItemType =
   | 'lead_created'
   | 'status_changed'
   | 'assigned'
+  | 'assignment'           // Backend sends this for assignment logs
+  | 'consultation'         // Backend sends this for consultations
   | 'consultation_added'
   | 'consultation_updated'
   | 'application_submitted'

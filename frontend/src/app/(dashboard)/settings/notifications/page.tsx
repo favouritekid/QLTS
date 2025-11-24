@@ -1,7 +1,7 @@
 // src/app/(dashboard)/settings/notifications/page.tsx
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { Bell, Save, Volume2, Mail, Monitor } from "lucide-react";
 import { toast } from "sonner";
 
@@ -36,7 +36,21 @@ export default function NotificationSettingsPage() {
   const { data: eventGroupData, isLoading: isLoadingEventGroups } = useEventGroupPreferences();
   const updateEventGroupPreference = useUpdateEventGroupPreference();
 
-  // General settings state
+  // Track if initial data has been loaded to prevent re-initialization
+  const initializedRef = useRef(false);
+
+  // General settings state - use useMemo for initial values from server
+  const initialValues = useMemo(() => ({
+    emailEnabled: preferences?.email_enabled ?? true,
+    soundEnabled: preferences?.sound_enabled ?? true,
+    browserEnabled: preferences?.browser_enabled ?? true,
+    emailDigest: preferences?.email_digest ?? "instant",
+    quietHoursEnabled: preferences?.quiet_hours_enabled ?? false,
+    quietHoursStart: preferences?.quiet_hours_start ?? "22:00",
+    quietHoursEnd: preferences?.quiet_hours_end ?? "08:00",
+  }), [preferences]);
+
+  // Local form state
   const [emailEnabled, setEmailEnabled] = useState(true);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [browserEnabled, setBrowserEnabled] = useState(true);
@@ -45,18 +59,19 @@ export default function NotificationSettingsPage() {
   const [quietHoursStart, setQuietHoursStart] = useState("22:00");
   const [quietHoursEnd, setQuietHoursEnd] = useState("08:00");
 
-  // Update local state when preferences load
+  // Sync local state with server data only once when data first loads
   useEffect(() => {
-    if (preferences) {
-      setEmailEnabled(preferences.email_enabled);
-      setSoundEnabled(preferences.sound_enabled);
-      setBrowserEnabled(preferences.browser_enabled);
-      setEmailDigest(preferences.email_digest);
-      setQuietHoursEnabled(preferences.quiet_hours_enabled);
-      setQuietHoursStart(preferences.quiet_hours_start ?? "22:00");
-      setQuietHoursEnd(preferences.quiet_hours_end ?? "08:00");
+    if (preferences && !initializedRef.current) {
+      initializedRef.current = true;
+      setEmailEnabled(initialValues.emailEnabled);
+      setSoundEnabled(initialValues.soundEnabled);
+      setBrowserEnabled(initialValues.browserEnabled);
+      setEmailDigest(initialValues.emailDigest);
+      setQuietHoursEnabled(initialValues.quietHoursEnabled);
+      setQuietHoursStart(initialValues.quietHoursStart);
+      setQuietHoursEnd(initialValues.quietHoursEnd);
     }
-  }, [preferences]);
+  }, [preferences, initialValues]);
 
   const handleSaveGeneralSettings = async () => {
     const updateData: NotificationPreferenceUpdate = {

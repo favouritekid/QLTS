@@ -239,10 +239,11 @@ export function useUpdateLead() {
         description: updatedLead.full_name,
       });
 
-      // Invalidate queries
+      // Invalidate queries - including insights which may change based on lead data
       queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
       queryClient.invalidateQueries({ queryKey: leadsKeys.detail(updatedLead.id) });
       queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(updatedLead.id) });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.insights(updatedLead.id) });
       queryClient.invalidateQueries({ queryKey: ["pipeline"] });
     },
   });
@@ -260,15 +261,28 @@ export function useUpdateLead() {
 export function useDeleteLead() {
   const queryClient = useQueryClient();
 
-  return useMutation<void, AxiosError<ApiErrorResponse>, number>({
+  return useMutation<void, AxiosError<ApiErrorResponse>, number, { deletedLeadId: number }>({
     mutationFn: async (id) => {
       await leadsApi.deleteLead(id);
     },
 
-    onSuccess: () => {
+    // Store lead ID in context for onSuccess
+    onMutate: async (id) => {
+      // Cancel any outgoing refetches to avoid race conditions
+      await queryClient.cancelQueries({ queryKey: leadsKeys.detail(id) });
+      return { deletedLeadId: id };
+    },
+
+    onSuccess: (_, __, context) => {
       toast.success("Lead deleted successfully!");
 
-      // Invalidate lists
+      // Invalidate the specific lead's queries
+      if (context?.deletedLeadId) {
+        queryClient.invalidateQueries({ queryKey: leadsKeys.detail(context.deletedLeadId) });
+        queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(context.deletedLeadId) });
+        queryClient.invalidateQueries({ queryKey: leadsKeys.insights(context.deletedLeadId) });
+      }
+      // Invalidate lists and pipeline
       queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
       queryClient.invalidateQueries({ queryKey: ["pipeline"] });
     },
@@ -491,9 +505,10 @@ export function useAddConsultation() {
     onSuccess: (consultation, { leadId }) => {
       toast.success("Consultation added successfully!");
 
-      // Invalidate lead detail, timeline, and lists (for LeadCard updates)
+      // Invalidate lead detail, timeline, insights and lists (for LeadCard updates)
       queryClient.invalidateQueries({ queryKey: leadsKeys.detail(leadId) });
       queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(leadId) });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.insights(leadId) });
       queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
       queryClient.invalidateQueries({ queryKey: ["pipeline"] });
     },
@@ -539,9 +554,10 @@ export function useUpdateConsultation() {
     onSuccess: (consultation, { leadId }) => {
       toast.success("Consultation updated successfully!");
 
-      // Invalidate lead detail, timeline, and pipeline (if status changed)
+      // Invalidate lead detail, timeline, insights and pipeline (if status changed)
       queryClient.invalidateQueries({ queryKey: leadsKeys.detail(leadId) });
       queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(leadId) });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.insights(leadId) });
       queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
       queryClient.invalidateQueries({ queryKey: ["pipeline"] });
     },

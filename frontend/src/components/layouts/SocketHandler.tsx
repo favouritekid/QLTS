@@ -10,6 +10,7 @@ import { useNotificationPreferences } from "@/hooks/useNotificationPreferences";
 import { playNotificationSound, showBrowserNotification } from "@/lib/sound";
 import type { Notification } from "@/types/api.types";
 import { useQueryClient } from "@tanstack/react-query";
+import { leadsKeys } from "@/hooks/useLeads";
 
 /**
  * Component "vô hình" (không render)
@@ -152,7 +153,7 @@ export function SocketHandler() {
           break;
 
         case "lead":
-          queryClient.invalidateQueries({ queryKey: ["leads"] });
+          queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
           break;
 
         case "organization":
@@ -262,9 +263,9 @@ export function SocketHandler() {
       console.log("[SocketHandler] Received lead_assigned event:", data);
 
       // Invalidate lead-related queries to refresh officer's lead list
-      queryClient.invalidateQueries({ queryKey: ["leads"] });
-      queryClient.invalidateQueries({ queryKey: ["officer-leads"] });
-      queryClient.invalidateQueries({ queryKey: ["officer", "my-leads"] });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.insights(data.lead_id) });
 
       // Show prominent success toast with action button
       toast.success(data.message, {
@@ -443,9 +444,9 @@ export function SocketHandler() {
       console.log("[SocketHandler] Received consultation_created event:", data);
 
       // Invalidate lead-related queries to refresh timeline and status
-      queryClient.invalidateQueries({ queryKey: ["leads"] });
-      queryClient.invalidateQueries({ queryKey: ["leads", data.lead_id] });
-      queryClient.invalidateQueries({ queryKey: ["leads", data.lead_id, "timeline"] });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(data.lead_id) });
       queryClient.invalidateQueries({ queryKey: ["pipeline"] });
 
       // Show toast notification
@@ -467,9 +468,9 @@ export function SocketHandler() {
       console.log("[SocketHandler] Received consultation_deleted event:", data);
 
       // Invalidate lead-related queries to refresh timeline and status
-      queryClient.invalidateQueries({ queryKey: ["leads"] });
-      queryClient.invalidateQueries({ queryKey: ["leads", data.lead_id] });
-      queryClient.invalidateQueries({ queryKey: ["leads", data.lead_id, "timeline"] });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(data.lead_id) });
       queryClient.invalidateQueries({ queryKey: ["pipeline"] });
 
       // Show toast notification
@@ -491,9 +492,9 @@ export function SocketHandler() {
       console.log("[SocketHandler] Received consultation_updated event:", data);
 
       // Invalidate lead-related queries to refresh timeline and status
-      queryClient.invalidateQueries({ queryKey: ["leads"] });
-      queryClient.invalidateQueries({ queryKey: ["leads", data.lead_id] });
-      queryClient.invalidateQueries({ queryKey: ["leads", data.lead_id, "timeline"] });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(data.lead_id) });
       queryClient.invalidateQueries({ queryKey: ["pipeline"] });
 
       // Show toast notification
@@ -515,9 +516,9 @@ export function SocketHandler() {
       console.log("[SocketHandler] Received lead_updated event:", data);
 
       // Invalidate lead-related queries to refresh all views
-      queryClient.invalidateQueries({ queryKey: ["leads"] });
-      queryClient.invalidateQueries({ queryKey: ["leads", data.lead_id] });
-      queryClient.invalidateQueries({ queryKey: ["leads", data.lead_id, "timeline"] });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(data.lead_id) });
 
       // If status changed, also invalidate pipeline queries
       if (data.status_changed) {
@@ -551,7 +552,7 @@ export function SocketHandler() {
       console.log("[SocketHandler] Received lead_created event:", data);
 
       // Invalidate lead-related queries to refresh dashboard
-      queryClient.invalidateQueries({ queryKey: ["leads"] });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
 
       // Show toast notification for admin/manager
@@ -581,8 +582,8 @@ export function SocketHandler() {
       console.log("[SocketHandler] Received lead_assignment_failed event:", data);
 
       // Invalidate lead-related queries to refresh dashboard
-      queryClient.invalidateQueries({ queryKey: ["leads"] });
-      queryClient.invalidateQueries({ queryKey: ["leads", data.lead_id] });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
 
       // Show warning toast for admin/manager
       toast.warning(`⚠️ Assignment Failed`, {
@@ -631,8 +632,8 @@ export function SocketHandler() {
       console.log("[SocketHandler] Received lead_status_changed event:", data);
 
       // Invalidate lead-related queries
-      queryClient.invalidateQueries({ queryKey: ["leads"] });
-      queryClient.invalidateQueries({ queryKey: ["leads", data.lead_id] });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
       queryClient.invalidateQueries({ queryKey: ["pipeline"] });
 
       // Show toast notification
