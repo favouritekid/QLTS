@@ -22,7 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { LeadStatus } from "@/types/lead.types";
-import type { ProgramOffering } from "@/types/organization.types";
+import { SmartOfferingSelector } from "@/components/common/selectors";
 import { LEAD_STATUS_OPTIONS, LEAD_SOURCE_OPTIONS } from "@/constants";
 
 interface LeadFiltersProps {
@@ -36,7 +36,6 @@ interface LeadFiltersProps {
   onScoreRangeChange: (range: [number, number]) => void;
   offeringFilter: string;
   onOfferingChange: (offeringId: string) => void;
-  offerings: ProgramOffering[];
   onReset: () => void;
 }
 
@@ -54,7 +53,6 @@ export const LeadFilters = React.memo(function LeadFilters({
   onScoreRangeChange,
   offeringFilter,
   onOfferingChange,
-  offerings,
   onReset,
 }: LeadFiltersProps) {
   const handleStatusToggle = (status: LeadStatus) => {
@@ -193,23 +191,17 @@ export const LeadFilters = React.memo(function LeadFilters({
           {/* Offering Filter */}
           <AccordionItem value="offering" className="border rounded-lg px-3">
             <AccordionTrigger className="text-sm font-medium py-3 hover:no-underline">
-              Program Offering
+              Chương trình
             </AccordionTrigger>
             <AccordionContent className="pb-3">
-              <Select value={offeringFilter} onValueChange={onOfferingChange}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="All offerings" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Offerings</SelectItem>
-                  {offerings.map((offering) => (
-                    <SelectItem key={offering.id} value={offering.id.toString()}>
-                      {offering.program?.name || offering.offering_type}
-                      {offering.program && ` (${offering.offering_type})`}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <SmartOfferingSelector
+                value={offeringFilter === "all" ? undefined : offeringFilter}
+                onChange={(val) => onOfferingChange(val || "all")}
+                placeholder="Chọn chương trình..."
+                allowAll
+                allLabel="Tất cả chương trình"
+                variant="combobox"
+              />
             </AccordionContent>
           </AccordionItem>
         </Accordion>

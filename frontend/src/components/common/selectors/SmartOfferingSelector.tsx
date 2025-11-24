@@ -232,7 +232,7 @@ function SelectVariant({
         ) : (
           Array.from(groupedOfferings.entries()).map(([degreeLevel, levelOfferings]) => (
             <SelectGroup key={degreeLevel}>
-              <SelectLabel className="text-xs font-bold text-primary bg-muted/50 py-1.5 px-2 -mx-1 sticky top-0">
+              <SelectLabel className="text-xs font-bold text-primary bg-background py-1.5 px-2 -mx-1 sticky top-0 z-10 border-b">
                 {DEGREE_LEVEL_LABELS[degreeLevel] || degreeLevel} ({levelOfferings.length})
               </SelectLabel>
               {levelOfferings.map((offering) => (
@@ -375,7 +375,7 @@ function ComboboxVariant({
                 <CommandGroup key={degreeLevel}>
                   {/* Collapsible Header */}
                   <div
-                    className="flex items-center justify-between px-2 py-1.5 text-xs font-bold text-primary bg-muted/50 cursor-pointer hover:bg-muted/70 transition-colors sticky top-0 z-10"
+                    className="flex items-center justify-between px-2 py-1.5 text-xs font-bold text-primary bg-background cursor-pointer hover:bg-muted transition-colors sticky top-0 z-10 border-b"
                     onClick={() => toggleGroup(degreeLevel)}
                   >
                     <div className="flex items-center gap-1.5">

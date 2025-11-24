@@ -428,18 +428,18 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                 name="offering_id"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Program Offering</FormLabel>
+                    <FormLabel>Chương trình đào tạo</FormLabel>
                     <FormControl>
                       <SmartOfferingSelector
                         value={field.value?.toString()}
                         onChange={(val) => field.onChange(val ? parseInt(val, 10) : null)}
-                        placeholder="Select offering (optional)"
+                        placeholder="Chọn chương trình (tùy chọn)"
                         allowAll
-                        allLabel="None"
-                        variant="select"
+                        allLabel="Không chọn"
+                        variant="combobox"
                       />
                     </FormControl>
-                    <FormDescription>The program/offering the lead is interested in</FormDescription>
+                    <FormDescription>Chương trình mà lead quan tâm</FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
