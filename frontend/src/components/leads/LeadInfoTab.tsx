@@ -11,17 +11,43 @@ interface LeadInfoTabProps {
 }
 
 export function LeadInfoTab({ lead }: LeadInfoTabProps) {
+  const getEducationLevelLabel = (level: string) => {
+    const labels: Record<string, string> = {
+      high_school: "Trung học phổ thông",
+      diploma: "Cao đẳng",
+      bachelor: "Cử nhân",
+      master: "Thạc sĩ",
+      phd: "Tiến sĩ",
+      other: "Khác",
+    };
+    return labels[level] || level;
+  };
+
+  const getSourceLabel = (source: string) => {
+    const labels: Record<string, string> = {
+      website: "Website",
+      referral: "Giới thiệu",
+      social_media: "Mạng xã hội",
+      walk_in: "Đến trực tiếp",
+      email: "Email",
+      phone: "Điện thoại",
+      event: "Sự kiện",
+      other: "Khác",
+    };
+    return labels[source] || source;
+  };
+
   return (
     <div className="grid gap-6 md:grid-cols-2">
-      {/* Contact Information */}
+      {/* Thông tin liên hệ */}
       <Card>
         <CardHeader>
-          <CardTitle>Contact Information</CardTitle>
-          <CardDescription>Basic contact details</CardDescription>
+          <CardTitle>Thông tin liên hệ</CardTitle>
+          <CardDescription>Thông tin liên lạc cơ bản</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div>
-            <label className="text-sm font-medium text-muted-foreground">Full Name</label>
+            <label className="text-sm font-medium text-muted-foreground">Họ và tên</label>
             <p className="text-base font-semibold">{lead.full_name}</p>
           </div>
           <div>
@@ -29,12 +55,12 @@ export function LeadInfoTab({ lead }: LeadInfoTabProps) {
             <p className="text-base">{lead.email}</p>
           </div>
           <div>
-            <label className="text-sm font-medium text-muted-foreground">Phone</label>
+            <label className="text-sm font-medium text-muted-foreground">Số điện thoại</label>
             <p className="text-base">{lead.phone}</p>
           </div>
           {lead.location && (
             <div>
-              <label className="text-sm font-medium text-muted-foreground">Location</label>
+              <label className="text-sm font-medium text-muted-foreground">Địa chỉ</label>
               <div className="flex items-center gap-2">
                 <MapPin className="h-4 w-4 text-muted-foreground" />
                 <p className="text-base">{lead.location}</p>
@@ -44,27 +70,27 @@ export function LeadInfoTab({ lead }: LeadInfoTabProps) {
         </CardContent>
       </Card>
 
-      {/* Academic Information */}
+      {/* Thông tin học vấn */}
       <Card>
         <CardHeader>
-          <CardTitle>Academic Information</CardTitle>
-          <CardDescription>Educational background</CardDescription>
+          <CardTitle>Thông tin học vấn</CardTitle>
+          <CardDescription>Lý lịch học tập</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {lead.education_level ? (
             <div>
-              <label className="text-sm font-medium text-muted-foreground">Education Level</label>
+              <label className="text-sm font-medium text-muted-foreground">Trình độ học vấn</label>
               <div className="flex items-center gap-2">
                 <GraduationCap className="h-4 w-4 text-muted-foreground" />
-                <p className="text-base capitalize">
-                  {lead.education_level.replace(/_/g, " ")}
+                <p className="text-base">
+                  {getEducationLevelLabel(lead.education_level)}
                 </p>
               </div>
             </div>
           ) : (
             <div>
-              <label className="text-sm font-medium text-muted-foreground">Education Level</label>
-              <p className="text-base text-muted-foreground">Not provided</p>
+              <label className="text-sm font-medium text-muted-foreground">Trình độ học vấn</label>
+              <p className="text-base text-muted-foreground">Chưa cung cấp</p>
             </div>
           )}
 
@@ -76,79 +102,79 @@ export function LeadInfoTab({ lead }: LeadInfoTabProps) {
           ) : (
             <div>
               <label className="text-sm font-medium text-muted-foreground">GPA</label>
-              <p className="text-base text-muted-foreground">Not provided</p>
+              <p className="text-base text-muted-foreground">Chưa cung cấp</p>
             </div>
           )}
         </CardContent>
       </Card>
 
-      {/* Lead Metadata */}
+      {/* Thông tin Lead */}
       <Card>
         <CardHeader>
-          <CardTitle>Lead Metadata</CardTitle>
-          <CardDescription>Source and tracking information</CardDescription>
+          <CardTitle>Thông tin Lead</CardTitle>
+          <CardDescription>Nguồn và thông tin theo dõi</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div>
-            <label className="text-sm font-medium text-muted-foreground">Source</label>
+            <label className="text-sm font-medium text-muted-foreground">Nguồn</label>
             <div className="mt-1">
-              <Badge variant="outline" className="capitalize">
-                {lead.source.replace(/_/g, " ")}
+              <Badge variant="outline">
+                {getSourceLabel(lead.source)}
               </Badge>
             </div>
           </div>
           <div>
-            <label className="text-sm font-medium text-muted-foreground">Lead Score</label>
+            <label className="text-sm font-medium text-muted-foreground">Điểm Lead</label>
             <p className="text-base font-semibold">{lead.lead_score}/100</p>
           </div>
           <div>
-            <label className="text-sm font-medium text-muted-foreground">Created At</label>
+            <label className="text-sm font-medium text-muted-foreground">Ngày tạo</label>
             <div className="flex items-center gap-2">
               <Calendar className="h-4 w-4 text-muted-foreground" />
               <p className="text-base">
-                {new Date(lead.created_at).toLocaleString()}
+                {new Date(lead.created_at).toLocaleString("vi-VN")}
               </p>
             </div>
           </div>
           <div>
-            <label className="text-sm font-medium text-muted-foreground">Last Updated</label>
+            <label className="text-sm font-medium text-muted-foreground">Cập nhật lần cuối</label>
             <div className="flex items-center gap-2">
               <Calendar className="h-4 w-4 text-muted-foreground" />
               <p className="text-base">
-                {new Date(lead.updated_at).toLocaleString()}
+                {new Date(lead.updated_at).toLocaleString("vi-VN")}
               </p>
             </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* Assignment Information */}
+      {/* Thông tin phân công */}
       <Card>
         <CardHeader>
-          <CardTitle>Assignment Information</CardTitle>
-          <CardDescription>Officer assignment details</CardDescription>
+          <CardTitle>Thông tin phân công</CardTitle>
+          <CardDescription>Chi tiết phân công tư vấn viên</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {lead.assigned_officer_id ? (
             <>
               <div>
                 <label className="text-sm font-medium text-muted-foreground">
-                  Assigned Officer
+                  Tư vấn viên phụ trách
                 </label>
                 <div className="flex items-center gap-2">
                   <User className="h-4 w-4 text-muted-foreground" />
-                  <p className="text-base">Officer #{lead.assigned_officer_id}</p>
+                  <p className="text-base">Tư vấn viên #{lead.assigned_officer_id}</p>
                 </div>
               </div>
               {lead.assigned_at && (
                 <div>
                   <label className="text-sm font-medium text-muted-foreground">
-                    Assigned At
+                    Ngày phân công
                   </label>
                   <div className="flex items-center gap-2">
                     <Calendar className="h-4 w-4 text-muted-foreground" />
                     <p className="text-base">
-                      {new Date(lead.assigned_at).toLocaleString()}
+                      {new Date(lead.assigned_at).toLocaleString("vi-VN")}
                     </p>
                   </div>
                 </div>
@@ -156,15 +182,15 @@ export function LeadInfoTab({ lead }: LeadInfoTabProps) {
             </>
           ) : (
             <div>
-              <p className="text-muted-foreground">Not assigned to any officer yet</p>
+              <p className="text-muted-foreground">Chưa được phân công cho tư vấn viên nào</p>
             </div>
           )}
 
           <div>
-            <label className="text-sm font-medium text-muted-foreground">Unit ID</label>
+            <label className="text-sm font-medium text-muted-foreground">Đơn vị</label>
             <div className="flex items-center gap-2">
               <Building className="h-4 w-4 text-muted-foreground" />
-              <p className="text-base">Unit #{lead.unit_id}</p>
+              <p className="text-base">Đơn vị #{lead.unit_id}</p>
             </div>
           </div>
         </CardContent>

@@ -22,43 +22,43 @@ export interface LeadStatusOption {
 export const LEAD_STATUS_OPTIONS: LeadStatusOption[] = [
   {
     value: "new",
-    label: "New",
+    label: "Mới",
     color: "bg-blue-500",
     description: "Lead mới chưa được xử lý",
   },
   {
     value: "assigned",
-    label: "Assigned",
+    label: "Đã phân công",
     color: "bg-purple-500",
     description: "Đã phân công cho tư vấn viên",
   },
   {
     value: "contacted",
-    label: "Contacted",
+    label: "Đã liên hệ",
     color: "bg-cyan-500",
     description: "Đã liên hệ với lead",
   },
   {
     value: "qualified",
-    label: "Qualified",
+    label: "Đủ điều kiện",
     color: "bg-emerald-500",
     description: "Lead đủ điều kiện chuyển đổi",
   },
   {
     value: "unqualified",
-    label: "Unqualified",
+    label: "Không đủ điều kiện",
     color: "bg-gray-500",
     description: "Lead không đủ điều kiện",
   },
   {
     value: "converted",
-    label: "Converted",
+    label: "Đã chuyển đổi",
     color: "bg-green-500",
     description: "Đã chuyển đổi thành sinh viên",
   },
   {
     value: "rejected",
-    label: "Rejected",
+    label: "Đã từ chối",
     color: "bg-red-500",
     description: "Lead bị từ chối",
   },
@@ -88,13 +88,13 @@ export interface LeadSourceOption {
 
 export const LEAD_SOURCE_OPTIONS: LeadSourceOption[] = [
   { value: "website", label: "Website" },
-  { value: "referral", label: "Referral" },
-  { value: "social_media", label: "Social Media" },
-  { value: "walk_in", label: "Walk-in" },
+  { value: "referral", label: "Giới thiệu" },
+  { value: "social_media", label: "Mạng xã hội" },
+  { value: "walk_in", label: "Đến trực tiếp" },
   { value: "email", label: "Email" },
-  { value: "phone", label: "Phone" },
-  { value: "event", label: "Event" },
-  { value: "other", label: "Other" },
+  { value: "phone", label: "Điện thoại" },
+  { value: "event", label: "Sự kiện" },
+  { value: "other", label: "Khác" },
 ];
 
 // Helper to get source by value
