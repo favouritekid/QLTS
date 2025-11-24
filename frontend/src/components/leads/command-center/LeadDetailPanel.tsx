@@ -27,7 +27,7 @@ import { useLead } from "@/hooks/useLeads";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { LeadConsultationsTab } from "@/components/leads/LeadConsultationsTab";
 import { ConsultationDialog } from "@/components/leads/ConsultationDialog";
-import { QuickDisposition } from "@/components/leads/QuickDisposition";
+import { QuickConsultationSection } from "@/components/leads/QuickConsultationSection";
 import type { Lead, LeadStatus } from "@/types/lead.types";
 
 interface LeadDetailPanelProps {
@@ -288,16 +288,16 @@ export function LeadDetailPanel({
             </CardContent>
           </Card>
 
-          {/* Quick Actions Card - Highlighted */}
+          {/* Quick Consultation Card - Inline Form */}
           <Card className="bg-slate-50 border-slate-200">
             <CardHeader className="py-3 px-4">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
                 <Zap className="h-4 w-4 text-amber-500" />
-                Quick Actions
+                Ghi nhận tư vấn
               </CardTitle>
             </CardHeader>
             <CardContent className="px-4 pb-4 pt-0">
-              <QuickDisposition leadId={lead.id} />
+              <QuickConsultationSection leadId={lead.id} />
             </CardContent>
           </Card>
 
