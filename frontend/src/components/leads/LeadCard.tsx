@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import {
   Tooltip,
   TooltipContent,
+  TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -124,35 +125,37 @@ export const LeadCard = React.memo(function LeadCard({
 
           {/* Activity Indicator */}
           {activityStatus !== "none" && lead.next_activity_at && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div className="flex items-center gap-1 shrink-0">
-                  <Clock
-                    className={cn(
-                      "h-4 w-4",
-                      getActivityIconColor(activityStatus),
-                      activityStatus === "overdue" && "animate-pulse"
-                    )}
-                  />
-                  <span className={cn(
-                    "text-xs font-medium",
-                    getActivityIconColor(activityStatus)
-                  )}>
-                    {format(parseISO(lead.next_activity_at), "HH:mm")}
-                  </span>
-                </div>
-              </TooltipTrigger>
-              <TooltipContent side="left">
-                <p className="font-medium">
-                  {activityStatus === "overdue" && "Quá hạn"}
-                  {activityStatus === "today" && "Hôm nay"}
-                  {activityStatus === "future" && "Sắp tới"}
-                </p>
-                <p className="text-xs">
-                  {format(parseISO(lead.next_activity_at), "dd/MM/yyyy HH:mm", { locale: vi })}
-                </p>
-              </TooltipContent>
-            </Tooltip>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Clock
+                      className={cn(
+                        "h-4 w-4",
+                        getActivityIconColor(activityStatus),
+                        activityStatus === "overdue" && "animate-pulse"
+                      )}
+                    />
+                    <span className={cn(
+                      "text-xs font-medium",
+                      getActivityIconColor(activityStatus)
+                    )}>
+                      {format(parseISO(lead.next_activity_at), "HH:mm")}
+                    </span>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="left">
+                  <p className="font-medium">
+                    {activityStatus === "overdue" && "Quá hạn"}
+                    {activityStatus === "today" && "Hôm nay"}
+                    {activityStatus === "future" && "Sắp tới"}
+                  </p>
+                  <p className="text-xs">
+                    {format(parseISO(lead.next_activity_at), "dd/MM/yyyy HH:mm", { locale: vi })}
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           )}
         </div>
 
