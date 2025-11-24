@@ -1,7 +1,7 @@
 // src/components/leads/command-center/LeadDetailSheet.tsx
 "use client";
 
-import React, { useState } from "react";
+import React from "react";
 import {
   Sheet,
   SheetContent,
@@ -27,8 +27,6 @@ import {
 import { cn } from "@/lib/utils";
 import { useLead } from "@/hooks/useLeads";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
-import { LeadConsultationsTab } from "@/components/leads/LeadConsultationsTab";
-import { ConsultationDialog } from "@/components/leads/ConsultationDialog";
 import { QuickConsultationSection } from "@/components/leads/QuickConsultationSection";
 import type { Lead, LeadStatus } from "@/types/lead.types";
 
@@ -86,7 +84,6 @@ export function LeadDetailSheet({
   onAssign,
 }: LeadDetailSheetProps) {
   const { data: lead, isLoading } = useLead(leadId || 0, open && !!leadId);
-  const [consultationDialogOpen, setConsultationDialogOpen] = useState(false);
 
   return (
     <>
@@ -204,10 +201,9 @@ export function LeadDetailSheet({
 
             {/* Tabs */}
             <Tabs defaultValue="quick" className="mt-4">
-              <TabsList className="grid w-full grid-cols-3">
+              <TabsList className="grid w-full grid-cols-2">
                 <TabsTrigger value="quick">Tư vấn</TabsTrigger>
                 <TabsTrigger value="timeline">Timeline</TabsTrigger>
-                <TabsTrigger value="consultations">History</TabsTrigger>
               </TabsList>
 
               <TabsContent value="quick" className="mt-4">
@@ -216,14 +212,6 @@ export function LeadDetailSheet({
 
               <TabsContent value="timeline" className="mt-4">
                 <LeadTimelineTab leadId={lead.id} />
-              </TabsContent>
-
-              <TabsContent value="consultations" className="mt-4">
-                <LeadConsultationsTab
-                  leadId={lead.id}
-                  lead={lead}
-                  onAddConsultation={() => setConsultationDialogOpen(true)}
-                />
               </TabsContent>
             </Tabs>
 
@@ -259,15 +247,6 @@ export function LeadDetailSheet({
         )}
       </SheetContent>
     </Sheet>
-
-    {/* Consultation Dialog */}
-    {lead && (
-      <ConsultationDialog
-        leadId={lead.id}
-        open={consultationDialogOpen}
-        onOpenChange={setConsultationDialogOpen}
-      />
-    )}
     </>
   );
 }

@@ -6,7 +6,6 @@ import { format, addMinutes, addHours, addDays, set } from "date-fns";
 import { vi } from "date-fns/locale";
 import {
   Loader2,
-  Phone,
   PhoneOff,
   ThumbsUp,
   XCircle,
@@ -18,7 +17,6 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import {
   Popover,
   PopoverContent,
@@ -178,28 +176,9 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
   ];
 
   return (
-    <div className="space-y-4">
-      {/* Current Status Display */}
-      {lead?.consultation_status && (
-        <div className="flex items-center gap-2 text-xs text-muted-foreground pb-2 border-b">
-          <Phone className="h-3.5 w-3.5" />
-          <span>Hiện tại:</span>
-          <Badge
-            variant="outline"
-            className="text-xs font-normal"
-            style={{
-              backgroundColor: `${lead.consultation_status.color_code}15`,
-              borderColor: lead.consultation_status.color_code,
-              color: lead.consultation_status.color_code,
-            }}
-          >
-            {lead.consultation_status.name}
-          </Badge>
-        </div>
-      )}
-
+    <div className="space-y-3">
       {/* Notes Input - Always visible */}
-      <div className="space-y-2">
+      <div className="space-y-1.5">
         <Label htmlFor="quick-notes" className="text-xs text-muted-foreground">
           Ghi chú nhanh (tùy chọn)
         </Label>
@@ -352,19 +331,19 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
 
         {/* Positive Group - Progress/Success */}
         {groupedStatuses.positive.length > 0 && (
-          <div className="space-y-2 mb-4">
+          <div className="space-y-2 mb-3">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <ThumbsUp className="h-3.5 w-3.5" />
               <span className="font-medium">Tích cực / Tiến triển</span>
             </div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="flex flex-wrap gap-1.5">
               {groupedStatuses.positive.map((status) => (
                 <Button
                   key={status.id}
                   variant="outline"
                   size="sm"
                   className={cn(
-                    "h-9 text-xs justify-start",
+                    "h-7 text-xs px-2.5",
                     "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200",
                     "font-medium transition-all hover:scale-[1.02]"
                   )}
@@ -372,14 +351,14 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                   disabled={addConsultation.isPending}
                 >
                   {savingStatusId === status.id ? (
-                    <Loader2 className="h-3 w-3 animate-spin mr-2" />
+                    <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
                   ) : (
                     <span
-                      className="w-2 h-2 rounded-full mr-2 flex-shrink-0"
+                      className="w-1.5 h-1.5 rounded-full mr-1.5 flex-shrink-0"
                       style={{ backgroundColor: status.color_code }}
                     />
                   )}
-                  <span className="truncate">{status.name}</span>
+                  {status.name}
                 </Button>
               ))}
             </div>
