@@ -1,7 +1,7 @@
 """add consultation reminder_sent column
 
 Revision ID: z3a4b5c6d7e8
-Revises: x1y2z3a4b5c6
+Revises: y2z3a4b5c6d7
 Create Date: 2025-01-24 10:00:00.000000
 
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'z3a4b5c6d7e8'
-down_revision: Union[str, None] = 'x1y2z3a4b5c6'
+down_revision: Union[str, None] = 'y2z3a4b5c6d7'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
