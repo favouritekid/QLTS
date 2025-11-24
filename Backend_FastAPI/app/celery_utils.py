@@ -578,7 +578,7 @@ def check_consultation_reminders_task(self):
            - Mark reminder_sent = True
         3. Commit transaction
     """
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
     import pytz
 
     task_log = logging.getLogger("check_consultation_reminders_task")
@@ -600,11 +600,15 @@ def check_consultation_reminders_task(self):
         try:
             async with session_maker() as session:
                 # Use configured timezone for consistency with stored data
+                # Get current time in UTC first, then convert to app timezone
+                # This ensures correct timezone offset regardless of system timezone
                 app_tz = pytz.timezone(settings.TIMEZONE)
-                now = datetime.now(app_tz)
+                now = datetime.now(timezone.utc).astimezone(app_tz)
                 reminder_window = now + timedelta(minutes=15)
 
-                task_log.info(f"Checking consultations between {now} and {reminder_window}")
+                task_log.info(
+                    f"Checking consultations between {now.isoformat()} and {reminder_window.isoformat()}"
+                )
 
                 # Query consultations due within the reminder window
                 query = (
