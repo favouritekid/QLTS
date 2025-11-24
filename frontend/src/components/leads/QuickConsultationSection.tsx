@@ -10,19 +10,12 @@ import {
   ThumbsUp,
   XCircle,
   Clock,
-  Calendar,
   CalendarClock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import { Calendar as CalendarComponent } from "@/components/ui/calendar";
+import { DateTimePicker } from "@/components/common/form";
 import { cn } from "@/lib/utils";
 import { useAllowedNextStatuses } from "@/hooks/usePipeline";
 import { useAddConsultation, useLead } from "@/hooks/useLeads";
@@ -71,8 +64,6 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
   const [notes, setNotes] = useState("");
   const [scheduleOption, setScheduleOption] = useState<ScheduleOption>("none");
   const [customDateTime, setCustomDateTime] = useState<Date | undefined>(undefined);
-  const [customDateOpen, setCustomDateOpen] = useState(false);
-  const [customTimeValue, setCustomTimeValue] = useState("09:00");
   const [savingStatusId, setSavingStatusId] = useState<string | null>(null);
 
   // Group statuses by outcome_type
@@ -106,10 +97,8 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
     let scheduledAt: string | null = null;
 
     if (scheduleOption === "custom" && customDateTime) {
-      // Combine custom date with custom time
-      const [hours, minutes] = customTimeValue.split(":").map(Number);
-      const combined = set(customDateTime, { hours, minutes, seconds: 0, milliseconds: 0 });
-      scheduledAt = combined.toISOString();
+      // DateTimePicker already includes time in customDateTime
+      scheduledAt = customDateTime.toISOString();
     } else {
       scheduledAt = getScheduledDateTime(scheduleOption);
     }
@@ -224,43 +213,15 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
           ))}
         </div>
 
-        {/* Custom Date/Time Picker */}
+        {/* Custom DateTime Picker */}
         {scheduleOption === "custom" && (
-          <div className="flex gap-2 pt-2">
-            <Popover open={customDateOpen} onOpenChange={setCustomDateOpen}>
-              <PopoverTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className={cn(
-                    "h-8 text-xs justify-start flex-1",
-                    !customDateTime && "text-muted-foreground"
-                  )}
-                >
-                  <Calendar className="mr-2 h-3.5 w-3.5" />
-                  {customDateTime
-                    ? format(customDateTime, "dd/MM/yyyy", { locale: vi })
-                    : "Chọn ngày"}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0" align="start">
-                <CalendarComponent
-                  mode="single"
-                  selected={customDateTime}
-                  onSelect={(date) => {
-                    setCustomDateTime(date);
-                    setCustomDateOpen(false);
-                  }}
-                  disabled={(date) => date < new Date(new Date().setHours(0, 0, 0, 0))}
-                  initialFocus
-                />
-              </PopoverContent>
-            </Popover>
-            <Input
-              type="time"
-              value={customTimeValue}
-              onChange={(e) => setCustomTimeValue(e.target.value)}
-              className="h-8 text-xs w-24"
+          <div className="pt-2">
+            <DateTimePicker
+              value={customDateTime}
+              onChange={(date) => setCustomDateTime(date)}
+              placeholder="Chọn ngày giờ"
+              minDate={new Date()}
+              className="h-8 text-xs"
             />
           </div>
         )}
@@ -271,10 +232,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
             <CalendarClock className="h-3 w-3 text-blue-500" />
             <span>
               {scheduleOption === "custom" && customDateTime
-                ? `Hẹn: ${format(set(customDateTime, {
-                    hours: parseInt(customTimeValue.split(":")[0]),
-                    minutes: parseInt(customTimeValue.split(":")[1])
-                  }), "HH:mm dd/MM", { locale: vi })}`
+                ? `Hẹn: ${format(customDateTime, "HH:mm dd/MM", { locale: vi })}`
                 : scheduleOption === "30m"
                   ? `Hẹn: ${format(addMinutes(new Date(), 30), "HH:mm", { locale: vi })}`
                   : scheduleOption === "1h"
