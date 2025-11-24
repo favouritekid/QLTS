@@ -25,19 +25,22 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { DateTimePicker } from "@/components/common/form";
 
 import { useAddConsultation } from "@/hooks/useLeads";
 import { SmartConsultationStatusSelector } from "@/components/common/selectors";
 
-// Validation schema
+// Validation schema - using Date object for scheduled_at
 const consultationSchema = z.object({
-  scheduled_at: z.string().min(1, "Scheduled date/time is required"),
-  status_id: z.string().min(1, "Status is required"),
+  scheduled_at: z.date({
+    required_error: "Vui lòng chọn ngày giờ",
+    invalid_type_error: "Ngày giờ không hợp lệ",
+  }),
+  status_id: z.string().min(1, "Vui lòng chọn trạng thái"),
   notes: z
     .string()
-    .max(1000, "Notes must be less than 1000 characters")
+    .max(1000, "Ghi chú không được quá 1000 ký tự")
     .optional(),
 });
 
@@ -59,7 +62,7 @@ export function ConsultationDialog({
   const form = useForm<ConsultationFormValues>({
     resolver: zodResolver(consultationSchema),
     defaultValues: {
-      scheduled_at: "",
+      scheduled_at: undefined,
       status_id: "",
       notes: "",
     },
@@ -77,7 +80,7 @@ export function ConsultationDialog({
       {
         leadId,
         data: {
-          scheduled_at: data.scheduled_at || null,
+          scheduled_at: data.scheduled_at ? data.scheduled_at.toISOString() : null,
           status_id: data.status_id,
           notes: data.notes,
           method: "phone",
@@ -97,9 +100,9 @@ export function ConsultationDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
-          <DialogTitle>Schedule Consultation</DialogTitle>
+          <DialogTitle>Lên lịch tư vấn</DialogTitle>
           <DialogDescription>
-            Schedule a new consultation meeting for this lead
+            Tạo lịch hẹn tư vấn mới cho lead này
           </DialogDescription>
         </DialogHeader>
 
@@ -110,16 +113,18 @@ export function ConsultationDialog({
               name="scheduled_at"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Scheduled Date & Time *</FormLabel>
+                  <FormLabel>Ngày giờ hẹn *</FormLabel>
                   <FormControl>
-                    <Input
-                      type="datetime-local"
-                      {...field}
-                      min={new Date().toISOString().slice(0, 16)}
+                    <DateTimePicker
+                      value={field.value}
+                      onChange={field.onChange}
+                      placeholder="Chọn ngày giờ"
+                      minDate={new Date()}
+                      error={form.formState.errors.scheduled_at?.message}
                     />
                   </FormControl>
                   <FormDescription>
-                    When should the consultation take place?
+                    Thời gian dự kiến tư vấn
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -131,18 +136,18 @@ export function ConsultationDialog({
               name="status_id"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Status *</FormLabel>
+                  <FormLabel>Trạng thái *</FormLabel>
                   <FormControl>
                     <SmartConsultationStatusSelector
                       value={field.value}
                       onChange={field.onChange}
-                      placeholder="Select status"
+                      placeholder="Chọn trạng thái"
                       variant="select"
                       showOutcomeType
                     />
                   </FormControl>
                   <FormDescription>
-                    Current status of this consultation
+                    Trạng thái hiện tại của lịch hẹn
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -154,17 +159,17 @@ export function ConsultationDialog({
               name="notes"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Notes (Optional)</FormLabel>
+                  <FormLabel>Ghi chú (Tùy chọn)</FormLabel>
                   <FormControl>
                     <Textarea
-                      placeholder="Add any notes about this consultation..."
+                      placeholder="Thêm ghi chú về buổi tư vấn..."
                       className="resize-none"
                       rows={4}
                       {...field}
                     />
                   </FormControl>
                   <FormDescription>
-                    Additional information or agenda for the consultation
+                    Thông tin thêm hoặc nội dung tư vấn
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -178,11 +183,11 @@ export function ConsultationDialog({
                 onClick={() => onOpenChange(false)}
                 disabled={isSubmitting}
               >
-                Cancel
+                Hủy
               </Button>
               <Button type="submit" disabled={isSubmitting}>
                 {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Schedule Consultation
+                Lưu lịch hẹn
               </Button>
             </DialogFooter>
           </form>

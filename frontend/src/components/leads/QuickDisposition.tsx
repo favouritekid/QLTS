@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
-import { format, addDays } from "date-fns";
+import { addDays, set } from "date-fns";
 import { Loader2, PhoneOff, ThumbsUp, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,8 +15,8 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
+import { DateTimePicker } from "@/components/common/form";
 import { cn } from "@/lib/utils";
 import { useAllowedNextStatuses } from "@/hooks/usePipeline";
 import { useAddConsultation, useLead } from "@/hooks/useLeads";
@@ -52,9 +52,9 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
   const [selectedStatus, setSelectedStatus] = useState<ConsultationStatus | null>(null);
 
   // Form state for complex dialog
-  const [consultationDateTime, setConsultationDateTime] = useState<string>("");
+  const [consultationDateTime, setConsultationDateTime] = useState<Date | undefined>(undefined);
   const [notes, setNotes] = useState("");
-  const [scheduledDateTime, setScheduledDateTime] = useState<string>("");
+  const [scheduledDateTime, setScheduledDateTime] = useState<Date | undefined>(undefined);
 
   // Group statuses by outcome_type
   const groupedStatuses = useMemo(() => {
@@ -105,11 +105,11 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
 
     // Set default consultation time to now
     const now = new Date();
-    setConsultationDateTime(format(now, "yyyy-MM-dd'T'HH:mm"));
+    setConsultationDateTime(now);
 
     // Default scheduled time: tomorrow at 9:00 AM
     const tomorrow = addDays(now, 1);
-    setScheduledDateTime(format(tomorrow, "yyyy-MM-dd") + "T09:00");
+    setScheduledDateTime(set(tomorrow, { hours: 9, minutes: 0, seconds: 0, milliseconds: 0 }));
 
     setDialogOpen(true);
   };
@@ -121,12 +121,12 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
     // Parse scheduled datetime (if applicable)
     let scheduledAt: string | null = null;
     if (SCHEDULABLE_STATUS_IDS.includes(selectedStatus.id) && scheduledDateTime) {
-      scheduledAt = new Date(scheduledDateTime).toISOString();
+      scheduledAt = scheduledDateTime.toISOString();
     }
 
     const payload: ConsultationCreate = {
       status_id: selectedStatus.id,
-      consultation_date: consultationDateTime ? new Date(consultationDateTime).toISOString() : undefined,
+      consultation_date: consultationDateTime ? consultationDateTime.toISOString() : undefined,
       method: "phone",
       notes: notes || `Ghi nhận: ${selectedStatus.name}`,
       scheduled_at: scheduledAt,
@@ -305,12 +305,11 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
           <div className="space-y-4">
             {/* Consultation Date/Time */}
             <div className="space-y-2">
-              <Label htmlFor="consultation-datetime">Thời gian tương tác</Label>
-              <Input
-                id="consultation-datetime"
-                type="datetime-local"
+              <Label>Thời gian tương tác</Label>
+              <DateTimePicker
                 value={consultationDateTime}
-                onChange={(e) => setConsultationDateTime(e.target.value)}
+                onChange={setConsultationDateTime}
+                placeholder="Chọn ngày giờ"
               />
             </div>
 
@@ -330,12 +329,12 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
             {/* Scheduled Follow-up (only for schedulable statuses) */}
             {selectedStatus && SCHEDULABLE_STATUS_IDS.includes(selectedStatus.id) && (
               <div className="space-y-2">
-                <Label htmlFor="scheduled-datetime">Lịch hẹn tiếp theo</Label>
-                <Input
-                  id="scheduled-datetime"
-                  type="datetime-local"
+                <Label>Lịch hẹn tiếp theo</Label>
+                <DateTimePicker
                   value={scheduledDateTime}
-                  onChange={(e) => setScheduledDateTime(e.target.value)}
+                  onChange={setScheduledDateTime}
+                  placeholder="Chọn ngày giờ"
+                  minDate={new Date()}
                 />
                 <p className="text-xs text-muted-foreground">
                   Lead sẽ được ưu tiên hiển thị khi đến thời gian hẹn
