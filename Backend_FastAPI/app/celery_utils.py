@@ -549,3 +549,146 @@ def broadcast_notification_task(
     except Exception as e:
         task_log.error(f"Broadcast task failed: {e}", exc_info=True)
         raise e
+
+
+# ==================================================================
+# === Consultation Reminder Task (Celery Beat - runs every minute) ===
+# ==================================================================
+
+@celery_app.task(
+    name="check_consultation_reminders_task",
+    bind=True,
+    autoretry_for=(Exception,),
+    max_retries=2,
+    default_retry_delay=60,
+)
+def check_consultation_reminders_task(self):
+    """
+    Celery Beat periodic task to check and send consultation reminders.
+
+    Runs every minute to find consultations with scheduled_at approaching
+    (within next 15 minutes) and sends reminder notifications to officers.
+
+    Flow:
+        1. Query consultations where:
+           - scheduled_at is between NOW and NOW + 15 minutes
+           - reminder_sent = False
+        2. For each consultation:
+           - Dispatch CONSULTATION_REMINDER notification
+           - Mark reminder_sent = True
+        3. Commit transaction
+    """
+    from datetime import datetime, timedelta, timezone
+
+    task_log = logging.getLogger("check_consultation_reminders_task")
+    task_log.info("Starting consultation reminder check...")
+
+    async def _run_reminder_check() -> dict:
+        from sqlalchemy import and_, select, update
+
+        from .core.events import SystemEvents
+        from .models.lead import Consultation, Lead
+        from .services import notification_dispatcher
+
+        # Create engine INSIDE async context
+        engine = _create_task_async_engine()
+        session_maker = _create_task_session_maker(engine)
+
+        result = {"checked": 0, "sent": 0, "failed": 0}
+
+        try:
+            async with session_maker() as session:
+                now = datetime.now(timezone.utc)
+                reminder_window = now + timedelta(minutes=15)
+
+                # Query consultations due within the reminder window
+                query = (
+                    select(Consultation, Lead)
+                    .join(Lead, Consultation.lead_id == Lead.id)
+                    .where(
+                        and_(
+                            Consultation.scheduled_at.isnot(None),
+                            Consultation.scheduled_at > now,
+                            Consultation.scheduled_at <= reminder_window,
+                            Consultation.reminder_sent == False,
+                        )
+                    )
+                )
+
+                db_result = await session.execute(query)
+                consultations_with_leads = db_result.all()
+                result["checked"] = len(consultations_with_leads)
+
+                task_log.info(
+                    f"Found {result['checked']} consultations due within {15} minutes"
+                )
+
+                for consultation, lead in consultations_with_leads:
+                    try:
+                        # Calculate minutes until scheduled time
+                        time_diff = consultation.scheduled_at - now
+                        minutes_until = int(time_diff.total_seconds() / 60)
+
+                        # Dispatch reminder notification
+                        await notification_dispatcher.dispatch(
+                            db=session,
+                            event=SystemEvents.CONSULTATION_REMINDER,
+                            payload={
+                                "consultation_id": consultation.id,
+                                "lead_id": lead.id,
+                                "lead_name": lead.full_name,
+                                "lead_phone": lead.phone,
+                                "officer_id": consultation.officer_id,
+                                "scheduled_at": consultation.scheduled_at.isoformat(),
+                                "minutes_until": minutes_until,
+                            },
+                        )
+
+                        # Mark as sent
+                        consultation.reminder_sent = True
+                        result["sent"] += 1
+
+                        task_log.info(
+                            f"Reminder sent for consultation #{consultation.id} "
+                            f"(Lead: {lead.full_name}, Officer: {consultation.officer_id})"
+                        )
+
+                    except Exception as e:
+                        task_log.error(
+                            f"Failed to send reminder for consultation #{consultation.id}: {e}"
+                        )
+                        result["failed"] += 1
+
+                # Commit all changes
+                await session.commit()
+
+        finally:
+            await engine.dispose()
+
+        return result
+
+    try:
+        result = asyncio.run(_run_reminder_check())
+        task_log.info(
+            f"Reminder check completed: checked={result['checked']}, "
+            f"sent={result['sent']}, failed={result['failed']}"
+        )
+        return result
+    except Exception as e:
+        task_log.error(f"Reminder check task failed: {e}", exc_info=True)
+        raise e
+
+
+# ==================================================================
+# === Celery Beat Schedule Configuration ===
+# ==================================================================
+
+celery_app.conf.beat_schedule = {
+    "check-consultation-reminders-every-minute": {
+        "task": "check_consultation_reminders_task",
+        "schedule": 60.0,  # Every 60 seconds
+        "options": {"queue": "default"},
+    },
+}
+
+celery_app.conf.timezone = "UTC"

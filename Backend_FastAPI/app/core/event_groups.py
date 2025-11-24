@@ -71,6 +71,7 @@ EVENT_GROUP_MAPPING: Dict[SystemEvents, NotificationEventGroup] = {
     SystemEvents.CONSULTATION_CREATED: NotificationEventGroup.CONSULTATION,
     SystemEvents.CONSULTATION_UPDATED: NotificationEventGroup.CONSULTATION,
     SystemEvents.CONSULTATION_DELETED: NotificationEventGroup.CONSULTATION,
+    SystemEvents.CONSULTATION_REMINDER: NotificationEventGroup.CONSULTATION,
 
     # Application events
     SystemEvents.APPLICATION_CREATED: NotificationEventGroup.APPLICATION,

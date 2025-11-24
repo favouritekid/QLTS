@@ -218,6 +218,18 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         link_template="/leads/${lead_id}?tab=consultations"
     ),
 
+    SystemEvents.CONSULTATION_REMINDER: NotificationConfig(
+        group=NotificationEventGroup.CONSULTATION,
+        resolver=LeadOwnerResolver(),  # No ActorExcluded - officer must receive reminder
+        template={
+            "title": "⏰ Nhắc nhở: Lịch hẹn tư vấn",
+            "message": "Bạn có lịch hẹn gọi ${lead_name} (${lead_phone}) trong ${minutes_until} phút nữa."
+        },
+        channels=["browser"],
+        notification_type="reminder",
+        link_template="/leads/${lead_id}"
+    ),
+
     # =========================================================================
     # APPLICATION EVENTS
     # =========================================================================

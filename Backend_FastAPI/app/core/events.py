@@ -180,6 +180,24 @@ class SystemEvents(str, Enum):
     Recipients: The lead's assigned officer
     """
 
+    CONSULTATION_REMINDER = "consultation_reminder"
+    """
+    Triggered by Celery Beat scheduler when a consultation is due soon.
+
+    Payload Schema:
+        {
+            "consultation_id": int,       # Required: ID of the consultation
+            "lead_id": int,               # Required: ID of the lead
+            "lead_name": str,             # Lead's full name for display
+            "lead_phone": str,            # Lead's phone number
+            "officer_id": int,            # Officer to be reminded
+            "scheduled_at": str,          # ISO datetime of the scheduled time
+            "minutes_until": int          # Minutes until the scheduled time
+        }
+
+    Recipients: The officer assigned to the consultation
+    """
+
     # =========================================================================
     # APPLICATION EVENTS
     # =========================================================================

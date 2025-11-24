@@ -116,10 +116,24 @@ export function SocketHandler() {
       }
 
       // Always show toast notification (this is in-app, separate from browser notifications)
-      toast.info(notification.title, {
-        description: notification.message,
-        duration: 5000,
-      });
+      // Use different toast style for reminders
+      if (notification.type === "reminder") {
+        toast.warning(notification.title, {
+          description: notification.message,
+          duration: 15000, // 15 seconds for reminders - more prominent
+          action: notification.link ? {
+            label: "Xem Lead",
+            onClick: () => {
+              window.location.href = notification.link!;
+            },
+          } : undefined,
+        });
+      } else {
+        toast.info(notification.title, {
+          description: notification.message,
+          duration: 5000,
+        });
+      }
     };
 
     // ✅ REAL-TIME DATA SYNC (v16): Lắng nghe sự kiện data_updated
