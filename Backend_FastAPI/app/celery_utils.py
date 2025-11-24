@@ -599,9 +599,9 @@ def check_consultation_reminders_task(self):
 
         try:
             async with session_maker() as session:
-                # Use Vietnam timezone for consistency with stored data
-                vn_tz = pytz.timezone("Asia/Ho_Chi_Minh")
-                now = datetime.now(vn_tz)
+                # Use configured timezone for consistency with stored data
+                app_tz = pytz.timezone(settings.TIMEZONE)
+                now = datetime.now(app_tz)
                 reminder_window = now + timedelta(minutes=15)
 
                 task_log.info(f"Checking consultations between {now} and {reminder_window}")
@@ -696,6 +696,7 @@ celery_app.conf.beat_schedule = {
     },
 }
 
-# Use Vietnam timezone for consistency with local time
-celery_app.conf.timezone = "Asia/Ho_Chi_Minh"
+# Use configured timezone for consistency with local time
+# Can be set via TIMEZONE environment variable (default: Asia/Ho_Chi_Minh)
+celery_app.conf.timezone = settings.TIMEZONE
 celery_app.conf.enable_utc = False

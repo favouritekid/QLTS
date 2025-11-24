@@ -92,6 +92,12 @@ class Settings(BaseSettings):
         default="redis://localhost:6379/3", validation_alias="CELERY_RESULT_BACKEND_URL"
     )
 
+    # Timezone Settings - có thể thay đổi tùy theo vị trí VPS
+    # Ví dụ: "Asia/Ho_Chi_Minh", "Asia/Singapore", "Asia/Tokyo", "UTC"
+    TIMEZONE: str = Field(
+        default="Asia/Ho_Chi_Minh", validation_alias="TIMEZONE"
+    )
+
     # -- File Uploads --
     # Pydantic-settings reads MAX_AVATAR_SIZE_MB from env first
     MAX_AVATAR_SIZE_MB: int = Field(default=2, validation_alias="MAX_AVATAR_SIZE_MB")
