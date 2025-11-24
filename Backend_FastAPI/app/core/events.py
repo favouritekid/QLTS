@@ -112,6 +112,22 @@ class SystemEvents(str, Enum):
     Recipients: Unit staff (managers, admins)
     """
 
+    LEAD_DELETED = "lead_deleted"
+    """
+    Triggered when a lead is soft-deleted.
+
+    Payload Schema:
+        {
+            "lead_id": int,               # Required: ID of the deleted lead
+            "lead_name": Optional[str],   # Name of the lead
+            "unit_id": int,               # Unit of the lead
+            "officer_id": Optional[int],  # Previously assigned officer (if any)
+            "actor_id": int               # Admin who deleted the lead
+        }
+
+    Recipients: Previously assigned officer, unit managers
+    """
+
     # =========================================================================
     # CONSULTATION EVENTS
     # =========================================================================
@@ -164,6 +180,24 @@ class SystemEvents(str, Enum):
     Recipients: The lead's assigned officer
     """
 
+    CONSULTATION_REMINDER = "consultation_reminder"
+    """
+    Triggered by Celery Beat scheduler when a consultation is due soon.
+
+    Payload Schema:
+        {
+            "consultation_id": int,       # Required: ID of the consultation
+            "lead_id": int,               # Required: ID of the lead
+            "lead_name": str,             # Lead's full name for display
+            "lead_phone": str,            # Lead's phone number
+            "officer_id": int,            # Officer to be reminded
+            "scheduled_at": str,          # ISO datetime of the scheduled time
+            "minutes_until": int          # Minutes until the scheduled time
+        }
+
+    Recipients: The officer assigned to the consultation
+    """
+
     # =========================================================================
     # APPLICATION EVENTS
     # =========================================================================
@@ -212,6 +246,22 @@ class SystemEvents(str, Enum):
             "officer_id": int,            # Required: Officer handling the application
             "document_summary": Optional[str],  # Brief summary of changes
             "actor_id": int               # User who updated documents
+        }
+
+    Recipients: The officer, admins
+    """
+
+    APPLICATION_DELETED = "application_deleted"
+    """
+    Triggered when an application is deleted.
+
+    Payload Schema:
+        {
+            "application_id": int,        # Required: ID of the deleted application
+            "lead_id": int,               # Required: ID of the lead
+            "officer_id": int,            # Required: Officer who was handling the application
+            "lead_name": Optional[str],   # Name of the lead
+            "actor_id": int               # Admin who deleted the application
         }
 
     Recipients: The officer, admins
@@ -391,6 +441,22 @@ class SystemEvents(str, Enum):
     Recipients: The affected user
     """
 
+    USER_DEACTIVATED = "user_deactivated"
+    """
+    Triggered when a user account is deactivated.
+
+    Payload Schema:
+        {
+            "user_id": int,               # Required: ID of the deactivated user
+            "username": str,              # Username of the deactivated user
+            "old_status": str,            # Previous status (usually "active")
+            "reason": Optional[str],      # Reason for deactivation
+            "actor_id": int               # Admin who deactivated the user
+        }
+
+    Recipients: The deactivated user (for awareness before logout)
+    """
+
     # =========================================================================
     # PIPELINE CONFIG EVENTS
     # =========================================================================
@@ -409,4 +475,25 @@ class SystemEvents(str, Enum):
         }
 
     Recipients: All admins
+    """
+
+    # =========================================================================
+    # OFFICER/OPERATIONAL EVENTS
+    # =========================================================================
+
+    OFFICER_AVAILABILITY_CHANGED = "officer_availability_changed"
+    """
+    Triggered when an officer changes their availability status.
+
+    Payload Schema:
+        {
+            "officer_id": int,            # Required: ID of the officer
+            "new_status": str,            # Required: New availability status (available, busy, away)
+            "old_status": Optional[str],  # Previous status (if known)
+            "username": str,              # Officer's username
+            "unit_id": Optional[int],     # Officer's unit ID
+            "actor_id": int               # User who changed the status (usually the officer themselves)
+        }
+
+    Recipients: All admins and managers (for workload visibility)
     """

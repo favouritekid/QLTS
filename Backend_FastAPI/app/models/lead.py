@@ -1,7 +1,7 @@
 # app/models/lead.py
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from .base import Base
@@ -106,6 +106,8 @@ class Consultation(Base):
     )
     # Quick Disposition: Scheduled follow-up time
     scheduled_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    # Reminder notification sent flag (prevents duplicate reminders)
+    reminder_sent = Column(Boolean, default=False, nullable=False, index=True)
     method = Column(String(50))
     notes = Column(Text)
     outcome = Column(String(50))

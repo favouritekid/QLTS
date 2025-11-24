@@ -18,7 +18,6 @@ from ..utils.exceptions import (
     ResourceNotFoundError,
 )
 from ..services import pipeline_service, distribution_service
-from .. import socket_manager
 from ..core.status_mapping import sync_lead_status_from_consultation
 from .status_helper import StatusHelper, AssignmentStatus
 
@@ -1056,29 +1055,36 @@ async def update_lead(
                 )
                 # Don't fail the request - assignment can be done manually
 
-            # 2. Emit Socket.IO events for real-time UI updates
+            # 2. Dispatch notification for lead reassignment
             try:
-                from ..socket_manager import emit_lead_reassigned
-                # Note: Variables old_unit_id, old_officer_id captured in auto-reassign block above
-                await emit_lead_reassigned(
-                    lead_id=lead_id,
-                    old_officer_id=old_officer_id,  # type: ignore
-                    old_unit_id=old_unit_id,  # type: ignore
-                    new_unit_id=new_target_unit_id,  # type: ignore
-                    reason=f"Offering changed from #{old_offering_id} to #{new_offering_id}"  # type: ignore
+                from .notification_dispatcher import dispatch
+                from ..core.events import SystemEvents
+                await dispatch(
+                    db=db,
+                    event=SystemEvents.LEAD_REASSIGNED,
+                    payload={
+                        "lead_id": lead_id,
+                        "old_officer_id": old_officer_id,  # type: ignore
+                        "new_officer_id": None,  # Will be assigned by auto-assignment
+                        "old_unit_id": old_unit_id,  # type: ignore
+                        "new_unit_id": new_target_unit_id,  # type: ignore
+                        "actor_id": updated_by.id,
+                        "reason": f"Offering changed from #{old_offering_id} to #{new_offering_id}",  # type: ignore
+                        "user_ids": [old_officer_id] if old_officer_id else [],  # Notify old officer
+                    }
                 )
                 log.info(
-                    "Socket.IO reassignment events emitted",
+                    "Lead reassignment notification dispatched",
                     lead_id=lead_id
                 )
             except Exception as e:
                 log.error(
-                    "Failed to emit Socket.IO reassignment events",
+                    "Failed to dispatch lead reassignment notification",
                     lead_id=lead_id,
                     error=str(e),
                     exc_info=True
                 )
-                # Don't fail the request - real-time updates are non-critical
+                # Don't fail the request - notifications are non-critical
 
         # Trả về lead đã được tải đầy đủ (bao gồm relations)
         # Gọi lại get_lead_by_id để đảm bảo dữ liệu mới nhất và relations
@@ -1562,14 +1568,28 @@ async def delete_consultation(
         new_lead_status=_new_status_id,
     )
 
-    # Emit Socket.IO event for real-time updates
-    await socket_manager.emit_consultation_deleted(
-        lead_id=_lead_id,
-        consultation_id=_consultation_id,
-        officer_id=_officer_id,
-        new_lead_status_id=_new_status_id,
-        deleted_by_username=current_user.username,
-    )
+    # Dispatch notification for consultation deleted
+    try:
+        from .notification_dispatcher import dispatch
+        from ..core.events import SystemEvents
+        await dispatch(
+            db=db,
+            event=SystemEvents.CONSULTATION_DELETED,
+            payload={
+                "consultation_id": _consultation_id,
+                "lead_id": _lead_id,
+                "officer_id": _officer_id,
+                "actor_id": current_user.id,
+            }
+        )
+    except Exception as e:
+        log.error(
+            "Failed to dispatch consultation deleted notification",
+            lead_id=_lead_id,
+            consultation_id=_consultation_id,
+            error=str(e),
+            exc_info=True
+        )
 
 
 async def update_consultation(
@@ -1748,14 +1768,30 @@ async def update_consultation(
         status_changed=_status_changed,
     )
 
-    # Emit Socket.IO event for real-time updates
-    await socket_manager.emit_consultation_updated(
-        lead_id=_lead_id,
-        consultation_id=_consultation_id,
-        officer_id=_officer_id,
-        consultation_status_id=_consultation_status_id,
-        updated_by_username=current_user.username,
-    )
+    # Dispatch notification for consultation updated
+    try:
+        from .notification_dispatcher import dispatch
+        from ..core.events import SystemEvents
+        await dispatch(
+            db=db,
+            event=SystemEvents.CONSULTATION_UPDATED,
+            payload={
+                "consultation_id": _consultation_id,
+                "lead_id": _lead_id,
+                "officer_id": _officer_id,
+                "old_status_id": None,  # Could be tracked if needed
+                "new_status_id": _consultation_status_id,
+                "actor_id": current_user.id,
+            }
+        )
+    except Exception as e:
+        log.error(
+            "Failed to dispatch consultation updated notification",
+            lead_id=_lead_id,
+            consultation_id=_consultation_id,
+            error=str(e),
+            exc_info=True
+        )
 
     return consultation
 

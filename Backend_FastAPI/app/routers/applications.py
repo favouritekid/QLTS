@@ -174,11 +174,45 @@ async def delete_application(
     - Application đã xóa có thể phục hồi bởi Admin nếu cần
     """
     try:
-        await application_service.delete_application(
+        # Get application info before deletion for notification
+        app_info = await application_service.get_application_by_id(
+            db, application_id, load_relationships=True, include_deleted=False
+        )
+        if not app_info:
+            raise ResourceNotFoundError(f"Hồ sơ với ID {application_id} không tồn tại")
+
+        # Store info for notification before deletion
+        officer_id = app_info.lead.assigned_officer_id if app_info.lead else None
+        lead_name = app_info.lead.full_name if app_info.lead else "Unknown"
+        lead_id = app_info.lead_id
+
+        deleted_app = await application_service.delete_application(
             db=db,
             application_id=application_id,
             deleted_by=current_user,
         )
+
+        # Dispatch notification for application deletion
+        try:
+            from ..services.notification_dispatcher import dispatch
+            from ..core.events import SystemEvents
+            await dispatch(
+                db=db,
+                event=SystemEvents.APPLICATION_DELETED,
+                payload={
+                    "application_id": deleted_app.id,
+                    "lead_id": lead_id,
+                    "officer_id": officer_id,
+                    "lead_name": lead_name,
+                    "actor_id": current_user.id,
+                },
+                dedupe_key=f"application_deleted:{deleted_app.id}"
+            )
+        except Exception as e:
+            # Log but don't fail - deletion already succeeded
+            import logging
+            logging.warning(f"Failed to dispatch application deletion notification: {e}")
+
         return None
     except ResourceNotFoundError as e:
         raise HTTPException(

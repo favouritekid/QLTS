@@ -34,6 +34,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { DateTimePicker } from "@/components/common/form";
 
 import { useUpdateConsultation } from "@/hooks/useLeads";
 import { useAllowedNextStatuses } from "@/hooks/usePipeline";
@@ -42,11 +43,11 @@ import type { Consultation, ConsultationUpdate } from "@/types/lead.types";
 
 // Validation schema (all fields optional for partial update)
 const editConsultationSchema = z.object({
-  scheduled_at: z.string().optional(),
+  scheduled_at: z.date().optional().nullable(),
   status_id: z.string().optional(),
   notes: z
     .string()
-    .max(1000, "Notes must be less than 1000 characters")
+    .max(1000, "Ghi chú không được quá 1000 ký tự")
     .optional(),
   method: z.enum(["phone", "email", "in_person", "online", "video_call"]).optional(),
   duration_minutes: z.number().min(0).max(480).optional(),
@@ -77,7 +78,7 @@ export function EditConsultationDialog({
   const form = useForm<EditConsultationFormValues>({
     resolver: zodResolver(editConsultationSchema),
     defaultValues: {
-      scheduled_at: "",
+      scheduled_at: undefined,
       status_id: "",
       notes: "",
       method: "phone",
@@ -90,8 +91,8 @@ export function EditConsultationDialog({
     if (open && consultation) {
       form.reset({
         scheduled_at: consultation.scheduled_at
-          ? new Date(consultation.scheduled_at).toISOString().slice(0, 16)
-          : "",
+          ? new Date(consultation.scheduled_at)
+          : undefined,
         status_id: consultation.consultation_status_id || "",
         notes: consultation.notes || "",
         method: consultation.method || "phone",
@@ -107,7 +108,7 @@ export function EditConsultationDialog({
 
     // Only send fields that have values (partial update)
     const updateData: ConsultationUpdate = {};
-    if (data.scheduled_at) updateData.scheduled_at = data.scheduled_at;
+    if (data.scheduled_at) updateData.scheduled_at = data.scheduled_at.toISOString();
     if (data.status_id) updateData.status_id = data.status_id;
     if (data.notes !== undefined) updateData.notes = data.notes;
     if (data.method) updateData.method = data.method;
@@ -222,9 +223,12 @@ export function EditConsultationDialog({
                 <FormItem>
                   <FormLabel>Lịch hẹn tiếp theo</FormLabel>
                   <FormControl>
-                    <Input
-                      type="datetime-local"
-                      {...field}
+                    <DateTimePicker
+                      value={field.value}
+                      onChange={field.onChange}
+                      placeholder="Chọn ngày giờ"
+                      minDate={new Date()}
+                      error={form.formState.errors.scheduled_at?.message}
                     />
                   </FormControl>
                   <FormDescription>

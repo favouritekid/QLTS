@@ -29,7 +29,6 @@ import {
   useExportLeads,
   useImportLeads,
 } from "@/hooks/useLeads";
-import { useAllProgramOfferings } from "@/hooks/useOrganization";
 import { LeadDialog } from "@/components/leads/LeadDialog";
 import { AssignLeadDialog } from "@/components/leads/AssignLeadDialog";
 import { LeadCard } from "@/components/leads/LeadCard";
@@ -86,7 +85,6 @@ export default function LeadsCommandCenter() {
 
   // Fetch data
   const { data: leadsPage, isLoading, isError, error } = useLeads(apiFilters);
-  const { data: offerings = [] } = useAllProgramOfferings(true);
   const deleteMutation = useDeleteLead();
   const exportMutation = useExportLeads();
   const importMutation = useImportLeads();
@@ -264,7 +262,6 @@ export default function LeadsCommandCenter() {
               onScoreRangeChange={setScoreRange}
               offeringFilter={offeringFilter}
               onOfferingChange={handleOfferingChange}
-              offerings={offerings}
               onReset={resetFilters}
             />
           </div>

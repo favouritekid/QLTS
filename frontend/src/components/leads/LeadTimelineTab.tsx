@@ -100,8 +100,8 @@ const getEventConfig = (eventType: string, method?: string) => {
     }
   }
 
-  // Assignment events
-  if (eventType === "assignment") {
+  // Assignment events (backend sends "assignment", frontend may use "assigned")
+  if (eventType === "assignment" || eventType === "assigned") {
     return {
       icon: UserPlus,
       color: "text-slate-600",
@@ -242,8 +242,12 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
                 const eventType = event.type || "lead_created";
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 const eventData = (event.data || {}) as any; // TODO: Refactor to use new TimelineItem structure
-                const isConsultation = eventType === "consultation_added" || eventType === "consultation_updated";
-                const isAssignment = eventType === "assigned";
+
+                // ✅ FIX: Match actual backend event types ("consultation", "assignment")
+                // Backend sends: type: "consultation" | "assignment"
+                // NOT "consultation_added", "consultation_updated", or "assigned"
+                const isConsultation = eventType === "consultation" || eventType === "consultation_added" || eventType === "consultation_updated";
+                const isAssignment = eventType === "assignment" || eventType === "assigned";
 
                 const config = getEventConfig(
                   eventType,
@@ -368,16 +372,62 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
                           </div>
                         )}
 
-                        {/* Footer: Metadata - only scheduled_at */}
-                        {isConsultation && eventData.scheduled_at && (
+                        {/* Footer: Metadata badges */}
+                        {(isConsultation || isAssignment) && (
                           <div className="flex flex-wrap gap-2">
-                            <Badge
-                              variant="outline"
-                              className="text-xs font-normal gap-1 border-blue-200 bg-blue-50 text-blue-700"
-                            >
-                              <Calendar className="h-3 w-3" />
-                              Hẹn: {format(parseISO(eventData.scheduled_at), "dd/MM HH:mm")}
-                            </Badge>
+                            {/* Consultation: Scheduled follow-up */}
+                            {isConsultation && eventData.scheduled_at && (
+                              <Badge
+                                variant="outline"
+                                className="text-xs font-normal gap-1 border-blue-200 bg-blue-50 text-blue-700"
+                              >
+                                <Calendar className="h-3 w-3" />
+                                Hẹn: {format(parseISO(eventData.scheduled_at), "dd/MM HH:mm")}
+                              </Badge>
+                            )}
+
+                            {/* Consultation: Duration */}
+                            {isConsultation && eventData.duration_minutes && eventData.duration_minutes > 0 && (
+                              <Badge
+                                variant="outline"
+                                className="text-xs font-normal gap-1 border-slate-200 bg-slate-50 text-slate-600"
+                              >
+                                <Clock className="h-3 w-3" />
+                                {eventData.duration_minutes} phút
+                              </Badge>
+                            )}
+
+                            {/* Consultation: Outcome */}
+                            {isConsultation && eventData.outcome && (
+                              <Badge
+                                variant="outline"
+                                className={cn(
+                                  "text-xs font-normal gap-1",
+                                  eventData.outcome === "positive" && "border-green-200 bg-green-50 text-green-700",
+                                  eventData.outcome === "negative" && "border-red-200 bg-red-50 text-red-700",
+                                  eventData.outcome === "neutral" && "border-gray-200 bg-gray-50 text-gray-600"
+                                )}
+                              >
+                                {eventData.outcome === "positive" && "Tích cực"}
+                                {eventData.outcome === "negative" && "Tiêu cực"}
+                                {eventData.outcome === "neutral" && "Trung lập"}
+                              </Badge>
+                            )}
+
+                            {/* Assignment: Method (automatic vs manual) */}
+                            {isAssignment && eventData.method && (
+                              <Badge
+                                variant="outline"
+                                className={cn(
+                                  "text-xs font-normal gap-1",
+                                  eventData.method === "automatic" && "border-purple-200 bg-purple-50 text-purple-700",
+                                  eventData.method === "manual" && "border-orange-200 bg-orange-50 text-orange-700"
+                                )}
+                              >
+                                {eventData.method === "automatic" && "Tự động"}
+                                {eventData.method === "manual" && "Thủ công"}
+                              </Badge>
+                            )}
                           </div>
                         )}
                       </div>

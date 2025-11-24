@@ -206,7 +206,7 @@ export interface UserStatistics {
 export interface Notification {
   id: number;
   user_id: number;
-  type: "info" | "success" | "warning" | "error" | "admin_update" | "system";
+  type: "info" | "success" | "warning" | "error" | "admin_update" | "system" | "reminder";
   title: string;
   message: string;
   link: string | null;

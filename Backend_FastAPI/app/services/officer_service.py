@@ -7,7 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, joinedload, aliased
 
 from .. import models, schemas
-from ..socket_manager import emit_to_all
+from ..core.events import SystemEvents
+from .notification_dispatcher import dispatch
 
 log = structlog.get_logger(__name__)
 
@@ -237,20 +238,31 @@ async def update_officer_availability(
     if not user:
         raise ValueError("User not found")
     
+    old_status = user.availability_status
     user.availability_status = availability_status
     db.add(user)
     await db.commit()
     await db.refresh(user)
-    
-    # Bắn sự kiện Real-time để Admin và Dashboard cập nhật
-    await emit_to_all(
-        event="officer_availability_changed",
-        data={
-            "officer_id": officer_id,
-            "new_status": availability_status,
-            "username": user.username,
-            "unit_id": user.unit_id
-        }
-    )
-    
+
+    # Dispatch notification for officer availability change
+    try:
+        await dispatch(
+            db=db,
+            event=SystemEvents.OFFICER_AVAILABILITY_CHANGED,
+            payload={
+                "officer_id": officer_id,
+                "new_status": availability_status,
+                "old_status": old_status,
+                "username": user.username,
+                "unit_id": user.unit_id,
+                "actor_id": officer_id,  # Officer changes their own status
+            }
+        )
+    except Exception as e:
+        log.warning(
+            "Failed to dispatch officer availability notification",
+            officer_id=officer_id,
+            error=str(e)
+        )
+
     return user

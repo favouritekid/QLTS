@@ -896,6 +896,32 @@ async def update_existing_user(
         changes=changes if changes else None,
     )
 
+    # Dispatch USER_DEACTIVATED notification if status changed to inactive
+    if "status" in changes and changes["status"]["new"] == "inactive":
+        try:
+            from app.services.notification_dispatcher import dispatch
+            from app.core.events import SystemEvents
+            await dispatch(
+                db=db,
+                event=SystemEvents.USER_DEACTIVATED,
+                payload={
+                    "user_id": updated_user.id,
+                    "username": updated_user.username,
+                    "old_status": changes["status"]["old"],
+                    "reason": "Account deactivated by administrator",
+                    "actor_id": current_admin.id,
+                },
+                dedupe_key=f"user_deactivated:{updated_user.id}",
+                skip_preference_check=True  # Critical notification
+            )
+            log.info(
+                "User deactivation notification dispatched",
+                target_user_id=updated_user.id,
+                admin_id=current_admin.id,
+            )
+        except Exception as e:
+            log.error(f"Failed to dispatch user deactivation notification: {e}")
+
     # Send notification to user if admin updated their info
     if current_admin.id != updated_user.id and changes:
         log.info(

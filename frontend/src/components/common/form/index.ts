@@ -18,5 +18,8 @@ export type { FormNumberProps } from "./FormNumber";
 export { DatePicker } from "./DatePicker";
 export type { DatePickerProps } from "./DatePicker";
 
+export { DateTimePicker } from "./DateTimePicker";
+export type { DateTimePickerProps } from "./DateTimePicker";
+
 export { SearchInput } from "./SearchInput";
 export type { SearchInputProps } from "./SearchInput";

@@ -269,20 +269,18 @@ async def create_pipeline_stage(
         await invalidate_pipeline_cache()
         log.info("Created new pipeline stage, cache invalidated", stage_id=db_stage.id)
 
-        # 6. === SOCKET.IO EVENT: Emit pipeline_config_updated event ===
+        # 6. === NOTIFICATION: Dispatch pipeline config updated event ===
         if current_user:
-            resource_data = {
-                "id": db_stage.id,
-                "name": db_stage.name,
-                "order": db_stage.order,
-                "is_final_stage": db_stage.is_final_stage,
-            }
-            await emit_pipeline_config_updated(
-                config_type="pipeline_stage",
-                operation="create",
-                resource_id=db_stage.id,
-                resource_data=resource_data,
-                updated_by_username=current_user.username,
+            await dispatch(
+                db=db,
+                event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+                payload={
+                    "config_type": "pipeline_stage",
+                    "operation": "created",
+                    "resource_id": db_stage.id,
+                    "resource_name": db_stage.name,
+                    "actor_id": current_user.id,
+                }
             )
 
         return db_stage
@@ -343,20 +341,18 @@ async def update_pipeline_stage(
         await invalidate_pipeline_cache()
         log.info("Updated pipeline stage, cache invalidated", stage_id=db_stage.id)
 
-        # 5. === SOCKET.IO EVENT: Emit pipeline_config_updated event ===
+        # 5. === NOTIFICATION: Dispatch pipeline config updated event ===
         if current_user:
-            resource_data = {
-                "id": db_stage.id,
-                "name": db_stage.name,
-                "order": db_stage.order,
-                "is_final_stage": db_stage.is_final_stage,
-            }
-            await emit_pipeline_config_updated(
-                config_type="pipeline_stage",
-                operation="update",
-                resource_id=db_stage.id,
-                resource_data=resource_data,
-                updated_by_username=current_user.username,
+            await dispatch(
+                db=db,
+                event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+                payload={
+                    "config_type": "pipeline_stage",
+                    "operation": "updated",
+                    "resource_id": db_stage.id,
+                    "resource_name": db_stage.name,
+                    "actor_id": current_user.id,
+                }
             )
 
         return db_stage
@@ -405,14 +401,18 @@ async def delete_pipeline_stage(
         await invalidate_pipeline_cache()
         log.info("Deleted pipeline stage, cache invalidated", stage_id=stage_id)
 
-        # 4. === SOCKET.IO EVENT: Emit pipeline_config_updated event ===
+        # 4. === NOTIFICATION: Dispatch pipeline config updated event ===
         if current_user:
-            await emit_pipeline_config_updated(
-                config_type="pipeline_stage",
-                operation="delete",
-                resource_id=stage_id,
-                resource_data=stage_data,
-                updated_by_username=current_user.username,
+            await dispatch(
+                db=db,
+                event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+                payload={
+                    "config_type": "pipeline_stage",
+                    "operation": "deleted",
+                    "resource_id": stage_id,
+                    "resource_name": stage_data["name"],
+                    "actor_id": current_user.id,
+                }
             )
 
     except Exception as e:
@@ -506,22 +506,18 @@ async def create_consultation_status(
             "Created new consultation status, cache invalidated", status_id=db_status.id
         )
 
-        # 6. === SOCKET.IO EVENT: Emit pipeline_config_updated event ===
+        # 6. === NOTIFICATION: Dispatch pipeline config updated event ===
         if current_user:
-            resource_data = {
-                "id": db_status.id,
-                "name": db_status.name,
-                "color_code": db_status.color_code,
-                "stage_id": db_status.stage_id,
-                "outcome_type": db_status.outcome_type.value,
-                "is_final_status": db_status.is_final_status,
-            }
-            await emit_pipeline_config_updated(
-                config_type="consultation_status",
-                operation="create",
-                resource_id=db_status.id,
-                resource_data=resource_data,
-                updated_by_username=current_user.username,
+            await dispatch(
+                db=db,
+                event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+                payload={
+                    "config_type": "consultation_status",
+                    "operation": "created",
+                    "resource_id": db_status.id,
+                    "resource_name": db_status.name,
+                    "actor_id": current_user.id,
+                }
             )
 
         return db_status
@@ -605,22 +601,18 @@ async def update_consultation_status(
             "Updated consultation status, cache invalidated", status_id=db_status.id
         )
 
-        # 5. === SOCKET.IO EVENT: Emit pipeline_config_updated event ===
+        # 5. === NOTIFICATION: Dispatch pipeline config updated event ===
         if current_user:
-            resource_data = {
-                "id": db_status.id,
-                "name": db_status.name,
-                "color_code": db_status.color_code,
-                "stage_id": db_status.stage_id,
-                "outcome_type": db_status.outcome_type.value,
-                "is_final_status": db_status.is_final_status,
-            }
-            await emit_pipeline_config_updated(
-                config_type="consultation_status",
-                operation="update",
-                resource_id=db_status.id,
-                resource_data=resource_data,
-                updated_by_username=current_user.username,
+            await dispatch(
+                db=db,
+                event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+                payload={
+                    "config_type": "consultation_status",
+                    "operation": "updated",
+                    "resource_id": db_status.id,
+                    "resource_name": db_status.name,
+                    "actor_id": current_user.id,
+                }
             )
 
         return db_status
@@ -681,14 +673,18 @@ async def delete_consultation_status(
         await invalidate_pipeline_cache()
         log.info("Deleted consultation status, cache invalidated", status_id=status_id)
 
-        # 4. === SOCKET.IO EVENT: Emit pipeline_config_updated event ===
+        # 4. === NOTIFICATION: Dispatch pipeline config updated event ===
         if current_user:
-            await emit_pipeline_config_updated(
-                config_type="consultation_status",
-                operation="delete",
-                resource_id=status_id,
-                resource_data=status_data,
-                updated_by_username=current_user.username,
+            await dispatch(
+                db=db,
+                event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+                payload={
+                    "config_type": "consultation_status",
+                    "operation": "deleted",
+                    "resource_id": status_id,
+                    "resource_name": status_data["name"],
+                    "actor_id": current_user.id,
+                }
             )
 
     except Exception as e:
@@ -775,21 +771,20 @@ async def create_allowed_transition(
             to_status=transition_in.to_status_id,
         )
 
-        # === SOCKET.IO EVENT: Emit pipeline_config_updated event ===
+        # === NOTIFICATION: Dispatch pipeline config updated event ===
         if current_user:
-            resource_data = {
-                "id": db_transition.id,
-                "from_status_id": db_transition.from_status_id,
-                "to_status_id": db_transition.to_status_id,
-                "from_status_name": db_transition.from_status.name if db_transition.from_status else "N/A",
-                "to_status_name": db_transition.to_status.name if db_transition.to_status else "N/A",
-            }
-            await emit_pipeline_config_updated(
-                config_type="allowed_transition",
-                operation="create",
-                resource_id=str(db_transition.id),
-                resource_data=resource_data,
-                updated_by_username=current_user.username,
+            from_name = db_transition.from_status.name if db_transition.from_status else "N/A"
+            to_name = db_transition.to_status.name if db_transition.to_status else "N/A"
+            await dispatch(
+                db=db,
+                event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+                payload={
+                    "config_type": "allowed_transition",
+                    "operation": "created",
+                    "resource_id": str(db_transition.id),
+                    "resource_name": f"{from_name} → {to_name}",
+                    "actor_id": current_user.id,
+                }
             )
 
         return db_transition
@@ -838,14 +833,18 @@ async def delete_allowed_transition(
 
         log.info("Deleted allowed transition", transition_id=transition_id)
 
-        # === SOCKET.IO EVENT: Emit pipeline_config_updated event ===
+        # === NOTIFICATION: Dispatch pipeline config updated event ===
         if current_user:
-            await emit_pipeline_config_updated(
-                config_type="allowed_transition",
-                operation="delete",
-                resource_id=str(transition_id),
-                resource_data=transition_data,
-                updated_by_username=current_user.username,
+            await dispatch(
+                db=db,
+                event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+                payload={
+                    "config_type": "allowed_transition",
+                    "operation": "deleted",
+                    "resource_id": str(transition_id),
+                    "resource_name": f"{transition_data['from_status_name']} → {transition_data['to_status_name']}",
+                    "actor_id": current_user.id,
+                }
             )
 
     except Exception as e:

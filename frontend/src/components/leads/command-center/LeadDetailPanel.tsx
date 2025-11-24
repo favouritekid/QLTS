@@ -1,8 +1,7 @@
 // src/components/leads/command-center/LeadDetailPanel.tsx
 "use client";
 
-import React, { useState } from "react";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import React from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -21,13 +20,12 @@ import {
   Calendar,
   User,
   Zap,
+  History,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLead } from "@/hooks/useLeads";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
-import { LeadConsultationsTab } from "@/components/leads/LeadConsultationsTab";
-import { ConsultationDialog } from "@/components/leads/ConsultationDialog";
-import { QuickDisposition } from "@/components/leads/QuickDisposition";
+import { QuickConsultationSection } from "@/components/leads/QuickConsultationSection";
 import type { Lead, LeadStatus } from "@/types/lead.types";
 
 interface LeadDetailPanelProps {
@@ -80,7 +78,6 @@ export function LeadDetailPanel({
   onAssign,
 }: LeadDetailPanelProps) {
   const { data: lead, isLoading } = useLead(leadId || 0, !!leadId);
-  const [consultationDialogOpen, setConsultationDialogOpen] = useState(false);
 
   // Empty state
   if (!leadId) {
@@ -288,63 +285,33 @@ export function LeadDetailPanel({
             </CardContent>
           </Card>
 
-          {/* Quick Actions Card - Highlighted */}
+          {/* Quick Consultation Card - Inline Form */}
           <Card className="bg-slate-50 border-slate-200">
             <CardHeader className="py-3 px-4">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
                 <Zap className="h-4 w-4 text-amber-500" />
-                Quick Actions
+                Ghi nhận tư vấn
               </CardTitle>
             </CardHeader>
             <CardContent className="px-4 pb-4 pt-0">
-              <QuickDisposition leadId={lead.id} />
+              <QuickConsultationSection leadId={lead.id} />
             </CardContent>
           </Card>
 
-          {/* Tabs - Timeline & History */}
+          {/* Timeline */}
           <Card>
-            <CardContent className="p-0">
-              <Tabs defaultValue="timeline">
-                <TabsList className="w-full rounded-none border-b bg-transparent h-auto p-0">
-                  <TabsTrigger
-                    value="timeline"
-                    className="flex-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-3"
-                  >
-                    Timeline
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="consultations"
-                    className="flex-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent py-3"
-                  >
-                    Lịch sử
-                  </TabsTrigger>
-                </TabsList>
-
-                <div className="p-4">
-                  <TabsContent value="timeline" className="mt-0">
-                    <LeadTimelineTab leadId={lead.id} />
-                  </TabsContent>
-
-                  <TabsContent value="consultations" className="mt-0">
-                    <LeadConsultationsTab
-                      leadId={lead.id}
-                      lead={lead}
-                      onAddConsultation={() => setConsultationDialogOpen(true)}
-                    />
-                  </TabsContent>
-                </div>
-              </Tabs>
+            <CardHeader className="py-3 px-4">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <History className="h-4 w-4 text-muted-foreground" />
+                Timeline
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="px-4 pb-4 pt-0">
+              <LeadTimelineTab leadId={lead.id} />
             </CardContent>
           </Card>
         </div>
       </ScrollArea>
-
-      {/* Consultation Dialog */}
-      <ConsultationDialog
-        leadId={lead.id}
-        open={consultationDialogOpen}
-        onOpenChange={setConsultationDialogOpen}
-      />
     </div>
   );
 }
