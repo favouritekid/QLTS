@@ -696,7 +696,6 @@ celery_app.conf.beat_schedule = {
     "check-consultation-reminders-every-minute": {
         "task": "check_consultation_reminders_task",
         "schedule": 60.0,  # Every 60 seconds
-        "options": {"queue": "default"},
     },
 }
 
