@@ -551,12 +551,12 @@ async def test_validate_status_transition_universal_status_always_allowed(
     universal_status = ConsultationStatus(
         id="sts01",
         name="Không nghe máy",
+        color_code="#FFA500",
         stage_id="stg01",
         outcome_type="neutral",
         is_final_status=False,
         is_universal=True,  # ✅ Universal
         updates_pipeline=False,
-        order=1,
     )
     mock_db_session.get.return_value = universal_status
 
@@ -585,12 +585,12 @@ async def test_validate_status_transition_non_universal_without_rule_fails(
     non_universal_status = ConsultationStatus(
         id="sts11",
         name="Đã nhập học",
+        color_code="#28A745",
         stage_id="stg06",
         outcome_type="positive",
         is_final_status=True,
         is_universal=False,  # ❌ NOT universal
         updates_pipeline=True,
-        order=11,
     )
     mock_db_session.get.return_value = non_universal_status
 
@@ -651,46 +651,46 @@ async def test_get_allowed_next_statuses_includes_universal(mock_db_session):
     current_status = ConsultationStatus(
         id="sts06",
         name="Quan tâm",
+        color_code="#007BFF",
         stage_id="stg02",
         outcome_type="positive",
         is_final_status=False,
         is_universal=False,
         updates_pipeline=True,
-        order=6,
     )
 
     # Mock allowed status (từ transition rule)
     allowed_status = ConsultationStatus(
         id="sts07",
         name="Không quan tâm",
+        color_code="#DC3545",
         stage_id="stg02",
         outcome_type="negative",
         is_final_status=True,
         is_universal=False,
         updates_pipeline=True,
-        order=7,
     )
 
     # Mock universal statuses
     universal_status_1 = ConsultationStatus(
         id="sts01",
         name="Không nghe máy",
+        color_code="#FFA500",
         stage_id="stg01",
         outcome_type="neutral",
         is_final_status=False,
         is_universal=True,
         updates_pipeline=False,
-        order=1,
     )
     universal_status_2 = ConsultationStatus(
         id="sts02",
         name="Thuê bao",
+        color_code="#6C757D",
         stage_id="stg01",
         outcome_type="neutral",
         is_final_status=False,
         is_universal=True,
         updates_pipeline=False,
-        order=2,
     )
 
     # Mock DB queries
@@ -737,34 +737,34 @@ async def test_get_allowed_next_statuses_ordering(mock_db_session):
     current_status = ConsultationStatus(
         id="sts06",
         name="Quan tâm",
+        color_code="#007BFF",
         stage_id="stg02",
         outcome_type="positive",
         is_final_status=False,
         is_universal=False,
         updates_pipeline=True,
-        order=6,
     )
 
     allowed_status = ConsultationStatus(
         id="sts07",
         name="Không quan tâm",
+        color_code="#DC3545",
         stage_id="stg02",
         outcome_type="negative",
         is_final_status=True,
         is_universal=False,
         updates_pipeline=True,
-        order=7,
     )
 
     universal_status_1 = ConsultationStatus(
         id="sts01",
         name="Không nghe máy",
+        color_code="#FFA500",
         stage_id="stg01",
         outcome_type="neutral",
         is_final_status=False,
         is_universal=True,
         updates_pipeline=False,
-        order=1,
     )
 
     mock_result_1 = MagicMock()
@@ -801,13 +801,13 @@ async def test_create_consultation_status_universal_with_legacy_warning(
     status_in = schemas.ConsultationStatusCreate(
         id="sts99",
         name="Test Universal",
+        color_code="#FFCC00",
         stage_id="stg01",
         outcome_type="neutral",
         is_final_status=False,
         is_universal=True,  # ✅ Universal
         updates_pipeline=False,
         legacy_status="contacted",  # ⚠️ Có legacy_status
-        order=99,
     )
 
     # Mock stage exists
