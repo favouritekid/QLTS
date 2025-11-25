@@ -657,6 +657,10 @@ def check_consultation_reminders_task(self):
                         consultation.reminder_sent = True
                         result["sent"] += 1
 
+                        # ✅ Cập nhật lead.next_activity_at sau khi mark reminder_sent
+                        from .services.lead_service import update_lead_next_activity
+                        await update_lead_next_activity(session, lead.id)
+
                         task_log.info(
                             f"Reminder sent for consultation #{consultation.id} "
                             f"(Lead: {lead.full_name}, Officer: {consultation.officer_id})"

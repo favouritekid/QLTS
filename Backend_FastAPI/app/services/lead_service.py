@@ -24,6 +24,59 @@ from .status_helper import StatusHelper, AssignmentStatus
 log = structlog.get_logger(__name__)
 
 
+async def update_lead_next_activity(
+    db: AsyncSession,
+    lead_id: int
+) -> None:
+    """
+    Cập nhật lead.next_activity_at = scheduled_at sớm nhất chưa gửi reminder.
+
+    Logic:
+    - Tìm MIN(scheduled_at) trong consultations WHERE:
+      - lead_id = lead_id
+      - reminder_sent = False
+      - scheduled_at >= NOW (chỉ tương lai, không lấy quá khứ)
+      - scheduled_at IS NOT NULL
+    - Set lead.next_activity_at = giá trị tìm được (hoặc NULL nếu không có)
+
+    Args:
+        db: Database session
+        lead_id: Lead ID cần update
+    """
+    from sqlalchemy import and_
+
+    # Lấy lead
+    lead = await db.get(models.Lead, lead_id)
+    if not lead:
+        log.warning("update_lead_next_activity: Lead not found", lead_id=lead_id)
+        return
+
+    # Tìm scheduled_at sớm nhất chưa reminder
+    now = datetime.now(timezone.utc)
+
+    result = await db.execute(
+        select(func.min(models.Consultation.scheduled_at))
+        .where(
+            and_(
+                models.Consultation.lead_id == lead_id,
+                models.Consultation.scheduled_at.isnot(None),
+                models.Consultation.scheduled_at >= now,
+                models.Consultation.reminder_sent == False,
+            )
+        )
+    )
+    earliest_scheduled = result.scalar_one_or_none()
+
+    # Update lead
+    lead.next_activity_at = earliest_scheduled
+
+    log.debug(
+        "Updated lead.next_activity_at",
+        lead_id=lead_id,
+        next_activity_at=earliest_scheduled.isoformat() if earliest_scheduled else None,
+    )
+
+
 async def calculate_lead_score(
     db: AsyncSession,
     lead_education_level: Optional[str] = None,
@@ -1145,10 +1198,6 @@ async def add_consultation(
             # ✅ Sync lead.status từ consultation_status (Hybrid Approach)
             sync_lead_status_from_consultation(lead, new_status)
 
-            # Quick Disposition: Sync scheduled_at to lead.next_activity_at
-            if data.scheduled_at:
-                lead.next_activity_at = data.scheduled_at
-
             # Chuẩn bị dữ liệu để tạo Consultation
             create_consult_data = data.model_dump(exclude={"status_id", "consultation_date"})
             # (Đã xóa .strip() vì Pydantic xử lý)
@@ -1189,6 +1238,10 @@ async def add_consultation(
 
             # Refresh consultation mới để tải relations (officer, consultation_status)
             await db.refresh(new_consultation, ["officer", "consultation_status"])
+
+            # ✅ Quick Disposition: Cập nhật next_activity_at dựa trên tất cả consultations
+            if data.scheduled_at:
+                await update_lead_next_activity(db, lead_id)
 
             log.info(
                 "New consultation added for lead",
@@ -1542,6 +1595,9 @@ async def delete_consultation(
                 reason=f"Deleted consultation ID {consultation_id}",
             )
 
+            # ✅ Quick Disposition: Cập nhật next_activity_at sau khi xóa consultation
+            await update_lead_next_activity(db, lead_id)
+
             # Store values for use after transaction
             _lead_id = lead_id
             _consultation_id = consultation_id
@@ -1740,6 +1796,10 @@ async def update_consultation(
             # Flush to get changes ready (commit handled by begin_nested context)
             await db.flush()
             await db.refresh(consultation)
+
+            # ✅ Quick Disposition: Cập nhật next_activity_at nếu scheduled_at thay đổi
+            if "scheduled_at" in update_data:
+                await update_lead_next_activity(db, lead_id)
 
             # Store values for use after transaction
             _lead_id = lead_id
