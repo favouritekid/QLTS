@@ -463,6 +463,18 @@ async def create_consultation_status(
             db, status_in.stage_id
         )  # Sẽ ném 404 nếu stage_id không tồn tại
 
+        # ✅ NEW: Validate universal status constraints
+        if status_in.is_universal and status_in.legacy_status:
+            log.warning(
+                "Creating universal status with legacy_status override",
+                status_id=status_in.id,
+                status_name=status_in.name,
+                legacy_status=status_in.legacy_status,
+                recommendation="Universal statuses should not have legacy_status. "
+                              "The legacy status derivation is bypassed when updates_pipeline=false.",
+            )
+            # Note: Không raise error, chỉ warning vì có thể có use case hợp lệ
+
         # ✅ CRITICAL FIX: Convert Pydantic model to dict with proper enum handling
         create_data = status_in.model_dump(mode='python')
 
@@ -589,6 +601,22 @@ async def update_consultation_status(
             await _get_stage_by_id(
                 db, update_data["stage_id"]
             )  # Ném 404 nếu không tìm thấy
+
+        # ✅ NEW: Validate universal status constraints
+        # Check nếu status đang được update thành universal + có legacy_status
+        will_be_universal = update_data.get("is_universal", db_status.is_universal)
+        will_have_legacy = update_data.get("legacy_status", db_status.legacy_status)
+
+        if will_be_universal and will_have_legacy:
+            log.warning(
+                "Updating status to universal with legacy_status override",
+                status_id=status_id,
+                status_name=db_status.name,
+                legacy_status=will_have_legacy,
+                recommendation="Universal statuses should not have legacy_status. "
+                              "The legacy status derivation is bypassed when updates_pipeline=false.",
+            )
+            # Note: Không raise error, chỉ warning vì có thể có use case hợp lệ
 
         # 3. Cập nhật
         for key, value in update_data.items():
@@ -861,24 +889,45 @@ async def delete_allowed_transition(
         raise e
 
 async def validate_status_transition(
-    db: AsyncSession, 
-    from_status_id: str, 
+    db: AsyncSession,
+    from_status_id: str,
     to_status_id: str
 ) -> bool:
     """
     Kiểm tra xem việc chuyển từ trạng thái A sang B có hợp lệ không.
-    
+
     Logic:
     1. Nếu from == to: Luôn đúng (cập nhật thông tin khác của lead).
     2. Nếu from là None (Lead mới): Luôn đúng (hoặc check rule init tùy logic).
-    3. Query bảng allowed_transitions.
+    3. ✅ NEW: Nếu to_status là universal: Luôn đúng (có thể dùng ở mọi stage).
+    4. Query bảng allowed_transitions.
     """
     if from_status_id == to_status_id:
         return True
-        
-    if not from_status_id: 
+
+    if not from_status_id:
         # Trường hợp Lead chưa có status (hiếm), cho phép gán status đầu tiên
         return True
+
+    # ✅ FIX: Kiểm tra universal status trước khi query transitions
+    # Universal statuses có thể dùng ở mọi pipeline stage mà không cần explicit rule
+    try:
+        to_status = await db.get(models.ConsultationStatus, to_status_id)
+        if to_status and to_status.is_universal:
+            log.debug(
+                "Universal status transition - always allowed",
+                from_status=from_status_id,
+                to_status=to_status_id,
+                status_name=to_status.name,
+            )
+            return True
+    except Exception as e:
+        log.warning(
+            "Failed to check universal status",
+            to_status_id=to_status_id,
+            error=str(e)
+        )
+        # Continue to check allowed_transitions as fallback
 
     # TODO: Performance Opt - Có thể cache danh sách allowed_transitions vào Redis
     # Hiện tại query DB trực tiếp để đảm bảo tính đúng đắn (Consistency)
@@ -951,22 +1000,35 @@ async def get_allowed_next_statuses(
     universal_result = await db.execute(universal_query)
     universal_statuses = list(universal_result.scalars().all())
 
-    # Merge (tránh duplicate)
+    # Lấy current status để kiểm tra
+    current_status = await _get_status_by_id(db, current_status_id)
+
+    # ✅ IMPROVED: Merge với ordering rõ ràng
+    # Thứ tự: Current (if not universal) → Universal → Allowed (sorted)
+    final_statuses = []
     allowed_ids = {s.id for s in allowed_statuses}
+    universal_ids = {s.id for s in universal_statuses}
+
+    # 1. Current status first (nếu không phải universal và không trong allowed)
+    if current_status and not current_status.is_universal and current_status.id not in allowed_ids:
+        final_statuses.append(current_status)
+
+    # 2. Universal statuses (already sorted by name)
+    # Tránh duplicate với allowed list
     for universal_status in universal_statuses:
         if universal_status.id not in allowed_ids:
-            allowed_statuses.append(universal_status)
+            final_statuses.append(universal_status)
 
-    # Luôn cho phép giữ nguyên status hiện tại (để cập nhật notes, etc.)
-    current_status = await _get_status_by_id(db, current_status_id)
-    if current_status and current_status.id not in allowed_ids:
-        allowed_statuses.insert(0, current_status)
+    # 3. Allowed statuses (sorted by stage_id, then name for better UX)
+    sorted_allowed = sorted(allowed_statuses, key=lambda s: (s.stage_id, s.name))
+    final_statuses.extend(sorted_allowed)
 
     log.debug(
         "get_allowed_next_statuses",
         current_status=current_status_id,
-        total_allowed=len(allowed_statuses),
-        universal_count=len(universal_statuses)
+        total_allowed=len(final_statuses),
+        universal_count=len(universal_statuses),
+        explicit_transitions=len(allowed_statuses),
     )
 
-    return allowed_statuses
+    return final_statuses

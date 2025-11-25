@@ -531,3 +531,311 @@ async def test_delete_consultation_status_in_use_by_consultation(mock_db_session
     assert f"Cannot delete status '{status_id}'" in exc_info.value.detail
     assert "linked to 5 consultation history records" in exc_info.value.detail
     mock_db_session.delete.assert_not_awaited()
+
+
+# ===========================================================================
+# TESTS FOR UNIVERSAL STATUS FEATURES
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_validate_status_transition_universal_status_always_allowed(
+    mock_db_session,
+):
+    """Test validate_status_transition: Universal status luôn được phép."""
+    # Setup: Lead ở sts06, chuyển sang sts01 (universal)
+    from_status_id = "sts06"
+    to_status_id = "sts01"
+
+    # Mock universal status
+    universal_status = ConsultationStatus(
+        id="sts01",
+        name="Không nghe máy",
+        stage_id="stg01",
+        outcome_type="neutral",
+        is_final_status=False,
+        is_universal=True,  # ✅ Universal
+        updates_pipeline=False,
+        order=1,
+    )
+    mock_db_session.get.return_value = universal_status
+
+    # Action
+    result = await pipeline_service.validate_status_transition(
+        mock_db_session, from_status_id, to_status_id
+    )
+
+    # Assert: Should pass without querying allowed_transitions
+    assert result is True
+    mock_db_session.get.assert_awaited_once_with(ConsultationStatus, to_status_id)
+    # execute KHÔNG được gọi (vì đã pass ở universal check)
+    mock_db_session.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_validate_status_transition_non_universal_without_rule_fails(
+    mock_db_session,
+):
+    """Test validate_status_transition: Non-universal status không có rule → Fail."""
+    # Setup: Lead ở sts06, chuyển sang sts11 (không có rule)
+    from_status_id = "sts06"
+    to_status_id = "sts11"
+
+    # Mock non-universal status
+    non_universal_status = ConsultationStatus(
+        id="sts11",
+        name="Đã nhập học",
+        stage_id="stg06",
+        outcome_type="positive",
+        is_final_status=True,
+        is_universal=False,  # ❌ NOT universal
+        updates_pipeline=True,
+        order=11,
+    )
+    mock_db_session.get.return_value = non_universal_status
+
+    # Mock không có transition rule
+    mock_db_session.execute.return_value.scalar_one_or_none.return_value = None
+
+    # Action
+    result = await pipeline_service.validate_status_transition(
+        mock_db_session, from_status_id, to_status_id
+    )
+
+    # Assert: Should fail
+    assert result is False
+    mock_db_session.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_validate_status_transition_self_transition_allowed(mock_db_session):
+    """Test validate_status_transition: Self-transition luôn được phép."""
+    from_status_id = "sts06"
+    to_status_id = "sts06"
+
+    # Action
+    result = await pipeline_service.validate_status_transition(
+        mock_db_session, from_status_id, to_status_id
+    )
+
+    # Assert: Should pass immediately without DB query
+    assert result is True
+    mock_db_session.get.assert_not_awaited()
+    mock_db_session.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_validate_status_transition_new_lead_allowed(mock_db_session):
+    """Test validate_status_transition: Lead mới (from=None) luôn được phép."""
+    from_status_id = None
+    to_status_id = "sts06"
+
+    # Action
+    result = await pipeline_service.validate_status_transition(
+        mock_db_session, from_status_id, to_status_id
+    )
+
+    # Assert: Should pass immediately
+    assert result is True
+    mock_db_session.get.assert_not_awaited()
+    mock_db_session.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_next_statuses_includes_universal(mock_db_session):
+    """Test get_allowed_next_statuses: Luôn bao gồm universal statuses."""
+    # Setup: Lead ở sts06, có rule: sts06 → sts07
+    current_status_id = "sts06"
+
+    # Mock current status
+    current_status = ConsultationStatus(
+        id="sts06",
+        name="Quan tâm",
+        stage_id="stg02",
+        outcome_type="positive",
+        is_final_status=False,
+        is_universal=False,
+        updates_pipeline=True,
+        order=6,
+    )
+
+    # Mock allowed status (từ transition rule)
+    allowed_status = ConsultationStatus(
+        id="sts07",
+        name="Không quan tâm",
+        stage_id="stg02",
+        outcome_type="negative",
+        is_final_status=True,
+        is_universal=False,
+        updates_pipeline=True,
+        order=7,
+    )
+
+    # Mock universal statuses
+    universal_status_1 = ConsultationStatus(
+        id="sts01",
+        name="Không nghe máy",
+        stage_id="stg01",
+        outcome_type="neutral",
+        is_final_status=False,
+        is_universal=True,
+        updates_pipeline=False,
+        order=1,
+    )
+    universal_status_2 = ConsultationStatus(
+        id="sts02",
+        name="Thuê bao",
+        stage_id="stg01",
+        outcome_type="neutral",
+        is_final_status=False,
+        is_universal=True,
+        updates_pipeline=False,
+        order=2,
+    )
+
+    # Mock DB queries
+    # First execute: Query allowed transitions → [sts07]
+    mock_result_1 = MagicMock()
+    mock_result_1.scalars.return_value.all.return_value = [allowed_status]
+
+    # Second execute: Query universal statuses → [sts01, sts02]
+    mock_result_2 = MagicMock()
+    mock_result_2.scalars.return_value.all.return_value = [
+        universal_status_1,
+        universal_status_2,
+    ]
+
+    mock_db_session.execute.side_effect = [mock_result_1, mock_result_2]
+    mock_db_session.get.return_value = current_status
+
+    # Action
+    result = await pipeline_service.get_allowed_next_statuses(
+        mock_db_session, current_status_id
+    )
+
+    # Assert: Should include universal + allowed
+    result_ids = [s.id for s in result]
+
+    # Current status (sts06) không được thêm vì đã có trong allowed (giả sử)
+    # Universal statuses
+    assert "sts01" in result_ids  # Không nghe máy
+    assert "sts02" in result_ids  # Thuê bao
+
+    # Allowed status
+    assert "sts07" in result_ids  # Không quan tâm
+
+    # Total count
+    assert len(result) >= 3
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_next_statuses_ordering(mock_db_session):
+    """Test get_allowed_next_statuses: Thứ tự hiển thị đúng."""
+    # Setup similar to previous test
+    current_status_id = "sts06"
+
+    current_status = ConsultationStatus(
+        id="sts06",
+        name="Quan tâm",
+        stage_id="stg02",
+        outcome_type="positive",
+        is_final_status=False,
+        is_universal=False,
+        updates_pipeline=True,
+        order=6,
+    )
+
+    allowed_status = ConsultationStatus(
+        id="sts07",
+        name="Không quan tâm",
+        stage_id="stg02",
+        outcome_type="negative",
+        is_final_status=True,
+        is_universal=False,
+        updates_pipeline=True,
+        order=7,
+    )
+
+    universal_status_1 = ConsultationStatus(
+        id="sts01",
+        name="Không nghe máy",
+        stage_id="stg01",
+        outcome_type="neutral",
+        is_final_status=False,
+        is_universal=True,
+        updates_pipeline=False,
+        order=1,
+    )
+
+    mock_result_1 = MagicMock()
+    mock_result_1.scalars.return_value.all.return_value = [allowed_status]
+
+    mock_result_2 = MagicMock()
+    mock_result_2.scalars.return_value.all.return_value = [universal_status_1]
+
+    mock_db_session.execute.side_effect = [mock_result_1, mock_result_2]
+    mock_db_session.get.return_value = current_status
+
+    # Action
+    result = await pipeline_service.get_allowed_next_statuses(
+        mock_db_session, current_status_id
+    )
+
+    # Assert: Check ordering
+    # Expected: Universal first (sts01) → Allowed (sts07)
+    result_ids = [s.id for s in result]
+
+    # Universal should come before allowed
+    idx_universal = result_ids.index("sts01")
+    idx_allowed = result_ids.index("sts07")
+    assert idx_universal < idx_allowed, "Universal status should come before allowed"
+
+
+@pytest.mark.asyncio
+@patch("app.services.pipeline_service.invalidate_pipeline_cache", new_callable=AsyncMock)
+async def test_create_consultation_status_universal_with_legacy_warning(
+    mock_invalidate, mock_db_session
+):
+    """Test create_consultation_status: Warning khi universal + legacy_status."""
+    # Setup: Tạo universal status với legacy_status override
+    status_in = schemas.ConsultationStatusCreate(
+        id="sts99",
+        name="Test Universal",
+        stage_id="stg01",
+        outcome_type="neutral",
+        is_final_status=False,
+        is_universal=True,  # ✅ Universal
+        updates_pipeline=False,
+        legacy_status="contacted",  # ⚠️ Có legacy_status
+        order=99,
+    )
+
+    # Mock stage exists
+    mock_stage = MagicMock()
+    mock_db_session.get.side_effect = [
+        None,  # Check existing ID → không tồn tại
+        mock_stage,  # Get stage → tồn tại
+    ]
+    mock_db_session.scalar.return_value = None  # Check name duplicate → không trùng
+
+    # Mock refresh to return created status
+    created_status = ConsultationStatus(**status_in.model_dump(mode='python'))
+    mock_db_session.refresh.side_effect = lambda obj: setattr(
+        obj, "id", created_status.id
+    )
+
+    # Action (should log warning but not raise error)
+    with patch("app.services.pipeline_service.log") as mock_log:
+        result = await pipeline_service.create_consultation_status(
+            mock_db_session, status_in
+        )
+
+        # Assert: Warning was logged
+        mock_log.warning.assert_called_once()
+        call_args = mock_log.warning.call_args[1]
+        assert "universal status with legacy_status" in call_args.get("", "").lower() or \
+               call_args.get("status_id") == "sts99"
+
+    # Assert: Status was created successfully (no error raised)
+    mock_db_session.add.assert_called_once()
+    mock_db_session.commit.assert_awaited_once()
