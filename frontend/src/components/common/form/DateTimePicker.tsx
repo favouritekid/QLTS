@@ -56,6 +56,8 @@ export interface DateTimePickerProps {
   open?: boolean;
   /** Callback when open state changes */
   onOpenChange?: (open: boolean) => void;
+  /** Hide the trigger button (useful when popup is controlled externally) */
+  hideTrigger?: boolean;
 }
 
 // =============================================================================
@@ -172,6 +174,7 @@ export function DateTimePicker({
   use12Hour = true,
   open: controlledOpen,
   onOpenChange: controlledOnOpenChange,
+  hideTrigger = false,
 }: DateTimePickerProps) {
   const [internalOpen, setInternalOpen] = React.useState(false);
   const triggerId = React.useId();
@@ -363,6 +366,7 @@ export function DateTimePicker({
               "w-full justify-start text-left font-normal",
               !value && "text-muted-foreground",
               hasError && "border-destructive focus-visible:ring-destructive",
+              hideTrigger && "sr-only",
               className
             )}
           >

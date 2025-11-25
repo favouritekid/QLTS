@@ -226,6 +226,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
               className="h-8 text-xs"
               open={isDatePickerOpen}
               onOpenChange={setIsDatePickerOpen}
+              hideTrigger
             />
           </div>
         )}
