@@ -899,6 +899,7 @@ async def get_allowed_next_statuses(
     Lấy danh sách các trạng thái được phép chuyển đến từ trạng thái hiện tại.
 
     Sử dụng bảng allowed_transitions để xác định workflow hợp lệ.
+    ✅ LUÔN bao gồm universal statuses (is_universal=True) bất kể workflow.
     Nếu current_status_id là None (lead mới), trả về tất cả statuses.
 
     Args:
@@ -912,7 +913,12 @@ async def get_allowed_next_statuses(
     if not current_status_id:
         query = (
             select(models.ConsultationStatus)
-            .order_by(models.ConsultationStatus.name)
+            .options(selectinload(models.ConsultationStatus.stage))
+            .order_by(
+                models.ConsultationStatus.is_universal.desc(),  # Universal first
+                models.ConsultationStatus.stage_id,
+                models.ConsultationStatus.name
+            )
         )
         result = await db.execute(query)
         return list(result.scalars().all())
@@ -925,15 +931,39 @@ async def get_allowed_next_statuses(
             models.ConsultationStatus.id == models.AllowedTransition.to_status_id
         )
         .where(models.AllowedTransition.from_status_id == current_status_id)
+        .options(selectinload(models.ConsultationStatus.stage))
         .order_by(models.ConsultationStatus.name)
     )
 
     result = await db.execute(query)
     allowed_statuses = list(result.scalars().all())
 
+    # ✅ NEW: Luôn thêm universal statuses (có thể dùng ở mọi stage)
+    universal_query = (
+        select(models.ConsultationStatus)
+        .where(models.ConsultationStatus.is_universal == True)
+        .options(selectinload(models.ConsultationStatus.stage))
+        .order_by(models.ConsultationStatus.name)
+    )
+    universal_result = await db.execute(universal_query)
+    universal_statuses = list(universal_result.scalars().all())
+
+    # Merge (tránh duplicate)
+    allowed_ids = {s.id for s in allowed_statuses}
+    for universal_status in universal_statuses:
+        if universal_status.id not in allowed_ids:
+            allowed_statuses.append(universal_status)
+
     # Luôn cho phép giữ nguyên status hiện tại (để cập nhật notes, etc.)
     current_status = await _get_status_by_id(db, current_status_id)
-    if current_status and current_status not in allowed_statuses:
+    if current_status and current_status.id not in allowed_ids:
         allowed_statuses.insert(0, current_status)
+
+    log.debug(
+        "get_allowed_next_statuses",
+        current_status=current_status_id,
+        total_allowed=len(allowed_statuses),
+        universal_count=len(universal_statuses)
+    )
 
     return allowed_statuses

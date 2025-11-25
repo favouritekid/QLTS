@@ -88,6 +88,15 @@ class ConsultationStatusBase(BaseModel):
         default=None,
         description="Maps to lead.status for backward compatibility. Valid values: new, assigned, contacted, qualified, unqualified, converted, rejected"
     )
+    # Universal status support (Phase 1 - Option B architecture)
+    is_universal: bool = Field(
+        default=False,
+        description="True nếu status có thể dùng ở mọi pipeline stage (VD: Không nghe máy, Thuê bao)"
+    )
+    updates_pipeline: bool = Field(
+        default=True,
+        description="False nếu chỉ ghi nhận activity, không thay đổi pipeline progression"
+    )
 
     # ✅ QUAN TRỌNG NHẤT: Fix lỗi "invalid input value ... NEUTRAL"
     model_config = ConfigDict(use_enum_values=True, from_attributes=True)
@@ -114,6 +123,14 @@ class ConsultationStatusUpdate(BaseModel):
     legacy_status: Optional[str] = Field(
         default=None,
         description="Maps to lead.status for backward compatibility"
+    )
+    is_universal: Optional[bool] = Field(
+        default=None,
+        description="True nếu status có thể dùng ở mọi pipeline stage"
+    )
+    updates_pipeline: Optional[bool] = Field(
+        default=None,
+        description="False nếu chỉ ghi nhận activity, không thay đổi pipeline progression"
     )
 
     model_config = ConfigDict(use_enum_values=True)

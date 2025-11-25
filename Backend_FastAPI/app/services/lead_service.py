@@ -1192,11 +1192,30 @@ async def add_consultation(
             # Lưu trạng thái Lead cũ
             old_state = _get_current_lead_state(lead)
 
-            # Cập nhật trạng thái Lead theo status mới của consultation
-            lead.consultation_status_id = new_status.id
-            lead.pipeline_stage_id = new_status.stage_id
-            # ✅ Sync lead.status từ consultation_status (Hybrid Approach)
-            sync_lead_status_from_consultation(lead, new_status)
+            # ✅ NEW: Chỉ cập nhật pipeline nếu status.updates_pipeline = True
+            if new_status.updates_pipeline:
+                # Cập nhật trạng thái Lead theo status mới của consultation
+                lead.consultation_status_id = new_status.id
+                lead.pipeline_stage_id = new_status.stage_id
+                # ✅ Sync lead.status từ consultation_status (Hybrid Approach)
+                sync_lead_status_from_consultation(lead, new_status)
+
+                log.info(
+                    "Updating lead pipeline",
+                    lead_id=lead_id,
+                    old_status=old_state.get("consultation_status_id"),
+                    new_status=new_status.id,
+                    status_name=new_status.name
+                )
+            else:
+                # Universal status - chỉ ghi nhận consultation, không thay đổi pipeline
+                log.info(
+                    "Universal status - không update pipeline",
+                    lead_id=lead_id,
+                    status_id=new_status.id,
+                    status_name=new_status.name,
+                    is_universal=new_status.is_universal
+                )
 
             # Chuẩn bị dữ liệu để tạo Consultation
             create_consult_data = data.model_dump(exclude={"status_id", "consultation_date"})
@@ -1216,20 +1235,22 @@ async def add_consultation(
 
             # Thêm các đối tượng vào session
             db.add(new_consultation)
-            db.add(lead)  # Đánh dấu lead là dirty
+            if new_status.updates_pipeline:
+                db.add(lead)  # Chỉ đánh dấu lead dirty nếu có thay đổi
 
             # Lấy trạng thái Lead mới
             new_state = _get_current_lead_state(lead)
 
-            # Ghi log lịch sử thay đổi trạng thái Lead
-            await _log_lead_state_change(
-                db,
-                lead,
-                old_state,
-                new_state,
-                changed_by=officer,
-                reason=f"Consultation added: {data.method}",
-            )
+            # Ghi log lịch sử thay đổi trạng thái Lead (chỉ khi có thay đổi thực sự)
+            if new_status.updates_pipeline and old_state != new_state:
+                await _log_lead_state_change(
+                    db,
+                    lead,
+                    old_state,
+                    new_state,
+                    changed_by=officer,
+                    reason=f"Consultation added: {data.method}",
+                )
 
             # Không cần commit ở đây, `async with` sẽ xử lý
 

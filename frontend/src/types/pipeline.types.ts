@@ -80,6 +80,10 @@ export interface ConsultationStatus {
   is_final_status: boolean // Whether this status marks end of lead lifecycle
   legacy_status?: string | null // Maps to lead.status for backward compatibility (Hybrid Approach)
 
+  // ✅ Universal status support (Phase 1 - Option B)
+  is_universal?: boolean // True nếu status có thể dùng ở mọi pipeline stage (VD: Không nghe máy, Thuê bao)
+  updates_pipeline?: boolean // False nếu chỉ ghi nhận activity, không thay đổi pipeline progression
+
   // Relationship
   stage?: PipelineStage
 
@@ -98,6 +102,8 @@ export interface ConsultationStatusCreate {
   outcome_type?: OutcomeType // Default: neutral
   is_final_status?: boolean // Default: false
   legacy_status?: string | null // Maps to lead.status for backward compatibility
+  is_universal?: boolean // Default: false
+  updates_pipeline?: boolean // Default: true
 }
 
 /**
@@ -110,6 +116,8 @@ export interface ConsultationStatusUpdate {
   outcome_type?: OutcomeType
   is_final_status?: boolean
   legacy_status?: string | null // Maps to lead.status for backward compatibility
+  is_universal?: boolean
+  updates_pipeline?: boolean
 }
 
 // ============================================
