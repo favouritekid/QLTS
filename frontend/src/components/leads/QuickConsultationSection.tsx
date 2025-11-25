@@ -65,30 +65,38 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
   const [scheduleOption, setScheduleOption] = useState<ScheduleOption>("none");
   const [customDateTime, setCustomDateTime] = useState<Date | undefined>(undefined);
   const [savingStatusId, setSavingStatusId] = useState<string | null>(null);
+  const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
 
-  // Group statuses by outcome_type
+  // Group statuses by outcome_type and universal flag
   const groupedStatuses = useMemo(() => {
+    const universal: ConsultationStatus[] = []; // ✅ NEW - Universal/retry statuses
     const neutral: ConsultationStatus[] = [];
     const positive: ConsultationStatus[] = [];
     const negative: ConsultationStatus[] = [];
 
     statuses.forEach((status) => {
-      switch (status.outcome_type) {
-        case "neutral":
-          neutral.push(status);
-          break;
-        case "positive":
-          positive.push(status);
-          break;
-        case "negative":
-          negative.push(status);
-          break;
-        default:
-          neutral.push(status);
+      // ✅ NEW: Universal statuses in separate group
+      if (status.is_universal) {
+        universal.push(status);
+      } else {
+        // Existing grouping logic for non-universal statuses
+        switch (status.outcome_type) {
+          case "neutral":
+            neutral.push(status);
+            break;
+          case "positive":
+            positive.push(status);
+            break;
+          case "negative":
+            negative.push(status);
+            break;
+          default:
+            neutral.push(status);
+        }
       }
     });
 
-    return { neutral, positive, negative };
+    return { universal, neutral, positive, negative };
   }, [statuses]);
 
   // Handle status badge click - save immediately
@@ -202,6 +210,10 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
               )}
               onClick={() => {
                 setScheduleOption(option.value);
+                // Tự động mở DateTimePicker khi chọn "Tùy chọn"
+                if (option.value === "custom") {
+                  setIsDatePickerOpen(true);
+                }
               }}
             >
               {option.icon && <span className="mr-1">{option.icon}</span>}
@@ -219,6 +231,9 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
               placeholder="Chọn ngày giờ"
               minDate={new Date()}
               className="h-8 text-xs"
+              open={isDatePickerOpen}
+              onOpenChange={setIsDatePickerOpen}
+              hideTrigger
             />
           </div>
         )}
@@ -247,6 +262,45 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
         <Label className="text-xs text-muted-foreground mb-3 block">
           Chọn kết quả tư vấn (click để lưu)
         </Label>
+
+        {/* ✅ NEW: Universal Statuses - Retry/Transient (không thay đổi trạng thái lead) */}
+        {groupedStatuses.universal.length > 0 && (
+          <div className="space-y-2 mb-4 pb-4 border-b">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <PhoneOff className="h-3.5 w-3.5" />
+              <span className="font-medium">Kết quả cuộc gọi</span>
+              <span className="text-[10px] ml-auto text-amber-600 font-medium">
+                (không thay đổi trạng thái)
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {groupedStatuses.universal.map((status) => (
+                <Button
+                  key={status.id}
+                  variant="ghost"
+                  size="sm"
+                  className={cn(
+                    "h-7 text-xs px-2.5",
+                    "bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200",
+                    "transition-all hover:scale-[1.02]"
+                  )}
+                  onClick={() => handleStatusClick(status)}
+                  disabled={addConsultation.isPending}
+                >
+                  {savingStatusId === status.id ? (
+                    <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
+                  ) : (
+                    <span
+                      className="w-1.5 h-1.5 rounded-full mr-1.5 flex-shrink-0"
+                      style={{ backgroundColor: status.color_code }}
+                    />
+                  )}
+                  {status.name}
+                </Button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Neutral Group - Retry/Callback */}
         {groupedStatuses.neutral.length > 0 && (

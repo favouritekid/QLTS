@@ -255,6 +255,26 @@ export default function AdminPipelinePage() {
                                     Final
                                   </Badge>
                                 )}
+
+                                {/* ✅ Universal Status Badge */}
+                                {status.is_universal && (
+                                  <Badge
+                                    variant="outline"
+                                    className="border-amber-500 text-amber-700 bg-amber-50 h-5 px-1.5 text-[10px]"
+                                  >
+                                    Universal
+                                  </Badge>
+                                )}
+
+                                {/* ✅ No Pipeline Update Badge */}
+                                {!status.updates_pipeline && (
+                                  <Badge
+                                    variant="outline"
+                                    className="border-blue-500 text-blue-700 bg-blue-50 h-5 px-1.5 text-[10px]"
+                                  >
+                                    No Update
+                                  </Badge>
+                                )}
                               </div>
                               <p className="text-muted-foreground font-mono text-xs">
                                 ID: {status.id}

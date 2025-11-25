@@ -553,23 +553,14 @@ export interface ProgramOffering {
 }
 
 /**
- * Consultation Status
+ * Consultation Status & Pipeline Stage
+ * Re-exported from pipeline.types.ts to avoid duplication
  */
-export interface ConsultationStatus {
-  id: string
-  name: string
-  color_code: string
-  stage_id: string
-}
-
-/**
- * Pipeline Stage
- */
-export interface PipelineStage {
-  id: string
-  name: string
-  order: number
-}
+export type {
+  ConsultationStatus,
+  PipelineStage,
+  OutcomeType,
+} from './pipeline.types'
 
 // ============================================
 // UTILITY TYPES

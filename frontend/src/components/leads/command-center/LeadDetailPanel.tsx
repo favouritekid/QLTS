@@ -71,6 +71,18 @@ const getInitials = (name: string) => {
     .slice(0, 2);
 };
 
+const getEducationLevelLabel = (level: string) => {
+  const labels: Record<string, string> = {
+    high_school: "Trung học phổ thông",
+    diploma: "Cao đẳng",
+    bachelor: "Cử nhân",
+    master: "Thạc sĩ",
+    phd: "Tiến sĩ",
+    other: "Khác",
+  };
+  return labels[level] || level;
+};
+
 export function LeadDetailPanel({
   leadId,
   onEdit,
@@ -130,36 +142,19 @@ export function LeadDetailPanel({
           <div className="flex-1 space-y-1 min-w-0">
             <h2 className="text-lg font-semibold truncate">{lead.full_name}</h2>
             <div className="flex items-center gap-2 flex-wrap">
-              <Badge
-                variant="outline"
-                className={cn("font-bold", getScoreColor(lead.lead_score))}
-              >
-                Score: {lead.lead_score}
-              </Badge>
-              <Badge variant="secondary">
-                <span
-                  className={cn(
-                    "w-2 h-2 rounded-full mr-1.5",
-                    getStatusColor(lead.status as LeadStatus)
-                  )}
-                />
-                {lead.status}
-              </Badge>
-              {lead.consultation_status && (
-                <Badge
-                  variant="outline"
-                  style={{
-                    borderColor: lead.consultation_status.color_code,
-                    color: lead.consultation_status.color_code,
-                  }}
-                >
-                  {lead.consultation_status.name}
+              {lead.pipeline_stage && (
+                <Badge variant="outline" className="font-medium">
+                  {lead.pipeline_stage.name}
                 </Badge>
               )}
+              <Badge variant="secondary">
+                <Calendar className="h-3 w-3 mr-1.5" />
+                {new Date(lead.created_at).toLocaleDateString("vi-VN")}
+              </Badge>
             </div>
           </div>
 
-          {/* Action Buttons */}
+          {/* Các nút hành động */}
           <div className="flex gap-2 shrink-0">
             <Button
               variant="outline"
@@ -168,7 +163,7 @@ export function LeadDetailPanel({
               className="h-8"
             >
               <Edit className="h-3.5 w-3.5 mr-1.5" />
-              Sửa
+              Chỉnh sửa
             </Button>
             {!lead.assigned_officer && (
               <Button
@@ -178,7 +173,7 @@ export function LeadDetailPanel({
                 className="h-8"
               >
                 <UserPlus className="h-3.5 w-3.5 mr-1.5" />
-                Gán
+                Phân công
               </Button>
             )}
             <Button
@@ -196,7 +191,7 @@ export function LeadDetailPanel({
       {/* Scrollable Content */}
       <ScrollArea className="flex-1">
         <div className="p-4 space-y-4">
-          {/* Contact Info Card */}
+          {/* Thông tin liên hệ */}
           <Card>
             <CardHeader className="py-3 px-4">
               <CardTitle className="text-sm font-medium">Thông tin liên hệ</CardTitle>
@@ -243,18 +238,18 @@ export function LeadDetailPanel({
                 </div>
               )}
 
-              {/* Education */}
+              {/* Trình độ học vấn */}
               {lead.education_level && (
                 <div className="flex items-center gap-3 text-sm">
                   <GraduationCap className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <span className="capitalize truncate">
-                    {lead.education_level.replace(/_/g, " ")}
+                  <span className="truncate">
+                    {getEducationLevelLabel(lead.education_level)}
                     {lead.gpa && ` (GPA: ${lead.gpa})`}
                   </span>
                 </div>
               )}
 
-              {/* Offering */}
+              {/* Chương trình */}
               {lead.offering && (
                 <div className="flex items-center gap-3 text-sm">
                   <Building className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -265,7 +260,7 @@ export function LeadDetailPanel({
                 </div>
               )}
 
-              {/* Assigned Officer */}
+              {/* Tư vấn viên phụ trách */}
               {lead.assigned_officer && (
                 <div className="flex items-center gap-3 text-sm">
                   <UserPlus className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -275,17 +270,17 @@ export function LeadDetailPanel({
                 </div>
               )}
 
-              {/* Created Date */}
+              {/* Ngày tạo */}
               <div className="flex items-center gap-3 text-sm text-muted-foreground">
                 <Calendar className="h-4 w-4 shrink-0" />
                 <span>
-                  Tạo: {new Date(lead.created_at).toLocaleDateString("vi-VN")}
+                  Ngày tạo: {new Date(lead.created_at).toLocaleDateString("vi-VN")}
                 </span>
               </div>
             </CardContent>
           </Card>
 
-          {/* Quick Consultation Card - Inline Form */}
+          {/* Ghi nhận tư vấn nhanh */}
           <Card className="bg-slate-50 border-slate-200">
             <CardHeader className="py-3 px-4">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -298,12 +293,12 @@ export function LeadDetailPanel({
             </CardContent>
           </Card>
 
-          {/* Timeline */}
+          {/* Dòng thời gian */}
           <Card>
             <CardHeader className="py-3 px-4">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
                 <History className="h-4 w-4 text-muted-foreground" />
-                Timeline
+                Dòng thời gian
               </CardTitle>
             </CardHeader>
             <CardContent className="px-4 pb-4 pt-0">

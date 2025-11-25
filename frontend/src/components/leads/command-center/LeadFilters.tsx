@@ -74,9 +74,9 @@ export const LeadFilters = React.memo(function LeadFilters({
   return (
     <div className="h-full bg-card">
       <div className="h-full overflow-y-auto p-4 space-y-4">
-        {/* Header */}
+        {/* Tiêu đề */}
         <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-sm">Filters</h3>
+          <h3 className="font-semibold text-sm">Bộ lọc</h3>
           {hasActiveFilters && (
             <Button
               variant="ghost"
@@ -85,16 +85,16 @@ export const LeadFilters = React.memo(function LeadFilters({
               className="h-7 px-2 text-xs"
             >
               <RotateCcw className="h-3 w-3 mr-1" />
-              Reset
+              Đặt lại
             </Button>
           )}
         </div>
 
-        {/* Search */}
+        {/* Tìm kiếm */}
         <div className="relative">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Search name, phone, email..."
+            placeholder="Tìm kiếm tên, số điện thoại, email..."
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
             className="pl-8 pr-8"
@@ -109,12 +109,12 @@ export const LeadFilters = React.memo(function LeadFilters({
           )}
         </div>
 
-        {/* Filter Accordions */}
+        {/* Bộ lọc */}
         <Accordion type="multiple" defaultValue={["status", "source"]} className="space-y-2">
-          {/* Status Filter */}
+          {/* Bộ lọc trạng thái */}
           <AccordionItem value="status" className="border rounded-lg px-3">
             <AccordionTrigger className="text-sm font-medium py-3 hover:no-underline">
-              Status
+              Vòng đời Lead
               {statusFilters.length > 0 && (
                 <span className="ml-auto mr-2 text-xs bg-primary text-primary-foreground px-1.5 py-0.5 rounded-full">
                   {statusFilters.length}
@@ -143,18 +143,18 @@ export const LeadFilters = React.memo(function LeadFilters({
             </AccordionContent>
           </AccordionItem>
 
-          {/* Source Filter */}
+          {/* Bộ lọc nguồn */}
           <AccordionItem value="source" className="border rounded-lg px-3">
             <AccordionTrigger className="text-sm font-medium py-3 hover:no-underline">
-              Source
+              Nguồn
             </AccordionTrigger>
             <AccordionContent className="pb-3">
               <Select value={sourceFilter} onValueChange={onSourceChange}>
                 <SelectTrigger className="w-full">
-                  <SelectValue placeholder="All sources" />
+                  <SelectValue placeholder="Tất cả nguồn" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Sources</SelectItem>
+                  <SelectItem value="all">Tất cả nguồn</SelectItem>
                   {LEAD_SOURCE_OPTIONS.map((option) => (
                     <SelectItem key={option.value} value={option.value}>
                       {option.label}
@@ -165,10 +165,10 @@ export const LeadFilters = React.memo(function LeadFilters({
             </AccordionContent>
           </AccordionItem>
 
-          {/* Lead Score Filter */}
+          {/* Bộ lọc điểm Lead */}
           <AccordionItem value="score" className="border rounded-lg px-3">
             <AccordionTrigger className="text-sm font-medium py-3 hover:no-underline">
-              Lead Score
+              Điểm Lead
             </AccordionTrigger>
             <AccordionContent className="pb-3 pt-2">
               <div className="space-y-4">
@@ -188,7 +188,7 @@ export const LeadFilters = React.memo(function LeadFilters({
             </AccordionContent>
           </AccordionItem>
 
-          {/* Offering Filter */}
+          {/* Bộ lọc chương trình */}
           <AccordionItem value="offering" className="border rounded-lg px-3">
             <AccordionTrigger className="text-sm font-medium py-3 hover:no-underline">
               Chương trình

@@ -94,6 +94,22 @@ class ConsultationStatus(Base):
         comment="Maps to lead.status for backward compatibility (auto-derived if NULL)"
     )
 
+    # Universal status support (Phase 1 - Option B architecture)
+    is_universal = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+        comment="True nếu status có thể dùng ở mọi pipeline stage (VD: Không nghe máy, Thuê bao)"
+    )
+    updates_pipeline = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="true",
+        comment="False nếu chỉ ghi nhận activity, không thay đổi pipeline progression"
+    )
+
     # Relationships
     stage = relationship("PipelineStage", back_populates="statuses")
     leads = relationship("Lead", back_populates="consultation_status")
