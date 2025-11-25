@@ -51,33 +51,17 @@ def upgrade() -> None:
     )
 
     # ✅ Seed data: Đánh dấu retry/transient statuses
-    # Dựa trên dữ liệu thực tế từ screenshot
+    # CHỈ đánh dấu sts01 và sts02 là universal
+    # sts03 (Nhầm số) GIỮ NGUYÊN - chỉ dùng ở stg01 (giai đoạn đầu)
+    # Lý do: Sau khi xác định lead, việc cập nhật thông tin được thực hiện qua form cập nhật
     op.execute("""
         UPDATE consultation_status
         SET is_universal = true, updates_pipeline = false
         WHERE id IN (
-            'sts01',  -- Không nghe máy
-            'sts02'   -- Thuê bao
-            -- 'sts03' CHƯA THÊM - cần xác nhận với user về logic "Nhầm số"
+            'sts01',  -- Không nghe máy - có thể xảy ra ở mọi stage
+            'sts02'   -- Thuê bao - có thể xảy ra ở mọi stage
         )
     """)
-
-    # Note: sts03 (Nhầm số) hiện có is_final_status=true, outcome_type=negative
-    # Nếu muốn dùng như universal status, cần:
-    # 1. SET is_final_status = false
-    # 2. SET outcome_type = 'neutral'
-    # 3. SET is_universal = true, updates_pipeline = false
-    #
-    # Uncomment dòng dưới nếu muốn "Nhầm số" thành universal status:
-    # op.execute("""
-    #     UPDATE consultation_status
-    #     SET
-    #         is_universal = true,
-    #         updates_pipeline = false,
-    #         is_final_status = false,
-    #         outcome_type = 'neutral'
-    #     WHERE id = 'sts03'
-    # """)
 
 
 def downgrade() -> None:

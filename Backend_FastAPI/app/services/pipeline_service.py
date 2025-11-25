@@ -162,6 +162,9 @@ async def get_all_consultation_statuses(
                 "stage_id": s.stage_id,
                 "outcome_type": s.outcome_type.value,  # Convert enum to string
                 "is_final_status": s.is_final_status,
+                "legacy_status": s.legacy_status,  # Backward compatibility
+                "is_universal": s.is_universal,  # ✅ Universal status support
+                "updates_pipeline": s.updates_pipeline,  # ✅ Pipeline update control
             }
             for s in statuses_models
         ]

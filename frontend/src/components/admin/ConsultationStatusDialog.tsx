@@ -76,6 +76,9 @@ const statusFormSchema = z.object({
   outcome_type: z.enum(["positive", "neutral", "negative"]),
   is_final_status: z.boolean(),
   legacy_status: z.string().nullable().optional(),
+  // ✅ Universal status support (Phase 1 - Option B)
+  is_universal: z.boolean(),
+  updates_pipeline: z.boolean(),
 });
 
 type StatusFormValues = z.infer<typeof statusFormSchema>;
@@ -121,6 +124,9 @@ export function ConsultationStatusDialog({
       outcome_type: "neutral",
       is_final_status: false,
       legacy_status: null,
+      // ✅ Universal status defaults
+      is_universal: false,
+      updates_pipeline: true,
     },
   });
 
@@ -136,6 +142,9 @@ export function ConsultationStatusDialog({
           outcome_type: status.outcome_type || "neutral",
           is_final_status: status.is_final_status || false,
           legacy_status: status.legacy_status || null,
+          // ✅ Universal status fields
+          is_universal: status.is_universal ?? false,
+          updates_pipeline: status.updates_pipeline ?? true,
         });
       } else {
         form.reset({
@@ -146,6 +155,9 @@ export function ConsultationStatusDialog({
           outcome_type: "neutral",
           is_final_status: false,
           legacy_status: null,
+          // ✅ Universal status defaults for create mode
+          is_universal: false,
+          updates_pipeline: true,
         });
       }
     }
@@ -164,6 +176,9 @@ export function ConsultationStatusDialog({
             outcome_type: values.outcome_type as OutcomeType,
             is_final_status: values.is_final_status,
             legacy_status: values.legacy_status || null,
+            // ✅ Universal status fields
+            is_universal: values.is_universal,
+            updates_pipeline: values.updates_pipeline,
           } as ConsultationStatusUpdate,
         });
       } else {
@@ -175,6 +190,9 @@ export function ConsultationStatusDialog({
           outcome_type: values.outcome_type as OutcomeType,
           is_final_status: values.is_final_status,
           legacy_status: values.legacy_status || null,
+          // ✅ Universal status fields
+          is_universal: values.is_universal,
+          updates_pipeline: values.updates_pipeline,
         } as ConsultationStatusCreate);
       }
 
@@ -394,6 +412,48 @@ export function ConsultationStatusDialog({
                       Mark this as end of lead lifecycle (e.g., &apos;Enrolled&apos;,
                       &apos;Rejected&apos;). Leads with final status won&apos;t be counted in active
                       pipeline.
+                    </FormDescription>
+                  </div>
+                </FormItem>
+              )}
+            />
+
+            {/* ✅ Universal Status Field */}
+            <FormField
+              control={form.control}
+              name="is_universal"
+              render={({ field }) => (
+                <FormItem className="flex flex-row items-start space-y-0 space-x-3 rounded-md border p-4 bg-amber-50 border-amber-200">
+                  <FormControl>
+                    <ShadcnCheckbox checked={field.value} onCheckedChange={field.onChange} />
+                  </FormControl>
+                  <div className="space-y-1 leading-none">
+                    <FormLabel>Universal Status</FormLabel>
+                    <FormDescription>
+                      Status có thể dùng ở mọi pipeline stage (VD: &quot;Không nghe máy&quot;,
+                      &quot;Thuê bao&quot;). Universal statuses luôn xuất hiện trong danh sách cho
+                      phép chuyển đổi bất kể stage hiện tại của lead.
+                    </FormDescription>
+                  </div>
+                </FormItem>
+              )}
+            />
+
+            {/* ✅ Updates Pipeline Field */}
+            <FormField
+              control={form.control}
+              name="updates_pipeline"
+              render={({ field }) => (
+                <FormItem className="flex flex-row items-start space-y-0 space-x-3 rounded-md border p-4 bg-blue-50 border-blue-200">
+                  <FormControl>
+                    <ShadcnCheckbox checked={field.value} onCheckedChange={field.onChange} />
+                  </FormControl>
+                  <div className="space-y-1 leading-none">
+                    <FormLabel>Cập nhật Pipeline Progression</FormLabel>
+                    <FormDescription>
+                      Bỏ tích nếu status chỉ ghi nhận activity mà KHÔNG thay đổi pipeline progression
+                      của lead. Thường dùng cho universal retry statuses (VD: &quot;Không nghe
+                      máy&quot;) để ghi nhận cuộc gọi nhưng giữ nguyên trạng thái lead.
                     </FormDescription>
                   </div>
                 </FormItem>
