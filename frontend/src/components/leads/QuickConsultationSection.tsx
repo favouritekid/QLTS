@@ -65,6 +65,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
   const [scheduleOption, setScheduleOption] = useState<ScheduleOption>("none");
   const [customDateTime, setCustomDateTime] = useState<Date | undefined>(undefined);
   const [savingStatusId, setSavingStatusId] = useState<string | null>(null);
+  const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
 
   // Group statuses by outcome_type
   const groupedStatuses = useMemo(() => {
@@ -202,6 +203,10 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
               )}
               onClick={() => {
                 setScheduleOption(option.value);
+                // Tự động mở DateTimePicker khi chọn "Tùy chọn"
+                if (option.value === "custom") {
+                  setIsDatePickerOpen(true);
+                }
               }}
             >
               {option.icon && <span className="mr-1">{option.icon}</span>}
@@ -219,6 +224,8 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
               placeholder="Chọn ngày giờ"
               minDate={new Date()}
               className="h-8 text-xs"
+              open={isDatePickerOpen}
+              onOpenChange={setIsDatePickerOpen}
             />
           </div>
         )}

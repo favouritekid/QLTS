@@ -52,6 +52,10 @@ export interface DateTimePickerProps {
   className?: string;
   /** Use 12-hour format (default: true for Vietnamese) */
   use12Hour?: boolean;
+  /** Controlled open state */
+  open?: boolean;
+  /** Callback when open state changes */
+  onOpenChange?: (open: boolean) => void;
 }
 
 // =============================================================================
@@ -166,9 +170,16 @@ export function DateTimePicker({
   containerClassName,
   className,
   use12Hour = true,
+  open: controlledOpen,
+  onOpenChange: controlledOnOpenChange,
 }: DateTimePickerProps) {
-  const [open, setOpen] = React.useState(false);
+  const [internalOpen, setInternalOpen] = React.useState(false);
   const triggerId = React.useId();
+
+  // Use controlled state if provided, otherwise use internal state
+  const isControlled = controlledOpen !== undefined;
+  const open = isControlled ? controlledOpen : internalOpen;
+  const setOpen = isControlled ? (controlledOnOpenChange || (() => {})) : setInternalOpen;
 
   const hasError = !!error;
 
