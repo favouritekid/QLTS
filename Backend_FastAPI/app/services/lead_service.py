@@ -968,7 +968,18 @@ async def update_lead(
                                     detail=f"Không thể chuyển trạng thái từ '{current_status_id}' sang '{new_status_id}'. Quy trình không cho phép (Allowed Transitions)."
                                 )
                             else:
-                                log.warning(f"Admin {updated_by.username} bypassed transition rule: {current_status_id} -> {new_status_id}")
+                                # ✅ IMPROVED: Log with more context
+                                # Note: Universal status sẽ pass validation, nên không vào đây
+                                new_status_obj = await db.get(models.ConsultationStatus, new_status_id)
+                                log.warning(
+                                    "Admin bypassed transition rule",
+                                    admin_username=updated_by.username,
+                                    from_status=current_status_id,
+                                    to_status=new_status_id,
+                                    to_status_name=new_status_obj.name if new_status_obj else "Unknown",
+                                    is_universal=new_status_obj.is_universal if new_status_obj else False,
+                                    reason="Admin override - no explicit transition rule exists",
+                                )
 
                     # Logic gán status mới (Giữ nguyên)
                     new_status_obj = await db.get(models.ConsultationStatus, new_status_id)
