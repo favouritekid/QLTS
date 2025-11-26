@@ -20,7 +20,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
-from ..database import safe_redis_del, safe_redis_exists, safe_redis_get, safe_redis_set
+from ..database import safe_redis_delete, safe_redis_exists, safe_redis_get, safe_redis_set
 from ..models import UserActivityLog
 
 log = structlog.get_logger(__name__)
@@ -139,7 +139,7 @@ class AccountLockoutService:
                 )
 
                 # Reset attempts counter (start fresh after lockout expires)
-                await safe_redis_del(attempts_key)
+                await safe_redis_delete(attempts_key)
 
                 log.warning(
                     "SECURITY ALERT: Account locked due to excessive failed attempts",
@@ -204,7 +204,7 @@ class AccountLockoutService:
         attempts_key = f"login_attempts:{username}"
 
         try:
-            await safe_redis_del(attempts_key)
+            await safe_redis_delete(attempts_key)
 
             log.info("Login attempts counter reset after successful login", username=username)
 
@@ -241,9 +241,9 @@ class AccountLockoutService:
 
             if was_locked:
                 # Remove lockout
-                await safe_redis_del(lockout_key)
-                await safe_redis_del(f"{lockout_key}:ttl")
-                await safe_redis_del(attempts_key)
+                await safe_redis_delete(lockout_key)
+                await safe_redis_delete(f"{lockout_key}:ttl")
+                await safe_redis_delete(attempts_key)
 
                 log.warning(
                     "Account manually unlocked (admin override)", username=username
