@@ -1,4 +1,4 @@
-# app/security.py
+# app/security/__init__.py
 """
 Security utilities for password hashing and token management.
 
@@ -24,7 +24,7 @@ from passlib.context import CryptContext
 
 # ✅ PHASE 1 Task 1.9: Import token functions from auth_service
 # These are re-exported for backward compatibility
-from .services.auth_service import (
+from ..services.auth_service import (
     create_access_token,
     create_refresh_token,
     create_password_reset_token,
