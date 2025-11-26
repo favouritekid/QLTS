@@ -156,7 +156,7 @@ class AccountLockoutService:
                         action="account_locked",
                         resource_type="account",
                         resource_id=None,
-                        details={
+                        changes={
                             "username": username,
                             "reason": "excessive_failed_login_attempts",
                             "failed_attempts": current_attempts,
