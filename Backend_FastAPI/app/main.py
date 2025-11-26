@@ -421,15 +421,62 @@ app.add_middleware(
 )
 
 
-# (Giữ nguyên Security Headers Middleware)
+# ===============================================================
+# === HTTPS REDIRECT MIDDLEWARE (✅ SECURITY FIX: Force HTTPS)
+# ===============================================================
+
+if settings.APP_ENV == "production":
+    from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
+    app.add_middleware(HTTPSRedirectMiddleware)
+    log.info("✅ HTTPS redirect enabled for production")
+
+
+# ===============================================================
+# === SECURITY HEADERS MIDDLEWARE (✅ Enhanced with CSP)
+# ===============================================================
+
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
+    """Add comprehensive security headers to all responses."""
     response = await call_next(request)
+
+    # ✅ HSTS - Force HTTPS for 1 year
     response.headers["Strict-Transport-Security"] = (
-        "max-age=31536000; includeSubDomains"
+        "max-age=31536000; includeSubDomains; preload"
     )
+
+    # ✅ Prevent MIME sniffing
     response.headers["X-Content-Type-Options"] = "nosniff"
+
+    # ✅ Prevent clickjacking
     response.headers["X-Frame-Options"] = "DENY"
+
+    # ✅ XSS Protection (legacy browsers)
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+
+    # ✅ NEW: Content Security Policy
+    # Restrictive CSP for API - adjust based on your frontend needs
+    if settings.APP_ENV == "production":
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "  # Allow inline styles for admin UI
+            "img-src 'self' data: https:; "
+            "font-src 'self' data:; "
+            "connect-src 'self'; "
+            "frame-ancestors 'none'; "
+            "base-uri 'self'; "
+            "form-action 'self'"
+        )
+
+    # ✅ Referrer Policy
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+
+    # ✅ Permissions Policy (restrict browser features)
+    response.headers["Permissions-Policy"] = (
+        "geolocation=(), microphone=(), camera=(), payment=()"
+    )
+
     return response
 
 
