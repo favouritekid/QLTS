@@ -24,6 +24,7 @@ from ..config import settings
 from ..core import deps
 from ..utils.exceptions import (  # ✅ PHASE 1: Import custom exceptions
     CacheServiceError,
+    InvalidCredentials,
     UserServiceError,
 )
 from ..database import (
@@ -163,7 +164,7 @@ async def login_for_access_token(
         user = await user_service.authenticate_user(
             db, username=form_data.username, password=form_data.password
         )
-    except HTTPException as auth_error:
+    except (InvalidCredentials, HTTPException) as auth_error:
         # ✅ SECURITY FIX: Record failed attempt
         await AccountLockoutService.record_failed_attempt(
             db=db,
