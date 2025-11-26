@@ -4,12 +4,14 @@ Anomaly detection service for identifying suspicious login activities.
 """
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
+from zoneinfo import ZoneInfo
 
 import structlog
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models
+from ..config import settings
 
 log = structlog.get_logger(__name__)
 
@@ -217,7 +219,7 @@ class AnomalyDetector:
 
         Args:
             user_id: User ID
-            login_time: Login timestamp (default: now)
+            login_time: Login timestamp (default: now in UTC)
 
         Returns:
             True if login time is unusual
@@ -225,14 +227,33 @@ class AnomalyDetector:
         if login_time is None:
             login_time = datetime.now(timezone.utc)
 
-        # Get user's typical login hours (simplified: just check if night time)
-        hour = login_time.hour
+        # ✅ FIX: Convert UTC time to configured timezone (e.g., Asia/Ho_Chi_Minh)
+        # This prevents false positives when server is in UTC but users are in Vietnam
+        try:
+            app_timezone = ZoneInfo(settings.TIMEZONE)
+            local_time = login_time.astimezone(app_timezone)
+            hour = local_time.hour
+        except Exception as e:
+            # Fallback to UTC if timezone conversion fails
+            log.warning(
+                "Failed to convert timezone for anomaly detection",
+                error=str(e),
+                timezone=settings.TIMEZONE,
+            )
+            hour = login_time.hour
 
-        # Consider 2 AM - 6 AM as unusual (this is very simplified)
+        # Consider 2 AM - 6 AM (local time) as unusual (this is very simplified)
         is_unusual = 2 <= hour < 6
 
         if is_unusual:
-            log.info("Unusual login time detected", user_id=user_id, hour=hour)
+            log.info(
+                "Unusual login time detected",
+                user_id=user_id,
+                hour=hour,
+                timezone=settings.TIMEZONE,
+                utc_time=login_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
+                local_time=local_time.strftime("%Y-%m-%d %H:%M:%S") if 'local_time' in locals() else None,
+            )
 
         return is_unusual
 

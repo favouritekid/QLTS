@@ -510,40 +510,41 @@ async def revoke_all_other_sessions(
     revoked_count = 0
 
     try:
-        # ✅ PHASE 1: Use injected db session (no AsyncSessionLocal creation)
-        async with db.begin():  # Start transaction
-            now = datetime.now(timezone.utc)
-            conditions = [
-                models.UserSession.user_id == user_id,
-                models.UserSession.revoked_at.is_(None),
-            ]
-            if except_session_id is not None:
-                conditions.append(models.UserSession.id != except_session_id)
+        # ✅ FIX: Use existing transaction from caller (don't start new one)
+        # The db session already has an active transaction from the endpoint
+        now = datetime.now(timezone.utc)
+        conditions = [
+            models.UserSession.user_id == user_id,
+            models.UserSession.revoked_at.is_(None),
+        ]
+        if except_session_id is not None:
+            conditions.append(models.UserSession.id != except_session_id)
 
-            result = await db.execute(
-                select(models.UserSession).where(and_(*conditions)).with_for_update()
-            )
-            sessions = result.scalars().all()
+        result = await db.execute(
+            select(models.UserSession).where(and_(*conditions)).with_for_update()
+        )
+        sessions = result.scalars().all()
 
-            for session in sessions:
-                session.revoked_at = now
-                db.add(session)
-                revoked_jtis.append(session.refresh_jti)
+        for session in sessions:
+            session.revoked_at = now
+            db.add(session)
+            revoked_jtis.append(session.refresh_jti)
 
-                # Cập nhật Redis (Nếu đây là lỗi, exception sẽ văng ra
-                # và db.begin() sẽ tự động rollback)
-                ttl = int((session.expires_at - now).total_seconds())
-                if ttl > 0:
-                    await safe_redis_set(
-                        f"blacklist:{session.refresh_jti}",
-                        "revoked_by_user",
-                        ex=ttl,
-                    )
-                await safe_redis_delete(f"session:{session.refresh_jti}")
+            # Cập nhật Redis
+            ttl = int((session.expires_at - now).total_seconds())
+            if ttl > 0:
+                await safe_redis_set(
+                    f"blacklist:{session.refresh_jti}",
+                    "revoked_by_user",
+                    ex=ttl,
+                )
+            await safe_redis_delete(f"session:{session.refresh_jti}")
 
-                revoked_count += 1
+            revoked_count += 1
 
-        # ✅ Transaction auto-commits if successful
+        # Commit changes (caller's transaction will handle commit)
+        await db.flush()
+
         log.info("Revoked all other sessions and updated Redis",
                  user_id=user_id,
                  revoked_count=revoked_count)

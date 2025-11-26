@@ -81,27 +81,48 @@ export function useAuth() {
 
   const logoutMutation = useMutation<void, AxiosError<ApiErrorResponse>>({
     mutationFn: async () => {
-      // ✅ SECURITY FIX: Call backend logout (refresh token sent via HttpOnly cookie)
-      // Only call API if user is authenticated (has valid session)
-      if (useAuthStore.getState().isAuthenticated) {
-        await api.post(API_ENDPOINTS.AUTH.LOGOUT, {}, { withCredentials: true });
+      // ========================================
+      // OPTIMISTIC LOGOUT (Race Condition Fix)
+      // ========================================
+      // Execute cleanup BEFORE calling API to prevent race conditions
+      // Order: Cancel queries → Clear cache → Redirect → API call (fire-and-forget)
+
+      // 🛑 STEP 1: Cancel all ongoing requests immediately
+      // This prevents 401 errors after logout button is clicked
+      await queryClient.cancelQueries();
+
+      // 🗑️ STEP 2: Clear all cached data
+      // Prevents next user from seeing previous user's data
+      queryClient.clear();
+
+      // 🧹 STEP 3: Clear client state
+      logoutStore();
+
+      // 🚀 STEP 4: Redirect IMMEDIATELY (optimistic UI)
+      // Don't wait for API response - better UX
+      router.replace("/login");
+
+      // 📡 STEP 5: Call logout API in background (fire-and-forget)
+      // If this fails, it's okay - client is already cleaned up
+      try {
+        if (useAuthStore.getState().isAuthenticated) {
+          await api.post(API_ENDPOINTS.AUTH.LOGOUT, {}, { withCredentials: true });
+        }
+      } catch (error) {
+        // Silently fail - user is already logged out on client
+        console.warn("[Logout] Background API call failed (user already logged out):", error);
       }
     },
     onSuccess: () => {
-      toast.success("Logged out successfully.");
+      // User won't see this toast because they're already on login page
+      // But it's good for debugging in console
+      console.log("[Logout] Successfully logged out");
     },
     onError: (error) => {
-      console.error("Logout API call failed:", error.response?.data || error.message);
-      toast.warning("Logout API call failed, proceeding with local logout.");
+      // This should rarely happen since we handle errors in mutationFn
+      console.error("[Logout] Mutation error:", error);
     },
-    onSettled: async () => {
-      // ✅ SECURITY FIX: Refresh token cookie is cleared by backend
-      // No need to call API route to clear cookie
-      logoutStore();
-      queryClient.removeQueries({ queryKey: ["auth", "me"], exact: true });
-      queryClient.clear();
-      router.push("/login");
-    },
+    // onSettled removed - all cleanup is done in mutationFn
   });
 
   const {

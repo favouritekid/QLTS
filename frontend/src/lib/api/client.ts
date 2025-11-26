@@ -2,12 +2,14 @@
 /**
  * Axios client instance with auto-refresh interceptors
  *
- * ✅ FIX-4: Implemented automatic token refresh with queueing mechanism
- * to prevent race conditions and improve UX dramatically.
+ * ✅ FIX-4 ENHANCED: Mutex lock + queue + 100ms browser delay
+ * Prevents race conditions and token reuse detection triggers
  *
  * Features:
  * - Auto-refresh access token on 401 errors
+ * - Mutex lock prevents duplicate refresh requests
  * - Queue concurrent requests during refresh
+ * - 100ms delay for browser cookie persistence
  * - Prevent infinite loops
  * - Graceful error handling
  */
@@ -25,61 +27,52 @@ export const api = axios.create({
 });
 
 // ============================================
-// 🔒 AUTO-REFRESH TOKEN MECHANISM (FIX-4)
+// 🔒 AUTO-REFRESH TOKEN MECHANISM (FIX-4 ENHANCED)
 // ============================================
 
 /**
- * Queue mechanism to prevent race conditions when multiple requests
- * receive 401 simultaneously. Only ONE refresh request is made,
- * and all other requests wait for it to complete.
+ * Mutex lock + Queue mechanism to prevent race conditions
+ *
+ * When multiple requests receive 401 simultaneously:
+ * - Only ONE refresh request is made (Leader)
+ * - Other requests wait in queue (Followers)
+ * - After refresh success, all queued requests retry
+ *
+ * This prevents "Token Reuse Detection" false positives
+ * caused by duplicate refresh requests hitting backend.
  */
 let isRefreshing = false;
-let refreshSubscribers: Array<{
-  onSuccess: (token: string) => void;
-  onError: (error: unknown) => void;
+let failedQueue: Array<{
+  resolve: (value?: unknown) => void;
+  reject: (reason?: unknown) => void;
 }> = [];
 
-function subscribeTokenRefresh(
-  onSuccess: (token: string) => void,
-  onError: (error: unknown) => void
-) {
-  refreshSubscribers.push({ onSuccess, onError });
-}
-
-function onRefreshed(token: string) {
-  refreshSubscribers.forEach((subscriber) => subscriber.onSuccess(token));
-  refreshSubscribers = [];
-}
-
-function onRefreshFailed(error: unknown) {
-  refreshSubscribers.forEach((subscriber) => subscriber.onError(error));
-  refreshSubscribers = [];
-}
+const processQueue = (error: unknown, token: string | null = null) => {
+  failedQueue.forEach((prom) => {
+    if (error) {
+      prom.reject(error);
+    } else {
+      prom.resolve(token);
+    }
+  });
+  failedQueue = [];
+};
 
 // ============================================
 // 📤 REQUEST INTERCEPTOR
 // ============================================
 
-// ✅ SECURITY FIX: No longer need to manually set Authorization header
-// Tokens are sent automatically via httpOnly cookies by browser
-// withCredentials: true ensures cookies are included in requests
-
 api.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
-    // No need to manually add Authorization header
-    // Browser automatically sends access_token cookie with all requests
+    // ✅ SECURITY FIX: No longer need to manually set Authorization header
+    // Tokens are sent automatically via httpOnly cookies by browser
+    // withCredentials: true ensures cookies are included in requests
 
-    // ✅ OPTIONAL ENHANCEMENT (Deep Dive Audit): Auto-detect FormData
-    // Automatically sets correct Content-Type for multipart/form-data uploads
-    // Eliminates repetitive manual header setting in mutation functions
+    // ✅ OPTIONAL ENHANCEMENT: Auto-detect FormData
     if (config.data instanceof FormData) {
-      // Delete Content-Type to let browser set it automatically with boundary
-      // Example: multipart/form-data; boundary=----WebKitFormBoundary...
       delete config.headers["Content-Type"];
-
       console.log("[API Client] 📤 FormData detected - Auto-setting multipart headers");
     }
-    // else: Keep default "application/json" for regular requests
 
     return config;
   },
@@ -103,26 +96,17 @@ api.interceptors.response.use(
     // ========================================
     // STEP 1: Check if this is a 401 error
     // ========================================
-    if (error.response?.status === 401 && originalRequest && !originalRequest._retry) {
-      const currentPath =
-        typeof window !== "undefined" ? window.location.pathname : "";
-
-      // ========================================
-      // STEP 2: Don't refresh on auth endpoints
-      // (prevent infinite loops)
-      // ========================================
-      const authEndpoints = [
-        "/api/auth/login",
-        "/api/auth/register",
-        "/api/auth/refresh",
-        "/api/auth/forgot-password",
-        "/api/auth/reset-password",
-      ];
-
-      if (authEndpoints.some((path) => originalRequest.url?.includes(path))) {
-        console.log("[API Client] Auth endpoint failed, not retrying");
-        return Promise.reject(error);
-      }
+    if (
+      error.response?.status === 401 &&
+      originalRequest &&
+      !originalRequest._retry &&
+      !originalRequest.url?.includes("/auth/login") &&
+      !originalRequest.url?.includes("/auth/register") &&
+      !originalRequest.url?.includes("/auth/refresh") &&
+      !originalRequest.url?.includes("/auth/forgot-password") &&
+      !originalRequest.url?.includes("/auth/reset-password")
+    ) {
+      const currentPath = typeof window !== "undefined" ? window.location.pathname : "";
 
       // Don't redirect if already on public pages
       const publicPages = ["/login", "/register", "/forgot-password", "/reset-password"];
@@ -131,28 +115,26 @@ api.interceptors.response.use(
       }
 
       // ========================================
-      // STEP 3: QUEUE MECHANISM
+      // STEP 2: QUEUE MECHANISM (Follower)
       // If refresh is already in progress, queue this request
       // ========================================
       if (isRefreshing) {
         console.log("[API Client] 🔄 Request queued (refresh in progress)");
 
         return new Promise((resolve, reject) => {
-          subscribeTokenRefresh(
-            () => {
-              // ✅ SECURITY FIX: No need to set Authorization header
-              // Cookie is sent automatically
-              resolve(api(originalRequest));
-            },
-            (error: unknown) => {
-              reject(error);
-            }
-          );
-        });
+          failedQueue.push({ resolve, reject });
+        })
+          .then(() => {
+            // When queue is processed, retry original request
+            return api(originalRequest);
+          })
+          .catch((err) => {
+            return Promise.reject(err);
+          });
       }
 
       // ========================================
-      // STEP 4: START REFRESH PROCESS
+      // STEP 3: START REFRESH PROCESS (Leader)
       // ========================================
       originalRequest._retry = true;
       isRefreshing = true;
@@ -160,17 +142,8 @@ api.interceptors.response.use(
       try {
         console.log("[API Client] 🔄 Access token expired, refreshing...");
 
-        // ✅ SECURITY FIX: Call /refresh endpoint (tokens sent/received via httpOnly cookies)
-        await axios.post<{
-          access_token: string; // Kept in response for backwards compatibility
-          user: {
-            id: number;
-            username: string;
-            email: string;
-            full_name: string | null;
-            role: string;
-          };
-        }>(
+        // Call /refresh endpoint (tokens sent/received via httpOnly cookies)
+        await axios.post(
           `${API_BASE_URL}/api/auth/refresh`,
           {},
           {
@@ -178,46 +151,41 @@ api.interceptors.response.use(
           }
         );
 
-        // ✅ SECURITY FIX: No need to update localStorage
-        // New access_token is already set in httpOnly cookie by backend
+        // ⚠️ DEFENSIVE FIX: Wait for browser to persist new cookie
+        // This prevents race condition at browser storage level
+        // Some browsers (especially mobile) need 50-150ms to persist cookies
+        await new Promise((resolve) => setTimeout(resolve, 100));
 
         console.log("[API Client] ✅ Token refreshed successfully (via httpOnly cookie)");
 
         // ========================================
-        // STEP 5: NOTIFY QUEUED REQUESTS
+        // STEP 4: NOTIFY QUEUED REQUESTS
         // ========================================
-        isRefreshing = false;
-        onRefreshed(""); // Pass empty string since we don't use token value anymore
+        processQueue(null, "success");
 
         // ========================================
-        // STEP 6: RETRY ORIGINAL REQUEST
+        // STEP 5: RETRY ORIGINAL REQUEST
         // ========================================
-        // No need to set Authorization header - cookie is sent automatically
         return api(originalRequest);
       } catch (refreshError) {
         console.error("[API Client] ❌ Refresh failed:", refreshError);
 
         // ========================================
-        // STEP 7: HANDLE REFRESH FAILURE
+        // STEP 6: HANDLE REFRESH FAILURE
         // ========================================
-        isRefreshing = false;
-        onRefreshFailed(refreshError);
+        processQueue(refreshError, null);
 
-        // ✅ SECURITY FIX: Clear auth state (cookies are cleared by redirect/middleware)
-        try {
-          const { useAuthStore } = await import("@/lib/stores/auth.store");
-          useAuthStore.getState().logout();
-        } catch (importError) {
-          console.warn("[API Client] Failed to logout:", importError);
-        }
-
-        // Redirect to login
+        // Fallback Logout: Hard redirect to clear all state
+        // Using window.location.href is more reliable than dynamic imports
         if (typeof window !== "undefined" && !publicPages.includes(currentPath)) {
           console.log("[API Client] 🚪 Redirecting to login...");
           window.location.href = "/login";
         }
 
         return Promise.reject(refreshError);
+      } finally {
+        // Always unlock mutex
+        isRefreshing = false;
       }
     }
 
@@ -230,6 +198,5 @@ api.interceptors.response.use(
 // 📊 EXPORT
 // ============================================
 
-// Export as both 'api' and 'apiClient' for backward compatibility
 export { api as apiClient };
 export default api;

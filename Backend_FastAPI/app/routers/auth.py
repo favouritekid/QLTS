@@ -24,6 +24,7 @@ from ..config import settings
 from ..core import deps
 from ..utils.exceptions import (  # ✅ PHASE 1: Import custom exceptions
     CacheServiceError,
+    InvalidCredentials,
     UserServiceError,
 )
 from ..database import (
@@ -133,9 +134,49 @@ async def login_for_access_token(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(database.get_db),
 ):
-    user = await user_service.authenticate_user(
-        db, username=form_data.username, password=form_data.password
+    # ✅ SECURITY FIX: Check account lockout before authentication
+    from ..security.account_lockout import AccountLockoutService
+
+    is_locked, lockout_ttl = await AccountLockoutService.check_lockout(
+        form_data.username
     )
+
+    if is_locked:
+        # Add delay to slow down attacker
+        import asyncio
+        await asyncio.sleep(2)
+
+        log.warning(
+            "Login attempt blocked: Account is locked",
+            username=form_data.username,
+            remaining_seconds=lockout_ttl,
+            ip_address=request.client.host if request.client else None,
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Account temporarily locked due to too many failed login attempts. "
+                   f"Please try again in {lockout_ttl // 60} minutes.",
+        )
+
+    # Attempt authentication
+    try:
+        user = await user_service.authenticate_user(
+            db, username=form_data.username, password=form_data.password
+        )
+    except (InvalidCredentials, HTTPException) as auth_error:
+        # ✅ SECURITY FIX: Record failed attempt
+        await AccountLockoutService.record_failed_attempt(
+            db=db,
+            username=form_data.username,
+            ip_address=request.client.host if request.client else None,
+        )
+
+        # Re-raise original error (don't reveal lockout info to attacker)
+        raise auth_error
+
+    # ✅ SECURITY FIX: Reset attempts counter on successful login
+    await AccountLockoutService.reset_attempts(form_data.username)
 
     try:
         await user_service.remove_user_from_global_blacklist(user.id)
@@ -145,6 +186,30 @@ async def login_for_access_token(
             user_id=user.id,
             error=str(e),
         )
+
+    # ✅ SECURITY FIX: Revoke all old sessions to prevent session fixation
+    # This ensures only the new session (from this login) will be valid
+    try:
+        from ..services import session_service
+        revoked_count = await session_service.revoke_all_other_sessions(
+            db=db,
+            user_id=user.id,
+            except_session_id=None  # Revoke ALL old sessions
+        )
+        if revoked_count > 0:
+            log.info(
+                "Old sessions revoked on login (session fixation prevention)",
+                user_id=user.id,
+                revoked_count=revoked_count
+            )
+    except Exception as e:
+        log.error(
+            "Failed to revoke old sessions during login",
+            user_id=user.id,
+            error=str(e),
+            exc_info=True
+        )
+        # Continue login even if revocation fails (fail-open for availability)
 
     # ✅ BƯỚC 2: SỬA HÀM LOGIN
 
