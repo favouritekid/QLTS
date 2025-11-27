@@ -50,6 +50,18 @@ export function useNotifications(params: UseNotificationsParams = {}) {
     // refetchInterval: 30000, // ❌ REMOVED - Socket.IO pushes notifications in real-time
     staleTime: Infinity, // Never mark as stale - Socket.IO will invalidate when needed
     gcTime: 10 * 60 * 1000, // Garbage collect after 10 minutes of inactivity
+
+    // ✅ PHASE 1.1.2: Exponential backoff with jitter (Thundering Herd protection)
+    // Retries with increasing delays: 1s → 2s → 4s (+ random 0-1s jitter)
+    // Prevents synchronized retries when backend restarts or has issues
+    retry: 3, // Retry up to 3 times on failure
+    retryDelay: (attemptIndex) => {
+      // Exponential backoff: 1s, 2s, 4s, capped at 30s
+      const exponentialDelay = Math.min(1000 * 2 ** attemptIndex, 30000);
+      // Add jitter (0-1000ms random) to avoid synchronized retries
+      const jitter = Math.random() * 1000;
+      return exponentialDelay + jitter;
+    },
   });
 }
 
