@@ -46,10 +46,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models
 from app.core.events import SystemEvents
 from app.core.event_groups import get_event_group, NotificationChannel
+from app.database import safe_redis_lpush, safe_redis_ltrim, safe_redis_expire
 from app.services.notification_registry import get_event_config, NotificationConfig
 from app.services import notification_preference_service
 
 log = logging.getLogger(__name__)
+
+# ✅ PHASE 1.2: Import cache config from notification_service
+from app.services.notification_service import (
+    INBOX_CACHE_KEY_PREFIX,
+    INBOX_CACHE_MAX_SIZE,
+    INBOX_CACHE_TTL,
+)
 
 # Chunk size for bulk insert (to avoid overwhelming the DB)
 BULK_INSERT_CHUNK_SIZE = 100
@@ -199,6 +207,10 @@ async def dispatch(
         )
         await db.rollback()
         return []
+
+    # Step 7.5: ✅ PHASE 1.2: Prepend new notifications to inbox cache
+    # This keeps cache warm and avoids cache miss on next read
+    await _prepend_to_inbox_cache(user_ids, notification_ids)
 
     # Step 8: Emit Socket.IO notifications IMMEDIATELY for real-time delivery
     # This ensures users see toast notifications without delay
@@ -453,6 +465,60 @@ def _dispatch_broadcast_task(
     except Exception as e:
         log.error(f"Failed to queue broadcast task: {str(e)}")
         raise
+
+
+async def _prepend_to_inbox_cache(user_ids: List[int], notification_ids: List[int]):
+    """
+    ✅ PHASE 1.2: Prepend new notification IDs to user inbox caches.
+
+    This keeps cache warm after creating new notifications, avoiding cache miss
+    on next read.
+
+    Strategy:
+    - For each user, prepend their notification ID(s) to their inbox cache
+    - Trim cache to max 100 items
+    - Set TTL to 7 days
+
+    Args:
+        user_ids: List of user IDs who received notifications
+        notification_ids: List of notification IDs that were created (in same order as user_ids)
+
+    Note:
+        Bulk notifications create one notification per user in same order as user_ids list.
+        We prepend notification_ids[i] to cache for user_ids[i].
+    """
+    if len(user_ids) != len(notification_ids):
+        log.warning(
+            "Mismatch between user_ids and notification_ids length, skipping cache prepend",
+            extra={"users": len(user_ids), "notifications": len(notification_ids)}
+        )
+        return
+
+    try:
+        # Prepend each notification to the corresponding user's inbox cache
+        for user_id, notification_id in zip(user_ids, notification_ids):
+            cache_key = f"{INBOX_CACHE_KEY_PREFIX}:{user_id}"
+
+            # LPUSH to prepend notification ID to front of list
+            await safe_redis_lpush(cache_key, str(notification_id))
+
+            # LTRIM to keep only first 100 items
+            await safe_redis_ltrim(cache_key, 0, INBOX_CACHE_MAX_SIZE - 1)
+
+            # Set/refresh TTL
+            await safe_redis_expire(cache_key, INBOX_CACHE_TTL)
+
+        log.info(
+            "Prepended notifications to inbox cache",
+            extra={"user_count": len(user_ids), "notification_count": len(notification_ids)}
+        )
+
+    except Exception as e:
+        # Log but don't fail - cache prepend is non-critical
+        log.warning(
+            f"Failed to prepend notifications to cache: {str(e)}",
+            exc_info=True
+        )
 
 
 # =============================================================================

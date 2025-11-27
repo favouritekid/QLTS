@@ -112,6 +112,65 @@ async def safe_redis_delete(key: str):
         return 0
 
 
+# ✅ PHASE 1.2.1: Redis List operations for notification inbox caching
+async def safe_redis_lpush(key: str, *values):
+    """
+    LPUSH values to Redis list (safe with circuit breaker).
+
+    Used for notification inbox cache: adds new notifications to the front of the list.
+    """
+    try:
+        return await redis_breaker.call_async(redis_client.lpush, key, *values)
+    except REDIS_BREAKER_EXCEPTIONS:
+        log.error("Redis LPUSH failed", key=key, exc_info=True)
+        return 0
+
+
+async def safe_redis_ltrim(key: str, start: int, end: int):
+    """
+    LTRIM Redis list to keep only specified range (safe with circuit breaker).
+
+    Used to maintain max 100 notifications in inbox cache.
+    Example: LTRIM user_inbox:123 0 99 → keeps first 100 items
+    """
+    try:
+        return await redis_breaker.call_async(redis_client.ltrim, key, start, end)
+    except REDIS_BREAKER_EXCEPTIONS:
+        log.error("Redis LTRIM failed", key=key, start=start, end=end, exc_info=True)
+        return False
+
+
+async def safe_redis_lrange(key: str, start: int, end: int):
+    """
+    LRANGE to get items from Redis list (safe with circuit breaker).
+
+    Used to fetch notification IDs from inbox cache.
+    Example: LRANGE user_inbox:123 0 49 → gets first 50 items
+
+    Returns:
+        List of items, or empty list if key doesn't exist or error occurs
+    """
+    try:
+        result = await redis_breaker.call_async(redis_client.lrange, key, start, end)
+        return result if result else []
+    except REDIS_BREAKER_EXCEPTIONS:
+        log.error("Redis LRANGE failed", key=key, start=start, end=end, exc_info=True)
+        return []
+
+
+async def safe_redis_expire(key: str, seconds: int):
+    """
+    Set expiration time for a key (safe with circuit breaker).
+
+    Used to set TTL for inbox cache (7 days = 604800 seconds).
+    """
+    try:
+        return await redis_breaker.call_async(redis_client.expire, key, seconds)
+    except REDIS_BREAKER_EXCEPTIONS:
+        log.error("Redis EXPIRE failed", key=key, seconds=seconds, exc_info=True)
+        return False
+
+
 # ✅ FIX: Tạo async context manager cho pipeline
 
 
