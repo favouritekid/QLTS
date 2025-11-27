@@ -136,7 +136,7 @@ async def seed_notification_rules():
 
             # Skip if already exists
             if event_name in existing_events:
-                log.debug("Skipping existing rule", event=event_name)
+                log.debug("Skipping existing rule", event_name=event_name)
                 skipped_count += 1
                 continue
 
@@ -146,7 +146,7 @@ async def seed_notification_rules():
             except Exception as e:
                 log.error(
                     "Failed to serialize resolver, skipping",
-                    event=event_name,
+                    event_name=event_name,
                     error=str(e)
                 )
                 continue
@@ -171,7 +171,7 @@ async def seed_notification_rules():
 
             log.info(
                 "Created notification rule",
-                event=event_name,
+                event_name=event_name,
                 resolver_type=recipient_config["resolver_type"],
                 channels=config.channels
             )
