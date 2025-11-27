@@ -162,19 +162,19 @@ async def dispatch(
     except Exception as e:
         log.error(
             "Failed to resolve users for event",
-            event=event.value,
+            event_type=event.value,
             error=str(e),
             resolver=config.resolver.__class__.__name__
         )
         return []
 
     if not user_ids:
-        log.info("No recipients resolved for event", event=event.value)
+        log.info("No recipients resolved for event", event_type=event.value)
         return []
 
     log.info(
         "Recipients resolved successfully",
-        event=event.value,
+        event_type=event.value,
         recipient_count=len(user_ids)
     )
 
