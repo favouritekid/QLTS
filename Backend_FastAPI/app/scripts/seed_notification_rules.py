@@ -96,7 +96,7 @@ def serialize_resolver(resolver: BaseResolver) -> Dict[str, Any]:
 
     # Handle actor-excluded wrapper
     if isinstance(resolver, ActorExcludedResolver):
-        inner_resolver = serialize_resolver(resolver.resolver)
+        inner_resolver = serialize_resolver(resolver.inner_resolver)
         return {
             "resolver_type": "actor_excluded",
             "params": {"inner_resolver": inner_resolver}
