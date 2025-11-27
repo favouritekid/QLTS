@@ -1,8 +1,8 @@
 # app/services/notification_service.py
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
-import logging
 
+import structlog
 from sqlalchemy import and_, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,7 +17,7 @@ from app.database import (
 from app.services import notification_preference_service
 from app.services.email_service import EmailService
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 # ✅ PHASE 1.2.1: Redis inbox cache configuration
 INBOX_CACHE_KEY_PREFIX = "user_inbox"  # Cache key: user_inbox:{user_id}
@@ -39,7 +39,11 @@ async def invalidate_user_inbox_cache(user_id: int):
     """
     cache_key = f"{INBOX_CACHE_KEY_PREFIX}:{user_id}"
     await safe_redis_delete(cache_key)
-    log.info("Notification cache INVALIDATED", extra={"user_id": user_id})
+    log.info(
+        "Notification inbox cache invalidated",
+        user_id=user_id,
+        cache_key=cache_key
+    )
 
 
 async def create_notification(
@@ -77,12 +81,11 @@ async def create_notification(
     )
 
     log.info(
-        "Notification preference check",
-        extra={
-            "user_id": user_id,
-            "notification_type": notification_type,
-            "should_send": should_send,
-        }
+        "Notification preference check completed",
+        user_id=user_id,
+        notification_type=notification_type,
+        send_email=should_send["send_email"],
+        create_notification=should_send["create_notification"]
     )
 
     # Always create the notification in the database
@@ -116,17 +119,26 @@ async def create_notification(
                 if email_sent:
                     log.info(
                         "Email notification sent successfully",
-                        extra={"user_id": user_id, "notification_id": notification.id}
+                        user_id=user_id,
+                        notification_id=notification.id,
+                        notification_type=notification_type,
+                        recipient_email=user.email
                     )
                 else:
                     log.warning(
                         "Failed to send email notification",
-                        extra={"user_id": user_id, "notification_id": notification.id}
+                        user_id=user_id,
+                        notification_id=notification.id,
+                        notification_type=notification_type,
+                        recipient_email=user.email
                     )
         except Exception as e:
             log.error(
                 "Error sending email notification",
-                extra={"user_id": user_id, "notification_id": notification.id, "error": str(e)}
+                user_id=user_id,
+                notification_id=notification.id,
+                notification_type=notification_type,
+                error=str(e)
             )
 
     return notification
@@ -187,8 +199,11 @@ async def get_user_notifications(
         if cached_ids:
             # Cache hit! Fetch notifications by IDs from DB
             log.info(
-                "Notification cache HIT",
-                extra={"user_id": user_id, "cached_count": len(cached_ids)}
+                "Notification inbox cache HIT",
+                user_id=user_id,
+                cached_count=len(cached_ids),
+                skip=skip,
+                limit=limit
             )
 
             # Convert string IDs to integers
@@ -206,8 +221,9 @@ async def get_user_notifications(
         else:
             # Cache miss - query DB and populate cache
             log.info(
-                "Notification cache MISS",
-                extra={"user_id": user_id}
+                "Notification inbox cache MISS",
+                user_id=user_id,
+                cache_key=cache_key
             )
 
             query = (
@@ -232,8 +248,11 @@ async def get_user_notifications(
                 await safe_redis_expire(cache_key, INBOX_CACHE_TTL)
 
                 log.info(
-                    "Notification cache POPULATED",
-                    extra={"user_id": user_id, "count": len(notification_ids)}
+                    "Notification inbox cache POPULATED",
+                    user_id=user_id,
+                    notification_count=len(notification_ids),
+                    cache_max_size=INBOX_CACHE_MAX_SIZE,
+                    cache_ttl_seconds=INBOX_CACHE_TTL
                 )
 
             # Return paginated slice
