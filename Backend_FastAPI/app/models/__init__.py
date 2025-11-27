@@ -19,7 +19,7 @@ from .lead import Application, AssignmentLog, Consultation, CRMInteraction, Lead
 from .lead_history import LeadStatusHistory
 
 # Notification models
-from .notification import Notification
+from .notification import Notification, NotificationRule
 from .notification_preference import NotificationPreference
 
 # Organization models (includes temporal models)
@@ -67,6 +67,7 @@ __all__ = [
     "LeadStatusHistory",
     # Notification
     "Notification",
+    "NotificationRule",
     "NotificationPreference",
     # Organization (Legacy)
     # "Major",  # REMOVED after 3-tier migration k6l7m8n9o0p1
