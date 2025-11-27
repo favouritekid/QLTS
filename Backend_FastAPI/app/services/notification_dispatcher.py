@@ -49,6 +49,8 @@ from app.core.event_groups import get_event_group, NotificationChannel
 from app.database import safe_redis_lpush, safe_redis_ltrim, safe_redis_expire
 from app.services.notification_registry import get_event_config, NotificationConfig
 from app.services import notification_preference_service
+# ✅ PHASE 2.3: Import database rule loader
+from app.services.notification_rule_loader import get_rule_for_event
 
 log = structlog.get_logger(__name__)
 
@@ -117,14 +119,42 @@ async def dispatch(
         payload_keys=list(payload.keys())
     )
 
-    # Step 1: Lookup registry
-    config = get_event_config(event)
+    # Step 1: ✅ PHASE 2.3: Load rule from database (or fallback to hardcoded registry)
+    # Try database first for visual management
+    config = await get_rule_for_event(db, event)
+    rule_source = "database" if config else None
+
+    # Fallback to hardcoded registry if no database rule
+    if not config:
+        config = get_event_config(event)
+        rule_source = "registry" if config else None
+
     if not config:
         log.error(
-            "Event not found in registry, skipping dispatch",
-            event=event.value
+            "No notification rule found for event",
+            event=event.value,
+            checked_sources=["database", "registry"]
         )
         return []
+
+    log.info(
+        "Loaded notification rule",
+        event=event.value,
+        rule_source=rule_source,
+        rule_id=getattr(config, 'rule_id', None),
+        channels=config.channels
+    )
+
+    # Step 1.5: ✅ PHASE 2.3: Check activation condition (database rules only)
+    if rule_source == "database" and hasattr(config, 'should_activate'):
+        if not config.should_activate(payload):
+            log.info(
+                "Notification rule condition not met, skipping dispatch",
+                event=event.value,
+                rule_id=config.rule_id,
+                condition=config.condition
+            )
+            return []
 
     # Step 2: Resolve recipients
     try:
