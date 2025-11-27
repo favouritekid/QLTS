@@ -1,8 +1,8 @@
-"""add notification_rule table for visual management
+"""add_notification_rule_table
 
-Revision ID: k6l7m8n9o0p1
-Revises: j5k6l7m8n9o0
-Create Date: 2025-11-27 10:00:00.000000
+Revision ID: 7caf68807fa8
+Revises: a2b3c4d5e6f7
+Create Date: 2025-11-27 12:32:59.621656
 
 """
 from typing import Sequence, Union
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = 'k6l7m8n9o0p1'
-down_revision: Union[str, None] = 'j5k6l7m8n9o0'
+revision: str = '7caf68807fa8'
+down_revision: Union[str, Sequence[str], None] = 'a2b3c4d5e6f7'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
