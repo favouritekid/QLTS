@@ -38,6 +38,7 @@ from .routers import (
     leads,
     monitoring,
     notification_preferences,
+    notification_rules,  # ✅ PHASE 2.2: Notification Rules CRUD
     notifications,
     officer,
     organization,
@@ -198,6 +199,14 @@ async def lifespan(app: FastAPI):
             await enforcer.add_policy("role:manager", "/api/notifications/mark-as-read", "POST")
             await enforcer.add_policy("role:manager", "/api/notifications/mark-all-as-read", "POST")
             await enforcer.add_policy("role:manager", "/api/notifications/{notification_id}", "DELETE")
+
+            # ✅ PHASE 2.2: Notification Rules (Admin-only) - Visual notification management
+            await enforcer.add_policy("role:admin", "/api/notification-rules", "GET")
+            await enforcer.add_policy("role:admin", "/api/notification-rules", "POST")
+            await enforcer.add_policy("role:admin", "/api/notification-rules/{rule_id}", "GET")
+            await enforcer.add_policy("role:admin", "/api/notification-rules/{rule_id}", "PUT")
+            await enforcer.add_policy("role:admin", "/api/notification-rules/{rule_id}", "DELETE")
+            await enforcer.add_policy("role:admin", "/api/notification-rules/{rule_id}/toggle", "PATCH")
 
             # ✅ SECURITY FIX: Organization policies - all authenticated users can read, admin can write
             # READ operations - accessible by all authenticated users
@@ -490,6 +499,7 @@ app.include_router(users.router, prefix="/api/users", tags=["Users"])
 app.include_router(sessions.router, prefix="/api", tags=["Sessions"])
 app.include_router(notifications.router, prefix="/api/notifications", tags=["Notifications"])
 app.include_router(notification_preferences.router, prefix="/api/notifications", tags=["Notification Preferences"])
+app.include_router(notification_rules.router, prefix="/api", tags=["Notification Rules (Admin)"])  # ✅ PHASE 2.2: Admin-only notification rule management
 app.include_router(leads.router, prefix="/api/leads", tags=["Leads"])
 app.include_router(applications.router, prefix="/api", tags=["Applications"])
 app.include_router(pipeline.router, prefix="/api/pipeline", tags=["Pipeline"])
