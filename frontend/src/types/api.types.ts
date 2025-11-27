@@ -256,3 +256,50 @@ export interface NotificationPreferenceUpdate {
   quiet_hours_start?: string | null;
   quiet_hours_end?: string | null;
 }
+
+// ============================================
+// ✅ PHASE 2.4: NOTIFICATION RULES (Admin)
+// ============================================
+
+export interface NotificationRule {
+  id: number;
+  event: string; // SystemEvents enum value
+  title_template: string;
+  message_template: string;
+  notification_type: string; // info, success, warning, error
+  link_template: string | null;
+  channels: string[]; // ["browser", "email", "sms"]
+  recipient_config: Record<string, unknown>; // {resolver_type, params}
+  condition: Record<string, unknown> | null; // Optional activation conditions
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NotificationRuleCreate {
+  event: string;
+  title_template: string;
+  message_template: string;
+  notification_type: string;
+  link_template?: string | null;
+  channels: string[];
+  recipient_config: Record<string, unknown>;
+  condition?: Record<string, unknown> | null;
+  enabled?: boolean;
+}
+
+export interface NotificationRuleUpdate {
+  title_template?: string;
+  message_template?: string;
+  notification_type?: string;
+  link_template?: string | null;
+  channels?: string[];
+  recipient_config?: Record<string, unknown>;
+  condition?: Record<string, unknown> | null;
+  enabled?: boolean;
+}
+
+export interface NotificationRulesPage {
+  total_count: number;
+  rules: NotificationRule[];
+}
