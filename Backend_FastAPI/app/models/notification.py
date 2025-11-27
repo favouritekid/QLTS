@@ -52,3 +52,76 @@ class Notification(Base):
 
     def __repr__(self) -> str:
         return f"<Notification {self.id}: {self.title} for user {self.user_id}>"
+
+
+class NotificationRule(Base):
+    """
+    ✅ PHASE 2.1: Model for notification rules (visual management).
+
+    Allows administrators to manage notification configurations through UI
+    instead of hardcoding them in the registry.
+
+    Fields:
+        event: SystemEvents enum value (e.g., "LEAD_ASSIGNED")
+        title_template: Template string with {placeholders} (e.g., "Lead assigned: {lead_name}")
+        message_template: Message template with {placeholders}
+        notification_type: Severity level (info, success, warning, error)
+        link_template: Optional link template (e.g., "/leads/{lead_id}")
+        channels: JSON array of delivery channels ["browser", "email", "sms"]
+        recipient_config: JSON object defining resolver {resolver_type, params}
+        condition: Optional JSON object for activation conditions
+        enabled: Whether this rule is active
+
+    Example recipient_config:
+        {
+            "resolver_type": "specific_user",
+            "params": {"user_field": "officer_id"}
+        }
+        {
+            "resolver_type": "all_users",
+            "params": {"exclude_actor": true}
+        }
+    """
+
+    __tablename__ = "notification_rule"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Event trigger (from SystemEvents enum)
+    event = Column(String(100), nullable=False, index=True,
+                   comment="SystemEvents enum value (e.g., LEAD_ASSIGNED)")
+
+    # Notification content templates
+    title_template = Column(String(255), nullable=False,
+                           comment="Title template with {placeholders}")
+    message_template = Column(Text, nullable=False,
+                             comment="Message template with {placeholders}")
+    notification_type = Column(String(20), nullable=False, default="info",
+                              comment="Severity: info, success, warning, error")
+    link_template = Column(String(512), nullable=True,
+                          comment="Optional link template (e.g., /leads/{lead_id})")
+
+    # Delivery configuration
+    channels = Column(JSON, nullable=False, default=["browser"],
+                     comment="Delivery channels: [\"browser\", \"email\", \"sms\"]")
+
+    # Recipient resolution configuration
+    recipient_config = Column(JSON, nullable=False,
+                             comment="Resolver config: {resolver_type, params}")
+
+    # Optional activation conditions
+    condition = Column(JSON, nullable=True,
+                      comment="Optional activation conditions")
+
+    # Enable/disable flag
+    enabled = Column(Boolean, nullable=False, default=True, index=True,
+                    comment="Enable/disable this rule")
+
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), server_default=func.now(),
+                       nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(),
+                       onupdate=func.now(), nullable=False)
+
+    def __repr__(self) -> str:
+        return f"<NotificationRule {self.id}: {self.event} ({self.notification_type})>"

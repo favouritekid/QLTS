@@ -3,6 +3,8 @@
  * Based on Backend Models (verified in BACKEND_VERIFICATION_REPORT.md)
  */
 
+import type { ConsultationStatus, PipelineStage } from './pipeline.types';
+
 // ============================================
 // CORE LEAD TYPES
 // ============================================

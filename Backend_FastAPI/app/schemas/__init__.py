@@ -190,6 +190,12 @@ from .notification import (
     NotificationCreate,
     NotificationsPage,
     MarkAsReadRequest,
+    # ✅ PHASE 2.2: Notification Rule schemas
+    NotificationRule,
+    NotificationRuleBase,
+    NotificationRuleCreate,
+    NotificationRuleUpdate,
+    NotificationRulesPage,
 )
 
 # --- Từ notification_preference.py ---

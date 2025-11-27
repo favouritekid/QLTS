@@ -2,11 +2,12 @@
 from typing import List
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, models, schemas
 from ..core import deps
+from ..ratelimit import RATE_LIMITS, limiter
 from ..services import notification_service
 from ..socket_manager import sio
 
@@ -16,14 +17,21 @@ PermissionDep = Depends(deps.check_permission)
 
 
 @router.get("", response_model=schemas.NotificationsPage)
+@limiter.limit(RATE_LIMITS["notifications"])  # ✅ PHASE 1.1.1: Rate limiting (Thundering Herd protection)
 async def get_my_notifications(
+    request: Request,  # ✅ Required for rate limiter
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     unread_only: bool = Query(False),
 ):
-    """Get notifications for the current user."""
+    """
+    Get notifications for the current user.
+
+    Rate limit: 60 requests/minute per IP (production), 10000/minute (test).
+    This prevents Thundering Herd problem when many users reconnect simultaneously.
+    """
     skip = (page - 1) * page_size
 
     total, unread, notifications = await notification_service.get_user_notifications(

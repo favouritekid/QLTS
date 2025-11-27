@@ -21,7 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import database, models
 from app.celery_utils import celery_app
 from app.core import deps
-from app.database import redis_client, safe_redis_ping
+from app.database import redis_client, safe_redis_ping, safe_redis_lrange
+from app.services.notification_service import INBOX_CACHE_KEY_PREFIX
 from app.socket_manager import sio
 
 log = structlog.get_logger(__name__)
@@ -334,6 +335,188 @@ async def get_socket_connections(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get Socket.IO connections: {str(e)}"
+        )
+
+
+# ============================================================================
+# NOTIFICATION METRICS (✅ PHASE 1.3.1)
+# ============================================================================
+
+
+@router.get("/notifications/metrics")
+async def get_notification_metrics(
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = PermissionDep,
+):
+    """
+    ✅ PHASE 1.3.1: Get comprehensive notification system metrics.
+
+    (Admin only) Provides visibility into:
+    - Total notifications created
+    - Notifications by type breakdown
+    - Notifications by status (read/unread)
+    - Cache performance metrics
+    - Recent activity (24h, 7d, 30d)
+    - Top recipients
+
+    Returns:
+        Metrics object with detailed statistics for monitoring and optimization
+    """
+    metrics = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "totals": {},
+        "by_type": {},
+        "by_status": {},
+        "cache": {},
+        "activity": {},
+        "top_recipients": [],
+    }
+
+    try:
+        # 1. Total notifications count
+        result = await db.execute(
+            text("SELECT COUNT(*) as total FROM notification")
+        )
+        metrics["totals"]["all_time"] = result.scalar() or 0
+
+        # 2. Notifications by type breakdown
+        result = await db.execute(
+            text("""
+                SELECT type, COUNT(*) as count
+                FROM notification
+                GROUP BY type
+                ORDER BY count DESC
+            """)
+        )
+        metrics["by_type"] = {row[0]: row[1] for row in result.fetchall()}
+
+        # 3. Notifications by read status
+        result = await db.execute(
+            text("""
+                SELECT
+                    SUM(CASE WHEN is_read = true THEN 1 ELSE 0 END) as read_count,
+                    SUM(CASE WHEN is_read = false THEN 1 ELSE 0 END) as unread_count
+                FROM notification
+            """)
+        )
+        row = result.first()
+        metrics["by_status"] = {
+            "read": row[0] or 0,
+            "unread": row[1] or 0,
+        }
+
+        # 4. Cache performance metrics (Redis)
+        try:
+            if redis_client:
+                # Get Redis INFO for keyspace stats
+                info = await redis_client.info()
+                keyspace_hits = info.get("keyspace_hits", 0)
+                keyspace_misses = info.get("keyspace_misses", 0)
+
+                total_ops = keyspace_hits + keyspace_misses
+                hit_rate = (keyspace_hits / total_ops * 100) if total_ops > 0 else 0
+
+                metrics["cache"]["redis_hits"] = keyspace_hits
+                metrics["cache"]["redis_misses"] = keyspace_misses
+                metrics["cache"]["hit_rate_percent"] = round(hit_rate, 2)
+
+                # Count inbox cache keys
+                # Pattern: user_inbox:*
+                keys = await redis_client.keys(f"{INBOX_CACHE_KEY_PREFIX}:*")
+                metrics["cache"]["inbox_keys_count"] = len(keys) if keys else 0
+
+                # Sample cache size (check first 5 inbox caches)
+                if keys:
+                    sample_keys = keys[:5]
+                    total_items = 0
+                    for key in sample_keys:
+                        items = await safe_redis_lrange(key, 0, -1)
+                        total_items += len(items)
+                    avg_items = total_items / len(sample_keys) if sample_keys else 0
+                    metrics["cache"]["avg_items_per_inbox"] = round(avg_items, 1)
+        except Exception as e:
+            log.warning("Failed to get cache metrics", error=str(e))
+            metrics["cache"]["error"] = str(e)
+
+        # 5. Recent activity (24h, 7d, 30d)
+        result = await db.execute(
+            text("""
+                SELECT
+                    COUNT(CASE WHEN created_at >= NOW() - INTERVAL '24 hours' THEN 1 END) as last_24h,
+                    COUNT(CASE WHEN created_at >= NOW() - INTERVAL '7 days' THEN 1 END) as last_7d,
+                    COUNT(CASE WHEN created_at >= NOW() - INTERVAL '30 days' THEN 1 END) as last_30d
+                FROM notification
+            """)
+        )
+        row = result.first()
+        metrics["activity"] = {
+            "last_24h": row[0] or 0,
+            "last_7d": row[1] or 0,
+            "last_30d": row[2] or 0,
+        }
+
+        # 6. Top recipients (users with most notifications)
+        result = await db.execute(
+            text("""
+                SELECT
+                    n.user_id,
+                    u.username,
+                    COUNT(*) as notification_count,
+                    SUM(CASE WHEN n.is_read = false THEN 1 ELSE 0 END) as unread_count
+                FROM notification n
+                LEFT JOIN "user" u ON n.user_id = u.id
+                GROUP BY n.user_id, u.username
+                ORDER BY notification_count DESC
+                LIMIT 10
+            """)
+        )
+        metrics["top_recipients"] = [
+            {
+                "user_id": row[0],
+                "username": row[1],
+                "total_notifications": row[2],
+                "unread_notifications": row[3],
+            }
+            for row in result.fetchall()
+        ]
+
+        # 7. Performance insights
+        metrics["insights"] = []
+
+        # Alert if unread ratio is too high (> 50%)
+        unread_ratio = (
+            metrics["by_status"]["unread"] / metrics["totals"]["all_time"] * 100
+            if metrics["totals"]["all_time"] > 0 else 0
+        )
+        if unread_ratio > 50:
+            metrics["insights"].append({
+                "level": "warning",
+                "message": f"High unread notification ratio: {unread_ratio:.1f}%"
+            })
+
+        # Alert if cache hit rate is low (< 70%)
+        if "hit_rate_percent" in metrics["cache"]:
+            if metrics["cache"]["hit_rate_percent"] < 70:
+                metrics["insights"].append({
+                    "level": "warning",
+                    "message": f"Low cache hit rate: {metrics['cache']['hit_rate_percent']}%"
+                })
+
+        # Positive feedback if cache hit rate is good (> 80%)
+        if "hit_rate_percent" in metrics["cache"]:
+            if metrics["cache"]["hit_rate_percent"] > 80:
+                metrics["insights"].append({
+                    "level": "info",
+                    "message": f"Good cache hit rate: {metrics['cache']['hit_rate_percent']}%"
+                })
+
+        return metrics
+
+    except Exception as e:
+        log.error("Failed to get notification metrics", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get notification metrics: {str(e)}"
         )
 
 

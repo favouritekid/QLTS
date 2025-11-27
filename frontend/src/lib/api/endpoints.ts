@@ -150,6 +150,15 @@ export const API_ENDPOINTS = {
     EVENT_GROUPS: "/api/notifications/event-groups",
     EVENT_GROUPS_METADATA: "/api/notifications/event-groups/metadata",
   },
+  // ✅ PHASE 2.4: Notification Rules (Admin-only)
+  NOTIFICATION_RULES: {
+    LIST: "/api/notification-rules",
+    CREATE: "/api/notification-rules",
+    DETAIL: (id: number) => `/api/notification-rules/${id}`,
+    UPDATE: (id: number) => `/api/notification-rules/${id}`,
+    TOGGLE: (id: number) => `/api/notification-rules/${id}/toggle`,
+    DELETE: (id: number) => `/api/notification-rules/${id}`,
+  },
   // Applications (Hồ sơ Tuyển sinh)
   APPLICATIONS: {
     CREATE: (leadId: number) => `/api/leads/${leadId}/applications`,

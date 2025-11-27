@@ -30,21 +30,34 @@ export function SocketHandler() {
 
   // ✅ SECURITY FIX: Manage Socket.io connection based on authentication state
   // No longer tracks JTI or token - backend reads auth from httpOnly cookies
+  // ✅ PHASE 1.1.3: Staggered reconnection with random delay (Thundering Herd protection)
   useEffect(() => {
     if (isAuthenticated) {
-      // When authenticated, connect Socket.io (cookies sent automatically)
-      console.log("[SocketHandler] User authenticated, connecting Socket.io...");
-      socketService.connect();
+      // ✅ PHASE 1.1.3: Add random delay 0-5000ms before connecting
+      // This prevents Thundering Herd when backend restarts and all users reconnect simultaneously
+      // Connections are spread over 5 seconds instead of all at once
+      const delay = Math.random() * 5000;
+
+      console.log(
+        `[SocketHandler] User authenticated, connecting Socket.io in ${Math.round(delay)}ms...`
+      );
+
+      const timeoutId = setTimeout(() => {
+        socketService.connect();
+        console.log("[SocketHandler] Socket.io connection initiated after delay");
+      }, delay);
+
+      // Cleanup: clear timeout if effect re-runs before connection
+      return () => {
+        clearTimeout(timeoutId);
+        socketService.disconnect();
+      };
     } else {
-      // When not authenticated, disconnect
+      // When not authenticated, disconnect immediately (no delay needed)
       console.log("[SocketHandler] User not authenticated, disconnecting Socket.io...");
       socketService.disconnect();
+      return undefined;
     }
-
-    // Cleanup khi component unmount
-    return () => {
-      socketService.disconnect();
-    };
   }, [isAuthenticated]); // Chạy lại khi `isAuthenticated` thay đổi
 
   // 2. Lắng nghe sự kiện

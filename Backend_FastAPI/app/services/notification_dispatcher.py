@@ -36,7 +36,7 @@ Usage:
         }
     )
 """
-import logging
+import structlog
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -46,10 +46,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import models
 from app.core.events import SystemEvents
 from app.core.event_groups import get_event_group, NotificationChannel
+from app.database import safe_redis_lpush, safe_redis_ltrim, safe_redis_expire
 from app.services.notification_registry import get_event_config, NotificationConfig
 from app.services import notification_preference_service
+# ✅ PHASE 2.3: Import database rule loader
+from app.services.notification_rule_loader import get_rule_for_event
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
+
+# ✅ PHASE 1.2: Import cache config from notification_service
+from app.services.notification_service import (
+    INBOX_CACHE_KEY_PREFIX,
+    INBOX_CACHE_MAX_SIZE,
+    INBOX_CACHE_TTL,
+)
 
 # Chunk size for bulk insert (to avoid overwhelming the DB)
 BULK_INSERT_CHUNK_SIZE = 100
@@ -103,31 +113,70 @@ async def dispatch(
         )
     """
     log.info(
-        f"Dispatching event: {event.value}",
-        extra={"event": event.value, "dedupe_key": dedupe_key}
+        "Dispatching notification event",
+        event=event.value,
+        dedupe_key=dedupe_key,
+        payload_keys=list(payload.keys())
     )
 
-    # Step 1: Lookup registry
-    config = get_event_config(event)
+    # Step 1: ✅ PHASE 2.3: Load rule from database (or fallback to hardcoded registry)
+    # Try database first for visual management
+    config = await get_rule_for_event(db, event)
+    rule_source = "database" if config else None
+
+    # Fallback to hardcoded registry if no database rule
     if not config:
-        log.error(f"Event {event} not found in registry, skipping dispatch")
+        config = get_event_config(event)
+        rule_source = "registry" if config else None
+
+    if not config:
+        log.error(
+            "No notification rule found for event",
+            event=event.value,
+            checked_sources=["database", "registry"]
+        )
         return []
+
+    log.info(
+        "Loaded notification rule",
+        event=event.value,
+        rule_source=rule_source,
+        rule_id=getattr(config, 'rule_id', None),
+        channels=config.channels
+    )
+
+    # Step 1.5: ✅ PHASE 2.3: Check activation condition (database rules only)
+    if rule_source == "database" and hasattr(config, 'should_activate'):
+        if not config.should_activate(payload):
+            log.info(
+                "Notification rule condition not met, skipping dispatch",
+                event=event.value,
+                rule_id=config.rule_id,
+                condition=config.condition
+            )
+            return []
 
     # Step 2: Resolve recipients
     try:
         user_ids = await config.resolver.resolve_users(db, payload)
     except Exception as e:
         log.error(
-            f"Failed to resolve users for event {event}: {str(e)}",
-            extra={"payload": payload}
+            "Failed to resolve users for event",
+            event=event.value,
+            error=str(e),
+            resolver=config.resolver.__class__.__name__
         )
         return []
 
     if not user_ids:
-        log.info(f"No recipients resolved for event {event}")
+        log.info("No recipients resolved for event", event=event.value)
         return []
 
-    log.info(f"Resolved {len(user_ids)} recipients for event {event}")
+    log.info(
+        "Recipients resolved successfully",
+        event=event.value,
+        recipient_count=len(user_ids)
+    )
 
     # Step 3: Filter by preferences
     if not skip_preference_check:
@@ -141,21 +190,38 @@ async def dispatch(
 
         if not user_ids:
             log.info(
-                f"All recipients filtered out by preferences for event {event}"
+                "All recipients filtered out by preferences",
+                event=event.value,
+                group=group.value
             )
             return []
 
-        log.info(f"After preference filtering: {len(user_ids)} recipients")
+        log.info(
+            "Recipients after preference filtering",
+            event=event.value,
+            filtered_count=len(user_ids)
+        )
 
     # Step 4: Apply deduplication
     if dedupe_key:
+        original_count = len(user_ids)
         user_ids = await _apply_deduplication(db, user_ids, dedupe_key)
 
         if not user_ids:
-            log.info(f"All recipients filtered out by deduplication for event {event}")
+            log.info(
+                "All recipients filtered out by deduplication",
+                event=event.value,
+                dedupe_key=dedupe_key
+            )
             return []
 
-        log.info(f"After deduplication: {len(user_ids)} recipients")
+        log.info(
+            "Recipients after deduplication",
+            event=event.value,
+            original_count=original_count,
+            deduplicated_count=len(user_ids),
+            filtered_out=original_count - len(user_ids)
+        )
 
     # Step 5: Render notification content
     title = config.render_title(payload)
@@ -186,19 +252,34 @@ async def dispatch(
     )
 
     if not notification_ids:
-        log.error(f"Failed to create notifications for event {event}")
+        log.error(
+            "Failed to create notifications for event",
+            event=event.value
+        )
         return []
 
     # Step 7: Commit transaction BEFORE dispatching notifications
     try:
         await db.commit()
-        log.info(f"Committed {len(notification_ids)} notifications for event {event}")
+        log.info(
+            "Notifications committed successfully",
+            event=event.value,
+            notification_count=len(notification_ids),
+            notification_type=notification_type
+        )
     except Exception as e:
         log.error(
-            f"Failed to commit notifications for event {event}: {str(e)}"
+            "Failed to commit notifications",
+            event=event.value,
+            error=str(e),
+            notification_count=len(notification_ids)
         )
         await db.rollback()
         return []
+
+    # Step 7.5: ✅ PHASE 1.2: Prepend new notifications to inbox cache
+    # This keeps cache warm and avoids cache miss on next read
+    await _prepend_to_inbox_cache(user_ids, notification_ids)
 
     # Step 8: Emit Socket.IO notifications IMMEDIATELY for real-time delivery
     # This ensures users see toast notifications without delay
@@ -208,8 +289,11 @@ async def dispatch(
         except Exception as e:
             # Log but don't fail - notifications are in DB and Celery will retry
             log.warning(
-                f"Failed to emit immediate Socket.IO for event {event}: {str(e)}. "
-                "Celery task will handle delivery."
+                "Failed to emit immediate Socket.IO notifications",
+                event=event.value,
+                error=str(e),
+                notification_count=len(notification_ids),
+                fallback="Celery task will handle delivery"
             )
 
     # Step 9: Dispatch Celery task for email delivery and retries
@@ -222,8 +306,11 @@ async def dispatch(
     except Exception as e:
         # Log but don't fail - notifications are already in DB
         log.error(
-            f"Failed to dispatch Celery task for event {event}: {str(e)}. "
-            "Notifications are saved but won't be pushed."
+            "Failed to dispatch Celery broadcast task",
+            event=event.value,
+            error=str(e),
+            notification_count=len(notification_ids),
+            channels=config.channels
         )
 
     return notification_ids
@@ -263,11 +350,25 @@ async def _apply_deduplication(
         existing_user_ids = {row[0] for row in result.fetchall()}
 
         # Return users who don't have the notification yet
-        return [uid for uid in user_ids if uid not in existing_user_ids]
+        filtered_ids = [uid for uid in user_ids if uid not in existing_user_ids]
+
+        if existing_user_ids:
+            log.debug(
+                "Deduplication applied",
+                dedupe_key=dedupe_key,
+                original_count=len(user_ids),
+                duplicate_count=len(existing_user_ids),
+                remaining_count=len(filtered_ids)
+            )
+
+        return filtered_ids
 
     except Exception as e:
         log.warning(
-            f"Deduplication check failed, proceeding without: {str(e)}"
+            "Deduplication check failed, proceeding without deduplication",
+            dedupe_key=dedupe_key,
+            error=str(e),
+            user_count=len(user_ids)
         )
         # On failure, proceed without deduplication to avoid losing notifications
         return user_ids
@@ -332,13 +433,29 @@ async def _bulk_create_notifications(
             chunk_ids = [row[0] for row in result.fetchall()]
             notification_ids.extend(chunk_ids)
 
-            log.debug(f"Created {len(chunk_ids)} notifications in chunk {i // BULK_INSERT_CHUNK_SIZE + 1}")
+            log.debug(
+                "Bulk notification insert successful",
+                chunk_number=i // BULK_INSERT_CHUNK_SIZE + 1,
+                chunk_size=len(chunk_ids),
+                notification_type=notification_type
+            )
 
         except Exception as e:
             log.error(
-                f"Failed to bulk insert notifications (chunk {i // BULK_INSERT_CHUNK_SIZE + 1}): {str(e)}"
+                "Failed to bulk insert notifications chunk",
+                chunk_number=i // BULK_INSERT_CHUNK_SIZE + 1,
+                chunk_size=len(chunk),
+                error=str(e),
+                notification_type=notification_type
             )
             # Continue with other chunks
+
+    log.info(
+        "Bulk notification creation completed",
+        total_created=len(notification_ids),
+        total_recipients=len(user_ids),
+        notification_type=notification_type
+    )
 
     return notification_ids
 
@@ -376,11 +493,15 @@ async def _emit_notifications_immediate(
         notifications = result.scalars().all()
 
         if not notifications:
-            log.warning(f"No notifications found for immediate emit: {notification_ids}")
+            log.warning(
+                "No notifications found for immediate Socket.IO emit",
+                requested_ids=notification_ids
+            )
             return
 
         # Emit each notification to the user's Socket.IO room
         emitted_count = 0
+        failed_count = 0
         for notification in notifications:
             try:
                 room_name = f"user_room_{notification.user_id}"
@@ -401,16 +522,28 @@ async def _emit_notifications_immediate(
                 )
                 emitted_count += 1
             except Exception as e:
+                failed_count += 1
                 log.warning(
-                    f"Failed to emit notification {notification.id} to room {room_name}: {e}"
+                    "Failed to emit notification via Socket.IO",
+                    notification_id=notification.id,
+                    user_id=notification.user_id,
+                    room=room_name,
+                    error=str(e)
                 )
 
         log.info(
-            f"Emitted {emitted_count}/{len(notifications)} notifications immediately via Socket.IO"
+            "Socket.IO immediate emission completed",
+            emitted_count=emitted_count,
+            failed_count=failed_count,
+            total_notifications=len(notifications)
         )
 
     except Exception as e:
-        log.error(f"Failed to emit immediate Socket.IO notifications: {str(e)}")
+        log.error(
+            "Failed to emit immediate Socket.IO notifications",
+            error=str(e),
+            notification_count=len(notification_ids)
+        )
         raise
 
 
@@ -446,13 +579,82 @@ def _dispatch_broadcast_task(
         )
 
         log.info(
-            f"Queued broadcast task for {len(notification_ids)} notifications "
-            f"(event: {event}, channels: {channels})"
+            "Celery broadcast task queued successfully",
+            event=event,
+            notification_count=len(notification_ids),
+            channels=channels,
+            queue="notifications"
         )
 
     except Exception as e:
-        log.error(f"Failed to queue broadcast task: {str(e)}")
+        log.error(
+            "Failed to queue Celery broadcast task",
+            event=event,
+            error=str(e),
+            notification_count=len(notification_ids)
+        )
         raise
+
+
+async def _prepend_to_inbox_cache(user_ids: List[int], notification_ids: List[int]):
+    """
+    ✅ PHASE 1.2: Prepend new notification IDs to user inbox caches.
+
+    This keeps cache warm after creating new notifications, avoiding cache miss
+    on next read.
+
+    Strategy:
+    - For each user, prepend their notification ID(s) to their inbox cache
+    - Trim cache to max 100 items
+    - Set TTL to 7 days
+
+    Args:
+        user_ids: List of user IDs who received notifications
+        notification_ids: List of notification IDs that were created (in same order as user_ids)
+
+    Note:
+        Bulk notifications create one notification per user in same order as user_ids list.
+        We prepend notification_ids[i] to cache for user_ids[i].
+    """
+    if len(user_ids) != len(notification_ids):
+        log.warning(
+            "Mismatch between user_ids and notification_ids length, skipping cache prepend",
+            user_count=len(user_ids),
+            notification_count=len(notification_ids)
+        )
+        return
+
+    try:
+        # Prepend each notification to the corresponding user's inbox cache
+        for user_id, notification_id in zip(user_ids, notification_ids):
+            cache_key = f"{INBOX_CACHE_KEY_PREFIX}:{user_id}"
+
+            # LPUSH to prepend notification ID to front of list
+            await safe_redis_lpush(cache_key, str(notification_id))
+
+            # LTRIM to keep only first 100 items
+            await safe_redis_ltrim(cache_key, 0, INBOX_CACHE_MAX_SIZE - 1)
+
+            # Set/refresh TTL
+            await safe_redis_expire(cache_key, INBOX_CACHE_TTL)
+
+        log.info(
+            "Inbox cache prepend successful",
+            user_count=len(user_ids),
+            notification_count=len(notification_ids),
+            cache_max_size=INBOX_CACHE_MAX_SIZE,
+            cache_ttl_seconds=INBOX_CACHE_TTL
+        )
+
+    except Exception as e:
+        # Log but don't fail - cache prepend is non-critical
+        log.warning(
+            "Failed to prepend notifications to inbox cache",
+            error=str(e),
+            user_count=len(user_ids),
+            notification_count=len(notification_ids),
+            exc_info=True
+        )
 
 
 # =============================================================================
