@@ -74,8 +74,8 @@ const formSchema = z.object({
   notification_type: z.enum(["info", "success", "warning", "error"]),
   link_template: z.string().optional(),
   channels: z.array(z.string()).min(1, "At least one channel is required"),
-  recipient_config: z.record(z.unknown()),
-  condition: z.record(z.unknown()).nullable(),
+  recipient_config: z.record(z.string(), z.unknown()),
+  condition: z.record(z.string(), z.unknown()).nullable(),
   enabled: z.boolean(),
 });
 

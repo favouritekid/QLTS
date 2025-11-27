@@ -79,6 +79,7 @@ export default function NotificationsPage() {
       error: "destructive",
       admin_update: "secondary",
       system: "outline",
+      reminder: "default",
     };
 
     const labels: Record<Notification["type"], string> = {
@@ -88,6 +89,7 @@ export default function NotificationsPage() {
       error: "Error",
       admin_update: "Admin Update",
       system: "System",
+      reminder: "Reminder",
     };
 
     return (
