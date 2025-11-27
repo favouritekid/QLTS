@@ -197,12 +197,13 @@ export function useToggleNotificationRule() {
 
       return { previousRule };
     },
-    onError: (_err, ruleId, context?: { previousRule?: NotificationRule }) => {
+    onError: (_err, ruleId, context) => {
       // Rollback on error
-      if (context?.previousRule) {
+      const ctx = context as { previousRule?: NotificationRule } | undefined;
+      if (ctx?.previousRule) {
         queryClient.setQueryData(
           notificationRuleKeys.detail(ruleId),
-          context.previousRule
+          ctx.previousRule
         );
       }
     },

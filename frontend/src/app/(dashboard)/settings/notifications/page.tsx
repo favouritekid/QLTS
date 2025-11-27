@@ -39,12 +39,6 @@ export default function NotificationSettingsPage() {
   // Track if initial data has been loaded to prevent re-initialization
   const initializedRef = useRef(false);
 
-  // Calculate if we should initialize from server data
-  const shouldInitialize = preferences && !initializedRef.current;
-  if (shouldInitialize) {
-    initializedRef.current = true;
-  }
-
   // Local form state - initialize from server data when available
   const [emailEnabled, setEmailEnabled] = useState(true);
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -55,37 +49,18 @@ export default function NotificationSettingsPage() {
   const [quietHoursEnd, setQuietHoursEnd] = useState("08:00");
 
   // Sync local state with server data only once when data first loads
-  // Using useMemo to derive values avoids the cascading render issue
-  const syncedValues = useMemo(() => {
-    if (shouldInitialize && preferences) {
-      return {
-        emailEnabled: preferences.email_enabled ?? true,
-        soundEnabled: preferences.sound_enabled ?? true,
-        browserEnabled: preferences.browser_enabled ?? true,
-        emailDigest: preferences.email_digest ?? "instant",
-        quietHoursEnabled: preferences.quiet_hours_enabled ?? false,
-        quietHoursStart: preferences.quiet_hours_start ?? "22:00",
-        quietHoursEnd: preferences.quiet_hours_end ?? "08:00",
-      };
-    }
-    return null;
-  }, [shouldInitialize, preferences]);
-
-  // Apply synced values outside of render (via ref callback pattern)
   useEffect(() => {
-    if (syncedValues) {
-      // Use queueMicrotask to avoid synchronous setState in effect
-      queueMicrotask(() => {
-        setEmailEnabled(syncedValues.emailEnabled);
-        setSoundEnabled(syncedValues.soundEnabled);
-        setBrowserEnabled(syncedValues.browserEnabled);
-        setEmailDigest(syncedValues.emailDigest);
-        setQuietHoursEnabled(syncedValues.quietHoursEnabled);
-        setQuietHoursStart(syncedValues.quietHoursStart);
-        setQuietHoursEnd(syncedValues.quietHoursEnd);
-      });
+    if (preferences && !initializedRef.current) {
+      initializedRef.current = true;
+      setEmailEnabled(preferences.email_enabled ?? true);
+      setSoundEnabled(preferences.sound_enabled ?? true);
+      setBrowserEnabled(preferences.browser_enabled ?? true);
+      setEmailDigest(preferences.email_digest ?? "instant");
+      setQuietHoursEnabled(preferences.quiet_hours_enabled ?? false);
+      setQuietHoursStart(preferences.quiet_hours_start ?? "22:00");
+      setQuietHoursEnd(preferences.quiet_hours_end ?? "08:00");
     }
-  }, [syncedValues]);
+  }, [preferences]);
 
   const handleSaveGeneralSettings = async () => {
     const updateData: NotificationPreferenceUpdate = {
