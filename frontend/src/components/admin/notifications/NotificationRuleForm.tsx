@@ -235,15 +235,17 @@ export function NotificationRuleForm({
         enabled: existingRule.enabled,
       });
 
-      // Update all dependent states in one batch
-      setResolverType(newResolverType);
-      setConditionEnabled(hasCondition);
+      // Defer setState to avoid synchronous updates in effect
+      queueMicrotask(() => {
+        setResolverType(newResolverType);
+        setConditionEnabled(hasCondition);
 
-      if (hasCondition) {
-        setConditionField(existingRule.condition!.field as string || "");
-        setConditionOperator(existingRule.condition!.operator as string || "eq");
-        setConditionValue(String(existingRule.condition!.value || ""));
-      }
+        if (hasCondition) {
+          setConditionField(existingRule.condition!.field as string || "");
+          setConditionOperator(existingRule.condition!.operator as string || "eq");
+          setConditionValue(String(existingRule.condition!.value || ""));
+        }
+      });
     }
   }, [existingRule, isEditMode, form]);
 

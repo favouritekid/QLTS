@@ -1,7 +1,7 @@
 // src/app/(dashboard)/settings/notifications/page.tsx
 "use client";
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Bell, Save, Volume2, Mail, Monitor } from "lucide-react";
 import { toast } from "sonner";
 
@@ -52,13 +52,16 @@ export default function NotificationSettingsPage() {
   useEffect(() => {
     if (preferences && !initializedRef.current) {
       initializedRef.current = true;
-      setEmailEnabled(preferences.email_enabled ?? true);
-      setSoundEnabled(preferences.sound_enabled ?? true);
-      setBrowserEnabled(preferences.browser_enabled ?? true);
-      setEmailDigest(preferences.email_digest ?? "instant");
-      setQuietHoursEnabled(preferences.quiet_hours_enabled ?? false);
-      setQuietHoursStart(preferences.quiet_hours_start ?? "22:00");
-      setQuietHoursEnd(preferences.quiet_hours_end ?? "08:00");
+      // Defer setState to avoid synchronous updates in effect
+      queueMicrotask(() => {
+        setEmailEnabled(preferences.email_enabled ?? true);
+        setSoundEnabled(preferences.sound_enabled ?? true);
+        setBrowserEnabled(preferences.browser_enabled ?? true);
+        setEmailDigest(preferences.email_digest ?? "instant");
+        setQuietHoursEnabled(preferences.quiet_hours_enabled ?? false);
+        setQuietHoursStart(preferences.quiet_hours_start ?? "22:00");
+        setQuietHoursEnd(preferences.quiet_hours_end ?? "08:00");
+      });
     }
   }, [preferences]);
 
