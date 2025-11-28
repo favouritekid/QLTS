@@ -118,7 +118,7 @@ async def get_notification_rule(
     log.info(
         "Retrieved notification rule",
         rule_id=rule_id,
-        event=rule.event,
+        event_type=rule.event,
         admin_id=current_admin.id
     )
 
@@ -159,7 +159,7 @@ async def create_notification_rule(
     if existing_rule:
         log.warning(
             "Duplicate notification rule attempt",
-            event=rule_data.event,
+            event_type=rule_data.event,
             existing_rule_id=existing_rule.id,
             admin_id=current_admin.id
         )
@@ -188,7 +188,7 @@ async def create_notification_rule(
     log.info(
         "Created notification rule",
         rule_id=new_rule.id,
-        event=new_rule.event,
+        event_type=new_rule.event,
         admin_id=current_admin.id,
         channels=new_rule.channels
     )
@@ -249,7 +249,7 @@ async def update_notification_rule(
         log.info(
             "Updated notification rule",
             rule_id=rule_id,
-            event=rule.event,
+            event_type=rule.event,
             admin_id=current_admin.id,
             updated_fields=updated_fields
         )
@@ -306,7 +306,7 @@ async def toggle_notification_rule(
     log.info(
         "Toggled notification rule status",
         rule_id=rule_id,
-        event=rule.event,
+        event_type=rule.event,
         admin_id=current_admin.id,
         old_status=old_status,
         new_status=rule.enabled
@@ -349,7 +349,7 @@ async def delete_notification_rule(
         )
 
     # Store event for logging
-    event = rule.event
+    event_type = rule.event
 
     # Delete the rule
     await db.delete(rule)
@@ -358,7 +358,7 @@ async def delete_notification_rule(
     log.info(
         "Deleted notification rule",
         rule_id=rule_id,
-        event=event,
+        event_type=event_type,
         admin_id=current_admin.id
     )
 
