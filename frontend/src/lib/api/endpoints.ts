@@ -159,6 +159,14 @@ export const API_ENDPOINTS = {
     TOGGLE: (id: number) => `/api/notification-rules/${id}/toggle`,
     DELETE: (id: number) => `/api/notification-rules/${id}`,
   },
+  // ✅ PHASE 3.1: Notification Templates (Admin-only)
+  NOTIFICATION_TEMPLATES: {
+    LIST: "/api/notification-templates",
+    CREATE: "/api/notification-templates",
+    DETAIL: (id: number) => `/api/notification-templates/${id}`,
+    UPDATE: (id: number) => `/api/notification-templates/${id}`,
+    DELETE: (id: number) => `/api/notification-templates/${id}`,
+  },
   // Applications (Hồ sơ Tuyển sinh)
   APPLICATIONS: {
     CREATE: (leadId: number) => `/api/leads/${leadId}/applications`,

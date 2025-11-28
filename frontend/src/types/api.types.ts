@@ -303,3 +303,49 @@ export interface NotificationRulesPage {
   total_count: number;
   rules: NotificationRule[];
 }
+
+// ============================================
+// ✅ PHASE 3.1: NOTIFICATION TEMPLATES (Admin)
+// ============================================
+
+export interface NotificationTemplate {
+  id: number;
+  name: string; // Unique template name
+  description: string | null;
+  title_template: string;
+  message_template: string;
+  link_template: string | null;
+  variables: string[] | null; // Available variables like ["lead_name", "officer_id"]
+  category: string | null; // Template category (lead, consultation, etc.)
+  is_system: boolean; // System template (cannot be deleted)
+  usage_count: number; // Number of rules using this template
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NotificationTemplateCreate {
+  name: string;
+  description?: string | null;
+  title_template: string;
+  message_template: string;
+  link_template?: string | null;
+  variables?: string[] | null;
+  category?: string | null;
+  is_system?: boolean;
+}
+
+export interface NotificationTemplateUpdate {
+  name?: string;
+  description?: string | null;
+  title_template?: string;
+  message_template?: string;
+  link_template?: string | null;
+  variables?: string[] | null;
+  category?: string | null;
+}
+
+export interface NotificationTemplatesPage {
+  total_count: number;
+  templates: NotificationTemplate[];
+}
