@@ -43,9 +43,10 @@ def upgrade() -> None:
     )
 
     # Create indexes for efficient querying
+    # Note: Comments for indexes are not supported in Alembic, only for tables and columns
     op.create_index(op.f('ix_notification_rule_id'), 'notification_rule', ['id'], unique=False)
-    op.create_index(op.f('ix_notification_rule_event'), 'notification_rule', ['event'], unique=False, comment='Fast lookup by event type')
-    op.create_index(op.f('ix_notification_rule_enabled'), 'notification_rule', ['enabled'], unique=False, comment='Filter enabled rules')
+    op.create_index(op.f('ix_notification_rule_event'), 'notification_rule', ['event'], unique=False)  # Fast lookup by event type
+    op.create_index(op.f('ix_notification_rule_enabled'), 'notification_rule', ['enabled'], unique=False)  # Filter enabled rules
 
     # Composite index for the most common query pattern
     op.create_index(

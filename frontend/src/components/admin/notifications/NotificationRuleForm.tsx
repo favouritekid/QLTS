@@ -16,12 +16,8 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import * as z from "zod";
 import {
-  AlertCircle,
-  Check,
   Loader2,
-  Plus,
   Save,
-  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -61,7 +57,6 @@ import {
   useUpdateNotificationRule,
   useNotificationRule,
 } from "@/hooks/useNotificationRules";
-import type { NotificationRule } from "@/types/api.types";
 
 // ============================================
 // FORM SCHEMA & VALIDATION
@@ -224,6 +219,10 @@ export function NotificationRuleForm({
   // Load existing rule data into form
   useEffect(() => {
     if (existingRule && isEditMode) {
+      // Batch all state updates together to avoid cascading renders
+      const newResolverType = existingRule.recipient_config.resolver_type as string || "lead_owner";
+      const hasCondition = !!existingRule.condition;
+
       form.reset({
         event: existingRule.event,
         title_template: existingRule.title_template,
@@ -236,16 +235,17 @@ export function NotificationRuleForm({
         enabled: existingRule.enabled,
       });
 
-      // Set resolver type
-      setResolverType(existingRule.recipient_config.resolver_type as string || "lead_owner");
+      // Defer setState to avoid synchronous updates in effect
+      queueMicrotask(() => {
+        setResolverType(newResolverType);
+        setConditionEnabled(hasCondition);
 
-      // Set condition state
-      if (existingRule.condition) {
-        setConditionEnabled(true);
-        setConditionField(existingRule.condition.field as string || "");
-        setConditionOperator(existingRule.condition.operator as string || "eq");
-        setConditionValue(String(existingRule.condition.value || ""));
-      }
+        if (hasCondition) {
+          setConditionField(existingRule.condition!.field as string || "");
+          setConditionOperator(existingRule.condition!.operator as string || "eq");
+          setConditionValue(String(existingRule.condition!.value || ""));
+        }
+      });
     }
   }, [existingRule, isEditMode, form]);
 
@@ -285,7 +285,7 @@ export function NotificationRuleForm({
       onOpenChange(false);
       form.reset();
       onSuccess?.();
-    } catch (error: unknown) {
+    } catch {
       toast.error(
         isEditMode
           ? "Failed to update notification rule"

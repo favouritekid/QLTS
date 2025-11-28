@@ -16,13 +16,10 @@ import { useState } from "react";
 import {
   AlertCircle,
   Bell,
-  Check,
   Edit,
   Loader2,
   Plus,
-  Power,
   Trash2,
-  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -83,7 +80,7 @@ export function NotificationRuleList() {
           ? `Rule "${rule.event}" disabled`
           : `Rule "${rule.event}" enabled`
       );
-    } catch (error: unknown) {
+    } catch {
       toast.error("Failed to toggle rule");
     }
   };
@@ -95,7 +92,7 @@ export function NotificationRuleList() {
       await deleteMutation.mutateAsync(deleteRuleId);
       toast.success("Rule deleted successfully");
       setDeleteRuleId(null);
-    } catch (error: unknown) {
+    } catch {
       toast.error("Failed to delete rule");
     }
   };
