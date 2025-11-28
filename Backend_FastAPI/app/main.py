@@ -39,6 +39,7 @@ from .routers import (
     monitoring,
     notification_preferences,
     notification_rules,  # ✅ PHASE 2.2: Notification Rules CRUD
+    notification_templates,  # ✅ PHASE 3.1: Notification Templates CRUD
     notifications,
     officer,
     organization,
@@ -207,6 +208,13 @@ async def lifespan(app: FastAPI):
             await enforcer.add_policy("role:admin", "/api/notification-rules/{rule_id}", "PUT")
             await enforcer.add_policy("role:admin", "/api/notification-rules/{rule_id}", "DELETE")
             await enforcer.add_policy("role:admin", "/api/notification-rules/{rule_id}/toggle", "PATCH")
+
+            # ✅ PHASE 3.1: Notification Templates (Admin-only) - Reusable template management
+            await enforcer.add_policy("role:admin", "/api/notification-templates", "GET")
+            await enforcer.add_policy("role:admin", "/api/notification-templates", "POST")
+            await enforcer.add_policy("role:admin", "/api/notification-templates/{template_id}", "GET")
+            await enforcer.add_policy("role:admin", "/api/notification-templates/{template_id}", "PUT")
+            await enforcer.add_policy("role:admin", "/api/notification-templates/{template_id}", "DELETE")
 
             # ✅ SECURITY FIX: Organization policies - all authenticated users can read, admin can write
             # READ operations - accessible by all authenticated users
@@ -500,6 +508,7 @@ app.include_router(sessions.router, prefix="/api", tags=["Sessions"])
 app.include_router(notifications.router, prefix="/api/notifications", tags=["Notifications"])
 app.include_router(notification_preferences.router, prefix="/api/notifications", tags=["Notification Preferences"])
 app.include_router(notification_rules.router, prefix="/api", tags=["Notification Rules (Admin)"])  # ✅ PHASE 2.2: Admin-only notification rule management
+app.include_router(notification_templates.router, prefix="/api", tags=["Notification Templates (Admin)"])  # ✅ PHASE 3.1: Admin-only template management
 app.include_router(leads.router, prefix="/api/leads", tags=["Leads"])
 app.include_router(applications.router, prefix="/api", tags=["Applications"])
 app.include_router(pipeline.router, prefix="/api/pipeline", tags=["Pipeline"])
