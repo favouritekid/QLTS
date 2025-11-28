@@ -1,12 +1,12 @@
 // src/components/admin/notifications/NotificationRuleForm.tsx
 /**
- * ✅ PHASE 2.4: Notification Rule Form Component
+ * ✅ PHASE 2.4 + 3.2: Notification Rule Form Component
  *
  * Form for creating and editing notification rules.
  * Features:
  * - All rule fields with validation
  * - Visual resolver builder
- * - Visual condition builder
+ * - ✅ PHASE 3.2: Advanced visual condition builder with nested AND/OR groups
  * - Create and edit modes
  */
 "use client";
@@ -19,6 +19,8 @@ import {
   Loader2,
   Save,
 } from "lucide-react";
+
+import { ConditionBuilder, type Condition } from "./ConditionBuilder";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -149,18 +151,6 @@ const RESOLVER_TYPES = [
   { value: "composite", label: "Composite (Multiple)" },
 ];
 
-const CONDITION_OPERATORS = [
-  { value: "eq", label: "Equal (=)" },
-  { value: "ne", label: "Not Equal (≠)" },
-  { value: "gt", label: "Greater Than (>)" },
-  { value: "gte", label: "Greater or Equal (≥)" },
-  { value: "lt", label: "Less Than (<)" },
-  { value: "lte", label: "Less or Equal (≤)" },
-  { value: "in", label: "In List" },
-  { value: "not_in", label: "Not In List" },
-  { value: "contains", label: "Contains" },
-];
-
 // ============================================
 // COMPONENT PROPS
 // ============================================
@@ -194,12 +184,6 @@ export function NotificationRuleForm({
   // Resolver builder state
   const [resolverType, setResolverType] = useState<string>("lead_owner");
 
-  // Condition builder state
-  const [conditionEnabled, setConditionEnabled] = useState(false);
-  const [conditionField, setConditionField] = useState("");
-  const [conditionOperator, setConditionOperator] = useState("eq");
-  const [conditionValue, setConditionValue] = useState("");
-
   // Form
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -219,9 +203,7 @@ export function NotificationRuleForm({
   // Load existing rule data into form
   useEffect(() => {
     if (existingRule && isEditMode) {
-      // Batch all state updates together to avoid cascading renders
       const newResolverType = existingRule.recipient_config.resolver_type as string || "lead_owner";
-      const hasCondition = !!existingRule.condition;
 
       form.reset({
         event: existingRule.event,
@@ -238,13 +220,6 @@ export function NotificationRuleForm({
       // Defer setState to avoid synchronous updates in effect
       queueMicrotask(() => {
         setResolverType(newResolverType);
-        setConditionEnabled(hasCondition);
-
-        if (hasCondition) {
-          setConditionField(existingRule.condition!.field as string || "");
-          setConditionOperator(existingRule.condition!.operator as string || "eq");
-          setConditionValue(String(existingRule.condition!.value || ""));
-        }
       });
     }
   }, [existingRule, isEditMode, form]);
@@ -256,19 +231,6 @@ export function NotificationRuleForm({
       params: {},
     });
   }, [resolverType, form]);
-
-  // Update condition when builder state changes
-  useEffect(() => {
-    if (conditionEnabled && conditionField && conditionOperator && conditionValue) {
-      form.setValue("condition", {
-        field: conditionField,
-        operator: conditionOperator,
-        value: conditionValue,
-      });
-    } else {
-      form.setValue("condition", null);
-    }
-  }, [conditionEnabled, conditionField, conditionOperator, conditionValue, form]);
 
   const onSubmit = async (data: FormValues) => {
     try {
@@ -513,65 +475,21 @@ export function NotificationRuleForm({
                 </p>
               </div>
 
-              {/* Condition Builder */}
-              <div className="space-y-4 border-t pt-4">
-                <div className="flex items-center space-x-2">
-                  <Switch
-                    checked={conditionEnabled}
-                    onCheckedChange={setConditionEnabled}
-                  />
-                  <FormLabel>Enable Activation Condition</FormLabel>
-                </div>
-
-                {conditionEnabled && (
-                  <div className="space-y-3 pl-4 border-l-2 border-muted">
-                    <div className="grid grid-cols-3 gap-2">
-                      {/* Field */}
-                      <div className="space-y-1">
-                        <FormLabel className="text-xs">Field</FormLabel>
-                        <Input
-                          placeholder="e.g., status"
-                          value={conditionField}
-                          onChange={(e) => setConditionField(e.target.value)}
-                        />
-                      </div>
-
-                      {/* Operator */}
-                      <div className="space-y-1">
-                        <FormLabel className="text-xs">Operator</FormLabel>
-                        <Select
-                          value={conditionOperator}
-                          onValueChange={setConditionOperator}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {CONDITION_OPERATORS.map((op) => (
-                              <SelectItem key={op.value} value={op.value}>
-                                {op.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      {/* Value */}
-                      <div className="space-y-1">
-                        <FormLabel className="text-xs">Value</FormLabel>
-                        <Input
-                          placeholder="e.g., active"
-                          value={conditionValue}
-                          onChange={(e) => setConditionValue(e.target.value)}
-                        />
-                      </div>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Notification will only trigger if condition is met
-                    </p>
-                  </div>
+              {/* ✅ PHASE 3.2: Visual Condition Builder */}
+              <FormField
+                control={form.control}
+                name="condition"
+                render={({ field }) => (
+                  <FormItem className="border-t pt-4">
+                    <ConditionBuilder
+                      value={field.value as Condition}
+                      onChange={field.onChange}
+                      eventType={form.watch("event")}
+                    />
+                    <FormMessage />
+                  </FormItem>
                 )}
-              </div>
+              />
 
               {/* Enabled */}
               <FormField
