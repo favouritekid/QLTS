@@ -21,50 +21,17 @@ log = structlog.get_logger(__name__)
 is_prod = settings.APP_ENV == "production"
 
 
-# ✅ DEBUG: ASGI Middleware to log Origin header before Socket.IO CORS validation
-class OriginLoggingMiddleware:
-    """
-    ASGI middleware to log all incoming WebSocket requests with their Origin header.
-    This helps debug CORS 403 errors by showing exactly what Origin the browser sends.
-    """
-    def __init__(self, app):
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        # Handle both http and websocket scope types
-        if scope["type"] in ("http", "websocket"):
-            headers = dict(scope.get("headers", []))
-            origin = headers.get(b"origin", b"").decode("utf-8")
-            path = scope.get("path", "")
-            scope_type = scope["type"]
-
-            # Log all Socket.IO related requests
-            if "socket.io" in path:
-                log.warning(
-                    "🔍 ORIGIN DEBUG: Socket.IO request intercepted",
-                    scope_type=scope_type,
-                    path=path,
-                    origin=origin,
-                    configured_cors=cors_origins_list,
-                    origin_in_cors_list=origin in cors_origins_list if origin else False,
-                    all_headers={k.decode('utf-8'): v.decode('utf-8') for k, v in headers.items()},
-                )
-
-        await self.app(scope, receive, send)
-
 # ✅ CRITICAL FIX: AsyncRedisManager for Pub/Sub across processes
 # Without this, Celery tasks cannot broadcast Socket.IO events to clients
 # connected to the FastAPI server (they run in separate processes)
-# 🔍 TEST: Disable again with proper CORS to isolate issue
 client_manager = None
-# if settings.REDIS_URL:
-#     try:
-#         client_manager = socketio.AsyncRedisManager(settings.REDIS_URL)
-#         log.info("✅ Socket.IO Redis Manager initialized for cross-process Pub/Sub")
-#     except Exception as e:
-#         log.error("Failed to initialize Socket.IO Redis Manager", error=str(e))
-#         log.warning("⚠️ Celery tasks will NOT be able to broadcast Socket.IO events")
-log.warning("🔍 TEST: AsyncRedisManager disabled with proper CORS list")
+if settings.REDIS_URL:
+    try:
+        client_manager = socketio.AsyncRedisManager(settings.REDIS_URL)
+        log.info("✅ Socket.IO Redis Manager initialized for cross-process Pub/Sub")
+    except Exception as e:
+        log.error("Failed to initialize Socket.IO Redis Manager", error=str(e))
+        log.warning("⚠️ Celery tasks will NOT be able to broadcast Socket.IO events")
 
 # ✅ FIX: Parse CORS origins with whitespace stripping (same as main.py CORS middleware)
 # This prevents issues with spaces in .env like: "http://localhost:3000, http://127.0.0.1:3000"
@@ -77,16 +44,14 @@ sio = socketio.AsyncServer(
     async_mode="asgi",
     # ✅ FIX: Use properly parsed CORS origins (with whitespace stripped)
     cors_allowed_origins=cors_origins_list,
-    # 🔍 TEST: Disable credentials to isolate issue
     # ✅ FIX: Enable credentials to allow httpOnly cookies in WebSocket handshake
-    engineio_cors_credentials=False,  # Was: True - Testing without credentials
+    engineio_cors_credentials=True,
     # ✅ FIX: Enable logging in development for debugging
     logger=not is_prod,
     engineio_logger=not is_prod,
     # ✅ CRITICAL: Add Redis manager for cross-process communication (Celery → API server)
     client_manager=client_manager,
 )
-log.warning("🔍 TEST: CORS list configured, credentials DISABLED")
 
 # === ✅ CẢI TIẾN: Vấn đề #1 - Rate Limiting bằng Redis LUA Script ===
 # Increased from 20 to 60 to accommodate legitimate usage patterns
@@ -308,22 +273,8 @@ async def connect(sid, environ, auth):
     1. Read from httpOnly cookie (access_token) - RECOMMENDED
     2. Fallback to auth dict (backwards compatibility during migration)
     """
-    # 🔍 DEBUG: Log that connect handler was called
-    log.info("🔍 SOCKET CONNECT HANDLER CALLED", sid=sid, environ_keys=list(environ.keys()))
-
     async with track_event_latency("connect"):  # ✅ Theo dõi latency
         client_ip = environ.get("REMOTE_ADDR") or "unknown_ip"
-
-        # 🔍 DEBUG: Log environment details
-        log.info(
-            "🔍 Socket connection attempt details",
-            sid=sid,
-            client_ip=client_ip,
-            path=environ.get("PATH_INFO"),
-            query=environ.get("QUERY_STRING"),
-            origin=environ.get("HTTP_ORIGIN"),
-            has_cookie=bool(environ.get("HTTP_COOKIE")),
-        )
 
         # === ✅ SECURITY FIX: Read token from httpOnly cookie ===
         cookie_string = environ.get("HTTP_COOKIE", "")
@@ -337,9 +288,7 @@ async def connect(sid, environ, auth):
             token_source = "auth_dict"
 
         # === ✅ CẢI TIẾN: Rate Limiting bằng Redis LUA ===
-        log.info("🔍 Checking rate limit", client_ip=client_ip, app_env=settings.APP_ENV)
         rate_limit_ok = await check_rate_limit(client_ip)
-        log.info("🔍 Rate limit check result", client_ip=client_ip, allowed=rate_limit_ok)
 
         if not rate_limit_ok:
             log.warning("Socket rate limit exceeded", client_ip=client_ip)

@@ -59,7 +59,7 @@ from .routers import (
 from .routers.admin import router as admin_router
 
 # ✅ V5: Import SIO, LUA loader, và Prometheus
-from .socket_manager import load_rate_limit_script, sio, OriginLoggingMiddleware
+from .socket_manager import load_rate_limit_script, sio
 
 # ✅ PHASE 1: Import centralized exception handler registration
 from .middleware import register_exception_handlers
@@ -104,10 +104,9 @@ logging.getLogger("sqlalchemy.pool").setLevel(logging.WARNING)
 logging.getLogger("uvicorn.access").setLevel(logging.INFO)
 logging.getLogger("uvicorn.error").setLevel(logging.INFO)
 
-# ❗️ TEMPORARY DEBUG: Enable Socket.IO và Engine.IO logging để debug 403 errors
-# TODO: Revert to INFO after fixing 403 issue
-logging.getLogger("socketio").setLevel(logging.DEBUG)
-logging.getLogger("engineio").setLevel(logging.DEBUG)
+# Tắt log verbose của Socket.IO và Engine.IO (chỉ hiển thị WARNING trở lên)
+logging.getLogger("socketio").setLevel(logging.WARNING)
+logging.getLogger("engineio").setLevel(logging.WARNING)
 
 # Tắt log DEBUG của thư viện user-agents
 logging.getLogger("user_agents").setLevel(logging.INFO)
@@ -262,7 +261,7 @@ async def lifespan(app: FastAPI):
     # (Giữ nguyên logic Rate Limiter)
     if settings.APP_ENV != "test":
         fastapi_app.state.limiter = limiter
-        app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+        fastapi_app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
         log.info("SlowAPI rate limiter INITIALIZED for non-test environment.")
     else:
         log.info("APP_ENV is 'test', skipping SlowAPI rate limiter setup.")
@@ -650,15 +649,9 @@ async def detailed_health_check(db: AsyncSession = Depends(database.get_db)):
 # ===============================================================
 
 # IMPORTANT: This MUST be at the END of the file, after all routers and middlewares are registered
-# The FastAPI app is wrapped inside Socket.IO, which is then wrapped in debug middleware
-# Uvicorn will load 'app', which points to the fully wrapped application
+# The FastAPI app is wrapped inside Socket.IO ASGI application
+# Uvicorn will load 'app', which points to the Socket.IO wrapped application
 
-# Step 1: Wrap FastAPI inside Socket.IO
-_sio_app = socketio.ASGIApp(sio, fastapi_app)
-
-# Step 2: Wrap with Origin logging middleware for CORS debugging
-_wrapped_app = OriginLoggingMiddleware(_sio_app)
-
-# Step 3: Export as 'app' for uvicorn to load
-# This ensures 'uvicorn app.main:app' loads the Socket.IO + debug wrapped application
-app = _wrapped_app
+# Wrap FastAPI inside Socket.IO and export as 'app' for uvicorn
+# This ensures 'uvicorn app.main:app' loads the correct ASGI application
+app = socketio.ASGIApp(sio, fastapi_app)
