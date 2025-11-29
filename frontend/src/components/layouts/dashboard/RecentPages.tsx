@@ -88,43 +88,50 @@ export function RecentPages({ isCollapsed }: RecentPagesProps) {
 
   // Expanded state - show full list
   return (
-    <div className="border-t pt-3">
+    <div className="border-t pt-3 animate-in fade-in-0 slide-in-from-bottom-2 duration-500">
       {/* Header */}
       <div className="flex items-center justify-between px-4 mb-2">
         <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           Recent
         </h4>
-        <Clock className="h-3.5 w-3.5 text-muted-foreground/70" />
+        <Clock className="h-3.5 w-3.5 text-muted-foreground/70 animate-pulse" />
       </div>
 
       {/* Recent items list */}
       <div className="space-y-0.5">
-        {recentPages.map((page) => {
+        {recentPages.map((page, index) => {
           const isActive = pathname === page.path;
 
           return (
             <div
               key={page.path}
-              className="group relative flex items-center"
+              className="group relative flex items-center animate-in fade-in-0 slide-in-from-left-2 duration-300"
+              style={{ animationDelay: `${index * 75}ms` }}
             >
               {/* Link */}
               <Link
                 href={page.path}
                 className={cn(
-                  "flex-1 flex items-center gap-2 px-3 py-2 rounded-md transition-all",
+                  "flex-1 flex items-center gap-2 px-3 py-2 rounded-md",
+                  "transition-all duration-200 ease-in-out",
                   "text-sm text-muted-foreground hover:text-foreground hover:bg-muted",
+                  "hover:scale-[1.02] hover:shadow-sm active:scale-[0.98]",
                   isActive &&
-                    "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground font-medium"
+                    "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground font-medium shadow-sm"
                 )}
               >
-                <Clock className="h-3.5 w-3.5 flex-shrink-0" />
+                <Clock className={cn(
+                  "h-3.5 w-3.5 flex-shrink-0 transition-transform duration-200",
+                  isActive && "animate-pulse"
+                )} />
                 <span className="flex-1 truncate">{page.label}</span>
 
                 {/* Visit count badge */}
                 {page.visits > 1 && (
                   <span
                     className={cn(
-                      "text-xs px-1.5 py-0.5 rounded-full",
+                      "text-xs px-1.5 py-0.5 rounded-full transition-all duration-200",
+                      "group-hover:scale-110",
                       isActive
                         ? "bg-primary-foreground/20 text-primary-foreground"
                         : "bg-muted text-muted-foreground"
@@ -144,8 +151,9 @@ export function RecentPages({ isCollapsed }: RecentPagesProps) {
                   removePage(page.path);
                 }}
                 className={cn(
-                  "absolute right-1 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity",
-                  "hover:bg-destructive hover:text-destructive-foreground"
+                  "absolute right-1 h-6 w-6 opacity-0 group-hover:opacity-100",
+                  "transition-all duration-200 ease-in-out",
+                  "hover:bg-destructive hover:text-destructive-foreground hover:scale-110"
                 )}
                 aria-label={`Remove ${page.label} from recent`}
               >

@@ -104,27 +104,53 @@ export function CommandPalette() {
         onSelect={() => executeCommand(item)}
         className={cn(
           "flex items-center gap-3 px-4 py-3 cursor-pointer",
-          isSelected && "bg-accent"
+          "transition-all duration-200 ease-in-out",
+          "hover:scale-[1.02] active:scale-[0.98]",
+          isSelected && "bg-accent shadow-sm"
         )}
       >
         {/* Icon */}
-        <div className="flex items-center justify-center w-8 h-8 rounded-md bg-muted flex-shrink-0">
+        <div className={cn(
+          "flex items-center justify-center w-8 h-8 rounded-md bg-muted flex-shrink-0",
+          "transition-all duration-200",
+          isSelected && "bg-accent-foreground/10 scale-110"
+        )}>
           {Icon ? (
-            <Icon className="h-4 w-4 text-muted-foreground" />
+            <Icon className={cn(
+              "h-4 w-4 text-muted-foreground transition-all duration-200",
+              isSelected && "text-foreground"
+            )} />
           ) : item.category === "recent" ? (
-            <Clock className="h-4 w-4 text-muted-foreground" />
+            <Clock className={cn(
+              "h-4 w-4 text-muted-foreground transition-all duration-200",
+              isSelected && "text-foreground"
+            )} />
           ) : (
-            <Hash className="h-4 w-4 text-muted-foreground" />
+            <Hash className={cn(
+              "h-4 w-4 text-muted-foreground transition-all duration-200",
+              isSelected && "text-foreground"
+            )} />
           )}
         </div>
 
         {/* Label */}
         <div className="flex-1 flex items-center justify-between gap-2">
-          <span className="font-medium">{item.label}</span>
+          <span className={cn(
+            "font-medium transition-colors duration-200",
+            isSelected && "text-foreground"
+          )}>
+            {item.label}
+          </span>
 
           {/* Badge */}
           {item.badge && (
-            <Badge variant="secondary" className="flex-shrink-0">
+            <Badge
+              variant="secondary"
+              className={cn(
+                "flex-shrink-0 transition-all duration-200",
+                isSelected && "scale-105"
+              )}
+            >
               {item.badge}
             </Badge>
           )}
@@ -132,7 +158,11 @@ export function CommandPalette() {
 
         {/* Path hint */}
         {item.href && (
-          <span className="text-xs text-muted-foreground truncate max-w-[200px]">
+          <span className={cn(
+            "text-xs text-muted-foreground truncate max-w-[200px]",
+            "transition-opacity duration-200",
+            isSelected ? "opacity-100" : "opacity-60"
+          )}>
             {item.href}
           </span>
         )}
@@ -142,22 +172,26 @@ export function CommandPalette() {
 
   return (
     <CommandDialog open={isOpen} onOpenChange={close}>
-      <Command shouldFilter={false} className="rounded-lg border shadow-md">
+      <Command
+        shouldFilter={false}
+        className="rounded-lg border shadow-md animate-in fade-in-0 zoom-in-95 duration-200"
+      >
         {/* Search Input */}
         <CommandInput
           placeholder="Search pages, actions, or type a command..."
           value={query}
           onValueChange={setQuery}
-          className="h-14 border-none focus:ring-0"
+          className="h-14 border-none focus:ring-0 transition-all duration-200"
         />
 
         {/* Results List */}
-        <CommandList className="max-h-[400px]">
+        <CommandList className="max-h-[400px] animate-in fade-in-0 slide-in-from-bottom-2 duration-300">
           {/* Empty State */}
-          <CommandEmpty className="py-6 text-center">
-            <div className="text-muted-foreground">
-              <p className="text-sm">No results found for &quot;{query}&quot;</p>
-              <p className="text-xs mt-1">Try searching for pages or features</p>
+          <CommandEmpty className="py-8 text-center">
+            <div className="text-muted-foreground space-y-2 animate-in fade-in-0 zoom-in-95 duration-500">
+              <div className="text-4xl">🔍</div>
+              <p className="text-sm font-medium">No results found for &quot;{query}&quot;</p>
+              <p className="text-xs">Try searching for pages or features</p>
             </div>
           </CommandEmpty>
 
