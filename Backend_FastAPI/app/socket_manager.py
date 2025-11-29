@@ -23,14 +23,16 @@ is_prod = settings.APP_ENV == "production"
 # ✅ CRITICAL FIX: AsyncRedisManager for Pub/Sub across processes
 # Without this, Celery tasks cannot broadcast Socket.IO events to clients
 # connected to the FastAPI server (they run in separate processes)
+# 🔍 TEST: Disable again with proper CORS to isolate issue
 client_manager = None
-if settings.REDIS_URL:
-    try:
-        client_manager = socketio.AsyncRedisManager(settings.REDIS_URL)
-        log.info("✅ Socket.IO Redis Manager initialized for cross-process Pub/Sub")
-    except Exception as e:
-        log.error("Failed to initialize Socket.IO Redis Manager", error=str(e))
-        log.warning("⚠️ Celery tasks will NOT be able to broadcast Socket.IO events")
+# if settings.REDIS_URL:
+#     try:
+#         client_manager = socketio.AsyncRedisManager(settings.REDIS_URL)
+#         log.info("✅ Socket.IO Redis Manager initialized for cross-process Pub/Sub")
+#     except Exception as e:
+#         log.error("Failed to initialize Socket.IO Redis Manager", error=str(e))
+#         log.warning("⚠️ Celery tasks will NOT be able to broadcast Socket.IO events")
+log.warning("🔍 TEST: AsyncRedisManager disabled with proper CORS list")
 
 # ✅ FIX: Parse CORS origins with whitespace stripping (same as main.py CORS middleware)
 # This prevents issues with spaces in .env like: "http://localhost:3000, http://127.0.0.1:3000"
