@@ -12,7 +12,6 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { usePathname } from "next/navigation";
 
 interface RecentPagesProps {
   /**
@@ -37,7 +36,6 @@ interface RecentPagesProps {
  */
 export function RecentPages({ isCollapsed }: RecentPagesProps) {
   const { recentPages, removePage } = useRecentPages();
-  const pathname = usePathname();
 
   // Don't render if no recent pages
   if (recentPages.length === 0) {
@@ -50,18 +48,12 @@ export function RecentPages({ isCollapsed }: RecentPagesProps) {
       <TooltipProvider delayDuration={0}>
         <div className="flex flex-col gap-1 pt-2 border-t">
           {recentPages.map((page) => {
-            const isActive = pathname === page.path;
-
             return (
               <Tooltip key={page.path}>
                 <TooltipTrigger asChild>
                   <Link
                     href={page.path}
-                    className={cn(
-                      "text-muted-foreground hover:bg-muted hover:text-foreground flex h-9 w-9 items-center justify-center rounded-lg transition-colors",
-                      isActive &&
-                        "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground"
-                    )}
+                    className="text-muted-foreground hover:bg-muted hover:text-foreground flex h-9 w-9 items-center justify-center rounded-lg transition-colors"
                   >
                     <Clock className="h-4 w-4" />
                     <span className="sr-only">{page.label}</span>
@@ -71,12 +63,7 @@ export function RecentPages({ isCollapsed }: RecentPagesProps) {
                   side="right"
                   className="bg-popover text-popover-foreground border shadow-md"
                 >
-                  <div className="flex flex-col gap-1">
-                    <span className="font-medium">{page.label}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {page.visits} visit{page.visits > 1 ? "s" : ""}
-                    </span>
-                  </div>
+                  <span className="font-medium">{page.label}</span>
                 </TooltipContent>
               </Tooltip>
             );
@@ -94,14 +81,12 @@ export function RecentPages({ isCollapsed }: RecentPagesProps) {
         <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           Recent
         </h4>
-        <Clock className="h-3.5 w-3.5 text-muted-foreground/70 animate-pulse" />
+        <Clock className="h-3.5 w-3.5 text-muted-foreground/70" />
       </div>
 
       {/* Recent items list */}
       <div className="space-y-0.5">
         {recentPages.map((page, index) => {
-          const isActive = pathname === page.path;
-
           return (
             <div
               key={page.path}
@@ -115,31 +100,11 @@ export function RecentPages({ isCollapsed }: RecentPagesProps) {
                   "flex-1 flex items-center gap-2 px-3 py-2 rounded-md",
                   "transition-all duration-200 ease-in-out",
                   "text-sm text-muted-foreground hover:text-foreground hover:bg-muted",
-                  "hover:scale-[1.02] hover:shadow-sm active:scale-[0.98]",
-                  isActive &&
-                    "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground font-medium shadow-sm"
+                  "hover:scale-[1.02] hover:shadow-sm active:scale-[0.98]"
                 )}
               >
-                <Clock className={cn(
-                  "h-3.5 w-3.5 flex-shrink-0 transition-transform duration-200",
-                  isActive && "animate-pulse"
-                )} />
+                <Clock className="h-3.5 w-3.5 flex-shrink-0" />
                 <span className="flex-1 truncate">{page.label}</span>
-
-                {/* Visit count badge */}
-                {page.visits > 1 && (
-                  <span
-                    className={cn(
-                      "text-xs px-1.5 py-0.5 rounded-full transition-all duration-200",
-                      "group-hover:scale-110",
-                      isActive
-                        ? "bg-primary-foreground/20 text-primary-foreground"
-                        : "bg-muted text-muted-foreground"
-                    )}
-                  >
-                    {page.visits}
-                  </span>
-                )}
               </Link>
 
               {/* Remove button - shown on hover */}
