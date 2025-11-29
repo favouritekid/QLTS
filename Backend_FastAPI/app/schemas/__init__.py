@@ -196,6 +196,17 @@ from .notification import (
     NotificationRuleCreate,
     NotificationRuleUpdate,
     NotificationRulesPage,
+    RecipientConfig,
+    # ✅ PHASE 3.1: Notification Template schemas
+    NotificationTemplate,
+    NotificationTemplateBase,
+    NotificationTemplateCreate,
+    NotificationTemplateUpdate,
+    NotificationTemplatesPage,
+    # ✅ Edge Case #4: Condition validation schemas
+    SimpleCondition,
+    CompoundCondition,
+    Condition,
 )
 
 # --- Từ notification_preference.py ---
