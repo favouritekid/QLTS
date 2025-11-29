@@ -36,15 +36,18 @@ log.warning("🔍 DEBUG: AsyncRedisManager DISABLED for testing 403 errors")
 
 sio = socketio.AsyncServer(
     async_mode="asgi",
-    cors_allowed_origins=settings.CORS_ORIGINS.split(","),
+    # 🔍 TEMPORARY TEST: Allow ALL origins to test if CORS is the issue
+    cors_allowed_origins="*",  # Was: settings.CORS_ORIGINS.split(",")
     # ✅ FIX: Enable credentials to allow httpOnly cookies in WebSocket handshake
-    engineio_cors_credentials=True,
+    # NOTE: credentials don't work with wildcard origins in production
+    engineio_cors_credentials=False if not is_prod else True,  # Disable for wildcard test
     # ✅ FIX: Enable logging in development for debugging
     logger=not is_prod,
     engineio_logger=not is_prod,
     # ✅ CRITICAL: Add Redis manager for cross-process communication (Celery → API server)
     client_manager=client_manager,
 )
+log.warning("🔍 DEBUG: CORS set to '*' (all origins) for testing")
 
 # === ✅ CẢI TIẾN: Vấn đề #1 - Rate Limiting bằng Redis LUA Script ===
 # Increased from 20 to 60 to accommodate legitimate usage patterns
