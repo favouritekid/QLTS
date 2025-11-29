@@ -20,17 +20,34 @@ from .socket_metrics import (
 log = structlog.get_logger(__name__)
 is_prod = settings.APP_ENV == "production"
 
+# ✅ CRITICAL FIX: AsyncRedisManager for Pub/Sub across processes
+# Without this, Celery tasks cannot broadcast Socket.IO events to clients
+# connected to the FastAPI server (they run in separate processes)
+client_manager = None
+if settings.REDIS_URL:
+    try:
+        client_manager = socketio.AsyncRedisManager(settings.REDIS_URL)
+        log.info("✅ Socket.IO Redis Manager initialized for cross-process Pub/Sub")
+    except Exception as e:
+        log.error("Failed to initialize Socket.IO Redis Manager", error=str(e))
+        log.warning("⚠️ Celery tasks will NOT be able to broadcast Socket.IO events")
+
 sio = socketio.AsyncServer(
     async_mode="asgi",
     cors_allowed_origins=settings.CORS_ORIGINS.split(","),
     # ✅ FIX: Enable credentials to allow httpOnly cookies in WebSocket handshake
     engineio_cors_credentials=True,
-    logger=False,             # 👈 Đặt thành False
-    engineio_logger=False,    # 👈 Đặt thành False
+    # ✅ FIX: Enable logging in development for debugging
+    logger=not is_prod,
+    engineio_logger=not is_prod,
+    # ✅ CRITICAL: Add Redis manager for cross-process communication (Celery → API server)
+    client_manager=client_manager,
 )
 
 # === ✅ CẢI TIẾN: Vấn đề #1 - Rate Limiting bằng Redis LUA Script ===
-MAX_CONN_PER_MINUTE = 20
+# Increased from 20 to 60 to accommodate legitimate usage patterns
+# 20 req/min was too strict and caused false positives
+MAX_CONN_PER_MINUTE = 60
 RATE_LIMIT_SCRIPT_SHA = None  # Sẽ được load khi khởi động
 
 # LUA script (atomic)
@@ -69,23 +86,30 @@ async def check_rate_limit(client_ip: str) -> bool:
     """
     Kiểm tra rate limit bằng Redis LUA Script (atomic và hiệu quả).
 
-    ✅ SECURITY FIX (Phase 2): Fail-closed strategy
-    - If Redis is unavailable, DENY connection (return False)
-    - This prevents rate limit bypass during Redis outage (CVSS 5.3 MEDIUM)
-    - Trade-off: Temporary service disruption vs. security
+    ✅ FIX: Fail-open strategy + Development bypass
+    - Development: Always allow (React HMR + Strict Mode cause rapid reconnections)
+    - Production: If Redis is unavailable, ALLOW connection with warning (fail-open)
+    - Trade-off: Availability > Security for internal systems
 
-    VULNERABILITY: Socket Rate Limit Bypass
-    - Old behavior: return True when Redis fails (fail-open)
-    - Attack: Crash Redis → unlimited Socket.IO connections → DoS
-    - Fix: return False when Redis fails (fail-closed)
+    Rationale for fail-open:
+    - Authentication still enforced (Redis failure doesn't bypass auth)
+    - Rate limiting is defense-in-depth, not primary security
+    - Internal system (not public-facing), acceptable risk
+    - Monitoring should alert on Redis failures
+    - Avoids service disruption from Redis hiccups
     """
+    # ✅ FIX: Bypass rate limiting in development (React HMR + Strict Mode)
+    if settings.APP_ENV == "development":
+        log.debug("Rate limiting bypassed in development", client_ip=client_ip)
+        return True
+
+    # ✅ FIX: Fail-open strategy - allow connection if Redis unavailable
     if not redis_client or not RATE_LIMIT_SCRIPT_SHA:
-        log.error(
-            "🔒 SECURITY: Redis or LUA script not ready, DENYING connection (fail-closed)",
+        log.warning(
+            "⚠️ Rate limiter skipped (Redis/Script unavailable) - allowing connection (fail-open)",
             client_ip=client_ip
         )
-        # ✅ FIX: Return False to deny connection (fail-closed for security)
-        return False
+        return True
 
     key = f"socket_rate_limit:{client_ip}"
     try:
@@ -108,13 +132,13 @@ async def check_rate_limit(client_ip: str) -> bool:
             )
             return bool(result)
         except Exception as e2:
-            log.error(
-                "🔒 SECURITY: Redis rate limit check totally failed, DENYING connection (fail-closed)",
+            # ✅ FIX: Fail-open - allow connection if rate limit check fails
+            log.warning(
+                "⚠️ Rate limit check failed completely - allowing connection (fail-open)",
                 error=str(e2),
                 client_ip=client_ip
             )
-            # ✅ FIX: Return False to deny connection (fail-closed for security)
-            return False
+            return True
 
 
 # === ✅ CẢI TIẾN: Vấn đề #3 - Sanitize Token Log ===
