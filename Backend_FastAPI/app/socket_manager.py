@@ -31,22 +31,23 @@ class OriginLoggingMiddleware:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] == "http":
-            # Log HTTP requests (WebSocket handshake)
+        # Handle both http and websocket scope types
+        if scope["type"] in ("http", "websocket"):
             headers = dict(scope.get("headers", []))
             origin = headers.get(b"origin", b"").decode("utf-8")
-            upgrade = headers.get(b"upgrade", b"").decode("utf-8").lower()
             path = scope.get("path", "")
+            scope_type = scope["type"]
 
-            # Log WebSocket upgrade requests with Origin
-            if upgrade == "websocket" or "socket.io" in path:
+            # Log all Socket.IO related requests
+            if "socket.io" in path:
                 log.warning(
-                    "🔍 ORIGIN DEBUG: WebSocket handshake request",
+                    "🔍 ORIGIN DEBUG: Socket.IO request intercepted",
+                    scope_type=scope_type,
                     path=path,
                     origin=origin,
-                    upgrade=upgrade,
                     configured_cors=cors_origins_list,
                     origin_in_cors_list=origin in cors_origins_list if origin else False,
+                    all_headers={k.decode('utf-8'): v.decode('utf-8') for k, v in headers.items()},
                 )
 
         await self.app(scope, receive, send)
