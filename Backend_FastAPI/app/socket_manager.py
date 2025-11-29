@@ -45,14 +45,16 @@ sio = socketio.AsyncServer(
     async_mode="asgi",
     # ✅ FIX: Use properly parsed CORS origins (with whitespace stripped)
     cors_allowed_origins=cors_origins_list,
+    # 🔍 TEST: Disable credentials to isolate issue
     # ✅ FIX: Enable credentials to allow httpOnly cookies in WebSocket handshake
-    engineio_cors_credentials=True,
+    engineio_cors_credentials=False,  # Was: True - Testing without credentials
     # ✅ FIX: Enable logging in development for debugging
     logger=not is_prod,
     engineio_logger=not is_prod,
     # ✅ CRITICAL: Add Redis manager for cross-process communication (Celery → API server)
     client_manager=client_manager,
 )
+log.warning("🔍 TEST: CORS list configured, credentials DISABLED")
 
 # === ✅ CẢI TIẾN: Vấn đề #1 - Rate Limiting bằng Redis LUA Script ===
 # Increased from 20 to 60 to accommodate legitimate usage patterns
