@@ -1,7 +1,13 @@
 /**
  * Navigation Routes Configuration
  * Centralized route definitions with metadata for breadcrumbs and back navigation
+ *
+ * ENHANCED: Now auto-generates breadcrumbs from navigation.ts config
+ * Falls back to manual route definitions for backward compatibility
  */
+
+import { navigationConfig } from "@/lib/config/navigation";
+import type { NavItem } from "@/types/navigation";
 
 export interface RouteConfig {
   path: string;
@@ -83,6 +89,74 @@ export const routes: Record<string, RouteConfig> = {
 };
 
 /**
+ * NEW: Helper functions to search navigation config
+ */
+
+/**
+ * Recursively searches navigation config for a label matching the given path
+ * @param path - The path to find label for
+ * @param items - Navigation items to search through
+ * @returns The label if found, null otherwise
+ */
+function findLabelInNavigation(path: string, items?: NavItem[]): string | null {
+  if (!items) {
+    // Search all groups if no items provided
+    for (const group of navigationConfig.groups) {
+      const label = findLabelInNavigation(path, group.items);
+      if (label) return label;
+    }
+    return null;
+  }
+
+  for (const item of items) {
+    // Exact match
+    if (item.href === path) {
+      return item.label;
+    }
+
+    // Search in children
+    if (item.children && item.children.length > 0) {
+      const childLabel = findLabelInNavigation(path, item.children);
+      if (childLabel) return childLabel;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Converts URL segment to readable label
+ * @param segment - URL segment (e.g., "notification-rules")
+ * @returns Readable label (e.g., "Notification Rules")
+ */
+function segmentToLabel(segment: string): string {
+  // Handle special cases
+  const specialCases: Record<string, string> = {
+    admin: "Admin",
+    dashboard: "Dashboard",
+    leads: "Leads",
+    notifications: "Notifications",
+    settings: "Settings",
+    organization: "Organization",
+    users: "Users",
+    policies: "Policies",
+    config: "Config",
+    monitoring: "Monitoring",
+    pipeline: "Pipeline",
+  };
+
+  if (specialCases[segment]) {
+    return specialCases[segment];
+  }
+
+  // Convert kebab-case to Title Case
+  return segment
+    .split("-")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+/**
  * Get route config by pathname
  * Handles dynamic routes with parameters
  */
@@ -105,20 +179,61 @@ export function getRouteConfig(pathname: string): RouteConfig | null {
 
 /**
  * Get breadcrumb trail for a given pathname
+ * ENHANCED: Auto-generates breadcrumbs from pathname if not in routes config
  */
 export function getBreadcrumbs(pathname: string): RouteConfig[] {
+  // Skip breadcrumbs for root paths
+  if (!pathname || pathname === "/" || pathname === "/dashboard") {
+    return [];
+  }
+
+  // Try to get from manual route config first (backward compatibility)
   const current = getRouteConfig(pathname);
-  if (!current) return [];
+  if (current) {
+    const breadcrumbs: RouteConfig[] = [current];
 
-  const breadcrumbs: RouteConfig[] = [current];
+    let parentKey = current.parent;
+    while (parentKey) {
+      const parent = routes[parentKey];
+      if (!parent) break;
 
-  let parentKey = current.parent;
-  while (parentKey) {
-    const parent = routes[parentKey];
-    if (!parent) break;
+      breadcrumbs.unshift(parent);
+      parentKey = parent.parent;
+    }
 
-    breadcrumbs.unshift(parent);
-    parentKey = parent.parent;
+    return breadcrumbs;
+  }
+
+  // AUTO-GENERATION: Build breadcrumbs from pathname segments
+  const segments = pathname.split("/").filter(Boolean);
+  const breadcrumbs: RouteConfig[] = [];
+
+  // Always start with Dashboard (unless we're already on dashboard)
+  if (pathname !== "/dashboard") {
+    breadcrumbs.push({
+      path: "/dashboard",
+      label: "Dashboard",
+    });
+  }
+
+  // Build breadcrumbs from path segments
+  let currentPath = "";
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i];
+    currentPath += `/${segment}`;
+
+    // Try to find label from navigation config first
+    let label = findLabelInNavigation(currentPath);
+
+    // If not found in config, convert segment to readable label
+    if (!label) {
+      label = segmentToLabel(segment);
+    }
+
+    breadcrumbs.push({
+      path: currentPath,
+      label,
+    });
   }
 
   return breadcrumbs;

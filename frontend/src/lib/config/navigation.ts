@@ -39,6 +39,34 @@ import type { NavigationConfig } from "@/types/navigation";
  * 5. User Management - People and access control
  * 6. Automation & Rules - Workflows and configurations (NEW)
  * 7. System - System-level settings and monitoring
+ *
+ * ENHANCED BADGE SUPPORT (Phase 3):
+ * Badges can be simple values or enhanced configurations:
+ *
+ * Simple badge (backward compatible):
+ *   badge: 5
+ *   badge: "New"
+ *
+ * Enhanced badge (NEW):
+ *   badge: {
+ *     type: "count",         // count | dot | pulse | text
+ *     value: 5,              // number or string
+ *     variant: "danger",     // default | primary | success | warning | danger | info
+ *     tooltip: "5 pending"   // optional tooltip
+ *   }
+ *
+ * Examples:
+ *   // Simple count
+ *   badge: 10
+ *
+ *   // Status dot
+ *   badge: { type: "dot", variant: "success" }
+ *
+ *   // Pulsing alert
+ *   badge: { type: "pulse", variant: "danger", tooltip: "Requires attention" }
+ *
+ *   // Custom text
+ *   badge: { type: "text", value: "Beta", variant: "info" }
  */
 export const navigationConfig: NavigationConfig = {
   groups: [

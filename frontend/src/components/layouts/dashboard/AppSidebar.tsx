@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { BookMarked } from "lucide-react";
 import { NavUser } from "./NavUser";
 import { NavGroup } from "./NavGroup";
+import { RecentPages } from "./RecentPages";
 import type { NavigationLink } from "@/types/layout.types";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -114,6 +115,11 @@ export function AppSidebar() {
             />
           </div>
         ))}
+
+        {/* Recent Pages - below main navigation */}
+        <div className="mt-4">
+          <RecentPages isCollapsed={isSidebarCollapsed} />
+        </div>
       </nav>
 
       {/* User Section */}

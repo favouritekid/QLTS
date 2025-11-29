@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { AppSidebar } from "./dashboard/AppSidebar";
 import { Header } from "./dashboard/Header";
 import { Main } from "./dashboard/Main";
+import { CommandPalette } from "@/components/common/CommandPalette";
 import { useEffect } from "react";
 
 export function DashboardLayout({
@@ -33,35 +34,40 @@ export function DashboardLayout({
   }, [setSidebarCollapsed]);
 
   return (
-    <div className="bg-muted/40 relative flex min-h-screen w-full overflow-hidden">
-      {/* Sidebar */}
-      <AppSidebar />
+    <>
+      {/* Command Palette - Global keyboard shortcut (Cmd/Ctrl+K) */}
+      <CommandPalette />
 
-      {/* Mobile Overlay */}
-      {!isSidebarCollapsed && (
-        <div
-          className="fixed inset-0 z-40 bg-black/50 lg:hidden"
-          onClick={() => setSidebarCollapsed(true)}
-          aria-hidden="true"
-        />
-      )}
+      <div className="bg-muted/40 relative flex min-h-screen w-full overflow-hidden">
+        {/* Sidebar */}
+        <AppSidebar />
 
-      {/* Main wrapper - chứa cả Header và Content */}
-      <div
-        className={cn(
-          "flex flex-1 flex-col transition-all duration-300 ease-in-out",
-          "lg:ml-[72px]",
-          !isSidebarCollapsed && "lg:ml-64"
+        {/* Mobile Overlay */}
+        {!isSidebarCollapsed && (
+          <div
+            className="fixed inset-0 z-40 bg-black/50 lg:hidden"
+            onClick={() => setSidebarCollapsed(true)}
+            aria-hidden="true"
+          />
         )}
-      >
-        {/* Header */}
-        <Header />
 
-        {/* Main Content - Padding top = chiều cao header (h-14 = 56px) */}
-        <div className="mt-14 flex-1">
-          <Main>{children}</Main>
+        {/* Main wrapper - chứa cả Header và Content */}
+        <div
+          className={cn(
+            "flex flex-1 flex-col transition-all duration-300 ease-in-out",
+            "lg:ml-[72px]",
+            !isSidebarCollapsed && "lg:ml-64"
+          )}
+        >
+          {/* Header */}
+          <Header />
+
+          {/* Main Content - Padding top = chiều cao header (h-14 = 56px) */}
+          <div className="mt-14 flex-1">
+            <Main>{children}</Main>
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }

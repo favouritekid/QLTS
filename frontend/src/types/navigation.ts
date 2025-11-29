@@ -2,8 +2,36 @@
 /**
  * Configuration-driven navigation types for AppSidebar
  * Supports RBAC filtering, nested children, and advanced active state logic
+ *
+ * ENHANCED: Support for multiple badge types (count, dot, pulse, text)
  */
 import { type LucideIcon } from "lucide-react";
+
+/**
+ * Badge configuration for navigation items
+ */
+export interface NavBadge {
+  /**
+   * Badge type determines the visual style
+   * - count: Shows numeric count (e.g., "5")
+   * - dot: Shows small dot indicator
+   * - pulse: Shows animated pulsing dot
+   * - text: Shows custom text label
+   */
+  type?: "count" | "dot" | "pulse" | "text";
+  /**
+   * Badge value (number for count, string for text)
+   */
+  value?: number | string;
+  /**
+   * Badge variant/color
+   */
+  variant?: "default" | "primary" | "success" | "warning" | "danger" | "info";
+  /**
+   * Optional tooltip to show on hover
+   */
+  tooltip?: string;
+}
 
 /**
  * Navigation item configuration
@@ -14,7 +42,7 @@ import { type LucideIcon } from "lucide-react";
  * @property matchPath - Optional custom paths that should activate this item
  * @property excludePaths - Optional paths to exclude from parent active state
  * @property children - Nested navigation items
- * @property badge - Optional badge value (string or number)
+ * @property badge - Optional badge (simple value or enhanced config)
  */
 export interface NavItem {
   label: string;
@@ -24,7 +52,7 @@ export interface NavItem {
   matchPath?: string[]; // Additional paths that should activate this item
   excludePaths?: string[]; // Paths to exclude from parent active state checking
   children?: NavItem[];
-  badge?: string | number;
+  badge?: string | number | NavBadge; // Enhanced: Support both simple and complex badges
 }
 
 /**
