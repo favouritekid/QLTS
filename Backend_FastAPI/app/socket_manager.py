@@ -264,8 +264,22 @@ async def connect(sid, environ, auth):
     1. Read from httpOnly cookie (access_token) - RECOMMENDED
     2. Fallback to auth dict (backwards compatibility during migration)
     """
+    # 🔍 DEBUG: Log that connect handler was called
+    log.info("🔍 SOCKET CONNECT HANDLER CALLED", sid=sid, environ_keys=list(environ.keys()))
+
     async with track_event_latency("connect"):  # ✅ Theo dõi latency
         client_ip = environ.get("REMOTE_ADDR") or "unknown_ip"
+
+        # 🔍 DEBUG: Log environment details
+        log.info(
+            "🔍 Socket connection attempt details",
+            sid=sid,
+            client_ip=client_ip,
+            path=environ.get("PATH_INFO"),
+            query=environ.get("QUERY_STRING"),
+            origin=environ.get("HTTP_ORIGIN"),
+            has_cookie=bool(environ.get("HTTP_COOKIE")),
+        )
 
         # === ✅ SECURITY FIX: Read token from httpOnly cookie ===
         cookie_string = environ.get("HTTP_COOKIE", "")
@@ -279,7 +293,11 @@ async def connect(sid, environ, auth):
             token_source = "auth_dict"
 
         # === ✅ CẢI TIẾN: Rate Limiting bằng Redis LUA ===
-        if not await check_rate_limit(client_ip):
+        log.info("🔍 Checking rate limit", client_ip=client_ip, app_env=settings.APP_ENV)
+        rate_limit_ok = await check_rate_limit(client_ip)
+        log.info("🔍 Rate limit check result", client_ip=client_ip, allowed=rate_limit_ok)
+
+        if not rate_limit_ok:
             log.warning("Socket rate limit exceeded", client_ip=client_ip)
             socket_auth_failures_total.inc()
             raise ConnectionRefusedError("Rate limit exceeded")
