@@ -237,6 +237,25 @@ export function NotificationRuleList() {
     });
   };
 
+  const getResolverTypeName = (config: Record<string, unknown>) => {
+    const type = config.resolver_type as string;
+    if (!type) return "Chưa xác định";
+
+    // Map resolver types to Vietnamese
+    const resolverMap: Record<string, string> = {
+      "assigned_officer": "Cán bộ phụ trách",
+      "lead_owner": "Người sở hữu lead",
+      "specific_user": "Người dùng cụ thể",
+      "specific_role": "Vai trò cụ thể",
+      "unit_members": "Thành viên đơn vị",
+      "all_users": "Tất cả người dùng",
+      "applicant": "Người nộp hồ sơ",
+      "consultation_officer": "Cán bộ tư vấn",
+    };
+
+    return resolverMap[type] || type.split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+  };
+
   const getTypeColor = (type: string) => {
     switch (type) {
       case "success":
@@ -427,6 +446,7 @@ export function NotificationRuleList() {
                               <TableHead>Sự kiện</TableHead>
                               <TableHead>Tiêu đề</TableHead>
                               <TableHead className="w-[100px]">Loại</TableHead>
+                              <TableHead className="w-[150px]">Người nhận</TableHead>
                               <TableHead className="w-[120px] text-right">
                                 Thao tác
                               </TableHead>
@@ -478,6 +498,11 @@ export function NotificationRuleList() {
                                     {rule.notification_type === "warning" && "Cảnh báo"}
                                     {rule.notification_type === "error" && "Lỗi"}
                                   </Badge>
+                                </TableCell>
+
+                                {/* Resolver/Recipient */}
+                                <TableCell className="text-sm text-muted-foreground">
+                                  {getResolverTypeName(rule.recipient_config)}
                                 </TableCell>
 
                                 {/* Actions */}
