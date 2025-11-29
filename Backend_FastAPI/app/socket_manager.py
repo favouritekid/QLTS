@@ -23,14 +23,16 @@ is_prod = settings.APP_ENV == "production"
 # ✅ CRITICAL FIX: AsyncRedisManager for Pub/Sub across processes
 # Without this, Celery tasks cannot broadcast Socket.IO events to clients
 # connected to the FastAPI server (they run in separate processes)
+# 🔍 TEMPORARY DEBUG: Disable to test if this causes 403 errors
 client_manager = None
-if settings.REDIS_URL:
-    try:
-        client_manager = socketio.AsyncRedisManager(settings.REDIS_URL)
-        log.info("✅ Socket.IO Redis Manager initialized for cross-process Pub/Sub")
-    except Exception as e:
-        log.error("Failed to initialize Socket.IO Redis Manager", error=str(e))
-        log.warning("⚠️ Celery tasks will NOT be able to broadcast Socket.IO events")
+# if settings.REDIS_URL:
+#     try:
+#         client_manager = socketio.AsyncRedisManager(settings.REDIS_URL)
+#         log.info("✅ Socket.IO Redis Manager initialized for cross-process Pub/Sub")
+#     except Exception as e:
+#         log.error("Failed to initialize Socket.IO Redis Manager", error=str(e))
+#         log.warning("⚠️ Celery tasks will NOT be able to broadcast Socket.IO events")
+log.warning("🔍 DEBUG: AsyncRedisManager DISABLED for testing 403 errors")
 
 sio = socketio.AsyncServer(
     async_mode="asgi",
