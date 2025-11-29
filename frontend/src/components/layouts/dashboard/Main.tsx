@@ -1,6 +1,9 @@
 // src/components/layouts/dashboard/Main.tsx
+"use client";
+
 import { cn } from "@/lib/utils";
 import React from "react";
+import { Breadcrumbs } from "@/components/common/Breadcrumbs";
 
 export function Main({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
@@ -16,7 +19,13 @@ export function Main({ children, className }: { children: React.ReactNode; class
       )}
     >
       {/* Container với max-width và spacing */}
-      <div className="mx-auto w-full max-w-[1600px] space-y-4">{children}</div>
+      <div className="mx-auto w-full max-w-[1600px] space-y-4">
+        {/* Breadcrumbs Navigation */}
+        <Breadcrumbs className="mb-2" />
+
+        {/* Page Content */}
+        {children}
+      </div>
     </main>
   );
 }
