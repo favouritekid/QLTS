@@ -23,31 +23,34 @@ is_prod = settings.APP_ENV == "production"
 # ✅ CRITICAL FIX: AsyncRedisManager for Pub/Sub across processes
 # Without this, Celery tasks cannot broadcast Socket.IO events to clients
 # connected to the FastAPI server (they run in separate processes)
-# 🔍 TEMPORARY DEBUG: Disable to test if this causes 403 errors
 client_manager = None
-# if settings.REDIS_URL:
-#     try:
-#         client_manager = socketio.AsyncRedisManager(settings.REDIS_URL)
-#         log.info("✅ Socket.IO Redis Manager initialized for cross-process Pub/Sub")
-#     except Exception as e:
-#         log.error("Failed to initialize Socket.IO Redis Manager", error=str(e))
-#         log.warning("⚠️ Celery tasks will NOT be able to broadcast Socket.IO events")
-log.warning("🔍 DEBUG: AsyncRedisManager DISABLED for testing 403 errors")
+if settings.REDIS_URL:
+    try:
+        client_manager = socketio.AsyncRedisManager(settings.REDIS_URL)
+        log.info("✅ Socket.IO Redis Manager initialized for cross-process Pub/Sub")
+    except Exception as e:
+        log.error("Failed to initialize Socket.IO Redis Manager", error=str(e))
+        log.warning("⚠️ Celery tasks will NOT be able to broadcast Socket.IO events")
+
+# ✅ FIX: Parse CORS origins with whitespace stripping (same as main.py CORS middleware)
+# This prevents issues with spaces in .env like: "http://localhost:3000, http://127.0.0.1:3000"
+cors_origins_list = [
+    origin.strip() for origin in settings.CORS_ORIGINS.split(",")
+] if settings.CORS_ORIGINS else []
+log.info("Socket.IO CORS origins configured", origins=cors_origins_list)
 
 sio = socketio.AsyncServer(
     async_mode="asgi",
-    # 🔍 TEMPORARY TEST: Allow ALL origins to test if CORS is the issue
-    cors_allowed_origins="*",  # Was: settings.CORS_ORIGINS.split(",")
+    # ✅ FIX: Use properly parsed CORS origins (with whitespace stripped)
+    cors_allowed_origins=cors_origins_list,
     # ✅ FIX: Enable credentials to allow httpOnly cookies in WebSocket handshake
-    # NOTE: credentials don't work with wildcard origins in production
-    engineio_cors_credentials=False if not is_prod else True,  # Disable for wildcard test
+    engineio_cors_credentials=True,
     # ✅ FIX: Enable logging in development for debugging
     logger=not is_prod,
     engineio_logger=not is_prod,
     # ✅ CRITICAL: Add Redis manager for cross-process communication (Celery → API server)
     client_manager=client_manager,
 )
-log.warning("🔍 DEBUG: CORS set to '*' (all origins) for testing")
 
 # === ✅ CẢI TIẾN: Vấn đề #1 - Rate Limiting bằng Redis LUA Script ===
 # Increased from 20 to 60 to accommodate legitimate usage patterns
