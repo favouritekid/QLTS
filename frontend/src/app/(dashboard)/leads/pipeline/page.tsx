@@ -15,6 +15,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PageContainer } from "@/components/layouts/PageContainer";
+import { PageHeader } from "@/components/layouts/PageHeader";
 
 import { PipelineBoard } from "@/components/leads/PipelineBoard";
 import { useFullPipeline } from "@/hooks/usePipeline";
@@ -37,7 +39,7 @@ export default function PipelinePage() {
 
   if (isLoading) {
     return (
-      <div className="container mx-auto py-6 space-y-6">
+      <PageContainer>
         <Skeleton className="h-10 w-64" />
         <div className="grid gap-4 md:grid-cols-4">
           {[...Array(4)].map((_, i) => (
@@ -45,13 +47,13 @@ export default function PipelinePage() {
           ))}
         </div>
         <Skeleton className="h-[600px]" />
-      </div>
+      </PageContainer>
     );
   }
 
   if (isError || !pipeline) {
     return (
-      <div className="container mx-auto py-6">
+      <PageContainer>
         <Card className="border-red-200 bg-red-50">
           <CardHeader>
             <CardTitle className="text-red-900">Error Loading Pipeline</CardTitle>
@@ -66,52 +68,43 @@ export default function PipelinePage() {
             </Button>
           </CardContent>
         </Card>
-      </div>
+      </PageContainer>
     );
   }
 
   return (
-    <div className="container mx-auto py-6 space-y-6">
+    <PageContainer>
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" asChild>
-              <Link href="/leads">
-                <ArrowLeft className="mr-2 h-4 w-4" />
-                Back to Leads
-              </Link>
+      <PageHeader
+        title="Pipeline Board"
+        description="Drag and drop leads to move them through the pipeline"
+        backButton={{ href: "/leads", label: "Back to Leads" }}
+        actions={
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowFilters(!showFilters)}
+            >
+              <Filter className="mr-2 h-4 w-4" />
+              Filters
             </Button>
-          </div>
-          <h1 className="text-3xl font-bold tracking-tight">Pipeline Board</h1>
-          <p className="text-muted-foreground">
-            Drag and drop leads to move them through the pipeline
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowFilters(!showFilters)}
-          >
-            <Filter className="mr-2 h-4 w-4" />
-            Filters
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => refetch()}>
-            <RefreshCw className="mr-2 h-4 w-4" />
-            Refresh
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleExport}
-            disabled={exportLeads.isPending}
-          >
-            <Download className="mr-2 h-4 w-4" />
-            {exportLeads.isPending ? "Exporting..." : "Export"}
-          </Button>
-        </div>
-      </div>
+            <Button variant="outline" size="sm" onClick={() => refetch()}>
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Refresh
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleExport}
+              disabled={exportLeads.isPending}
+            >
+              <Download className="mr-2 h-4 w-4" />
+              {exportLeads.isPending ? "Exporting..." : "Export"}
+            </Button>
+          </>
+        }
+      />
 
       {/* Filters */}
       {showFilters && (
@@ -240,6 +233,6 @@ export default function PipelinePage() {
 
       {/* Kanban Board */}
       <PipelineBoard pipeline={pipeline} />
-    </div>
+    </PageContainer>
   );
 }

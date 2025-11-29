@@ -6,6 +6,8 @@ import { Activity, HardHat, ShieldCheck, Database } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PageContainer } from "@/components/layouts/PageContainer";
+import { PageHeader } from "@/components/layouts/PageHeader";
 
 import { usePolicyStatistics } from "@/hooks/usePolicies";
 import { RoleManagementWorkflowTab } from "@/components/admin/policies/RoleManagementWorkflowTab";
@@ -18,14 +20,12 @@ export default function PolicyManagementPage() {
   const { data: stats, isLoading: statsLoading } = usePolicyStatistics();
 
   return (
-    <div className="space-y-6">
+    <PageContainer>
       {/* Header */}
-      <header>
-        <h1 className="text-3xl font-bold tracking-tight">Policy Management</h1>
-        <p className="text-muted-foreground">
-          Quản lý tập trung quyền truy cập hệ thống theo vai trò và tính năng.
-        </p>
-      </header>
+      <PageHeader
+        title="Policy Management"
+        description="Quản lý tập trung quyền truy cập hệ thống theo vai trò và tính năng."
+      />
 
       {/* Statistics Cards */}
       <div className="grid gap-4 md:grid-cols-3">
@@ -109,6 +109,6 @@ export default function PolicyManagementPage() {
           <AuditLogTab />
         </TabsContent>
       </Tabs>
-    </div>
+    </PageContainer>
   );
 }

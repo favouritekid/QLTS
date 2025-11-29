@@ -15,6 +15,8 @@ import {
 } from "@/hooks/usePipeline";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { PageContainer } from "@/components/layouts/PageContainer";
+import { PageHeader } from "@/components/layouts/PageHeader";
 import { PipelineStageDialog } from "@/components/admin/PipelineStageDialog";
 import { ConsultationStatusDialog } from "@/components/admin/ConsultationStatusDialog";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -74,23 +76,13 @@ export default function AdminPipelinePage() {
   const maxOrder = stages?.reduce((max, stage) => Math.max(max, stage.order), 0) || 0;
 
   return (
-    <div className="container mx-auto space-y-6 py-6">
+    <PageContainer>
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" asChild>
-            <Link href="/admin">
-              <ArrowLeft className="h-5 w-5" />
-            </Link>
-          </Button>
-          <div>
-            <h1 className="text-3xl font-bold">Pipeline Settings</h1>
-            <p className="text-muted-foreground">
-              Manage pipeline stages, consultation statuses, and workflow rules.
-            </p>
-          </div>
-        </div>
-      </div>
+      <PageHeader
+        title="Pipeline Settings"
+        description="Manage pipeline stages, consultation statuses, and workflow rules."
+        backButton={{ href: "/admin", label: "Back to Admin" }}
+      />
 
       {/* Tabs */}
       <Tabs defaultValue="stages" className="space-y-6">
@@ -378,6 +370,6 @@ export default function AdminPipelinePage() {
         variant="destructive"
         isLoading={deleteStatus.isPending}
       />
-    </div>
+    </PageContainer>
   );
 }

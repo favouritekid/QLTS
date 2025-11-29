@@ -12,6 +12,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { PageContainer } from "@/components/layouts/PageContainer";
+import { PageHeader } from "@/components/layouts/PageHeader";
 import {
   useNotifications,
   useMarkAsRead,
@@ -100,22 +102,20 @@ export default function NotificationsPage() {
   };
 
   return (
-    <div className="container mx-auto max-w-4xl py-6 space-y-6">
+    <PageContainer maxWidth="md">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Notifications</h1>
-          <p className="text-muted-foreground mt-1">
-            Stay updated with your latest notifications
-          </p>
-        </div>
-        {unreadCount > 0 && (
-          <Button onClick={handleMarkAllAsRead} disabled={markAllAsRead.isPending}>
-            <CheckCheck className="mr-2 h-4 w-4" />
-            Mark all as read
-          </Button>
-        )}
-      </div>
+      <PageHeader
+        title="Notifications"
+        description="Stay updated with your latest notifications"
+        actions={
+          unreadCount > 0 ? (
+            <Button onClick={handleMarkAllAsRead} disabled={markAllAsRead.isPending}>
+              <CheckCheck className="mr-2 h-4 w-4" />
+              Mark all as read
+            </Button>
+          ) : undefined
+        }
+      />
 
       {/* Stats */}
       <div className="grid gap-4 md:grid-cols-2">
@@ -315,6 +315,6 @@ export default function NotificationsPage() {
           </div>
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }

@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PageContainer } from "@/components/layouts/PageContainer";
 import { Users, TrendingUp, DollarSign, Activity, UserCheck, UserX, UserPlus, Shield } from "lucide-react";
 
 export default function DashboardPage() {
@@ -98,7 +99,7 @@ export default function DashboardPage() {
   const displayStats = isAdmin && stats ? userStats : defaultStats;
 
   return (
-    <div className="animate-fade-in space-y-4">
+    <PageContainer className="animate-fade-in">
       {/* Page Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="space-y-1">
@@ -338,6 +339,6 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
-    </div>
+    </PageContainer>
   );
 }

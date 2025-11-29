@@ -24,6 +24,8 @@ import {
   ArrowUp,
   ArrowDown,
 } from "lucide-react";
+import { PageContainer } from "@/components/layouts/PageContainer";
+import { PageHeader } from "@/components/layouts/PageHeader";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -398,43 +400,35 @@ export default function DistributionRulesPage() {
 
   if (error) {
     return (
-      <div className="space-y-6">
-        <header>
-          <h1 className="flex items-center gap-2 text-3xl font-bold tracking-tight">
-            <Share2 className="h-8 w-8" />
-            Phân Phối Tuyển Sinh
-          </h1>
-          <p className="text-muted-foreground">
-            Cấu hình tỷ lệ chia Lead giữa các đơn vị.
-          </p>
-        </header>
+      <PageContainer>
+        <PageHeader
+          title="Phân Phối Tuyển Sinh"
+          description="Cấu hình tỷ lệ chia Lead giữa các đơn vị."
+          icon={<Share2 className="h-8 w-8" />}
+        />
         <Card>
           <CardContent className="pt-6">
             <p className="text-destructive">Lỗi tải dữ liệu: {error.message}</p>
           </CardContent>
         </Card>
-      </div>
+      </PageContainer>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <PageContainer>
       {/* Header */}
-      <header className="flex items-center justify-between">
-        <div>
-          <h1 className="flex items-center gap-2 text-3xl font-bold tracking-tight">
-            <Share2 className="h-8 w-8" />
-            Phân Phối Tuyển Sinh
-          </h1>
-          <p className="text-muted-foreground">
-            Cấu hình tỷ lệ chia Lead (Weighted Round Robin) giữa các đơn vị.
-          </p>
-        </div>
-        <Button onClick={handleCreateRule}>
-          <Plus className="mr-2 h-4 w-4" />
-          Thêm Luật Mới
-        </Button>
-      </header>
+      <PageHeader
+        title="Phân Phối Tuyển Sinh"
+        description="Cấu hình tỷ lệ chia Lead (Weighted Round Robin) giữa các đơn vị."
+        icon={<Share2 className="h-8 w-8" />}
+        actions={
+          <Button onClick={handleCreateRule}>
+            <Plus className="mr-2 h-4 w-4" />
+            Thêm Luật Mới
+          </Button>
+        }
+      />
 
       {/* Bulk Actions Bar */}
       {selectedCount > 0 && (
@@ -625,6 +619,6 @@ export default function DistributionRulesPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </PageContainer>
   );
 }
