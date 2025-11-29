@@ -321,8 +321,11 @@ function ConditionGroup({
 
       {/* Conditions */}
       <div className="space-y-2">
-        {conditions.map((cond, index) =>
-          isCompoundCondition(cond) ? (
+        {conditions.map((cond, index) => {
+          // Skip null conditions
+          if (!cond) return null;
+
+          return isCompoundCondition(cond) ? (
             <ConditionGroup
               key={index}
               condition={cond}
@@ -334,13 +337,13 @@ function ConditionGroup({
           ) : (
             <SimpleConditionRow
               key={index}
-              condition={cond}
+              condition={cond as SimpleCondition}
               onChange={(newCond) => handleConditionChange(index, newCond)}
               onRemove={() => handleConditionRemove(index)}
               eventType={eventType}
             />
-          )
-        )}
+          );
+        })}
       </div>
 
       {/* Add buttons */}

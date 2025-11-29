@@ -81,10 +81,17 @@ export function useNotificationTemplates(
 // 📄 NOTIFICATION TEMPLATE DETAIL QUERY
 // ============================================
 
+interface UseNotificationTemplateOptions {
+  enabled?: boolean;
+}
+
 /**
  * Hook to fetch single notification template by ID (admin only)
  */
-export function useNotificationTemplate(templateId: number | undefined) {
+export function useNotificationTemplate(
+  templateId: number | undefined,
+  options?: UseNotificationTemplateOptions
+) {
   return useQuery<NotificationTemplate, AxiosError<ApiErrorResponse>>({
     queryKey: notificationTemplateKeys.detail(templateId!),
     queryFn: async () => {
@@ -93,7 +100,7 @@ export function useNotificationTemplate(templateId: number | undefined) {
       );
       return response.data;
     },
-    enabled: !!templateId, // Only fetch if templateId is provided
+    enabled: options?.enabled !== undefined ? options.enabled : !!templateId,
     staleTime: 5 * 60 * 1000,
     gcTime: 10 * 60 * 1000,
   });
