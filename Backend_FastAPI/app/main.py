@@ -59,7 +59,7 @@ from .routers import (
 from .routers.admin import router as admin_router
 
 # ✅ V5: Import SIO, LUA loader, và Prometheus
-from .socket_manager import load_rate_limit_script, sio
+from .socket_manager import load_rate_limit_script, sio, OriginLoggingMiddleware
 
 # ✅ PHASE 1: Import centralized exception handler registration
 from .middleware import register_exception_handlers
@@ -344,7 +344,10 @@ app = FastAPI(
 
 # === ✅ V5: MOUNT SOCKET.IO APP ===
 # Bọc ứng dụng FastAPI BÊN TRONG ứng dụng Socket.IO
-app_with_sockets = socketio.ASGIApp(sio, app)
+_sio_app = socketio.ASGIApp(sio, app)
+
+# ✅ DEBUG: Wrap with Origin logging middleware to debug CORS 403 errors
+app_with_sockets = OriginLoggingMiddleware(_sio_app)
 
 
 # ===============================================================

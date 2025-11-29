@@ -20,6 +20,37 @@ from .socket_metrics import (
 log = structlog.get_logger(__name__)
 is_prod = settings.APP_ENV == "production"
 
+
+# ✅ DEBUG: ASGI Middleware to log Origin header before Socket.IO CORS validation
+class OriginLoggingMiddleware:
+    """
+    ASGI middleware to log all incoming WebSocket requests with their Origin header.
+    This helps debug CORS 403 errors by showing exactly what Origin the browser sends.
+    """
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            # Log HTTP requests (WebSocket handshake)
+            headers = dict(scope.get("headers", []))
+            origin = headers.get(b"origin", b"").decode("utf-8")
+            upgrade = headers.get(b"upgrade", b"").decode("utf-8").lower()
+            path = scope.get("path", "")
+
+            # Log WebSocket upgrade requests with Origin
+            if upgrade == "websocket" or "socket.io" in path:
+                log.warning(
+                    "🔍 ORIGIN DEBUG: WebSocket handshake request",
+                    path=path,
+                    origin=origin,
+                    upgrade=upgrade,
+                    configured_cors=cors_origins_list,
+                    origin_in_cors_list=origin in cors_origins_list if origin else False,
+                )
+
+        await self.app(scope, receive, send)
+
 # ✅ CRITICAL FIX: AsyncRedisManager for Pub/Sub across processes
 # Without this, Celery tasks cannot broadcast Socket.IO events to clients
 # connected to the FastAPI server (they run in separate processes)
