@@ -457,7 +457,9 @@ export function NotificationRuleForm({
 
               {/* Resolver Type */}
               <div className="space-y-2">
-                <FormLabel>Recipient Resolver</FormLabel>
+                <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                  Recipient Resolver
+                </label>
                 <Select value={resolverType} onValueChange={setResolverType}>
                   <SelectTrigger>
                     <SelectValue />
