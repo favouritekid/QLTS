@@ -104,10 +104,10 @@ logging.getLogger("sqlalchemy.pool").setLevel(logging.WARNING)
 logging.getLogger("uvicorn.access").setLevel(logging.INFO)
 logging.getLogger("uvicorn.error").setLevel(logging.INFO)
 
-# ❗️ Tắt log DEBUG của Socket.IO và Engine.IO (QUAN TRỌNG NHẤT)
-# Đây là những dòng log như "Sending packet...", "Received packet..."
-logging.getLogger("socketio").setLevel(logging.INFO)
-logging.getLogger("engineio").setLevel(logging.INFO)
+# ❗️ TEMPORARY DEBUG: Enable Socket.IO và Engine.IO logging để debug 403 errors
+# TODO: Revert to INFO after fixing 403 issue
+logging.getLogger("socketio").setLevel(logging.DEBUG)
+logging.getLogger("engineio").setLevel(logging.DEBUG)
 
 # Tắt log DEBUG của thư viện user-agents
 logging.getLogger("user_agents").setLevel(logging.INFO)
