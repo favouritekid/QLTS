@@ -74,7 +74,7 @@ const formSchema = z.object({
   link_template: z.string().optional(),
   variables: z.array(z.string()).optional(),
   category: z.string().optional(),
-  is_system: z.boolean().default(false),
+  is_system: z.boolean(),
 });
 
 type FormValues = z.infer<typeof formSchema>;
