@@ -23,6 +23,8 @@ is_prod = settings.APP_ENV == "production"
 sio = socketio.AsyncServer(
     async_mode="asgi",
     cors_allowed_origins=settings.CORS_ORIGINS.split(","),
+    # ✅ FIX: Enable credentials to allow httpOnly cookies in WebSocket handshake
+    engineio_cors_credentials=True,
     logger=False,             # 👈 Đặt thành False
     engineio_logger=False,    # 👈 Đặt thành False
 )
