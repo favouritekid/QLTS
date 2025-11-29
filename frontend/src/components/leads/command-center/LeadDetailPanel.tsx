@@ -22,11 +22,11 @@ import {
   Zap,
   History,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+// import { cn } from "@/lib/utils"; // TODO: Use when needed
 import { useLead } from "@/hooks/useLeads";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { QuickConsultationSection } from "@/components/leads/QuickConsultationSection";
-import type { Lead, LeadStatus } from "@/types/lead.types";
+import type { Lead } from "@/types/lead.types";
 
 interface LeadDetailPanelProps {
   leadId: number | null;
@@ -35,32 +35,34 @@ interface LeadDetailPanelProps {
   onAssign: (lead: Lead) => void;
 }
 
-const getStatusColor = (status: LeadStatus) => {
-  switch (status) {
-    case "new":
-      return "bg-blue-500";
-    case "assigned":
-      return "bg-purple-500";
-    case "contacted":
-      return "bg-cyan-500";
-    case "qualified":
-      return "bg-emerald-500";
-    case "unqualified":
-      return "bg-gray-500";
-    case "converted":
-      return "bg-green-500";
-    case "rejected":
-      return "bg-red-500";
-    default:
-      return "bg-gray-500";
-  }
-};
+// TODO: Use when implementing status badges
+// const getStatusColor = (status: LeadStatus) => {
+//   switch (status) {
+//     case "new":
+//       return "bg-blue-500";
+//     case "assigned":
+//       return "bg-purple-500";
+//     case "contacted":
+//       return "bg-cyan-500";
+//     case "qualified":
+//       return "bg-emerald-500";
+//     case "unqualified":
+//       return "bg-gray-500";
+//     case "converted":
+//       return "bg-green-500";
+//     case "rejected":
+//       return "bg-red-500";
+//     default:
+//       return "bg-gray-500";
+//   }
+// };
 
-const getScoreColor = (score: number) => {
-  if (score >= 80) return "text-red-600 bg-red-50 border-red-200";
-  if (score >= 50) return "text-yellow-600 bg-yellow-50 border-yellow-200";
-  return "text-gray-600 bg-gray-50 border-gray-200";
-};
+// TODO: Use when implementing score display
+// const getScoreColor = (score: number) => {
+//   if (score >= 80) return "text-red-600 bg-red-50 border-red-200";
+//   if (score >= 50) return "text-yellow-600 bg-yellow-50 border-yellow-200";
+//   return "text-gray-600 bg-gray-50 border-gray-200";
+// };
 
 const getInitials = (name: string) => {
   return name

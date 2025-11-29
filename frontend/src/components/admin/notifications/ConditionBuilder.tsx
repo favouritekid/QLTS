@@ -29,13 +29,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 
 // Condition types
 type SimpleCondition = {
   field: string;
   operator: string;
-  value: any;
+  value: unknown;
 };
 
 type CompoundCondition = {
@@ -287,8 +286,8 @@ function ConditionGroup({
     }
   };
 
-  const isCompoundCondition = (cond: any): cond is CompoundCondition => {
-    return cond && "operator" in cond && "conditions" in cond;
+  const isCompoundCondition = (cond: unknown): cond is CompoundCondition => {
+    return cond && typeof cond === "object" && "operator" in cond && "conditions" in cond;
   };
 
   return (
@@ -399,7 +398,7 @@ function SimpleConditionRow({
     onChange({ ...condition, operator });
   };
 
-  const handleValueChange = (value: any) => {
+  const handleValueChange = (value: unknown) => {
     onChange({ ...condition, value });
   };
 

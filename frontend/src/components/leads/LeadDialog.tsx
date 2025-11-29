@@ -1,7 +1,7 @@
 // src/components/leads/LeadDialog.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -257,7 +257,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
       });
     } else if (isEdit && lead) {
       // Don't send assigned_officer_id for updates (use separate assign endpoint)
-      const { assigned_officer_id, ...updateData } = apiData;
+      const { assigned_officer_id: _assigned_officer_id, ...updateData } = apiData;
       updateMutation.mutate(
         { id: lead.id, data: updateData },
         {
