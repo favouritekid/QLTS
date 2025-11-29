@@ -62,9 +62,9 @@ export function AppSidebar() {
   const unreadCount = notificationsData?.unread_count || 0;
 
   // Add notification badge dynamically to the navigation
-  // Find the "System" group and add badge to "Notifications" item
+  // Find the "Notifications" group and add badge to "Inbox" item
   const navigationWithBadges = navigation.map((group) => {
-    if (group.title === "System") {
+    if (group.title === "Notifications") {
       return {
         ...group,
         items: group.items.map((item) => {

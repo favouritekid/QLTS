@@ -74,7 +74,7 @@ const CATEGORIES = [
 ];
 
 export function TemplateList() {
-  const [page, setPage] = useState(1);
+  const [page] = useState(1); // TODO: Implement pagination
   const [category, setCategory] = useState<string>("all");
   const [isSystem, setIsSystem] = useState<string>("all");
   const [search, setSearch] = useState("");

@@ -124,7 +124,7 @@ export function DataTable<TData, TValue>({
   showToolbar = true,
   showSearch = true,
   searchPlaceholder = "Tim kiem...",
-  searchableColumns,
+  searchableColumns: _searchableColumns, // TODO: Implement column-specific search
   showColumnToggle = true,
   showPagination = true,
   serverSidePagination = false,

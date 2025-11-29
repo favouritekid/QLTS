@@ -74,7 +74,7 @@ const formSchema = z.object({
   link_template: z.string().optional(),
   variables: z.array(z.string()).optional(),
   category: z.string().optional(),
-  is_system: z.boolean().default(false),
+  is_system: z.boolean(),
 });
 
 type FormValues = z.infer<typeof formSchema>;
@@ -146,6 +146,7 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
     try {
       if (isEditMode && templateId) {
         // Update existing template
+        // Note: is_system flag cannot be changed after creation
         const updateData: NotificationTemplateUpdate = {
           name: data.name,
           description: data.description || null,
@@ -154,9 +155,8 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
           link_template: data.link_template || null,
           variables: data.variables,
           category: data.category || null,
-          is_system: data.is_system,
         };
-        await updateMutation.mutateAsync({ id: templateId, data: updateData });
+        await updateMutation.mutateAsync({ templateId, data: updateData });
         toast.success("Template updated successfully");
       } else {
         // Create new template
@@ -423,12 +423,15 @@ export function TemplateForm({ templateId, open, onOpenChange }: TemplateFormPro
                       <Checkbox
                         checked={field.value}
                         onCheckedChange={field.onChange}
+                        disabled={isEditMode}
                       />
                     </FormControl>
                     <div className="space-y-1 leading-none">
                       <FormLabel>System Template</FormLabel>
                       <FormDescription>
-                        System templates cannot be deleted and are protected from accidental removal
+                        {isEditMode
+                          ? "System flag cannot be changed after template creation"
+                          : "System templates cannot be deleted and are protected from accidental removal"}
                       </FormDescription>
                     </div>
                   </FormItem>

@@ -43,21 +43,39 @@ class MarkAsReadRequest(BaseModel):
 
 
 # =============================================================================
-# ✅ PHASE 2.2: Notification Rule Schemas
+# ✅ PHASE 2.2 + FIX: Notification Rule Schemas (with validation)
 # =============================================================================
 
 
+class RecipientConfig(BaseModel):
+    """
+    Schema for recipient resolver configuration.
+
+    Validates resolver_type and params structure.
+
+    Example:
+        {"resolver_type": "lead_owner", "params": {}}
+        {"resolver_type": "composite", "params": {"resolvers": [...]}}
+    """
+    resolver_type: str  # Resolver type (lead_owner, unit_staff, all_admins, etc.)
+    params: Dict[str, Any] = {}  # Resolver-specific parameters
+
+
 class NotificationRuleBase(BaseModel):
-    """Base schema for notification rule"""
+    """Base schema for notification rule (with validation)"""
     event: str  # SystemEvents enum value (e.g., "LEAD_ASSIGNED")
     title_template: str  # Template with {placeholders}
     message_template: str  # Message template
     notification_type: str = "info"  # info, success, warning, error
     link_template: Optional[str] = None  # Optional link template
     channels: List[str] = ["browser"]  # ["browser", "email", "sms"]
-    recipient_config: Dict[str, Any]  # {resolver_type, params}
-    condition: Optional[Dict[str, Any]] = None  # Optional conditions
+
+    # ✅ Now typed with validation
+    recipient_config: RecipientConfig  # Validated resolver config
+    condition: Optional[Dict[str, Any]] = None  # Optional conditions (validated at runtime)
+
     enabled: bool = True  # Enable/disable rule
+    template_id: Optional[int] = None  # ✅ Optional template reference
 
 
 class NotificationRuleCreate(NotificationRuleBase):
@@ -140,3 +158,48 @@ class NotificationTemplatesPage(BaseModel):
     """Paginated notification templates response"""
     total_count: int
     templates: List[NotificationTemplate]
+
+
+# =============================================================================
+# ✅ FIX: Edge Case #4 - JSON Schema Validation (Condition Models)
+# =============================================================================
+
+
+class SimpleCondition(BaseModel):
+    """
+    Schema for simple condition (field-operator-value).
+
+    Example:
+        {"field": "status", "operator": "eq", "value": "active"}
+    """
+    field: str  # Field name from payload (e.g., "lead.status")
+    operator: str  # Comparison operator (eq, ne, gt, gte, lt, lte, in, not_in, contains)
+    value: Any  # Expected value to compare against
+
+
+class CompoundCondition(BaseModel):
+    """
+    Schema for compound condition (nested AND/OR groups).
+
+    Example:
+        {
+            "operator": "and",
+            "conditions": [
+                {"field": "status", "operator": "eq", "value": "active"},
+                {
+                    "operator": "or",
+                    "conditions": [...]
+                }
+            ]
+        }
+    """
+    operator: str  # "and" or "or"
+    conditions: List[Any]  # List of SimpleCondition or CompoundCondition (recursive)
+
+    class Config:
+        # Allow recursive validation
+        arbitrary_types_allowed = True
+
+
+# Union type for condition validation
+Condition = SimpleCondition | CompoundCondition | None

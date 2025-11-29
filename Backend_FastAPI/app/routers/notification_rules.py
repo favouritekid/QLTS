@@ -10,11 +10,12 @@ from typing import Optional
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, models, schemas
 from ..core import deps
+from ..services.notification_rule_loader import invalidate_rule_cache
 
 log = structlog.get_logger(__name__)
 router = APIRouter(prefix="/notification-rules", tags=["Notification Rules (Admin)"])
@@ -178,19 +179,37 @@ async def create_notification_rule(
         channels=rule_data.channels,
         recipient_config=rule_data.recipient_config,
         condition=rule_data.condition,
-        enabled=rule_data.enabled
+        enabled=rule_data.enabled,
+        template_id=rule_data.template_id  # ✅ Include template_id
     )
 
     db.add(new_rule)
+
+    # ✅ FIX: Increment usage_count if template is referenced
+    if rule_data.template_id:
+        await db.execute(
+            update(models.NotificationTemplate)
+            .where(models.NotificationTemplate.id == rule_data.template_id)
+            .values(usage_count=models.NotificationTemplate.usage_count + 1)
+        )
+        log.debug(
+            "Incremented template usage_count",
+            template_id=rule_data.template_id
+        )
+
     await db.commit()
     await db.refresh(new_rule)
+
+    # ✅ Invalidate cache for this event
+    await invalidate_rule_cache(new_rule.event)
 
     log.info(
         "Created notification rule",
         rule_id=new_rule.id,
         event_type=new_rule.event,
         admin_id=current_admin.id,
-        channels=new_rule.channels
+        channels=new_rule.channels,
+        template_id=new_rule.template_id
     )
 
     return new_rule
@@ -232,7 +251,8 @@ async def update_notification_rule(
             detail=f"Notification rule {rule_id} not found"
         )
 
-    # Track which fields were updated
+    # ✅ FIX: Track template_id changes for usage_count updates
+    old_template_id = rule.template_id
     updated_fields = []
 
     # Update fields if provided
@@ -242,16 +262,48 @@ async def update_notification_rule(
             setattr(rule, field, value)
             updated_fields.append(field)
 
+    # ✅ FIX: Update usage_count if template_id changed
+    if "template_id" in updated_fields:
+        new_template_id = rule.template_id
+
+        # Decrement old template's usage_count
+        if old_template_id:
+            await db.execute(
+                update(models.NotificationTemplate)
+                .where(models.NotificationTemplate.id == old_template_id)
+                .values(usage_count=models.NotificationTemplate.usage_count - 1)
+            )
+            log.debug(
+                "Decremented old template usage_count",
+                old_template_id=old_template_id
+            )
+
+        # Increment new template's usage_count
+        if new_template_id:
+            await db.execute(
+                update(models.NotificationTemplate)
+                .where(models.NotificationTemplate.id == new_template_id)
+                .values(usage_count=models.NotificationTemplate.usage_count + 1)
+            )
+            log.debug(
+                "Incremented new template usage_count",
+                new_template_id=new_template_id
+            )
+
     if updated_fields:
         await db.commit()
         await db.refresh(rule)
+
+        # ✅ Invalidate cache for this event
+        await invalidate_rule_cache(rule.event)
 
         log.info(
             "Updated notification rule",
             rule_id=rule_id,
             event_type=rule.event,
             admin_id=current_admin.id,
-            updated_fields=updated_fields
+            updated_fields=updated_fields,
+            template_changed=("template_id" in updated_fields)
         )
     else:
         log.info(
@@ -303,6 +355,9 @@ async def toggle_notification_rule(
     await db.commit()
     await db.refresh(rule)
 
+    # ✅ Invalidate cache for this event
+    await invalidate_rule_cache(rule.event)
+
     log.info(
         "Toggled notification rule status",
         rule_id=rule_id,
@@ -348,17 +403,34 @@ async def delete_notification_rule(
             detail=f"Notification rule {rule_id} not found"
         )
 
-    # Store event for logging
+    # Store for logging
     event_type = rule.event
+    template_id = rule.template_id
+
+    # ✅ FIX: Decrement usage_count if template is referenced
+    if template_id:
+        await db.execute(
+            update(models.NotificationTemplate)
+            .where(models.NotificationTemplate.id == template_id)
+            .values(usage_count=models.NotificationTemplate.usage_count - 1)
+        )
+        log.debug(
+            "Decremented template usage_count",
+            template_id=template_id
+        )
 
     # Delete the rule
     await db.delete(rule)
     await db.commit()
 
+    # ✅ Invalidate cache for this event
+    await invalidate_rule_cache(event_type)
+
     log.info(
         "Deleted notification rule",
         rule_id=rule_id,
         event_type=event_type,
+        template_id=template_id,
         admin_id=current_admin.id
     )
 
