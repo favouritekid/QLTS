@@ -68,6 +68,67 @@ const OPERATORS = {
   ],
 };
 
+// =============================================================================
+// ✅ FIX: Edge Case #5 - Frontend Validation Helpers
+// =============================================================================
+
+/**
+ * Validate a condition tree to ensure all fields have values.
+ * Returns array of validation error messages.
+ *
+ * Usage in form submit:
+ *   const errors = validateCondition(condition);
+ *   if (errors.length > 0) {
+ *     toast.error(errors.join(", "));
+ *     return;
+ *   }
+ */
+export function validateCondition(condition: Condition): string[] {
+  const errors: string[] = [];
+
+  if (!condition) {
+    return errors;
+  }
+
+  // Check if it's a compound condition
+  if ("conditions" in condition && "operator" in condition) {
+    const compound = condition as CompoundCondition;
+
+    // Compound condition must have at least one sub-condition
+    if (!compound.conditions || compound.conditions.length === 0) {
+      errors.push("Condition group cannot be empty. Add at least one condition or remove the group.");
+    } else {
+      // Recursively validate each sub-condition
+      compound.conditions.forEach((subCond, index) => {
+        const subErrors = validateCondition(subCond);
+        subErrors.forEach(err => {
+          errors.push(`Condition ${index + 1}: ${err}`);
+        });
+      });
+    }
+  } else {
+    // Simple condition validation
+    const simple = condition as SimpleCondition;
+
+    if (!simple.field || simple.field.trim() === "") {
+      errors.push("Field name is required");
+    }
+
+    if (!simple.operator || simple.operator.trim() === "") {
+      errors.push("Operator is required");
+    }
+
+    if (simple.value === null || simple.value === undefined || simple.value === "") {
+      // Allow empty for certain operators (like is_null)
+      if (simple.operator !== "is_null" && simple.operator !== "is_not_null") {
+        errors.push("Value is required");
+      }
+    }
+  }
+
+  return errors;
+}
+
 // Available fields by event type (can be expanded)
 const FIELD_SCHEMAS: Record<string, { value: string; label: string; type: string }[]> = {
   LEAD_ASSIGNED: [
