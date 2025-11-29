@@ -3,6 +3,9 @@
  * Centralized Navigation Configuration
  * Single source of truth for all sidebar navigation items
  * Supports role-based access control and nested navigation
+ *
+ * Updated: Added Notifications group, Automation & Rules group
+ * Restructured for better UX following industry best practices
  */
 import {
   Activity,
@@ -10,6 +13,8 @@ import {
   Building2,
   Cog,
   Database,
+  FileText,
+  FolderTree,
   LayoutDashboard,
   Percent,
   Settings,
@@ -25,9 +30,21 @@ import type { NavigationConfig } from "@/types/navigation";
 /**
  * Main navigation configuration
  * Groups are displayed in order, items are filtered by user role
+ *
+ * Navigation structure follows best practices:
+ * 1. Overview - Dashboards and high-level views
+ * 2. Lead Operations - Daily operational tasks
+ * 3. Notifications - All notification-related features (NEW)
+ * 4. Organization - Structure and programs
+ * 5. User Management - People and access control
+ * 6. Automation & Rules - Workflows and configurations (NEW)
+ * 7. System - System-level settings and monitoring
  */
 export const navigationConfig: NavigationConfig = {
   groups: [
+    // =========================================================================
+    // 1. OVERVIEW - High-level dashboards
+    // =========================================================================
     {
       title: "Overview",
       items: [
@@ -43,44 +60,92 @@ export const navigationConfig: NavigationConfig = {
           icon: TrendingUp,
           roles: ["officer"], // Only officers can see this
         },
+      ],
+    },
+
+    // =========================================================================
+    // 2. LEAD OPERATIONS - Daily operational tasks
+    // =========================================================================
+    {
+      title: "Lead Operations",
+      items: [
         {
-          label: "Lead Management",
+          label: "Lead List",
           href: "/leads",
           icon: Database,
           roles: [], // Accessible to all roles
-          // excludePaths prevents /leads from being active when on /leads/pipeline
-          excludePaths: ["/leads/pipeline"],
-          children: [
-            {
-              label: "Lead List",
-              href: "/leads",
-              icon: Database,
-              roles: [],
-            },
-            {
-              label: "Pipeline Board",
-              href: "/leads/pipeline",
-              icon: Trello,
-              roles: [],
-            },
-            {
-              label: "Pipeline Settings",
-              href: "/admin/pipeline",
-              icon: Workflow,
-              roles: ["admin", "manager"], // Only admin and manager can see this
-            },
-            {
-              label: "Distribution Config",
-              href: "/admin/distribution",
-              icon: Share2,
-              roles: ["admin", "manager"], // Only admin and manager can see this
-            },
-          ],
+          excludePaths: ["/leads/pipeline"], // Don't highlight when on pipeline
+        },
+        {
+          label: "Pipeline Board",
+          href: "/leads/pipeline",
+          icon: Trello,
+          roles: [], // Accessible to all roles
         },
       ],
     },
+
+    // =========================================================================
+    // 3. NOTIFICATIONS - All notification features (NEW)
+    // =========================================================================
     {
-      title: "Management",
+      title: "Notifications",
+      items: [
+        {
+          label: "Inbox",
+          href: "/notifications",
+          icon: Bell,
+          roles: [], // Accessible to all roles
+          // Badge count will be added dynamically by component
+        },
+        {
+          label: "Notification Rules",
+          href: "/admin/notification-rules",
+          icon: Workflow,
+          roles: ["admin", "manager"], // Admin configuration
+        },
+        {
+          label: "Templates",
+          href: "/admin/notification-templates",
+          icon: FileText,
+          roles: ["admin", "manager"], // Admin configuration
+        },
+      ],
+    },
+
+    // =========================================================================
+    // 4. ORGANIZATION - Structure and programs
+    // =========================================================================
+    {
+      title: "Organization",
+      items: [
+        {
+          label: "Units & Programs",
+          href: "/admin/organization",
+          icon: Building2,
+          roles: ["admin", "manager"],
+          excludePaths: ["/admin/organization-tree"],
+        },
+        {
+          label: "Organization Tree",
+          href: "/admin/organization-tree",
+          icon: FolderTree,
+          roles: ["admin", "manager"],
+        },
+        {
+          label: "Tuition & Discounts",
+          href: "/admin/tuition-discount",
+          icon: Percent,
+          roles: ["admin", "manager"],
+        },
+      ],
+    },
+
+    // =========================================================================
+    // 5. USER MANAGEMENT - People and access control
+    // =========================================================================
+    {
+      title: "User Management",
       items: [
         {
           label: "Users",
@@ -89,25 +154,38 @@ export const navigationConfig: NavigationConfig = {
           roles: ["admin", "manager"],
         },
         {
-          label: "Organization",
-          href: "/admin/organization",
-          icon: Building2,
-          roles: ["admin", "manager"],
-        },
-        {
-          label: "Policy Management",
+          label: "Policies & Permissions",
           href: "/admin/policies",
           icon: ShieldCheck,
           roles: ["admin", "manager"],
         },
+      ],
+    },
+
+    // =========================================================================
+    // 6. AUTOMATION & RULES - Workflows and configurations (NEW)
+    // =========================================================================
+    {
+      title: "Automation & Rules",
+      items: [
         {
-          label: "Tuition Discount",
-          href: "/admin/tuition-discount",
-          icon: Percent,
+          label: "Pipeline Stages",
+          href: "/admin/pipeline",
+          icon: Workflow,
+          roles: ["admin", "manager"],
+        },
+        {
+          label: "Distribution Rules",
+          href: "/admin/distribution",
+          icon: Share2,
           roles: ["admin", "manager"],
         },
       ],
     },
+
+    // =========================================================================
+    // 7. SYSTEM - System-level settings and monitoring
+    // =========================================================================
     {
       title: "System",
       items: [
@@ -128,13 +206,6 @@ export const navigationConfig: NavigationConfig = {
           href: "/settings",
           icon: Settings,
           roles: [], // Accessible to all roles
-        },
-        {
-          label: "Notifications",
-          href: "/notifications",
-          icon: Bell,
-          roles: [], // Accessible to all roles
-          // Badge will be added dynamically by the component
         },
       ],
     },
