@@ -349,3 +349,45 @@ export interface NotificationTemplatesPage {
   total_count: number;
   templates: NotificationTemplate[];
 }
+
+// ============================================
+// ✅ NOTIFICATION 2.0: METADATA FOR DYNAMIC BUILDER
+// ============================================
+
+export interface EventVariable {
+  name: string;
+  type: string; // "string" | "integer" | "datetime" | "boolean" | "float"
+  description: string;
+  required?: boolean;
+}
+
+export interface EventMetadata {
+  event: string; // SystemEvents enum value
+  display_name: string;
+  description: string;
+  variables: EventVariable[];
+  filter_fields: string[];
+  default_channels: string[];
+  category: string; // "lead" | "application" | "consultation" | "finance" | etc.
+}
+
+export interface ResolverTypeOption {
+  value: string; // "assigned_officer" | "lead_owner" | etc.
+  label: string; // Vietnamese label
+  description: string;
+  example: string;
+  requires_params: boolean;
+}
+
+export interface OperatorOption {
+  value: string; // "==" | "!=" | ">" | "<" | etc.
+  label: string; // Vietnamese label
+  description: string;
+}
+
+export interface NotificationMetadata {
+  events: EventMetadata[];
+  channels: string[]; // ["socket", "email", "zalo", "sms"]
+  resolver_types: ResolverTypeOption[];
+  operators: OperatorOption[];
+}

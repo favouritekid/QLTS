@@ -158,6 +158,7 @@ export const API_ENDPOINTS = {
     UPDATE: (id: number) => `/api/notification-rules/${id}`,
     TOGGLE: (id: number) => `/api/notification-rules/${id}/toggle`,
     DELETE: (id: number) => `/api/notification-rules/${id}`,
+    METADATA: "/api/notification-rules/metadata", // ✅ NOTIFICATION 2.0: Dynamic metadata
   },
   // ✅ PHASE 3.1: Notification Templates (Admin-only)
   NOTIFICATION_TEMPLATES: {
