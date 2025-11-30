@@ -261,6 +261,25 @@ export interface NotificationPreferenceUpdate {
 // ✅ PHASE 2.4: NOTIFICATION RULES (Admin)
 // ============================================
 
+// ✅ NOTIFICATION 2.0: Multi-Step Workflow Support
+export interface NotificationAction {
+  id?: number; // Optional for create
+  rule_id?: number; // Optional for create
+  step: number; // Step order (1, 2, 3, ...)
+  channel: string; // "socket" | "email" | "zalo" | "sms"
+  template_code: string | null; // Template code to use
+  delay_minutes: number; // Delay before sending (0 = immediate)
+  config: Record<string, unknown> | null; // Additional channel config
+}
+
+export interface NotificationActionCreate {
+  step: number;
+  channel: string;
+  template_code?: string | null;
+  delay_minutes?: number;
+  config?: Record<string, unknown> | null;
+}
+
 export interface NotificationRule {
   id: number;
   event: string; // SystemEvents enum value
@@ -268,10 +287,11 @@ export interface NotificationRule {
   message_template: string;
   notification_type: string; // info, success, warning, error
   link_template: string | null;
-  channels: string[]; // ["browser", "email", "sms"]
+  channels: string[]; // ["socket", "email", "zalo", "sms"] - DEPRECATED, use actions
   recipient_config: Record<string, unknown>; // {resolver_type, params}
   condition: Record<string, unknown> | null; // Optional activation conditions
   enabled: boolean;
+  actions: NotificationAction[]; // ✅ NOTIFICATION 2.0: Multi-step workflow
   created_at: string;
   updated_at: string;
 }
@@ -282,10 +302,11 @@ export interface NotificationRuleCreate {
   message_template: string;
   notification_type: string;
   link_template?: string | null;
-  channels: string[];
+  channels: string[]; // Fallback for backward compatibility
   recipient_config: Record<string, unknown>;
   condition?: Record<string, unknown> | null;
   enabled?: boolean;
+  actions?: NotificationActionCreate[]; // ✅ NOTIFICATION 2.0: Multi-step workflow
 }
 
 export interface NotificationRuleUpdate {
@@ -297,6 +318,7 @@ export interface NotificationRuleUpdate {
   recipient_config?: Record<string, unknown>;
   condition?: Record<string, unknown> | null;
   enabled?: boolean;
+  actions?: NotificationActionCreate[]; // ✅ NOTIFICATION 2.0: Multi-step workflow
 }
 
 export interface NotificationRulesPage {
