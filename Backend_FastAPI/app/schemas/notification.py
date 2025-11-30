@@ -43,6 +43,44 @@ class MarkAsReadRequest(BaseModel):
 
 
 # =============================================================================
+# ✅ NOTIFICATION 2.0 - PHASE 1: Notification Action Schemas
+# =============================================================================
+
+
+class NotificationActionBase(BaseModel):
+    """Base schema for notification action (workflow step)"""
+    step: int = 1  # Step number in workflow
+    channel: str  # Delivery channel: socket, email, zalo, sms
+    template_code: Optional[str] = None  # Optional template code reference
+    delay_minutes: int = 0  # Delay before execution (0 = immediate)
+    config: Optional[Dict[str, Any]] = None  # Channel-specific config
+
+
+class NotificationActionCreate(NotificationActionBase):
+    """Schema for creating a notification action"""
+    pass
+
+
+class NotificationActionUpdate(BaseModel):
+    """Schema for updating a notification action (partial update)"""
+    step: Optional[int] = None
+    channel: Optional[str] = None
+    template_code: Optional[str] = None
+    delay_minutes: Optional[int] = None
+    config: Optional[Dict[str, Any]] = None
+
+
+class NotificationAction(NotificationActionBase):
+    """Schema for reading notification action (response)"""
+    id: int
+    rule_id: int
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# =============================================================================
 # ✅ PHASE 2.2 + FIX: Notification Rule Schemas (with validation)
 # =============================================================================
 
@@ -80,7 +118,7 @@ class NotificationRuleBase(BaseModel):
 
 class NotificationRuleCreate(NotificationRuleBase):
     """Schema for creating a notification rule"""
-    pass
+    actions: List[NotificationActionCreate] = []  # ✅ NOTIFICATION 2.0: Workflow actions
 
 
 class NotificationRuleUpdate(BaseModel):
@@ -93,11 +131,13 @@ class NotificationRuleUpdate(BaseModel):
     recipient_config: Optional[Dict[str, Any]] = None
     condition: Optional[Dict[str, Any]] = None
     enabled: Optional[bool] = None
+    actions: Optional[List[NotificationActionCreate]] = None  # ✅ NOTIFICATION 2.0: Update actions
 
 
 class NotificationRule(NotificationRuleBase):
     """Schema for reading notification rule (response)"""
     id: int
+    actions: List[NotificationAction] = []  # ✅ NOTIFICATION 2.0: Include workflow actions
     created_at: datetime
     updated_at: datetime
 
@@ -117,13 +157,19 @@ class NotificationRulesPage(BaseModel):
 
 class NotificationTemplateBase(BaseModel):
     """Base schema for notification template"""
-    name: str  # Unique template name
+    name: str  # Human-readable template name
+    template_code: str  # Unique code identifier (e.g., "TPL_LEAD_ASSIGN")
     description: Optional[str] = None  # Template description
     title_template: str  # Title template with {placeholders}
     message_template: str  # Message template
     link_template: Optional[str] = None  # Optional link template
     variables: Optional[List[str]] = None  # Available variables
     category: Optional[str] = None  # Template category (lead, consultation, etc.)
+
+    # ✅ NOTIFICATION 2.0: New metadata fields
+    supported_channels: List[str] = ["socket"]  # Channels this template supports
+    allowed_events: Optional[List[str]] = None  # Events this template is for (null = all)
+    template_type: str = "system"  # Template type: system, zalo_zns, email_html, sms
 
 
 class NotificationTemplateCreate(NotificationTemplateBase):
@@ -134,12 +180,18 @@ class NotificationTemplateCreate(NotificationTemplateBase):
 class NotificationTemplateUpdate(BaseModel):
     """Schema for updating a notification template (partial update)"""
     name: Optional[str] = None
+    template_code: Optional[str] = None
     description: Optional[str] = None
     title_template: Optional[str] = None
     message_template: Optional[str] = None
     link_template: Optional[str] = None
     variables: Optional[List[str]] = None
     category: Optional[str] = None
+
+    # ✅ NOTIFICATION 2.0: Support updating new metadata fields
+    supported_channels: Optional[List[str]] = None
+    allowed_events: Optional[List[str]] = None
+    template_type: Optional[str] = None
 
 
 class NotificationTemplate(NotificationTemplateBase):

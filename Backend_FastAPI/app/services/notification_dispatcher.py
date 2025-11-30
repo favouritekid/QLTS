@@ -1,26 +1,27 @@
 # app/services/notification_dispatcher.py
 """
-Notification Dispatcher - Central Event Bus for the notification system.
+✅ NOTIFICATION 2.0 - Central Event Bus with Multi-Channel Support
 
 The dispatcher is the entry point for publishing events. It handles:
-1. Registry lookup
-2. Recipient resolution
-3. Preference filtering
-4. Deduplication
-5. Bulk notification creation
-6. Database commit
-7. Immediate Socket.IO emission (for real-time browser notifications)
-8. Celery task dispatch for email delivery and retries
+1. Database/Registry rule lookup
+2. Condition evaluation (database rules only)
+3. Recipient resolution
+4. Preference filtering
+5. Deduplication
+6. Bulk notification creation
+7. Database commit
+8. ✅ NOTIFICATION 2.0: Multi-channel delivery via Channel Infrastructure
 
 Transaction Safety:
 - All database operations are committed BEFORE any notifications are sent
-- Socket.IO notifications are emitted immediately after DB commit (no delay)
-- Celery tasks handle email delivery and retries in background
+- Channels send notifications immediately after DB commit
 - If DB commit fails, no notifications are sent (prevents ghost notifications)
 
-Real-time Delivery:
-- Browser notifications: Sent immediately via Socket.IO (instant toast)
-- Email notifications: Sent via Celery task (background processing)
+Channel Delivery:
+- Uses unified Channel Infrastructure (Strategy Pattern)
+- Each channel (socket, email, zalo, sms) handles its own delivery
+- Channels are independent - failure in one doesn't affect others
+- Channel results logged for monitoring
 
 Usage:
     from app.services.notification_dispatcher import dispatch
@@ -36,9 +37,10 @@ Usage:
         }
     )
 """
+import asyncio
 import structlog
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, Tuple, Any
 
 from sqlalchemy import and_, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -63,6 +65,49 @@ from app.services.notification_service import (
 
 # Chunk size for bulk insert (to avoid overwhelming the DB)
 BULK_INSERT_CHUNK_SIZE = 100
+
+
+async def _send_via_channel(
+    channel_name: str,
+    notifications: List[Any],
+    recipient_ids: List[int],
+    context: dict,
+    event: str
+) -> Tuple[str, Optional[Any], Optional[str]]:
+    """
+    ✅ NOTIFICATION 2.0 - PHASE 3.1: Send notifications via a single channel with error handling.
+
+    Helper function for parallel channel delivery using asyncio.gather().
+
+    Args:
+        channel_name: Name of the channel ("socket", "email", etc.)
+        notifications: List of notification objects to send
+        recipient_ids: List of recipient user IDs
+        context: Event payload context
+        event: Event name for logging
+
+    Returns:
+        Tuple of (channel_name, ChannelResult or None, error_message or None)
+        - On success: (channel_name, ChannelResult, None)
+        - On failure: (channel_name, None, error_message)
+    """
+    try:
+        from app.services.notification_channels import get_channel
+
+        channel = get_channel(channel_name)
+        result = await channel.send(
+            notifications=notifications,
+            recipient_ids=recipient_ids,
+            context=context
+        )
+        return (channel_name, result, None)
+
+    except ValueError as e:
+        # Unknown channel (not registered)
+        return (channel_name, None, f"Unknown channel: {str(e)}")
+    except Exception as e:
+        # Channel send failed
+        return (channel_name, None, f"Delivery failed: {str(e)}")
 
 
 async def dispatch(
@@ -281,36 +326,93 @@ async def dispatch(
     # This keeps cache warm and avoids cache miss on next read
     await _prepend_to_inbox_cache(user_ids, notification_ids)
 
-    # Step 8: Emit Socket.IO notifications IMMEDIATELY for real-time delivery
-    # This ensures users see toast notifications without delay
-    if "browser" in config.channels:
-        try:
-            await _emit_notifications_immediate(db, notification_ids)
-        except Exception as e:
-            # Log but don't fail - notifications are in DB and Celery will retry
-            log.warning(
-                "Failed to emit immediate Socket.IO notifications",
-                event=event.value,
-                error=str(e),
-                notification_count=len(notification_ids),
-                fallback="Celery task will handle delivery"
-            )
-
-    # Step 9: Dispatch Celery task for email delivery and retries
+    # ✅ NOTIFICATION 2.0 - PHASE 3.1: Parallel Multi-Channel Delivery
+    # Step 8: Send notifications through configured channels IN PARALLEL
+    # Performance optimization: asyncio.gather() reduces latency from sequential to parallel
+    # Example: 3 channels @ 1s each = 3s sequential → ~1s parallel
     try:
-        _dispatch_broadcast_task(
-            notification_ids=notification_ids,
-            channels=config.channels,
-            event=event.value
+        # Fetch notifications from database for channel delivery
+        result = await db.execute(
+            select(models.Notification)
+            .where(models.Notification.id.in_(notification_ids))
         )
+        notifications = list(result.scalars().all())
+
+        if not notifications:
+            log.warning(
+                "No notifications found for channel delivery",
+                requested_ids=notification_ids
+            )
+            return notification_ids
+
+        # Create parallel tasks for all channels
+        channel_tasks = [
+            _send_via_channel(
+                channel_name=channel_name,
+                notifications=notifications,
+                recipient_ids=user_ids,
+                context=payload,
+                event=event.value
+            )
+            for channel_name in config.channels
+        ]
+
+        # Execute all channel deliveries in parallel
+        # return_exceptions=True ensures one channel failure doesn't affect others
+        channel_results = await asyncio.gather(*channel_tasks, return_exceptions=True)
+
+        # Process results and log per-channel statistics
+        for result in channel_results:
+            # Handle unexpected exceptions from gather
+            if isinstance(result, Exception):
+                log.error(
+                    "Unexpected channel delivery exception",
+                    event=event.value,
+                    error=str(result)
+                )
+                continue
+
+            channel_name, channel_result, error_msg = result
+
+            if error_msg:
+                # Channel failed
+                log.error(
+                    "Channel delivery failed",
+                    event=event.value,
+                    channel=channel_name,
+                    error=error_msg,
+                    notification_count=len(notifications)
+                )
+            elif channel_result:
+                # Channel succeeded
+                log.info(
+                    "Channel delivery completed",
+                    event=event.value,
+                    channel=channel_name,
+                    sent_count=channel_result.sent_count,
+                    failed_count=len(channel_result.failed_ids),
+                    success=channel_result.success
+                )
+
+                # Log failures for monitoring
+                if channel_result.failed_ids:
+                    log.warning(
+                        "Some recipients failed for channel",
+                        event=event.value,
+                        channel=channel_name,
+                        failed_ids=channel_result.failed_ids[:10],  # Log first 10
+                        failed_count=len(channel_result.failed_ids)
+                    )
+
     except Exception as e:
-        # Log but don't fail - notifications are already in DB
+        # Critical error in channel delivery system
         log.error(
-            "Failed to dispatch Celery broadcast task",
+            "Channel delivery system failed",
             event=event.value,
             error=str(e),
             notification_count=len(notification_ids),
-            channels=config.channels
+            channels=config.channels,
+            fallback="Notifications are in DB but delivery failed"
         )
 
     return notification_ids

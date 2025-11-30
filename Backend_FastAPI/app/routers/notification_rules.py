@@ -6,15 +6,18 @@ Admin-only API endpoints for managing notification rules.
 Allows administrators to create, read, update, and delete notification
 rules through UI instead of modifying code.
 """
-from typing import Optional
+from typing import Optional, Dict, Any, List
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+from pydantic import BaseModel
 
 from .. import database, models, schemas
 from ..core import deps
+from ..core.event_metadata import get_all_events_metadata
 from ..services.notification_rule_loader import invalidate_rule_cache
 
 log = structlog.get_logger(__name__)
@@ -22,6 +25,107 @@ router = APIRouter(prefix="/notification-rules", tags=["Notification Rules (Admi
 
 # Admin-only permission dependency
 AdminPermissionDep = Depends(deps.check_permission)
+
+
+# =============================================================================
+# ✅ NOTIFICATION 2.0 - PHASE 2: Metadata API
+# =============================================================================
+
+class ResolverTypeOption(BaseModel):
+    """Option for resolver type selector"""
+    value: str
+    label: str
+    description: str
+
+
+class OperatorOption(BaseModel):
+    """Option for condition operator selector"""
+    value: str
+    label: str
+
+
+class MetadataResponse(BaseModel):
+    """Complete metadata for building notification rules dynamically"""
+    events: Dict[str, Dict[str, Any]]
+    channels: List[str]
+    resolver_types: List[ResolverTypeOption]
+    operators: List[OperatorOption]
+
+
+@router.get("/metadata", response_model=MetadataResponse)
+async def get_notification_metadata(
+    current_admin: models.User = AdminPermissionDep,
+):
+    """
+    ✅ NOTIFICATION 2.0 - PHASE 2: Get metadata for notification rule builder.
+
+    Returns all metadata needed for frontend to dynamically build notification rules:
+        - Event definitions with variables and filter fields
+        - Available channels
+        - Resolver types
+        - Condition operators
+
+    This makes the frontend completely dynamic - no hardcoding needed.
+    """
+    log.info("Fetching notification metadata", admin_id=current_admin.id)
+
+    return {
+        "events": get_all_events_metadata(),
+        "channels": ["socket", "email", "zalo", "sms"],
+        "resolver_types": [
+            {
+                "value": "lead_owner",
+                "label": "Lead Owner",
+                "description": "Gửi cho officer được assign lead"
+            },
+            {
+                "value": "unit_staff",
+                "label": "Unit Staff",
+                "description": "Gửi cho tất cả staff trong đơn vị"
+            },
+            {
+                "value": "unit_managers",
+                "label": "Unit Managers",
+                "description": "Gửi cho managers/admins của đơn vị"
+            },
+            {
+                "value": "all_users",
+                "label": "All Users",
+                "description": "Gửi cho tất cả users"
+            },
+            {
+                "value": "all_admins",
+                "label": "All Admins",
+                "description": "Gửi cho tất cả admins"
+            },
+            {
+                "value": "specific_users",
+                "label": "Specific Users",
+                "description": "Gửi cho danh sách user cụ thể"
+            },
+            {
+                "value": "composite",
+                "label": "Composite (Multiple Resolvers)",
+                "description": "Kết hợp nhiều resolver"
+            },
+            {
+                "value": "actor_excluded",
+                "label": "Exclude Actor",
+                "description": "Gửi nhưng loại trừ người thực hiện hành động"
+            }
+        ],
+        "operators": [
+            {"value": "eq", "label": "Equals (=)"},
+            {"value": "ne", "label": "Not Equals (≠)"},
+            {"value": "gt", "label": "Greater Than (>)"},
+            {"value": "gte", "label": "Greater Than or Equal (≥)"},
+            {"value": "lt", "label": "Less Than (<)"},
+            {"value": "lte", "label": "Less Than or Equal (≤)"},
+            {"value": "in", "label": "In List"},
+            {"value": "not_in", "label": "Not In List"},
+            {"value": "contains", "label": "Contains"},
+        ]
+    }
 
 
 @router.get("", response_model=schemas.NotificationRulesPage)
@@ -47,8 +151,8 @@ async def list_notification_rules(
     """
     skip = (page - 1) * page_size
 
-    # Build query with filters
-    query = select(models.NotificationRule)
+    # Build query with filters (eager load actions)
+    query = select(models.NotificationRule).options(selectinload(models.NotificationRule.actions))
     count_query = select(func.count()).select_from(models.NotificationRule)
 
     if event:
@@ -97,10 +201,11 @@ async def get_notification_rule(
     (Admin only) Get a specific notification rule by ID.
 
     Returns:
-        NotificationRule with all details
+        NotificationRule with all details (including actions)
     """
     result = await db.execute(
         select(models.NotificationRule)
+        .options(selectinload(models.NotificationRule.actions))
         .where(models.NotificationRule.id == rule_id)
     )
     rule = result.scalar_one_or_none()
@@ -184,6 +289,19 @@ async def create_notification_rule(
     )
 
     db.add(new_rule)
+    await db.flush()  # Get the rule ID
+
+    # ✅ NOTIFICATION 2.0: Create actions for this rule
+    for action_data in rule_data.actions:
+        new_action = models.NotificationAction(
+            rule_id=new_rule.id,
+            step=action_data.step,
+            channel=action_data.channel,
+            template_code=action_data.template_code,
+            delay_minutes=action_data.delay_minutes,
+            config=action_data.config
+        )
+        db.add(new_action)
 
     # ✅ FIX: Increment usage_count if template is referenced
     if rule_data.template_id:
@@ -209,7 +327,8 @@ async def create_notification_rule(
         event_type=new_rule.event,
         admin_id=current_admin.id,
         channels=new_rule.channels,
-        template_id=new_rule.template_id
+        template_id=new_rule.template_id,
+        actions_count=len(rule_data.actions)
     )
 
     return new_rule
@@ -255,12 +374,40 @@ async def update_notification_rule(
     old_template_id = rule.template_id
     updated_fields = []
 
-    # Update fields if provided
-    update_data = rule_update.model_dump(exclude_unset=True)
+    # Update fields if provided (exclude actions, handle separately)
+    update_data = rule_update.model_dump(exclude_unset=True, exclude={"actions"})
     for field, value in update_data.items():
         if value is not None:
             setattr(rule, field, value)
             updated_fields.append(field)
+
+    # ✅ NOTIFICATION 2.0: Handle actions update
+    if rule_update.actions is not None:
+        # Delete all existing actions
+        from sqlalchemy import delete
+        await db.execute(
+            delete(models.NotificationAction)
+            .where(models.NotificationAction.rule_id == rule_id)
+        )
+
+        # Create new actions
+        for action_data in rule_update.actions:
+            new_action = models.NotificationAction(
+                rule_id=rule_id,
+                step=action_data.step,
+                channel=action_data.channel,
+                template_code=action_data.template_code,
+                delay_minutes=action_data.delay_minutes,
+                config=action_data.config
+            )
+            db.add(new_action)
+
+        updated_fields.append("actions")
+        log.debug(
+            "Updated notification rule actions",
+            rule_id=rule_id,
+            actions_count=len(rule_update.actions)
+        )
 
     # ✅ FIX: Update usage_count if template_id changed
     if "template_id" in updated_fields:
@@ -330,9 +477,10 @@ async def toggle_notification_rule(
     Returns:
         Updated NotificationRule with toggled enabled status
     """
-    # Get existing rule
+    # Get existing rule (with actions)
     result = await db.execute(
         select(models.NotificationRule)
+        .options(selectinload(models.NotificationRule.actions))
         .where(models.NotificationRule.id == rule_id)
     )
     rule = result.scalar_one_or_none()
