@@ -31,6 +31,9 @@ async def list_notification_templates(
     category: Optional[str] = Query(None, description="Filter by category"),
     is_system: Optional[bool] = Query(None, description="Filter by system flag"),
     search: Optional[str] = Query(None, description="Search by name or description"),
+    # ✅ NOTIFICATION 2.0: New filters
+    allowed_event: Optional[str] = Query(None, description="Filter by allowed event"),
+    supported_channel: Optional[str] = Query(None, description="Filter by supported channel"),
 ):
     """
     (Admin only) Get paginated list of notification templates.
@@ -41,6 +44,8 @@ async def list_notification_templates(
         - category: Filter by category (e.g., "lead", "consultation")
         - is_system: Filter by system flag (true/false)
         - search: Search by name or description
+        - allowed_event: Filter templates that support this event (null = all events)
+        - supported_channel: Filter templates that support this channel
 
     Returns:
         Paginated list of notification templates with total count
@@ -68,6 +73,24 @@ async def list_notification_templates(
         query = query.where(search_filter)
         count_query = count_query.where(search_filter)
 
+    # ✅ NOTIFICATION 2.0: Filter by allowed_event
+    if allowed_event:
+        from sqlalchemy import or_
+        # Match templates where allowed_events is null OR contains the event
+        event_filter = or_(
+            models.NotificationTemplate.allowed_events.is_(None),
+            models.NotificationTemplate.allowed_events.contains([allowed_event])
+        )
+        query = query.where(event_filter)
+        count_query = count_query.where(event_filter)
+
+    # ✅ NOTIFICATION 2.0: Filter by supported_channel
+    if supported_channel:
+        # Match templates where supported_channels contains the channel
+        channel_filter = models.NotificationTemplate.supported_channels.contains([supported_channel])
+        query = query.where(channel_filter)
+        count_query = count_query.where(channel_filter)
+
     # Order by name
     query = query.order_by(models.NotificationTemplate.name)
 
@@ -87,7 +110,13 @@ async def list_notification_templates(
         page=page,
         page_size=page_size,
         total=total,
-        filters={"category": category, "is_system": is_system, "search": search}
+        filters={
+            "category": category,
+            "is_system": is_system,
+            "search": search,
+            "allowed_event": allowed_event,
+            "supported_channel": supported_channel
+        }
     )
 
     return {

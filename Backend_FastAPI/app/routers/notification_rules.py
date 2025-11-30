@@ -12,6 +12,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from .. import database, models, schemas
 from ..core import deps
@@ -47,8 +48,8 @@ async def list_notification_rules(
     """
     skip = (page - 1) * page_size
 
-    # Build query with filters
-    query = select(models.NotificationRule)
+    # Build query with filters (eager load actions)
+    query = select(models.NotificationRule).options(selectinload(models.NotificationRule.actions))
     count_query = select(func.count()).select_from(models.NotificationRule)
 
     if event:
@@ -97,10 +98,11 @@ async def get_notification_rule(
     (Admin only) Get a specific notification rule by ID.
 
     Returns:
-        NotificationRule with all details
+        NotificationRule with all details (including actions)
     """
     result = await db.execute(
         select(models.NotificationRule)
+        .options(selectinload(models.NotificationRule.actions))
         .where(models.NotificationRule.id == rule_id)
     )
     rule = result.scalar_one_or_none()
@@ -184,6 +186,19 @@ async def create_notification_rule(
     )
 
     db.add(new_rule)
+    await db.flush()  # Get the rule ID
+
+    # ✅ NOTIFICATION 2.0: Create actions for this rule
+    for action_data in rule_data.actions:
+        new_action = models.NotificationAction(
+            rule_id=new_rule.id,
+            step=action_data.step,
+            channel=action_data.channel,
+            template_code=action_data.template_code,
+            delay_minutes=action_data.delay_minutes,
+            config=action_data.config
+        )
+        db.add(new_action)
 
     # ✅ FIX: Increment usage_count if template is referenced
     if rule_data.template_id:
@@ -209,7 +224,8 @@ async def create_notification_rule(
         event_type=new_rule.event,
         admin_id=current_admin.id,
         channels=new_rule.channels,
-        template_id=new_rule.template_id
+        template_id=new_rule.template_id,
+        actions_count=len(rule_data.actions)
     )
 
     return new_rule
@@ -255,12 +271,40 @@ async def update_notification_rule(
     old_template_id = rule.template_id
     updated_fields = []
 
-    # Update fields if provided
-    update_data = rule_update.model_dump(exclude_unset=True)
+    # Update fields if provided (exclude actions, handle separately)
+    update_data = rule_update.model_dump(exclude_unset=True, exclude={"actions"})
     for field, value in update_data.items():
         if value is not None:
             setattr(rule, field, value)
             updated_fields.append(field)
+
+    # ✅ NOTIFICATION 2.0: Handle actions update
+    if rule_update.actions is not None:
+        # Delete all existing actions
+        from sqlalchemy import delete
+        await db.execute(
+            delete(models.NotificationAction)
+            .where(models.NotificationAction.rule_id == rule_id)
+        )
+
+        # Create new actions
+        for action_data in rule_update.actions:
+            new_action = models.NotificationAction(
+                rule_id=rule_id,
+                step=action_data.step,
+                channel=action_data.channel,
+                template_code=action_data.template_code,
+                delay_minutes=action_data.delay_minutes,
+                config=action_data.config
+            )
+            db.add(new_action)
+
+        updated_fields.append("actions")
+        log.debug(
+            "Updated notification rule actions",
+            rule_id=rule_id,
+            actions_count=len(rule_update.actions)
+        )
 
     # ✅ FIX: Update usage_count if template_id changed
     if "template_id" in updated_fields:
@@ -330,9 +374,10 @@ async def toggle_notification_rule(
     Returns:
         Updated NotificationRule with toggled enabled status
     """
-    # Get existing rule
+    # Get existing rule (with actions)
     result = await db.execute(
         select(models.NotificationRule)
+        .options(selectinload(models.NotificationRule.actions))
         .where(models.NotificationRule.id == rule_id)
     )
     rule = result.scalar_one_or_none()
