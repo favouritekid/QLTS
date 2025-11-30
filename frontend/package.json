@@ -88,6 +88,7 @@
     "@vitest/ui": "^4.0.4",
     "autoprefixer": "^10.4.21",
     "babel-plugin-react-compiler": "1.0.0",
+    "baseline-browser-mapping": "^2.8.32",
     "eslint": "^9.38.0",
     "eslint-config-next": "^16.0.3",
     "eslint-plugin-jsx-a11y": "^6.10.2",
