@@ -6,16 +6,18 @@ Admin-only API endpoints for managing notification rules.
 Allows administrators to create, read, update, and delete notification
 rules through UI instead of modifying code.
 """
-from typing import Optional
+from typing import Optional, Dict, Any, List
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from pydantic import BaseModel
 
 from .. import database, models, schemas
 from ..core import deps
+from ..core.event_metadata import get_all_events_metadata
 from ..services.notification_rule_loader import invalidate_rule_cache
 
 log = structlog.get_logger(__name__)
@@ -23,6 +25,107 @@ router = APIRouter(prefix="/notification-rules", tags=["Notification Rules (Admi
 
 # Admin-only permission dependency
 AdminPermissionDep = Depends(deps.check_permission)
+
+
+# =============================================================================
+# ✅ NOTIFICATION 2.0 - PHASE 2: Metadata API
+# =============================================================================
+
+class ResolverTypeOption(BaseModel):
+    """Option for resolver type selector"""
+    value: str
+    label: str
+    description: str
+
+
+class OperatorOption(BaseModel):
+    """Option for condition operator selector"""
+    value: str
+    label: str
+
+
+class MetadataResponse(BaseModel):
+    """Complete metadata for building notification rules dynamically"""
+    events: Dict[str, Dict[str, Any]]
+    channels: List[str]
+    resolver_types: List[ResolverTypeOption]
+    operators: List[OperatorOption]
+
+
+@router.get("/metadata", response_model=MetadataResponse)
+async def get_notification_metadata(
+    current_admin: models.User = AdminPermissionDep,
+):
+    """
+    ✅ NOTIFICATION 2.0 - PHASE 2: Get metadata for notification rule builder.
+
+    Returns all metadata needed for frontend to dynamically build notification rules:
+        - Event definitions with variables and filter fields
+        - Available channels
+        - Resolver types
+        - Condition operators
+
+    This makes the frontend completely dynamic - no hardcoding needed.
+    """
+    log.info("Fetching notification metadata", admin_id=current_admin.id)
+
+    return {
+        "events": get_all_events_metadata(),
+        "channels": ["socket", "email", "zalo", "sms"],
+        "resolver_types": [
+            {
+                "value": "lead_owner",
+                "label": "Lead Owner",
+                "description": "Gửi cho officer được assign lead"
+            },
+            {
+                "value": "unit_staff",
+                "label": "Unit Staff",
+                "description": "Gửi cho tất cả staff trong đơn vị"
+            },
+            {
+                "value": "unit_managers",
+                "label": "Unit Managers",
+                "description": "Gửi cho managers/admins của đơn vị"
+            },
+            {
+                "value": "all_users",
+                "label": "All Users",
+                "description": "Gửi cho tất cả users"
+            },
+            {
+                "value": "all_admins",
+                "label": "All Admins",
+                "description": "Gửi cho tất cả admins"
+            },
+            {
+                "value": "specific_users",
+                "label": "Specific Users",
+                "description": "Gửi cho danh sách user cụ thể"
+            },
+            {
+                "value": "composite",
+                "label": "Composite (Multiple Resolvers)",
+                "description": "Kết hợp nhiều resolver"
+            },
+            {
+                "value": "actor_excluded",
+                "label": "Exclude Actor",
+                "description": "Gửi nhưng loại trừ người thực hiện hành động"
+            }
+        ],
+        "operators": [
+            {"value": "eq", "label": "Equals (=)"},
+            {"value": "ne", "label": "Not Equals (≠)"},
+            {"value": "gt", "label": "Greater Than (>)"},
+            {"value": "gte", "label": "Greater Than or Equal (≥)"},
+            {"value": "lt", "label": "Less Than (<)"},
+            {"value": "lte", "label": "Less Than or Equal (≤)"},
+            {"value": "in", "label": "In List"},
+            {"value": "not_in", "label": "Not In List"},
+            {"value": "contains", "label": "Contains"},
+        ]
+    }
 
 
 @router.get("", response_model=schemas.NotificationRulesPage)
