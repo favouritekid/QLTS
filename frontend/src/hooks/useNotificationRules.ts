@@ -238,3 +238,30 @@ export function useDeleteNotificationRule() {
     },
   });
 }
+
+// ============================================
+// ✅ NOTIFICATION 2.0: METADATA QUERY
+// ============================================
+
+/**
+ * Hook to fetch notification metadata for dynamic rule builder (admin only)
+ *
+ * Returns:
+ * - events: All available system events with metadata (display names, variables, filters)
+ * - channels: Available delivery channels (socket, email, zalo, sms)
+ * - resolver_types: Available recipient resolver types
+ * - operators: Available condition operators
+ */
+export function useNotificationMetadata() {
+  return useQuery<import("@/types/api.types").NotificationMetadata, AxiosError<ApiErrorResponse>>({
+    queryKey: [...notificationRuleKeys.all, "metadata"] as const,
+    queryFn: async () => {
+      const response = await api.get<import("@/types/api.types").NotificationMetadata>(
+        API_ENDPOINTS.NOTIFICATION_RULES.METADATA
+      );
+      return response.data;
+    },
+    staleTime: 30 * 60 * 1000, // 30 minutes (metadata rarely changes)
+    gcTime: 60 * 60 * 1000, // 1 hour
+  });
+}

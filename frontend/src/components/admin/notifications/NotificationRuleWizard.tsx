@@ -34,6 +34,7 @@ import {
   Check,
   ChevronsUpDown,
   Zap,
+  Layers, // ✅ NOTIFICATION 2.0: Step 5 icon
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -97,6 +98,8 @@ import {
   useNotificationRule,
 } from "@/hooks/useNotificationRules";
 import { useAdminUsersList } from "@/hooks/useAdminUsers";
+import { MultiStepActionEditor } from "./MultiStepActionEditor"; // ✅ NOTIFICATION 2.0
+import type { NotificationActionCreate } from "@/types/api.types"; // ✅ NOTIFICATION 2.0
 
 // ============================================
 // TYPES & INTERFACES
@@ -127,16 +130,26 @@ interface TemplateVariable {
 // FORM SCHEMA
 // ============================================
 
+// ✅ NOTIFICATION 2.0: Action schema for multi-step workflows
+const actionSchema = z.object({
+  step: z.number(),
+  channel: z.string(),
+  template_code: z.string().nullable().optional(),
+  delay_minutes: z.number().optional(),
+  config: z.record(z.string(), z.unknown()).nullable().optional(),
+});
+
 const formSchema = z.object({
   event: z.string().min(1, "Vui lòng chọn sự kiện"),
   title_template: z.string().min(1, "Vui lòng nhập tiêu đề"),
   message_template: z.string().min(1, "Vui lòng nhập nội dung"),
   notification_type: z.enum(["info", "success", "warning", "error"]),
   link_template: z.string().optional(),
-  channels: z.array(z.string()).min(1, "Vui lòng chọn ít nhất một kênh"),
+  channels: z.array(z.string()).min(1, "Vui lòng chọn ít nhất một kênh"), // Fallback for backward compatibility
   recipient_config: z.record(z.string(), z.unknown()),
   condition: z.record(z.string(), z.unknown()).nullable(),
   enabled: z.boolean(),
+  actions: z.array(actionSchema).optional(), // ✅ NOTIFICATION 2.0: Multi-step workflow
 });
 
 type FormValues = z.infer<typeof formSchema>;
@@ -558,6 +571,7 @@ function StepIndicator({ currentStep, totalSteps }: { currentStep: number; total
     { number: 2, label: "Người nhận", icon: Users },
     { number: 3, label: "Điều kiện", icon: Filter },
     { number: 4, label: "Nội dung", icon: MessageSquare },
+    { number: 5, label: "Quy trình", icon: Layers }, // ✅ NOTIFICATION 2.0: Multi-step workflow
   ];
 
   return (
@@ -658,10 +672,19 @@ export function NotificationRuleWizard({
       message_template: "",
       notification_type: "info",
       link_template: "",
-      channels: ["browser"],
+      channels: ["socket"], // ✅ NOTIFICATION 2.0: Changed from "browser" to "socket"
       recipient_config: { resolver_type: "lead_owner", params: {} },
       condition: null,
       enabled: true,
+      actions: [ // ✅ NOTIFICATION 2.0: Default single-step action
+        {
+          step: 1,
+          channel: "socket",
+          template_code: null,
+          delay_minutes: 0,
+          config: null,
+        },
+      ],
     },
   });
 
@@ -746,7 +769,7 @@ export function NotificationRuleWizard({
   const isPending = createMutation.isPending || updateMutation.isPending;
 
   const nextStep = () => {
-    setCurrentStep((prev) => Math.min(prev + 1, 4));
+    setCurrentStep((prev) => Math.min(prev + 1, 5)); // ✅ NOTIFICATION 2.0: Changed from 4 to 5
   };
 
   const prevStep = () => {
@@ -775,7 +798,7 @@ export function NotificationRuleWizard({
         ) : (
           <>
             {/* Step Indicator */}
-            <StepIndicator currentStep={currentStep} totalSteps={4} />
+            <StepIndicator currentStep={currentStep} totalSteps={5} /> {/* ✅ NOTIFICATION 2.0: Changed from 4 to 5 */}
 
             {/* Quick Templates */}
             {currentStep === 1 && !isEditMode && (
@@ -1628,6 +1651,39 @@ export function NotificationRuleWizard({
                   </div>
                 )}
 
+                {/* STEP 5: Multi-Step Workflow ✅ NOTIFICATION 2.0 */}
+                {currentStep === 5 && (
+                  <div className="space-y-6 animate-in fade-in-0 slide-in-from-right-4 duration-300">
+                    <div>
+                      <h3 className="text-lg font-semibold mb-1 flex items-center gap-2">
+                        <Layers className="h-5 w-5 text-primary" />
+                        Bước 5: Quy trình gửi thông báo
+                        <HelpTooltip content="Cấu hình quy trình gửi thông báo qua nhiều kênh với độ trễ khác nhau. Ví dụ: Gửi Socket ngay, sau 30 phút gửi Email nhắc nhở." />
+                      </h3>
+                      <p className="text-sm text-muted-foreground">
+                        Tạo quy trình gửi thông báo qua nhiều bước với các kênh khác nhau
+                      </p>
+                    </div>
+
+                    <FormField
+                      control={form.control}
+                      name="actions"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormControl>
+                            <MultiStepActionEditor
+                              actions={field.value || []}
+                              onChange={field.onChange}
+                              availableChannels={["socket", "email", "zalo", "sms"]}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                )}
+
                 {/* Navigation Footer */}
                 <DialogFooter className="flex items-center justify-between sm:justify-between border-t pt-4">
                   <div>
@@ -1655,7 +1711,7 @@ export function NotificationRuleWizard({
                     >
                       Hủy
                     </Button>
-                    {currentStep < 4 ? (
+                    {currentStep < 5 ? ( {/* ✅ NOTIFICATION 2.0: Changed from 4 to 5 */}
                       <Button
                         type="button"
                         onClick={nextStep}
