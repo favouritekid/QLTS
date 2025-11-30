@@ -50,6 +50,8 @@ import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { PageContainer } from "@/components/layouts/PageContainer";
+import { PageHeader } from "@/components/layouts/PageHeader";
 import { cn } from "@/lib/utils";
 
 import {
@@ -247,23 +249,20 @@ export default function TuitionDiscountPage() {
   const isSubmitting = createMutation.isPending || updateMutation.isPending;
 
   return (
-    <div className="container mx-auto py-6">
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <div>
-            <CardTitle className="flex items-center gap-2">
-              <Percent className="h-5 w-5" />
-              Quản lý chính sách ưu đãi học phí
-            </CardTitle>
-            <CardDescription>
-              Thiết lập và quản lý các chính sách ưu đãi, giảm giá học phí
-            </CardDescription>
-          </div>
+    <PageContainer>
+      <PageHeader
+        title="Quản lý chính sách ưu đãi học phí"
+        description="Thiết lập và quản lý các chính sách ưu đãi, giảm giá học phí"
+        icon={<Percent className="h-8 w-8" />}
+        actions={
           <Button onClick={openCreateDialog}>
             <Plus className="mr-2 h-4 w-4" />
             Thêm chính sách
           </Button>
-        </CardHeader>
+        }
+      />
+
+      <Card>
         <CardContent>
           {isLoading ? (
             <div className="space-y-3">
@@ -834,6 +833,6 @@ export default function TuitionDiscountPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageContainer>
   );
 }

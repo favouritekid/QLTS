@@ -1,5 +1,7 @@
 // src/app/(dashboard)/settings/layout.tsx
 import React from "react";
+import { PageContainer } from "@/components/layouts/PageContainer";
+import { PageHeader } from "@/components/layouts/PageHeader";
 import { SettingsNav } from "./_components/SettingsNav"; // Component điều hướng ta sẽ tạo ở bước 3
 
 /**
@@ -9,20 +11,18 @@ import { SettingsNav } from "./_components/SettingsNav"; // Component điều h�
  */
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="space-y-6">
+    <PageContainer maxWidth="md">
       {/* 1. Tiêu đề chung của trang Cài đặt */}
-      <header>
-        <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
-        <p className="text-muted-foreground">
-          Manage your account settings, password, and active sessions.
-        </p>
-      </header>
+      <PageHeader
+        title="Settings"
+        description="Manage your account settings, password, and active sessions."
+      />
 
       {/* 2. Thanh điều hướng dạng Tab */}
       <SettingsNav />
 
       {/* 3. Render nội dung của tab đang được chọn (children) */}
       <div className="pt-4">{children}</div>
-    </div>
+    </PageContainer>
   );
 }

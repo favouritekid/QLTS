@@ -104,10 +104,9 @@ logging.getLogger("sqlalchemy.pool").setLevel(logging.WARNING)
 logging.getLogger("uvicorn.access").setLevel(logging.INFO)
 logging.getLogger("uvicorn.error").setLevel(logging.INFO)
 
-# ❗️ Tắt log DEBUG của Socket.IO và Engine.IO (QUAN TRỌNG NHẤT)
-# Đây là những dòng log như "Sending packet...", "Received packet..."
-logging.getLogger("socketio").setLevel(logging.INFO)
-logging.getLogger("engineio").setLevel(logging.INFO)
+# Tắt log verbose của Socket.IO và Engine.IO (chỉ hiển thị WARNING trở lên)
+logging.getLogger("socketio").setLevel(logging.WARNING)
+logging.getLogger("engineio").setLevel(logging.WARNING)
 
 # Tắt log DEBUG của thư viện user-agents
 logging.getLogger("user_agents").setLevel(logging.INFO)
@@ -138,7 +137,7 @@ async def lifespan(app: FastAPI):
         log.info(f"Casbin Adapter successfully initialized: Type={type(adapter)}")
         enforcer = casbin.AsyncEnforcer("auth_model.conf", adapter)
         await enforcer.load_policy()
-        app.state.enforcer = enforcer
+        fastapi_app.state.enforcer = enforcer
         log.info("✅ Casbin AsyncEnforcer initialized and policies loaded.")
 
         # ✅ DEPRECATED: Default policies are now managed via Alembic migration
@@ -261,8 +260,8 @@ async def lifespan(app: FastAPI):
 
     # (Giữ nguyên logic Rate Limiter)
     if settings.APP_ENV != "test":
-        app.state.limiter = limiter
-        app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+        fastapi_app.state.limiter = limiter
+        fastapi_app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
         log.info("SlowAPI rate limiter INITIALIZED for non-test environment.")
     else:
         log.info("APP_ENV is 'test', skipping SlowAPI rate limiter setup.")
@@ -335,16 +334,14 @@ async def lifespan(app: FastAPI):
 
 
 # === KHỞI TẠO APP ===
-app = FastAPI(
+# NOTE: This creates the FastAPI app, but it will be wrapped with Socket.IO at the END of this file
+# Do NOT use 'app' directly with uvicorn - it will be reassigned to the wrapped version
+fastapi_app = FastAPI(
     title="QLTS Project API with FastAPI",
     description="API for managing leads, users, and system configurations.",
     version="1.0.0",
     lifespan=lifespan,
 )
-
-# === ✅ V5: MOUNT SOCKET.IO APP ===
-# Bọc ứng dụng FastAPI BÊN TRONG ứng dụng Socket.IO
-app_with_sockets = socketio.ASGIApp(sio, app)
 
 
 # ===============================================================
@@ -354,7 +351,7 @@ app_with_sockets = socketio.ASGIApp(sio, app)
 # Register all custom exception handlers from middleware
 # This replaces manual exception handler definitions with a centralized system
 # See: app/middleware/exception_handlers.py for implementation
-register_exception_handlers(app)
+register_exception_handlers(fastapi_app)
 log.info("✅ Custom exception handlers registered")
 
 
@@ -363,7 +360,7 @@ log.info("✅ Custom exception handlers registered")
 # ===============================================================
 
 
-@app.middleware("http")
+@fastapi_app.middleware("http")
 async def request_id_tracking_middleware(request: Request, call_next):
     # (Giữ nguyên logic)
     structlog.contextvars.clear_contextvars()
@@ -428,7 +425,7 @@ if settings.APP_ENV == "test" and not _cors_origins:
     _cors_origins = ["http://testserver", "http://localhost"]
     log.info("Test environment: Using test CORS origins", origins=_cors_origins)
 
-app.add_middleware(
+fastapi_app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=True,
@@ -444,7 +441,7 @@ app.add_middleware(
 
 if settings.APP_ENV == "production":
     from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
-    app.add_middleware(HTTPSRedirectMiddleware)
+    fastapi_app.add_middleware(HTTPSRedirectMiddleware)
     log.info("✅ HTTPS redirect enabled for production")
 
 
@@ -452,7 +449,7 @@ if settings.APP_ENV == "production":
 # === SECURITY HEADERS MIDDLEWARE (✅ Enhanced with CSP)
 # ===============================================================
 
-@app.middleware("http")
+@fastapi_app.middleware("http")
 async def add_security_headers(request: Request, call_next):
     """Add comprehensive security headers to all responses."""
     response = await call_next(request)
@@ -501,22 +498,22 @@ async def add_security_headers(request: Request, call_next):
 # === ROUTERS ===================================================
 # ===============================================================
 
-app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
-app.include_router(profile.router, prefix="/api/profile", tags=["Profile"])
-app.include_router(users.router, prefix="/api/users", tags=["Users"])
-app.include_router(sessions.router, prefix="/api", tags=["Sessions"])
-app.include_router(notifications.router, prefix="/api/notifications", tags=["Notifications"])
-app.include_router(notification_preferences.router, prefix="/api/notifications", tags=["Notification Preferences"])
-app.include_router(notification_rules.router, prefix="/api", tags=["Notification Rules (Admin)"])  # ✅ PHASE 2.2: Admin-only notification rule management
-app.include_router(notification_templates.router, prefix="/api", tags=["Notification Templates (Admin)"])  # ✅ PHASE 3.1: Admin-only template management
-app.include_router(leads.router, prefix="/api/leads", tags=["Leads"])
-app.include_router(applications.router, prefix="/api", tags=["Applications"])
-app.include_router(pipeline.router, prefix="/api/pipeline", tags=["Pipeline"])
-app.include_router(
+fastapi_app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
+fastapi_app.include_router(profile.router, prefix="/api/profile", tags=["Profile"])
+fastapi_app.include_router(users.router, prefix="/api/users", tags=["Users"])
+fastapi_app.include_router(sessions.router, prefix="/api", tags=["Sessions"])
+fastapi_app.include_router(notifications.router, prefix="/api/notifications", tags=["Notifications"])
+fastapi_app.include_router(notification_preferences.router, prefix="/api/notifications", tags=["Notification Preferences"])
+fastapi_app.include_router(notification_rules.router, prefix="/api", tags=["Notification Rules (Admin)"])  # ✅ PHASE 2.2: Admin-only notification rule management
+fastapi_app.include_router(notification_templates.router, prefix="/api", tags=["Notification Templates (Admin)"])  # ✅ PHASE 3.1: Admin-only template management
+fastapi_app.include_router(leads.router, prefix="/api/leads", tags=["Leads"])
+fastapi_app.include_router(applications.router, prefix="/api", tags=["Applications"])
+fastapi_app.include_router(pipeline.router, prefix="/api/pipeline", tags=["Pipeline"])
+fastapi_app.include_router(
     organization.router, prefix="/api", tags=["Organization"]
 )
-app.include_router(officer.router, prefix="/api", tags=["Officer Dashboard"])
-app.include_router(monitoring.router, prefix="/api", tags=["System Monitoring"])
+fastapi_app.include_router(officer.router, prefix="/api", tags=["Officer Dashboard"])
+fastapi_app.include_router(monitoring.router, prefix="/api", tags=["System Monitoring"])
 
 # ===============================================================
 # === ADMIN ROUTERS (PHASE 2 COMPLETE) =========================
@@ -524,7 +521,7 @@ app.include_router(monitoring.router, prefix="/api", tags=["System Monitoring"])
 
 # ✅ SPLIT ADMIN ROUTERS - All 5 specialized routers (70 endpoints)
 # Old monolithic admin.py (2,740 lines) has been completely replaced
-app.include_router(admin_router, prefix="/api")
+fastapi_app.include_router(admin_router, prefix="/api")
 # This provides:
 #   PHASE 2A (39 endpoints):
 #   - /api/admin/users/*       (16 endpoints - user management, sync, analytics)
@@ -549,14 +546,14 @@ app.include_router(admin_router, prefix="/api")
 # Mount static files directory to serve avatars and other static content
 STATIC_DIR = Path(__file__).parent / "static"
 if STATIC_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    fastapi_app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     log.info(f"✅ Static files mounted at /static from {STATIC_DIR}")
 else:
     log.warning(f"⚠️ Static directory not found at {STATIC_DIR}")
 
 
 # === ✅ CẢI TIẾN: Vấn đề #4 - Thêm Metrics Endpoint ===
-@app.get("/metrics", tags=["Utilities"])
+@fastapi_app.get("/metrics", tags=["Utilities"])
 async def metrics():
     """Endpoint cho Prometheus cào (scrape) metrics."""
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
@@ -567,14 +564,14 @@ async def metrics():
 # ===============================================================
 
 
-@app.get("/health", tags=["Utilities"])
+@fastapi_app.get("/health", tags=["Utilities"])
 async def health_check():
     """Kiểm tra API cơ bản."""
     log.debug("Health check endpoint was reached.")  # ✅ SỬA LỖI: Xóa `await`
     return {"status": "ok", "detail": "Server is healthy and running!"}
 
 
-@app.get("/health/detailed", tags=["Utilities"])
+@fastapi_app.get("/health/detailed", tags=["Utilities"])
 async def detailed_health_check(db: AsyncSession = Depends(database.get_db)):
     """
     Kiểm tra sức khỏe chi tiết của API và các dịch vụ phụ thuộc.
@@ -645,3 +642,16 @@ async def detailed_health_check(db: AsyncSession = Depends(database.get_db)):
         status.HTTP_200_OK if is_healthy else status.HTTP_503_SERVICE_UNAVAILABLE
     )
     return JSONResponse(status_code=status_code, content=checks)
+
+
+# ===============================================================
+# === ✅ FINAL STEP: WRAP FASTAPI APP WITH SOCKET.IO ===========
+# ===============================================================
+
+# IMPORTANT: This MUST be at the END of the file, after all routers and middlewares are registered
+# The FastAPI app is wrapped inside Socket.IO ASGI application
+# Uvicorn will load 'app', which points to the Socket.IO wrapped application
+
+# Wrap FastAPI inside Socket.IO and export as 'app' for uvicorn
+# This ensures 'uvicorn app.main:app' loads the correct ASGI application
+app = socketio.ASGIApp(sio, fastapi_app)

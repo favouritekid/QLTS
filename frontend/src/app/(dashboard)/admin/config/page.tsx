@@ -28,6 +28,8 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PageContainer } from "@/components/layouts/PageContainer";
+import { PageHeader } from "@/components/layouts/PageHeader";
 import { GraduationCap, Layers, FileText, Plus, Pencil, Trash2, Loader2 } from "lucide-react";
 
 // ============================================
@@ -352,15 +354,12 @@ function ConfigTable({ title, description, icon, endpoint, queryKey }: ConfigTab
 
 export default function SystemConfigPage() {
   return (
-    <div className="space-y-6">
+    <PageContainer>
       {/* Header */}
-      <header>
-        <h1 className="text-3xl font-bold tracking-tight">System Configuration</h1>
-        <p className="text-muted-foreground">
-          Manage system-wide configuration options for degree levels, offering types, and document
-          types.
-        </p>
-      </header>
+      <PageHeader
+        title="System Configuration"
+        description="Manage system-wide configuration options for degree levels, offering types, and document types."
+      />
 
       {/* Tabs */}
       <Tabs defaultValue="degree-levels" className="space-y-4">
@@ -409,6 +408,6 @@ export default function SystemConfigPage() {
           />
         </TabsContent>
       </Tabs>
-    </div>
+    </PageContainer>
   );
 }
