@@ -37,9 +37,10 @@ Usage:
         }
     )
 """
+import asyncio
 import structlog
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, Tuple, Any
 
 from sqlalchemy import and_, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -64,6 +65,49 @@ from app.services.notification_service import (
 
 # Chunk size for bulk insert (to avoid overwhelming the DB)
 BULK_INSERT_CHUNK_SIZE = 100
+
+
+async def _send_via_channel(
+    channel_name: str,
+    notifications: List[Any],
+    recipient_ids: List[int],
+    context: dict,
+    event: str
+) -> Tuple[str, Optional[Any], Optional[str]]:
+    """
+    ✅ NOTIFICATION 2.0 - PHASE 3.1: Send notifications via a single channel with error handling.
+
+    Helper function for parallel channel delivery using asyncio.gather().
+
+    Args:
+        channel_name: Name of the channel ("socket", "email", etc.)
+        notifications: List of notification objects to send
+        recipient_ids: List of recipient user IDs
+        context: Event payload context
+        event: Event name for logging
+
+    Returns:
+        Tuple of (channel_name, ChannelResult or None, error_message or None)
+        - On success: (channel_name, ChannelResult, None)
+        - On failure: (channel_name, None, error_message)
+    """
+    try:
+        from app.services.notification_channels import get_channel
+
+        channel = get_channel(channel_name)
+        result = await channel.send(
+            notifications=notifications,
+            recipient_ids=recipient_ids,
+            context=context
+        )
+        return (channel_name, result, None)
+
+    except ValueError as e:
+        # Unknown channel (not registered)
+        return (channel_name, None, f"Unknown channel: {str(e)}")
+    except Exception as e:
+        # Channel send failed
+        return (channel_name, None, f"Delivery failed: {str(e)}")
 
 
 async def dispatch(
@@ -282,12 +326,11 @@ async def dispatch(
     # This keeps cache warm and avoids cache miss on next read
     await _prepend_to_inbox_cache(user_ids, notification_ids)
 
-    # ✅ NOTIFICATION 2.0 - PHASE 3: Multi-Channel Delivery via Channel Infrastructure
-    # Step 8: Send notifications through configured channels
-    # Replaces old immediate Socket.IO + Celery approach with unified channel system
+    # ✅ NOTIFICATION 2.0 - PHASE 3.1: Parallel Multi-Channel Delivery
+    # Step 8: Send notifications through configured channels IN PARALLEL
+    # Performance optimization: asyncio.gather() reduces latency from sequential to parallel
+    # Example: 3 channels @ 1s each = 3s sequential → ~1s parallel
     try:
-        from app.services.notification_channels import get_channel
-
         # Fetch notifications from database for channel delivery
         result = await db.execute(
             select(models.Notification)
@@ -302,53 +345,64 @@ async def dispatch(
             )
             return notification_ids
 
-        # Send through each configured channel
-        for channel_name in config.channels:
-            try:
-                channel = get_channel(channel_name)
+        # Create parallel tasks for all channels
+        channel_tasks = [
+            _send_via_channel(
+                channel_name=channel_name,
+                notifications=notifications,
+                recipient_ids=user_ids,
+                context=payload,
+                event=event.value
+            )
+            for channel_name in config.channels
+        ]
 
-                result = await channel.send(
-                    notifications=notifications,
-                    recipient_ids=user_ids,
-                    context=payload
-                )
+        # Execute all channel deliveries in parallel
+        # return_exceptions=True ensures one channel failure doesn't affect others
+        channel_results = await asyncio.gather(*channel_tasks, return_exceptions=True)
 
-                log.info(
-                    "Channel delivery completed",
-                    event=event.value,
-                    channel=channel_name,
-                    sent_count=result.sent_count,
-                    failed_count=len(result.failed_ids),
-                    success=result.success
-                )
-
-                # Log failures for monitoring
-                if result.failed_ids:
-                    log.warning(
-                        "Some recipients failed for channel",
-                        event=event.value,
-                        channel=channel_name,
-                        failed_ids=result.failed_ids[:10],  # Log first 10
-                        failed_count=len(result.failed_ids)
-                    )
-
-            except ValueError as e:
-                # Unknown channel (not registered)
+        # Process results and log per-channel statistics
+        for result in channel_results:
+            # Handle unexpected exceptions from gather
+            if isinstance(result, Exception):
                 log.error(
-                    "Unknown channel, skipping",
+                    "Unexpected channel delivery exception",
                     event=event.value,
-                    channel=channel_name,
-                    error=str(e)
+                    error=str(result)
                 )
-            except Exception as e:
-                # Channel send failed, log but continue with other channels
+                continue
+
+            channel_name, channel_result, error_msg = result
+
+            if error_msg:
+                # Channel failed
                 log.error(
                     "Channel delivery failed",
                     event=event.value,
                     channel=channel_name,
-                    error=str(e),
+                    error=error_msg,
                     notification_count=len(notifications)
                 )
+            elif channel_result:
+                # Channel succeeded
+                log.info(
+                    "Channel delivery completed",
+                    event=event.value,
+                    channel=channel_name,
+                    sent_count=channel_result.sent_count,
+                    failed_count=len(channel_result.failed_ids),
+                    success=channel_result.success
+                )
+
+                # Log failures for monitoring
+                if channel_result.failed_ids:
+                    log.warning(
+                        "Some recipients failed for channel",
+                        event=event.value,
+                        channel=channel_name,
+                        failed_ids=channel_result.failed_ids[:10],  # Log first 10
+                        failed_count=len(channel_result.failed_ids)
+                    )
 
     except Exception as e:
         # Critical error in channel delivery system
