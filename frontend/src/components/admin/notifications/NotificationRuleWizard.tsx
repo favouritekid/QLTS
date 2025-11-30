@@ -31,6 +31,9 @@ import {
   Filter,
   MessageSquare,
   Sparkles,
+  Check,
+  ChevronsUpDown,
+  Zap,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -72,13 +75,28 @@ import {
 } from "@/components/ui/tooltip";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Separator } from "@/components/ui/separator";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 
 import {
   useCreateNotificationRule,
   useUpdateNotificationRule,
   useNotificationRule,
 } from "@/hooks/useNotificationRules";
+import { useAdminUsersList } from "@/hooks/useAdminUsers";
 
 // ============================================
 // TYPES & INTERFACES
@@ -608,6 +626,22 @@ export function NotificationRuleWizard({
   const [currentStep, setCurrentStep] = useState(1);
   const isEditMode = !!ruleId;
 
+  // User selection state (for specific_users recipient)
+  const [selectedUserIds, setSelectedUserIds] = useState<number[]>([]);
+  const [userPickerOpen, setUserPickerOpen] = useState(false);
+
+  // Condition builder state
+  const [conditionEnabled, setConditionEnabled] = useState(false);
+  const [conditionField, setConditionField] = useState<string>("");
+  const [conditionOperator, setConditionOperator] = useState<string>("==");
+  const [conditionValue, setConditionValue] = useState<string>("");
+
+  // Fetch users for user picker
+  const { data: usersData } = useAdminUsersList({
+    page: 1,
+    page_size: 100,
+  });
+
   // Fetch existing rule if in edit mode
   const { data: existingRule, isLoading: loadingRule } = useNotificationRule(ruleId);
 
@@ -664,6 +698,24 @@ export function NotificationRuleWizard({
   const insertVariable = (field: "title_template" | "message_template", variable: string) => {
     const currentValue = form.getValues(field);
     form.setValue(field, `${currentValue}${variable} `);
+  };
+
+  // Update condition in form
+  const updateCondition = (field: string, operator: string, value: string) => {
+    if (!field || !value) {
+      form.setValue("condition", null);
+      return;
+    }
+
+    // Build condition object based on backend format
+    const condition = {
+      type: "simple",
+      field: field,
+      operator: operator,
+      value: value,
+    };
+
+    form.setValue("condition", condition);
   };
 
   const onSubmit = async (data: FormValues) => {
@@ -724,6 +776,130 @@ export function NotificationRuleWizard({
           <>
             {/* Step Indicator */}
             <StepIndicator currentStep={currentStep} totalSteps={4} />
+
+            {/* Quick Templates */}
+            {currentStep === 1 && !isEditMode && (
+              <Card className="bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <Zap className="h-4 w-4 text-blue-600" />
+                    Kịch bản mẫu - Bắt đầu nhanh
+                    <HelpTooltip content="Click vào kịch bản mẫu để tự động điền form theo các trường hợp phổ biến" />
+                  </CardTitle>
+                  <CardDescription className="text-xs">
+                    Click để áp dụng kịch bản và tùy chỉnh sau
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {/* Template 1: Manager creates lead */}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-auto py-3 px-4 justify-start text-left"
+                      onClick={() => {
+                        form.setValue("event", "lead_created");
+                        form.setValue("recipient_config", {
+                          resolver_type: "unit_staff",
+                          params: {},
+                        });
+                        setConditionEnabled(true);
+                        setConditionField("actor.role");
+                        setConditionOperator("==");
+                        setConditionValue("manager");
+                        updateCondition("actor.role", "==", "manager");
+                        form.setValue("title_template", "Lead mới từ Manager: $lead_name");
+                        form.setValue("message_template", "Manager vừa tạo lead $lead_name ($lead_phone). Các officer cùng đơn vị vui lòng theo dõi.");
+                        form.setValue("notification_type", "info");
+                        setCurrentStep(2);
+                      }}
+                    >
+                      <div className="space-y-1">
+                        <p className="font-medium text-sm">Manager tạo lead → Gửi cho Officers</p>
+                        <p className="text-xs text-muted-foreground">
+                          Khi manager tạo lead, gửi thông báo cho tất cả officers cùng đơn vị
+                        </p>
+                      </div>
+                    </Button>
+
+                    {/* Template 2: Lead assigned */}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-auto py-3 px-4 justify-start text-left"
+                      onClick={() => {
+                        form.setValue("event", "lead_assigned");
+                        form.setValue("recipient_config", {
+                          resolver_type: "lead_owner",
+                          params: {},
+                        });
+                        form.setValue("title_template", "Lead được phân công: $lead_name");
+                        form.setValue("message_template", "Bạn vừa được phân công lead $lead_name ($lead_phone). Vui lòng liên hệ sớm.");
+                        form.setValue("notification_type", "success");
+                        setCurrentStep(2);
+                      }}
+                    >
+                      <div className="space-y-1">
+                        <p className="font-medium text-sm">Lead được phân công</p>
+                        <p className="text-xs text-muted-foreground">
+                          Thông báo cho officer khi được gán lead mới
+                        </p>
+                      </div>
+                    </Button>
+
+                    {/* Template 3: Lead assignment failed */}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-auto py-3 px-4 justify-start text-left"
+                      onClick={() => {
+                        form.setValue("event", "lead_assignment_failed");
+                        form.setValue("recipient_config", {
+                          resolver_type: "unit_managers",
+                          params: {},
+                        });
+                        form.setValue("title_template", "Cảnh báo: Phân công lead thất bại");
+                        form.setValue("message_template", "Không thể tự động phân công lead $lead_name. Lý do: $reason. Vui lòng phân công thủ công.");
+                        form.setValue("notification_type", "warning");
+                        setCurrentStep(2);
+                      }}
+                    >
+                      <div className="space-y-1">
+                        <p className="font-medium text-sm">Phân công thất bại → Gửi Manager</p>
+                        <p className="text-xs text-muted-foreground">
+                          Cảnh báo manager khi không thể phân công lead tự động
+                        </p>
+                      </div>
+                    </Button>
+
+                    {/* Template 4: Consultation reminder */}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-auto py-3 px-4 justify-start text-left"
+                      onClick={() => {
+                        form.setValue("event", "consultation_reminder");
+                        form.setValue("recipient_config", {
+                          resolver_type: "lead_owner",
+                          params: {},
+                        });
+                        form.setValue("title_template", "Nhắc nhở: Tư vấn với $lead_name");
+                        form.setValue("message_template", "Bạn có lịch tư vấn với $lead_name ($lead_phone) trong $minutes_until phút nữa.");
+                        form.setValue("notification_type", "info");
+                        setCurrentStep(2);
+                      }}
+                    >
+                      <div className="space-y-1">
+                        <p className="font-medium text-sm">Nhắc lịch tư vấn</p>
+                        <p className="text-xs text-muted-foreground">
+                          Nhắc officer trước khi đến giờ tư vấn
+                        </p>
+                      </div>
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
             <Form {...form}>
               <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
@@ -882,6 +1058,112 @@ export function NotificationRuleWizard({
                         </FormItem>
                       )}
                     />
+
+                    {/* User Picker - Only show when specific_users is selected */}
+                    {selectedRecipient === "specific_users" && (
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="text-sm">Chọn người dùng cụ thể</CardTitle>
+                          <CardDescription>Chọn người sẽ nhận thông báo từ danh sách</CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                          <Popover open={userPickerOpen} onOpenChange={setUserPickerOpen}>
+                            <PopoverTrigger asChild>
+                              <Button
+                                variant="outline"
+                                role="combobox"
+                                aria-expanded={userPickerOpen}
+                                className="w-full justify-between"
+                              >
+                                {selectedUserIds.length > 0
+                                  ? `${selectedUserIds.length} người được chọn`
+                                  : "Chọn người dùng..."}
+                                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                              </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-full p-0" align="start">
+                              <Command>
+                                <CommandInput placeholder="Tìm theo tên hoặc username..." />
+                                <CommandList>
+                                  <CommandEmpty>Không tìm thấy người dùng</CommandEmpty>
+                                  <CommandGroup>
+                                    {usersData?.users?.map((user) => (
+                                      <CommandItem
+                                        key={user.id}
+                                        value={`${user.username} ${user.full_name || ""}`}
+                                        onSelect={() => {
+                                          setSelectedUserIds((prev) =>
+                                            prev.includes(user.id)
+                                              ? prev.filter((id) => id !== user.id)
+                                              : [...prev, user.id]
+                                          );
+                                          // Update form value
+                                          const currentIds = selectedUserIds.includes(user.id)
+                                            ? selectedUserIds.filter((id) => id !== user.id)
+                                            : [...selectedUserIds, user.id];
+                                          form.setValue("recipient_config", {
+                                            resolver_type: "specific_users",
+                                            params: { user_ids: currentIds },
+                                          });
+                                        }}
+                                      >
+                                        <Check
+                                          className={cn(
+                                            "mr-2 h-4 w-4",
+                                            selectedUserIds.includes(user.id)
+                                              ? "opacity-100"
+                                              : "opacity-0"
+                                          )}
+                                        />
+                                        <div className="flex-1">
+                                          <div className="font-medium text-sm">
+                                            {user.full_name || user.username}
+                                          </div>
+                                          <div className="text-xs text-muted-foreground">
+                                            @{user.username} • {user.role}
+                                          </div>
+                                        </div>
+                                      </CommandItem>
+                                    ))}
+                                  </CommandGroup>
+                                </CommandList>
+                              </Command>
+                            </PopoverContent>
+                          </Popover>
+
+                          {/* Display selected users */}
+                          {selectedUserIds.length > 0 && (
+                            <div className="flex flex-wrap gap-2">
+                              {selectedUserIds.map((userId) => {
+                                const user = usersData?.users?.find((u) => u.id === userId);
+                                if (!user) return null;
+                                return (
+                                  <Badge key={userId} variant="secondary" className="gap-1">
+                                    {user.full_name || user.username}
+                                    <button
+                                      type="button"
+                                      className="ml-1 hover:text-destructive"
+                                      onClick={() => {
+                                        setSelectedUserIds((prev) =>
+                                          prev.filter((id) => id !== userId)
+                                        );
+                                        const currentIds = selectedUserIds.filter((id) => id !== userId);
+                                        form.setValue("recipient_config", {
+                                          resolver_type: "specific_users",
+                                          params: { user_ids: currentIds },
+                                        });
+                                      }}
+                                    >
+                                      ×
+                                    </button>
+                                  </Badge>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </CardContent>
+                      </Card>
+                    )}
                   </div>
                 )}
 
@@ -899,32 +1181,176 @@ export function NotificationRuleWizard({
                       </p>
                     </div>
 
-                    <Card className="border-dashed">
-                      <CardContent className="pt-6">
-                        <div className="text-center py-8">
-                          <Filter className="h-12 w-12 mx-auto text-muted-foreground/50 mb-3" />
-                          <p className="text-sm text-muted-foreground mb-2">
-                            Tính năng điều kiện nâng cao sắp ra mắt
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            Hiện tại, thông báo sẽ được gửi mỗi khi sự kiện xảy ra mà không có điều kiện lọc
-                          </p>
-                          <Badge variant="secondary" className="mt-3">
-                            Sắp có
-                          </Badge>
+                    {/* Enable/Disable Condition */}
+                    <div className="flex items-center justify-between rounded-lg border p-4">
+                      <div className="space-y-0.5">
+                        <p className="text-sm font-medium">Bật điều kiện lọc</p>
+                        <p className="text-xs text-muted-foreground">
+                          Chỉ gửi thông báo khi đáp ứng điều kiện
+                        </p>
+                      </div>
+                      <Switch
+                        checked={conditionEnabled}
+                        onCheckedChange={(checked) => {
+                          setConditionEnabled(checked);
+                          if (!checked) {
+                            form.setValue("condition", null);
+                            setConditionField("");
+                            setConditionOperator("==");
+                            setConditionValue("");
+                          }
+                        }}
+                      />
+                    </div>
+
+                    {/* Visual Condition Builder */}
+                    {conditionEnabled && (
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="text-sm">Thiết lập điều kiện</CardTitle>
+                          <CardDescription>
+                            Chỉ gửi thông báo khi thỏa mãn điều kiện dưới đây
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          {/* Condition Field */}
+                          <div className="space-y-2">
+                            <label className="text-sm font-medium">Trường dữ liệu</label>
+                            <Select
+                              value={conditionField}
+                              onValueChange={(value) => {
+                                setConditionField(value);
+                                updateCondition(value, conditionOperator, conditionValue);
+                              }}
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder="Chọn trường..." />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="actor.role">Vai trò người thực hiện</SelectItem>
+                                <SelectItem value="actor.unit_id">Đơn vị người thực hiện</SelectItem>
+                                <SelectItem value="lead.status">Trạng thái lead</SelectItem>
+                                <SelectItem value="lead.source">Nguồn lead</SelectItem>
+                                <SelectItem value="application.status">Trạng thái hồ sơ</SelectItem>
+                                <SelectItem value="amount">Số tiền</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <p className="text-xs text-muted-foreground">
+                              💡 VD: "actor.role" để lọc theo vai trò của người thực hiện hành động
+                            </p>
+                          </div>
+
+                          {/* Condition Operator */}
+                          <div className="space-y-2">
+                            <label className="text-sm font-medium">Phép so sánh</label>
+                            <Select
+                              value={conditionOperator}
+                              onValueChange={(value) => {
+                                setConditionOperator(value);
+                                updateCondition(conditionField, value, conditionValue);
+                              }}
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="==">Bằng (==)</SelectItem>
+                                <SelectItem value="!=">Khác (!=)</SelectItem>
+                                <SelectItem value=">">Lớn hơn ({">"}</SelectItem>
+                                <SelectItem value="<">Nhỏ hơn ({"<"})</SelectItem>
+                                <SelectItem value=">=">Lớn hơn hoặc bằng ({">"}=)</SelectItem>
+                                <SelectItem value="<=">Nhỏ hơn hoặc bằng ({"<"}=)</SelectItem>
+                                <SelectItem value="contains">Chứa (contains)</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          {/* Condition Value */}
+                          <div className="space-y-2">
+                            <label className="text-sm font-medium">Giá trị</label>
+                            {conditionField === "actor.role" ? (
+                              <Select
+                                value={conditionValue}
+                                onValueChange={(value) => {
+                                  setConditionValue(value);
+                                  updateCondition(conditionField, conditionOperator, value);
+                                }}
+                              >
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Chọn vai trò..." />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="manager">Manager</SelectItem>
+                                  <SelectItem value="officer">Officer</SelectItem>
+                                  <SelectItem value="admin">Admin</SelectItem>
+                                  <SelectItem value="support">Support</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            ) : (
+                              <Input
+                                placeholder={
+                                  conditionField === "amount"
+                                    ? "VD: 10000000"
+                                    : "VD: manager"
+                                }
+                                value={conditionValue}
+                                onChange={(e) => {
+                                  setConditionValue(e.target.value);
+                                  updateCondition(conditionField, conditionOperator, e.target.value);
+                                }}
+                              />
+                            )}
+                            <p className="text-xs text-muted-foreground">
+                              💡 Giá trị để so sánh với trường dữ liệu
+                            </p>
+                          </div>
+
+                          {/* Preview */}
+                          {conditionField && conditionValue && (
+                            <div className="bg-blue-50 border-l-2 border-blue-400 px-3 py-2 rounded">
+                              <p className="text-xs font-medium text-blue-900 mb-1">
+                                📝 Điều kiện hiện tại:
+                              </p>
+                              <code className="text-xs text-blue-700">
+                                {conditionField} {conditionOperator} "{conditionValue}"
+                              </code>
+                            </div>
+                          )}
+                        </CardContent>
+                      </Card>
+                    )}
+
+                    {/* Example scenarios */}
+                    <Card className="bg-muted/50">
+                      <CardHeader className="pb-3">
+                        <CardTitle className="text-sm">💡 Ví dụ điều kiện phổ biến</CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="space-y-2 text-xs">
+                          <div className="flex items-start gap-2">
+                            <span className="text-muted-foreground">•</span>
+                            <div>
+                              <p className="font-medium">Chỉ gửi khi Manager tạo lead:</p>
+                              <code className="text-muted-foreground">actor.role == "manager"</code>
+                            </div>
+                          </div>
+                          <div className="flex items-start gap-2">
+                            <span className="text-muted-foreground">•</span>
+                            <div>
+                              <p className="font-medium">Chỉ gửi khi thanh toán trên 10 triệu:</p>
+                              <code className="text-muted-foreground">amount {">"} 10000000</code>
+                            </div>
+                          </div>
+                          <div className="flex items-start gap-2">
+                            <span className="text-muted-foreground">•</span>
+                            <div>
+                              <p className="font-medium">Chỉ gửi khi hồ sơ được duyệt:</p>
+                              <code className="text-muted-foreground">application.status == "approved"</code>
+                            </div>
+                          </div>
                         </div>
                       </CardContent>
                     </Card>
-
-                    <div className="bg-muted/50 rounded-lg p-4 space-y-2">
-                      <p className="text-sm font-medium">💡 Sắp có các điều kiện:</p>
-                      <ul className="text-xs text-muted-foreground space-y-1 ml-4">
-                        <li>• Lọc theo vai trò người thực hiện (Manager, Officer, Admin)</li>
-                        <li>• Lọc theo đơn vị (chỉ gửi cho một số phòng ban)</li>
-                        <li>• Lọc theo giá trị (VD: chỉ gửi khi thanh toán {">"}  10 triệu)</li>
-                        <li>• Kết hợp nhiều điều kiện với AND/OR</li>
-                      </ul>
-                    </div>
                   </div>
                 )}
 
