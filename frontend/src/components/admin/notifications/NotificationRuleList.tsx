@@ -64,7 +64,7 @@ import {
   useDeleteNotificationRule,
 } from "@/hooks/useNotificationRules";
 import type { NotificationRule } from "@/types/api.types";
-import { NotificationRuleForm } from "./NotificationRuleForm";
+import { NotificationRuleWizard } from "./NotificationRuleWizard";
 
 // Event category configuration
 const EVENT_CATEGORIES = {
@@ -576,8 +576,8 @@ export function NotificationRuleList() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Create/Edit Form Dialog */}
-      <NotificationRuleForm
+      {/* Create/Edit Wizard Dialog */}
+      <NotificationRuleWizard
         ruleId={editingRuleId}
         open={formOpen}
         onOpenChange={handleFormClose}
