@@ -1,10 +1,10 @@
-// src/middleware.ts
+// src/proxy.ts
 /**
- * 🔒 SERVER-SIDE AUTHENTICATION MIDDLEWARE
+ * 🔒 SERVER-SIDE AUTHENTICATION PROXY
  *
  * ✅ SECURITY FIX: Prevents Client-Side Auth Guard vulnerability
  *
- * This middleware runs on the server BEFORE any page is rendered, ensuring:
+ * This proxy runs on the server BEFORE any page is rendered, ensuring:
  * 1. Unauthorized users NEVER receive HTML/data from protected pages
  * 2. Authentication is verified using httpOnly cookies (not localStorage)
  * 3. Role-based access control (RBAC) is enforced server-side
@@ -45,10 +45,10 @@ const ADMIN_ROUTES = ["/admin"];
 // const PROTECTED_ROUTES = ["/dashboard", "/profile", "/settings"];
 
 // ============================================
-// 🔐 MIDDLEWARE LOGIC
+// 🔐 PROXY LOGIC
 // ============================================
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // ========================================
@@ -60,7 +60,7 @@ export function middleware(request: NextRequest) {
 
   // Allow public routes without auth check
   if (isPublicRoute) {
-    console.log(`[Middleware] Public route: ${pathname}`);
+    console.log(`[Proxy] Public route: ${pathname}`);
     return NextResponse.next();
   }
 
@@ -71,7 +71,7 @@ export function middleware(request: NextRequest) {
   const accessToken = request.cookies.get("access_token")?.value;
 
   if (!accessToken) {
-    console.warn(`[Middleware] ❌ No access token for protected route: ${pathname}`);
+    console.warn(`[Proxy] ❌ No access token for protected route: ${pathname}`);
 
     // Redirect to login with return URL
     const loginUrl = new URL("/login", request.url);
@@ -86,7 +86,7 @@ export function middleware(request: NextRequest) {
   const payload = decodeJWT(accessToken);
 
   if (!payload) {
-    console.warn(`[Middleware] ❌ Invalid token format for: ${pathname}`);
+    console.warn(`[Proxy] ❌ Invalid token format for: ${pathname}`);
 
     // Clear invalid cookie and redirect
     const response = NextResponse.redirect(new URL("/login", request.url));
@@ -96,7 +96,7 @@ export function middleware(request: NextRequest) {
 
   // Check if token is expired
   if (isTokenExpired(accessToken)) {
-    console.warn(`[Middleware] ❌ Expired token for: ${pathname}`);
+    console.warn(`[Proxy] ❌ Expired token for: ${pathname}`);
 
     // Clear expired cookie and redirect
     const response = NextResponse.redirect(new URL("/login", request.url));
@@ -116,14 +116,14 @@ export function middleware(request: NextRequest) {
     // ✅ DYNAMIC ROLE CHECK: Use config instead of hard-coded roles
     if (!hasAdminAccess(userRole)) {
       console.warn(
-        `[Middleware] ❌ Unauthorized role '${userRole || "undefined"}' for admin route: ${pathname}`
+        `[Proxy] ❌ Unauthorized role '${userRole || "undefined"}' for admin route: ${pathname}`
       );
 
       // Redirect to dashboard (unauthorized for admin pages)
       return NextResponse.redirect(new URL("/dashboard", request.url));
     }
 
-    console.log(`[Middleware] ✅ Admin access granted for role '${userRole}': ${pathname}`);
+    console.log(`[Proxy] ✅ Admin access granted for role '${userRole}': ${pathname}`);
   }
 
   // ========================================
@@ -132,7 +132,7 @@ export function middleware(request: NextRequest) {
 
   // If user is logged in and tries to access login page, redirect to dashboard
   if (pathname === "/login" || pathname === "/register") {
-    console.log(`[Middleware] Redirecting authenticated user from ${pathname} to /dashboard`);
+    console.log(`[Proxy] Redirecting authenticated user from ${pathname} to /dashboard`);
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
@@ -140,7 +140,7 @@ export function middleware(request: NextRequest) {
   // STEP 6: Allow access
   // ========================================
 
-  console.log(`[Middleware] ✅ Access granted: ${pathname} (user: ${payload.sub})`);
+  console.log(`[Proxy] ✅ Access granted: ${pathname} (user: ${payload.sub})`);
   return NextResponse.next();
 }
 
