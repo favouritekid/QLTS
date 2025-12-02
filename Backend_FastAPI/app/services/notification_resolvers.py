@@ -604,3 +604,50 @@ dorm_staff_resolver = DormStaffResolver()
 all_users_resolver = AllUsersResolver()
 all_admins_resolver = AllAdminsResolver()
 specific_users_resolver = SpecificUsersResolver()
+
+
+# ============================================
+# ✅ NOTIFICATION 2.0: RESOLVER REGISTRY
+# ============================================
+# Maps metadata resolver_type strings to resolver instances
+
+
+RESOLVER_REGISTRY = {
+    # Lead/Application resolvers
+    "assigned_officer": lead_owner_resolver,
+    "lead_owner": lead_owner_resolver,  # Alias
+
+    # Unit resolvers
+    "unit_staff": unit_staff_resolver,
+    "unit_officers": unit_staff_resolver,  # Alias
+    "unit_managers": unit_managers_resolver,
+    "all_managers": unit_managers_resolver,  # Alias
+
+    # Dorm resolvers
+    "dorm_residents": dorm_residents_resolver,
+    "dorm_staff": dorm_staff_resolver,
+
+    # Global resolvers
+    "all_users": all_users_resolver,
+    "all_officers": all_users_resolver,  # Filtered by roles param
+    "all_admins": all_admins_resolver,
+    "specific_users": specific_users_resolver,
+}
+
+
+def get_resolver(resolver_type: str) -> Optional[BaseResolver]:
+    """
+    Get resolver instance by type name.
+
+    Args:
+        resolver_type: Resolver type from metadata (e.g., "assigned_officer")
+
+    Returns:
+        Resolver instance or None if not found
+
+    Example:
+        resolver = get_resolver("assigned_officer")
+        if resolver:
+            user_ids = await resolver.resolve_users(db, payload)
+    """
+    return RESOLVER_REGISTRY.get(resolver_type)
