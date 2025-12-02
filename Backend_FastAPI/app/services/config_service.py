@@ -798,16 +798,19 @@ async def get_document_type_by_id(
 async def create_document_type(
     db: AsyncSession,
     type_in: schemas.ConfigDocumentTypeCreate
-) -> models.ConfigDocumentType:
+) -> Tuple[models.ConfigDocumentType, Callable]:
     """
     Create a new document type.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
 
     Args:
         db: Database session
         type_in: Document type creation data
 
     Returns:
-        Created ConfigDocumentType model
+        Tuple of (document_type, post_commit_callback)
 
     Raises:
         DuplicateResourceError: If code or name already exists
@@ -842,11 +845,17 @@ async def create_document_type(
         is_active=type_in.is_active
     )
     db.add(db_type)
-    await db.commit()
+
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
     await db.refresh(db_type)
 
-    log.info("Document type created", type_id=db_type.id, code=db_type.code)
-    return db_type
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        log.info("Document type created", type_id=db_type.id, code=db_type.code)
+
+    return db_type, _post_commit
 
 
 async def update_document_type(
