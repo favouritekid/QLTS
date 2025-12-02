@@ -457,8 +457,16 @@ async def update_organization_unit(
     db: AsyncSession,
     unit_id: int,
     unit_in: schemas.OrganizationUnitUpdate
-) -> models.OrganizationUnit:
-    """Update an organization unit."""
+) -> Tuple[models.OrganizationUnit, Callable]:
+    """
+    Update an organization unit.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (organization_unit, post_commit_callback)
+    """
     try:
         db_unit = await get_organization_unit_by_id(db, unit_id)
         update_data = unit_in.model_dump(exclude_unset=True)
@@ -490,30 +498,44 @@ async def update_organization_unit(
             setattr(db_unit, key, value)
 
         db.add(db_unit)
-        await db.commit()
 
-        await invalidate_org_cache()
-        await emit_organization_updated(
-            operation="update",
-            resource_type="organization",
-            resource_id=db_unit.id,
-            resource_name=db_unit.name
-        )
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
 
-        return await get_organization_unit_by_id(db, unit_id)
+        # Get full unit with relationships
+        result_unit = await get_organization_unit_by_id(db, unit_id)
+
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            await invalidate_org_cache()
+            await emit_organization_updated(
+                operation="update",
+                resource_type="organization",
+                resource_id=db_unit.id,
+                resource_name=db_unit.name
+            )
+
+        return result_unit, _post_commit
 
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error("Failed to update organization unit", error=str(e), exc_info=True)
         raise
 
 
-async def delete_organization_unit(db: AsyncSession, unit_id: int):
+async def delete_organization_unit(db: AsyncSession, unit_id: int) -> Tuple[None, Callable]:
     """
     Soft delete an organization unit.
 
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
     Sets is_active=False to preserve historical data.
     Prevents deletion if unit has active children or programs.
+
+    Returns:
+        Tuple of (None, post_commit_callback)
     """
     try:
         db_unit = await get_organization_unit_by_id(db, unit_id)
@@ -561,20 +583,26 @@ async def delete_organization_unit(db: AsyncSession, unit_id: int):
         # Soft delete
         db_unit.is_active = False
         db.add(db_unit)
-        await db.commit()
 
-        log.info("Organization unit soft-deleted", unit_id=unit_id, unit_name=unit_name)
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
 
-        await invalidate_org_cache()
-        await emit_organization_updated(
-            operation="delete",
-            resource_type="organization",
-            resource_id=unit_id,
-            resource_name=unit_name
-        )
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            log.info("Organization unit soft-deleted", unit_id=unit_id, unit_name=unit_name)
+            await invalidate_org_cache()
+            await emit_organization_updated(
+                operation="delete",
+                resource_type="organization",
+                resource_id=unit_id,
+                resource_name=unit_name
+            )
+
+        return None, _post_commit
 
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error("Failed to delete organization unit", error=str(e), exc_info=True)
         raise
 
