@@ -639,8 +639,16 @@ async def get_major_program_by_id(
 async def create_major_program(
     db: AsyncSession,
     program_in: schemas.MajorProgramCreate
-) -> models.MajorProgram:
-    """Create a new major program."""
+) -> Tuple[models.MajorProgram, Callable]:
+    """
+    Create a new major program.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (major_program, post_commit_callback)
+    """
     try:
         # Check duplicate code
         existing_query = select(models.MajorProgram).where(
@@ -669,23 +677,30 @@ async def create_major_program(
 
         db_program = models.MajorProgram(**program_in.model_dump())
         db.add(db_program)
-        await db.commit()
+
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
         await db.refresh(db_program)
 
-        log.info("Major program created", program_id=db_program.id, code=db_program.code)
+        # Get full program with relationships
+        result_program = await get_major_program_by_id(db, db_program.id)
 
-        await invalidate_org_cache()
-        await emit_organization_updated(
-            operation="create",
-            resource_type="program",
-            resource_id=db_program.id,
-            resource_name=db_program.name
-        )
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            log.info("Major program created", program_id=db_program.id, code=db_program.code)
+            await invalidate_org_cache()
+            await emit_organization_updated(
+                operation="create",
+                resource_type="program",
+                resource_id=db_program.id,
+                resource_name=db_program.name
+            )
 
-        return await get_major_program_by_id(db, db_program.id)
+        return result_program, _post_commit
 
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error("Failed to create major program", error=str(e), exc_info=True)
         raise
 
@@ -694,8 +709,16 @@ async def update_major_program(
     db: AsyncSession,
     program_id: int,
     program_in: schemas.MajorProgramUpdate
-) -> models.MajorProgram:
-    """Update a major program. Note: code cannot be updated."""
+) -> Tuple[models.MajorProgram, Callable]:
+    """
+    Update a major program. Note: code cannot be updated.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (major_program, post_commit_callback)
+    """
     try:
         db_program = await get_major_program_by_id(db, program_id)
         update_data = program_in.model_dump(exclude_unset=True)
@@ -710,31 +733,44 @@ async def update_major_program(
             setattr(db_program, key, value)
 
         db.add(db_program)
-        await db.commit()
 
-        log.info("Major program updated", program_id=program_id)
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
 
-        await invalidate_org_cache()
-        await emit_organization_updated(
-            operation="update",
-            resource_type="program",
-            resource_id=db_program.id,
-            resource_name=db_program.name
-        )
+        # Get full program with relationships
+        result_program = await get_major_program_by_id(db, program_id)
 
-        return await get_major_program_by_id(db, program_id)
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            log.info("Major program updated", program_id=program_id)
+            await invalidate_org_cache()
+            await emit_organization_updated(
+                operation="update",
+                resource_type="program",
+                resource_id=db_program.id,
+                resource_name=db_program.name
+            )
+
+        return result_program, _post_commit
 
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error("Failed to update major program", error=str(e), exc_info=True)
         raise
 
 
-async def delete_major_program(db: AsyncSession, program_id: int):
+async def delete_major_program(db: AsyncSession, program_id: int) -> Tuple[None, Callable]:
     """
     Soft delete a Major Program and CASCADE soft delete to all its Program Offerings.
-    
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
     Performance Optimized: Uses Bulk Update instead of Loop.
+
+    Returns:
+        Tuple of (None, post_commit_callback)
     """
     try:
         # 1. Kiểm tra tồn tại (để lấy tên log và confirm ID hợp lệ)
@@ -742,7 +778,7 @@ async def delete_major_program(db: AsyncSession, program_id: int):
         program_name = db_program.name
 
         # 2. Thực hiện Soft Delete (Set is_active = False)
-        
+
         # 2a. Xóa mềm Ngành học (Level 1)
         db_program.is_active = False
         db.add(db_program)
@@ -761,26 +797,29 @@ async def delete_major_program(db: AsyncSession, program_id: int):
         # Tuy nhiên, logic thường thấy là: Nếu Level 2 Inactive thì Level 3 tự động ẩn.
         # Nên không nhất thiết phải update Level 3 để tiết kiệm tài nguyên DB.
 
-        # 3. Commit Transaction (Atomic: Cả Level 1 và Level 2 cùng update hoặc không)
-        await db.commit()
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
 
-        log.info(
-            "Major program and children soft-deleted successfully",
-            program_id=program_id,
-            program_name=program_name
-        )
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            log.info(
+                "Major program and children soft-deleted successfully",
+                program_id=program_id,
+                program_name=program_name
+            )
+            await invalidate_org_cache()
+            await emit_organization_updated(
+                operation="delete",
+                resource_type="program",
+                resource_id=program_id,
+                resource_name=program_name
+            )
 
-        # 4. Cache & Socket
-        await invalidate_org_cache()
-        await emit_organization_updated(
-            operation="delete",
-            resource_type="program",
-            resource_id=program_id,
-            resource_name=program_name
-        )
+        return None, _post_commit
 
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error("Failed to delete major program", error=str(e), exc_info=True)
         raise
 
@@ -815,8 +854,16 @@ async def get_program_offering_by_id(
 async def create_program_offering(
     db: AsyncSession,
     offering_in: schemas.ProgramOfferingCreate
-) -> models.ProgramOffering:
-    """Create a new program offering."""
+) -> Tuple[models.ProgramOffering, Callable]:
+    """
+    Create a new program offering.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (program_offering, post_commit_callback)
+    """
     try:
         # Verify program exists
         program = await db.get(models.MajorProgram, offering_in.program_id)
@@ -838,28 +885,35 @@ async def create_program_offering(
 
         db_offering = models.ProgramOffering(**offering_in.model_dump())
         db.add(db_offering)
-        await db.commit()
+
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
         await db.refresh(db_offering)
 
-        log.info(
-            "Program offering created",
-            offering_id=db_offering.id,
-            program_id=offering_in.program_id,
-            offering_type=offering_in.offering_type
-        )
+        # Get full offering with relationships
+        result_offering = await get_program_offering_by_id(db, db_offering.id)
 
-        await invalidate_org_cache()
-        await emit_organization_updated(
-            operation="create",
-            resource_type="offering",
-            resource_id=db_offering.id,
-            resource_name=db_offering.offering_type
-        )
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            log.info(
+                "Program offering created",
+                offering_id=db_offering.id,
+                program_id=offering_in.program_id,
+                offering_type=offering_in.offering_type
+            )
+            await invalidate_org_cache()
+            await emit_organization_updated(
+                operation="create",
+                resource_type="offering",
+                resource_id=db_offering.id,
+                resource_name=db_offering.offering_type
+            )
 
-        return await get_program_offering_by_id(db, db_offering.id)
+        return result_offering, _post_commit
 
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error("Failed to create program offering", error=str(e), exc_info=True)
         raise
 
@@ -868,8 +922,16 @@ async def update_program_offering(
     db: AsyncSession,
     offering_id: int,
     offering_in: schemas.ProgramOfferingUpdate
-) -> models.ProgramOffering:
-    """Update a program offering."""
+) -> Tuple[models.ProgramOffering, Callable]:
+    """
+    Update a program offering.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (program_offering, post_commit_callback)
+    """
     try:
         db_offering = await get_program_offering_by_id(db, offering_id)
         update_data = offering_in.model_dump(exclude_unset=True)
@@ -891,31 +953,44 @@ async def update_program_offering(
             setattr(db_offering, key, value)
 
         db.add(db_offering)
-        await db.commit()
 
-        log.info("Program offering updated", offering_id=offering_id)
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
 
-        await invalidate_org_cache()
-        await emit_organization_updated(
-            operation="update",
-            resource_type="offering",
-            resource_id=db_offering.id,
-            resource_name=db_offering.offering_type
-        )
+        # Get full offering with relationships
+        result_offering = await get_program_offering_by_id(db, offering_id)
 
-        return await get_program_offering_by_id(db, offering_id)
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            log.info("Program offering updated", offering_id=offering_id)
+            await invalidate_org_cache()
+            await emit_organization_updated(
+                operation="update",
+                resource_type="offering",
+                resource_id=db_offering.id,
+                resource_name=db_offering.offering_type
+            )
+
+        return result_offering, _post_commit
 
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error("Failed to update program offering", error=str(e), exc_info=True)
         raise
 
 
-async def delete_program_offering(db: AsyncSession, offering_id: int):
+async def delete_program_offering(db: AsyncSession, offering_id: int) -> Tuple[None, Callable]:
     """
     Soft delete a program offering.
 
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
     Cascade will also delete associated academic info records.
+
+    Returns:
+        Tuple of (None, post_commit_callback)
     """
     try:
         db_offering = await get_program_offering_by_id(db, offering_id)
@@ -924,20 +999,26 @@ async def delete_program_offering(db: AsyncSession, offering_id: int):
         # Soft delete
         db_offering.is_active = False
         db.add(db_offering)
-        await db.commit()
 
-        log.info("Program offering soft-deleted", offering_id=offering_id, offering_name=offering_name)
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
 
-        await invalidate_org_cache()
-        await emit_organization_updated(
-            operation="delete",
-            resource_type="offering",
-            resource_id=offering_id,
-            resource_name=offering_name
-        )
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            log.info("Program offering soft-deleted", offering_id=offering_id, offering_name=offering_name)
+            await invalidate_org_cache()
+            await emit_organization_updated(
+                operation="delete",
+                resource_type="offering",
+                resource_id=offering_id,
+                resource_name=offering_name
+            )
+
+        return None, _post_commit
 
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error("Failed to delete program offering", error=str(e), exc_info=True)
         raise
 
@@ -1021,8 +1102,16 @@ async def create_academic_info(
     db: AsyncSession,
     academic_info_in: schemas.OfferingAcademicInfoCreate,
     created_by_user_id: Optional[int] = None
-) -> models.OfferingAcademicInfo:
-    """Create new academic info for an offering."""
+) -> Tuple[models.OfferingAcademicInfo, Callable]:
+    """
+    Create new academic info for an offering.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (academic_info, post_commit_callback)
+    """
     try:
         # Verify offering exists
         offering = await db.get(models.ProgramOffering, academic_info_in.offering_id)
@@ -1046,28 +1135,32 @@ async def create_academic_info(
             created_by_user_id=created_by_user_id
         )
         db.add(db_academic_info)
-        await db.commit()
+
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
         await db.refresh(db_academic_info)
 
-        log.info(
-            "Academic info created",
-            academic_info_id=db_academic_info.id,
-            offering_id=academic_info_in.offering_id,
-            academic_year=academic_info_in.academic_year
-        )
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            log.info(
+                "Academic info created",
+                academic_info_id=db_academic_info.id,
+                offering_id=academic_info_in.offering_id,
+                academic_year=academic_info_in.academic_year
+            )
+            await invalidate_org_cache()
+            await emit_organization_updated(
+                operation="create",
+                resource_type="academic_info",
+                resource_id=db_academic_info.id,
+                resource_name=f"Năm {academic_info_in.academic_year}"
+            )
 
-        await invalidate_org_cache()
-        await emit_organization_updated(
-            operation="create",
-            resource_type="academic_info",
-            resource_id=db_academic_info.id,
-            resource_name=f"Năm {academic_info_in.academic_year}"
-        )
-
-        return db_academic_info
+        return db_academic_info, _post_commit
 
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error("Failed to create academic info", error=str(e), exc_info=True)
         raise
 
@@ -1077,12 +1170,18 @@ async def update_academic_info(
     academic_info_id: int,
     academic_info_in: schemas.OfferingAcademicInfoUpdate,
     updated_by_user_id: Optional[int] = None
-) -> models.OfferingAcademicInfo:
+) -> Tuple[models.OfferingAcademicInfo, Callable]:
     """
     Update existing academic info.
 
-    IMPORTANT: Blocks editing of tuition fees for past academic years
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Blocks editing of tuition fees for past academic years
     to prevent financial history rewriting (immutable financial data).
+
+    Returns:
+        Tuple of (academic_info, post_commit_callback)
     """
     try:
         db_academic_info = await get_academic_info_by_id(db, academic_info_id)
@@ -1110,35 +1209,42 @@ async def update_academic_info(
             db_academic_info.updated_by_user_id = updated_by_user_id
 
         db.add(db_academic_info)
-        await db.commit()
+
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
         await db.refresh(db_academic_info)
 
-        log.info(
-            "Academic info updated",
-            academic_info_id=academic_info_id,
-            offering_id=db_academic_info.offering_id,
-            academic_year=db_academic_info.academic_year
-        )
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            log.info(
+                "Academic info updated",
+                academic_info_id=academic_info_id,
+                offering_id=db_academic_info.offering_id,
+                academic_year=db_academic_info.academic_year
+            )
+            await invalidate_org_cache()
+            await emit_organization_updated(
+                operation="update",
+                resource_type="academic_info",
+                resource_id=academic_info_id,
+                resource_name=f"Năm {db_academic_info.academic_year}"
+            )
 
-        await invalidate_org_cache()
-        await emit_organization_updated(
-            operation="update",
-            resource_type="academic_info",
-            resource_id=academic_info_id,
-            resource_name=f"Năm {db_academic_info.academic_year}"
-        )
-
-        return db_academic_info
+        return db_academic_info, _post_commit
 
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error("Failed to update academic info", error=str(e), exc_info=True)
         raise
 
 
-async def delete_academic_info(db: AsyncSession, academic_info_id: int):
+async def delete_academic_info(db: AsyncSession, academic_info_id: int) -> Tuple[None, Callable]:
     """
     Soft delete academic info.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
 
     CRITICAL: This is a SOFT DELETE, not hard delete. Academic info contains
     financial data (tuition fees) and historical enrollment data that must be
@@ -1150,8 +1256,11 @@ async def delete_academic_info(db: AsyncSession, academic_info_id: int):
 
     NEVER hard delete academic info - use is_deleted flag instead.
 
-    IMPORTANT: Blocks deletion of past academic year data to prevent
+    Blocks deletion of past academic year data to prevent
     historical data loss (immutable financial history).
+
+    Returns:
+        Tuple of (None, post_commit_callback)
     """
     try:
         db_academic_info = await get_academic_info_by_id(db, academic_info_id)
@@ -1170,35 +1279,47 @@ async def delete_academic_info(db: AsyncSession, academic_info_id: int):
         # Soft delete - set flag instead of removing from database
         db_academic_info.is_deleted = True
         db_academic_info.updated_at = datetime.now()  # ✅ FIX: Explicitly update timestamp
-        await db.commit()
 
-        log.info(
-            "Academic info soft deleted (is_deleted=True)",
-            academic_info_id=academic_info_id,
-            offering_id=offering_id,
-            academic_year=academic_year
-        )
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
 
-        await invalidate_org_cache()
-        await emit_organization_updated(
-            operation="delete",
-            resource_type="academic_info",
-            resource_id=academic_info_id,
-            resource_name=f"Năm {academic_year}"
-        )
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            log.info(
+                "Academic info soft deleted (is_deleted=True)",
+                academic_info_id=academic_info_id,
+                offering_id=offering_id,
+                academic_year=academic_year
+            )
+            await invalidate_org_cache()
+            await emit_organization_updated(
+                operation="delete",
+                resource_type="academic_info",
+                resource_id=academic_info_id,
+                resource_name=f"Năm {academic_year}"
+            )
+
+        return None, _post_commit
 
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error("Failed to delete academic info", error=str(e), exc_info=True)
         raise
 
 
-async def restore_academic_info(db: AsyncSession, academic_info_id: int):
+async def restore_academic_info(db: AsyncSession, academic_info_id: int) -> Tuple[models.OfferingAcademicInfo, Callable]:
     """
     Restore a soft-deleted academic info record.
 
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
     Sets is_deleted back to False, allowing the record to be visible and editable again.
     This is useful when a user accidentally deletes a record.
+
+    Returns:
+        Tuple of (academic_info, post_commit_callback)
     """
     try:
         db_academic_info = await get_academic_info_by_id(db, academic_info_id)
@@ -1213,28 +1334,32 @@ async def restore_academic_info(db: AsyncSession, academic_info_id: int):
         # Restore - set flag back to False
         db_academic_info.is_deleted = False
         db_academic_info.updated_at = datetime.now()
-        await db.commit()
+
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
         await db.refresh(db_academic_info)
 
-        log.info(
-            "Academic info restored (is_deleted=False)",
-            academic_info_id=academic_info_id,
-            offering_id=offering_id,
-            academic_year=academic_year
-        )
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            log.info(
+                "Academic info restored (is_deleted=False)",
+                academic_info_id=academic_info_id,
+                offering_id=offering_id,
+                academic_year=academic_year
+            )
+            await invalidate_org_cache()
+            await emit_organization_updated(
+                operation="update",
+                resource_type="academic_info",
+                resource_id=academic_info_id,
+                resource_name=f"Năm {academic_year}"
+            )
 
-        await invalidate_org_cache()
-        await emit_organization_updated(
-            operation="update",
-            resource_type="academic_info",
-            resource_id=academic_info_id,
-            resource_name=f"Năm {academic_year}"
-        )
-
-        return db_academic_info
+        return db_academic_info, _post_commit
 
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error("Failed to restore academic info", error=str(e), exc_info=True)
         raise
 
