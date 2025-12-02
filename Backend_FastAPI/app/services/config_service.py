@@ -278,13 +278,26 @@ async def get_degree_level_by_id(
 async def create_degree_level(
     db: AsyncSession,
     level_in: schemas.ConfigDegreeLevelCreate
-) -> models.ConfigDegreeLevel:
+) -> Tuple[models.ConfigDegreeLevel, Callable]:
     """
     Create a new degree level.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
 
     Validates:
     - Code uniqueness
     - Name uniqueness
+
+    Args:
+        db: Database session
+        level_in: Degree level data
+
+    Returns:
+        Tuple of (degree_level, post_commit_callback)
+
+    Raises:
+        BadRequest: If code or name already exists
     """
     from ..utils.exceptions import BadRequest
 
@@ -309,19 +322,42 @@ async def create_degree_level(
     # Create new level
     db_level = models.ConfigDegreeLevel(**level_in.model_dump())
     db.add(db_level)
-    await db.commit()
+
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
     await db.refresh(db_level)
 
-    log.info("Degree level created", level_id=db_level.id, code=db_level.code)
-    return db_level
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        log.info("Degree level created", level_id=db_level.id, code=db_level.code)
+
+    return db_level, _post_commit
 
 
 async def update_degree_level(
     db: AsyncSession,
     level_id: int,
     level_in: schemas.ConfigDegreeLevelUpdate
-) -> models.ConfigDegreeLevel:
-    """Update a degree level."""
+) -> Tuple[models.ConfigDegreeLevel, Callable]:
+    """
+    Update a degree level.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Args:
+        db: Database session
+        level_id: ID of the degree level to update
+        level_in: Update data
+
+    Returns:
+        Tuple of (degree_level, post_commit_callback)
+
+    Raises:
+        ResourceNotFoundError: If level doesn't exist
+        BadRequest: If code or name already exists
+    """
     from ..utils.exceptions import BadRequest
 
     db_level = await get_degree_level_by_id(db, level_id)
@@ -354,25 +390,36 @@ async def update_degree_level(
     for field, value in update_data.items():
         setattr(db_level, field, value)
 
-    await db.commit()
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
     await db.refresh(db_level)
 
-    log.info("Degree level updated", level_id=level_id)
-    return db_level
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        log.info("Degree level updated", level_id=level_id)
+
+    return db_level, _post_commit
 
 
 async def delete_degree_level(
     db: AsyncSession,
     level_id: int,
     soft_delete: bool = True
-) -> None:
+) -> Tuple[None, Callable]:
     """
     Delete a degree level.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
 
     Args:
         db: Database session
         level_id: ID of the level to delete
         soft_delete: If True, set is_active=False; if False, hard delete
+
+    Returns:
+        Tuple of (None, post_commit_callback)
 
     Raises:
         ResourceNotFoundError: If level doesn't exist
@@ -393,14 +440,25 @@ async def delete_degree_level(
             detail=f"Cannot delete degree level '{db_level.name}' - it is being used by one or more programs"
         )
 
+    # ✅ TRANSACTION FIX: Perform delete/deactivate without commit
     if soft_delete:
         db_level.is_active = False
-        await db.commit()
-        log.info("Degree level soft deleted", level_id=level_id)
+        await db.flush()
+        delete_type = "soft"
     else:
         await db.delete(db_level)
-        await db.commit()
-        log.info("Degree level hard deleted", level_id=level_id)
+        await db.flush()
+        delete_type = "hard"
+
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        if delete_type == "soft":
+            log.info("Degree level soft deleted", level_id=level_id)
+        else:
+            log.info("Degree level hard deleted", level_id=level_id)
+
+    return None, _post_commit
 
 
 # =============================================================================
