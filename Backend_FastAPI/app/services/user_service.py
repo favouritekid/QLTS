@@ -3,7 +3,7 @@ import io
 import csv
 from typing import AsyncGenerator
 import structlog
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple  # ✅ ADD Callable for transaction pattern
 from datetime import datetime, timezone
 from fastapi import UploadFile
 from sqlalchemy import func, or_, select, text
@@ -314,7 +314,16 @@ async def authenticate_user(
 # --- Hàm Tạo User ---
 
 
-async def create_user(db: AsyncSession, user_in: schemas.UserCreate) -> models.User:
+async def create_user(db: AsyncSession, user_in: schemas.UserCreate) -> Tuple[models.User, Callable]:
+    """
+    Create a new user.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (user, post_commit_callback)
+    """
     try:
         hashed_password = get_password_hash(user_in.password)
         # ✅ SỬA: Dữ liệu đã sạch, chỉ cần model_dump
@@ -325,11 +334,20 @@ async def create_user(db: AsyncSession, user_in: schemas.UserCreate) -> models.U
             status="active",
         )
         db.add(db_user)
-        await db.commit()
+
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
         await db.refresh(db_user)
-        return db_user
+
+        # ✅ Create post-commit callback (empty - no post-commit actions needed)
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            pass
+
+        return db_user, _post_commit
+
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error(
             "Failed to create user",
             username=user_in.username,
@@ -345,10 +363,13 @@ async def create_user_by_admin(
     enforcer: Optional[casbin.AsyncEnforcer] = None,
     avatar_file: Optional[UploadFile] = None,
     assigned_by_user_id: Optional[int] = None,  # ✅ PHASE 2: Add assigner tracking
-) -> models.User:
+) -> Tuple[models.User, Callable]:
     """
     ✅ ATOMIC TRANSACTION (v17 + PHASE 2):
     Create user with atomic DB + Casbin + UserUnitAssignment transaction.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
 
     PHASE 2 Enhancement:
     - Automatically creates UserUnitAssignment if user has unit_id
@@ -357,6 +378,9 @@ async def create_user_by_admin(
 
     Uses nested transaction (savepoint) to ensure all operations
     (DB, Casbin, Assignment) succeed or fail together.
+
+    Returns:
+        Tuple of (user, post_commit_callback)
     """
     try:
         hashed_password = get_password_hash(user_in.password)
@@ -424,29 +448,32 @@ async def create_user_by_admin(
             # ✅ If we reach here, all operations succeeded
             # Nested transaction will commit on exit from 'async with' block
 
-        # (4) Commit the main transaction (atomic: DB + Assignment + Casbin together)
-        await db.commit()
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
 
-        log.info(
-            "User created successfully with atomic DB+Assignment+Casbin transaction",
-            user_id=db_user.id,
-            username=db_user.username,
-            role=db_user.role,
-            has_assignment=db_user.current_assignment_id is not None
-        )
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            log.info(
+                "User created successfully with atomic DB+Assignment+Casbin transaction",
+                user_id=db_user.id,
+                username=db_user.username,
+                role=db_user.role,
+                has_assignment=db_user.current_assignment_id is not None
+            )
 
-        # (5) ✅ REAL-TIME SYNC: Notify all connected clients (after successful commit)
-        await emit_data_updated(
-            resource_type="user",
-            operation="create",
-            resource_id=db_user.id,
-            data={"username": db_user.username, "role": db_user.role}
-        )
+            # ✅ REAL-TIME SYNC: Notify all connected clients
+            await emit_data_updated(
+                resource_type="user",
+                operation="create",
+                resource_id=db_user.id,
+                data={"username": db_user.username, "role": db_user.role}
+            )
 
-        return db_user
+        return db_user, _post_commit
 
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error(
             "Failed to create user by admin (rolled back atomic transaction)",
             username=user_in.username,
