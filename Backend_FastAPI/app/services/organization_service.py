@@ -13,7 +13,7 @@ Handles:
 import json
 from datetime import datetime
 from decimal import Decimal
-from typing import List, Optional
+from typing import Callable, List, Optional, Tuple  # ✅ ADD Callable, Tuple for transaction pattern
 
 import structlog
 from sqlalchemy import select, text, update
@@ -340,8 +340,16 @@ async def get_organization_unit_by_id(
 async def create_organization_unit(
     db: AsyncSession,
     unit_in: schemas.OrganizationUnitCreate
-) -> models.OrganizationUnit:
-    """Create a new organization unit."""
+) -> Tuple[models.OrganizationUnit, Callable]:
+    """
+    Create a new organization unit.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (organization_unit, post_commit_callback)
+    """
     try:
         # Check duplicate name
         await check_duplicate_unit_name(db, unit_in.name, unit_in.parent_id)
@@ -356,21 +364,29 @@ async def create_organization_unit(
 
         db_unit = models.OrganizationUnit(**unit_in.model_dump())
         db.add(db_unit)
-        await db.commit()
+
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
         await db.refresh(db_unit)
 
-        await invalidate_org_cache()
-        await emit_organization_updated(
-            operation="create",
-            resource_type="organization",
-            resource_id=db_unit.id,
-            resource_name=db_unit.name
-        )
+        # Get full unit with relationships
+        result_unit = await get_organization_unit_by_id(db, db_unit.id)
 
-        return await get_organization_unit_by_id(db, db_unit.id)
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            await invalidate_org_cache()
+            await emit_organization_updated(
+                operation="create",
+                resource_type="organization",
+                resource_id=db_unit.id,
+                resource_name=db_unit.name
+            )
+
+        return result_unit, _post_commit
 
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error("Failed to create organization unit", error=str(e), exc_info=True)
         raise
 
