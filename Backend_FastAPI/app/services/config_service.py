@@ -862,8 +862,16 @@ async def update_document_type(
     db: AsyncSession,
     type_id: int,
     type_in: schemas.ConfigDocumentTypeUpdate
-) -> models.ConfigDocumentType:
-    """Update a document type."""
+) -> Tuple[models.ConfigDocumentType, Callable]:
+    """
+    Update a document type.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (document_type, post_commit_callback)
+    """
     from ..utils.exceptions import BadRequest
 
     db_type = await get_document_type_by_id(db, type_id)
@@ -900,39 +908,61 @@ async def update_document_type(
     for key, value in update_data.items():
         setattr(db_type, key, value)
 
-    await db.commit()
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
     await db.refresh(db_type)
 
-    log.info("Document type updated", type_id=type_id)
-    return db_type
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        log.info("Document type updated", type_id=type_id)
+
+    return db_type, _post_commit
 
 
 async def delete_document_type(
     db: AsyncSession,
     type_id: int,
     soft_delete: bool = True
-) -> None:
+) -> Tuple[None, Callable]:
     """
     Delete a document type.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
 
     Args:
         db: Database session
         type_id: ID of the document type
         soft_delete: If True, set is_active=False; otherwise hard delete
 
+    Returns:
+        Tuple of (None, post_commit_callback)
+
     Raises:
         ResourceNotFoundError: If type doesn't exist
     """
     db_type = await get_document_type_by_id(db, type_id)
 
+    # ✅ TRANSACTION FIX: Perform delete/deactivate without commit
     if soft_delete:
         db_type.is_active = False
-        await db.commit()
-        log.info("Document type soft deleted", type_id=type_id)
+        await db.flush()
+        delete_type = "soft"
     else:
         await db.delete(db_type)
-        await db.commit()
-        log.info("Document type hard deleted", type_id=type_id)
+        await db.flush()
+        delete_type = "hard"
+
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        if delete_type == "soft":
+            log.info("Document type soft deleted", type_id=type_id)
+        else:
+            log.info("Document type hard deleted", type_id=type_id)
+
+    return None, _post_commit
 
 
 # ============================================================================
@@ -1064,16 +1094,19 @@ async def get_distribution_rule_by_id(
 async def create_distribution_rule(
     db: AsyncSession,
     rule_in: schemas.DistributionRuleCreate
-) -> schemas.DistributionRuleResponse:
+) -> Tuple[schemas.DistributionRuleResponse, Callable]:
     """
     Create a new distribution rule.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
 
     Args:
         db: Database session
         rule_in: Distribution rule creation data
 
     Returns:
-        DistributionRuleResponse schema
+        Tuple of (DistributionRuleResponse, post_commit_callback)
 
     Raises:
         BadRequest: If offering_id or unit_id doesn't exist
@@ -1110,7 +1143,9 @@ async def create_distribution_rule(
     # Create rule
     db_rule = models.OfferingDistributionConfig(**rule_in.model_dump())
     db.add(db_rule)
-    await db.commit()
+
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
 
     # Re-fetch with eager loading for response
     result = await db.execute(
@@ -1124,22 +1159,31 @@ async def create_distribution_rule(
     )
     db_rule = result.scalar_one()
 
-    log.info(
-        "Distribution rule created",
-        rule_id=db_rule.id,
-        offering_id=db_rule.offering_id,
-        unit_id=db_rule.unit_id
-    )
-    return _build_distribution_rule_response(db_rule)
+    response = _build_distribution_rule_response(db_rule)
+
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        log.info(
+            "Distribution rule created",
+            rule_id=db_rule.id,
+            offering_id=db_rule.offering_id,
+            unit_id=db_rule.unit_id
+        )
+
+    return response, _post_commit
 
 
 async def update_distribution_rule(
     db: AsyncSession,
     rule_id: int,
     rule_in: schemas.DistributionRuleUpdate
-) -> schemas.DistributionRuleResponse:
+) -> Tuple[schemas.DistributionRuleResponse, Callable]:
     """
     Update a distribution rule.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
 
     Args:
         db: Database session
@@ -1147,7 +1191,7 @@ async def update_distribution_rule(
         rule_in: Update data
 
     Returns:
-        DistributionRuleResponse schema
+        Tuple of (DistributionRuleResponse, post_commit_callback)
 
     Raises:
         ResourceNotFoundError: If rule doesn't exist
@@ -1161,7 +1205,8 @@ async def update_distribution_rule(
     for field, value in update_data.items():
         setattr(db_rule, field, value)
 
-    await db.commit()
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
 
     # Re-fetch with eager loading for response
     result = await db.execute(
@@ -1175,16 +1220,25 @@ async def update_distribution_rule(
     )
     db_rule = result.scalar_one()
 
-    log.info("Distribution rule updated", rule_id=rule_id)
-    return _build_distribution_rule_response(db_rule)
+    response = _build_distribution_rule_response(db_rule)
+
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        log.info("Distribution rule updated", rule_id=rule_id)
+
+    return response, _post_commit
 
 
 async def delete_distribution_rule(
     db: AsyncSession,
     rule_id: int
-) -> None:
+) -> Tuple[None, Callable]:
     """
     Delete a distribution rule with business rule validation.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
 
     **Business Rules:**
     - Cannot delete active rules (is_active=True)
@@ -1193,6 +1247,9 @@ async def delete_distribution_rule(
     Args:
         db: Database session
         rule_id: ID of the rule to delete
+
+    Returns:
+        Tuple of (None, post_commit_callback)
 
     Raises:
         ResourceNotFoundError: If rule doesn't exist
@@ -1217,15 +1274,26 @@ async def delete_distribution_rule(
     # Business Rule 2: Check if rule is in use by leads (future enhancement)
     # This would require querying leads table to see if any leads
     # were distributed using this rule
-    # For now, we log a warning
-    log.info(
-        "Deleting distribution rule",
-        rule_id=rule_id,
-        offering_id=db_rule.offering_id,
-        unit_id=db_rule.unit_id
-    )
+
+    # Store info for logging before deletion
+    offering_id = db_rule.offering_id
+    unit_id = db_rule.unit_id
 
     await db.delete(db_rule)
-    await db.commit()
+
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
+
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        log.info(
+            "Distribution rule deleted",
+            rule_id=rule_id,
+            offering_id=offering_id,
+            unit_id=unit_id
+        )
+
+    return None, _post_commit
 
     log.info("Distribution rule deleted successfully", rule_id=rule_id)
