@@ -100,7 +100,6 @@ import {
 } from "@/hooks/useNotificationRules";
 import { useAdminUsersList } from "@/hooks/useAdminUsers";
 import { MultiStepActionEditor } from "./MultiStepActionEditor"; // ✅ NOTIFICATION 2.0
-import type { NotificationActionCreate } from "@/types/api.types"; // ✅ NOTIFICATION 2.0
 
 // ============================================
 // TYPES & INTERFACES
@@ -466,27 +465,6 @@ const NOTIFICATION_TYPES = [
 ];
 
 /**
- * Kênh gửi thông báo
- */
-const CHANNELS = [
-  {
-    value: "browser",
-    label: "Trình duyệt",
-    description: "Hiển thị popup trong ứng dụng web",
-  },
-  {
-    value: "email",
-    label: "Email",
-    description: "Gửi qua email (sắp có)",
-  },
-  {
-    value: "sms",
-    label: "SMS",
-    description: "Gửi tin nhắn SMS (sắp có)",
-  },
-];
-
-/**
  * Biến template theo sự kiện
  */
 const TEMPLATE_VARIABLES: Record<string, TemplateVariable[]> = {
@@ -586,7 +564,7 @@ function HelpTooltip({ content }: { content: string }) {
 /**
  * Step indicator cho wizard
  */
-function StepIndicator({ currentStep, totalSteps }: { currentStep: number; totalSteps: number }) {
+function StepIndicator({ currentStep }: { currentStep: number }) {
   const steps = [
     { number: 1, label: "Sự kiện", icon: Bell },
     { number: 2, label: "Người nhận", icon: Users },
@@ -678,10 +656,10 @@ export function NotificationRuleWizard({
   });
 
   // ✅ NOTIFICATION 2.0: Fetch metadata for dynamic builder
-  const { data: metadata, isLoading: loadingMetadata } = useNotificationMetadata();
+  const { data: metadata } = useNotificationMetadata();
 
   // Fetch existing rule if in edit mode
-  const { data: existingRule, isLoading: loadingRule } = useNotificationRule(ruleId);
+  const { isLoading: loadingRule } = useNotificationRule(ruleId);
 
   // Mutations
   const createMutation = useCreateNotificationRule();
@@ -877,7 +855,8 @@ export function NotificationRuleWizard({
         ) : (
           <>
             {/* Step Indicator */}
-            <StepIndicator currentStep={currentStep} totalSteps={5} /> {/* ✅ NOTIFICATION 2.0: Changed from 4 to 5 */}
+            {/* ✅ NOTIFICATION 2.0: 5 steps total */}
+            <StepIndicator currentStep={currentStep} />
 
             {/* Quick Templates */}
             {currentStep === 1 && !isEditMode && (
@@ -1115,7 +1094,8 @@ export function NotificationRuleWizard({
                               }}
                             >
                               <div className="space-y-3">
-                                {dynamicResolverTypes.map((option) => ( {/* ✅ NOTIFICATION 2.0: Dynamic resolvers */}
+                                {/* ✅ NOTIFICATION 2.0: Dynamic resolvers */}
+                                {dynamicResolverTypes.map((option) => (
                                   <Card
                                     key={option.value}
                                     className={`
@@ -1338,7 +1318,7 @@ export function NotificationRuleWizard({
                               </SelectContent>
                             </Select>
                             <p className="text-xs text-muted-foreground">
-                              💡 VD: "actor.role" để lọc theo vai trò của người thực hiện hành động
+                              💡 VD: &ldquo;actor.role&rdquo; để lọc theo vai trò của người thực hiện hành động
                             </p>
                           </div>
 
@@ -1414,7 +1394,7 @@ export function NotificationRuleWizard({
                                 📝 Điều kiện hiện tại:
                               </p>
                               <code className="text-xs text-blue-700">
-                                {conditionField} {conditionOperator} "{conditionValue}"
+                                {conditionField} {conditionOperator} &ldquo;{conditionValue}&rdquo;
                               </code>
                             </div>
                           )}
@@ -1433,7 +1413,7 @@ export function NotificationRuleWizard({
                             <span className="text-muted-foreground">•</span>
                             <div>
                               <p className="font-medium">Chỉ gửi khi Manager tạo lead:</p>
-                              <code className="text-muted-foreground">actor.role == "manager"</code>
+                              <code className="text-muted-foreground">actor.role == &ldquo;manager&rdquo;</code>
                             </div>
                           </div>
                           <div className="flex items-start gap-2">
@@ -1447,7 +1427,7 @@ export function NotificationRuleWizard({
                             <span className="text-muted-foreground">•</span>
                             <div>
                               <p className="font-medium">Chỉ gửi khi hồ sơ được duyệt:</p>
-                              <code className="text-muted-foreground">application.status == "approved"</code>
+                              <code className="text-muted-foreground">application.status == &ldquo;approved&rdquo;</code>
                             </div>
                           </div>
                         </div>
@@ -1641,7 +1621,8 @@ export function NotificationRuleWizard({
                             Chọn các kênh để gửi thông báo
                           </FormDescription>
                           <div className="space-y-2">
-                            {dynamicChannels.map((channel) => ( {/* ✅ NOTIFICATION 2.0: Dynamic channels */}
+                            {/* ✅ NOTIFICATION 2.0: Dynamic channels */}
+                            {dynamicChannels.map((channel) => (
                               <FormField
                                 key={channel.value}
                                 control={form.control}
@@ -1750,10 +1731,11 @@ export function NotificationRuleWizard({
                       render={({ field }) => (
                         <FormItem>
                           <FormControl>
+                            {/* ✅ NOTIFICATION 2.0: Dynamic channels */}
                             <MultiStepActionEditor
                               actions={field.value || []}
                               onChange={field.onChange}
-                              availableChannels={metadata?.channels || ["socket", "email", "zalo", "sms"]} {/* ✅ NOTIFICATION 2.0: Dynamic channels */}
+                              availableChannels={metadata?.channels || ["socket", "email", "zalo", "sms"]}
                             />
                           </FormControl>
                           <FormMessage />
@@ -1790,7 +1772,8 @@ export function NotificationRuleWizard({
                     >
                       Hủy
                     </Button>
-                    {currentStep < 5 ? ( {/* ✅ NOTIFICATION 2.0: Changed from 4 to 5 */}
+                    {/* ✅ NOTIFICATION 2.0: Changed from 4 to 5 */}
+                    {currentStep < 5 ? (
                       <Button
                         type="button"
                         onClick={nextStep}
