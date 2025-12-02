@@ -127,6 +127,7 @@ async def get_application_by_id(
     db: AsyncSession,
     application_id: int,
     load_relationships: bool = True,
+    load_lead: bool = False,
     include_deleted: bool = False,
 ) -> Optional[models.Application]:
     """
@@ -136,6 +137,7 @@ async def get_application_by_id(
         db: Database session
         application_id: ID của Application
         load_relationships: Load relationships (major_program, program_offering)
+        load_lead: If True, eager load the associated lead (for IDOR check). When True, also loads lead's officer and unit.
         include_deleted: If True, include soft-deleted applications (default: False)
 
     Returns:
@@ -147,12 +149,21 @@ async def get_application_by_id(
     if not include_deleted:
         stmt = stmt.where(models.Application.deleted_at.is_(None))
 
+    # If load_lead is requested, ensure we load lead with its relationships for IDOR check
+    if load_lead or load_relationships:
+        stmt = stmt.options(
+            selectinload(models.Application.lead).options(
+                selectinload(models.Lead.assigned_officer),
+                selectinload(models.Lead.unit)
+            )
+        )
+
+    # Load other relationships if requested
     if load_relationships:
         stmt = stmt.options(
             selectinload(models.Application.major_program),
             selectinload(models.Application.program_offering),
             selectinload(models.Application.officer),
-            selectinload(models.Application.lead),
         )
 
     result = await db.execute(stmt)

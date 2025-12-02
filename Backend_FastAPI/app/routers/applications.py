@@ -100,32 +100,29 @@ async def create_application_for_lead(
     summary="Lấy thông tin hồ sơ tuyển sinh",
 )
 async def get_application(
-    application_id: int,
-    db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    application: models.Application = Depends(deps.get_application_for_user),
 ):
     """
     Lấy thông tin chi tiết của Application theo ID.
+
+    **Access Control:**
+    - Admin: Có thể truy cập tất cả applications
+    - Manager: Có thể truy cập applications trong các units mà họ quản lý
+    - Officer: Chỉ có thể truy cập applications của các leads được gán cho họ
+
+    **IDOR Prevention:**
+    Endpoint này được bảo vệ bởi ownership verification. User không thể
+    truy cập application của người khác bằng cách thay đổi application_id.
 
     **Bao gồm:**
     - Thông tin Application
     - Relationships: major_program, program_offering, officer, lead
 
     **Lỗi:**
+    - 403: Không có quyền truy cập application này
     - 404: Application không tồn tại
     """
-    application = await application_service.get_application_by_id(
-        db=db,
-        application_id=application_id,
-        load_relationships=True,
-    )
-
-    if not application:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Hồ sơ với ID {application_id} không tồn tại",
-        )
-
+    # Application đã được verify ownership trong dependency
     return application
 
 
@@ -135,13 +132,22 @@ async def get_application(
     summary="Cập nhật hồ sơ tuyển sinh",
 )
 async def update_application(
-    application_id: int,
     update_data: schemas.ApplicationUpdate,
+    application: models.Application = Depends(deps.get_application_for_user),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
 ):
     """
     Cập nhật thông tin Application (Hồ sơ Tuyển sinh).
+
+    **Access Control:**
+    - Admin: Có thể cập nhật tất cả applications
+    - Manager: Có thể cập nhật applications trong các units mà họ quản lý
+    - Officer: Chỉ có thể cập nhật applications của các leads được gán cho họ
+
+    **IDOR Prevention:**
+    Endpoint này được bảo vệ bởi ownership verification. User không thể
+    cập nhật application của người khác bằng cách thay đổi application_id.
 
     **Có thể cập nhật:**
     - status: Trạng thái hồ sơ (pending, missing_documents, completed, passed, failed)
@@ -155,18 +161,18 @@ async def update_application(
     - documents.checklist: List[ChecklistItem] - Danh sách hồ sơ
 
     **Lỗi:**
+    - 403: Không có quyền cập nhật application này
     - 404: Application không tồn tại
     """
     try:
-        # Get old application for comparison
-        old_application = await application_service.get_application_by_id(db, application_id)
-        old_status = old_application.status
-        old_documents = old_application.documents
+        # Application đã được verify ownership trong dependency
+        old_status = application.status
+        old_documents = application.documents
 
-        # Update application
+        # Update application using verified ID
         application = await application_service.update_application(
             db=db,
-            application_id=application_id,
+            application_id=application.id,  # ✅ Use verified application ID
             update_data=update_data,
             current_user=current_user,
         )
@@ -230,26 +236,31 @@ async def update_application(
 @router.delete(
     "/applications/{application_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Xóa hồ sơ tuyển sinh (Admin only)",
+    summary="Xóa hồ sơ tuyển sinh",
 )
 async def delete_application(
-    application_id: int,
+    application: models.Application = Depends(deps.get_application_for_user),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
 ):
     """
-    Soft delete Application (Admin only).
+    Soft delete Application.
+
+    **Access Control:**
+    - Admin: Có thể xóa tất cả applications
+    - Manager: Có thể xóa applications trong các units mà họ quản lý
+    - Officer: Chỉ có thể xóa applications của các leads được gán cho họ
+
+    **IDOR Prevention:**
+    Endpoint này được bảo vệ bởi ownership verification. User không thể
+    xóa application của người khác bằng cách thay đổi application_id.
 
     **Chức năng:**
     - Đánh dấu Application là đã xóa (soft delete)
-    - Chỉ Admin mới có quyền xóa
     - Application đã xóa sẽ không hiển thị trong danh sách
 
-    **Quyền truy cập:**
-    - Admin: Có quyền xóa bất kỳ Application nào
-
     **Lỗi:**
-    - 403: Không có quyền xóa (chỉ Admin)
+    - 403: Không có quyền xóa application này
     - 404: Application không tồn tại hoặc đã bị xóa
 
     **Lưu ý:**
@@ -257,21 +268,16 @@ async def delete_application(
     - Application đã xóa có thể phục hồi bởi Admin nếu cần
     """
     try:
-        # Get application info before deletion for notification
-        app_info = await application_service.get_application_by_id(
-            db, application_id, load_relationships=True, include_deleted=False
-        )
-        if not app_info:
-            raise ResourceNotFoundError(f"Hồ sơ với ID {application_id} không tồn tại")
-
+        # Application đã được verify ownership trong dependency
         # Store info for notification before deletion
-        officer_id = app_info.lead.assigned_officer_id if app_info.lead else None
-        lead_name = app_info.lead.full_name if app_info.lead else "Unknown"
-        lead_id = app_info.lead_id
+        officer_id = application.lead.assigned_officer_id if application.lead else None
+        lead_name = application.lead.full_name if application.lead else "Unknown"
+        lead_id = application.lead_id
 
+        # Delete using verified application ID
         deleted_app = await application_service.delete_application(
             db=db,
-            application_id=application_id,
+            application_id=application.id,  # ✅ Use verified application ID
             deleted_by=current_user,
         )
 
