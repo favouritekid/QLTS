@@ -964,8 +964,16 @@ async def handle_forgot_password(db: AsyncSession, email_in: str):
 
 async def reset_password(
     db: AsyncSession, token: str, new_password: str
-) -> models.User:
-    """Đặt lại mật khẩu từ token. Ném InvalidToken hoặc ResourceNotFound."""
+) -> Tuple[models.User, Callable]:
+    """
+    Reset password from token.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (user, post_commit_callback)
+    """
     try:
         email = verify_password_reset_token(token)
         if not email:
@@ -985,13 +993,19 @@ async def reset_password(
 
         user.password_hash = get_password_hash(new_password)
         db.add(user)
-        await db.commit()
-        log.info(
-            "User password reset successfully", user_id=user.id
-        )  # ✅ SỬA LỖI: Xóa `await`
-        return user
+
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
+
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            log.info("User password reset successfully", user_id=user.id)
+
+        return user, _post_commit
+
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error(
             "Failed to reset password", token=token, error=str(e), exc_info=True
         )  # ✅ SỬA LỖI: Xóa `await`
@@ -1000,8 +1014,16 @@ async def reset_password(
 
 async def change_password(
     db: AsyncSession, user: models.User, old_password: str, new_password: str
-):
-    """Người dùng tự đổi mật khẩu. Ném BadRequest nếu mật khẩu cũ sai."""
+) -> Tuple[None, Callable]:
+    """
+    User changes their own password.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (None, post_commit_callback)
+    """
     user_id_for_logging = user.id
     try:
         if not verify_password(old_password, user.password_hash):
@@ -1009,12 +1031,19 @@ async def change_password(
 
         user.password_hash = get_password_hash(new_password)
         db.add(user)
-        await db.commit()
-        log.info(
-            "User changed password successfully", user_id=user_id_for_logging
-        )  # ✅ SỬA LỖI: Xóa `await`
+
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
+
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            log.info("User changed password successfully", user_id=user_id_for_logging)
+
+        return None, _post_commit
+
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error(  # ✅ SỬA LỖI: Xóa `await`
             "Failed to change password",
             user_id=user_id_for_logging,
@@ -1042,21 +1071,37 @@ async def remove_user_from_global_blacklist(user_id: int):
 
 async def set_password_by_admin(
     db: AsyncSession, user_id: int, new_password: str
-) -> models.User:
-    """Admin đặt lại mật khẩu cho người dùng. Ném ResourceNotFound."""
+) -> Tuple[models.User, Callable]:
+    """
+    Admin sets password for a user.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (user, post_commit_callback)
+    """
     try:
         user = await get_user_by_id(db, user_id)
         user.password_hash = get_password_hash(new_password)
         db.add(user)
-        await db.commit()
-        log.info(  # ✅ SỬA LỖI: Xóa `await`
-            "Admin set password for user successfully",
-            admin_user="admin",
-            user_id=user.id,
-        )
-        return user
+
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
+
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            log.info(
+                "Admin set password for user successfully",
+                admin_user="admin",
+                user_id=user.id,
+            )
+
+        return user, _post_commit
+
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error(  # ✅ SỬA LỖI: Xóa `await`
             "Failed to set password by admin",
             user_id=user_id,
@@ -1181,16 +1226,32 @@ async def invalidate_all_sessions(db: AsyncSession, user: models.User):
             raise  # Re-raise custom exceptions (e.g., CacheServiceError)
 
 
-async def logout_user(db: AsyncSession, user: models.User):
+async def logout_user(db: AsyncSession, user: models.User) -> Tuple[None, Callable]:
+    """
+    Logout user (legacy function).
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (None, post_commit_callback)
+    """
     try:
         user.active_jti = None
         db.add(user)
-        await db.commit()
-        log.info(
-            "User logged out successfully (legacy function)", user_id=user.id
-        )  # ✅ SỬA LỖI: Xóa `await`
+
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
+
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            log.info("User logged out successfully (legacy function)", user_id=user.id)
+
+        return None, _post_commit
+
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error(
             "Failed to logout user (legacy function)",
             user_id=user.id,
@@ -1209,9 +1270,15 @@ async def perform_bulk_action(
     user_ids: List[int],
     admin_user: models.User,
     new_status: Optional[str] = None,
-):
+) -> Tuple[str, Callable]:
     """
-    (V5) Thực hiện hành động hàng loạt (đã sửa log).
+    Perform bulk action on users.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (message, post_commit_callback)
     """
     try:
         if action == "change_status":
@@ -1351,11 +1418,18 @@ async def perform_bulk_action(
                     new_status=new_status,
                 )
 
-        await db.commit()
-        return message
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
+
+        # ✅ Create post-commit callback (empty - no post-commit actions needed)
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            pass
+
+        return message, _post_commit
 
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error(  # ✅ SỬA LỖI: Xóa `await`
             "Failed to perform bulk action",
             action=action,
