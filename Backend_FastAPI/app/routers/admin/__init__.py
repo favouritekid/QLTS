@@ -38,6 +38,9 @@ from . import tuition_discount
 # Cache Management router
 from . import cache
 
+# System Management router (NOTIFICATION 2.0)
+from . import system
+
 # Create main admin router
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -100,3 +103,6 @@ router.include_router(tuition_discount.router)  # /api/admin/tuition-discount-po
 
 # Include Cache Management router
 router.include_router(cache.router)  # /api/admin/cache/*
+
+# Include System Management router (NOTIFICATION 2.0)
+router.include_router(system.router)  # /api/admin/system/*

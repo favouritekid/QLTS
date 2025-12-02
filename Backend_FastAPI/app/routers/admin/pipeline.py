@@ -71,7 +71,28 @@ async def create_new_pipeline_stage(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Tạo một Giai đoạn (Stage) mới trong Pipeline."""
-    return await pipeline_service.create_pipeline_stage(db, stage_in, current_user=current_admin)
+    result = await pipeline_service.create_pipeline_stage(db, stage_in, current_user=current_admin)
+
+    # ✅ NOTIFICATION 2.0: Dispatch PIPELINE_CONFIG_UPDATED
+    try:
+        from app.services.notification_dispatcher import dispatch
+        from app.core.events import SystemEvents
+        await dispatch(
+            db=db,
+            event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+            payload={
+                "config_type": "pipeline_stage",
+                "operation": "create",
+                "resource_id": result.id,
+                "resource_name": result.name,
+                "actor_id": current_admin.id,
+            },
+            dedupe_key=f"pipeline_config:create:stage:{result.id}"
+        )
+    except Exception as e:
+        log.warning("Failed to dispatch PIPELINE_CONFIG_UPDATED", error=str(e))
+
+    return result
 
 
 @router.get(
@@ -98,7 +119,28 @@ async def update_existing_pipeline_stage(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Cập nhật một Giai đoạn (Stage)."""
-    return await pipeline_service.update_pipeline_stage(db, stage_id, stage_in, current_user=current_admin)
+    result = await pipeline_service.update_pipeline_stage(db, stage_id, stage_in, current_user=current_admin)
+
+    # ✅ NOTIFICATION 2.0: Dispatch PIPELINE_CONFIG_UPDATED
+    try:
+        from app.services.notification_dispatcher import dispatch
+        from app.core.events import SystemEvents
+        await dispatch(
+            db=db,
+            event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+            payload={
+                "config_type": "pipeline_stage",
+                "operation": "update",
+                "resource_id": stage_id,
+                "resource_name": result.name,
+                "actor_id": current_admin.id,
+            },
+            dedupe_key=f"pipeline_config:update:stage:{stage_id}"
+        )
+    except Exception as e:
+        log.warning("Failed to dispatch PIPELINE_CONFIG_UPDATED", error=str(e))
+
+    return result
 
 
 @router.delete(
@@ -112,6 +154,26 @@ async def delete_existing_pipeline_stage(
 ):
     """(Admin only) Xóa một Giai đoạn (Stage). (Chỉ thành công nếu không có Status nào liên kết)"""
     await pipeline_service.delete_pipeline_stage(db, stage_id, current_user=current_admin)
+
+    # ✅ NOTIFICATION 2.0: Dispatch PIPELINE_CONFIG_UPDATED
+    try:
+        from app.services.notification_dispatcher import dispatch
+        from app.core.events import SystemEvents
+        await dispatch(
+            db=db,
+            event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+            payload={
+                "config_type": "pipeline_stage",
+                "operation": "delete",
+                "resource_id": stage_id,
+                "resource_name": stage_id,
+                "actor_id": current_admin.id,
+            },
+            dedupe_key=f"pipeline_config:delete:stage:{stage_id}"
+        )
+    except Exception as e:
+        log.warning("Failed to dispatch PIPELINE_CONFIG_UPDATED", error=str(e))
+
     return None
 
 
@@ -146,7 +208,28 @@ async def create_new_consultation_status(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Tạo một Trạng thái tư vấn (Status) mới."""
-    return await pipeline_service.create_consultation_status(db, status_in, current_user=current_admin)
+    result = await pipeline_service.create_consultation_status(db, status_in, current_user=current_admin)
+
+    # ✅ NOTIFICATION 2.0: Dispatch PIPELINE_CONFIG_UPDATED
+    try:
+        from app.services.notification_dispatcher import dispatch
+        from app.core.events import SystemEvents
+        await dispatch(
+            db=db,
+            event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+            payload={
+                "config_type": "consultation_status",
+                "operation": "create",
+                "resource_id": result.id,
+                "resource_name": result.name,
+                "actor_id": current_admin.id,
+            },
+            dedupe_key=f"pipeline_config:create:status:{result.id}"
+        )
+    except Exception as e:
+        log.warning("Failed to dispatch PIPELINE_CONFIG_UPDATED", error=str(e))
+
+    return result
 
 
 @router.get(
@@ -173,7 +256,28 @@ async def update_existing_consultation_status(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Cập nhật một Trạng thái tư vấn (Status)."""
-    return await pipeline_service.update_consultation_status(db, status_id, status_in, current_user=current_admin)
+    result = await pipeline_service.update_consultation_status(db, status_id, status_in, current_user=current_admin)
+
+    # ✅ NOTIFICATION 2.0: Dispatch PIPELINE_CONFIG_UPDATED
+    try:
+        from app.services.notification_dispatcher import dispatch
+        from app.core.events import SystemEvents
+        await dispatch(
+            db=db,
+            event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+            payload={
+                "config_type": "consultation_status",
+                "operation": "update",
+                "resource_id": status_id,
+                "resource_name": result.name,
+                "actor_id": current_admin.id,
+            },
+            dedupe_key=f"pipeline_config:update:status:{status_id}"
+        )
+    except Exception as e:
+        log.warning("Failed to dispatch PIPELINE_CONFIG_UPDATED", error=str(e))
+
+    return result
 
 
 @router.delete(
@@ -187,6 +291,26 @@ async def delete_existing_consultation_status(
 ):
     """(Admin only) Xóa một Trạng thái tư vấn (Status). (Chỉ thành công nếu không có Lead nào sử dụng)"""
     await pipeline_service.delete_consultation_status(db, status_id, current_user=current_admin)
+
+    # ✅ NOTIFICATION 2.0: Dispatch PIPELINE_CONFIG_UPDATED
+    try:
+        from app.services.notification_dispatcher import dispatch
+        from app.core.events import SystemEvents
+        await dispatch(
+            db=db,
+            event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+            payload={
+                "config_type": "consultation_status",
+                "operation": "delete",
+                "resource_id": status_id,
+                "resource_name": status_id,
+                "actor_id": current_admin.id,
+            },
+            dedupe_key=f"pipeline_config:delete:status:{status_id}"
+        )
+    except Exception as e:
+        log.warning("Failed to dispatch PIPELINE_CONFIG_UPDATED", error=str(e))
+
     return None
 
 

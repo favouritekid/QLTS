@@ -36,7 +36,26 @@ async def create_new_lead(
     - Manager: Can assign to officers in their unit or use auto-assignment
     - Officer: Auto-assigned to themselves, unit forced to their unit
     """
-    return await lead_service.create_lead(db, lead_in, created_by=current_user)
+    result = await lead_service.create_lead(db, lead_in, created_by=current_user)
+
+    # ✅ NOTIFICATION 2.0: Dispatch LEAD_CREATED event
+    try:
+        await dispatch(
+            db=db,
+            event=SystemEvents.LEAD_CREATED,
+            payload={
+                "lead_id": result.id,
+                "unit_id": result.unit_id,
+                "lead_name": result.full_name or result.email or f"Lead #{result.id}",
+                "source": result.source,
+                "actor_id": current_user.id,
+            },
+            dedupe_key=f"lead_created:{result.id}"
+        )
+    except Exception as e:
+        log.warning("Failed to dispatch LEAD_CREATED notification", error=str(e))
+
+    return result
 
 
 @router.get("/distribution-preview")
@@ -171,9 +190,34 @@ async def update_existing_lead(
     update_data = lead_in.model_dump(exclude_unset=True)
     updated_fields = list(update_data.keys())
     status_changed = "consultation_status_id" in updated_fields or "pipeline_stage_id" in updated_fields
+    unit_changed = "unit_id" in updated_fields and update_data.get("unit_id") != lead.unit_id
+
+    # Store old values before update
+    old_unit_id = lead.unit_id
+    old_officer_id = lead.assigned_officer_id
 
     result = await lead_service.update_lead(db, lead.id, lead_in, updated_by=current_user)
     await db.commit()
+
+    # ✅ NOTIFICATION 2.0: Dispatch LEAD_REASSIGNED if unit changed
+    if unit_changed:
+        try:
+            await dispatch(
+                db=db,
+                event=SystemEvents.LEAD_REASSIGNED,
+                payload={
+                    "lead_id": result.id,
+                    "old_officer_id": old_officer_id,
+                    "new_officer_id": result.assigned_officer_id,
+                    "old_unit_id": old_unit_id,
+                    "new_unit_id": result.unit_id,
+                    "actor_id": current_user.id,
+                    "reason": "Unit transfer by admin",
+                },
+                dedupe_key=f"lead_reassigned:{result.id}:{result.unit_id}"
+            )
+        except Exception as e:
+            log.warning("Failed to dispatch LEAD_REASSIGNED notification", error=str(e))
 
     # ✅ NOTIFICATION 2.0: Dispatch notification if status changed
     if status_changed:
@@ -392,9 +436,33 @@ async def update_a_consultation(
 
     This prevents Officers from breaking the consultation chain by editing historical consultations.
     """
+    # Get old status before update
+    consultation = await db.get(models.Consultation, consultation_id)
+    old_status_id = consultation.consultation_status_id if consultation else None
+
     result = await lead_service.update_consultation(
         db, lead.id, consultation_id, consultation_in, current_user
     )
+
+    # ✅ NOTIFICATION 2.0: Dispatch CONSULTATION_UPDATED if status changed
+    if old_status_id and result.consultation_status_id != old_status_id:
+        try:
+            await dispatch(
+                db=db,
+                event=SystemEvents.CONSULTATION_UPDATED,
+                payload={
+                    "consultation_id": result.id,
+                    "lead_id": lead.id,
+                    "officer_id": lead.assigned_officer_id,
+                    "old_status_id": old_status_id,
+                    "new_status_id": result.consultation_status_id,
+                    "actor_id": current_user.id,
+                },
+                dedupe_key=f"consultation_updated:{result.id}:{result.consultation_status_id}"
+            )
+        except Exception as e:
+            log.warning("Failed to dispatch CONSULTATION_UPDATED notification", error=str(e))
+
     return result
 
 
@@ -418,6 +486,23 @@ async def delete_a_consultation(
     This prevents Officers from breaking the consultation chain by deleting historical consultations.
     """
     await lead_service.delete_consultation(db, lead.id, consultation_id, current_user)
+
+    # ✅ NOTIFICATION 2.0: Dispatch CONSULTATION_DELETED
+    try:
+        await dispatch(
+            db=db,
+            event=SystemEvents.CONSULTATION_DELETED,
+            payload={
+                "consultation_id": consultation_id,
+                "lead_id": lead.id,
+                "officer_id": lead.assigned_officer_id,
+                "actor_id": current_user.id,
+            },
+            dedupe_key=f"consultation_deleted:{consultation_id}"
+        )
+    except Exception as e:
+        log.warning("Failed to dispatch CONSULTATION_DELETED notification", error=str(e))
+
     return None
 
 

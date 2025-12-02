@@ -46,7 +46,7 @@ class OperatorOption(BaseModel):
 
 class MetadataResponse(BaseModel):
     """Complete metadata for building notification rules dynamically"""
-    events: Dict[str, Dict[str, Any]]
+    events: List[Dict[str, Any]]  # ✅ FIX: Changed from Dict to List
     channels: List[str]
     resolver_types: List[ResolverTypeOption]
     operators: List[OperatorOption]
@@ -69,8 +69,12 @@ async def get_notification_metadata(
     """
     log.info("Fetching notification metadata", admin_id=current_admin.id)
 
+    # ✅ FIX: Convert events dict to list for frontend compatibility
+    events_dict = get_all_events_metadata()
+    events_list = list(events_dict.values())
+
     return {
-        "events": get_all_events_metadata(),
+        "events": events_list,
         "channels": ["socket", "email", "zalo", "sms"],
         "resolver_types": [
             {
