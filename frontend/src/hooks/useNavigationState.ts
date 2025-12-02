@@ -3,7 +3,7 @@
  * Custom hook for managing navigation group collapse state
  * Persists state in localStorage for better UX
  */
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 
 const STORAGE_KEY = "navigation-collapsed-groups";
 
@@ -92,21 +92,26 @@ function saveCollapsedGroups(collapsedGroups: Set<string>): void {
  */
 export function useNavigationState(): UseNavigationStateReturn {
   // Initialize state from localStorage (client-side only)
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-  const [isHydrated, setIsHydrated] = useState(false);
+  // Use lazy initialization to load from localStorage without useEffect
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
+    // During SSR, return empty set to avoid hydration mismatch
+    if (typeof window === 'undefined') return new Set();
+    return loadCollapsedGroups();
+  });
+  // Use ref for hydration flag to avoid unnecessary re-renders
+  const isHydratedRef = useRef(false);
 
-  // Load from localStorage on mount (avoid hydration mismatch)
+  // Mark as hydrated on mount
   useEffect(() => {
-    setCollapsedGroups(loadCollapsedGroups());
-    setIsHydrated(true);
+    isHydratedRef.current = true;
   }, []);
 
   // Save to localStorage whenever state changes
   useEffect(() => {
-    if (isHydrated) {
+    if (isHydratedRef.current) {
       saveCollapsedGroups(collapsedGroups);
     }
-  }, [collapsedGroups, isHydrated]);
+  }, [collapsedGroups]);
 
   /**
    * Check if a group is collapsed
@@ -114,10 +119,10 @@ export function useNavigationState(): UseNavigationStateReturn {
   const isCollapsed = useCallback(
     (groupTitle: string): boolean => {
       // During SSR or before hydration, default to expanded
-      if (!isHydrated) return false;
+      if (!isHydratedRef.current) return false;
       return collapsedGroups.has(groupTitle);
     },
-    [collapsedGroups, isHydrated]
+    [collapsedGroups]
   );
 
   /**

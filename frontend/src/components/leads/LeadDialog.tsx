@@ -257,6 +257,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
       });
     } else if (isEdit && lead) {
       // Don't send assigned_officer_id for updates (use separate assign endpoint)
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { assigned_officer_id: _assigned_officer_id, ...updateData } = apiData;
       updateMutation.mutate(
         { id: lead.id, data: updateData },

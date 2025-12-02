@@ -124,6 +124,7 @@ export function DataTable<TData, TValue>({
   showToolbar = true,
   showSearch = true,
   searchPlaceholder = "Tim kiem...",
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   searchableColumns: _searchableColumns, // TODO: Implement column-specific search
   showColumnToggle = true,
   showPagination = true,
