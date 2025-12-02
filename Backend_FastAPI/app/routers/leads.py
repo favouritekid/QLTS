@@ -11,6 +11,8 @@ import structlog
 from .. import database, models, schemas
 from ..core import deps
 from ..services import distribution_service, insights_service, lead_service
+from ..services.notification_dispatcher import dispatch  # ✅ NOTIFICATION 2.0
+from ..core.events import SystemEvents  # ✅ NOTIFICATION 2.0
 
 log = structlog.get_logger(__name__)
 
@@ -173,21 +175,26 @@ async def update_existing_lead(
     result = await lead_service.update_lead(db, lead.id, lead_in, updated_by=current_user)
     await db.commit()
 
-    # Dispatch notification if status changed
+    # ✅ NOTIFICATION 2.0: Dispatch notification if status changed
     if status_changed:
         try:
-            from ..services.notification_dispatcher import dispatch
-            from ..core.events import SystemEvents
             await dispatch(
                 db=db,
                 event=SystemEvents.LEAD_STATUS_CHANGED,
                 payload={
-                    "lead_id": lead.id,
+                    "lead_id": result.id,
+                    "lead_name": result.full_name or result.email or f"Lead #{result.id}",
                     "officer_id": result.assigned_officer_id,
-                    "old_status": lead.consultation_status_id or "",
-                    "new_status": result.consultation_status_id or "",
+                    "officer_name": result.assigned_officer.full_name if result.assigned_officer else "Unknown",
+                    "old_status": lead.consultation_status_id or "none",
+                    "new_status": result.consultation_status_id or "none",
+                    "old_stage": lead.pipeline_stage_id,
+                    "new_stage": result.pipeline_stage_id,
                     "actor_id": current_user.id,
-                }
+                    "actor_name": current_user.full_name,
+                    "updated_fields": updated_fields,
+                },
+                dedupe_key=f"lead_status_changed:{result.id}:{result.consultation_status_id}"
             )
         except Exception as e:
             log.warning(
@@ -305,6 +312,24 @@ async def assign_lead_manually(
         db, lead.id, assign_data.officer_id, current_user
     )
     await db.commit()
+
+    # ✅ NOTIFICATION 2.0: Dispatch LEAD_ASSIGNED event
+    await dispatch(
+        db=db,
+        event=SystemEvents.LEAD_ASSIGNED,
+        payload={
+            "lead_id": result.id,
+            "lead_name": result.full_name or result.email or f"Lead #{result.id}",
+            "officer_id": result.assigned_officer_id,
+            "officer_name": result.assigned_officer.full_name if result.assigned_officer else "Unknown",
+            "actor_id": current_user.id,
+            "actor_name": current_user.full_name,
+            "source": result.source,
+            "priority": result.priority,
+        },
+        dedupe_key=f"lead_assigned:{result.id}:{result.assigned_officer_id}"
+    )
+
     return result
 
 
