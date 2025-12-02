@@ -161,6 +161,7 @@ async def update_application(
         # Get old application for comparison
         old_application = await application_service.get_application_by_id(db, application_id)
         old_status = old_application.status
+        old_documents = old_application.documents
 
         # Update application
         application = await application_service.update_application(
@@ -169,6 +170,28 @@ async def update_application(
             update_data=update_data,
             current_user=current_user,
         )
+
+        # ✅ NOTIFICATION 2.0: Dispatch APPLICATION_DOCUMENTS_UPDATED if documents changed
+        if update_data.documents is not None and update_data.documents != old_documents:
+            try:
+                await dispatch(
+                    db=db,
+                    event=SystemEvents.APPLICATION_DOCUMENTS_UPDATED,
+                    payload={
+                        "application_id": application.id,
+                        "lead_id": application.lead_id,
+                        "officer_id": application.officer_id,
+                        "document_summary": f"Documents updated for application #{application.id}",
+                        "actor_id": current_user.id,
+                    },
+                    dedupe_key=f"application_documents_updated:{application.id}"
+                )
+            except Exception as e:
+                log.warning(
+                    "Failed to dispatch application documents updated notification",
+                    application_id=application.id,
+                    error=str(e)
+                )
 
         # ✅ NOTIFICATION 2.0: Dispatch APPLICATION_STATUS_CHANGED if status changed
         if update_data.status and update_data.status != old_status:
