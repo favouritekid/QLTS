@@ -287,7 +287,7 @@ function ConditionGroup({
   };
 
   const isCompoundCondition = (cond: unknown): cond is CompoundCondition => {
-    return cond && typeof cond === "object" && "operator" in cond && "conditions" in cond;
+    return Boolean(cond && typeof cond === "object" && "operator" in cond && "conditions" in cond);
   };
 
   return (
@@ -461,14 +461,14 @@ function SimpleConditionRow({
         <Input
           type="number"
           placeholder="Value"
-          value={condition.value}
+          value={condition.value as number | string | undefined}
           onChange={(e) => handleValueChange(Number(e.target.value))}
           className="w-[120px]"
         />
       ) : condition.operator === "in" || condition.operator === "not_in" ? (
         <Input
           placeholder="value1, value2, value3"
-          value={Array.isArray(condition.value) ? condition.value.join(", ") : condition.value}
+          value={Array.isArray(condition.value) ? condition.value.join(", ") : (condition.value as string | undefined)}
           onChange={(e) =>
             handleValueChange(e.target.value.split(",").map((v) => v.trim()))
           }
@@ -477,7 +477,7 @@ function SimpleConditionRow({
       ) : (
         <Input
           placeholder="Value"
-          value={condition.value}
+          value={condition.value as string | undefined}
           onChange={(e) => handleValueChange(e.target.value)}
           className="flex-1"
         />
