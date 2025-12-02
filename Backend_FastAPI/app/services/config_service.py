@@ -185,30 +185,65 @@ async def get_all_skill_rules(db: AsyncSession) -> List[models.SkillRequirementR
 
 async def create_skill_rule(
     db: AsyncSession, rule_in: schemas.SkillRuleCreate
-) -> models.SkillRequirementRule:
+) -> Tuple[models.SkillRequirementRule, Callable]:
+    """
+    Create a skill rule.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Args:
+        db: Database session
+        rule_in: Skill rule data
+
+    Returns:
+        Tuple of (skill_rule, post_commit_callback)
+    """
     # NOTE: If caching get_all_skill_rules, invalidate the cache here.
     try:
         db_rule = models.SkillRequirementRule(**rule_in.model_dump())
         db.add(db_rule)
-        await db.commit()
+
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
         await db.refresh(db_rule)
 
-        await invalidate_pipeline_cache()
-        log.info("Skill rule created, relevant cache invalidated", rule_id=db_rule.id)
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            await invalidate_pipeline_cache()
+            log.info("Skill rule created, relevant cache invalidated", rule_id=db_rule.id)
 
-        return db_rule
+        return db_rule, _post_commit
+
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error(
             "Failed to create skill rule",
             rule=rule_in.model_dump_json(),
             error=str(e),
             exc_info=True,
         )
-        raise e
+        raise
 
 
-async def delete_skill_rule(db: AsyncSession, rule_id: int):
+async def delete_skill_rule(db: AsyncSession, rule_id: int) -> Tuple[None, Callable]:
+    """
+    Delete a skill rule.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Args:
+        db: Database session
+        rule_id: ID of the rule to delete
+
+    Returns:
+        Tuple of (None, post_commit_callback)
+
+    Raises:
+        ResourceNotFoundError: If rule doesn't exist
+    """
     # NOTE: If caching get_all_skill_rules, invalidate the cache here.
     try:
         db_rule = await db.get(models.SkillRequirementRule, rule_id)
@@ -217,17 +252,24 @@ async def delete_skill_rule(db: AsyncSession, rule_id: int):
                 detail=f"Skill rule with id {rule_id} not found."
             )
         await db.delete(db_rule)
-        await db.commit()
 
-        await invalidate_pipeline_cache()
-        log.info("Skill rule deleted, relevant cache invalidated", rule_id=rule_id)
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
+
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            await invalidate_pipeline_cache()
+            log.info("Skill rule deleted, relevant cache invalidated", rule_id=rule_id)
+
+        return None, _post_commit
 
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error(
             "Failed to delete skill rule", rule_id=rule_id, error=str(e), exc_info=True
         )
-        raise e
+        raise
 
 
 # =============================================================================
@@ -509,13 +551,19 @@ async def get_offering_type_by_id(
 async def create_offering_type(
     db: AsyncSession,
     type_in: schemas.ConfigOfferingTypeCreate
-) -> models.ConfigOfferingType:
+) -> Tuple[models.ConfigOfferingType, Callable]:
     """
     Create a new offering type.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
 
     Validates:
     - Code uniqueness
     - Name uniqueness
+
+    Returns:
+        Tuple of (offering_type, post_commit_callback)
     """
     from ..utils.exceptions import BadRequest
 
@@ -540,19 +588,33 @@ async def create_offering_type(
     # Create new type
     db_type = models.ConfigOfferingType(**type_in.model_dump())
     db.add(db_type)
-    await db.commit()
+
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
     await db.refresh(db_type)
 
-    log.info("Offering type created", type_id=db_type.id, code=db_type.code)
-    return db_type
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        log.info("Offering type created", type_id=db_type.id, code=db_type.code)
+
+    return db_type, _post_commit
 
 
 async def update_offering_type(
     db: AsyncSession,
     type_id: int,
     type_in: schemas.ConfigOfferingTypeUpdate
-) -> models.ConfigOfferingType:
-    """Update an offering type."""
+) -> Tuple[models.ConfigOfferingType, Callable]:
+    """
+    Update an offering type.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (offering_type, post_commit_callback)
+    """
     from ..utils.exceptions import BadRequest
 
     db_type = await get_offering_type_by_id(db, type_id)
@@ -614,25 +676,36 @@ async def update_offering_type(
     for field, value in update_data.items():
         setattr(db_type, field, value)
 
-    await db.commit()
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
     await db.refresh(db_type)
 
-    log.info("Offering type updated", type_id=type_id)
-    return db_type
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        log.info("Offering type updated", type_id=type_id)
+
+    return db_type, _post_commit
 
 
 async def delete_offering_type(
     db: AsyncSession,
     type_id: int,
     soft_delete: bool = True
-) -> None:
+) -> Tuple[None, Callable]:
     """
     Delete an offering type.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
 
     Args:
         db: Database session
         type_id: ID of the type to delete
         soft_delete: If True, set is_active=False; if False, hard delete
+
+    Returns:
+        Tuple of (None, post_commit_callback)
 
     Raises:
         ResourceNotFoundError: If type doesn't exist
@@ -653,14 +726,25 @@ async def delete_offering_type(
             detail=f"Cannot delete offering type '{db_type.name}' - it is being used by one or more program offerings"
         )
 
+    # ✅ TRANSACTION FIX: Perform delete/deactivate without commit
     if soft_delete:
         db_type.is_active = False
-        await db.commit()
-        log.info("Offering type soft deleted", type_id=type_id)
+        await db.flush()
+        delete_type = "soft"
     else:
         await db.delete(db_type)
-        await db.commit()
-        log.info("Offering type hard deleted", type_id=type_id)
+        await db.flush()
+        delete_type = "hard"
+
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        if delete_type == "soft":
+            log.info("Offering type soft deleted", type_id=type_id)
+        else:
+            log.info("Offering type hard deleted", type_id=type_id)
+
+    return None, _post_commit
 
 
 # =============================================================================
