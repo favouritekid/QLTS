@@ -3,7 +3,7 @@
  * Custom hook for tracking recently visited pages
  * Provides quick access to frequently used pages in navigation
  */
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { usePathname } from "next/navigation";
 import { navigationConfig } from "@/lib/config/navigation";
 import type { NavItem } from "@/types/navigation";
@@ -156,22 +156,29 @@ interface UseRecentPagesReturn {
  */
 export function useRecentPages(maxItems: number = MAX_RECENT_ITEMS): UseRecentPagesReturn {
   const pathname = usePathname();
-  const [recentPages, setRecentPages] = useState<RecentPage[]>([]);
-  const [isHydrated, setIsHydrated] = useState(false);
+  // Use lazy initialization to load from localStorage without useEffect
+  const [recentPages, setRecentPages] = useState<RecentPage[]>(() => {
+    // During SSR, return empty array to avoid hydration mismatch
+    if (typeof window === 'undefined') return [];
+    return loadRecentPages();
+  });
+  // Use ref for hydration flag to avoid unnecessary re-renders
+  const isHydratedRef = useRef(false);
 
-  // Load from localStorage on mount (avoid hydration mismatch)
+  // Mark as hydrated on mount
   useEffect(() => {
-    setRecentPages(loadRecentPages());
-    setIsHydrated(true);
+    isHydratedRef.current = true;
   }, []);
 
   // Track current page visit
   useEffect(() => {
-    if (!isHydrated || !pathname || !shouldTrackPath(pathname)) {
+    if (!isHydratedRef.current || !pathname || !shouldTrackPath(pathname)) {
       return;
     }
 
-    setRecentPages((prev) => {
+    // Use queueMicrotask to defer state update and avoid synchronous setState warning
+    queueMicrotask(() => {
+      setRecentPages((prev) => {
       const existing = prev.find((p) => p.path === pathname);
 
       if (existing) {
@@ -205,7 +212,8 @@ export function useRecentPages(maxItems: number = MAX_RECENT_ITEMS): UseRecentPa
         return updated;
       }
     });
-  }, [pathname, isHydrated, maxItems]);
+    });
+  }, [pathname, maxItems]);
 
   /**
    * Clear all recent pages

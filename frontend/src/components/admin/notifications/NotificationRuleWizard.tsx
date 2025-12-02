@@ -96,10 +96,10 @@ import {
   useCreateNotificationRule,
   useUpdateNotificationRule,
   useNotificationRule,
+  useNotificationMetadata, // ✅ NOTIFICATION 2.0: Dynamic metadata
 } from "@/hooks/useNotificationRules";
 import { useAdminUsersList } from "@/hooks/useAdminUsers";
 import { MultiStepActionEditor } from "./MultiStepActionEditor"; // ✅ NOTIFICATION 2.0
-import type { NotificationActionCreate } from "@/types/api.types"; // ✅ NOTIFICATION 2.0
 
 // ============================================
 // TYPES & INTERFACES
@@ -465,27 +465,6 @@ const NOTIFICATION_TYPES = [
 ];
 
 /**
- * Kênh gửi thông báo
- */
-const CHANNELS = [
-  {
-    value: "browser",
-    label: "Trình duyệt",
-    description: "Hiển thị popup trong ứng dụng web",
-  },
-  {
-    value: "email",
-    label: "Email",
-    description: "Gửi qua email (sắp có)",
-  },
-  {
-    value: "sms",
-    label: "SMS",
-    description: "Gửi tin nhắn SMS (sắp có)",
-  },
-];
-
-/**
  * Biến template theo sự kiện
  */
 const TEMPLATE_VARIABLES: Record<string, TemplateVariable[]> = {
@@ -541,6 +520,26 @@ const TEMPLATE_VARIABLES: Record<string, TemplateVariable[]> = {
 };
 
 // ============================================
+// HELPER FUNCTIONS
+// ============================================
+
+/**
+ * ✅ NOTIFICATION 2.0: Map category to icon emoji
+ */
+function getCategoryIcon(category: string): string {
+  const iconMap: Record<string, string> = {
+    lead: "👤",
+    consultation: "💬",
+    application: "📝",
+    finance: "💰",
+    dorm: "🏠",
+    asset: "🔧",
+    system: "🔔",
+  };
+  return iconMap[category] || "🔔";
+}
+
+// ============================================
 // HELPER COMPONENTS
 // ============================================
 
@@ -565,7 +564,7 @@ function HelpTooltip({ content }: { content: string }) {
 /**
  * Step indicator cho wizard
  */
-function StepIndicator({ currentStep, totalSteps }: { currentStep: number; totalSteps: number }) {
+function StepIndicator({ currentStep }: { currentStep: number }) {
   const steps = [
     { number: 1, label: "Sự kiện", icon: Bell },
     { number: 2, label: "Người nhận", icon: Users },
@@ -656,8 +655,11 @@ export function NotificationRuleWizard({
     page_size: 100,
   });
 
+  // ✅ NOTIFICATION 2.0: Fetch metadata for dynamic builder
+  const { data: metadata } = useNotificationMetadata();
+
   // Fetch existing rule if in edit mode
-  const { data: existingRule, isLoading: loadingRule } = useNotificationRule(ruleId);
+  const { isLoading: loadingRule } = useNotificationRule(ruleId);
 
   // Mutations
   const createMutation = useCreateNotificationRule();
@@ -694,28 +696,83 @@ export function NotificationRuleWizard({
   const titleTemplate = form.watch("title_template");
   const messageTemplate = form.watch("message_template");
 
-  // Get category from selected event
+  // ✅ NOTIFICATION 2.0: Dynamic data from metadata
+  // Convert metadata events to EventOption format
+  const dynamicEvents = useMemo<EventOption[]>(() => {
+    if (!metadata?.events) return SYSTEM_EVENTS; // Fallback to hardcoded
+    return metadata.events.map((event) => ({
+      value: event.event,
+      label: event.display_name,
+      category: event.category,
+      description: event.description,
+      icon: getCategoryIcon(event.category),
+    }));
+  }, [metadata]);
+
+  // Dynamic channels from metadata (convert to full format with labels)
+  const dynamicChannels = useMemo(() => {
+    const channelLabels: Record<string, { label: string; description: string }> = {
+      socket: { label: "Socket (Real-time)", description: "Hiển thị popup trong trình duyệt ngay lập tức" },
+      email: { label: "Email", description: "Gửi email đến hộp thư của người dùng" },
+      zalo: { label: "Zalo", description: "Gửi tin nhắn qua Zalo OA" },
+      sms: { label: "SMS", description: "Gửi tin nhắn SMS" },
+    };
+
+    const channels = metadata?.channels || ["socket", "email", "zalo", "sms"];
+    return channels.map((channel) => ({
+      value: channel,
+      label: channelLabels[channel]?.label || channel,
+      description: channelLabels[channel]?.description || "",
+    }));
+  }, [metadata]);
+
+  // Dynamic resolver types from metadata
+  const dynamicResolverTypes = useMemo<RecipientOption[]>(() => {
+    if (!metadata?.resolver_types) return RECIPIENT_OPTIONS; // Fallback
+    return metadata.resolver_types.map((resolver) => ({
+      value: resolver.value,
+      label: resolver.label,
+      description: resolver.description,
+      example: resolver.example,
+    }));
+  }, [metadata]);
+
+  // Get category from selected event (using dynamic events)
   const selectedEventData = useMemo(() => {
-    return SYSTEM_EVENTS.find((e) => e.value === selectedEvent);
-  }, [selectedEvent]);
+    return dynamicEvents.find((e) => e.value === selectedEvent);
+  }, [selectedEvent, dynamicEvents]);
 
-  // Get template variables for selected event category
+  // Get metadata for selected event
+  const selectedEventMetadata = useMemo(() => {
+    if (!metadata?.events || !selectedEvent) return null;
+    return metadata.events.find((e) => e.event === selectedEvent);
+  }, [metadata, selectedEvent]);
+
+  // Get template variables for selected event (from metadata)
   const availableVariables = useMemo(() => {
-    if (!selectedEventData) return [];
-    return TEMPLATE_VARIABLES[selectedEventData.category] || [];
-  }, [selectedEventData]);
+    if (!selectedEventMetadata?.variables) {
+      // Fallback to hardcoded
+      if (!selectedEventData) return [];
+      return TEMPLATE_VARIABLES[selectedEventData.category] || [];
+    }
+    return selectedEventMetadata.variables.map((v) => ({
+      variable: `$${v.name}`,
+      label: v.description,
+      description: `${v.type}${v.required ? " (bắt buộc)" : ""}`,
+    }));
+  }, [selectedEventMetadata, selectedEventData]);
 
-  // Group events by category
+  // Group events by category (✅ NOTIFICATION 2.0: Using dynamic events)
   const groupedEvents = useMemo(() => {
     const groups: Record<string, EventOption[]> = {};
-    SYSTEM_EVENTS.forEach((event) => {
+    dynamicEvents.forEach((event) => {
       if (!groups[event.category]) {
         groups[event.category] = [];
       }
       groups[event.category].push(event);
     });
     return groups;
-  }, []);
+  }, [dynamicEvents]);
 
   // Insert variable into template
   const insertVariable = (field: "title_template" | "message_template", variable: string) => {
@@ -798,7 +855,8 @@ export function NotificationRuleWizard({
         ) : (
           <>
             {/* Step Indicator */}
-            <StepIndicator currentStep={currentStep} totalSteps={5} /> {/* ✅ NOTIFICATION 2.0: Changed from 4 to 5 */}
+            {/* ✅ NOTIFICATION 2.0: 5 steps total */}
+            <StepIndicator currentStep={currentStep} />
 
             {/* Quick Templates */}
             {currentStep === 1 && !isEditMode && (
@@ -1036,7 +1094,8 @@ export function NotificationRuleWizard({
                               }}
                             >
                               <div className="space-y-3">
-                                {RECIPIENT_OPTIONS.map((option) => (
+                                {/* ✅ NOTIFICATION 2.0: Dynamic resolvers */}
+                                {dynamicResolverTypes.map((option) => (
                                   <Card
                                     key={option.value}
                                     className={`
@@ -1259,7 +1318,7 @@ export function NotificationRuleWizard({
                               </SelectContent>
                             </Select>
                             <p className="text-xs text-muted-foreground">
-                              💡 VD: "actor.role" để lọc theo vai trò của người thực hiện hành động
+                              💡 VD: &ldquo;actor.role&rdquo; để lọc theo vai trò của người thực hiện hành động
                             </p>
                           </div>
 
@@ -1335,7 +1394,7 @@ export function NotificationRuleWizard({
                                 📝 Điều kiện hiện tại:
                               </p>
                               <code className="text-xs text-blue-700">
-                                {conditionField} {conditionOperator} "{conditionValue}"
+                                {conditionField} {conditionOperator} &ldquo;{conditionValue}&rdquo;
                               </code>
                             </div>
                           )}
@@ -1354,7 +1413,7 @@ export function NotificationRuleWizard({
                             <span className="text-muted-foreground">•</span>
                             <div>
                               <p className="font-medium">Chỉ gửi khi Manager tạo lead:</p>
-                              <code className="text-muted-foreground">actor.role == "manager"</code>
+                              <code className="text-muted-foreground">actor.role == &ldquo;manager&rdquo;</code>
                             </div>
                           </div>
                           <div className="flex items-start gap-2">
@@ -1368,7 +1427,7 @@ export function NotificationRuleWizard({
                             <span className="text-muted-foreground">•</span>
                             <div>
                               <p className="font-medium">Chỉ gửi khi hồ sơ được duyệt:</p>
-                              <code className="text-muted-foreground">application.status == "approved"</code>
+                              <code className="text-muted-foreground">application.status == &ldquo;approved&rdquo;</code>
                             </div>
                           </div>
                         </div>
@@ -1562,7 +1621,8 @@ export function NotificationRuleWizard({
                             Chọn các kênh để gửi thông báo
                           </FormDescription>
                           <div className="space-y-2">
-                            {CHANNELS.map((channel) => (
+                            {/* ✅ NOTIFICATION 2.0: Dynamic channels */}
+                            {dynamicChannels.map((channel) => (
                               <FormField
                                 key={channel.value}
                                 control={form.control}
@@ -1671,10 +1731,11 @@ export function NotificationRuleWizard({
                       render={({ field }) => (
                         <FormItem>
                           <FormControl>
+                            {/* ✅ NOTIFICATION 2.0: Dynamic channels */}
                             <MultiStepActionEditor
                               actions={field.value || []}
                               onChange={field.onChange}
-                              availableChannels={["socket", "email", "zalo", "sms"]}
+                              availableChannels={metadata?.channels || ["socket", "email", "zalo", "sms"]}
                             />
                           </FormControl>
                           <FormMessage />
@@ -1711,7 +1772,8 @@ export function NotificationRuleWizard({
                     >
                       Hủy
                     </Button>
-                    {currentStep < 5 ? ( {/* ✅ NOTIFICATION 2.0: Changed from 4 to 5 */}
+                    {/* ✅ NOTIFICATION 2.0: Changed from 4 to 5 */}
+                    {currentStep < 5 ? (
                       <Button
                         type="button"
                         onClick={nextStep}

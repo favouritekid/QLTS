@@ -56,7 +56,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
 
 import {
   useNotificationRules,
@@ -341,7 +340,7 @@ export function NotificationRuleList() {
             </div>
 
             {/* Status Filter */}
-            <Select value={statusFilter} onValueChange={(value: any) => setStatusFilter(value)}>
+            <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as "all" | "enabled" | "disabled")}>
               <SelectTrigger className="w-full sm:w-[180px]">
                 <SelectValue placeholder="Trạng thái" />
               </SelectTrigger>
@@ -353,7 +352,7 @@ export function NotificationRuleList() {
             </Select>
 
             {/* Type Filter */}
-            <Select value={typeFilter} onValueChange={(value: any) => setTypeFilter(value)}>
+            <Select value={typeFilter} onValueChange={(value) => setTypeFilter(value as "all" | "success" | "warning" | "error" | "info")}>
               <SelectTrigger className="w-full sm:w-[180px]">
                 <SelectValue placeholder="Loại thông báo" />
               </SelectTrigger>

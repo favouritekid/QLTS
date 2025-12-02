@@ -1,7 +1,7 @@
 // src/components/common/CommandPalette.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useCommandPalette } from "@/hooks/useCommandPalette";
 import type { CommandItem } from "@/hooks/useCommandPalette";
 import {
@@ -45,10 +45,18 @@ export function CommandPalette() {
   } = useCommandPalette();
 
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const prevQueryRef = useRef(query);
+  const prevItemsLengthRef = useRef(filteredItems.length);
 
   // Reset selected index when query changes
   useEffect(() => {
-    setSelectedIndex(0);
+    // Only reset if query or items actually changed
+    if (query !== prevQueryRef.current || filteredItems.length !== prevItemsLengthRef.current) {
+      prevQueryRef.current = query;
+      prevItemsLengthRef.current = filteredItems.length;
+      // Use queueMicrotask to defer state update
+      queueMicrotask(() => setSelectedIndex(0));
+    }
   }, [query, filteredItems]);
 
   // Handle keyboard navigation (Arrow keys, Enter)

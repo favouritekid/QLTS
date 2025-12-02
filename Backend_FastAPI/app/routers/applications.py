@@ -10,11 +10,16 @@ Endpoints:
 """
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
+import structlog
 
 from .. import database, models, schemas
 from ..core import deps
 from ..services import application_service
+from ..services.notification_dispatcher import dispatch  # ✅ NOTIFICATION 2.0
+from ..core.events import SystemEvents  # ✅ NOTIFICATION 2.0
 from ..utils.exceptions import ResourceNotFoundError, BadRequest
+
+log = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["Applications"])
 
@@ -54,6 +59,32 @@ async def create_application_for_lead(
             lead_id=lead_id,
             current_user=current_user,
         )
+
+        # ✅ NOTIFICATION 2.0: Dispatch APPLICATION_SUBMITTED event
+        try:
+            await dispatch(
+                db=db,
+                event=SystemEvents.APPLICATION_SUBMITTED,
+                payload={
+                    "application_id": application.id,
+                    "applicant_id": application.lead_id,
+                    "applicant_name": application.lead.full_name if application.lead else "Unknown",
+                    "applicant_email": application.lead.email if application.lead else "",
+                    "officer_id": application.officer_id,
+                    "officer_name": application.officer.full_name if application.officer else "Unknown",
+                    "status": application.status,
+                    "actor_id": current_user.id,
+                    "actor_name": current_user.full_name,
+                },
+                dedupe_key=f"application_submitted:{application.id}"
+            )
+        except Exception as e:
+            log.warning(
+                "Failed to dispatch application submitted notification",
+                application_id=application.id,
+                error=str(e)
+            )
+
         return application
     except ResourceNotFoundError as e:
         raise HTTPException(
@@ -131,12 +162,45 @@ async def update_application(
     - 404: Application không tồn tại
     """
     try:
+        # Get old application for comparison
+        old_application = await application_service.get_application_by_id(db, application_id)
+        old_status = old_application.status
+
+        # Update application
         application = await application_service.update_application(
             db=db,
             application_id=application_id,
             update_data=update_data,
             current_user=current_user,
         )
+
+        # ✅ NOTIFICATION 2.0: Dispatch APPLICATION_STATUS_CHANGED if status changed
+        if update_data.status and update_data.status != old_status:
+            try:
+                await dispatch(
+                    db=db,
+                    event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                    payload={
+                        "application_id": application.id,
+                        "applicant_id": application.lead_id,
+                        "applicant_name": application.lead.full_name if application.lead else "Unknown",
+                        "applicant_email": application.lead.email if application.lead else "",
+                        "officer_id": application.officer_id,
+                        "officer_name": application.officer.full_name if application.officer else "Unknown",
+                        "old_status": old_status,
+                        "new_status": application.status,
+                        "actor_id": current_user.id,
+                        "actor_name": current_user.full_name,
+                    },
+                    dedupe_key=f"application_status_changed:{application.id}:{application.status}"
+                )
+            except Exception as e:
+                log.warning(
+                    "Failed to dispatch application status changed notification",
+                    application_id=application.id,
+                    error=str(e)
+                )
+
         return application
     except ResourceNotFoundError as e:
         raise HTTPException(

@@ -3,7 +3,7 @@
 
 import { useUIStore } from "@/lib/stores/ui.store";
 import { cn } from "@/lib/utils";
-import { Menu, Search, Command as CommandIcon } from "lucide-react";
+import { Menu, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
