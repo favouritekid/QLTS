@@ -1,6 +1,6 @@
 # app/services/config_service.py
 import json  # 👈 *** ADD IMPORT ***
-from typing import Any, List
+from typing import Any, Callable, List, Tuple  # ✅ ADD Callable, Tuple for transaction pattern
 
 import structlog
 from sqlalchemy import select
@@ -90,10 +90,28 @@ async def get_assignment_config(db: AsyncSession, unit_id: int) -> dict:
 
 async def update_assignment_config(
     db: AsyncSession, unit_id: int, params: Any
-) -> models.OfficerAssignmentConfig:
+) -> Tuple[models.OfficerAssignmentConfig, Callable]:
     """
     Cập nhật cấu hình phân chia của một đơn vị.
-    Sử dụng commit/rollback tường minh.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Args:
+        db: Database session
+        unit_id: ID của organization unit
+        params: Configuration parameters
+
+    Returns:
+        Tuple of (config, post_commit_callback)
+
+    Raises:
+        ResourceNotFoundError: If organization unit doesn't exist
+
+    Example:
+        config, post_commit = await update_assignment_config(db, unit_id, params)
+        await db.commit()  # Router commits
+        await post_commit()  # Execute post-commit actions
     """
     cache_key = f"config:assignment:{unit_id}"
     try:
@@ -118,41 +136,39 @@ async def update_assignment_config(
 
         db.add(config)
 
-        # === THAY ĐỔI CHÍNH ===
-        # 1. Commit thay đổi vào DB
-        await db.commit()
-        # 2. Refresh để load lại cột 'params' sau khi commit
-        # (Chỉ định rõ 'params' để đảm bảo nó được load)
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        # Flush writes to DB and gets ID without committing transaction
+        await db.flush()
+        # Refresh to load 'params' column after flush
         await db.refresh(config, attribute_names=["params"])
 
-        config_to_return = config
-        # === KẾT THÚC THAY ĐỔI ===
+        # ✅ Create post-commit callback for cache invalidation
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            try:
+                deleted_count = await safe_redis_delete(cache_key)
+                if deleted_count > 0:
+                    log.info("Invalidated assignment config cache", unit_id=unit_id)
+                else:
+                    log.debug("No assignment config cache to invalidate", unit_id=unit_id)
+            except Exception as e_redis_del:
+                log.error(
+                    "Failed to invalidate cache after config update",
+                    unit_id=unit_id,
+                    error=str(e_redis_del),
+                )
 
-        # --- Invalidate Cache SAU KHI DB commit thành công ---
-        try:
-            deleted_count = await safe_redis_delete(cache_key)
-            if deleted_count > 0:
-                log.info("Invalidated assignment config cache", unit_id=unit_id)
-            else:
-                log.debug("No assignment config cache to invalidate", unit_id=unit_id)
-        except Exception as e_redis_del:
-            log.error(
-                "Failed to invalidate assignment config cache after update",
-                unit_id=unit_id,
-                error=str(e_redis_del),
-            )
-
-        return config_to_return
+        return config, _post_commit
 
     except Exception as e:
-        await db.rollback()  # Rollback nếu có lỗi TRƯỚC KHI commit
+        # ✅ Router will handle rollback
         log.error(
             "Failed to update assignment config",
             unit_id=unit_id,
             error=str(e),
             exc_info=True,
         )
-        raise e  # Ném lại lỗi (ví dụ: ResourceNotFoundError)
+        raise  # Re-raise exception (e.g., ResourceNotFoundError)
 
 
 # --- Skill Rules (Consider caching if needed) ---
