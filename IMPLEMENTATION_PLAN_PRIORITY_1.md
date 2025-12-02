@@ -1,6 +1,8 @@
 # 🚀 KẾ HOẠCH IMPLEMENTATION - PRIORITY 1 EVENTS
 
-**Tổng quan:** Implement 5 events quan trọng nhất trong vòng 1-2 ngày
+**Tổng quan:** Implement 4 events quan trọng nhất trong vòng 1 ngày
+
+**⚠️ Cập nhật:** CONSULTATION_REMINDER đã được implement (celery_utils.py:558-692)
 
 ---
 
@@ -263,263 +265,36 @@ pytest tests/integration/api/test_consultations.py::test_update_consultation -v
 
 ---
 
-### ✅ Task 5: Tạo CONSULTATION_REMINDER Celery task
-**Thời gian:** 1-2 giờ
-**Độ khó:** ⭐⭐⭐⭐ Rất khó (cần setup Celery)
+### ✅ ~~Task 5: Tạo CONSULTATION_REMINDER Celery task~~ (ĐÃ CÓ)
 
-**Bước 1: Check Celery đã có chưa**
+**Status:** ✅ **ĐÃ ĐƯỢC IMPLEMENT**
+
+**Vị trí:** `app/celery_utils.py` (line 558-692)
+
+**Chi tiết implementation:**
+- Celery task: `check_consultation_reminders_task`
+- Beat schedule: Chạy mỗi 60 giây (line 700-704)
+- Event dispatch: SystemEvents.CONSULTATION_REMINDER (line 644)
+- Database field: `reminder_sent` có sẵn trong Consultation model
+- Logic: Tìm consultations trong 15 phút tiếp theo, dispatch reminder, mark reminder_sent=True
+- Error handling: Try-catch per consultation + auto retry (max 2 retries)
+- Timezone: Dùng pytz + settings.TIMEZONE
+
+**Verification:**
 ```bash
-# Tìm celery config
-find . -name "celery*" -type f
-grep -rn "from celery import" app/
+# Xem task code
+cat app/celery_utils.py | sed -n '558,692p'
+
+# Check beat schedule
+grep -A 5 "beat_schedule" app/celery_utils.py
 ```
 
-**Bước 2: Setup Celery (nếu chưa có)**
+**Không cần làm gì thêm** - Task này đã hoàn chỉnh và production-ready.
 
-**File 1: `app/celery_app.py`**
-```python
-from celery import Celery
-from app.config import settings
-
-celery_app = Celery(
-    "qlts_worker",
-    broker=settings.CELERY_BROKER_URL,
-    backend=settings.CELERY_RESULT_BACKEND
-)
-
-celery_app.conf.update(
-    task_serializer="json",
-    accept_content=["json"],
-    result_serializer="json",
-    timezone="UTC",
-    enable_utc=True,
-    broker_connection_retry_on_startup=True,
-)
-
-# Auto-discover tasks
-celery_app.autodiscover_tasks(["app.tasks"])
-```
-
-**File 2: `app/tasks/__init__.py`**
-```python
-from .consultation_tasks import send_consultation_reminders
-
-__all__ = ["send_consultation_reminders"]
-```
-
-**File 3: `app/tasks/consultation_tasks.py`**
-```python
-import asyncio
-import structlog
-from datetime import datetime, timedelta, timezone
-from celery import shared_task
-from sqlalchemy import select
-
-from app.database import SessionLocal
-from app import models
-from app.core.events import SystemEvents
-from app.services.notification_dispatcher import dispatch
-
-log = structlog.get_logger(__name__)
-
-@shared_task(name="tasks.send_consultation_reminders")
-def send_consultation_reminders():
-    """
-    Celery Beat task: Send reminders for upcoming consultations.
-
-    Runs every 15 minutes.
-    Sends reminder 30 minutes before scheduled consultation.
-    """
-    db = SessionLocal()
-    try:
-        now = datetime.now(timezone.utc)
-        remind_window_start = now + timedelta(minutes=25)  # 25-35 min window
-        remind_window_end = now + timedelta(minutes=35)
-
-        log.info(
-            "Running consultation reminder task",
-            now=now.isoformat(),
-            window_start=remind_window_start.isoformat(),
-            window_end=remind_window_end.isoformat()
-        )
-
-        # Find consultations in reminder window that haven't been reminded
-        stmt = (
-            select(models.Consultation)
-            .where(
-                models.Consultation.scheduled_at >= remind_window_start,
-                models.Consultation.scheduled_at <= remind_window_end,
-                models.Consultation.reminder_sent == False,
-                models.Consultation.deleted_at == None,
-            )
-            .join(models.Lead)
-            .where(models.Lead.deleted_at == None)
-        )
-
-        result = db.execute(stmt)
-        consultations = result.scalars().all()
-
-        log.info(f"Found {len(consultations)} consultations needing reminders")
-
-        for consultation in consultations:
-            try:
-                lead = consultation.lead
-                if not lead.assigned_officer_id:
-                    log.warning(
-                        "Consultation has no assigned officer, skipping",
-                        consultation_id=consultation.id
-                    )
-                    continue
-
-                minutes_until = int((consultation.scheduled_at - now).total_seconds() / 60)
-
-                # Dispatch reminder using asyncio
-                asyncio.run(dispatch(
-                    db=db,
-                    event=SystemEvents.CONSULTATION_REMINDER,
-                    payload={
-                        "consultation_id": consultation.id,
-                        "lead_id": lead.id,
-                        "lead_name": lead.full_name or "Unknown",
-                        "lead_phone": lead.phone_number or "N/A",
-                        "officer_id": lead.assigned_officer_id,
-                        "scheduled_at": consultation.scheduled_at.isoformat(),
-                        "minutes_until": minutes_until,
-                    },
-                    dedupe_key=f"consultation_reminder:{consultation.id}"
-                ))
-
-                # Mark as reminded
-                consultation.reminder_sent = True
-                db.add(consultation)
-
-                log.info(
-                    "Consultation reminder sent",
-                    consultation_id=consultation.id,
-                    officer_id=lead.assigned_officer_id,
-                    minutes_until=minutes_until
-                )
-
-            except Exception as e:
-                log.error(
-                    "Failed to send consultation reminder",
-                    consultation_id=consultation.id,
-                    error=str(e)
-                )
-
-        db.commit()
-
-        return {
-            "success": True,
-            "reminders_sent": len(consultations),
-            "timestamp": now.isoformat()
-        }
-
-    except Exception as e:
-        log.error("Consultation reminder task failed", error=str(e))
-        db.rollback()
-        return {"success": False, "error": str(e)}
-    finally:
-        db.close()
-```
-
-**Bước 3: Update models.py (thêm reminder_sent field)**
-```python
-# app/models.py - class Consultation
-
-class Consultation(Base):
-    __tablename__ = "consultations"
-
-    # ... existing fields ...
-
-    reminder_sent: Mapped[bool] = mapped_column(
-        Boolean,
-        default=False,
-        nullable=False,
-        comment="Whether reminder notification has been sent"
-    )
-```
-
-**Bước 4: Tạo Alembic migration**
-```bash
-alembic revision -m "Add reminder_sent field to consultations"
-```
-
-Edit migration file:
-```python
-def upgrade():
-    op.add_column(
-        'consultations',
-        sa.Column('reminder_sent', sa.Boolean(), nullable=False, server_default='false')
-    )
-
-def downgrade():
-    op.drop_column('consultations', 'reminder_sent')
-```
-
-**Bước 5: Config Celery Beat schedule**
-
-**File: `app/celery_beat_schedule.py`**
-```python
-from celery.schedules import crontab
-
-CELERY_BEAT_SCHEDULE = {
-    "send-consultation-reminders": {
-        "task": "tasks.send_consultation_reminders",
-        "schedule": crontab(minute="*/15"),  # Every 15 minutes
-    },
-}
-```
-
-**Bước 6: Update config.py**
-```python
-# app/config.py
-
-class Settings(BaseSettings):
-    # ... existing settings ...
-
-    # Celery
-    CELERY_BROKER_URL: str = Field(
-        default="redis://localhost:6379/0",
-        env="CELERY_BROKER_URL"
-    )
-    CELERY_RESULT_BACKEND: str = Field(
-        default="redis://localhost:6379/0",
-        env="CELERY_RESULT_BACKEND"
-    )
-```
-
-**Bước 7: Update .env**
-```bash
-# .env
-CELERY_BROKER_URL=redis://localhost:6379/0
-CELERY_RESULT_BACKEND=redis://localhost:6379/0
-```
-
-**Bước 8: Chạy Celery worker và beat**
-```bash
-# Terminal 1: Worker
-celery -A app.celery_app worker --loglevel=info
-
-# Terminal 2: Beat scheduler
-celery -A app.celery_app beat --loglevel=info
-```
-
-**Test:**
-```bash
-# Test task manually
-python -c "from app.tasks.consultation_tasks import send_consultation_reminders; send_consultation_reminders.delay()"
-
-# Create test consultation 30 minutes in future
-# Wait for task to run
-# Check notifications table
-```
-
----
 
 ## 🧪 TESTING CHECKLIST
 
-Sau khi hoàn thành tất cả 5 tasks:
+Sau khi hoàn thành tất cả 4 tasks cần implement (Task 5 đã có sẵn):
 
 ### Unit Tests
 ```bash
@@ -537,7 +312,7 @@ pytest -k "test_lead_created" -v
 pytest -k "test_user_role_changed" -v
 pytest -k "test_application_created" -v
 pytest -k "test_consultation_updated" -v
-pytest -k "test_consultation_reminder" -v
+pytest -k "test_consultation_reminder" -v  # ✅ Đã có task
 ```
 
 ### Manual Tests
@@ -559,9 +334,9 @@ pytest -k "test_consultation_reminder" -v
    - Update consultation status
    - Check notification
 
-5. **CONSULTATION_REMINDER:**
-   - Tạo consultation 30 min in future
-   - Wait 15 min (or trigger manually)
+5. **CONSULTATION_REMINDER:** ✅ **Đã có task**
+   - Tạo consultation trong 15 phút tiếp theo
+   - Wait for Celery Beat (max 60s)
    - Check reminder notification
 
 ---
@@ -572,9 +347,11 @@ Sau khi hoàn thành Priority 1:
 
 | Metric | Before | After |
 |--------|--------|-------|
-| Events dispatched | 7/27 (25.9%) | 12/27 (44.4%) |
+| Events dispatched | 8/27 (29.6%) | 12/27 (44.4%) |
 | Bug count | 1 | 0 |
-| Core business coverage | 60% | 95% |
+| Core business coverage | 70% | 95% |
+
+**Lưu ý:** CONSULTATION_REMINDER đã được implement, nên số liệu Before đã bao gồm event này (8/27 thay vì 7/27).
 
 ---
 
@@ -588,7 +365,7 @@ Sau khi hoàn thành Priority 1:
 
 ### Issue 2: Consultation model thiếu field
 **Problem:** `reminder_sent` field không tồn tại
-**Solution:** Tạo migration (đã có hướng dẫn ở Task 5)
+**Solution:** ✅ Field đã có sẵn trong model (models/lead.py:110)
 
 ### Issue 3: Performance
 **Problem:** Dispatch quá nhiều notifications có thể chậm
@@ -631,13 +408,9 @@ git commit -m "feat: Add CONSULTATION_UPDATED endpoint and dispatch
 - Dispatch CONSULTATION_UPDATED on status change
 - Add ConsultationUpdate schema"
 
-# Task 5
-git commit -m "feat: Add consultation reminder Celery task
-
-- Create periodic task to send consultation reminders
-- Send reminder 30 minutes before scheduled time
-- Add reminder_sent field to consultations table
-- Configure Celery Beat schedule"
+# Task 5 - ĐÃ CÓ SẴN
+# ✅ CONSULTATION_REMINDER đã được implement (celery_utils.py:558-692)
+# Không cần commit gì thêm
 ```
 
 ---

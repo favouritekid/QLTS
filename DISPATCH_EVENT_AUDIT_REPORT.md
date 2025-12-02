@@ -33,7 +33,7 @@ event=SystemEvents.APPLICATION_CREATED,  # ✅ Đúng event name
 
 ---
 
-## ✅ EVENTS ĐÃ DISPATCH (8/27 = 29.6%)
+## ✅ EVENTS ĐÃ DISPATCH (9/27 = 33.3%)
 
 | # | Event Name | File Location | Line | Status |
 |---|------------|---------------|------|--------|
@@ -41,16 +41,17 @@ event=SystemEvents.APPLICATION_CREATED,  # ✅ Đúng event name
 | 2 | LEAD_STATUS_CHANGED | app/routers/leads.py | 181 | ✅ OK |
 | 3 | LEAD_DELETED | app/routers/leads.py | 237 | ✅ OK |
 | 4 | CONSULTATION_CREATED | app/routers/leads.py | 280 | ✅ OK |
-| 5 | ~~APPLICATION_SUBMITTED~~ | app/routers/applications.py | 67 | ❌ BUG |
-| 6 | APPLICATION_STATUS_CHANGED | app/routers/applications.py | 180 | ✅ OK |
-| 7 | APPLICATION_DELETED | app/routers/applications.py | 263 | ✅ OK |
-| 8 | USER_DEACTIVATED | app/routers/admin/users.py | 904 | ✅ OK |
+| 5 | CONSULTATION_REMINDER | app/celery_utils.py | 644 | ✅ OK (Celery Beat) |
+| 6 | ~~APPLICATION_SUBMITTED~~ | app/routers/applications.py | 67 | ❌ BUG |
+| 7 | APPLICATION_STATUS_CHANGED | app/routers/applications.py | 180 | ✅ OK |
+| 8 | APPLICATION_DELETED | app/routers/applications.py | 263 | ✅ OK |
+| 9 | USER_DEACTIVATED | app/routers/admin/users.py | 904 | ✅ OK |
 
-**Lưu ý:** Thực tế chỉ có **7 events hoạt động đúng**, còn 1 event bị lỗi.
+**Lưu ý:** Thực tế có **8 events hoạt động đúng**, còn 1 event bị lỗi.
 
 ---
 
-## ❌ EVENTS CHƯA DISPATCH (19/27 = 70.4%)
+## ❌ EVENTS CHƯA DISPATCH (18/27 = 66.7%)
 
 ### 🔴 PRIORITY 1 - CẦN LÀM NGAY (Core Business Logic)
 
@@ -193,59 +194,6 @@ async def update_consultation(...):
 
 ---
 
-#### 5. CONSULTATION_REMINDER
-- **File:** Chưa có Celery task
-- **Status:** ⚠️ CẦN TẠO MỚI Celery Beat task
-- **Trigger:** Scheduled task chạy mỗi 15 phút, kiểm tra consultations sắp tới trong 30 phút
-- **Recipients:** Officer có lịch hẹn
-
-**Code mẫu (Celery task):**
-```python
-# app/tasks/consultation_tasks.py
-from celery import shared_task
-from app.core.events import SystemEvents
-from app.services.notification_dispatcher import dispatch
-
-@shared_task
-def send_consultation_reminders():
-    """Run every 15 minutes to send reminders for upcoming consultations."""
-    from app.database import SessionLocal
-    from app import models
-    from datetime import datetime, timedelta
-
-    db = SessionLocal()
-    try:
-        now = datetime.utcnow()
-        remind_window = now + timedelta(minutes=30)
-
-        consultations = db.query(models.Consultation).filter(
-            models.Consultation.scheduled_at.between(now, remind_window),
-            models.Consultation.reminder_sent == False
-        ).all()
-
-        for consultation in consultations:
-            asyncio.run(dispatch(
-                db=db,
-                event=SystemEvents.CONSULTATION_REMINDER,
-                payload={
-                    "consultation_id": consultation.id,
-                    "lead_id": consultation.lead_id,
-                    "lead_name": consultation.lead.full_name,
-                    "lead_phone": consultation.lead.phone_number,
-                    "officer_id": consultation.lead.assigned_officer_id,
-                    "scheduled_at": consultation.scheduled_at.isoformat(),
-                    "minutes_until": int((consultation.scheduled_at - now).total_seconds() / 60)
-                }
-            ))
-            consultation.reminder_sent = True
-
-        db.commit()
-    finally:
-        db.close()
-```
-
----
-
 ### 🟡 PRIORITY 2 - Quan trọng nhưng có thể chờ
 
 #### 6. LEAD_ASSIGNMENT_FAILED
@@ -314,10 +262,10 @@ Các events sau đây thuộc các module chưa được implement:
 | Chỉ số | Số lượng | Tỷ lệ |
 |--------|----------|-------|
 | **Tổng Events** | 27 | 100% |
-| **Đã dispatch (hoạt động)** | 7 | 25.9% |
+| **Đã dispatch (hoạt động)** | 8 | 29.6% |
 | **Đã dispatch (lỗi)** | 1 | 3.7% |
-| **Chưa dispatch** | 19 | 70.4% |
-| ├─ Priority 1 (cần ngay) | 5 | 18.5% |
+| **Chưa dispatch** | 18 | 66.7% |
+| ├─ Priority 1 (cần ngay) | 4 | 14.8% |
 | ├─ Priority 2 (có thể chờ) | 6 | 22.2% |
 | └─ Priority 3 (future) | 8 | 29.6% |
 
@@ -331,10 +279,10 @@ Các events sau đây thuộc các module chưa được implement:
 - [ ] Add USER_ROLE_CHANGED dispatch
 - [ ] Add APPLICATION_CREATED dispatch (fixed)
 
-### Sprint 2 - Core Features (3-5 ngày)
+### Sprint 2 - Core Features (2-3 ngày)
 - [ ] Add CONSULTATION_UPDATED endpoint + dispatch
 - [ ] Add CONSULTATION_DELETED endpoint + dispatch
-- [ ] Create CONSULTATION_REMINDER Celery task
+- [x] ~~Create CONSULTATION_REMINDER Celery task~~ ✅ **ĐÃ CÓ** (celery_utils.py:644)
 - [ ] Add LEAD_ASSIGNMENT_FAILED dispatch
 
 ### Sprint 3 - Enhanced Features (1 tuần)
@@ -367,7 +315,7 @@ sed -i 's/APPLICATION_SUBMITTED/APPLICATION_CREATED/g' app/routers/applications.
 2. USER_ROLE_CHANGED (dễ, 15 phút)
 3. APPLICATION_CREATED fix (dễ, 5 phút)
 4. CONSULTATION_UPDATED (trung bình, 30 phút - cần tìm/tạo endpoint)
-5. CONSULTATION_REMINDER (khó, 1-2 giờ - cần setup Celery)
+5. ~~CONSULTATION_REMINDER~~ ✅ **ĐÃ CÓ** (celery_utils.py line 558-692)
 
 ### Bước 3: Testing
 ```bash
