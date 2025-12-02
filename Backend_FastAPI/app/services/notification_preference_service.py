@@ -28,7 +28,7 @@ Rules:
 - If user has group but missing channel → default to True
 """
 from datetime import datetime, time
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 import structlog
 from sqlalchemy import select
@@ -41,11 +41,22 @@ log = structlog.get_logger(__name__)
 
 
 async def get_user_preference(
-    db: AsyncSession, user_id: int
-) -> Optional[models.NotificationPreference]:
+    db: AsyncSession, user_id: int, auto_commit: bool = False
+) -> Tuple[Optional[models.NotificationPreference], Optional[Callable]]:
     """
     Get notification preference for a user.
     Creates default preference if not exists.
+
+    IMPORTANT: If auto_commit=False (default), this function does NOT commit when creating default.
+    Caller must handle the transaction. If auto_commit=True, uses legacy behavior (for backward compatibility).
+
+    Args:
+        db: Database session
+        user_id: User ID
+        auto_commit: If True, commits immediately (legacy). If False, returns callback.
+
+    Returns:
+        Tuple of (preference, post_commit_callback_or_None)
     """
     stmt = select(models.NotificationPreference).where(
         models.NotificationPreference.user_id == user_id
@@ -66,20 +77,43 @@ async def get_user_preference(
             quiet_hours_enabled=False,
         )
         db.add(preference)
-        await db.commit()
-        await db.refresh(preference)
 
-    return preference
+        if auto_commit:
+            # ✅ Legacy behavior for internal calls
+            await db.commit()
+            await db.refresh(preference)
+            return preference, None
+        else:
+            # ✅ TRANSACTION FIX: Flush and return callback
+            await db.flush()
+            await db.refresh(preference)
+
+            async def _post_commit():
+                """Execute after router commits the transaction."""
+                log.info("Default notification preference created", user_id=user_id)
+
+            return preference, _post_commit
+
+    # Existing preference - no commit needed
+    return preference, None
 
 
 async def update_user_preference(
     db: AsyncSession,
     user_id: int,
     preference_update: schemas.NotificationPreferenceUpdate,
-) -> models.NotificationPreference:
-    """Update user notification preferences."""
-    # Get or create preference
-    preference = await get_user_preference(db, user_id)
+) -> Tuple[models.NotificationPreference, Callable]:
+    """
+    Update user notification preferences.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (preference, post_commit_callback)
+    """
+    # Get or create preference (with auto_commit for backward compatibility)
+    preference, _ = await get_user_preference(db, user_id, auto_commit=True)
 
     # Update fields
     update_data = preference_update.model_dump(exclude_unset=True)
@@ -87,16 +121,20 @@ async def update_user_preference(
     for field, value in update_data.items():
         setattr(preference, field, value)
 
-    await db.commit()
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
     await db.refresh(preference)
 
-    log.info(
-        "Updated notification preferences",
-        user_id=user_id,
-        updated_fields=list(update_data.keys()),
-    )
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        log.info(
+            "Updated notification preferences",
+            user_id=user_id,
+            updated_fields=list(update_data.keys()),
+        )
 
-    return preference
+    return preference, _post_commit
 
 
 async def is_quiet_hours(preference: models.NotificationPreference) -> bool:
@@ -125,7 +163,7 @@ async def should_send_notification(
     Check if notification should be sent based on user preferences.
     Returns dict with flags for different notification channels.
     """
-    preference = await get_user_preference(db, user_id)
+    preference, _ = await get_user_preference(db, user_id, auto_commit=True)
 
     # Check if in quiet hours
     in_quiet_hours = await is_quiet_hours(preference)
@@ -200,7 +238,7 @@ async def get_user_group_preferences(
             ...
         }
     """
-    preference = await get_user_preference(db, user_id)
+    preference, _ = await get_user_preference(db, user_id, auto_commit=True)
 
     result = {}
     for group in NotificationEventGroup:
@@ -231,9 +269,12 @@ async def set_user_group_preference(
     group: str,
     channel: str,
     enabled: bool
-) -> models.NotificationPreference:
+) -> Tuple[models.NotificationPreference, Callable]:
     """
     Set a specific group/channel preference for a user.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
 
     Args:
         db: Database session
@@ -243,9 +284,10 @@ async def set_user_group_preference(
         enabled: Whether to enable notifications
 
     Returns:
-        Updated NotificationPreference
+        Tuple of (preference, post_commit_callback)
     """
-    preference = await get_user_preference(db, user_id)
+    # Get or create preference (with auto_commit for backward compatibility)
+    preference, _ = await get_user_preference(db, user_id, auto_commit=True)
 
     # Initialize type_preferences if None
     if preference.type_preferences is None:
@@ -263,18 +305,22 @@ async def set_user_group_preference(
     from sqlalchemy.orm.attributes import flag_modified
     flag_modified(preference, "type_preferences")
 
-    await db.commit()
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
     await db.refresh(preference)
 
-    log.info(
-        "Updated group preference",
-        user_id=user_id,
-        group=group,
-        channel=channel,
-        enabled=enabled
-    )
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        log.info(
+            "Updated group preference",
+            user_id=user_id,
+            group=group,
+            channel=channel,
+            enabled=enabled
+        )
 
-    return preference
+    return preference, _post_commit
 
 
 async def filter_users_by_group(
