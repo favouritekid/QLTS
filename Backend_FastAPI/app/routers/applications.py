@@ -60,23 +60,19 @@ async def create_application_for_lead(
             current_user=current_user,
         )
 
-        # ✅ NOTIFICATION 2.0: Dispatch APPLICATION_SUBMITTED event
+        # ✅ NOTIFICATION 2.0: Dispatch APPLICATION_CREATED event
         try:
             await dispatch(
                 db=db,
-                event=SystemEvents.APPLICATION_SUBMITTED,
+                event=SystemEvents.APPLICATION_CREATED,
                 payload={
                     "application_id": application.id,
-                    "applicant_id": application.lead_id,
-                    "applicant_name": application.lead.full_name if application.lead else "Unknown",
-                    "applicant_email": application.lead.email if application.lead else "",
+                    "lead_id": application.lead_id,
                     "officer_id": application.officer_id,
-                    "officer_name": application.officer.full_name if application.officer else "Unknown",
-                    "status": application.status,
+                    "major_program_name": None,  # Will be updated later
                     "actor_id": current_user.id,
-                    "actor_name": current_user.full_name,
                 },
-                dedupe_key=f"application_submitted:{application.id}"
+                dedupe_key=f"application_created:{application.id}"
             )
         except Exception as e:
             log.warning(
