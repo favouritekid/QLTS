@@ -1,6 +1,6 @@
 # app/services/notification_service.py
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import structlog
 from sqlalchemy import and_, desc, func, select
@@ -54,7 +54,7 @@ async def create_notification(
     notification_type: str = "info",
     link: Optional[str] = None,
     data: Optional[Dict[str, Any]] = None,
-) -> models.Notification:
+) -> Tuple[models.Notification, Callable]:
     """
     Create a new notification for a user with preference checking.
 
@@ -62,6 +62,9 @@ async def create_notification(
     1. Checks user's notification preferences
     2. Creates the notification in the database (if preferences allow)
     3. Sends an email notification (if preferences allow)
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
 
     Args:
         db: Database session
@@ -73,7 +76,7 @@ async def create_notification(
         data: Optional additional data
 
     Returns:
-        Created Notification instance
+        Tuple of (notification, post_commit_callback)
     """
     # Check user preferences
     should_send = await notification_preference_service.should_send_notification(
@@ -100,48 +103,53 @@ async def create_notification(
     )
 
     db.add(notification)
-    await db.commit()
+
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
     await db.refresh(notification)
 
-    # Send email if preferences allow
-    if should_send["send_email"]:
-        try:
-            # Get user info for email
-            user = await db.get(models.User, user_id)
-            if user and user.email:
-                email_service = EmailService()
-                email_sent = email_service.send_notification_email(
-                    user.email,
-                    user.full_name or user.username,
-                    notification
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        # Send email if preferences allow
+        if should_send["send_email"]:
+            try:
+                # Get user info for email
+                user = await db.get(models.User, user_id)
+                if user and user.email:
+                    email_service = EmailService()
+                    email_sent = email_service.send_notification_email(
+                        user.email,
+                        user.full_name or user.username,
+                        notification
+                    )
+
+                    if email_sent:
+                        log.info(
+                            "Email notification sent successfully",
+                            user_id=user_id,
+                            notification_id=notification.id,
+                            notification_type=notification_type,
+                            recipient_email=user.email
+                        )
+                    else:
+                        log.warning(
+                            "Failed to send email notification",
+                            user_id=user_id,
+                            notification_id=notification.id,
+                            notification_type=notification_type,
+                            recipient_email=user.email
+                        )
+            except Exception as e:
+                log.error(
+                    "Error sending email notification",
+                    user_id=user_id,
+                    notification_id=notification.id,
+                    notification_type=notification_type,
+                    error=str(e)
                 )
 
-                if email_sent:
-                    log.info(
-                        "Email notification sent successfully",
-                        user_id=user_id,
-                        notification_id=notification.id,
-                        notification_type=notification_type,
-                        recipient_email=user.email
-                    )
-                else:
-                    log.warning(
-                        "Failed to send email notification",
-                        user_id=user_id,
-                        notification_id=notification.id,
-                        notification_type=notification_type,
-                        recipient_email=user.email
-                    )
-        except Exception as e:
-            log.error(
-                "Error sending email notification",
-                user_id=user_id,
-                notification_id=notification.id,
-                notification_type=notification_type,
-                error=str(e)
-            )
-
-    return notification
+    return notification, _post_commit
 
 
 async def get_user_notifications(
@@ -277,12 +285,15 @@ async def mark_as_read(
     db: AsyncSession,
     user_id: int,
     notification_ids: List[int],
-) -> int:
+) -> Tuple[int, Callable]:
     """
     Mark notifications as read.
 
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
     Returns:
-        Number of notifications marked as read
+        Tuple of (count, post_commit_callback)
     """
     # Get notifications that belong to the user and are unread
     query = select(models.Notification).where(
@@ -301,20 +312,36 @@ async def mark_as_read(
         notification.is_read = True
         notification.read_at = datetime.utcnow()
 
-    await db.commit()
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
 
-    return len(notifications)
+    count = len(notifications)
+
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        log.info(
+            "Notifications marked as read",
+            user_id=user_id,
+            count=count,
+            notification_ids=notification_ids
+        )
+
+    return count, _post_commit
 
 
 async def mark_all_as_read(
     db: AsyncSession,
     user_id: int,
-) -> int:
+) -> Tuple[int, Callable]:
     """
     Mark all notifications as read for a user.
 
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
     Returns:
-        Number of notifications marked as read
+        Tuple of (count, post_commit_callback)
     """
     query = select(models.Notification).where(
         and_(
@@ -331,23 +358,38 @@ async def mark_all_as_read(
         notification.is_read = True
         notification.read_at = datetime.utcnow()
 
-    await db.commit()
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
 
-    return len(notifications)
+    count = len(notifications)
+
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        log.info(
+            "All notifications marked as read",
+            user_id=user_id,
+            count=count
+        )
+
+    return count, _post_commit
 
 
 async def delete_notification(
     db: AsyncSession,
     user_id: int,
     notification_id: int,
-) -> bool:
+) -> Tuple[bool, Callable]:
     """
     Delete a notification and invalidate cache.
 
     ✅ PHASE 1.2.3: Cache invalidation on delete
 
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
     Returns:
-        True if deleted, False if not found
+        Tuple of (success, post_commit_callback)
     """
     query = select(models.Notification).where(
         and_(
@@ -360,12 +402,25 @@ async def delete_notification(
     notification = result.scalar_one_or_none()
 
     if not notification:
-        return False
+        # Return False with empty callback
+        async def _empty_callback():
+            pass
+        return False, _empty_callback
 
     await db.delete(notification)
-    await db.commit()
 
-    # ✅ PHASE 1.2.3: Invalidate cache after successful delete
-    await invalidate_user_inbox_cache(user_id)
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
 
-    return True
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        # ✅ PHASE 1.2.3: Invalidate cache after successful delete
+        await invalidate_user_inbox_cache(user_id)
+        log.info(
+            "Notification deleted and cache invalidated",
+            user_id=user_id,
+            notification_id=notification_id
+        )
+
+    return True, _post_commit
