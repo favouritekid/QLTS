@@ -610,10 +610,13 @@ async def update_user(
     enforcer: Optional[casbin.AsyncEnforcer] = None,
     avatar_file: Optional[UploadFile] = None,
     assigned_by_user_id: Optional[int] = None,  # ✅ PHASE 2: Track who made the assignment
-) -> models.User:
+) -> Tuple[models.User, Callable]:
     """
     ✅ ATOMIC TRANSACTION (v17 + PHASE 2):
     Update user with atomic DB + Casbin + UserUnitAssignment transaction.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
 
     PHASE 2 Enhancement:
     - Detects role/unit_id changes and creates temporal history
@@ -631,6 +634,9 @@ async def update_user(
 
     Uses nested transaction (savepoint) to ensure all operations
     succeed or fail together, preventing inconsistency.
+
+    Returns:
+        Tuple of (user, post_commit_callback)
     """
     user_id_for_logging = db_user.id
     try:
@@ -739,35 +745,38 @@ async def update_user(
             # ✅ If we reach here, all operations succeeded
             # Nested transaction will commit on exit from 'async with' block
 
-        # (4) Commit the main transaction (atomic: DB + Assignment + Casbin together)
-        await db.commit()
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
 
-        log.info(
-            "User updated successfully with atomic DB+Assignment+Casbin transaction",
-            user_id=user_id_for_logging,
-            role_changed=role_changed,
-            unit_changed=unit_changed,
-            assignment_changed=assignment_changed
-        )
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            log.info(
+                "User updated successfully with atomic DB+Assignment+Casbin transaction",
+                user_id=user_id_for_logging,
+                role_changed=role_changed,
+                unit_changed=unit_changed,
+                assignment_changed=assignment_changed
+            )
 
-        # (5) ✅ REAL-TIME SYNC: Notify all connected clients (after successful commit)
-        await emit_data_updated(
-            resource_type="user",
-            operation="update",
-            resource_id=db_user.id,
-            data={
-                "username": db_user.username,
-                "full_name": db_user.full_name,
-                "role": db_user.role,
-                "unit_id": db_user.unit_id,
-                "status": db_user.status
-            }
-        )
+            # ✅ REAL-TIME SYNC: Notify all connected clients
+            await emit_data_updated(
+                resource_type="user",
+                operation="update",
+                resource_id=db_user.id,
+                data={
+                    "username": db_user.username,
+                    "full_name": db_user.full_name,
+                    "role": db_user.role,
+                    "unit_id": db_user.unit_id,
+                    "status": db_user.status
+                }
+            )
 
-        return db_user
+        return db_user, _post_commit
 
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error(
             "Failed to update user (rolled back atomic transaction)",
             user_id=user_id_for_logging,
@@ -782,7 +791,16 @@ async def update_profile(
     db_user: models.User,
     user_in: schemas.UserUpdate,
     avatar_file: Optional[UploadFile] = None,
-) -> models.User:
+) -> Tuple[models.User, Callable]:
+    """
+    Update user profile.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (user, post_commit_callback)
+    """
     user_id_for_logging = db_user.id
     try:
         update_data = user_in.model_dump(exclude_unset=True)
@@ -809,11 +827,20 @@ async def update_profile(
             )
 
         db.add(db_user)
-        await db.commit()
+
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
         await db.refresh(db_user)
-        return db_user
+
+        # ✅ Create post-commit callback (empty - no post-commit actions needed)
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            pass
+
+        return db_user, _post_commit
+
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error(  # ✅ SỬA LỖI: Xóa `await`
             "Failed to update profile",
             user_id=user_id_for_logging,
@@ -826,8 +853,16 @@ async def update_profile(
 # --- Hàm Xóa User ---
 
 
-async def delete_user(db: AsyncSession, user_id: int):
-    """Xóa một user. Ném ResourceNotFound nếu không tìm thấy."""
+async def delete_user(db: AsyncSession, user_id: int) -> Tuple[None, Callable]:
+    """
+    Delete a user.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (None, post_commit_callback)
+    """
     try:
         # ✅ FIX MissingGreenlet: Eager load cascade-delete relationships
         # Without this, SQLAlchemy tries to lazy-load during cascade delete,
@@ -851,18 +886,25 @@ async def delete_user(db: AsyncSession, user_id: int):
         deleted_username = user_to_delete.username
 
         await db.delete(user_to_delete)
-        await db.commit()
 
-        # ✅ REAL-TIME SYNC: Notify all connected clients about the deletion
-        await emit_data_updated(
-            resource_type="user",
-            operation="delete",
-            resource_id=user_id,
-            data={"username": deleted_username}
-        )
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
+
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            # ✅ REAL-TIME SYNC: Notify all connected clients about the deletion
+            await emit_data_updated(
+                resource_type="user",
+                operation="delete",
+                resource_id=user_id,
+                data={"username": deleted_username}
+            )
+
+        return None, _post_commit
 
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error(
             "Failed to delete user", user_id=user_id, error=str(e), exc_info=True
         )  # ✅ SỬA LỖI: Xóa `await`
