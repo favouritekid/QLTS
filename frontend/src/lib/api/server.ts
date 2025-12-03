@@ -440,6 +440,22 @@ const admin = {
     }): Promise<any> {
       return serverFetch<any>('/api/notifications', { params });
     },
+
+    /**
+     * Get notification preferences
+     * ✅ PHASE 1 - WEEK 3 - DAY 1
+     */
+    async getPreferences(): Promise<any> {
+      return serverFetch<any>('/api/notifications/preferences');
+    },
+
+    /**
+     * Get event group preferences
+     * ✅ PHASE 1 - WEEK 3 - DAY 1
+     */
+    async getEventGroupPreferences(): Promise<any> {
+      return serverFetch<any>('/api/notifications/event-groups');
+    },
   },
 };
 

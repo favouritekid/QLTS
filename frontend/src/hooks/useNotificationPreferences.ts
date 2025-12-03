@@ -42,8 +42,11 @@ export const notificationPreferenceKeys = {
 
 /**
  * Hook to fetch user's notification preferences
+ * ✅ PHASE 1 - WEEK 3 - DAY 1: Added initialData support for SSR
  */
-export function useNotificationPreferences() {
+export function useNotificationPreferences(options?: {
+  initialData?: NotificationPreference;
+}) {
   return useQuery<NotificationPreference, AxiosError<ApiErrorResponse>>({
     queryKey: notificationPreferenceKeys.detail(),
     queryFn: async () => {
@@ -52,6 +55,7 @@ export function useNotificationPreferences() {
       );
       return response.data;
     },
+    initialData: options?.initialData,
     staleTime: 5 * 60 * 1000, // 5 minutes
   });
 }
@@ -93,8 +97,11 @@ export function useUpdateNotificationPreferences() {
 /**
  * Hook to fetch event group preferences
  * Returns both group metadata and user's preferences
+ * ✅ PHASE 1 - WEEK 3 - DAY 1: Added initialData support for SSR
  */
-export function useEventGroupPreferences() {
+export function useEventGroupPreferences(options?: {
+  initialData?: EventGroupPreferencesResponse;
+}) {
   return useQuery<EventGroupPreferencesResponse, AxiosError<ApiErrorResponse>>({
     queryKey: notificationPreferenceKeys.eventGroups(),
     queryFn: async () => {
@@ -103,6 +110,7 @@ export function useEventGroupPreferences() {
       );
       return response.data;
     },
+    initialData: options?.initialData,
     staleTime: 5 * 60 * 1000, // 5 minutes
   });
 }
