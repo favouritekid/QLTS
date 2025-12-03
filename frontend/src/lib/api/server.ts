@@ -389,6 +389,18 @@ const admin = {
       return serverFetch<any>('/api/admin/distribution/stats', { params });
     },
   },
+
+  /**
+   * Distribution Rules
+   */
+  distributionRules: {
+    /**
+     * Get all distribution rules
+     */
+    async getRules(): Promise<any> {
+      return serverFetch<any>('/api/admin/distribution-rules');
+    },
+  },
 };
 
 // ============================================
