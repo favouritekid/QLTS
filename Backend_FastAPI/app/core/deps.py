@@ -332,6 +332,148 @@ async def get_lead_for_user(
 # ============================================================================
 
 
+async def get_application_for_user(
+    application_id: int = Path(..., description="ID of the Application"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+) -> models.Application:
+    """
+    Verify ownership and retrieve an application.
+
+    **Security Levels:**
+    - **Admin**: Can access all applications
+    - **Manager**: Can access applications for leads in their managed units
+    - **Officer**: Can access applications for their assigned leads only
+
+    **IDOR Prevention:**
+    This dependency prevents Insecure Direct Object Reference attacks by verifying
+    that the current user has permission to access the specified application.
+
+    Args:
+        application_id: ID of the application to access
+        db: Database session (injected)
+        current_user: Current authenticated user (injected)
+
+    Returns:
+        Application model if access is permitted
+
+    Raises:
+        ResourceNotFoundError: If application doesn't exist
+        PermissionDeniedError: If user doesn't have permission
+
+    Example:
+        ```python
+        @router.get("/applications/{application_id}")
+        async def get_application(
+            application: models.Application = Depends(get_application_for_user)
+        ):
+            # application is guaranteed to be accessible by current user
+            return application
+        ```
+    """
+    from ..services import application_service
+
+    # Get application with lead relationship
+    try:
+        application = await application_service.get_application_by_id(
+            db,
+            application_id,
+            load_lead=True  # Ensure lead is loaded for ownership check
+        )
+    except ResourceNotFoundError:
+        log.warning(
+            "Application not found",
+            application_id=application_id,
+            user_id=current_user.id
+        )
+        raise ResourceNotFoundError(
+            detail=f"Application with id {application_id} not found"
+        )
+
+    # Verify application has associated lead
+    if not application.lead:
+        log.error(
+            "Application has no associated lead - data integrity issue",
+            application_id=application_id
+        )
+        raise ResourceNotFoundError(
+            detail=f"Application {application_id} has no associated lead"
+        )
+
+    lead = application.lead
+
+    # ADMIN: Full access to all applications
+    if current_user.role == "admin":
+        log.debug(
+            "Admin accessing application",
+            application_id=application_id,
+            admin_id=current_user.id
+        )
+        return application
+
+    # MANAGER: Access to applications for leads in their managed units
+    if current_user.role == "manager":
+        managed_units = await get_user_managed_units(db, current_user.id)
+        if lead.unit_id in managed_units:
+            log.debug(
+                "Manager accessing application in managed unit",
+                application_id=application_id,
+                manager_id=current_user.id,
+                unit_id=lead.unit_id
+            )
+            return application
+        else:
+            log.warning(
+                "IDOR attempt detected: Manager trying to access application outside managed units",
+                application_id=application_id,
+                lead_unit_id=lead.unit_id,
+                managed_units=managed_units,
+                manager_id=current_user.id,
+                username=current_user.username
+            )
+            raise PermissionDeniedError(
+                detail="You do not have permission to access this application. "
+                       "This application belongs to a lead outside your managed units."
+            )
+
+    # OFFICER: Access to applications for their assigned leads only
+    if current_user.role == "officer":
+        if lead.assigned_officer_id == current_user.id:
+            log.debug(
+                "Officer accessing application for assigned lead",
+                application_id=application_id,
+                officer_id=current_user.id,
+                lead_id=lead.id
+            )
+            return application
+        else:
+            log.warning(
+                "IDOR attempt detected: Officer trying to access another officer's application",
+                application_id=application_id,
+                lead_id=lead.id,
+                lead_officer_id=lead.assigned_officer_id,
+                officer_id=current_user.id,
+                username=current_user.username
+            )
+            raise PermissionDeniedError(
+                detail="You do not have permission to access this application. "
+                       "This application belongs to a lead assigned to another officer."
+            )
+
+    # ACCESS DENIED - Unknown role or no permission
+    log.warning(
+        "IDOR attempt detected: User with unknown role trying to access application",
+        application_id=application_id,
+        user_id=current_user.id,
+        user_role=current_user.role,
+        lead_officer_id=lead.assigned_officer_id,
+        lead_unit_id=lead.unit_id
+    )
+    raise PermissionDeniedError(
+        detail="You do not have permission to access this application."
+    )
+
+
 async def get_user_managed_units(
     db: AsyncSession,
     user_id: int

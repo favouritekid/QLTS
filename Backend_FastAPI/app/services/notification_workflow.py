@@ -29,7 +29,7 @@ Multi-Step Example:
 import asyncio
 import structlog
 from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Any, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -177,9 +177,12 @@ async def execute_action(
     action: models.NotificationAction,
     recipient_ids: List[int],
     payload: Dict[str, Any]
-) -> Dict[str, Any]:
+) -> Tuple[Dict[str, Any], Callable]:
     """
     Execute a single notification action.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
 
     Args:
         db: Database session
@@ -188,7 +191,7 @@ async def execute_action(
         payload: Event payload for template rendering
 
     Returns:
-        Execution result with status and metadata
+        Tuple of (result_dict, post_commit_callback)
     """
     try:
         log.info(
@@ -219,29 +222,32 @@ async def execute_action(
         db.add_all(notifications)
         await db.flush()
 
-        # Send via channel
+        # Send via channel (NOTE: Sending before commit - may need adjustment)
         result = await channel.send(
             notifications=notifications,
             recipient_ids=recipient_ids,
             context=payload
         )
 
-        await db.commit()
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            log.info(
+                "Action executed successfully",
+                step=action.step,
+                channel=action.channel,
+                sent=result.sent_count,
+                failed=len(result.failed_ids)
+            )
 
-        log.info(
-            "Action executed successfully",
-            step=action.step,
-            channel=action.channel,
-            sent=result.sent_count,
-            failed=len(result.failed_ids)
-        )
-
-        return {
+        result_dict = {
             "success": result.success,
             "sent_count": result.sent_count,
             "failed_count": len(result.failed_ids),
             "failed_ids": result.failed_ids
         }
+
+        return result_dict, _post_commit
 
     except Exception as e:
         log.error(
@@ -250,13 +256,18 @@ async def execute_action(
             channel=action.channel,
             error=str(e)
         )
-        await db.rollback()
-        return {
+        # ✅ Router will handle rollback
+        result_dict = {
             "success": False,
             "error": str(e),
             "sent_count": 0,
             "failed_count": len(recipient_ids)
         }
+
+        async def _empty_callback():
+            pass
+
+        return result_dict, _empty_callback
 
 
 # ============================================

@@ -36,24 +36,9 @@ async def create_new_lead(
     - Manager: Can assign to officers in their unit or use auto-assignment
     - Officer: Auto-assigned to themselves, unit forced to their unit
     """
-    result = await lead_service.create_lead(db, lead_in, created_by=current_user)
-
-    # ✅ NOTIFICATION 2.0: Dispatch LEAD_CREATED event
-    try:
-        await dispatch(
-            db=db,
-            event=SystemEvents.LEAD_CREATED,
-            payload={
-                "lead_id": result.id,
-                "unit_id": result.unit_id,
-                "lead_name": result.full_name or result.email or f"Lead #{result.id}",
-                "source": result.source,
-                "actor_id": current_user.id,
-            },
-            dedupe_key=f"lead_created:{result.id}"
-        )
-    except Exception as e:
-        log.warning("Failed to dispatch LEAD_CREATED notification", error=str(e))
+    result, callback = await lead_service.create_lead(db, lead_in, created_by=current_user)
+    await db.commit()
+    await callback()
 
     return result
 
@@ -924,13 +909,15 @@ async def officer_import_leads(
 
     # Call service with auto-assign parameters
     try:
-        result = await lead_service.import_leads_from_file_content(
+        result, callback = await lead_service.import_leads_from_file_content(
             file_content=content,
             filename=file.filename or "unknown",
             db=db,
             default_unit_id=current_user.unit_id,  # Force unit to officer's unit
             auto_assign_officer_id=current_user.id,  # Auto-assign to officer
         )
+        await db.commit()
+        await callback()
         return result
 
     except ValueError as e:

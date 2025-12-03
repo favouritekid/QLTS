@@ -12,7 +12,7 @@ Business Rules:
 - Role priority: admin > manager > officer > user
 """
 
-from typing import Dict, List, Tuple
+from typing import Callable, Dict, List, Tuple
 import logging
 
 import casbin
@@ -38,9 +38,12 @@ async def remove_role_from_users(
     enforcer: casbin.AsyncEnforcer,
     user_ids: List[int],
     role_to_remove: str,
-) -> Dict[str, any]:
+) -> Tuple[Dict[str, any], Callable]:
     """
     Remove a specific role from multiple users.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
 
     SMART BEHAVIOR:
     - If user has ONLY this role → remove it and auto-assign "role:user"
@@ -54,7 +57,8 @@ async def remove_role_from_users(
         role_to_remove: Role name to remove (e.g., "role:admin")
 
     Returns:
-        Dict containing:
+        Tuple of (result_dict, post_commit_callback)
+        result_dict contains:
         - removed_count: Number of users role was removed from
         - reassigned_to_user_count: Number of users auto-assigned to "role:user"
         - failed_count: Number of failed operations
@@ -70,16 +74,19 @@ async def remove_role_from_users(
            c. Check remaining roles
            d. If no roles left, auto-assign "role:user"
            e. Update database user.role to highest priority role
-        2. Save Casbin policies
-        3. Return operation summary
+        2. Flush changes to database
+        3. Post-commit: Save Casbin policies
+        4. Return operation summary
 
     Example:
-        >>> result = await remove_role_from_users(
+        >>> result, callback = await remove_role_from_users(
         ...     db=session,
         ...     enforcer=app.state.enforcer,
         ...     user_ids=[1, 2, 3],
         ...     role_to_remove="role:manager"
         ... )
+        >>> await db.commit()
+        >>> await callback()
         >>> print(result["removed_count"])
         3
     """
@@ -138,7 +145,6 @@ async def remove_role_from_users(
                 # Extract role name without "role:" prefix for DB
                 db_role_name = highest_priority_role.replace("role:", "")
                 user.role = db_role_name
-                await db.commit()
 
                 log.info(
                     f"User {user_id} updated",
@@ -151,13 +157,21 @@ async def remove_role_from_users(
             failed_users.append({"user_id": user_id, "error": str(e)})
             log.error(f"Failed to remove role from user {user_id}", error=str(e))
 
-    # Save Casbin policies to persist changes
-    await enforcer.save_policy()
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
 
-    return {
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        # Save Casbin policies to persist changes
+        await enforcer.save_policy()
+
+    result = {
         "detail": f"Removed {role_to_remove} from {removed_count} user(s), {reassigned_count} auto-assigned to role:user",
         "removed_count": removed_count,
         "reassigned_to_user_count": reassigned_count,
         "failed_count": len(failed_users),
         "failed_users": failed_users,
     }
+
+    return result, _post_commit

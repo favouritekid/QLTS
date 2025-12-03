@@ -142,11 +142,13 @@ async def create_policy(
     ```
     """
     try:
-        policy = await tuition_discount_service.create_policy(
+        policy, callback = await tuition_discount_service.create_policy(
             db,
             policy_data,
             created_by_user_id=current_user.id
         )
+        await db.commit()
+        await callback()
 
         policy_dict = {
             **policy.__dict__,
@@ -175,7 +177,7 @@ async def update_policy(
     current_user: models.User = PermissionDep,
 ):
     """Cập nhật thông tin chính sách ưu đãi."""
-    policy = await tuition_discount_service.update_policy(
+    policy, callback = await tuition_discount_service.update_policy(
         db,
         policy_id,
         policy_data,
@@ -187,6 +189,9 @@ async def update_policy(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Không tìm thấy chính sách với ID {policy_id}"
         )
+
+    await db.commit()
+    await callback()
 
     policy_dict = {
         **policy.__dict__,
@@ -214,7 +219,7 @@ async def delete_policy(
     - **hard_delete=false** (mặc định): Soft delete - đánh dấu is_active=false
     - **hard_delete=true**: Xóa vĩnh viễn khỏi database
     """
-    success = await tuition_discount_service.delete_policy(
+    success, callback = await tuition_discount_service.delete_policy(
         db, policy_id, hard_delete=hard_delete
     )
 
@@ -223,6 +228,9 @@ async def delete_policy(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Không tìm thấy chính sách với ID {policy_id}"
         )
+
+    await db.commit()
+    await callback()
 
 
 # =============================================================================

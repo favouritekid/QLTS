@@ -11,7 +11,7 @@ Tuân thủ kiến trúc phân lớp:
 - Sử dụng selectinload, joinedload để tránh N+1
 """
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional, Tuple
 
 import structlog
 from sqlalchemy import select
@@ -30,9 +30,12 @@ async def create_application(
     db: AsyncSession,
     lead_id: int,
     current_user: models.User,
-) -> models.Application:
+) -> Tuple[models.Application, Callable]:
     """
     Tạo Application mới cho Lead.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
 
     Args:
         db: Database session
@@ -40,7 +43,7 @@ async def create_application(
         current_user: User hiện tại (để set officer_id)
 
     Returns:
-        Application đã tạo
+        Tuple of (application, post_commit_callback)
 
     Raises:
         ResourceNotFoundError: Nếu Lead không tồn tại
@@ -76,7 +79,9 @@ async def create_application(
     )
 
     db.add(new_application)
-    await db.commit()
+
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
     await db.refresh(new_application)
 
     # Load relationships for socket event payload
@@ -91,42 +96,47 @@ async def create_application(
     result_reload = await db.execute(stmt_reload)
     new_application = result_reload.scalar_one()
 
-    log.info(
-        "Application created",
-        application_id=new_application.id,
-        lead_id=lead_id,
-        officer_id=current_user.id,
-    )
-
-    # === ✅ REFACTOR: Dispatch notification instead of direct socket emit ===
-    try:
-        await dispatch(
-            db=db,
-            event=SystemEvents.APPLICATION_CREATED,
-            payload={
-                "application_id": new_application.id,
-                "lead_id": lead_id,
-                "officer_id": current_user.id,
-                "major_program_name": new_application.major_program.name if new_application.major_program else "N/A",
-                "actor_id": current_user.id
-            },
-            dedupe_key=f"application_created:{new_application.id}"
-        )
-        log.info("Application creation notification dispatched", application_id=new_application.id)
-    except Exception as e:
-        log.error(
-            "Failed to dispatch application creation notification",
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        log.info(
+            "Application created",
             application_id=new_application.id,
-            error=str(e)
+            lead_id=lead_id,
+            officer_id=current_user.id,
         )
 
-    return new_application
+        # === ✅ REFACTOR: Dispatch notification instead of direct socket emit ===
+        try:
+            await dispatch(
+                db=db,
+                event=SystemEvents.APPLICATION_CREATED,
+                payload={
+                    "application_id": new_application.id,
+                    "lead_id": lead_id,
+                    "officer_id": current_user.id,
+                    "major_program_name": new_application.major_program.name if new_application.major_program else "N/A",
+                    "actor_id": current_user.id
+                },
+                dedupe_key=f"application_created:{new_application.id}",
+                auto_commit=True  # ✅ Auto-commit for service callback
+            )
+            log.info("Application creation notification dispatched", application_id=new_application.id)
+        except Exception as e:
+            log.error(
+                "Failed to dispatch application creation notification",
+                application_id=new_application.id,
+                error=str(e)
+            )
+
+    return new_application, _post_commit
 
 
 async def get_application_by_id(
     db: AsyncSession,
     application_id: int,
     load_relationships: bool = True,
+    load_lead: bool = False,
     include_deleted: bool = False,
 ) -> Optional[models.Application]:
     """
@@ -136,6 +146,7 @@ async def get_application_by_id(
         db: Database session
         application_id: ID của Application
         load_relationships: Load relationships (major_program, program_offering)
+        load_lead: If True, eager load the associated lead (for IDOR check). When True, also loads lead's officer and unit.
         include_deleted: If True, include soft-deleted applications (default: False)
 
     Returns:
@@ -147,12 +158,21 @@ async def get_application_by_id(
     if not include_deleted:
         stmt = stmt.where(models.Application.deleted_at.is_(None))
 
+    # If load_lead is requested, ensure we load lead with its relationships for IDOR check
+    if load_lead or load_relationships:
+        stmt = stmt.options(
+            selectinload(models.Application.lead).options(
+                selectinload(models.Lead.assigned_officer),
+                selectinload(models.Lead.unit)
+            )
+        )
+
+    # Load other relationships if requested
     if load_relationships:
         stmt = stmt.options(
             selectinload(models.Application.major_program),
             selectinload(models.Application.program_offering),
             selectinload(models.Application.officer),
-            selectinload(models.Application.lead),
         )
 
     result = await db.execute(stmt)
@@ -164,9 +184,12 @@ async def update_application(
     application_id: int,
     update_data: schemas.ApplicationUpdate,
     current_user: Optional[models.User] = None,
-) -> models.Application:
+) -> Tuple[models.Application, Callable]:
     """
     Cập nhật Application.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
 
     Args:
         db: Database session
@@ -175,7 +198,7 @@ async def update_application(
         current_user: User thực hiện update (for Socket.IO events)
 
     Returns:
-        Application đã cập nhật
+        Tuple of (application, post_commit_callback)
 
     Raises:
         ResourceNotFoundError: Nếu Application không tồn tại
@@ -211,10 +234,11 @@ async def update_application(
         else:
             setattr(application, field, value)
 
-    await db.commit()
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
     await db.refresh(application)
 
-    # Load relationships sau khi commit
+    # Load relationships after flush
     stmt = (
         select(models.Application)
         .where(models.Application.id == application_id)
@@ -228,62 +252,67 @@ async def update_application(
     result = await db.execute(stmt)
     application = result.scalar_one()
 
-    log.info(
-        "Application updated",
-        application_id=application_id,
-        updated_fields=list(update_dict.keys()),
-    )
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        log.info(
+            "Application updated",
+            application_id=application_id,
+            updated_fields=list(update_dict.keys()),
+        )
 
-    # === ✅ REFACTOR: Dispatch notifications instead of direct socket emits ===
-    if current_user and application.officer_id:
-        # Dispatch status changed notification
-        if status_changed and old_status != application.status:
-            try:
-                await dispatch(
-                    db=db,
-                    event=SystemEvents.APPLICATION_STATUS_CHANGED,
-                    payload={
-                        "application_id": application.id,
-                        "lead_id": application.lead_id,
-                        "officer_id": application.officer_id,
-                        "old_status": old_status,
-                        "new_status": application.status,
-                        "actor_id": current_user.id
-                    },
-                    dedupe_key=f"application_status_changed:{application.id}:{application.status}"
-                )
-                log.info("Application status change notification dispatched", application_id=application.id)
-            except Exception as e:
-                log.error(
-                    "Failed to dispatch application status change notification",
-                    application_id=application.id,
-                    error=str(e)
-                )
+        # === ✅ REFACTOR: Dispatch notifications instead of direct socket emits ===
+        if current_user and application.officer_id:
+            # Dispatch status changed notification
+            if status_changed and old_status != application.status:
+                try:
+                    await dispatch(
+                        db=db,
+                        event=SystemEvents.APPLICATION_STATUS_CHANGED,
+                        payload={
+                            "application_id": application.id,
+                            "lead_id": application.lead_id,
+                            "officer_id": application.officer_id,
+                            "old_status": old_status,
+                            "new_status": application.status,
+                            "actor_id": current_user.id
+                        },
+                        dedupe_key=f"application_status_changed:{application.id}:{application.status}",
+                        auto_commit=True  # ✅ Auto-commit for service callback
+                    )
+                    log.info("Application status change notification dispatched", application_id=application.id)
+                except Exception as e:
+                    log.error(
+                        "Failed to dispatch application status change notification",
+                        application_id=application.id,
+                        error=str(e)
+                    )
 
-        # Dispatch documents updated notification
-        if documents_changed and old_documents != application.documents:
-            try:
-                await dispatch(
-                    db=db,
-                    event=SystemEvents.APPLICATION_DOCUMENTS_UPDATED,
-                    payload={
-                        "application_id": application.id,
-                        "lead_id": application.lead_id,
-                        "officer_id": application.officer_id,
-                        "document_summary": "Documents checklist updated",
-                        "actor_id": current_user.id
-                    },
-                    dedupe_key=f"application_documents_updated:{application.id}:{datetime.now(timezone.utc).isoformat()}"
-                )
-                log.info("Application documents update notification dispatched", application_id=application.id)
-            except Exception as e:
-                log.error(
-                    "Failed to dispatch application documents update notification",
-                    application_id=application.id,
-                    error=str(e)
-                )
+            # Dispatch documents updated notification
+            if documents_changed and old_documents != application.documents:
+                try:
+                    await dispatch(
+                        db=db,
+                        event=SystemEvents.APPLICATION_DOCUMENTS_UPDATED,
+                        payload={
+                            "application_id": application.id,
+                            "lead_id": application.lead_id,
+                            "officer_id": application.officer_id,
+                            "document_summary": "Documents checklist updated",
+                            "actor_id": current_user.id
+                        },
+                        dedupe_key=f"application_documents_updated:{application.id}:{datetime.now(timezone.utc).isoformat()}",
+                        auto_commit=True  # ✅ Auto-commit for service callback
+                    )
+                    log.info("Application documents update notification dispatched", application_id=application.id)
+                except Exception as e:
+                    log.error(
+                        "Failed to dispatch application documents update notification",
+                        application_id=application.id,
+                        error=str(e)
+                    )
 
-    return application
+    return application, _post_commit
 
 
 async def get_application_by_lead_id(
@@ -325,9 +354,12 @@ async def delete_application(
     db: AsyncSession,
     application_id: int,
     deleted_by: models.User,
-) -> models.Application:
+) -> Tuple[models.Application, Callable]:
     """
     Soft delete an Application (Admin only).
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
 
     Args:
         db: Database session
@@ -335,7 +367,7 @@ async def delete_application(
         deleted_by: User thực hiện xóa (Admin)
 
     Returns:
-        Application đã được đánh dấu xóa
+        Tuple of (application, post_commit_callback)
 
     Raises:
         ResourceNotFoundError: Nếu Application không tồn tại hoặc đã bị xóa
@@ -357,15 +389,20 @@ async def delete_application(
     application.deleted_at = datetime.now(timezone.utc)
 
     db.add(application)
-    await db.commit()
+
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
     await db.refresh(application)
 
-    log.info(
-        "Application soft-deleted",
-        application_id=application_id,
-        deleted_by_user_id=deleted_by.id,
-        deleted_by_role=deleted_by.role,
-        deleted_by_username=deleted_by.username,
-    )
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        log.info(
+            "Application soft-deleted",
+            application_id=application_id,
+            deleted_by_user_id=deleted_by.id,
+            deleted_by_role=deleted_by.role,
+            deleted_by_username=deleted_by.username,
+        )
 
-    return application
+    return application, _post_commit

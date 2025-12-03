@@ -40,7 +40,7 @@ Usage:
 import asyncio
 import structlog
 from datetime import datetime, timezone
-from typing import List, Optional, Tuple, Any
+from typing import Any, Callable, List, Optional, Tuple
 
 from sqlalchemy import and_, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -116,7 +116,8 @@ async def dispatch(
     payload: dict,
     dedupe_key: Optional[str] = None,
     skip_preference_check: bool = False,
-) -> List[int]:
+    auto_commit: bool = False,
+) -> Tuple[List[int], Optional[Callable]]:
     """
     Dispatch a notification event.
 
@@ -131,9 +132,13 @@ async def dispatch(
                    If provided, prevents duplicate notifications for same key+user
         skip_preference_check: If True, skip user preference filtering
                               Use for critical system notifications
+        auto_commit: If True, commits transaction and executes callback immediately
+                    (for use in service callbacks where router already committed)
 
     Returns:
-        List of created notification IDs
+        Tuple of (notification_ids, post_commit_callback)
+        - If auto_commit=False: Returns tuple with callback to execute after commit
+        - If auto_commit=True: Commits and executes callback, returns (ids, None)
 
     Flow:
         1. Lookup event config from registry
@@ -180,7 +185,9 @@ async def dispatch(
             event=event.value,
             checked_sources=["database", "registry"]
         )
-        return []
+        async def _empty_callback():
+            pass
+        return [], _empty_callback
 
     log.info(
         "Loaded notification rule",
@@ -199,7 +206,9 @@ async def dispatch(
                 rule_id=config.rule_id,
                 condition=config.condition
             )
-            return []
+            async def _empty_callback():
+                pass
+            return [], _empty_callback
 
     # Step 2: Resolve recipients
     try:
@@ -211,11 +220,15 @@ async def dispatch(
             error=str(e),
             resolver=config.resolver.__class__.__name__
         )
-        return []
+        async def _empty_callback():
+            pass
+        return [], _empty_callback
 
     if not user_ids:
         log.info("No recipients resolved for event", event_type=event.value)
-        return []
+        async def _empty_callback():
+            pass
+        return [], _empty_callback
 
     log.info(
         "Recipients resolved successfully",
@@ -239,7 +252,9 @@ async def dispatch(
                 event=event.value,
                 group=group.value
             )
-            return []
+            async def _empty_callback():
+                pass
+            return [], _empty_callback
 
         log.info(
             "Recipients after preference filtering",
@@ -258,7 +273,9 @@ async def dispatch(
                 event=event.value,
                 dedupe_key=dedupe_key
             )
-            return []
+            async def _empty_callback():
+                pass
+            return [], _empty_callback
 
         log.info(
             "Recipients after deduplication",
@@ -301,121 +318,115 @@ async def dispatch(
             "Failed to create notifications for event",
             event=event.value
         )
-        return []
+        # Return empty with empty callback
+        async def _empty_callback():
+            pass
+        return [], _empty_callback
 
-    # Step 7: Commit transaction BEFORE dispatching notifications
-    try:
-        await db.commit()
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
+
+    # ✅ Create post-commit callback with all post-commit actions
+    async def _post_commit():
+        """Execute after router commits the transaction."""
         log.info(
             "Notifications committed successfully",
             event=event.value,
             notification_count=len(notification_ids),
             notification_type=notification_type
         )
-    except Exception as e:
-        log.error(
-            "Failed to commit notifications",
-            event=event.value,
-            error=str(e),
-            notification_count=len(notification_ids)
-        )
-        await db.rollback()
-        return []
 
-    # Step 7.5: ✅ PHASE 1.2: Prepend new notifications to inbox cache
-    # This keeps cache warm and avoids cache miss on next read
-    await _prepend_to_inbox_cache(user_ids, notification_ids)
+        # Step 7.5: ✅ PHASE 1.2: Prepend new notifications to inbox cache
+        await _prepend_to_inbox_cache(user_ids, notification_ids)
 
-    # ✅ NOTIFICATION 2.0 - PHASE 3.1: Parallel Multi-Channel Delivery
-    # Step 8: Send notifications through configured channels IN PARALLEL
-    # Performance optimization: asyncio.gather() reduces latency from sequential to parallel
-    # Example: 3 channels @ 1s each = 3s sequential → ~1s parallel
-    try:
-        # Fetch notifications from database for channel delivery
-        result = await db.execute(
-            select(models.Notification)
-            .where(models.Notification.id.in_(notification_ids))
-        )
-        notifications = list(result.scalars().all())
-
-        if not notifications:
-            log.warning(
-                "No notifications found for channel delivery",
-                requested_ids=notification_ids
+        # ✅ NOTIFICATION 2.0 - PHASE 3.1: Parallel Multi-Channel Delivery
+        # Step 8: Send notifications through configured channels IN PARALLEL
+        try:
+            # Fetch notifications from database for channel delivery
+            result = await db.execute(
+                select(models.Notification)
+                .where(models.Notification.id.in_(notification_ids))
             )
-            return notification_ids
+            notifications = list(result.scalars().all())
 
-        # Create parallel tasks for all channels
-        channel_tasks = [
-            _send_via_channel(
-                channel_name=channel_name,
-                notifications=notifications,
-                recipient_ids=user_ids,
-                context=payload,
-                event=event.value
-            )
-            for channel_name in config.channels
-        ]
-
-        # Execute all channel deliveries in parallel
-        # return_exceptions=True ensures one channel failure doesn't affect others
-        channel_results = await asyncio.gather(*channel_tasks, return_exceptions=True)
-
-        # Process results and log per-channel statistics
-        for result in channel_results:
-            # Handle unexpected exceptions from gather
-            if isinstance(result, Exception):
-                log.error(
-                    "Unexpected channel delivery exception",
-                    event=event.value,
-                    error=str(result)
+            if not notifications:
+                log.warning(
+                    "No notifications found for channel delivery",
+                    requested_ids=notification_ids
                 )
-                continue
+                return
 
-            channel_name, channel_result, error_msg = result
-
-            if error_msg:
-                # Channel failed
-                log.error(
-                    "Channel delivery failed",
-                    event=event.value,
-                    channel=channel_name,
-                    error=error_msg,
-                    notification_count=len(notifications)
+            # Create parallel tasks for all channels
+            channel_tasks = [
+                _send_via_channel(
+                    channel_name=channel_name,
+                    notifications=notifications,
+                    recipient_ids=user_ids,
+                    context=payload,
+                    event=event.value
                 )
-            elif channel_result:
-                # Channel succeeded
-                log.info(
-                    "Channel delivery completed",
-                    event=event.value,
-                    channel=channel_name,
-                    sent_count=channel_result.sent_count,
-                    failed_count=len(channel_result.failed_ids),
-                    success=channel_result.success
-                )
+                for channel_name in config.channels
+            ]
 
-                # Log failures for monitoring
-                if channel_result.failed_ids:
-                    log.warning(
-                        "Some recipients failed for channel",
+            # Execute all channel deliveries in parallel
+            channel_results = await asyncio.gather(*channel_tasks, return_exceptions=True)
+
+            # Process results and log per-channel statistics
+            for result in channel_results:
+                if isinstance(result, Exception):
+                    log.error(
+                        "Unexpected channel delivery exception",
+                        event=event.value,
+                        error=str(result)
+                    )
+                    continue
+
+                channel_name, channel_result, error_msg = result
+
+                if error_msg:
+                    log.error(
+                        "Channel delivery failed",
                         event=event.value,
                         channel=channel_name,
-                        failed_ids=channel_result.failed_ids[:10],  # Log first 10
-                        failed_count=len(channel_result.failed_ids)
+                        error=error_msg,
+                        notification_count=len(notifications)
+                    )
+                elif channel_result:
+                    log.info(
+                        "Channel delivery completed",
+                        event=event.value,
+                        channel=channel_name,
+                        sent_count=channel_result.sent_count,
+                        failed_count=len(channel_result.failed_ids),
+                        success=channel_result.success
                     )
 
-    except Exception as e:
-        # Critical error in channel delivery system
-        log.error(
-            "Channel delivery system failed",
-            event=event.value,
-            error=str(e),
-            notification_count=len(notification_ids),
-            channels=config.channels,
-            fallback="Notifications are in DB but delivery failed"
-        )
+                    if channel_result.failed_ids:
+                        log.warning(
+                            "Some recipients failed for channel",
+                            event=event.value,
+                            channel=channel_name,
+                            failed_ids=channel_result.failed_ids[:10],
+                            failed_count=len(channel_result.failed_ids)
+                        )
 
-    return notification_ids
+        except Exception as e:
+            log.error(
+                "Channel delivery system failed",
+                event=event.value,
+                error=str(e),
+                notification_count=len(notification_ids),
+                channels=config.channels,
+                fallback="Notifications are in DB but delivery failed"
+            )
+
+    # ✅ AUTO_COMMIT MODE: For service callbacks that need dispatch() to self-commit
+    if auto_commit:
+        await db.commit()
+        await _post_commit()
+        return notification_ids, None
+
+    return notification_ids, _post_commit
 
 
 async def _apply_deduplication(

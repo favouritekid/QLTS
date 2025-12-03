@@ -2,7 +2,7 @@
 from datetime import (
     datetime, timezone  # ✅ SỬA LỖI: Thêm dấu cách (E231) và xóa cách thừa cuối dòng (W291)
 )
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import structlog
 from sqlalchemy import case, func, or_, select  # ✅ SỬA LỖI: Thêm 'desc' vào import và xóa comment
@@ -475,7 +475,7 @@ async def create_lead(
     db: AsyncSession,
     lead_in: schemas.LeadCreate,
     created_by: models.User = None
-) -> models.Lead:
+) -> Tuple[models.Lead, Callable]:
     """
     Tạo Lead mới với role-based logic.
 
@@ -729,7 +729,7 @@ async def create_lead(
                 assignment_status=db_lead.assignment_status
             )
 
-        # === ✅ CRITICAL: Load relationships BEFORE commit to avoid greenlet errors ===
+        # === ✅ CRITICAL: Load relationships BEFORE flush to avoid greenlet errors ===
         # Must load offering while we're still in transaction context
         # Store relationship references immediately to avoid triggering lazy loads
         offering_name = ""
@@ -750,97 +750,98 @@ async def create_lead(
                 else:
                     offering_name = offering_obj.offering_type
 
-        # Commit transaction
-        await db.commit()
-        # Refresh để lấy dữ liệu mới nhất (bao gồm cả ID nếu chưa flush)
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
         await db.refresh(db_lead)
-        log.info(
-            "New lead created successfully", lead_id=db_lead.id, email=db_lead.email
-        )
 
-        # === ✅ REFACTOR: Dispatch LEAD_CREATED notification ===
-        # offering_name already loaded before commit to avoid greenlet errors
-        try:
-            from ..core.events import SystemEvents
-            from .notification_dispatcher import dispatch
-
-            await dispatch(
-                db=db,
-                event=SystemEvents.LEAD_CREATED,
-                payload={
-                    "lead_id": db_lead.id,
-                    "unit_id": db_lead.unit_id,
-                    "lead_name": db_lead.full_name or "Unknown",
-                    "source": db_lead.source or "Unknown",
-                    "actor_id": created_by.id if created_by else 0
-                },
-                dedupe_key=f"lead_created:{db_lead.id}"
+        # ✅ Create post-commit callback with all post-commit actions
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            log.info(
+                "New lead created successfully", lead_id=db_lead.id, email=db_lead.email
             )
-            log.info("Lead creation notification dispatched", lead_id=db_lead.id)
-        except Exception as e:
-            log.warning("Failed to dispatch lead_created notification", lead_id=db_lead.id, error=str(e))
 
-        # === POST-COMMIT ACTIONS ===
-        if skip_auto_assignment:
-            # Direct assignment was done - dispatch LEAD_ASSIGNED notification
-            # offering_name already loaded before commit to avoid greenlet errors
-            if direct_assignment_officer_id:
-                try:
-                    from ..core.events import SystemEvents
-                    from .notification_dispatcher import dispatch
-
-                    await dispatch(
-                        db=db,
-                        event=SystemEvents.LEAD_ASSIGNED,
-                        payload={
-                            "lead_id": db_lead.id,
-                            "officer_id": direct_assignment_officer_id,
-                            "actor_id": created_by.id if created_by else 0,
-                            "lead_name": db_lead.full_name or "Unknown",
-                            "lead_phone": db_lead.phone or "",
-                            "offering_name": offering_name
-                        },
-                        dedupe_key=f"lead_assigned:{db_lead.id}:{direct_assignment_officer_id}"
-                    )
-                    log.info(
-                        "Direct assignment notification dispatched",
-                        lead_id=db_lead.id,
-                        officer_id=direct_assignment_officer_id
-                    )
-                except Exception as e:
-                    # Non-blocking - don't fail if notification dispatch fails
-                    log.warning(
-                        "Failed to dispatch direct assignment notification",
-                        lead_id=db_lead.id,
-                        error=str(e)
-                    )
-        else:
-            # Dispatch Celery task for auto-assignment
+            # === ✅ REFACTOR: Dispatch LEAD_CREATED notification ===
             try:
-                process_automatic_lead_assignment_task.delay(db_lead.id)
-                log.info("Auto-assignment task dispatched successfully", lead_id=db_lead.id)
-            except Exception as e:
-                # Ghi log lỗi nếu không dispatch được, nhưng không rollback transaction
-                log.error(
-                    "Failed to dispatch Celery auto-assignment task",
-                    lead_id=db_lead.id,
-                    error=str(e),
-                    exc_info=True,
-                )
+                from ..core.events import SystemEvents
+                from .notification_dispatcher import dispatch
 
-        # Trả về đối tượng Lead đã được load đầy đủ (bao gồm relations)
-        return await get_lead_by_id(db, db_lead.id)
+                await dispatch(
+                    db=db,
+                    event=SystemEvents.LEAD_CREATED,
+                    payload={
+                        "lead_id": db_lead.id,
+                        "unit_id": db_lead.unit_id,
+                        "lead_name": db_lead.full_name or "Unknown",
+                        "source": db_lead.source or "Unknown",
+                        "actor_id": created_by.id if created_by else 0
+                    },
+                    dedupe_key=f"lead_created:{db_lead.id}",
+                    auto_commit=True  # ✅ Auto-commit for service callback
+                )
+                log.info("Lead creation notification dispatched", lead_id=db_lead.id)
+            except Exception as e:
+                log.warning("Failed to dispatch lead_created notification", lead_id=db_lead.id, error=str(e))
+
+            # === POST-COMMIT ACTIONS ===
+            if skip_auto_assignment:
+                # Direct assignment was done - dispatch LEAD_ASSIGNED notification
+                if direct_assignment_officer_id:
+                    try:
+                        from ..core.events import SystemEvents
+                        from .notification_dispatcher import dispatch
+
+                        await dispatch(
+                            db=db,
+                            event=SystemEvents.LEAD_ASSIGNED,
+                            payload={
+                                "lead_id": db_lead.id,
+                                "officer_id": direct_assignment_officer_id,
+                                "actor_id": created_by.id if created_by else 0,
+                                "lead_name": db_lead.full_name or "Unknown",
+                                "lead_phone": db_lead.phone or "",
+                                "offering_name": offering_name
+                            },
+                            dedupe_key=f"lead_assigned:{db_lead.id}:{direct_assignment_officer_id}",
+                            auto_commit=True  # ✅ Auto-commit for service callback
+                        )
+                        log.info(
+                            "Direct assignment notification dispatched",
+                            lead_id=db_lead.id,
+                            officer_id=direct_assignment_officer_id
+                        )
+                    except Exception as e:
+                        log.warning(
+                            "Failed to dispatch direct assignment notification",
+                            lead_id=db_lead.id,
+                            error=str(e)
+                        )
+            else:
+                # Dispatch Celery task for auto-assignment
+                try:
+                    process_automatic_lead_assignment_task.delay(db_lead.id)
+                    log.info("Auto-assignment task dispatched successfully", lead_id=db_lead.id)
+                except Exception as e:
+                    log.error(
+                        "Failed to dispatch Celery auto-assignment task",
+                        lead_id=db_lead.id,
+                        error=str(e),
+                        exc_info=True,
+                    )
+
+        # Get fully loaded lead object for return
+        lead = await get_lead_by_id(db, db_lead.id)
+        return lead, _post_commit
 
     except Exception as e:
-        # Rollback nếu có bất kỳ lỗi nào xảy ra trong khối try
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error(
             "Failed to create lead",
             lead_email=lead_in.email,
             error=str(e),
             exc_info=True,
         )
-        raise e  # Ném lại lỗi để router xử lý
+        raise e
 
 
 async def update_lead(
@@ -1135,7 +1136,8 @@ async def update_lead(
                         "actor_id": updated_by.id,
                         "reason": f"Offering changed from #{old_offering_id} to #{new_offering_id}",  # type: ignore
                         "user_ids": [old_officer_id] if old_officer_id else [],  # Notify old officer
-                    }
+                    },
+                    auto_commit=True  # ✅ Auto-commit for service callback
                 )
                 log.info(
                     "Lead reassignment notification dispatched",
@@ -1395,7 +1397,8 @@ async def assign_lead_manually(
             db=db,
             event=SystemEvents.LEAD_ASSIGNED,
             payload=notification_payload,
-            dedupe_key=f"lead_assigned:{lead.id}:{officer.id}"
+            dedupe_key=f"lead_assigned:{lead.id}:{officer.id}",
+            auto_commit=True  # ✅ Auto-commit for service callback
         )
 
         log.info(
@@ -1668,7 +1671,8 @@ async def delete_consultation(
                 "lead_id": _lead_id,
                 "officer_id": _officer_id,
                 "actor_id": current_user.id,
-            }
+            },
+            auto_commit=True  # ✅ Auto-commit for service callback
         )
     except Exception as e:
         log.error(
@@ -1874,7 +1878,8 @@ async def update_consultation(
                 "old_status_id": None,  # Could be tracked if needed
                 "new_status_id": _consultation_status_id,
                 "actor_id": current_user.id,
-            }
+            },
+            auto_commit=True  # ✅ Auto-commit for service callback
         )
     except Exception as e:
         log.error(
@@ -2197,7 +2202,7 @@ async def import_leads_from_file_content(
     db: AsyncSession,
     default_unit_id: Optional[int] = None,  # Force all leads to this unit
     auto_assign_officer_id: Optional[int] = None,  # Auto-assign to this officer
-) -> schemas.LeadImportResult:
+) -> Tuple[schemas.LeadImportResult, Callable]:
     """
     Import leads from CSV or Excel file content.
 
@@ -2450,14 +2455,13 @@ async def import_leads_from_file_content(
                     f"Committed batch {i // batch_size + 1}, {len(batch_ids)} leads inserted."
                 )
 
-            # Commit main transaction
-            await db.commit()
-            log.info(f"Successfully bulk inserted {len(created_lead_ids)} leads in total.")
+            # ✅ TRANSACTION FIX: Flush instead of commit
+            await db.flush()
 
         except Exception as e:
-            await db.rollback()  # Rollback main transaction
+            # ✅ Router will handle rollback
             log.error(
-                "Bulk lead insertion failed during batch, rolling back.",
+                "Bulk lead insertion failed during batch",
                 error=str(e),
                 exc_info=True,
             )
@@ -2471,7 +2475,7 @@ async def import_leads_from_file_content(
             )
             created_lead_ids = []  # Reset IDs due to rollback
 
-    # --- 6. Build and return result ---
+    # --- 6. Build result ---
     result = schemas.LeadImportResult(
         total_rows_processed=processed_row_count,
         successful_imports=len(created_lead_ids),
@@ -2480,13 +2484,16 @@ async def import_leads_from_file_content(
         errors=errors,
     )
 
-    result_summary = result.model_dump(exclude={"errors"})
-    if errors:
-        log.warning("Lead import process finished with errors", result=result_summary)
-    else:
-        log.info("Lead import process finished successfully", result=result_summary)
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        result_summary = result.model_dump(exclude={"errors"})
+        if errors:
+            log.warning("Lead import process finished with errors", result=result_summary)
+        else:
+            log.info("Lead import process finished successfully", result=result_summary)
 
-    return result
+    return result, _post_commit
 
 
 # =============================================================================

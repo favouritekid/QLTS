@@ -6,7 +6,7 @@ Pipeline Configuration Service - Manages pipeline stages and consultation status
 This ensures notifications are persisted to database AND sent via Socket.IO.
 """
 import json  # ✅ For JSON serialization
-from typing import List, Optional
+from typing import Callable, List, Optional, Tuple  # ✅ ADD Callable, Tuple for transaction pattern
 
 import structlog
 from sqlalchemy import func, select, and_
@@ -231,7 +231,16 @@ async def create_pipeline_stage(
     db: AsyncSession,
     stage_in: schemas.PipelineStageCreate,
     current_user: Optional[models.User] = None
-) -> models.PipelineStage:
+) -> Tuple[models.PipelineStage, Callable]:
+    """
+    Create a new pipeline stage.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (pipeline_stage, post_commit_callback)
+    """
     try:
         # 1. Kiểm tra ID đã tồn tại
         existing_id = await db.get(models.PipelineStage, stage_in.id)
@@ -265,30 +274,37 @@ async def create_pipeline_stage(
         # 4. Tạo
         db_stage = models.PipelineStage(**stage_in.model_dump())
         db.add(db_stage)
-        await db.commit()
+
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
         await db.refresh(db_stage)
 
-        # 5. Hủy cache
-        await invalidate_pipeline_cache()
-        log.info("Created new pipeline stage, cache invalidated", stage_id=db_stage.id)
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            # 5. Hủy cache
+            await invalidate_pipeline_cache()
+            log.info("Created new pipeline stage, cache invalidated", stage_id=db_stage.id)
 
-        # 6. === NOTIFICATION: Dispatch pipeline config updated event ===
-        if current_user:
-            await dispatch(
-                db=db,
-                event=SystemEvents.PIPELINE_CONFIG_UPDATED,
-                payload={
-                    "config_type": "pipeline_stage",
-                    "operation": "created",
-                    "resource_id": db_stage.id,
-                    "resource_name": db_stage.name,
-                    "actor_id": current_user.id,
-                }
-            )
+            # 6. === NOTIFICATION: Dispatch pipeline config updated event ===
+            if current_user:
+                await dispatch(
+                    db=db,
+                    event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+                    payload={
+                        "config_type": "pipeline_stage",
+                        "operation": "created",
+                        "resource_id": db_stage.id,
+                        "resource_name": db_stage.name,
+                        "actor_id": current_user.id,
+                    },
+                    auto_commit=True  # ✅ Auto-commit for service callback
+                )
 
-        return db_stage
+        return db_stage, _post_commit
+
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error("Failed to create pipeline stage", error=str(e), exc_info=True)
         raise e
 
@@ -303,7 +319,16 @@ async def update_pipeline_stage(
     stage_id: str,
     stage_in: schemas.PipelineStageUpdate,
     current_user: Optional[models.User] = None
-) -> models.PipelineStage:
+) -> Tuple[models.PipelineStage, Callable]:
+    """
+    Update a pipeline stage.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (pipeline_stage, post_commit_callback)
+    """
     try:
         db_stage = await _get_stage_by_id(db, stage_id)
         update_data = stage_in.model_dump(exclude_unset=True)
@@ -337,30 +362,37 @@ async def update_pipeline_stage(
             setattr(db_stage, key, value)
 
         db.add(db_stage)
-        await db.commit()
+
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
         await db.refresh(db_stage)
 
-        # 4. Hủy cache
-        await invalidate_pipeline_cache()
-        log.info("Updated pipeline stage, cache invalidated", stage_id=db_stage.id)
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            # 4. Hủy cache
+            await invalidate_pipeline_cache()
+            log.info("Updated pipeline stage, cache invalidated", stage_id=db_stage.id)
 
-        # 5. === NOTIFICATION: Dispatch pipeline config updated event ===
-        if current_user:
-            await dispatch(
-                db=db,
-                event=SystemEvents.PIPELINE_CONFIG_UPDATED,
-                payload={
-                    "config_type": "pipeline_stage",
-                    "operation": "updated",
-                    "resource_id": db_stage.id,
-                    "resource_name": db_stage.name,
-                    "actor_id": current_user.id,
-                }
-            )
+            # 5. === NOTIFICATION: Dispatch pipeline config updated event ===
+            if current_user:
+                await dispatch(
+                    db=db,
+                    event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+                    payload={
+                        "config_type": "pipeline_stage",
+                        "operation": "updated",
+                        "resource_id": db_stage.id,
+                        "resource_name": db_stage.name,
+                        "actor_id": current_user.id,
+                    },
+                    auto_commit=True  # ✅ Auto-commit for service callback
+                )
 
-        return db_stage
+        return db_stage, _post_commit
+
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error(
             "Failed to update pipeline stage",
             stage_id=stage_id,
@@ -374,7 +406,16 @@ async def delete_pipeline_stage(
     db: AsyncSession,
     stage_id: str,
     current_user: Optional[models.User] = None
-):
+) -> Tuple[None, Callable]:
+    """
+    Delete a pipeline stage.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (None, post_commit_callback)
+    """
     try:
         db_stage = await _get_stage_by_id(db, stage_id)
 
@@ -398,28 +439,36 @@ async def delete_pipeline_stage(
 
         # 2. Xóa
         await db.delete(db_stage)
-        await db.commit()
 
-        # 3. Hủy cache
-        await invalidate_pipeline_cache()
-        log.info("Deleted pipeline stage, cache invalidated", stage_id=stage_id)
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
 
-        # 4. === NOTIFICATION: Dispatch pipeline config updated event ===
-        if current_user:
-            await dispatch(
-                db=db,
-                event=SystemEvents.PIPELINE_CONFIG_UPDATED,
-                payload={
-                    "config_type": "pipeline_stage",
-                    "operation": "deleted",
-                    "resource_id": stage_id,
-                    "resource_name": stage_data["name"],
-                    "actor_id": current_user.id,
-                }
-            )
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            # 3. Hủy cache
+            await invalidate_pipeline_cache()
+            log.info("Deleted pipeline stage, cache invalidated", stage_id=stage_id)
+
+            # 4. === NOTIFICATION: Dispatch pipeline config updated event ===
+            if current_user:
+                await dispatch(
+                    db=db,
+                    event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+                    payload={
+                        "config_type": "pipeline_stage",
+                        "operation": "deleted",
+                        "resource_id": stage_id,
+                        "resource_name": stage_data["name"],
+                        "actor_id": current_user.id,
+                    },
+                    auto_commit=True  # ✅ Auto-commit for service callback
+                )
+
+        return None, _post_commit
 
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error(
             "Failed to delete pipeline stage",
             stage_id=stage_id,
@@ -438,7 +487,16 @@ async def create_consultation_status(
     db: AsyncSession,
     status_in: schemas.ConsultationStatusCreate,
     current_user: Optional[models.User] = None
-) -> models.ConsultationStatus:
+) -> Tuple[models.ConsultationStatus, Callable]:
+    """
+    Create a new consultation status.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (consultation_status, post_commit_callback)
+    """
     try:
         # 1. Kiểm tra ID
         existing_id = await db.get(models.ConsultationStatus, status_in.id)
@@ -510,34 +568,41 @@ async def create_consultation_status(
 
         # 4. Tạo model với dữ liệu đã làm sạch
         db_status = models.ConsultationStatus(**create_data)
-        
+
         db.add(db_status)
-        await db.commit()
+
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
         await db.refresh(db_status)
 
-        # 5. Hủy cache
-        await invalidate_pipeline_cache()
-        log.info(
-            "Created new consultation status, cache invalidated", status_id=db_status.id
-        )
-
-        # 6. === NOTIFICATION: Dispatch pipeline config updated event ===
-        if current_user:
-            await dispatch(
-                db=db,
-                event=SystemEvents.PIPELINE_CONFIG_UPDATED,
-                payload={
-                    "config_type": "consultation_status",
-                    "operation": "created",
-                    "resource_id": db_status.id,
-                    "resource_name": db_status.name,
-                    "actor_id": current_user.id,
-                }
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            # 5. Hủy cache
+            await invalidate_pipeline_cache()
+            log.info(
+                "Created new consultation status, cache invalidated", status_id=db_status.id
             )
 
-        return db_status
+            # 6. === NOTIFICATION: Dispatch pipeline config updated event ===
+            if current_user:
+                await dispatch(
+                    db=db,
+                    event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+                    payload={
+                        "config_type": "consultation_status",
+                        "operation": "created",
+                        "resource_id": db_status.id,
+                        "resource_name": db_status.name,
+                        "actor_id": current_user.id,
+                    },
+                    auto_commit=True  # ✅ Auto-commit for service callback
+                )
+
+        return db_status, _post_commit
+
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error("Failed to create consultation status", error=str(e), exc_info=True)
         raise e
 
@@ -554,7 +619,16 @@ async def update_consultation_status(
     status_id: str,
     status_in: schemas.ConsultationStatusUpdate,
     current_user: Optional[models.User] = None
-) -> models.ConsultationStatus:
+) -> Tuple[models.ConsultationStatus, Callable]:
+    """
+    Update a consultation status.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (consultation_status, post_commit_callback)
+    """
     try:
         db_status = await _get_status_by_id(db, status_id)
         update_data = status_in.model_dump(exclude_unset=True, mode='python')
@@ -623,32 +697,39 @@ async def update_consultation_status(
             setattr(db_status, key, value)
 
         db.add(db_status)
-        await db.commit()
+
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
         await db.refresh(db_status)
 
-        # 4. Hủy cache
-        await invalidate_pipeline_cache()
-        log.info(
-            "Updated consultation status, cache invalidated", status_id=db_status.id
-        )
-
-        # 5. === NOTIFICATION: Dispatch pipeline config updated event ===
-        if current_user:
-            await dispatch(
-                db=db,
-                event=SystemEvents.PIPELINE_CONFIG_UPDATED,
-                payload={
-                    "config_type": "consultation_status",
-                    "operation": "updated",
-                    "resource_id": db_status.id,
-                    "resource_name": db_status.name,
-                    "actor_id": current_user.id,
-                }
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            # 4. Hủy cache
+            await invalidate_pipeline_cache()
+            log.info(
+                "Updated consultation status, cache invalidated", status_id=db_status.id
             )
 
-        return db_status
+            # 5. === NOTIFICATION: Dispatch pipeline config updated event ===
+            if current_user:
+                await dispatch(
+                    db=db,
+                    event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+                    payload={
+                        "config_type": "consultation_status",
+                        "operation": "updated",
+                        "resource_id": db_status.id,
+                        "resource_name": db_status.name,
+                        "actor_id": current_user.id,
+                    },
+                    auto_commit=True  # ✅ Auto-commit for service callback
+                )
+
+        return db_status, _post_commit
+
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error(
             "Failed to update consultation status",
             status_id=status_id,
@@ -662,7 +743,16 @@ async def delete_consultation_status(
     db: AsyncSession,
     status_id: str,
     current_user: Optional[models.User] = None
-):
+) -> Tuple[None, Callable]:
+    """
+    Delete a consultation status.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (None, post_commit_callback)
+    """
     try:
         db_status = await _get_status_by_id(db, status_id)
 
@@ -698,28 +788,36 @@ async def delete_consultation_status(
 
         # 2. Xóa
         await db.delete(db_status)
-        await db.commit()
 
-        # 3. Hủy cache
-        await invalidate_pipeline_cache()
-        log.info("Deleted consultation status, cache invalidated", status_id=status_id)
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
 
-        # 4. === NOTIFICATION: Dispatch pipeline config updated event ===
-        if current_user:
-            await dispatch(
-                db=db,
-                event=SystemEvents.PIPELINE_CONFIG_UPDATED,
-                payload={
-                    "config_type": "consultation_status",
-                    "operation": "deleted",
-                    "resource_id": status_id,
-                    "resource_name": status_data["name"],
-                    "actor_id": current_user.id,
-                }
-            )
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            # 3. Hủy cache
+            await invalidate_pipeline_cache()
+            log.info("Deleted consultation status, cache invalidated", status_id=status_id)
+
+            # 4. === NOTIFICATION: Dispatch pipeline config updated event ===
+            if current_user:
+                await dispatch(
+                    db=db,
+                    event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+                    payload={
+                        "config_type": "consultation_status",
+                        "operation": "deleted",
+                        "resource_id": status_id,
+                        "resource_name": status_data["name"],
+                        "actor_id": current_user.id,
+                    },
+                    auto_commit=True  # ✅ Auto-commit for service callback
+                )
+
+        return None, _post_commit
 
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error(
             "Failed to delete consultation status",
             status_id=status_id,
@@ -753,8 +851,16 @@ async def create_allowed_transition(
     db: AsyncSession,
     transition_in: schemas.AllowedTransitionCreate,
     current_user: Optional[models.User] = None
-) -> models.AllowedTransition:
-    """Tạo một allowed transition mới."""
+) -> Tuple[models.AllowedTransition, Callable]:
+    """
+    Create a new allowed transition.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (allowed_transition, post_commit_callback)
+    """
     try:
         # 1. Kiểm tra from_status và to_status có tồn tại
         from_status = await _get_status_by_id(db, transition_in.from_status_id)
@@ -781,8 +887,10 @@ async def create_allowed_transition(
         # 4. Tạo transition
         db_transition = models.AllowedTransition(**transition_in.model_dump())
         db.add(db_transition)
-        await db.commit()
-        
+
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
+
         # ✅ FIX: Thay thế db.refresh bằng query có selectinload
         # Điều này nạp trước các quan hệ (from_status, to_status) để tránh lỗi MissingGreenlet
         query = (
@@ -796,32 +904,38 @@ async def create_allowed_transition(
         result = await db.execute(query)
         db_transition = result.scalar_one()
 
-        log.info(
-            "Created allowed transition",
-            from_status=transition_in.from_status_id,
-            to_status=transition_in.to_status_id,
-        )
+        # Store names for callback
+        from_name = db_transition.from_status.name if db_transition.from_status else "N/A"
+        to_name = db_transition.to_status.name if db_transition.to_status else "N/A"
 
-        # === NOTIFICATION: Dispatch pipeline config updated event ===
-        if current_user:
-            from_name = db_transition.from_status.name if db_transition.from_status else "N/A"
-            to_name = db_transition.to_status.name if db_transition.to_status else "N/A"
-            await dispatch(
-                db=db,
-                event=SystemEvents.PIPELINE_CONFIG_UPDATED,
-                payload={
-                    "config_type": "allowed_transition",
-                    "operation": "created",
-                    "resource_id": str(db_transition.id),
-                    "resource_name": f"{from_name} → {to_name}",
-                    "actor_id": current_user.id,
-                }
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            log.info(
+                "Created allowed transition",
+                from_status=transition_in.from_status_id,
+                to_status=transition_in.to_status_id,
             )
 
-        return db_transition
+            # === NOTIFICATION: Dispatch pipeline config updated event ===
+            if current_user:
+                await dispatch(
+                    db=db,
+                    event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+                    payload={
+                        "config_type": "allowed_transition",
+                        "operation": "created",
+                        "resource_id": str(db_transition.id),
+                        "resource_name": f"{from_name} → {to_name}",
+                        "actor_id": current_user.id,
+                    },
+                    auto_commit=True  # ✅ Auto-commit for service callback
+                )
+
+        return db_transition, _post_commit
 
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error("Failed to create allowed transition", error=str(e), exc_info=True)
         raise e
 
@@ -830,8 +944,16 @@ async def delete_allowed_transition(
     db: AsyncSession,
     transition_id: int,
     current_user: Optional[models.User] = None
-):
-    """Xóa một allowed transition."""
+) -> Tuple[None, Callable]:
+    """
+    Delete an allowed transition.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (None, post_commit_callback)
+    """
     try:
         # Load with relationships for socket event
         query = (
@@ -860,26 +982,34 @@ async def delete_allowed_transition(
         }
 
         await db.delete(db_transition)
-        await db.commit()
 
-        log.info("Deleted allowed transition", transition_id=transition_id)
+        # ✅ TRANSACTION FIX: Flush instead of commit
+        await db.flush()
 
-        # === NOTIFICATION: Dispatch pipeline config updated event ===
-        if current_user:
-            await dispatch(
-                db=db,
-                event=SystemEvents.PIPELINE_CONFIG_UPDATED,
-                payload={
-                    "config_type": "allowed_transition",
-                    "operation": "deleted",
-                    "resource_id": str(transition_id),
-                    "resource_name": f"{transition_data['from_status_name']} → {transition_data['to_status_name']}",
-                    "actor_id": current_user.id,
-                }
-            )
+        # ✅ Create post-commit callback
+        async def _post_commit():
+            """Execute after router commits the transaction."""
+            log.info("Deleted allowed transition", transition_id=transition_id)
+
+            # === NOTIFICATION: Dispatch pipeline config updated event ===
+            if current_user:
+                await dispatch(
+                    db=db,
+                    event=SystemEvents.PIPELINE_CONFIG_UPDATED,
+                    payload={
+                        "config_type": "allowed_transition",
+                        "operation": "deleted",
+                        "resource_id": str(transition_id),
+                        "resource_name": f"{transition_data['from_status_name']} → {transition_data['to_status_name']}",
+                        "actor_id": current_user.id,
+                    },
+                    auto_commit=True  # ✅ Auto-commit for service callback
+                )
+
+        return None, _post_commit
 
     except Exception as e:
-        await db.rollback()
+        # ✅ Router will handle rollback
         log.error(
             "Failed to delete allowed transition",
             transition_id=transition_id,

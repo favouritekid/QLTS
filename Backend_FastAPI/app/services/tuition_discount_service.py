@@ -8,7 +8,7 @@ Cung cấp các chức năng:
 """
 from datetime import date
 from decimal import Decimal
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import structlog
 from sqlalchemy import and_, or_, select, func
@@ -121,9 +121,12 @@ async def create_policy(
     db: AsyncSession,
     policy_data: TuitionDiscountPolicyCreate,
     created_by_user_id: Optional[int] = None
-) -> TuitionDiscountPolicy:
+) -> Tuple[TuitionDiscountPolicy, Callable]:
     """
     Tạo chính sách ưu đãi mới.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
 
     Args:
         db: Database session
@@ -131,7 +134,7 @@ async def create_policy(
         created_by_user_id: ID user tạo
 
     Returns:
-        TuitionDiscountPolicy: Chính sách vừa tạo
+        Tuple of (policy, post_commit_callback)
 
     Raises:
         ValueError: Nếu mã đã tồn tại
@@ -166,17 +169,22 @@ async def create_policy(
     )
 
     db.add(db_policy)
-    await db.commit()
+
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
     await db.refresh(db_policy)
 
-    log.info(
-        "Created tuition discount policy",
-        policy_id=db_policy.id,
-        code=db_policy.code,
-        created_by=created_by_user_id
-    )
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        log.info(
+            "Created tuition discount policy",
+            policy_id=db_policy.id,
+            code=db_policy.code,
+            created_by=created_by_user_id
+        )
 
-    return db_policy
+    return db_policy, _post_commit
 
 
 async def update_policy(
@@ -184,9 +192,12 @@ async def update_policy(
     policy_id: int,
     policy_data: TuitionDiscountPolicyUpdate,
     updated_by_user_id: Optional[int] = None
-) -> Optional[TuitionDiscountPolicy]:
+) -> Tuple[Optional[TuitionDiscountPolicy], Optional[Callable]]:
     """
     Cập nhật chính sách ưu đãi.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
 
     Args:
         db: Database session
@@ -195,11 +206,11 @@ async def update_policy(
         updated_by_user_id: ID user cập nhật
 
     Returns:
-        TuitionDiscountPolicy hoặc None nếu không tìm thấy
+        Tuple of (policy_or_None, post_commit_callback_or_None)
     """
     db_policy = await get_policy_by_id(db, policy_id)
     if not db_policy:
-        return None
+        return None, None
 
     # Update fields if provided
     update_data = policy_data.model_dump(exclude_unset=True)
@@ -215,25 +226,32 @@ async def update_policy(
 
     db_policy.updated_by_user_id = updated_by_user_id
 
-    await db.commit()
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
     await db.refresh(db_policy)
 
-    log.info(
-        "Updated tuition discount policy",
-        policy_id=policy_id,
-        updated_by=updated_by_user_id
-    )
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        log.info(
+            "Updated tuition discount policy",
+            policy_id=policy_id,
+            updated_by=updated_by_user_id
+        )
 
-    return db_policy
+    return db_policy, _post_commit
 
 
 async def delete_policy(
     db: AsyncSession,
     policy_id: int,
     hard_delete: bool = False
-) -> bool:
+) -> Tuple[bool, Optional[Callable]]:
     """
     Xóa chính sách ưu đãi.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
 
     Args:
         db: Database session
@@ -241,21 +259,31 @@ async def delete_policy(
         hard_delete: True = xóa vĩnh viễn, False = soft delete
 
     Returns:
-        bool: True nếu xóa thành công
+        Tuple of (success, post_commit_callback_or_None)
     """
     db_policy = await get_policy_by_id(db, policy_id)
     if not db_policy:
-        return False
+        return False, None
 
     if hard_delete:
         await db.delete(db_policy)
-        log.info("Hard deleted tuition discount policy", policy_id=policy_id)
+        delete_type = "hard"
     else:
         db_policy.is_active = False
-        log.info("Soft deleted tuition discount policy", policy_id=policy_id)
+        delete_type = "soft"
 
-    await db.commit()
-    return True
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
+
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        if delete_type == "hard":
+            log.info("Hard deleted tuition discount policy", policy_id=policy_id)
+        else:
+            log.info("Soft deleted tuition discount policy", policy_id=policy_id)
+
+    return True, _post_commit
 
 
 # =============================================================================

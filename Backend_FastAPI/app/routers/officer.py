@@ -41,12 +41,14 @@ async def update_availability(
     current_user: Annotated[models.User, PermissionDep]
 ):
     try:
-        updated_user = await officer_service.update_officer_availability(
+        updated_user, callback = await officer_service.update_officer_availability(
             db=db,
             officer_id=current_user.id,
-            new_status=status_data.availability_status
+            availability_status=status_data.availability_status
         )
-        
+        await db.commit()
+        await callback()
+
         return {
             "status": "success",
             "availability_status": updated_user.availability_status,
