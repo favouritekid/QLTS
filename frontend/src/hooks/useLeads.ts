@@ -79,13 +79,18 @@ export function useLeads(
  * const { data: lead, isLoading } = useLead(123);
  * ```
  */
-export function useLead(id: number, enabled: boolean = true) {
+export function useLead(
+  id: number,
+  enabled: boolean = true,
+  options?: { initialData?: Lead }
+) {
   return useQuery<Lead, AxiosError<ApiErrorResponse>>({
     queryKey: leadsKeys.detail(id),
     queryFn: async () => {
       return await leadsApi.getLead(id);
     },
     enabled: enabled && !!id,
+    initialData: options?.initialData, // ✅ PHASE 1 - WEEK 2 - DAY 5: Support SSR
     staleTime: 1000 * 60, // 1 minute
     gcTime: 1000 * 60 * 5, // 5 minutes in cache
   });

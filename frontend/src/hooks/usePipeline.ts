@@ -76,12 +76,16 @@ export function usePipelineStages(options?: { initialData?: PipelineStage[] }) {
  * });
  * ```
  */
-export function useFullPipeline(params?: PipelineQueryParams) {
+export function useFullPipeline(
+  params?: PipelineQueryParams,
+  options?: { initialData?: FullPipeline }
+) {
   return useQuery<FullPipeline, AxiosError<ApiErrorResponse>>({
     queryKey: pipelineKeys.fullPipeline(params),
     queryFn: async () => {
       return await pipelineApi.getFullPipeline(params);
     },
+    initialData: options?.initialData, // ✅ PHASE 1 - WEEK 2 - DAY 5: Support SSR
     staleTime: 1000 * 30, // 30 seconds
     gcTime: 1000 * 60 * 5, // 5 minutes in cache
   });

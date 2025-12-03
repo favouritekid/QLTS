@@ -246,6 +246,18 @@ const admin = {
     async getPipelineStages(params?: { status_id?: number }): Promise<any> {
       return serverFetch<any>('/api/pipeline-stages', { params });
     },
+
+    /**
+     * Get full pipeline with leads and stats
+     */
+    async getFullPipeline(params?: {
+      include_leads?: boolean;
+      include_stats?: boolean;
+      date_from?: string;
+      date_to?: string;
+    }): Promise<any> {
+      return serverFetch<any>('/api/pipeline', { params });
+    },
   },
 
   /**

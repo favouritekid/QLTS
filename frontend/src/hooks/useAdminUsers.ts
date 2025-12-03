@@ -71,7 +71,10 @@ export function useAdminUsersList(
 // 👤 GET USER DETAIL QUERY
 // ============================================
 
-export function useAdminUserDetail(userId: number | null) {
+export function useAdminUserDetail(
+  userId: number | null,
+  options?: { initialData?: User }
+) {
   return useQuery<User, AxiosError<ApiErrorResponse>>({
     queryKey: adminUsersKeys.detail(userId!),
     queryFn: async () => {
@@ -79,6 +82,7 @@ export function useAdminUserDetail(userId: number | null) {
       return response.data;
     },
     enabled: !!userId,
+    initialData: options?.initialData, // ✅ PHASE 1 - WEEK 2 - DAY 5: Support SSR
   });
 }
 
