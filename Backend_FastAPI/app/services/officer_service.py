@@ -1,6 +1,6 @@
 import structlog
 from datetime import datetime, timedelta, timezone, date
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Callable, Tuple
 
 from sqlalchemy import select, func, or_, desc, case, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -227,42 +227,53 @@ async def get_officer_dashboard_stats(
 
 
 async def update_officer_availability(
-    db: AsyncSession, 
-    officer_id: int, 
+    db: AsyncSession,
+    officer_id: int,
     availability_status: str
-) -> models.User:
+) -> Tuple[models.User, Callable]:
     """
     Cập nhật trạng thái nhận việc (Available/Busy) và bắn Socket.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (user, post_commit_callback)
     """
     user = await db.get(models.User, officer_id)
     if not user:
         raise ValueError("User not found")
-    
+
     old_status = user.availability_status
     user.availability_status = availability_status
     db.add(user)
-    await db.commit()
+
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
     await db.refresh(user)
 
-    # Dispatch notification for officer availability change
-    try:
-        await dispatch(
-            db=db,
-            event=SystemEvents.OFFICER_AVAILABILITY_CHANGED,
-            payload={
-                "officer_id": officer_id,
-                "new_status": availability_status,
-                "old_status": old_status,
-                "username": user.username,
-                "unit_id": user.unit_id,
-                "actor_id": officer_id,  # Officer changes their own status
-            }
-        )
-    except Exception as e:
-        log.warning(
-            "Failed to dispatch officer availability notification",
-            officer_id=officer_id,
-            error=str(e)
-        )
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        # Dispatch notification for officer availability change
+        try:
+            await dispatch(
+                db=db,
+                event=SystemEvents.OFFICER_AVAILABILITY_CHANGED,
+                payload={
+                    "officer_id": officer_id,
+                    "new_status": availability_status,
+                    "old_status": old_status,
+                    "username": user.username,
+                    "unit_id": user.unit_id,
+                    "actor_id": officer_id,  # Officer changes their own status
+                }
+            )
+        except Exception as e:
+            log.warning(
+                "Failed to dispatch officer availability notification",
+                officer_id=officer_id,
+                error=str(e)
+            )
 
-    return user
+    return user, _post_commit
