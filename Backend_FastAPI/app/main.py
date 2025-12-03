@@ -33,6 +33,7 @@ from .database import redis_client as main_redis_client
 from .database import safe_redis_ping
 from .ratelimit import limiter
 from .routers import (
+    admissions,  # ✅ NEW: Admission Profile workflow (replacement for applications)
     applications,
     auth,
     leads,
@@ -508,6 +509,7 @@ fastapi_app.include_router(notification_rules.router, prefix="/api", tags=["Noti
 fastapi_app.include_router(notification_templates.router, prefix="/api", tags=["Notification Templates (Admin)"])  # ✅ PHASE 3.1: Admin-only template management
 fastapi_app.include_router(leads.router, prefix="/api/leads", tags=["Leads"])
 fastapi_app.include_router(applications.router, prefix="/api", tags=["Applications"])
+fastapi_app.include_router(admissions.router, prefix="/api", tags=["Admissions"])  # ✅ NEW: Admission Profile workflow
 fastapi_app.include_router(pipeline.router, prefix="/api/pipeline", tags=["Pipeline"])
 fastapi_app.include_router(
     organization.router, prefix="/api", tags=["Organization"]
