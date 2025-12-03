@@ -184,14 +184,189 @@ const leads = {
 const users = {
   /**
    * Get current user profile (Server-Side)
-   *
-   * @example
-   * ```ts
-   * const user = await serverApi.users.getCurrentUser();
-   * ```
    */
   async getCurrentUser(): Promise<any> {
     return serverFetch<any>('/api/users/me');
+  },
+};
+
+// ============================================
+// ADMIN API (SERVER-SIDE)
+// ============================================
+
+const admin = {
+  /**
+   * Admin Users Management
+   */
+  users: {
+    /**
+     * Get paginated admin users list
+     */
+    async getUsers(params?: {
+      page?: number;
+      page_size?: number;
+      search?: string;
+      role?: string;
+      status?: string;
+      sort_by?: string;
+      order?: string;
+    }): Promise<any> {
+      return serverFetch<any>('/api/admin/users', { params });
+    },
+
+    /**
+     * Get single user by ID (admin)
+     */
+    async getUser(userId: number): Promise<any> {
+      return serverFetch<any>(`/api/admin/users/${userId}`);
+    },
+
+    /**
+     * Get user statistics (admin dashboard)
+     */
+    async getStatistics(): Promise<any> {
+      return serverFetch<any>('/api/admin/users/statistics');
+    },
+  },
+
+  /**
+   * Pipeline Management
+   */
+  pipeline: {
+    /**
+     * Get all consultation statuses
+     */
+    async getConsultationStatuses(): Promise<any> {
+      return serverFetch<any>('/api/consultation-statuses');
+    },
+
+    /**
+     * Get pipeline stages
+     */
+    async getPipelineStages(params?: { status_id?: number }): Promise<any> {
+      return serverFetch<any>('/api/pipeline-stages', { params });
+    },
+  },
+
+  /**
+   * Organization Management
+   */
+  organization: {
+    /**
+     * Get organization units tree
+     */
+    async getUnitsTree(): Promise<any> {
+      return serverFetch<any>('/api/organization-units');
+    },
+
+    /**
+     * Get organization unit by ID
+     */
+    async getUnit(unitId: number): Promise<any> {
+      return serverFetch<any>(`/api/organization-units/${unitId}`);
+    },
+
+    /**
+     * Get organization tree with aggregation
+     */
+    async getTreeWithAggregation(): Promise<any> {
+      return serverFetch<any>('/api/organization-units/tree-with-aggregation');
+    },
+
+    /**
+     * Get major programs
+     */
+    async getMajorPrograms(): Promise<any> {
+      return serverFetch<any>('/api/major-programs');
+    },
+
+    /**
+     * Get program offerings
+     */
+    async getProgramOfferings(): Promise<any> {
+      return serverFetch<any>('/api/program-offerings');
+    },
+  },
+
+  /**
+   * Notification Management
+   */
+  notifications: {
+    /**
+     * Get notification templates
+     */
+    async getTemplates(params?: {
+      page?: number;
+      page_size?: number;
+      search?: string;
+    }): Promise<any> {
+      return serverFetch<any>('/api/admin/notification-templates', { params });
+    },
+
+    /**
+     * Get notification rules
+     */
+    async getRules(params?: {
+      page?: number;
+      page_size?: number;
+      event?: string;
+      is_active?: boolean;
+    }): Promise<any> {
+      return serverFetch<any>('/api/admin/notification-rules', { params });
+    },
+
+    /**
+     * Get notification event groups
+     */
+    async getEventGroups(): Promise<any> {
+      return serverFetch<any>('/api/notifications/event-groups');
+    },
+  },
+
+  /**
+   * System Configuration
+   */
+  config: {
+    /**
+     * Get system configuration list
+     */
+    async getConfigs(params?: {
+      page?: number;
+      page_size?: number;
+      search?: string;
+    }): Promise<any> {
+      return serverFetch<any>('/api/admin/config', { params });
+    },
+  },
+
+  /**
+   * Tuition Discount Policies
+   */
+  tuitionDiscount: {
+    /**
+     * Get tuition discount policies
+     */
+    async getPolicies(params?: {
+      page?: number;
+      page_size?: number;
+    }): Promise<any> {
+      return serverFetch<any>('/api/admin/tuition-discount-policies', { params });
+    },
+  },
+
+  /**
+   * Monitoring & Analytics
+   */
+  monitoring: {
+    /**
+     * Get lead distribution statistics
+     */
+    async getDistributionStats(params?: {
+      start_date?: string;
+      end_date?: string;
+    }): Promise<any> {
+      return serverFetch<any>('/api/admin/distribution/stats', { params });
+    },
   },
 };
 
@@ -207,6 +382,7 @@ const users = {
 export const serverApi = {
   leads,
   users,
+  admin,
 };
 
 /**
