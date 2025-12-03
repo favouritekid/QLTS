@@ -112,9 +112,34 @@ async def update_current_user_profile(
 
     update_data = schemas.UserUpdate(**update_dict)
 
-    updated_user = await user_service.update_profile(
-        db, db_user=current_user, user_in=update_data, avatar_file=avatar
+    # ✅ REFACTORED (Issue #3): Read avatar file content in router layer
+    avatar_content = None
+    avatar_filename = None
+    if avatar and avatar.filename:
+        from app.config import settings
+        # Validate file size before reading (DoS protection)
+        avatar.file.seek(0, 2)  # Seek to end
+        file_size = avatar.file.tell()
+        avatar.file.seek(0)  # Reset to beginning
+
+        if file_size > settings.MAX_AVATAR_CONTENT_LENGTH:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File size cannot exceed {settings.MAX_AVATAR_SIZE_MB}MB."
+            )
+
+        avatar_content = await avatar.read()
+        avatar_filename = avatar.filename
+
+    updated_user, callback = await user_service.update_profile(
+        db, db_user=current_user, user_in=update_data,
+        avatar_content=avatar_content,  # ✅ REFACTORED: Pass bytes instead of UploadFile
+        avatar_filename=avatar_filename,  # ✅ REFACTORED: Pass filename
     )
+
+    # ✅ TRANSACTION PATTERN: Commit and execute callback
+    await db.commit()
+    await callback()
 
     # Log activity
     await log_profile_activity(

@@ -138,15 +138,38 @@ async def create_new_user(
     if await user_service.get_user_by_email(db, user_in.email):
         raise DuplicateResourceError(detail="Email already exists")
 
+    # ✅ REFACTORED (Issue #3): Read avatar file content in router layer
+    avatar_content = None
+    avatar_filename = None
+    if avatar and avatar.filename:
+        # Validate file size before reading (DoS protection)
+        avatar.file.seek(0, 2)  # Seek to end
+        file_size = avatar.file.tell()
+        avatar.file.seek(0)  # Reset to beginning
+
+        if file_size > settings.MAX_AVATAR_CONTENT_LENGTH:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File size cannot exceed {settings.MAX_AVATAR_SIZE_MB}MB."
+            )
+
+        avatar_content = await avatar.read()
+        avatar_filename = avatar.filename
+
     # ✅ ATOMIC FIX (v17): Pass enforcer to service for atomic DB + Casbin transaction
     enforcer = request.app.state.enforcer
-    created_user = await user_service.create_user_by_admin(
+    created_user, callback = await user_service.create_user_by_admin(
         db=db,
         user_in=user_in,
         enforcer=enforcer,
-        avatar_file=avatar
+        avatar_content=avatar_content,  # ✅ REFACTORED: Pass bytes instead of UploadFile
+        avatar_filename=avatar_filename,  # ✅ REFACTORED: Pass filename
     )
     # Casbin sync now happens inside create_user_by_admin atomically
+
+    # ✅ TRANSACTION PATTERN: Commit and execute callback
+    await db.commit()
+    await callback()
 
     # Log activity
     await log_admin_activity(
@@ -878,10 +901,35 @@ async def update_existing_user(
     # ← PHASE 1: Lấy enforcer từ app state để sync Casbin khi role thay đổi
     enforcer = request.app.state.enforcer
 
+    # ✅ REFACTORED (Issue #3): Read avatar file content in router layer
+    avatar_content = None
+    avatar_filename = None
+    if avatar and avatar.filename:
+        # Validate file size before reading (DoS protection)
+        avatar.file.seek(0, 2)  # Seek to end
+        file_size = avatar.file.tell()
+        avatar.file.seek(0)  # Reset to beginning
+
+        if file_size > settings.MAX_AVATAR_CONTENT_LENGTH:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File size cannot exceed {settings.MAX_AVATAR_SIZE_MB}MB."
+            )
+
+        avatar_content = await avatar.read()
+        avatar_filename = avatar.filename
+
     # Truyền avatar và enforcer vào hàm service
-    updated_user = await user_service.update_user(
-        db, db_user, user_in, enforcer=enforcer, avatar_file=avatar
+    updated_user, callback = await user_service.update_user(
+        db, db_user, user_in, enforcer=enforcer,
+        avatar_content=avatar_content,  # ✅ REFACTORED: Pass bytes instead of UploadFile
+        avatar_filename=avatar_filename,  # ✅ REFACTORED: Pass filename
+        assigned_by_user_id=current_admin.id  # ✅ PHASE 2: Track who made the assignment
     )
+
+    # ✅ TRANSACTION PATTERN: Commit and execute callback
+    await db.commit()
+    await callback()
 
     # Log activity
     await log_admin_activity(
