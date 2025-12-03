@@ -18,6 +18,10 @@ from .config import (
 from .lead import Application, AssignmentLog, Consultation, CRMInteraction, Lead
 from .lead_history import LeadStatusHistory
 
+# Admission models (NEW: Replacement for Application)
+from .admission import AdmissionProfile
+from .student import Student, StudentDocument
+
 # Notification models
 from .notification import Notification, NotificationRule, NotificationTemplate
 from .notification_preference import NotificationPreference
@@ -65,6 +69,10 @@ __all__ = [
     "CRMInteraction",
     "Lead",
     "LeadStatusHistory",
+    # Admission (NEW)
+    "AdmissionProfile",
+    "Student",
+    "StudentDocument",
     # Notification
     "Notification",
     "NotificationRule",
