@@ -776,7 +776,8 @@ async def create_lead(
                         "source": db_lead.source or "Unknown",
                         "actor_id": created_by.id if created_by else 0
                     },
-                    dedupe_key=f"lead_created:{db_lead.id}"
+                    dedupe_key=f"lead_created:{db_lead.id}",
+                    auto_commit=True  # ✅ Auto-commit for service callback
                 )
                 log.info("Lead creation notification dispatched", lead_id=db_lead.id)
             except Exception as e:
@@ -801,7 +802,8 @@ async def create_lead(
                                 "lead_phone": db_lead.phone or "",
                                 "offering_name": offering_name
                             },
-                            dedupe_key=f"lead_assigned:{db_lead.id}:{direct_assignment_officer_id}"
+                            dedupe_key=f"lead_assigned:{db_lead.id}:{direct_assignment_officer_id}",
+                            auto_commit=True  # ✅ Auto-commit for service callback
                         )
                         log.info(
                             "Direct assignment notification dispatched",
@@ -1134,7 +1136,8 @@ async def update_lead(
                         "actor_id": updated_by.id,
                         "reason": f"Offering changed from #{old_offering_id} to #{new_offering_id}",  # type: ignore
                         "user_ids": [old_officer_id] if old_officer_id else [],  # Notify old officer
-                    }
+                    },
+                    auto_commit=True  # ✅ Auto-commit for service callback
                 )
                 log.info(
                     "Lead reassignment notification dispatched",
@@ -1394,7 +1397,8 @@ async def assign_lead_manually(
             db=db,
             event=SystemEvents.LEAD_ASSIGNED,
             payload=notification_payload,
-            dedupe_key=f"lead_assigned:{lead.id}:{officer.id}"
+            dedupe_key=f"lead_assigned:{lead.id}:{officer.id}",
+            auto_commit=True  # ✅ Auto-commit for service callback
         )
 
         log.info(
@@ -1667,7 +1671,8 @@ async def delete_consultation(
                 "lead_id": _lead_id,
                 "officer_id": _officer_id,
                 "actor_id": current_user.id,
-            }
+            },
+            auto_commit=True  # ✅ Auto-commit for service callback
         )
     except Exception as e:
         log.error(
@@ -1873,7 +1878,8 @@ async def update_consultation(
                 "old_status_id": None,  # Could be tracked if needed
                 "new_status_id": _consultation_status_id,
                 "actor_id": current_user.id,
-            }
+            },
+            auto_commit=True  # ✅ Auto-commit for service callback
         )
     except Exception as e:
         log.error(

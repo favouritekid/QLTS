@@ -297,7 +297,8 @@ async def create_pipeline_stage(
                         "resource_id": db_stage.id,
                         "resource_name": db_stage.name,
                         "actor_id": current_user.id,
-                    }
+                    },
+                    auto_commit=True  # ✅ Auto-commit for service callback
                 )
 
         return db_stage, _post_commit
@@ -384,7 +385,8 @@ async def update_pipeline_stage(
                         "resource_id": db_stage.id,
                         "resource_name": db_stage.name,
                         "actor_id": current_user.id,
-                    }
+                    },
+                    auto_commit=True  # ✅ Auto-commit for service callback
                 )
 
         return db_stage, _post_commit
@@ -459,7 +461,8 @@ async def delete_pipeline_stage(
                         "resource_id": stage_id,
                         "resource_name": stage_data["name"],
                         "actor_id": current_user.id,
-                    }
+                    },
+                    auto_commit=True  # ✅ Auto-commit for service callback
                 )
 
         return None, _post_commit
@@ -592,7 +595,8 @@ async def create_consultation_status(
                         "resource_id": db_status.id,
                         "resource_name": db_status.name,
                         "actor_id": current_user.id,
-                    }
+                    },
+                    auto_commit=True  # ✅ Auto-commit for service callback
                 )
 
         return db_status, _post_commit
@@ -718,7 +722,8 @@ async def update_consultation_status(
                         "resource_id": db_status.id,
                         "resource_name": db_status.name,
                         "actor_id": current_user.id,
-                    }
+                    },
+                    auto_commit=True  # ✅ Auto-commit for service callback
                 )
 
         return db_status, _post_commit
@@ -805,7 +810,8 @@ async def delete_consultation_status(
                         "resource_id": status_id,
                         "resource_name": status_data["name"],
                         "actor_id": current_user.id,
-                    }
+                    },
+                    auto_commit=True  # ✅ Auto-commit for service callback
                 )
 
         return None, _post_commit
@@ -922,7 +928,8 @@ async def create_allowed_transition(
                         "resource_id": str(db_transition.id),
                         "resource_name": f"{from_name} → {to_name}",
                         "actor_id": current_user.id,
-                    }
+                    },
+                    auto_commit=True  # ✅ Auto-commit for service callback
                 )
 
         return db_transition, _post_commit
@@ -995,7 +1002,8 @@ async def delete_allowed_transition(
                         "resource_id": str(transition_id),
                         "resource_name": f"{transition_data['from_status_name']} → {transition_data['to_status_name']}",
                         "actor_id": current_user.id,
-                    }
+                    },
+                    auto_commit=True  # ✅ Auto-commit for service callback
                 )
 
         return None, _post_commit

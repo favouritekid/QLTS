@@ -267,7 +267,8 @@ async def update_officer_availability(
                     "username": user.username,
                     "unit_id": user.unit_id,
                     "actor_id": officer_id,  # Officer changes their own status
-                }
+                },
+                auto_commit=True  # ✅ Auto-commit for service callback
             )
         except Exception as e:
             log.warning(
