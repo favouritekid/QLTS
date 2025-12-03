@@ -249,7 +249,14 @@ class AdmissionProfileUpdate(BaseModel):
     - All text fields sanitized via field validators
     - citizen_id format validated (12 digits)
     - GPA validated via nested schemas
+    - Optimistic locking via version field (required)
+    - Array size limits: family_info max 10, documents_checklist max 50
     """
+    version: int = Field(
+        ...,
+        ge=1,
+        description="Current version (for optimistic locking, must match DB)"
+    )
     citizen_id: Optional[str] = Field(
         None,
         pattern=r"^\d{12}$",
@@ -257,7 +264,8 @@ class AdmissionProfileUpdate(BaseModel):
     )
     family_info: Optional[List[FamilyMemberSchema]] = Field(
         None,
-        description="Array of family members"
+        max_items=10,
+        description="Array of family members (max 10)"
     )
     academic_history: Optional[List[AcademicRecordSchema]] = Field(
         None,
@@ -269,7 +277,8 @@ class AdmissionProfileUpdate(BaseModel):
     )
     documents_checklist: Optional[List[DocumentItemSchema]] = Field(
         None,
-        description="Document upload checklist"
+        max_items=50,
+        description="Document upload checklist (max 50)"
     )
 
     model_config = ConfigDict(
@@ -288,6 +297,7 @@ class AdmissionProfileResponse(BaseModel):
     lead_id: int
     citizen_id: Optional[str] = None
     status: str
+    version: int
     applied_rules: dict
     family_info: List[FamilyMemberSchema] = []
     academic_history: List[AcademicRecordSchema] = []

@@ -32,6 +32,7 @@ from .database import engine as async_db_engine
 from .database import redis_client as main_redis_client
 from .database import safe_redis_ping
 from .ratelimit import limiter
+from .utils.redis_lock import init_redis_client, close_redis_client
 from .routers import (
     admissions,  # ✅ NEW: Admission Profile workflow (replacement for applications)
     applications,
@@ -275,6 +276,10 @@ async def lifespan(app: FastAPI):
         # ✅ CẢI TIẾN: Vấn đề #1 - Tải LUA script khi khởi động
         await load_rate_limit_script()
 
+        # ✅ Initialize Redis lock client for distributed locking
+        init_redis_client()
+        log.info("✅ Redis lock client initialized for student_code generation")
+
     except Exception as e:
         log.error(
             "❌ FAILED TO CONNECT TO REDIS on startup!", error=str(e), exc_info=True
@@ -325,6 +330,16 @@ async def lifespan(app: FastAPI):
         # Lỗi này giờ đây chỉ bắt các lỗi chung (ví dụ: lỗi khi emit)
         log.error("Error during Socket.IO shutdown", error=str(e))
 
+    # Close Redis lock client
+    try:
+        await close_redis_client()
+        log.info("✅ Redis lock client connection closed.")
+    except Exception as e:
+        log.error(
+            "Error closing Redis lock client connection during shutdown.", error=str(e)
+        )
+
+    # Close main Redis client
     try:
         await main_redis_client.aclose()
         log.info("✅ Main Redis client connection closed.")

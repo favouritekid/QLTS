@@ -28,6 +28,8 @@ from typing import List, Dict, Any, Optional
 
 import structlog
 from sqlalchemy import select
+
+from app.utils.redis_lock import acquire_redis_lock
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, joinedload
@@ -360,6 +362,21 @@ async def update_profile(
             "Only draft profiles can be updated."
         )
 
+    # Optimistic Locking: Check version matches
+    if "version" in data and data["version"] != profile.version:
+        log.warning(
+            "Version mismatch during update (concurrent modification)",
+            profile_id=profile_id,
+            expected_version=data["version"],
+            current_version=profile.version,
+            user_id=current_user.id,
+        )
+        raise ConflictError(
+            f"Profile was modified by another user. "
+            f"Expected version {data['version']}, but current version is {profile.version}. "
+            "Please refresh and try again."
+        )
+
     # Update fields (only non-None values from schema)
     if "citizen_id" in data and data["citizen_id"] is not None:
         profile.citizen_id = data["citizen_id"]
@@ -376,8 +393,9 @@ async def update_profile(
     if "documents_checklist" in data and data["documents_checklist"] is not None:
         profile.documents_checklist = [doc.model_dump() for doc in data["documents_checklist"]]
 
-    # Update timestamp
+    # Update timestamp and increment version
     profile.updated_at = datetime.now(timezone.utc)
+    profile.version += 1
 
     await db.flush()  # Router commits
 
@@ -513,6 +531,7 @@ async def submit_and_evaluate(
     if errors:
         # Reject
         profile.status = "rejected"
+        profile.version += 1  # Increment version on status change
         await db.flush()
 
         log.warning(
@@ -531,6 +550,7 @@ async def submit_and_evaluate(
     else:
         # Approve
         profile.status = "approved"
+        profile.version += 1  # Increment version on status change
         await db.flush()
 
         log.info(
@@ -601,32 +621,48 @@ async def enroll_student(
     # ACID Transaction with Savepoint
     try:
         async with db.begin_nested():  # Savepoint (not full transaction)
-            # Step 1: Generate unique student_code
+            # Step 1: Generate unique student_code with distributed lock
             year = datetime.now(timezone.utc).year
             student_code = None
 
-            for attempt in range(10):  # Retry up to 10 times
-                random_digits = random.randint(0, 9999)
-                candidate_code = f"SV{year}{random_digits:04d}"
+            # Redis distributed lock to prevent concurrent generation collisions
+            async with acquire_redis_lock(
+                key=f"student_code_gen:{year}",
+                timeout=10,
+                max_retries=50
+            ) as lock_acquired:
+                if not lock_acquired:
+                    log.error(
+                        "Failed to acquire lock for student_code generation",
+                        profile_id=profile_id,
+                        year=year
+                    )
+                    raise ConflictError(
+                        "Too many concurrent enrollment requests. Please try again in a few seconds."
+                    )
 
-                # Check uniqueness
-                stmt_check = select(models.Student).where(
-                    models.Student.student_code == candidate_code
-                )
-                existing = (await db.execute(stmt_check)).scalar_one_or_none()
+                for attempt in range(10):  # Retry up to 10 times
+                    random_digits = random.randint(0, 9999)
+                    candidate_code = f"SV{year}{random_digits:04d}"
 
-                if not existing:
-                    student_code = candidate_code
-                    break
+                    # Check uniqueness
+                    stmt_check = select(models.Student).where(
+                        models.Student.student_code == candidate_code
+                    )
+                    existing = (await db.execute(stmt_check)).scalar_one_or_none()
 
-            if not student_code:
-                log.error(
-                    "Failed to generate unique student_code after 10 attempts",
-                    profile_id=profile_id,
-                )
-                raise BadRequest(
-                    "Cannot generate unique student code. Please try again."
-                )
+                    if not existing:
+                        student_code = candidate_code
+                        break
+
+                if not student_code:
+                    log.error(
+                        "Failed to generate unique student_code after 10 attempts",
+                        profile_id=profile_id,
+                    )
+                    raise BadRequest(
+                        "Cannot generate unique student code. Please try again."
+                    )
 
             # Step 2: Create Student
             student = models.Student(
@@ -666,6 +702,7 @@ async def enroll_student(
             # Step 4: Update AdmissionProfile status
             profile.status = "enrolled"
             profile.updated_at = datetime.now(timezone.utc)
+            profile.version += 1  # Increment version on enrollment
 
             # Step 5: Update Lead status
             profile.lead.status = "converted"

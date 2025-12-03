@@ -71,6 +71,16 @@ class AdmissionProfile(Base):
         comment="State: draft | approved | rejected | enrolled"
     )
 
+    # Optimistic Locking (Prevent Concurrent Modification)
+    # Incremented on every update/submit
+    # Service must check version matches before modifying
+    version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        comment="Optimistic locking version (incremented on update)"
+    )
+
     # SNAPSHOT PATTERN (Security: Immutable Rules)
     # This is a snapshot of ProgramOffering.admission_rules AT CREATION TIME
     # NEVER query ProgramOffering during submit/evaluate - use this snapshot only
