@@ -196,6 +196,12 @@ class DocumentItemSchema(BaseModel):
         max_length=512,
         description="S3 path or local file path (null if not uploaded)"
     )
+    file_size: Optional[int] = Field(
+        None,
+        ge=0,
+        le=10_485_760,  # 10MB max (10 * 1024 * 1024)
+        description="File size in bytes (max 10MB, null if not uploaded)"
+    )
     uploaded_at: Optional[datetime] = Field(
         None,
         description="Upload timestamp (UTC)"

@@ -640,14 +640,26 @@ async def enroll_student(
             # Step 3: Create StudentDocument records
             for doc_item in profile.documents_checklist:
                 if doc_item.get("status") == "uploaded" and doc_item.get("file_path"):
+                    # Parse uploaded_at safely (prevent ValueError on invalid ISO format)
+                    uploaded_at = datetime.now(timezone.utc)
+                    if doc_item.get("uploaded_at"):
+                        try:
+                            uploaded_at = datetime.fromisoformat(doc_item["uploaded_at"])
+                        except (ValueError, TypeError):
+                            # Invalid format, use current time
+                            log.warning(
+                                "Invalid uploaded_at format, using current time",
+                                doc_code=doc_item.get("code"),
+                                uploaded_at_value=doc_item.get("uploaded_at"),
+                            )
+                            uploaded_at = datetime.now(timezone.utc)
+
                     doc = models.StudentDocument(
                         student_id=student.id,
                         doc_type=doc_item["code"],
                         file_path=doc_item["file_path"],
                         is_verified=False,  # Default: pending verification
-                        uploaded_at=datetime.fromisoformat(doc_item["uploaded_at"])
-                        if doc_item.get("uploaded_at")
-                        else datetime.now(timezone.utc),
+                        uploaded_at=uploaded_at,
                     )
                     db.add(doc)
 
