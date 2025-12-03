@@ -1,3 +1,4 @@
+from app.core.rate_limits import limiter, RateLimits
 # app/routers/applications.py
 """
 Router cho Application (Hồ sơ Tuyển sinh).
@@ -26,6 +27,7 @@ router = APIRouter(tags=["Applications"])
 PermissionDep = Depends(deps.check_permission)
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post(
     "/leads/{lead_id}/applications",
     response_model=schemas.Application,
@@ -75,6 +77,7 @@ async def create_application_for_lead(
         )
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get(
     "/applications/{application_id}",
     response_model=schemas.Application,
@@ -107,6 +110,7 @@ async def get_application(
     return application
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.put(
     "/applications/{application_id}",
     response_model=schemas.Application,
@@ -163,6 +167,7 @@ async def update_application(
             detail=str(e),
         )
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.delete(
     "/applications/{application_id}",
     status_code=status.HTTP_204_NO_CONTENT,

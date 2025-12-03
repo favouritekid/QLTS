@@ -10,14 +10,15 @@ from ..core import deps
 from ..ratelimit import RATE_LIMITS, limiter
 from ..services import notification_service
 from ..socket_manager import sio
+from app.core.rate_limits import limiter, RateLimits
 
 log = structlog.get_logger(__name__)
 router = APIRouter(tags=["Notifications"])
 PermissionDep = Depends(deps.check_permission)
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("", response_model=schemas.NotificationsPage)
-@limiter.limit(RATE_LIMITS["notifications"])  # ✅ PHASE 1.1.1: Rate limiting (Thundering Herd protection)
 async def get_my_notifications(
     request: Request,  # ✅ Required for rate limiter
     db: AsyncSession = Depends(database.get_db),
@@ -49,6 +50,7 @@ async def get_my_notifications(
     }
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("/mark-as-read", status_code=status.HTTP_200_OK)
 async def mark_notifications_as_read(
     request: schemas.MarkAsReadRequest,
@@ -67,6 +69,7 @@ async def mark_notifications_as_read(
     return {"detail": f"Marked {count} notification(s) as read"}
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("/mark-all-as-read", status_code=status.HTTP_200_OK)
 async def mark_all_notifications_as_read(
     db: AsyncSession = Depends(database.get_db),
@@ -83,6 +86,7 @@ async def mark_all_notifications_as_read(
     return {"detail": f"Marked {count} notification(s) as read"}
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.delete("/{notification_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_notification(
     notification_id: int,

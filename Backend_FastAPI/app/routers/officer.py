@@ -6,12 +6,14 @@ from .. import models, schemas
 from ..database import get_db
 from ..core import deps # ✅ Import module deps chuẩn
 from ..services import officer_service
+from app.core.rate_limits import limiter, RateLimits
 
 router = APIRouter(prefix="/officer", tags=["Officer Dashboard"])
 
 # ✅ Chuẩn hóa Permission Dependency (Giống admin.py)
 PermissionDep = Depends(deps.check_permission)
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get(
     "/stats",
     response_model=schemas.OfficerDashboardStats, # ✅ Validate Output
@@ -30,6 +32,7 @@ async def get_officer_stats(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post(
     "/availability",
     response_model=schemas.AvailabilityResponse, # ✅ Validate Output

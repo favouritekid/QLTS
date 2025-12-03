@@ -7,12 +7,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import database, models, schemas
 from ..core import deps
 from ..services import pipeline_service
+from app.core.rate_limits import limiter, RateLimits
 
 router = APIRouter(tags=["Pipeline"])
 
 PermissionDep = Depends(deps.check_permission)
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/stages", response_model=List[schemas.PipelineStage])
 async def get_pipeline_stages(
     db: AsyncSession = Depends(database.get_db),
@@ -23,6 +25,7 @@ async def get_pipeline_stages(
     return stages
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/all", response_model=schemas.FullPipeline)
 async def get_full_pipeline(
     db: AsyncSession = Depends(database.get_db),
@@ -36,6 +39,7 @@ async def get_full_pipeline(
     return {"stages": stages, "statuses": statuses}
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/allowed-next-statuses", response_model=List[schemas.ConsultationStatus])
 async def get_allowed_next_statuses(
     current_status_id: str | None = None,

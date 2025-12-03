@@ -1,3 +1,4 @@
+from app.core.rate_limits import limiter, RateLimits
 # app/routers/admissions.py
 """
 Router for Admissions (AdmissionProfile workflow).
@@ -50,6 +51,7 @@ limiter = Limiter(key_func=get_remote_address)
 # ENDPOINTS
 # ==============================================================================
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post(
     "",
     response_model=schemas.AdmissionProfileResponse,
@@ -136,6 +138,7 @@ async def create_admission_profile(
         )
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get(
     "/{profile_id}",
     response_model=schemas.AdmissionProfileResponse,
@@ -180,6 +183,7 @@ async def get_admission_profile(
         )
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.put(
     "/{profile_id}",
     response_model=schemas.AdmissionProfileResponse,
@@ -247,6 +251,7 @@ async def update_admission_profile(
         )
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post(
     "/{profile_id}/submit",
     response_model=schemas.AdmissionSubmitResponse,
@@ -333,13 +338,13 @@ async def submit_admission_profile(
         )
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post(
     "/{profile_id}/enroll",
     response_model=schemas.EnrollStudentResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Enroll student (ACID transaction)",
 )
-@limiter.limit("10/minute")  # Rate limiting: 10 requests per minute
 async def enroll_student(
     request: Request,  # Required for rate limiter
     profile_id: int,
