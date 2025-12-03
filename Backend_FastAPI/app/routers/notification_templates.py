@@ -130,8 +130,7 @@ async def list_notification_templates(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/{template_id}", response_model=schemas.NotificationTemplate)
 async def get_notification_template(
-    template_id: int,
-    db: AsyncSession = Depends(database.get_db),
+    template: models.NotificationTemplate = Depends(deps.get_notification_template_for_admin),
     current_admin: models.User = AdminPermissionDep,
 ):
     """
@@ -140,26 +139,9 @@ async def get_notification_template(
     Returns:
         NotificationTemplate with all details
     """
-    result = await db.execute(
-        select(models.NotificationTemplate)
-        .where(models.NotificationTemplate.id == template_id)
-    )
-    template = result.scalar_one_or_none()
-
-    if not template:
-        log.warning(
-            "Notification template not found",
-            template_id=template_id,
-            admin_id=current_admin.id
-        )
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Notification template {template_id} not found"
-        )
-
     log.info(
         "Retrieved notification template",
-        template_id=template_id,
+        template_id=template.id,
         template_name=template.name,
         admin_id=current_admin.id
     )
@@ -242,8 +224,8 @@ async def create_notification_template(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.put("/{template_id}", response_model=schemas.NotificationTemplate)
 async def update_notification_template(
-    template_id: int,
     template_update: schemas.NotificationTemplateUpdate,
+    template: models.NotificationTemplate = Depends(deps.get_notification_template_for_admin),
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = AdminPermissionDep,
 ):
@@ -258,23 +240,6 @@ async def update_notification_template(
     Returns:
         Updated NotificationTemplate
     """
-    # Get existing template
-    result = await db.execute(
-        select(models.NotificationTemplate)
-        .where(models.NotificationTemplate.id == template_id)
-    )
-    template = result.scalar_one_or_none()
-
-    if not template:
-        log.warning(
-            "Notification template not found for update",
-            template_id=template_id,
-            admin_id=current_admin.id
-        )
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Notification template {template_id} not found"
-        )
 
     # Check if updating name to existing name
     if template_update.name and template_update.name != template.name:
@@ -323,7 +288,7 @@ async def update_notification_template(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.delete("/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_notification_template(
-    template_id: int,
+    template: models.NotificationTemplate = Depends(deps.get_notification_template_for_admin),
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = AdminPermissionDep,
 ):
@@ -335,29 +300,12 @@ async def delete_notification_template(
     Returns:
         No content (204)
     """
-    # Get existing template
-    result = await db.execute(
-        select(models.NotificationTemplate)
-        .where(models.NotificationTemplate.id == template_id)
-    )
-    template = result.scalar_one_or_none()
-
-    if not template:
-        log.warning(
-            "Notification template not found for deletion",
-            template_id=template_id,
-            admin_id=current_admin.id
-        )
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Notification template {template_id} not found"
-        )
 
     # Check if system template
     if template.is_system:
         log.warning(
             "Attempted to delete system template",
-            template_id=template_id,
+            template_id=template.id,
             template_name=template.name,
             admin_id=current_admin.id
         )
@@ -370,7 +318,7 @@ async def delete_notification_template(
     if template.usage_count > 0:
         log.warning(
             "Attempted to delete template in use",
-            template_id=template_id,
+            template_id=template.id,
             template_name=template.name,
             usage_count=template.usage_count,
             admin_id=current_admin.id
@@ -389,7 +337,7 @@ async def delete_notification_template(
 
     log.info(
         "Deleted notification template",
-        template_id=template_id,
+        template_id=template.id,
         template_name=template_name,
         admin_id=current_admin.id
     )

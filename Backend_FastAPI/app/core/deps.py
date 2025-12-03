@@ -860,6 +860,133 @@ async def verify_user_management_permission(
     )
 
 
+async def get_notification_template_for_admin(
+    template_id: int = Path(..., description="ID of the Notification Template"),
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = Depends(check_permission),
+) -> models.NotificationTemplate:
+    """
+    Verify access and retrieve a notification template.
+
+    **Security Levels:**
+    - **Admin/Manager/Officer**: All authenticated users can access (Casbin enforces endpoint-level permission)
+
+    **IDOR Prevention:**
+    This dependency prevents Insecure Direct Object Reference attacks by verifying
+    that the notification template exists before allowing access.
+
+    Args:
+        template_id: ID of the notification template to access
+        db: Database session (injected)
+        current_admin: Current authenticated user with admin permission (injected via Casbin)
+
+    Returns:
+        NotificationTemplate model if it exists
+
+    Raises:
+        ResourceNotFoundError: If template doesn't exist
+
+    Example:
+        ```python
+        @router.get("/notification-templates/{template_id}")
+        async def get_template(
+            template: models.NotificationTemplate = Depends(get_notification_template_for_admin)
+        ):
+            # template is guaranteed to exist
+            return template
+        ```
+    """
+    from sqlalchemy import select
+
+    result = await db.execute(
+        select(models.NotificationTemplate).where(
+            models.NotificationTemplate.id == template_id
+        )
+    )
+    template = result.scalar_one_or_none()
+
+    if not template:
+        log.warning(
+            "Notification template not found",
+            template_id=template_id,
+            user_id=current_admin.id
+        )
+        raise ResourceNotFoundError(
+            detail=f"Notification template {template_id} not found"
+        )
+
+    log.debug(
+        "User accessing notification template",
+        template_id=template_id,
+        user_id=current_admin.id
+    )
+    return template
+
+
+async def get_notification_rule_for_admin(
+    rule_id: int = Path(..., description="ID of the Notification Rule"),
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = Depends(check_permission),
+) -> models.NotificationRule:
+    """
+    Verify access and retrieve a notification rule with eager-loaded actions.
+
+    **Security Levels:**
+    - **Admin/Manager/Officer**: All authenticated users can access (Casbin enforces endpoint-level permission)
+
+    **IDOR Prevention:**
+    This dependency prevents Insecure Direct Object Reference attacks by verifying
+    that the notification rule exists before allowing access.
+
+    Args:
+        rule_id: ID of the notification rule to access
+        db: Database session (injected)
+        current_admin: Current authenticated user with admin permission (injected via Casbin)
+
+    Returns:
+        NotificationRule model with actions eager-loaded if it exists
+
+    Raises:
+        ResourceNotFoundError: If rule doesn't exist
+
+    Example:
+        ```python
+        @router.get("/notification-rules/{rule_id}")
+        async def get_rule(
+            rule: models.NotificationRule = Depends(get_notification_rule_for_admin)
+        ):
+            # rule is guaranteed to exist with actions loaded
+            return rule
+        ```
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    result = await db.execute(
+        select(models.NotificationRule)
+        .options(selectinload(models.NotificationRule.actions))
+        .where(models.NotificationRule.id == rule_id)
+    )
+    rule = result.scalar_one_or_none()
+
+    if not rule:
+        log.warning(
+            "Notification rule not found",
+            rule_id=rule_id,
+            user_id=current_admin.id
+        )
+        raise ResourceNotFoundError(
+            detail=f"Notification rule {rule_id} not found"
+        )
+
+    log.debug(
+        "User accessing notification rule",
+        rule_id=rule_id,
+        user_id=current_admin.id
+    )
+    return rule
+
+
 # ============================================================================
 # DEPENDENCY SHORTCUTS
 # ============================================================================
