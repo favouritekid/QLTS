@@ -425,6 +425,22 @@ const admin = {
       return serverFetch<any>('/api/admin/permissions/statistics');
     },
   },
+
+  /**
+   * User Notifications
+   */
+  notifications: {
+    /**
+     * Get user notifications
+     */
+    async getNotifications(params?: {
+      page?: number;
+      page_size?: number;
+      unread_only?: boolean;
+    }): Promise<any> {
+      return serverFetch<any>('/api/notifications', { params });
+    },
+  },
 };
 
 // ============================================
