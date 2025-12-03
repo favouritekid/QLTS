@@ -56,11 +56,13 @@ async def mark_notifications_as_read(
     current_user: models.User = PermissionDep,
 ):
     """Mark specific notifications as read."""
-    count = await notification_service.mark_as_read(
+    count, callback = await notification_service.mark_as_read(
         db=db,
         user_id=current_user.id,
         notification_ids=request.notification_ids,
     )
+    await db.commit()
+    await callback()
 
     return {"detail": f"Marked {count} notification(s) as read"}
 
@@ -71,10 +73,12 @@ async def mark_all_notifications_as_read(
     current_user: models.User = PermissionDep,
 ):
     """Mark all notifications as read for the current user."""
-    count = await notification_service.mark_all_as_read(
+    count, callback = await notification_service.mark_all_as_read(
         db=db,
         user_id=current_user.id,
     )
+    await db.commit()
+    await callback()
 
     return {"detail": f"Marked {count} notification(s) as read"}
 
@@ -86,7 +90,7 @@ async def delete_notification(
     current_user: models.User = PermissionDep,
 ):
     """Delete a notification."""
-    deleted = await notification_service.delete_notification(
+    deleted, callback = await notification_service.delete_notification(
         db=db,
         user_id=current_user.id,
         notification_id=notification_id,
@@ -97,6 +101,9 @@ async def delete_notification(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Notification not found",
         )
+
+    await db.commit()
+    await callback()
 
     return None
 

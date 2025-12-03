@@ -54,32 +54,13 @@ async def create_application_for_lead(
     - 400: Lead đã có Application
     """
     try:
-        application = await application_service.create_application(
+        application, callback = await application_service.create_application(
             db=db,
             lead_id=lead_id,
             current_user=current_user,
         )
-
-        # ✅ NOTIFICATION 2.0: Dispatch APPLICATION_CREATED event
-        try:
-            await dispatch(
-                db=db,
-                event=SystemEvents.APPLICATION_CREATED,
-                payload={
-                    "application_id": application.id,
-                    "lead_id": application.lead_id,
-                    "officer_id": application.officer_id,
-                    "major_program_name": None,  # Will be updated later
-                    "actor_id": current_user.id,
-                },
-                dedupe_key=f"application_created:{application.id}"
-            )
-        except Exception as e:
-            log.warning(
-                "Failed to dispatch application submitted notification",
-                application_id=application.id,
-                error=str(e)
-            )
+        await db.commit()
+        await callback()
 
         return application
     except ResourceNotFoundError as e:
@@ -165,66 +146,15 @@ async def update_application(
     - 404: Application không tồn tại
     """
     try:
-        # Application đã được verify ownership trong dependency
-        old_status = application.status
-        old_documents = application.documents
-
         # Update application using verified ID
-        application = await application_service.update_application(
+        application, callback = await application_service.update_application(
             db=db,
             application_id=application.id,  # ✅ Use verified application ID
             update_data=update_data,
             current_user=current_user,
         )
-
-        # ✅ NOTIFICATION 2.0: Dispatch APPLICATION_DOCUMENTS_UPDATED if documents changed
-        if update_data.documents is not None and update_data.documents != old_documents:
-            try:
-                await dispatch(
-                    db=db,
-                    event=SystemEvents.APPLICATION_DOCUMENTS_UPDATED,
-                    payload={
-                        "application_id": application.id,
-                        "lead_id": application.lead_id,
-                        "officer_id": application.officer_id,
-                        "document_summary": f"Documents updated for application #{application.id}",
-                        "actor_id": current_user.id,
-                    },
-                    dedupe_key=f"application_documents_updated:{application.id}"
-                )
-            except Exception as e:
-                log.warning(
-                    "Failed to dispatch application documents updated notification",
-                    application_id=application.id,
-                    error=str(e)
-                )
-
-        # ✅ NOTIFICATION 2.0: Dispatch APPLICATION_STATUS_CHANGED if status changed
-        if update_data.status and update_data.status != old_status:
-            try:
-                await dispatch(
-                    db=db,
-                    event=SystemEvents.APPLICATION_STATUS_CHANGED,
-                    payload={
-                        "application_id": application.id,
-                        "applicant_id": application.lead_id,
-                        "applicant_name": application.lead.full_name if application.lead else "Unknown",
-                        "applicant_email": application.lead.email if application.lead else "",
-                        "officer_id": application.officer_id,
-                        "officer_name": application.officer.full_name if application.officer else "Unknown",
-                        "old_status": old_status,
-                        "new_status": application.status,
-                        "actor_id": current_user.id,
-                        "actor_name": current_user.full_name,
-                    },
-                    dedupe_key=f"application_status_changed:{application.id}:{application.status}"
-                )
-            except Exception as e:
-                log.warning(
-                    "Failed to dispatch application status changed notification",
-                    application_id=application.id,
-                    error=str(e)
-                )
+        await db.commit()
+        await callback()
 
         return application
     except ResourceNotFoundError as e:
@@ -268,39 +198,14 @@ async def delete_application(
     - Application đã xóa có thể phục hồi bởi Admin nếu cần
     """
     try:
-        # Application đã được verify ownership trong dependency
-        # Store info for notification before deletion
-        officer_id = application.lead.assigned_officer_id if application.lead else None
-        lead_name = application.lead.full_name if application.lead else "Unknown"
-        lead_id = application.lead_id
-
         # Delete using verified application ID
-        deleted_app = await application_service.delete_application(
+        deleted_app, callback = await application_service.delete_application(
             db=db,
             application_id=application.id,  # ✅ Use verified application ID
             deleted_by=current_user,
         )
-
-        # Dispatch notification for application deletion
-        try:
-            from ..services.notification_dispatcher import dispatch
-            from ..core.events import SystemEvents
-            await dispatch(
-                db=db,
-                event=SystemEvents.APPLICATION_DELETED,
-                payload={
-                    "application_id": deleted_app.id,
-                    "lead_id": lead_id,
-                    "officer_id": officer_id,
-                    "lead_name": lead_name,
-                    "actor_id": current_user.id,
-                },
-                dedupe_key=f"application_deleted:{deleted_app.id}"
-            )
-        except Exception as e:
-            # Log but don't fail - deletion already succeeded
-            import logging
-            logging.warning(f"Failed to dispatch application deletion notification: {e}")
+        await db.commit()
+        await callback()
 
         return None
     except ResourceNotFoundError as e:

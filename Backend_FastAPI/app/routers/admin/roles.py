@@ -458,12 +458,16 @@ async def remove_role_from_users(
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
     # Call service layer with injected dependencies (DI pattern)
-    return await role_service.remove_role_from_users(
+    result, callback = await role_service.remove_role_from_users(
         db=db,
         enforcer=enforcer,
         user_ids=user_ids,
         role_to_remove=role_to_remove,
     )
+    await db.commit()
+    await callback()
+
+    return result
 
 
 
