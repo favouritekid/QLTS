@@ -401,6 +401,18 @@ const admin = {
       return serverFetch<any>('/api/admin/distribution-rules');
     },
   },
+
+  /**
+   * Policies & Permissions
+   */
+  policies: {
+    /**
+     * Get policy statistics
+     */
+    async getStatistics(): Promise<any> {
+      return serverFetch<any>('/api/admin/permissions/statistics');
+    },
+  },
 };
 
 // ============================================

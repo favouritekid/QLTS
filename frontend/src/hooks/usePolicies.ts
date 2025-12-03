@@ -65,13 +65,14 @@ export function useTemplates() {
 }
 
 // Get policy statistics
-export function usePolicyStatistics() {
+export function usePolicyStatistics(options?: { initialData?: PolicyStatistics }) {
   return useQuery<PolicyStatistics>({
     queryKey: policyKeys.statistics(),
     queryFn: async () => {
       const response = await api.get<PolicyStatistics>(API_ENDPOINTS.ADMIN.PERMISSIONS.STATISTICS);
       return response.data;
     },
+    initialData: options?.initialData, // ✅ PHASE 1 - WEEK 2 - DAY 4: Support SSR
   });
 }
 
