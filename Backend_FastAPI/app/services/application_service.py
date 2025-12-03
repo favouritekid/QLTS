@@ -118,7 +118,8 @@ async def create_application(
                     "major_program_name": new_application.major_program.name if new_application.major_program else "N/A",
                     "actor_id": current_user.id
                 },
-                dedupe_key=f"application_created:{new_application.id}"
+                dedupe_key=f"application_created:{new_application.id}",
+                auto_commit=True  # ✅ Auto-commit for service callback
             )
             log.info("Application creation notification dispatched", application_id=new_application.id)
         except Exception as e:
@@ -276,7 +277,8 @@ async def update_application(
                             "new_status": application.status,
                             "actor_id": current_user.id
                         },
-                        dedupe_key=f"application_status_changed:{application.id}:{application.status}"
+                        dedupe_key=f"application_status_changed:{application.id}:{application.status}",
+                        auto_commit=True  # ✅ Auto-commit for service callback
                     )
                     log.info("Application status change notification dispatched", application_id=application.id)
                 except Exception as e:
@@ -299,7 +301,8 @@ async def update_application(
                             "document_summary": "Documents checklist updated",
                             "actor_id": current_user.id
                         },
-                        dedupe_key=f"application_documents_updated:{application.id}:{datetime.now(timezone.utc).isoformat()}"
+                        dedupe_key=f"application_documents_updated:{application.id}:{datetime.now(timezone.utc).isoformat()}",
+                        auto_commit=True  # ✅ Auto-commit for service callback
                     )
                     log.info("Application documents update notification dispatched", application_id=application.id)
                 except Exception as e:

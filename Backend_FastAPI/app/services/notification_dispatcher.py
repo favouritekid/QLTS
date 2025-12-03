@@ -116,7 +116,8 @@ async def dispatch(
     payload: dict,
     dedupe_key: Optional[str] = None,
     skip_preference_check: bool = False,
-) -> Tuple[List[int], Callable]:
+    auto_commit: bool = False,
+) -> Tuple[List[int], Optional[Callable]]:
     """
     Dispatch a notification event.
 
@@ -131,9 +132,13 @@ async def dispatch(
                    If provided, prevents duplicate notifications for same key+user
         skip_preference_check: If True, skip user preference filtering
                               Use for critical system notifications
+        auto_commit: If True, commits transaction and executes callback immediately
+                    (for use in service callbacks where router already committed)
 
     Returns:
-        List of created notification IDs
+        Tuple of (notification_ids, post_commit_callback)
+        - If auto_commit=False: Returns tuple with callback to execute after commit
+        - If auto_commit=True: Commits and executes callback, returns (ids, None)
 
     Flow:
         1. Lookup event config from registry
@@ -414,6 +419,12 @@ async def dispatch(
                 channels=config.channels,
                 fallback="Notifications are in DB but delivery failed"
             )
+
+    # ✅ AUTO_COMMIT MODE: For service callbacks that need dispatch() to self-commit
+    if auto_commit:
+        await db.commit()
+        await _post_commit()
+        return notification_ids, None
 
     return notification_ids, _post_commit
 
