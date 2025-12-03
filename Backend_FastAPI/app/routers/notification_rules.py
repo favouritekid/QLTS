@@ -201,8 +201,7 @@ async def list_notification_rules(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/{rule_id}", response_model=schemas.NotificationRule)
 async def get_notification_rule(
-    rule_id: int,
-    db: AsyncSession = Depends(database.get_db),
+    rule: models.NotificationRule = Depends(deps.get_notification_rule_for_admin),
     current_admin: models.User = AdminPermissionDep,
 ):
     """
@@ -211,27 +210,9 @@ async def get_notification_rule(
     Returns:
         NotificationRule with all details (including actions)
     """
-    result = await db.execute(
-        select(models.NotificationRule)
-        .options(selectinload(models.NotificationRule.actions))
-        .where(models.NotificationRule.id == rule_id)
-    )
-    rule = result.scalar_one_or_none()
-
-    if not rule:
-        log.warning(
-            "Notification rule not found",
-            rule_id=rule_id,
-            admin_id=current_admin.id
-        )
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Notification rule {rule_id} not found"
-        )
-
     log.info(
         "Retrieved notification rule",
-        rule_id=rule_id,
+        rule_id=rule.id,
         event_type=rule.event,
         admin_id=current_admin.id
     )
@@ -346,8 +327,8 @@ async def create_notification_rule(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.put("/{rule_id}", response_model=schemas.NotificationRule)
 async def update_notification_rule(
-    rule_id: int,
     rule_update: schemas.NotificationRuleUpdate,
+    rule: models.NotificationRule = Depends(deps.get_notification_rule_for_admin),
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = AdminPermissionDep,
 ):
@@ -362,23 +343,6 @@ async def update_notification_rule(
     Returns:
         Updated NotificationRule
     """
-    # Get existing rule
-    result = await db.execute(
-        select(models.NotificationRule)
-        .where(models.NotificationRule.id == rule_id)
-    )
-    rule = result.scalar_one_or_none()
-
-    if not rule:
-        log.warning(
-            "Notification rule not found for update",
-            rule_id=rule_id,
-            admin_id=current_admin.id
-        )
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Notification rule {rule_id} not found"
-        )
 
     # ✅ FIX: Track template_id changes for usage_count updates
     old_template_id = rule.template_id
@@ -397,13 +361,13 @@ async def update_notification_rule(
         from sqlalchemy import delete
         await db.execute(
             delete(models.NotificationAction)
-            .where(models.NotificationAction.rule_id == rule_id)
+            .where(models.NotificationAction.rule_id == rule.id)
         )
 
         # Create new actions
         for action_data in rule_update.actions:
             new_action = models.NotificationAction(
-                rule_id=rule_id,
+                rule_id=rule.id,
                 step=action_data.step,
                 channel=action_data.channel,
                 template_code=action_data.template_code,
@@ -415,7 +379,7 @@ async def update_notification_rule(
         updated_fields.append("actions")
         log.debug(
             "Updated notification rule actions",
-            rule_id=rule_id,
+            rule_id=rule.id,
             actions_count=len(rule_update.actions)
         )
 
@@ -456,7 +420,7 @@ async def update_notification_rule(
 
         log.info(
             "Updated notification rule",
-            rule_id=rule_id,
+            rule_id=rule.id,
             event_type=rule.event,
             admin_id=current_admin.id,
             updated_fields=updated_fields,
@@ -465,7 +429,7 @@ async def update_notification_rule(
     else:
         log.info(
             "No fields to update for notification rule",
-            rule_id=rule_id,
+            rule_id=rule.id,
             admin_id=current_admin.id
         )
 
@@ -475,7 +439,7 @@ async def update_notification_rule(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.patch("/{rule_id}/toggle", response_model=schemas.NotificationRule)
 async def toggle_notification_rule(
-    rule_id: int,
+    rule: models.NotificationRule = Depends(deps.get_notification_rule_for_admin),
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = AdminPermissionDep,
 ):
@@ -488,24 +452,6 @@ async def toggle_notification_rule(
     Returns:
         Updated NotificationRule with toggled enabled status
     """
-    # Get existing rule (with actions)
-    result = await db.execute(
-        select(models.NotificationRule)
-        .options(selectinload(models.NotificationRule.actions))
-        .where(models.NotificationRule.id == rule_id)
-    )
-    rule = result.scalar_one_or_none()
-
-    if not rule:
-        log.warning(
-            "Notification rule not found for toggle",
-            rule_id=rule_id,
-            admin_id=current_admin.id
-        )
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Notification rule {rule_id} not found"
-        )
 
     # Toggle enabled status
     old_status = rule.enabled
@@ -519,7 +465,7 @@ async def toggle_notification_rule(
 
     log.info(
         "Toggled notification rule status",
-        rule_id=rule_id,
+        rule_id=rule.id,
         event_type=rule.event,
         admin_id=current_admin.id,
         old_status=old_status,
@@ -532,7 +478,7 @@ async def toggle_notification_rule(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_notification_rule(
-    rule_id: int,
+    rule: models.NotificationRule = Depends(deps.get_notification_rule_for_admin),
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = AdminPermissionDep,
 ):
@@ -545,23 +491,6 @@ async def delete_notification_rule(
     Returns:
         No content (204)
     """
-    # Get existing rule
-    result = await db.execute(
-        select(models.NotificationRule)
-        .where(models.NotificationRule.id == rule_id)
-    )
-    rule = result.scalar_one_or_none()
-
-    if not rule:
-        log.warning(
-            "Notification rule not found for deletion",
-            rule_id=rule_id,
-            admin_id=current_admin.id
-        )
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Notification rule {rule_id} not found"
-        )
 
     # Store for logging
     event_type = rule.event
@@ -588,7 +517,7 @@ async def delete_notification_rule(
 
     log.info(
         "Deleted notification rule",
-        rule_id=rule_id,
+        rule_id=rule.id,
         event_type=event_type,
         template_id=template_id,
         admin_id=current_admin.id
