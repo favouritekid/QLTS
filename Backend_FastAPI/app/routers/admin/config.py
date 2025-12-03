@@ -47,12 +47,23 @@ PermissionDep = Depends(deps.check_permission)
     response_model=schemas.AssignmentConfig,
 )
 async def get_assignment_config_route(
-    unit_id: int,
+    unit: models.OrganizationUnit = Depends(deps.get_organizational_unit_for_user),
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
-    """(Admin only) Lấy cấu hình phân chia của một đơn vị."""
-    params = await config_service.get_assignment_config(db, unit_id)
+    """
+    (Admin/Manager) Get assignment config for an organizational unit.
+
+    **Security:**
+    - ✓ Role: Admin or Manager (Casbin)
+    - ✓ Ownership: Manager limited to managed units
+    - ✓ IDOR Protection: Enabled
+
+    **Access Levels:**
+    - **Admin**: Can access all units
+    - **Manager**: Can only access units they manage
+    """
+    params = await config_service.get_assignment_config(db, unit.id)
     return {"params": params}
 
 
@@ -62,14 +73,29 @@ async def get_assignment_config_route(
     response_model=schemas.AssignmentConfig,
 )
 async def update_assignment_config_route(
-    unit_id: int,
     config_in: schemas.AssignmentConfig,
+    unit: models.OrganizationUnit = Depends(deps.get_organizational_unit_for_user),
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
-    """(Admin only) Cập nhật cấu hình phân chia của một đơn vị."""
+    """
+    (Admin/Manager) Update assignment config for an organizational unit.
+
+    **Security:**
+    - ✓ Role: Admin or Manager (Casbin)
+    - ✓ Ownership: Manager limited to managed units
+    - ✓ IDOR Protection: Enabled
+
+    **Access Levels:**
+    - **Admin**: Can update all units
+    - **Manager**: Can only update units they manage
+
+    **Business Rules:**
+    - Assignment config controls officer distribution settings per unit
+    - Changes affect future lead assignments only (not existing assignments)
+    """
     updated_model = await config_service.update_assignment_config(
-        db, unit_id, config_in.params
+        db, unit.id, config_in.params
     )
     # Trả về schema Pydantic dựa trên model đã cập nhật từ DB
     return schemas.AssignmentConfig(params=updated_model.params)
