@@ -457,6 +457,19 @@ const admin = {
       return serverFetch<any>('/api/notifications/event-groups');
     },
   },
+
+  /**
+   * User Sessions
+   * ✅ PHASE 1 - WEEK 3 - DAY 1
+   */
+  sessions: {
+    /**
+     * Get active user sessions
+     */
+    async getActiveSessions(): Promise<any> {
+      return serverFetch<any>('/api/sessions');
+    },
+  },
 };
 
 // ============================================
