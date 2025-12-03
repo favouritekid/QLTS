@@ -1,3 +1,4 @@
+from app.core.rate_limits import limiter, RateLimits
 # app/routers/notification_templates.py
 """
 ✅ PHASE 3.1: Notification Templates CRUD Router
@@ -22,6 +23,7 @@ router = APIRouter(prefix="/notification-templates", tags=["Notification Templat
 AdminPermissionDep = Depends(deps.check_permission)
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("", response_model=schemas.NotificationTemplatesPage)
 async def list_notification_templates(
     db: AsyncSession = Depends(database.get_db),
@@ -125,6 +127,7 @@ async def list_notification_templates(
     }
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/{template_id}", response_model=schemas.NotificationTemplate)
 async def get_notification_template(
     template_id: int,
@@ -164,6 +167,7 @@ async def get_notification_template(
     return template
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("", response_model=schemas.NotificationTemplate, status_code=status.HTTP_201_CREATED)
 async def create_notification_template(
     template_data: schemas.NotificationTemplateCreate,
@@ -235,6 +239,7 @@ async def create_notification_template(
     return new_template
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.put("/{template_id}", response_model=schemas.NotificationTemplate)
 async def update_notification_template(
     template_id: int,
@@ -315,6 +320,7 @@ async def update_notification_template(
     return template
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.delete("/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_notification_template(
     template_id: int,

@@ -1,3 +1,4 @@
+from app.core.rate_limits import limiter, RateLimits
 # app/routers/monitoring.py
 """
 System Monitoring Router
@@ -38,6 +39,7 @@ PermissionDep = Depends(deps.check_permission)
 # ============================================================================
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/celery/workers")
 async def get_celery_workers(
     current_admin: models.User = PermissionDep,
@@ -94,6 +96,7 @@ async def get_celery_workers(
         )
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/celery/tasks")
 async def get_celery_tasks(
     current_admin: models.User = PermissionDep,
@@ -160,6 +163,7 @@ async def get_celery_tasks(
         )
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/celery/stats")
 async def get_celery_stats(
     current_admin: models.User = PermissionDep,
@@ -218,6 +222,7 @@ async def get_celery_stats(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/redis/info")
 async def get_redis_info(
     current_admin: models.User = PermissionDep,
@@ -294,6 +299,7 @@ async def get_redis_info(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/socket/connections")
 async def get_socket_connections(
     current_admin: models.User = PermissionDep,
@@ -343,6 +349,7 @@ async def get_socket_connections(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/notifications/metrics")
 async def get_notification_metrics(
     db: AsyncSession = Depends(database.get_db),
@@ -525,6 +532,7 @@ async def get_notification_metrics(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/system/overview")
 async def get_system_overview(
     db: AsyncSession = Depends(database.get_db),

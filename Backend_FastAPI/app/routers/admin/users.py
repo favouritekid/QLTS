@@ -22,6 +22,7 @@ Breaking API Changes:
 - GET /api/admin/activity-logs → GET /api/admin/users/activity-logs
 - GET /api/admin/statistics/users → GET /api/admin/users/statistics
 """
+from app.core.rate_limits import limiter, RateLimits  # ✅ Rate limiting
 
 import io
 from typing import List, Optional
@@ -109,6 +110,7 @@ async def log_admin_activity(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_new_user(
     request: Request,
@@ -188,6 +190,7 @@ async def create_new_user(
 
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("", response_model=schemas.UsersPage)
 async def get_all_users(
     request: Request,
@@ -217,6 +220,7 @@ async def get_all_users(
 
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/list")
 async def list_users(
     unit_id: Optional[int] = Query(None, description="Filter by organization unit ID"),
@@ -296,6 +300,7 @@ async def list_users(
 
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post("/{user_id}/password")
 async def admin_set_user_password(
     user_id: int,
@@ -317,6 +322,7 @@ async def admin_set_user_password(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/export")
 async def export_all_users(
     request: Request,
@@ -370,6 +376,7 @@ async def export_all_users(
 # FastAPI matches routes in order, so specific paths must come before path parameters
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/export/csv")
 async def stream_export_users_csv(
     request: Request,
@@ -413,6 +420,7 @@ async def stream_export_users_csv(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_BULK)  # 10/hour - Bulk operation
 @router.post("/bulk")
 async def bulk_user_action(
     action_data: schemas.BulkActionSchema,
@@ -477,6 +485,7 @@ async def bulk_user_action(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/sync/status")
 async def get_sync_status(
     request: Request,
@@ -532,6 +541,7 @@ async def get_sync_status(
 # ← PHASE 4: Remediation endpoint - manually sync DB to match Casbin
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post("/sync")
 async def sync_users(
     request: Request,
@@ -599,6 +609,7 @@ async def sync_users(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_BULK)  # 10/hour - Bulk operation
 @router.post("/leads/bulk-assign")
 async def bulk_assign_leads(
     assignment_data: schemas.BulkAssignLeadsSchema,  # Sử dụng schema mới
@@ -657,6 +668,7 @@ async def bulk_assign_leads(
 
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post("/leads/import")
 async def import_leads_from_file(
     file: UploadFile = File(
@@ -733,6 +745,7 @@ async def import_leads_from_file(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/statistics")
 async def get_user_statistics(
     db: AsyncSession = Depends(database.get_db),
@@ -760,6 +773,7 @@ async def get_user_statistics(
 #   - Moving /{user_id} routes to the end ensures specific routes match first
 # ============================================================================
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/{user_id}")
 async def get_user_details(
     user_id: int,
@@ -788,6 +802,7 @@ async def get_user_details(
 
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.put("/{user_id}")
 async def update_existing_user(
     user_id: int,
@@ -1053,6 +1068,7 @@ async def update_existing_user(
 # === KẾT THÚC HÀM CẬP NHẬT ===
 
 
+@limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
 @router.delete("/{user_id}")
 async def delete_existing_user(
     user_id: int,
@@ -1110,5 +1126,4 @@ async def delete_existing_user(
     await user_service.delete_user(db, user_id)
 
     return None
-
 

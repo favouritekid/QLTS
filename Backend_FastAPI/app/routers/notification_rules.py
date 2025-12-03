@@ -1,3 +1,4 @@
+from app.core.rate_limits import limiter, RateLimits
 # app/routers/notification_rules.py
 """
 ✅ PHASE 2.2: Notification Rules CRUD Router
@@ -52,6 +53,7 @@ class MetadataResponse(BaseModel):
     operators: List[OperatorOption]
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/metadata", response_model=MetadataResponse)
 async def get_notification_metadata(
     current_admin: models.User = AdminPermissionDep,
@@ -132,6 +134,7 @@ async def get_notification_metadata(
     }
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("", response_model=schemas.NotificationRulesPage)
 async def list_notification_rules(
     db: AsyncSession = Depends(database.get_db),
@@ -195,6 +198,7 @@ async def list_notification_rules(
     }
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/{rule_id}", response_model=schemas.NotificationRule)
 async def get_notification_rule(
     rule_id: int,
@@ -235,6 +239,7 @@ async def get_notification_rule(
     return rule
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("", response_model=schemas.NotificationRule, status_code=status.HTTP_201_CREATED)
 async def create_notification_rule(
     rule_data: schemas.NotificationRuleCreate,
@@ -338,6 +343,7 @@ async def create_notification_rule(
     return new_rule
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.put("/{rule_id}", response_model=schemas.NotificationRule)
 async def update_notification_rule(
     rule_id: int,
@@ -466,6 +472,7 @@ async def update_notification_rule(
     return rule
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.patch("/{rule_id}/toggle", response_model=schemas.NotificationRule)
 async def toggle_notification_rule(
     rule_id: int,
@@ -522,6 +529,7 @@ async def toggle_notification_rule(
     return rule
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_notification_rule(
     rule_id: int,

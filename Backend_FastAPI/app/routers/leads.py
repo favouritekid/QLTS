@@ -13,6 +13,7 @@ from ..core import deps
 from ..services import distribution_service, insights_service, lead_service
 from ..services.notification_dispatcher import dispatch  # ✅ NOTIFICATION 2.0
 from ..core.events import SystemEvents  # ✅ NOTIFICATION 2.0
+from app.core.rate_limits import limiter, RateLimits
 
 log = structlog.get_logger(__name__)
 
@@ -22,6 +23,7 @@ PermissionDep = Depends(deps.check_permission)
 LeadAccessDep = Depends(deps.get_lead_for_user)
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("", response_model=schemas.Lead, status_code=status.HTTP_201_CREATED)
 async def create_new_lead(
     lead_in: schemas.LeadCreate,
@@ -43,6 +45,7 @@ async def create_new_lead(
     return result
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/distribution-preview")
 async def get_distribution_preview(
     offering_id: int = Query(..., description="Offering ID to preview distribution"),
@@ -93,6 +96,7 @@ async def get_distribution_preview(
     }
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("", response_model=schemas.LeadsPage)
 async def get_all_leads(
     db: AsyncSession = Depends(database.get_db),
@@ -152,6 +156,7 @@ async def get_all_leads(
     return {"total_count": total, "leads": leads}
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/{lead_id}", response_model=schemas.Lead)
 async def get_lead_details(
     lead: models.Lead = LeadAccessDep,
@@ -160,6 +165,7 @@ async def get_lead_details(
     return lead
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.put("/{lead_id}", response_model=schemas.Lead)
 async def update_existing_lead(
     lead_in: schemas.LeadUpdate,
@@ -235,6 +241,7 @@ async def update_existing_lead(
     return result
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.delete("/{lead_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_lead(
     lead_id: int,
@@ -283,6 +290,7 @@ async def delete_lead(
     return None
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post(
     "/{lead_id}/consultations",
     response_model=schemas.Consultation,
@@ -329,6 +337,7 @@ async def add_new_consultation(
     return result
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("/{lead_id}/assign", response_model=schemas.Lead)
 async def assign_lead_manually(
     assign_data: schemas.AssignLead,
@@ -362,6 +371,7 @@ async def assign_lead_manually(
     return result
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("/{lead_id}/action", response_model=schemas.Lead)
 async def perform_lead_action(
     action_data: schemas.LeadAction,
@@ -377,6 +387,7 @@ async def perform_lead_action(
     return result
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/{lead_id}/timeline", response_model=List[schemas.TimelineItem])
 async def get_lead_timeline(
     lead: models.Lead = LeadAccessDep,  # <-- THAY ĐỔI (IDOR Check)
@@ -386,6 +397,7 @@ async def get_lead_timeline(
     return await lead_service.get_lead_timeline(db, lead.id)
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/{lead_id}/insights", response_model=schemas.LeadInsights)
 async def get_lead_insights(
     lead: models.Lead = LeadAccessDep,  # <-- THAY ĐỔI (IDOR Check)
@@ -396,6 +408,7 @@ async def get_lead_insights(
     return await insights_service.get_lead_insights(db, lead, timeline)
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.put(
     "/{lead_id}/consultations/{consultation_id}", response_model=schemas.Consultation
 )
@@ -451,6 +464,7 @@ async def update_a_consultation(
     return result
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.delete(
     "/{lead_id}/consultations/{consultation_id}", status_code=status.HTTP_204_NO_CONTENT
 )
@@ -491,6 +505,7 @@ async def delete_a_consultation(
     return None
 
 
+@limiter.limit(RateLimits.DATA_EXPORT)  # 20/hour - Export operation
 @router.get("/export")
 async def export_leads(
     db: AsyncSession = Depends(database.get_db),
@@ -670,6 +685,7 @@ async def export_leads(
         }
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/import/template")
 async def download_import_template(
     format: str = Query("csv", description="Template format (csv or xlsx)"),
@@ -804,6 +820,7 @@ async def download_import_template(
         return {"error": f"Unsupported format '{format}'. Supported: csv, xlsx"}
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("/bulk-assign", status_code=status.HTTP_200_OK)
 async def bulk_assign_leads(
     bulk_assign_data: schemas.BulkAssignLeadsSchema,
@@ -859,6 +876,7 @@ async def bulk_assign_leads(
     return result
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("/import", response_model=schemas.LeadImportResult)
 async def officer_import_leads(
     file: UploadFile = File(

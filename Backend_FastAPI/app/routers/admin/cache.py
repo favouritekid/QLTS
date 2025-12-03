@@ -5,6 +5,7 @@ Admin Cache Management Router
 Provides endpoints for viewing and managing Redis cache.
 Only accessible by admins.
 """
+from app.core.rate_limits import limiter, RateLimits  # ✅ Rate limiting
 
 from typing import Optional, List
 from fastapi import APIRouter, Depends, Query, HTTPException
@@ -72,6 +73,7 @@ KNOWN_CACHE_PATTERNS = {
 # ENDPOINTS
 # =============================================================================
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/keys", response_model=List[CacheKeyInfo])
 async def list_cache_keys(
     current_admin: models.User = PermissionDep,
@@ -119,6 +121,7 @@ async def list_cache_keys(
         raise HTTPException(status_code=500, detail=f"Redis error: {str(e)}")
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/keys/{key:path}")
 async def get_cache_value(
     key: str,
@@ -167,6 +170,7 @@ async def get_cache_value(
         raise HTTPException(status_code=500, detail=f"Redis error: {str(e)}")
 
 
+@limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
 @router.delete("/keys/{key:path}")
 async def delete_cache_key(
     key: str,
@@ -194,6 +198,7 @@ async def delete_cache_key(
         raise HTTPException(status_code=500, detail=f"Redis error: {str(e)}")
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post("/clear", response_model=ClearCacheResponse)
 async def clear_cache_by_patterns(
     request: ClearCacheRequest,
@@ -233,6 +238,7 @@ async def clear_cache_by_patterns(
         raise HTTPException(status_code=500, detail=f"Redis error: {str(e)}")
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/stats", response_model=CacheStats)
 async def get_cache_stats(
     current_admin: models.User = PermissionDep,
@@ -255,6 +261,7 @@ async def get_cache_stats(
         raise HTTPException(status_code=500, detail=f"Redis error: {str(e)}")
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/patterns")
 async def get_known_patterns(
     current_admin: models.User = PermissionDep,
@@ -270,6 +277,7 @@ async def get_known_patterns(
     }
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post("/invalidate/organization")
 async def invalidate_organization_cache(
     current_admin: models.User = PermissionDep,
@@ -300,6 +308,7 @@ async def invalidate_organization_cache(
         raise HTTPException(status_code=500, detail=f"Redis error: {str(e)}")
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post("/invalidate/pipeline")
 async def invalidate_pipeline_cache(
     current_admin: models.User = PermissionDep,
@@ -330,6 +339,7 @@ async def invalidate_pipeline_cache(
         raise HTTPException(status_code=500, detail=f"Redis error: {str(e)}")
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post("/invalidate/config")
 async def invalidate_config_cache(
     current_admin: models.User = PermissionDep,

@@ -1,3 +1,4 @@
+from app.core.rate_limits import limiter, RateLimits
 # app/routers/sessions.py
 """
 API endpoints for managing user sessions.
@@ -19,6 +20,7 @@ log = structlog.get_logger(__name__)
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("", response_model=schemas.UserSessionListResponse)
 async def get_active_sessions(
     current_user: models.User = Depends(deps.get_current_user),
@@ -113,6 +115,7 @@ async def get_active_sessions(
         )
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_session(
     session_id: int,
@@ -179,6 +182,7 @@ async def revoke_session(
         )
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("/revoke-all", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_all_other_sessions(
     request_data: schemas.RevokeAllSessionsRequest,

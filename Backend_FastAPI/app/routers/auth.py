@@ -34,22 +34,9 @@ from ..database import (
     safe_redis_pipeline,
     safe_redis_set,
 )
-from ..ratelimit import RATE_LIMITS, limiter
+from ..core.rate_limits import limiter, RateLimits  # ✅ MIGRATED: Use new rate limits module
 from ..services import session_service, user_service
 from ..services.anomaly_detection import AnomalyDetector
-
-
-def no_limit(func):
-    return func
-
-
-limit_auth = (
-    limiter.limit(RATE_LIMITS["auth"]) if settings.APP_ENV != "test" else no_limit
-)
-limit_register = (
-    limiter.limit(RATE_LIMITS["auth"]) if settings.APP_ENV != "test" else no_limit
-)
-
 from ..utils.exceptions import InvalidToken
 
 router = APIRouter(tags=["Authentication"])
@@ -59,7 +46,7 @@ log = structlog.get_logger(__name__)
 @router.post(
     "/register", response_model=schemas.User, status_code=status.HTTP_201_CREATED
 )
-@limiter.limit(RATE_LIMITS["register"])  # ✅ Use stricter rate limit for registration
+@limiter.limit(RateLimits.AUTH_REGISTER)  # ✅ RATE LIMIT: 3/min - Stricter for registration (prevents enumeration)
 async def register_user(
     request: Request,
     user_in: schemas.UserCreate,
@@ -128,7 +115,7 @@ async def register_user(
 
 
 @router.post("/login")
-@limiter.limit(RATE_LIMITS["auth"])
+@limiter.limit(RateLimits.AUTH_LOGIN)  # ✅ RATE LIMIT: 5/min - Prevents brute force attacks
 async def login_for_access_token(
     request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
@@ -385,6 +372,7 @@ async def login_for_access_token(
 
 
 @router.post("/logout")
+@limiter.limit(RateLimits.DATA_WRITE)  # ✅ RATE LIMIT: 200/hour - Normal write operation
 async def logout(
     response: Response,
     refresh_token: str = Cookie(None, alias="refresh_token"),
@@ -487,6 +475,7 @@ async def logout(
 
 
 @router.get("/check-status")
+@limiter.limit(RateLimits.DATA_READ)  # ✅ RATE LIMIT: 1000/hour - Normal read operation
 async def check_session_status(
     current_user: models.User = Depends(deps.get_current_user),
     authorization: Annotated[str | None, Header()] = None,
@@ -534,7 +523,7 @@ async def check_session_status(
 
 
 @router.post("/forgot-password", status_code=status.HTTP_202_ACCEPTED)
-@limiter.limit(RATE_LIMITS["auth"])
+@limiter.limit(RateLimits.AUTH_PASSWORD_RESET)  # ✅ RATE LIMIT: 3/hour - Prevents password reset abuse
 async def request_password_reset(
     request: Request,
     forgot_data: schemas.ForgotPasswordSchema,
@@ -550,7 +539,7 @@ async def request_password_reset(
 
 
 @router.post("/reset-password", response_model=schemas.User)
-@limiter.limit(RATE_LIMITS["auth"])
+@limiter.limit(RateLimits.AUTH_PASSWORD_RESET)  # ✅ RATE LIMIT: 3/hour - Same as forgot-password
 async def perform_password_reset(
     request: Request,
     reset_data: schemas.ResetPasswordSchema,
@@ -639,6 +628,7 @@ async def perform_password_reset(
 
 
 @router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit(RateLimits.AUTH_PASSWORD_CHANGE)  # ✅ RATE LIMIT: 10/hour - Moderate for authenticated users
 async def perform_change_password(
     password_data: schemas.ChangePasswordSchema,
     db: AsyncSession = Depends(database.get_db),
@@ -694,6 +684,7 @@ async def perform_change_password(
 
 
 @router.post("/refresh")
+@limiter.limit(RateLimits.AUTH_REFRESH_TOKEN)  # ✅ RATE LIMIT: 20/hour - Higher for token refresh
 async def refresh_access_token(
     refresh_token: str = Cookie(None, alias="refresh_token"),
     db: AsyncSession = Depends(database.get_db),

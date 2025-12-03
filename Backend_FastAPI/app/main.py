@@ -31,7 +31,7 @@ from .config import settings
 from .database import engine as async_db_engine
 from .database import redis_client as main_redis_client
 from .database import safe_redis_ping
-from .ratelimit import limiter
+from .core.rate_limits import limiter  # ✅ MIGRATED: Use new centralized rate limits module
 from .utils.redis_lock import init_redis_client, close_redis_client
 from .routers import (
     admissions,  # ✅ NEW: Admission Profile workflow (replacement for applications)

@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import database, models, schemas
 from ..core import deps
 from ..services import activity_service, user_service
+from app.core.rate_limits import limiter, RateLimits
 
 router = APIRouter(tags=["Profile"])
 PermissionDep = Depends(deps.check_permission)
@@ -44,6 +45,7 @@ async def log_profile_activity(
     )
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("", response_model=schemas.User)
 async def read_current_user_profile(
     current_user: models.User = PermissionDep,  # <-- THAY ĐỔI
@@ -56,6 +58,7 @@ async def read_current_user_profile(
 
 
 # === HÀM ĐÃ ĐƯỢỢC CẬP NHẬT ===
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.put("", response_model=schemas.User)
 async def update_current_user_profile(
     request: Request,

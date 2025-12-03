@@ -3,10 +3,12 @@ from fastapi import APIRouter
 
 from .. import models, schemas
 from ..core import deps
+from app.core.rate_limits import limiter, RateLimits
 
 router = APIRouter(tags=["Users"])
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/me", response_model=schemas.User)
 async def read_users_me(current_user: models.User = deps.CurrentUser):
     """

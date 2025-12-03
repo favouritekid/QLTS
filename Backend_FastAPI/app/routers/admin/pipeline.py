@@ -13,6 +13,7 @@ Dependencies: pipeline_service, lead_service (from PHASE 1)
 
 Complexity: MEDIUM (state machine logic, workflow rules)
 """
+from app.core.rate_limits import limiter, RateLimits  # ✅ Rate limiting
 
 from typing import List, Optional
 
@@ -45,6 +46,7 @@ PermissionDep = Depends(deps.check_permission)
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get(
     "/pipeline-stages",
     response_model=List[schemas.PipelineStage],
@@ -60,6 +62,7 @@ async def get_all_pipeline_stages_list(
     return stages_data
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post(
     "/pipeline-stages",
     response_model=schemas.PipelineStage,
@@ -95,6 +98,7 @@ async def create_new_pipeline_stage(
     return result
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get(
     "/pipeline-stages/{stage_id}",
     response_model=schemas.PipelineStage,
@@ -108,6 +112,7 @@ async def get_pipeline_stage_details(
     return await pipeline_service.get_pipeline_stage(db, stage_id)
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.put(
     "/pipeline-stages/{stage_id}",
     response_model=schemas.PipelineStage,
@@ -143,6 +148,7 @@ async def update_existing_pipeline_stage(
     return result
 
 
+@limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
 @router.delete(
     "/pipeline-stages/{stage_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -182,6 +188,7 @@ async def delete_existing_pipeline_stage(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get(
     "/consultation-statuses",
     response_model=List[schemas.ConsultationStatus],
@@ -197,6 +204,7 @@ async def get_all_consultation_statuses_list(
     return statuses_data
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post(
     "/consultation-statuses",
     response_model=schemas.ConsultationStatus,
@@ -232,6 +240,7 @@ async def create_new_consultation_status(
     return result
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get(
     "/consultation-statuses/{status_id}",
     response_model=schemas.ConsultationStatus,
@@ -245,6 +254,7 @@ async def get_consultation_status_details(
     return await pipeline_service.get_consultation_status(db, status_id)
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.put(
     "/consultation-statuses/{status_id}",
     response_model=schemas.ConsultationStatus,
@@ -280,6 +290,7 @@ async def update_existing_consultation_status(
     return result
 
 
+@limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
 @router.delete(
     "/consultation-statuses/{status_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -319,6 +330,7 @@ async def delete_existing_consultation_status(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get(
     "/allowed-transitions",
     response_model=List[schemas.AllowedTransition],
@@ -332,6 +344,7 @@ async def get_all_allowed_transitions(
     return transitions
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post(
     "/allowed-transitions",
     response_model=schemas.AllowedTransition,
@@ -346,6 +359,7 @@ async def create_new_allowed_transition(
     return await pipeline_service.create_allowed_transition(db, transition_in, current_user=current_admin)
 
 
+@limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
 @router.delete(
     "/allowed-transitions/{transition_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -365,6 +379,7 @@ async def delete_existing_allowed_transition(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post(
     "/leads/{lead_id}/revert-status",
     response_model=schemas.Lead,

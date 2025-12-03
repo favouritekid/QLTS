@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import database, schemas
 from ..core import deps
 from ..services import organization_service
+from app.core.rate_limits import limiter, RateLimits
 
 router = APIRouter(tags=["Organization"])
 
@@ -14,12 +15,14 @@ router = APIRouter(tags=["Organization"])
 PermissionDep = Depends(deps.check_permission)
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/organization-unit-types", response_model=List[str])
 async def get_organization_unit_types():
     """Lấy danh sách các loại đơn vị tổ chức cho phép."""
     return schemas.OrganizationUnitType.values()
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/organization-units", response_model=List[schemas.OrganizationUnit])
 async def get_all_organization_units(
     db: AsyncSession = Depends(database.get_db),
@@ -29,6 +32,7 @@ async def get_all_organization_units(
     return await organization_service.get_all_organization_units(db)
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/organization-units/tree-with-aggregation", response_model=List[schemas.OrganizationTreeNodeWithAggregation])
 async def get_organization_tree_with_aggregation(
     academic_year: Optional[int] = None,
@@ -53,6 +57,7 @@ async def get_organization_tree_with_aggregation(
     )
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/programs", response_model=List[schemas.MajorProgram])
 async def get_filtered_programs(
     unitId: int,
@@ -78,6 +83,7 @@ async def get_filtered_programs(
 # PROGRAM OFFERING (Level 2) ENDPOINTS
 # -----------------------------------------------------------------------------
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/programs/{program_id}/offerings", response_model=List[schemas.ProgramOffering])
 async def get_program_offerings(
     program_id: int,
@@ -99,6 +105,7 @@ async def get_program_offerings(
 # OFFERING ACADEMIC INFO (Level 3) ENDPOINTS - Year-Versioned Data
 # -----------------------------------------------------------------------------
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/offerings/{offering_id}/academic-info", response_model=List[schemas.OfferingAcademicInfo])
 async def get_offering_academic_history(
     offering_id: int,
@@ -119,6 +126,7 @@ async def get_offering_academic_history(
     )
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/offerings/{offering_id}/academic-info/{year}", response_model=schemas.OfferingAcademicInfo)
 async def get_offering_academic_info_by_year(
     offering_id: int,
@@ -142,6 +150,7 @@ async def get_offering_academic_info_by_year(
     return info
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/offerings/{offering_id}/academic-info/current", response_model=schemas.OfferingAcademicInfo)
 async def get_offering_current_academic_info(
     offering_id: int,
@@ -163,6 +172,7 @@ async def get_offering_current_academic_info(
     return info
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("/offerings/{offering_id}/academic-info", response_model=schemas.OfferingAcademicInfo)
 async def create_offering_academic_info(
     offering_id: int,
@@ -188,6 +198,7 @@ async def create_offering_academic_info(
     )
 
 # Thêm vào cuối file hoặc gần các API Offerings
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/program-offerings", response_model=List[schemas.ProgramOffering])
 async def get_all_program_offerings(
     is_active: Optional[bool] = None,
@@ -216,6 +227,7 @@ async def get_all_program_offerings(
     result = await db.execute(query)
     return result.scalars().all()
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.patch("/academic-info/{academic_info_id}", response_model=schemas.OfferingAcademicInfo)
 async def update_offering_academic_info(
     academic_info_id: int,
@@ -237,6 +249,7 @@ async def update_offering_academic_info(
     )
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.delete("/academic-info/{academic_info_id}", status_code=204)
 async def delete_offering_academic_info(
     academic_info_id: int,

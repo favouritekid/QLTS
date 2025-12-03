@@ -12,6 +12,7 @@ Dependencies: organization_service (from PHASE 1)
 
 Complexity: MEDIUM (hierarchical CRUD, 3-tier architecture)
 """
+from app.core.rate_limits import limiter, RateLimits  # ✅ Rate limiting
 
 import structlog
 from fastapi import (
@@ -40,6 +41,7 @@ PermissionDep = Depends(deps.check_permission)
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post(
     "/organization-units",
     response_model=schemas.OrganizationUnit,
@@ -54,6 +56,7 @@ async def create_new_organization_unit(
     return await organization_service.create_organization_unit(db, unit_in)
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get(
     "/organization-units/{unit_id}",
     response_model=schemas.OrganizationUnit,
@@ -85,6 +88,7 @@ async def get_organization_unit_details(
     return unit
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.put(
     "/organization-units/{unit_id}",
     response_model=schemas.OrganizationUnit,
@@ -109,6 +113,7 @@ async def update_existing_organization_unit(
     return await organization_service.update_organization_unit(db, unit.id, unit_in)
 
 
+@limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
 @router.delete(
     "/organization-units/{unit_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -148,6 +153,7 @@ async def delete_existing_organization_unit(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post(
     "/programs",
     response_model=schemas.MajorProgram,
@@ -162,6 +168,7 @@ async def create_new_program(
     return await organization_service.create_major_program(db, program_in)
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get(
     "/programs/{program_id}",
     response_model=schemas.MajorProgram,
@@ -175,6 +182,7 @@ async def get_program_details(
     return await organization_service.get_major_program_by_id(db, program_id)
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.put(
     "/programs/{program_id}",
     response_model=schemas.MajorProgram,
@@ -189,6 +197,7 @@ async def update_existing_program(
     return await organization_service.update_major_program(db, program_id, program_in)
 
 
+@limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
 @router.delete(
     "/programs/{program_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -208,6 +217,7 @@ async def delete_existing_program(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post(
     "/programs/{program_id}/offerings",
     response_model=schemas.ProgramOffering,
@@ -227,6 +237,7 @@ async def create_new_offering(
     return await organization_service.create_program_offering(db, offering_in)
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get(
     "/offerings/{offering_id}",
     response_model=schemas.ProgramOffering,
@@ -240,6 +251,7 @@ async def get_offering_details(
     return await organization_service.get_program_offering_by_id(db, offering_id)
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.put(
     "/offerings/{offering_id}",
     response_model=schemas.ProgramOffering,
@@ -254,6 +266,7 @@ async def update_existing_offering(
     return await organization_service.update_program_offering(db, offering_id, offering_in)
 
 
+@limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
 @router.delete(
     "/offerings/{offering_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -273,6 +286,7 @@ async def delete_existing_offering(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post(
     "/offerings/{offering_id}/academic-info",
     response_model=schemas.OfferingAcademicInfo,
@@ -301,6 +315,7 @@ async def create_new_academic_info(
     )
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.patch(
     "/academic-info/{academic_info_id}",
     response_model=schemas.OfferingAcademicInfo,
@@ -325,6 +340,7 @@ async def update_existing_academic_info(
     )
 
 
+@limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
 @router.delete(
     "/academic-info/{academic_info_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -345,6 +361,7 @@ async def delete_existing_academic_info(
     return None
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post(
     "/academic-info/{academic_info_id}/restore",
     response_model=schemas.OfferingAcademicInfo,

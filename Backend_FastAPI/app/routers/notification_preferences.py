@@ -1,3 +1,4 @@
+from app.core.rate_limits import limiter, RateLimits
 # app/routers/notification_preferences.py
 """
 Notification Preferences Router - API endpoints for managing notification preferences.
@@ -66,6 +67,7 @@ class UpdateGroupPreferenceRequest(BaseModel):
 # EXISTING ENDPOINTS (Backward Compatible)
 # =============================================================================
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/preferences", response_model=schemas.NotificationPreference)
 async def get_notification_preferences(
     db: AsyncSession = Depends(database.get_db),
@@ -79,6 +81,7 @@ async def get_notification_preferences(
     return preference
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.put("/preferences", response_model=schemas.NotificationPreference)
 async def update_notification_preferences(
     preference_update: schemas.NotificationPreferenceUpdate,
@@ -103,6 +106,7 @@ async def update_notification_preferences(
 # NEW ENDPOINTS FOR EVENT GROUPS
 # =============================================================================
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/event-groups", response_model=EventGroupPreferencesResponse)
 async def get_event_group_preferences(
     db: AsyncSession = Depends(database.get_db),
@@ -138,6 +142,7 @@ async def get_event_group_preferences(
     )
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.patch("/event-groups")
 async def update_event_group_preference(
     request: UpdateGroupPreferenceRequest,
@@ -200,6 +205,7 @@ async def update_event_group_preference(
     }
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/event-groups/metadata", response_model=List[EventGroupInfo])
 async def get_event_groups_metadata(
     current_user: models.User = PermissionDep,
