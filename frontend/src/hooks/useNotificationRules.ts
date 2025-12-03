@@ -50,7 +50,10 @@ interface UseNotificationRulesParams {
 /**
  * Hook to fetch paginated list of notification rules (admin only)
  */
-export function useNotificationRules(params: UseNotificationRulesParams = {}) {
+export function useNotificationRules(
+  params: UseNotificationRulesParams = {},
+  options?: { initialData?: NotificationRulesPage }
+) {
   const { page = 1, page_size = 50, event, enabled } = params;
 
   return useQuery<NotificationRulesPage, AxiosError<ApiErrorResponse>>({
@@ -64,6 +67,7 @@ export function useNotificationRules(params: UseNotificationRulesParams = {}) {
       );
       return response.data;
     },
+    initialData: options?.initialData,
     staleTime: 5 * 60 * 1000, // 5 minutes
     gcTime: 10 * 60 * 1000, // 10 minutes
   });

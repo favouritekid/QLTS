@@ -337,6 +337,27 @@ const admin = {
     }): Promise<any> {
       return serverFetch<any>('/api/admin/config', { params });
     },
+
+    /**
+     * Get degree levels
+     */
+    async getDegreeLevels(params?: { active_only?: boolean }): Promise<any> {
+      return serverFetch<any>('/api/admin/degree-levels', { params });
+    },
+
+    /**
+     * Get offering types
+     */
+    async getOfferingTypes(params?: { active_only?: boolean }): Promise<any> {
+      return serverFetch<any>('/api/admin/offering-types', { params });
+    },
+
+    /**
+     * Get document types
+     */
+    async getDocumentTypes(params?: { active_only?: boolean }): Promise<any> {
+      return serverFetch<any>('/api/admin/document-types', { params });
+    },
   },
 
   /**

@@ -49,9 +49,12 @@ interface UseNotificationTemplatesParams {
 
 /**
  * Hook to fetch paginated list of notification templates (admin only)
+ *
+ * ✅ PHASE 1 - WEEK 2: Support initialData from Server Components
  */
 export function useNotificationTemplates(
-  params: UseNotificationTemplatesParams = {}
+  params: UseNotificationTemplatesParams = {},
+  options?: { initialData?: NotificationTemplatesPage }
 ) {
   const { page = 1, page_size = 50, category, is_system, search } = params;
 
@@ -74,6 +77,7 @@ export function useNotificationTemplates(
     },
     staleTime: 5 * 60 * 1000, // 5 minutes
     gcTime: 10 * 60 * 1000, // 10 minutes
+    initialData: options?.initialData, // ✅ Use initialData from Server Component
   });
 }
 

@@ -73,7 +73,11 @@ const CATEGORIES = [
   { value: "system", label: "System" },
 ];
 
-export function TemplateList() {
+interface TemplateListProps {
+  initialData?: any; // ✅ PHASE 1 - WEEK 2: Accept initialData from server
+}
+
+export function TemplateList({ initialData }: TemplateListProps) {
   const [page] = useState(1); // TODO: Implement pagination
   const [category, setCategory] = useState<string>("all");
   const [isSystem, setIsSystem] = useState<string>("all");
@@ -82,14 +86,23 @@ export function TemplateList() {
   const [formOpen, setFormOpen] = useState(false);
   const [editingTemplateId, setEditingTemplateId] = useState<number | undefined>(undefined);
 
-  // Fetch templates
-  const { data, isLoading, error } = useNotificationTemplates({
-    page,
-    page_size: 50,
-    category: category === "all" ? undefined : category,
-    is_system: isSystem === "all" ? undefined : isSystem === "true",
-    search: search || undefined,
-  });
+  // Fetch templates (with initialData from server)
+  const { data, isLoading, error } = useNotificationTemplates(
+    {
+      page,
+      page_size: 50,
+      category: category === "all" ? undefined : category,
+      is_system: isSystem === "all" ? undefined : isSystem === "true",
+      search: search || undefined,
+    },
+    {
+      // ✅ Use initialData only when no filters applied
+      initialData:
+        page === 1 && category === "all" && isSystem === "all" && !search
+          ? initialData
+          : undefined,
+    }
+  );
 
   // Delete mutation
   const deleteMutation = useDeleteNotificationTemplate();
