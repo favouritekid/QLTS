@@ -1,6 +1,6 @@
 # app/services/activity_service.py
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # ✅ PHASE 1: Removed FastAPI Request import (protocol-independent)
 from sqlalchemy import and_, desc, func, select
@@ -21,9 +21,12 @@ async def log_activity(
     changes: Optional[Dict[str, Any]] = None,
     ip_address: Optional[str] = None,
     user_agent: Optional[str] = None,
-) -> models.UserActivityLog:
+) -> Tuple[models.UserActivityLog, Callable]:
     """
     Create a new activity log entry.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
 
     Args:
         db: Database session
@@ -38,7 +41,7 @@ async def log_activity(
         user_agent: User agent string
 
     Returns:
-        The created UserActivityLog instance
+        Tuple of (activity_log, post_commit_callback)
     """
     activity_log = models.UserActivityLog(
         actor_id=actor_id,
@@ -53,10 +56,17 @@ async def log_activity(
     )
 
     db.add(activity_log)
-    await db.commit()
+
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
     await db.refresh(activity_log)
 
-    return activity_log
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        pass  # No post-commit actions needed for activity logs
+
+    return activity_log, _post_commit
 
 
 # ✅ PHASE 1: Removed log_activity_from_request() - routers should extract IP/UA
