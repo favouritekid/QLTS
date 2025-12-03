@@ -14,6 +14,7 @@ Endpoints:
 
 IMPORTANT: These are ALIASES only. The actual implementation is in users.py.
 """
+from app.core.rate_limits import limiter, RateLimits  # ✅ Rate limiting
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +29,7 @@ PermissionDep = Depends(deps.check_permission)
 router = APIRouter(prefix="/sync", tags=["Admin - Sync (Aliases)"])
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/status")
 async def get_sync_status_alias(
     request: Request,
@@ -49,6 +51,7 @@ async def get_sync_status_alias(
     return await users.get_sync_status(request, db, current_admin)
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post("")
 async def sync_users_alias(
     request: Request,

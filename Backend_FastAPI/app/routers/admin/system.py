@@ -8,6 +8,7 @@ Handles system-wide operations including:
 
 Created: 2025-12-02 for NOTIFICATION 2.0 dispatch events
 """
+from app.core.rate_limits import limiter, RateLimits  # ✅ Rate limiting
 
 from typing import Optional
 from datetime import datetime
@@ -39,6 +40,7 @@ PermissionDep = Depends(deps.check_permission)
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post(
     "/system/alert",
     status_code=status.HTTP_201_CREATED,
@@ -123,6 +125,7 @@ async def create_system_alert(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post(
     "/system/announcement",
     status_code=status.HTTP_201_CREATED,

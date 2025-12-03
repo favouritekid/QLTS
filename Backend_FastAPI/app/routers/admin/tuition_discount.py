@@ -6,6 +6,7 @@ Quản lý chính sách ưu đãi học phí:
 - CRUD operations cho chính sách
 - Tính toán ưu đãi cho sinh viên
 """
+from app.core.rate_limits import limiter, RateLimits  # ✅ Rate limiting
 from typing import Optional
 
 import structlog
@@ -29,6 +30,7 @@ PermissionDep = Depends(deps.check_permission)
 # CRUD ENDPOINTS
 # =============================================================================
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get(
     "/tuition-discount-policies",
     response_model=schemas.TuitionDiscountPolicyListResponse,
@@ -82,6 +84,7 @@ async def list_policies(
     )
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get(
     "/tuition-discount-policies/{policy_id}",
     response_model=schemas.TuitionDiscountPolicy,
@@ -110,6 +113,7 @@ async def get_policy(
     return schemas.TuitionDiscountPolicy.model_validate(policy_dict)
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post(
     "/tuition-discount-policies",
     response_model=schemas.TuitionDiscountPolicy,
@@ -165,6 +169,7 @@ async def create_policy(
         )
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.put(
     "/tuition-discount-policies/{policy_id}",
     response_model=schemas.TuitionDiscountPolicy,
@@ -202,6 +207,7 @@ async def update_policy(
     return schemas.TuitionDiscountPolicy.model_validate(policy_dict)
 
 
+@limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
 @router.delete(
     "/tuition-discount-policies/{policy_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -237,6 +243,7 @@ async def delete_policy(
 # DISCOUNT CALCULATION ENDPOINT
 # =============================================================================
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post(
     "/tuition-discount-policies/calculate",
     response_model=schemas.DiscountCalculationResponse,

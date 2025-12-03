@@ -52,6 +52,7 @@ from app.utils.exceptions import (
 )
 from app.socket_manager import sio
 from app.socket_metrics import socket_events_emitted_total
+from app.core.rate_limits import limiter, RateLimits  # ✅ Rate limiting
 
 log = structlog.get_logger(__name__)
 
@@ -133,6 +134,7 @@ async def emit_policy_update(operation: str, data: dict):
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/policies", response_model=List[List[str]])
 async def get_all_policies(
     request: Request, current_admin: models.User = PermissionDep
@@ -147,6 +149,7 @@ async def get_all_policies(
 
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post("/policies", status_code=status.HTTP_201_CREATED)
 async def add_new_policy(
     policy_in: PolicyCreate,
@@ -214,6 +217,7 @@ async def add_new_policy(
 
 
 
+@limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
 @router.delete("/policies", status_code=status.HTTP_200_OK)
 async def delete_policy(
     policy_in: PolicyCreate,
@@ -303,6 +307,7 @@ async def delete_policy(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post("/assign", status_code=status.HTTP_201_CREATED)
 async def assign_role_to_user(
     assignment: RoleAssignment,
@@ -327,6 +332,7 @@ async def assign_role_to_user(
 
 
 
+@limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
 @router.delete("/revoke")
 async def remove_role_from_user(
     assignment: RoleAssignment,
@@ -353,6 +359,7 @@ async def remove_role_from_user(
 
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/users/{user_id}/roles")
 async def get_user_roles(
     user_id: int,
@@ -371,6 +378,7 @@ async def get_user_roles(
 
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/{role_name}/users")
 async def get_role_users(
     role_name: str,
@@ -433,6 +441,7 @@ async def get_role_users(
 
 
 
+@limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
 @router.delete("/{role_name}/users")
 async def remove_role_from_users(
     request: Request,
@@ -477,6 +486,7 @@ async def remove_role_from_users(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post("/grouping-policies", status_code=status.HTTP_201_CREATED)
 async def add_grouping_policy(
     grouping: GroupingPolicyCreate,
@@ -544,6 +554,7 @@ async def add_grouping_policy(
 
 
 
+@limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
 @router.delete("/grouping-policies")
 async def delete_grouping_policy(
     grouping: GroupingPolicyCreate,
@@ -610,6 +621,7 @@ async def delete_grouping_policy(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("")
 async def get_all_roles_with_info(
     request: Request,
@@ -635,6 +647,7 @@ async def get_all_roles_with_info(
 
 
 
+@limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
 @router.delete("/{role_name}")
 async def delete_role_atomic(
     role_name: str,
@@ -821,6 +834,7 @@ async def delete_role_atomic(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/templates")
 async def get_policy_templates(
     request: Request,
@@ -856,6 +870,7 @@ async def get_policy_templates(
 
 
 
+@limiter.limit(RateLimits.ADMIN_BULK)  # 10/hour - Bulk operation
 @router.post("/templates/apply")
 async def apply_template_to_role(
     request: Request,
@@ -909,6 +924,7 @@ async def apply_template_to_role(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_BULK)  # 10/hour - Bulk operation
 @router.post("/policies/batch")
 async def add_policies_batch(
     request: Request,
@@ -986,6 +1002,7 @@ async def add_policies_batch(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post("/policies/validate")
 async def validate_policy_operation(
     request: Request,
@@ -1033,6 +1050,7 @@ async def validate_policy_operation(
 
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post("/permissions/simulate")
 async def simulate_permission(
     request: Request,
@@ -1090,6 +1108,7 @@ async def simulate_permission(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/policies/statistics")
 async def get_policy_statistics(
     request: Request,
@@ -1115,6 +1134,7 @@ async def get_policy_statistics(
 
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/policies/suggestions")
 async def get_policy_suggestions(
     request: Request,
@@ -1157,6 +1177,7 @@ async def get_policy_suggestions(
 
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/{role_name}/permissions/explain")
 async def explain_role_permissions(
     request: Request,
@@ -1287,6 +1308,7 @@ async def explain_role_permissions(
 
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post("/permissions/who-can-access")
 async def who_can_access_resource(
     request: Request,
@@ -1385,6 +1407,7 @@ async def who_can_access_resource(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/{role_name}/features")
 async def get_role_features(
     request: Request,
@@ -1454,6 +1477,7 @@ async def get_role_features(
 
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post("/{role_name}/features/toggle")
 async def toggle_role_feature(
     request: Request,
@@ -1544,7 +1568,6 @@ async def toggle_role_feature(
         )
 
     return result
-
 
 
 

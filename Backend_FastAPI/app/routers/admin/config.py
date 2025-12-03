@@ -11,6 +11,7 @@ Dependencies: config_service (from PHASE 1)
 
 Complexity: LOW (simple CRUD operations)
 """
+from app.core.rate_limits import limiter, RateLimits  # ✅ Rate limiting
 
 from typing import List
 
@@ -40,6 +41,7 @@ PermissionDep = Depends(deps.check_permission)
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get(
     "/assignment-config/{unit_id}",
     response_model=schemas.AssignmentConfig,
@@ -54,6 +56,7 @@ async def get_assignment_config_route(
     return {"params": params}
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.put(
     "/assignment-config/{unit_id}",
     response_model=schemas.AssignmentConfig,
@@ -77,6 +80,7 @@ async def update_assignment_config_route(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get(
     "/skill-rules",
     response_model=List[schemas.SkillRule],
@@ -89,6 +93,7 @@ async def get_all_skill_rules_route(
     return await config_service.get_all_skill_rules(db)
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post(
     "/skill-rules",
     response_model=schemas.SkillRule,
@@ -103,6 +108,7 @@ async def create_new_skill_rule_route(
     return await config_service.create_skill_rule(db, rule_in)
 
 
+@limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
 @router.delete(
     "/skill-rules/{rule_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -122,6 +128,7 @@ async def delete_skill_rule_route(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/distribution/{offering_id}/stats")
 async def get_distribution_stats(
     offering_id: int,
@@ -177,6 +184,7 @@ async def get_distribution_stats(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get(
     "/distribution-rules",
     response_model=List[schemas.DistributionRuleResponse],
@@ -204,6 +212,7 @@ async def list_distribution_rules(
     return await config_service.get_distribution_rules_by_units(db, managed_units)
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post(
     "/distribution-rules",
     response_model=schemas.DistributionRuleResponse,
@@ -236,6 +245,7 @@ async def create_distribution_rule(
     return await config_service.create_distribution_rule(db, rule_in)
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.put(
     "/distribution-rules/{rule_id}",
     response_model=schemas.DistributionRuleResponse,
@@ -266,6 +276,7 @@ async def update_distribution_rule(
     return await config_service.update_distribution_rule(db, rule.id, rule_in)
 
 
+@limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
 @router.delete(
     "/distribution-rules/{rule_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -302,6 +313,7 @@ async def delete_distribution_rule(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get(
     "/degree-levels",
     response_model=List[schemas.ConfigDegreeLevel],
@@ -320,6 +332,7 @@ async def list_degree_levels(
     return await config_service.get_degree_levels(db, active_only)
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post(
     "/degree-levels",
     response_model=schemas.ConfigDegreeLevel,
@@ -334,6 +347,7 @@ async def create_degree_level(
     return await config_service.create_degree_level(db, level_in)
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.put(
     "/degree-levels/{level_id}",
     response_model=schemas.ConfigDegreeLevel,
@@ -348,6 +362,7 @@ async def update_degree_level(
     return await config_service.update_degree_level(db, level_id, level_in)
 
 
+@limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
 @router.delete(
     "/degree-levels/{level_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -367,6 +382,7 @@ async def delete_degree_level(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get(
     "/offering-types",
     response_model=List[schemas.ConfigOfferingType],
@@ -385,6 +401,7 @@ async def list_offering_types(
     return await config_service.get_offering_types(db, active_only)
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post(
     "/offering-types",
     response_model=schemas.ConfigOfferingType,
@@ -399,6 +416,7 @@ async def create_offering_type(
     return await config_service.create_offering_type(db, type_in)
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.put(
     "/offering-types/{type_id}",
     response_model=schemas.ConfigOfferingType,
@@ -413,6 +431,7 @@ async def update_offering_type(
     return await config_service.update_offering_type(db, type_id, type_in)
 
 
+@limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
 @router.delete(
     "/offering-types/{type_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -432,6 +451,7 @@ async def delete_offering_type(
 # ============================================================================
 
 
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get(
     "/document-types",
     response_model=List[schemas.ConfigDocumentType],
@@ -450,6 +470,7 @@ async def list_document_types(
     return await config_service.get_document_types(db, active_only)
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post(
     "/document-types",
     response_model=schemas.ConfigDocumentType,
@@ -464,6 +485,7 @@ async def create_document_type(
     return await config_service.create_document_type(db, type_in)
 
 
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.put(
     "/document-types/{type_id}",
     response_model=schemas.ConfigDocumentType,
@@ -478,6 +500,7 @@ async def update_document_type(
     return await config_service.update_document_type(db, type_id, type_in)
 
 
+@limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
 @router.delete(
     "/document-types/{type_id}",
     status_code=status.HTTP_204_NO_CONTENT,
