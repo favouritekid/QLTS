@@ -6,7 +6,7 @@ from pathlib import Path  # 👈 *** THÊM IMPORT NÀY ***
 import aiofiles
 import magic
 import structlog
-from fastapi import HTTPException, UploadFile, status
+from fastapi import HTTPException, status
 
 from ..config import settings
 
@@ -22,36 +22,48 @@ UPLOAD_FOLDER = (
 # === KẾT THÚC SỬ DỤNG settings ===
 
 
-async def save_avatar(file: UploadFile, old_avatar_url: str = None) -> str:
+async def save_avatar(content: bytes, filename: str, old_avatar_url: str = None) -> str:
     """
-    Lưu file avatar một cách an toàn:
-    1. Kiểm tra extension.
-    2. Đọc file vào bộ nhớ.
-    3. Kiểm tra kích thước thật (size).
-    4. Kiểm tra nội dung (magic bytes/MIME type).
-    5. Tạo tên file duy nhất (UUID).
-    6. Kiểm tra Path Traversal.
-    7. Xóa file cũ (nếu có).
-    8. Lưu file mới.
+    ✅ REFACTORED: Service Layer Purity (Issue #3)
 
-    Trả về URL tương đối của file đã lưu.
-    Ném HTTPException nếu có lỗi.
+    Lưu file avatar một cách an toàn (pure Python types):
+    1. Kiểm tra extension từ filename.
+    2. Kiểm tra kích thước content.
+    3. Kiểm tra nội dung (magic bytes/MIME type).
+    4. Tạo tên file duy nhất (UUID).
+    5. Kiểm tra Path Traversal.
+    6. Xóa file cũ (nếu có).
+    7. Lưu file mới.
+
+    Args:
+        content: File content as bytes (đã được router đọc và validate size)
+        filename: Original filename (for extension validation and logging)
+        old_avatar_url: URL của avatar cũ để xóa (nếu có)
+
+    Returns:
+        URL tương đối của file đã lưu
+
+    Raises:
+        HTTPException: Nếu validation thất bại hoặc không save được file
+
+    IMPORTANT: Router phải validate file size TRƯỚC khi gọi function này
+    để tránh DoS attack (đọc 2GB file vào RAM).
     """
-    if not file or not file.filename:
+    if not filename:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="No file selected."
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No filename provided."
         )
 
     # 1. Kiểm tra extension (bước lọc cơ bản)
     file_extension = ""
-    if "." in file.filename:
+    if "." in filename:
         # Lấy phần sau dấu chấm cuối cùng
-        file_extension = file.filename.rsplit(".", 1)[-1].lower()
+        file_extension = filename.rsplit(".", 1)[-1].lower()
 
     if not file_extension or file_extension not in ALLOWED_EXTENSIONS:
         log.warning(
             "Upload rejected: Invalid file extension",
-            filename=file.filename,
+            filename=filename,
             ext=file_extension,
         )
         raise HTTPException(
@@ -59,52 +71,7 @@ async def save_avatar(file: UploadFile, old_avatar_url: str = None) -> str:
             detail=f"Unsupported file format. Allowed: {', '.join(sorted(list(ALLOWED_EXTENSIONS)))}.",
         )
 
-    # 2. Đọc file theo chunks để tránh DoS (Security Fix: CVSS 7.5 HIGH)
-    # OLD CODE: await file.read() - Đọc toàn bộ vào RAM trước khi check size
-    # NEW CODE: Đọc từng chunk 8KB, check size mỗi lần để reject sớm
-    try:
-        content_chunks = []
-        total_size = 0
-        CHUNK_SIZE = 8192  # 8KB chunks
-
-        while True:
-            chunk = await file.read(CHUNK_SIZE)
-            if not chunk:
-                break
-
-            total_size += len(chunk)
-
-            # ✅ SECURITY FIX: Check size NGAY sau mỗi chunk
-            # Attacker upload 2GB → Bị reject sau 5MB → Không crash server
-            if total_size > MAX_CONTENT_LENGTH:
-                log.warning(
-                    "Upload rejected: File size exceeded limit (detected during chunked read)",
-                    filename=file.filename,
-                    size=total_size,
-                    limit=MAX_CONTENT_LENGTH,
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-                    detail=f"File size cannot exceed {settings.MAX_AVATAR_SIZE_MB}MB.",
-                )
-
-            content_chunks.append(chunk)
-
-        # Gộp tất cả chunks lại
-        content = b''.join(content_chunks)
-
-    except HTTPException:
-        raise  # Re-raise HTTP exceptions (413, etc.)
-    except Exception as e:
-        log.error(
-            "Failed to read uploaded file content", filename=file.filename, error=str(e)
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Could not read file content.",
-        )
-
-    # 3. Kiểm tra kích thước thật của nội dung đã đọc (double-check)
+    # 2. Kiểm tra kích thước content (router đã validate nhưng double-check)
     if len(content) == 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file uploaded."
@@ -112,22 +79,22 @@ async def save_avatar(file: UploadFile, old_avatar_url: str = None) -> str:
     if len(content) > MAX_CONTENT_LENGTH:
         log.warning(
             "Upload rejected: File size exceeded limit",
-            filename=file.filename,
+            filename=filename,
             size=len(content),
             limit=MAX_CONTENT_LENGTH,
         )
         raise HTTPException(
-            status_code=status.HTTP_413_CONTENT_TOO_LARGE,  # <-- Thay đổi ở đây
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=f"File size cannot exceed {settings.MAX_AVATAR_SIZE_MB}MB.",
         )
 
-    # 4. Kiểm tra Magic Bytes (MIME type) - Bước bảo mật quan trọng nhất!
+    # 3. Kiểm tra Magic Bytes (MIME type) - Bước bảo mật quan trọng nhất!
     try:
         mime_type = magic.from_buffer(content, mime=True)
         if mime_type not in ALLOWED_MIME_TYPES:
             log.warning(
                 "Upload rejected: Invalid MIME type detected",
-                filename=file.filename,
+                filename=filename,
                 detected_mime=mime_type,
                 allowed_mimes=list(ALLOWED_MIME_TYPES),
             )
@@ -136,13 +103,13 @@ async def save_avatar(file: UploadFile, old_avatar_url: str = None) -> str:
                 # Không tiết lộ MIME type chi tiết cho client
                 detail=f"File content is not a valid image format. Allowed: {', '.join(sorted(list(ALLOWED_EXTENSIONS)))}.",
             )
-        log.debug("MIME type validated", filename=file.filename, mime_type=mime_type)
+        log.debug("MIME type validated", filename=filename, mime_type=mime_type)
     except HTTPException:
         raise  # Ném lại lỗi 400 từ check MIME
     except Exception as e:
         log.error(
             "Magic bytes check failed",
-            filename=file.filename,
+            filename=filename,
             error=str(e),
             exc_info=True,
         )
@@ -153,11 +120,11 @@ async def save_avatar(file: UploadFile, old_avatar_url: str = None) -> str:
 
     # --- Nếu tất cả kiểm tra đã qua ---
 
-    # 5. Tạo tên file mới duy nhất (an toàn)
+    # 4. Tạo tên file mới duy nhất (an toàn)
     unique_filename = f"{uuid.uuid4()}.{file_extension}"
     file_path = os.path.join(UPLOAD_FOLDER, unique_filename)
 
-    # 6. KIỂM TRA PATH TRAVERSAL (DEFENSE-IN-DEPTH)
+    # 5. KIỂM TRA PATH TRAVERSAL (DEFENSE-IN-DEPTH)
     try:
         # Lấy đường dẫn tuyệt đối, chuẩn hóa (resolve) mọi '..'
         # strict=True đảm bảo thư mục upload thực sự tồn tại (đã được tạo trong config.py)
@@ -173,7 +140,7 @@ async def save_avatar(file: UploadFile, old_avatar_url: str = None) -> str:
         ):
             log.critical(
                 "🚨 PATH TRAVERSAL ATTEMPT DETECTED!",
-                filename=file.filename,  # Log tên file gốc để điều tra
+                filename=filename,  # ✅ FIXED: Use filename param
                 generated_path=file_path,
                 resolved_path=str(file_path_abs),
                 upload_dir=str(upload_folder_abs),
@@ -187,7 +154,7 @@ async def save_avatar(file: UploadFile, old_avatar_url: str = None) -> str:
     except Exception as e:
         # Bắt lỗi nếu resolve path thất bại (vd: tên file chứa ký tự không hợp lệ)
         log.error(
-            "Path validation/resolution failed", filename=file.filename, error=str(e)
+            "Path validation/resolution failed", filename=filename, error=str(e)  # ✅ FIXED
         )
         raise HTTPException(
             status_code=400, detail="Invalid characters in filename or path."

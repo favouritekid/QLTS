@@ -5,7 +5,9 @@ from typing import AsyncGenerator
 import structlog
 from typing import Any, Callable, Dict, List, Optional, Tuple  # ✅ ADD Callable for transaction pattern
 from datetime import datetime, timezone
-from fastapi import UploadFile
+# ✅ REMOVED: UploadFile import (Issue #3 - Service Layer Purity)
+# Service layer should only use pure Python types (bytes, str, int, etc.)
+# Router layer handles FastAPI-specific types (UploadFile, Request, etc.)
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -361,7 +363,8 @@ async def create_user_by_admin(
     db: AsyncSession,
     user_in: schemas.AdminUserCreate,
     enforcer: Optional[casbin.AsyncEnforcer] = None,
-    avatar_file: Optional[UploadFile] = None,
+    avatar_content: Optional[bytes] = None,  # ✅ REFACTORED: bytes instead of UploadFile
+    avatar_filename: Optional[str] = None,   # ✅ REFACTORED: filename for validation
     assigned_by_user_id: Optional[int] = None,  # ✅ PHASE 2: Add assigner tracking
 ) -> Tuple[models.User, Callable]:
     """
@@ -395,12 +398,16 @@ async def create_user_by_admin(
                 current_assignment_id=None,  # Will be set by helper function
             )
 
-            if avatar_file:
+            # ✅ REFACTORED: Use avatar_content + avatar_filename (Issue #3)
+            if avatar_content and avatar_filename:
                 log.debug(
                     "Processing avatar for new admin-created user",
-                    filename=avatar_file.filename,
+                    filename=avatar_filename,
                 )
-                new_avatar_url = await file_helpers.save_avatar(avatar_file)
+                new_avatar_url = await file_helpers.save_avatar(
+                    content=avatar_content,
+                    filename=avatar_filename
+                )
                 db_user.avatar_url = new_avatar_url
                 log.info(
                     "Avatar saved for new user",
@@ -608,7 +615,8 @@ async def update_user(
     db_user: models.User,
     user_in: schemas.UserUpdate,
     enforcer: Optional[casbin.AsyncEnforcer] = None,
-    avatar_file: Optional[UploadFile] = None,
+    avatar_content: Optional[bytes] = None,  # ✅ REFACTORED: bytes instead of UploadFile
+    avatar_filename: Optional[str] = None,   # ✅ REFACTORED: filename for validation
     assigned_by_user_id: Optional[int] = None,  # ✅ PHASE 2: Track who made the assignment
 ) -> Tuple[models.User, Callable]:
     """
@@ -669,14 +677,17 @@ async def update_user(
                 if field not in ["role", "unit_id"] and value is not None:
                     setattr(db_user, field, value)
 
-            if avatar_file:
+            # ✅ REFACTORED: Use avatar_content + avatar_filename (Issue #3)
+            if avatar_content and avatar_filename:
                 log.debug(
                     "Processing avatar update for user",
                     user_id=db_user.id,
-                    filename=avatar_file.filename,
+                    filename=avatar_filename,
                 )
                 new_avatar_url = await file_helpers.save_avatar(
-                    avatar_file, old_avatar_url=db_user.avatar_url
+                    content=avatar_content,
+                    filename=avatar_filename,
+                    old_avatar_url=db_user.avatar_url
                 )
                 db_user.avatar_url = new_avatar_url
                 log.info(
@@ -790,7 +801,8 @@ async def update_profile(
     db: AsyncSession,
     db_user: models.User,
     user_in: schemas.UserUpdate,
-    avatar_file: Optional[UploadFile] = None,
+    avatar_content: Optional[bytes] = None,  # ✅ REFACTORED: bytes instead of UploadFile
+    avatar_filename: Optional[str] = None,   # ✅ REFACTORED: filename for validation
 ) -> Tuple[models.User, Callable]:
     """
     Update user profile.
@@ -810,17 +822,20 @@ async def update_profile(
                 if value is not None:
                     setattr(db_user, field, value)
 
-        if avatar_file:
-            log.debug(  # ✅ SỬA LỖI: Xóa `await`
+        # ✅ REFACTORED: Use avatar_content + avatar_filename (Issue #3)
+        if avatar_content and avatar_filename:
+            log.debug(
                 "Processing profile avatar update",
                 user_id=user_id_for_logging,
-                filename=avatar_file.filename,
+                filename=avatar_filename,
             )
             new_avatar_url = await file_helpers.save_avatar(
-                avatar_file, old_avatar_url=db_user.avatar_url
+                content=avatar_content,
+                filename=avatar_filename,
+                old_avatar_url=db_user.avatar_url
             )
             db_user.avatar_url = new_avatar_url
-            log.info(  # ✅ SỬA LỖI: Xóa `await`
+            log.info(
                 "Profile avatar updated successfully",
                 user_id=user_id_for_logging,
                 url=new_avatar_url,
