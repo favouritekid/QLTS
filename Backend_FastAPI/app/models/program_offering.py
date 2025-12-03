@@ -16,6 +16,7 @@ from sqlalchemy import (
     Boolean, Column, ForeignKey, Integer, String, Text,
     UniqueConstraint
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from .base import Base
 
@@ -41,6 +42,13 @@ class ProgramOffering(Base):
         default=True,
         index=True,
         comment="Cờ Soft Delete"
+    )
+
+    # Admission Rules (for AdmissionProfile snapshot)
+    admission_rules = Column(
+        JSONB,
+        nullable=True,
+        comment="Admission rules JSON: {min_gpa, mandatory_docs[], admission_method}"
     )
 
     # Liên kết Nhiều-1 đến Cấp 1

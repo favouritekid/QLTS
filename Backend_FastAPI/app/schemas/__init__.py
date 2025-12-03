@@ -32,13 +32,31 @@ from .lead import (
     LeadsPage,
     LeadUpdate,
     TimelineItem,
-    # Application schemas (Hồ sơ Tuyển sinh)
+    # Application schemas (Hồ sơ Tuyển sinh - Legacy)
     Application,
     ApplicationBase,
     ApplicationCreate,
     ApplicationUpdate,
     ApplicationDocuments,
     ChecklistItem,
+)
+
+# --- Từ admission.py (NEW: Replacement for Application) ---
+from .admission import (
+    # Nested schemas
+    FamilyMemberSchema,
+    AcademicRecordSchema,
+    AdmissionScoreSchema,
+    DocumentItemSchema,
+    # AdmissionProfile schemas
+    AdmissionProfileCreate,
+    AdmissionProfileUpdate,
+    AdmissionProfileResponse,
+    AdmissionSubmitResponse,
+    EnrollStudentResponse,
+    # Student schemas
+    StudentDocumentResponse,
+    StudentResponse,
 )
 
 # --- Từ organization.py ---

@@ -76,6 +76,13 @@ class Lead(Base):
         uselist=False,
         cascade="all, delete-orphan",
     )
+    # NEW: AdmissionProfile (Replacement for Application)
+    admission_profile = relationship(
+        "AdmissionProfile",
+        back_populates="lead",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
     interactions = relationship(
         "CRMInteraction", back_populates="lead", cascade="all, delete-orphan"
     )
