@@ -129,6 +129,7 @@ async def update_existing_organization_unit(
     }
 )
 async def delete_existing_organization_unit(
+    request: Request,  # Required for rate limiter
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
     unit: models.OrganizationUnit = deps.OrgUnitAccessDep,
