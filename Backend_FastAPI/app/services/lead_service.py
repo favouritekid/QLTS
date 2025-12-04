@@ -363,112 +363,25 @@ async def get_leads(
     order: str = "desc",
 ) -> Tuple[int, List[models.Lead]]:
     """
-    Lấy danh sách Leads (List View) - Đã tối ưu hóa eager loading.
+    Lấy danh sách Leads (List View).
+
+    ✅ PHASE 2 - WEEK 2: Refactored to use LeadRepository
     """
+    from app.repositories import LeadRepository
 
-    # === Xây dựng query cơ bản ===
-    base_query = select(models.Lead)
-    count_query = select(func.count(models.Lead.id))  # Đếm dựa trên query gốc
-
-    # === Áp dụng filter ===
-    filters = []
-    # Filter out soft-deleted leads (always applied)
-    filters.append(models.Lead.deleted_at.is_(None))
-    if status:
-        statuses = [s.strip() for s in status.split(",") if s.strip()]
-        if statuses:
-            filters.append(models.Lead.status.in_(statuses))
-    if assigned_officer_id is not None:
-        filters.append(models.Lead.assigned_officer_id == assigned_officer_id)
-    if unit_id is not None:
-        filters.append(models.Lead.unit_id == unit_id)
-    if offering_id is not None:
-        filters.append(models.Lead.offering_id == offering_id)
-    if source:
-        sources = [s.strip() for s in source.split(",") if s.strip()]
-        if sources:
-            filters.append(models.Lead.source.in_(sources))
-
-    # === Áp dụng search ===
-    if search:
-        search_term = f"%{search.strip()}%"
-        search_conditions = or_(
-            models.Lead.full_name.ilike(search_term),
-            models.Lead.email.ilike(search_term),
-            models.Lead.phone.ilike(search_term),
-        )
-        filters.append(search_conditions)
-
-    # Áp dụng tất cả filters vào cả hai query
-    if filters:
-        base_query = base_query.where(*filters)
-        count_query = count_query.where(*filters)
-
-    # === Thực thi count query ===
-    total_count_result = await db.execute(count_query)
-    total_count = total_count_result.scalar_one_or_none() or 0
-
-    if total_count == 0:
-        return 0, []
-
-    # === Áp dụng sắp xếp (Bubble Up Logic) ===
-    # Priority sorting: Overdue/Today activities bubble up to top
-    now = datetime.now(timezone.utc)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
-
-    # Create priority weight using CASE statement:
-    # Priority 0: Overdue (next_activity_at <= now) - Most urgent
-    # Priority 1: Today (next_activity_at is today but not yet due)
-    # Priority 2: Future or NULL - Less urgent
-    activity_priority = case(
-        (models.Lead.next_activity_at <= now, 0),  # Overdue
-        (models.Lead.next_activity_at.between(today_start, today_end), 1),  # Today
-        else_=2  # Future or NULL
+    repo = LeadRepository(db)
+    return await repo.get_filtered(
+        skip=skip,
+        limit=limit,
+        status=status,
+        assigned_officer_id=assigned_officer_id,
+        unit_id=unit_id,
+        offering_id=offering_id,
+        source=source,
+        search=search,
+        sort_by=sort_by,
+        order=order,
     )
-
-    # Default sort with bubble-up: priority first, then by sort_column
-    sort_column = getattr(models.Lead, sort_by, models.Lead.created_at)
-
-    if order.lower() == "desc":
-        leads_query = base_query.order_by(
-            activity_priority.asc(),  # Always prioritize urgent items first
-            models.Lead.next_activity_at.asc().nullslast(),  # Oldest/most urgent first
-            sort_column.desc()
-        )
-    else:
-        leads_query = base_query.order_by(
-            activity_priority.asc(),  # Always prioritize urgent items first
-            models.Lead.next_activity_at.asc().nullslast(),  # Oldest/most urgent first
-            sort_column.asc()
-        )
-
-    # === Áp dụng eager loading tối ưu và pagination ===
-    leads_query = (
-        leads_query.options(
-            selectinload(models.Lead.offering).options(
-                selectinload(models.ProgramOffering.program)  # Eager load program for name display
-            ),
-            selectinload(models.Lead.unit).options(
-                selectinload(models.OrganizationUnit.parent),
-                selectinload(models.OrganizationUnit.major_programs),
-            ),
-            selectinload(models.Lead.assigned_officer),
-            selectinload(models.Lead.pipeline_stage),
-            selectinload(models.Lead.consultation_status),
-            selectinload(models.Lead.application).options(
-                selectinload(models.Application.officer)
-            ),  # Fix MissingGreenlet: Eager load application and its officer
-        )
-        .offset(skip)
-        .limit(limit)
-    )
-
-    # === Thực thi query lấy dữ liệu ===
-    leads_result = await db.execute(leads_query)
-    leads = leads_result.scalars().unique().all()
-
-    return total_count, leads
 
 
 async def create_lead(

@@ -44,7 +44,10 @@ interface ListPoliciesParams {
 /**
  * Hook lấy danh sách chính sách ưu đãi học phí
  */
-export function useTuitionDiscountPolicies(params: ListPoliciesParams = {}) {
+export function useTuitionDiscountPolicies(
+  params: ListPoliciesParams = {},
+  options?: { initialData?: TuitionDiscountPolicyListResponse }
+) {
   const { page = 1, pageSize = 20, isActive, includeExpired = false } = params;
 
   return useQuery({
@@ -63,6 +66,7 @@ export function useTuitionDiscountPolicies(params: ListPoliciesParams = {}) {
       );
       return response.data;
     },
+    initialData: options?.initialData, // ✅ PHASE 1 - WEEK 2 - DAY 3: Support SSR
   });
 }
 

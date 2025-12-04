@@ -105,10 +105,12 @@ export function useOrganizationUnits(initialData?: OrganizationUnit[]) {
  * Get organization tree with majors and aggregated statistics
  * @param academicYear - Academic year to fetch data for (defaults to current year)
  * @param includeInactive - Whether to include inactive units (default: false)
+ * @param options - Optional initialData for SSR
  */
 export function useOrganizationTreeWithAggregation(
   academicYear?: number,
-  includeInactive: boolean = false
+  includeInactive: boolean = false,
+  options?: { initialData?: OrganizationTreeNodeWithAggregation[] }
 ) {
   return useQuery<OrganizationTreeNodeWithAggregation[], AxiosError<ApiErrorResponse>>({
     queryKey: organizationKeys.treeWithAggregation(academicYear, includeInactive),
@@ -124,6 +126,7 @@ export function useOrganizationTreeWithAggregation(
       const response = await api.get<OrganizationTreeNodeWithAggregation[]>(url);
       return response.data;
     },
+    initialData: options?.initialData, // ✅ PHASE 1 - WEEK 2 - DAY 4: Support SSR
     staleTime: 1000 * 60 * 5, // 5 minutes (data can change)
     gcTime: 1000 * 60 * 10, // 10 minutes in cache
   });

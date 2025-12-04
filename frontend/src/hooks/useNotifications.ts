@@ -32,7 +32,10 @@ interface UseNotificationsParams {
   unread_only?: boolean;
 }
 
-export function useNotifications(params: UseNotificationsParams = {}) {
+export function useNotifications(
+  params: UseNotificationsParams = {},
+  options?: { initialData?: NotificationsPage }
+) {
   const { page = 1, page_size = 20, unread_only = false } = params;
 
   return useQuery<NotificationsPage, AxiosError<ApiErrorResponse>>({
@@ -46,6 +49,7 @@ export function useNotifications(params: UseNotificationsParams = {}) {
       );
       return response.data;
     },
+    initialData: options?.initialData, // ✅ PHASE 1 - WEEK 2 - DAY 6: Support SSR
     // ✅ PERFORMANCE FIX (v17): Remove polling - rely on Socket.IO for real-time updates
     // refetchInterval: 30000, // ❌ REMOVED - Socket.IO pushes notifications in real-time
     staleTime: Infinity, // Never mark as stale - Socket.IO will invalidate when needed

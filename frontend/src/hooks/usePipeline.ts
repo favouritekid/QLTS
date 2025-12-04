@@ -43,12 +43,16 @@ export const pipelineKeys = {
 /**
  * Get all pipeline stages (ordered)
  *
+ * ✅ PHASE 1 - WEEK 2: Support initialData from Server Components
+ *
  * @example
  * ```tsx
  * const { data: stages, isLoading } = usePipelineStages();
+ * // Or with initialData from server:
+ * const { data: stages } = usePipelineStages({ initialData: serverStages });
  * ```
  */
-export function usePipelineStages() {
+export function usePipelineStages(options?: { initialData?: PipelineStage[] }) {
   return useQuery<PipelineStage[], AxiosError<ApiErrorResponse>>({
     queryKey: pipelineKeys.stages(),
     queryFn: async () => {
@@ -56,6 +60,7 @@ export function usePipelineStages() {
     },
     staleTime: 1000 * 60 * 5, // 5 minutes (stages don't change frequently)
     gcTime: 1000 * 60 * 10, // 10 minutes in cache
+    initialData: options?.initialData, // ✅ Use initialData from Server Component
   });
 }
 
@@ -71,12 +76,16 @@ export function usePipelineStages() {
  * });
  * ```
  */
-export function useFullPipeline(params?: PipelineQueryParams) {
+export function useFullPipeline(
+  params?: PipelineQueryParams,
+  options?: { initialData?: FullPipeline }
+) {
   return useQuery<FullPipeline, AxiosError<ApiErrorResponse>>({
     queryKey: pipelineKeys.fullPipeline(params),
     queryFn: async () => {
       return await pipelineApi.getFullPipeline(params);
     },
+    initialData: options?.initialData, // ✅ PHASE 1 - WEEK 2 - DAY 5: Support SSR
     staleTime: 1000 * 30, // 30 seconds
     gcTime: 1000 * 60 * 5, // 5 minutes in cache
   });
@@ -141,12 +150,16 @@ export function usePipelineStats(params?: PipelineQueryParams) {
  * Get all consultation statuses
  * Uses public pipeline endpoint to allow officer access
  *
+ * ✅ PHASE 1 - WEEK 2: Support initialData from Server Components
+ *
  * @example
  * ```tsx
  * const { data: statuses } = useConsultationStatuses();
+ * // Or with initialData from server:
+ * const { data: statuses } = useConsultationStatuses({ initialData: serverStatuses });
  * ```
  */
-export function useConsultationStatuses() {
+export function useConsultationStatuses(options?: { initialData?: ConsultationStatus[] }) {
   return useQuery<ConsultationStatus[], AxiosError<ApiErrorResponse>>({
     queryKey: pipelineKeys.consultationStatuses(),
     queryFn: async () => {
@@ -161,6 +174,7 @@ export function useConsultationStatuses() {
     },
     staleTime: 1000 * 60 * 5, // 5 minutes
     gcTime: 1000 * 60 * 10, // 10 minutes in cache
+    initialData: options?.initialData, // ✅ Use initialData from Server Component
   });
 }
 

@@ -19,7 +19,15 @@ import type {
 } from "@/types/api.types";
 import { useEffect } from "react";
 import { AxiosError } from "axios";
-export function useAuth() {
+
+/**
+ * ✅ PHASE 1 - WEEK 3 - DAY 2: Added initialData support for SSR
+ */
+export interface UseAuthOptions {
+  initialData?: User;
+}
+
+export function useAuth(options?: UseAuthOptions) {
   const router = useRouter();
   const queryClient = useQueryClient();
 
@@ -142,6 +150,7 @@ export function useAuth() {
       return data;
     },
     enabled: isAuthenticated, // Only check if user is marked as authenticated
+    initialData: options?.initialData, // ✅ PHASE 1 - WEEK 3 - DAY 2: SSR support
     staleTime: 5 * 60 * 1000,
     gcTime: 15 * 60 * 1000,
     retry: 1,

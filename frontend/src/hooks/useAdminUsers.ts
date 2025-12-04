@@ -42,7 +42,13 @@ interface UseAdminUsersListParams {
   include_children?: boolean; // Include users from child units (hierarchical filter)
 }
 
-export function useAdminUsersList(params: UseAdminUsersListParams = {}) {
+/**
+ * ✅ PHASE 1 - WEEK 2: Support initialData from Server Components
+ */
+export function useAdminUsersList(
+  params: UseAdminUsersListParams = {},
+  options?: { initialData?: UsersPage }
+) {
   const { page = 1, page_size = 10, ...filters } = params;
 
   return useQuery<UsersPage, AxiosError<ApiErrorResponse>>({
@@ -57,6 +63,7 @@ export function useAdminUsersList(params: UseAdminUsersListParams = {}) {
     // Data is fetched once, then only refetched when Socket.IO invalidates the cache
     staleTime: Infinity, // Never mark as stale - real-time sync via Socket.IO
     gcTime: 10 * 60 * 1000, // Garbage collect after 10 minutes of inactivity
+    initialData: options?.initialData, // ✅ Use initialData from Server Component
   });
 }
 
@@ -64,7 +71,10 @@ export function useAdminUsersList(params: UseAdminUsersListParams = {}) {
 // 👤 GET USER DETAIL QUERY
 // ============================================
 
-export function useAdminUserDetail(userId: number | null) {
+export function useAdminUserDetail(
+  userId: number | null,
+  options?: { initialData?: User }
+) {
   return useQuery<User, AxiosError<ApiErrorResponse>>({
     queryKey: adminUsersKeys.detail(userId!),
     queryFn: async () => {
@@ -72,6 +82,7 @@ export function useAdminUserDetail(userId: number | null) {
       return response.data;
     },
     enabled: !!userId,
+    initialData: options?.initialData, // ✅ PHASE 1 - WEEK 2 - DAY 5: Support SSR
   });
 }
 

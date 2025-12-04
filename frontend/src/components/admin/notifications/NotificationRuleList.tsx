@@ -109,7 +109,11 @@ interface RuleGroup {
   rules: NotificationRule[];
 }
 
-export function NotificationRuleList() {
+interface NotificationRuleListProps {
+  initialData?: any; // ✅ PHASE 1 - WEEK 2: Accept initialData from server
+}
+
+export function NotificationRuleList({ initialData }: NotificationRuleListProps) {
   const [deleteRuleId, setDeleteRuleId] = useState<number | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [editingRuleId, setEditingRuleId] = useState<number | undefined>(undefined);
@@ -122,11 +126,17 @@ export function NotificationRuleList() {
   // Collapsed sections state
   const [collapsedSections, setCollapsedSections] = useState<Set<CategoryKey>>(new Set());
 
-  // Fetch rules (fetch all at once, filter client-side)
-  const { data, isLoading, error } = useNotificationRules({
-    page: 1,
-    page_size: 100, // Fetch all rules
-  });
+  // Fetch rules (fetch all at once, filter client-side) with initialData
+  const { data, isLoading, error } = useNotificationRules(
+    {
+      page: 1,
+      page_size: 100, // Fetch all rules
+    },
+    {
+      // ✅ Use initialData from server (no filters, so always use it)
+      initialData,
+    }
+  );
 
   // Toggle mutation
   const toggleMutation = useToggleNotificationRule();

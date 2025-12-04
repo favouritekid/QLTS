@@ -26,6 +26,7 @@ interface OrganizationTreeViewProps {
   academicYear?: number;
   includeInactive?: boolean;
   onNodeClick?: (node: OrganizationTreeNodeWithAggregation) => void;
+  initialData?: OrganizationTreeNodeWithAggregation[]; // ✅ PHASE 1 - WEEK 2 - DAY 4: Support SSR
 }
 
 /**
@@ -272,10 +273,13 @@ export function OrganizationTreeView({
   academicYear,
   includeInactive = false,
   onNodeClick,
+  initialData,
 }: OrganizationTreeViewProps) {
+  // ⚡ Use initialData from Server Component if available
   const { data: treeData, isLoading, error } = useOrganizationTreeWithAggregation(
     academicYear,
-    includeInactive
+    includeInactive,
+    { initialData }
   );
 
   // Calculate overall statistics

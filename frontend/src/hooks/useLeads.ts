@@ -42,17 +42,24 @@ export const leadsKeys = {
 /**
  * Get paginated leads list with optional filters
  *
+ * ✅ PHASE 1 - WEEK 1: Support initialData from Server Components
+ *
+ * @param params - Filter parameters
+ * @param options - Query options including initialData
+ *
  * @example
  * ```tsx
- * const { data, isLoading } = useLeads({
- *   page: 1,
- *   page_size: 20,
- *   status: 'new',
- *   search: 'John',
- * });
+ * // Client-side only
+ * const { data, isLoading } = useLeads({ page: 1 });
+ *
+ * // With initialData from Server Component
+ * const { data } = useLeads({ page: 1 }, { initialData });
  * ```
  */
-export function useLeads(params?: LeadListParams) {
+export function useLeads(
+  params?: LeadListParams,
+  options?: { initialData?: LeadsPage }
+) {
   return useQuery<LeadsPage, AxiosError<ApiErrorResponse>>({
     queryKey: leadsKeys.list(params),
     queryFn: async () => {
@@ -60,6 +67,7 @@ export function useLeads(params?: LeadListParams) {
     },
     staleTime: 1000 * 30, // 30 seconds
     gcTime: 1000 * 60 * 5, // 5 minutes in cache
+    initialData: options?.initialData, // ✅ Use initialData from Server Component
   });
 }
 
@@ -71,13 +79,18 @@ export function useLeads(params?: LeadListParams) {
  * const { data: lead, isLoading } = useLead(123);
  * ```
  */
-export function useLead(id: number, enabled: boolean = true) {
+export function useLead(
+  id: number,
+  enabled: boolean = true,
+  options?: { initialData?: Lead }
+) {
   return useQuery<Lead, AxiosError<ApiErrorResponse>>({
     queryKey: leadsKeys.detail(id),
     queryFn: async () => {
       return await leadsApi.getLead(id);
     },
     enabled: enabled && !!id,
+    initialData: options?.initialData, // ✅ PHASE 1 - WEEK 2 - DAY 5: Support SSR
     staleTime: 1000 * 60, // 1 minute
     gcTime: 1000 * 60 * 5, // 5 minutes in cache
   });
