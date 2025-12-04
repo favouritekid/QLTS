@@ -204,8 +204,8 @@ async def delete_cache_key(
 @limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post("/clear", response_model=ClearCacheResponse)
 async def clear_cache_by_patterns(
-    request: Request,
-    request: ClearCacheRequest,
+    request: Request,  # Required for rate limiter
+    body: ClearCacheRequest,  # Renamed from 'request' to avoid conflict
     current_admin: models.User = PermissionDep,
 ):
     """
@@ -221,7 +221,7 @@ async def clear_cache_by_patterns(
     deleted_keys = []
 
     try:
-        for pattern in request.patterns:
+        for pattern in body.patterns:  # Changed from request. to body.
             # Safety check - warn about auth keys
             if pattern in ["session:*", "blacklist:*", "*"]:
                 # Still allow but log warning

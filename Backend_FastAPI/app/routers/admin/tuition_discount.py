@@ -255,8 +255,8 @@ async def delete_policy(
     summary="Tính toán ưu đãi học phí",
 )
 async def calculate_discount(
-    request: Request,
-    request: schemas.DiscountCalculationRequest,
+    request: Request,  # Required for rate limiter
+    body: schemas.DiscountCalculationRequest,  # Renamed from 'request' to avoid conflict
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
 ):
@@ -295,24 +295,24 @@ async def calculate_discount(
     # Get applicable policies
     policies = await tuition_discount_service.get_applicable_policies(
         db,
-        major_program_id=request.major_program_id,
-        major_program_code=request.major_program_code,
-        is_heavy_program=request.is_heavy_program,
-        offering_id=request.offering_id,
-        student_priority_type=request.student_priority_type,
-        student_region=request.student_region,
+        major_program_id=body.major_program_id,  # Changed from request. to body.
+        major_program_code=body.major_program_code,  # Changed from request. to body.
+        is_heavy_program=body.is_heavy_program,  # Changed from request. to body.
+        offering_id=body.offering_id,  # Changed from request. to body.
+        student_priority_type=body.student_priority_type,  # Changed from request. to body.
+        student_region=body.student_region,  # Changed from request. to body.
     )
 
     # Calculate discount
     total_discount, applied = tuition_discount_service.calculate_discount(
-        request.tuition_fee,
+        body.tuition_fee,  # Changed from request. to body.
         policies
     )
 
     return schemas.DiscountCalculationResponse(
-        original_tuition=request.tuition_fee,
+        original_tuition=body.tuition_fee,  # Changed from request. to body.
         total_discount=total_discount,
-        final_tuition=request.tuition_fee - total_discount,
+        final_tuition=body.tuition_fee - total_discount,  # Changed from request. to body.
         applied_policies=[
             schemas.AppliedDiscount(**p) for p in applied
         ]
