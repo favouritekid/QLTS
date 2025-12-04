@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, models, schemas
 from ..core import deps
-from ..ratelimit import RATE_LIMITS, limiter
 from ..services import notification_service
 from ..socket_manager import sio
 from app.core.rate_limits import limiter, RateLimits
