@@ -8,7 +8,7 @@ Only accessible by admins.
 from app.core.rate_limits import limiter, RateLimits  # ✅ Rate limiting
 
 from typing import Optional, List
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, Request
 from pydantic import BaseModel
 
 from app.core import deps

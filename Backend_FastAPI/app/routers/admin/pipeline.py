@@ -23,6 +23,7 @@ from fastapi import (
     Body,
     Depends,
     HTTPException,
+    Request,
     status,
 )
 from sqlalchemy.ext.asyncio import AsyncSession

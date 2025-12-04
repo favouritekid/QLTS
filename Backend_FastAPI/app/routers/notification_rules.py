@@ -10,7 +10,7 @@ rules through UI instead of modifying code.
 from typing import Optional, Dict, Any, List
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload

@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession

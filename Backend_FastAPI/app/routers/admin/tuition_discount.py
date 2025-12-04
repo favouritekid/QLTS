@@ -10,7 +10,7 @@ from app.core.rate_limits import limiter, RateLimits  # ✅ Rate limiting
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models, schemas

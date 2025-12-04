@@ -1,5 +1,5 @@
 # app/routers/users.py
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from .. import models, schemas
 from ..core import deps

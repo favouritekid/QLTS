@@ -17,6 +17,7 @@ import structlog
 from fastapi import (
     APIRouter,
     Depends,
+    Request,
     status,
 )
 from sqlalchemy.ext.asyncio import AsyncSession

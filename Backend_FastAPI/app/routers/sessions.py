@@ -7,7 +7,7 @@ Allows users to view active sessions, revoke specific sessions, and revoke all o
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, Cookie, Depends, HTTPException, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database  # ✅ FIX: Import security from app, not app.core

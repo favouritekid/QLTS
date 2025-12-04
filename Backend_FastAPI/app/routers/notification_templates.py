@@ -9,7 +9,7 @@ Templates can be shared across multiple notification rules to reduce duplication
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 

@@ -1,7 +1,7 @@
 # app/routers/pipeline.py
 from typing import List
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, models, schemas
