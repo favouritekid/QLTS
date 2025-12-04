@@ -45,7 +45,6 @@ import type {
   UserStatistics,
   ConsultationStatus,
   PipelineStage,
-  PipelineWithStages,
   OrganizationUnit,
   OrganizationTreeWithAggregation,
   MajorProgram,
