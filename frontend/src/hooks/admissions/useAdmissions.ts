@@ -163,7 +163,8 @@ export function useUpdateAdmission(profileId: number) {
   return useMutation<
     AdmissionProfileResponse,
     AxiosError<ApiErrorResponse>,
-    AdmissionProfileUpdate
+    AdmissionProfileUpdate,
+    { previousProfile?: AdmissionProfileResponse }
   >({
     mutationFn: (data) => admissionsApi.updateAdmission(profileId, data),
 
@@ -208,7 +209,7 @@ export function useUpdateAdmission(profileId: number) {
       )
     },
 
-    onError: (error, _newData, context: { previousProfile?: AdmissionProfileResponse } | undefined) => {
+    onError: (error, _newData, context) => {
       // Rollback optimistic update
       if (context?.previousProfile) {
         queryClient.setQueryData(

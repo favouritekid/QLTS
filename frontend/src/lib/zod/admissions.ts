@@ -40,7 +40,6 @@ export const familyMemberSchema = z.object({
     .string()
     .max(255, "Nghề nghiệp không được quá 255 ký tự")
     .trim()
-    .optional()
     .default(""),
   phone: z
     .string()
@@ -134,9 +133,7 @@ export const documentItemSchema = z.object({
     .min(1, "Tên tài liệu không được để trống")
     .max(255, "Tên tài liệu không được quá 255 ký tự")
     .trim(),
-  status: z.enum(["missing", "uploaded", "verified", "rejected"], {
-    errorMap: () => ({ message: "Trạng thái không hợp lệ" }),
-  }),
+  status: z.enum(["missing", "uploaded", "verified", "rejected"]),
   file_path: z
     .string()
     .max(512, "Đường dẫn file không được quá 512 ký tự")

@@ -9,7 +9,7 @@ Endpoints:
 - GET /api/applications/{application_id} - Lấy Application theo ID
 - DELETE /api/applications/{application_id} - Xóa Application (Admin only, soft delete)
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
@@ -35,6 +35,7 @@ PermissionDep = Depends(deps.check_permission)
     summary="Tạo hồ sơ tuyển sinh cho Lead",
 )
 async def create_application_for_lead(
+    request: Request,
     lead_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
@@ -84,6 +85,7 @@ async def create_application_for_lead(
     summary="Lấy thông tin hồ sơ tuyển sinh",
 )
 async def get_application(
+    request: Request,
     application: models.Application = Depends(deps.get_application_for_user),
 ):
     """
@@ -117,6 +119,7 @@ async def get_application(
     summary="Cập nhật hồ sơ tuyển sinh",
 )
 async def update_application(
+    request: Request,
     update_data: schemas.ApplicationUpdate,
     application: models.Application = Depends(deps.get_application_for_user),
     db: AsyncSession = Depends(database.get_db),
@@ -174,6 +177,7 @@ async def update_application(
     summary="Xóa hồ sơ tuyển sinh",
 )
 async def delete_application(
+    request: Request,
     application: models.Application = Depends(deps.get_application_for_user),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
