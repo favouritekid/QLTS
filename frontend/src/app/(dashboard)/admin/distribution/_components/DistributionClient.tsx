@@ -308,7 +308,7 @@ export function DistributionClient({ initialData }: DistributionClientProps) {
         },
       },
     ],
-    [getSortIcon, handleSort]
+    [getSortIcon, handleSort, toggleMutation]
   );
 
   // Setup table

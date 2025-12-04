@@ -36,6 +36,34 @@ import type {
   TimelineItem,
   LeadInsights,
 } from '@/types/lead.types';
+import type {
+  User,
+  UsersPage,
+  UserStatistics,
+  ConsultationStatus,
+  PipelineStage,
+  PipelineWithStages,
+  OrganizationUnit,
+  OrganizationTreeWithAggregation,
+  MajorProgram,
+  ProgramOffering,
+  NotificationTemplate,
+  NotificationTemplatesPage,
+  NotificationRule,
+  NotificationRulesPage,
+  EventGroup,
+  NotificationPreferences,
+  NotificationsPage,
+  AssignmentConfig,
+  DistributionRule,
+  DistributionStats,
+  DegreeLevel,
+  OfferingType,
+  DocumentType,
+  TuitionDiscountPoliciesPage,
+  PermissionStatistics,
+  ActiveSession,
+} from '@/types/api.types';
 
 // ============================================
 // CONFIGURATION
@@ -61,9 +89,7 @@ function getBackendUrl(): string {
 // SERVER-SIDE FETCH WRAPPER
 // ============================================
 
-interface FetchOptions extends RequestInit {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  params?: Record<string, any>; // Generic query parameters - type varies by endpoint
+interface FetchOptions extends RequestInit {  params?: Record<string, any>; // Generic query parameters - type varies by endpoint
 }
 
 /**
@@ -185,10 +211,8 @@ const leads = {
 const users = {
   /**
    * Get current user profile (Server-Side)
-   */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  async getCurrentUser(): Promise<any> {
-    return serverFetch<any>('/api/users/me');
+   */  async getCurrentUser(): Promise<User> {
+    return serverFetch<User>('/api/users/me');
   },
 };
 
@@ -218,18 +242,14 @@ const admin = {
 
     /**
      * Get single user by ID (admin)
-     */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async getUser(userId: number): Promise<any> {
-      return serverFetch<any>(`/api/admin/users/${userId}`);
+     */    async getUser(userId: number): Promise<User> {
+      return serverFetch<User>(`/api/admin/users/${userId}`);
     },
 
     /**
      * Get user statistics (admin dashboard)
-     */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async getStatistics(): Promise<any> {
-      return serverFetch<any>('/api/admin/users/statistics');
+     */    async getStatistics(): Promise<PermissionStatistics> {
+      return serverFetch<PermissionStatistics>('/api/admin/users/statistics');
     },
   },
 
@@ -239,18 +259,14 @@ const admin = {
   pipeline: {
     /**
      * Get all consultation statuses
-     */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async getConsultationStatuses(): Promise<any> {
-      return serverFetch<any>('/api/consultation-statuses');
+     */    async getConsultationStatuses(): Promise<ConsultationStatus[]> {
+      return serverFetch<ConsultationStatus[]>('/api/consultation-statuses');
     },
 
     /**
      * Get pipeline stages
-     */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async getPipelineStages(params?: { status_id?: number }): Promise<any> {
-      return serverFetch<any>('/api/pipeline-stages', { params });
+     */    async getPipelineStages(params?: { status_id?: number }): Promise<PipelineStage[]> {
+      return serverFetch<PipelineStage[]>('/api/pipeline-stages', { params });
     },
 
     /**
@@ -261,7 +277,7 @@ const admin = {
       include_stats?: boolean;
       date_from?: string;
       date_to?: string;
-    }): Promise<any> {
+    }): Promise<PipelineWithStages> {
       return serverFetch<any>('/api/pipeline', { params });
     },
   },
@@ -272,42 +288,32 @@ const admin = {
   organization: {
     /**
      * Get organization units tree
-     */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async getUnitsTree(): Promise<any> {
-      return serverFetch<any>('/api/organization-units');
+     */    async getUnitsTree(): Promise<OrganizationUnit[]> {
+      return serverFetch<OrganizationUnit[]>('/api/organization-units');
     },
 
     /**
      * Get organization unit by ID
-     */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async getUnit(unitId: number): Promise<any> {
-      return serverFetch<any>(`/api/organization-units/${unitId}`);
+     */    async getUnit(unitId: number): Promise<OrganizationUnit> {
+      return serverFetch<OrganizationUnit>(`/api/organization-units/${unitId}`);
     },
 
     /**
      * Get organization tree with aggregation
-     */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async getTreeWithAggregation(): Promise<any> {
-      return serverFetch<any>('/api/organization-units/tree-with-aggregation');
+     */    async getTreeWithAggregation(): Promise<OrganizationTreeWithAggregation[]> {
+      return serverFetch<OrganizationTreeWithAggregation[]>('/api/organization-units/tree-with-aggregation');
     },
 
     /**
      * Get major programs
-     */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async getMajorPrograms(): Promise<any> {
-      return serverFetch<any>('/api/major-programs');
+     */    async getMajorPrograms(): Promise<MajorProgram[]> {
+      return serverFetch<MajorProgram[]>('/api/major-programs');
     },
 
     /**
      * Get program offerings
-     */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async getProgramOfferings(): Promise<any> {
-      return serverFetch<any>('/api/program-offerings');
+     */    async getProgramOfferings(): Promise<ProgramOffering[]> {
+      return serverFetch<ProgramOffering[]>('/api/program-offerings');
     },
   },
 
@@ -322,8 +328,8 @@ const admin = {
       page?: number;
       page_size?: number;
       search?: string;
-    }): Promise<any> {
-      return serverFetch<any>('/api/admin/notification-templates', { params });
+    }): Promise<NotificationTemplatesPage> {
+      return serverFetch<NotificationTemplatesPage>('/api/admin/notification-templates', { params });
     },
 
     /**
@@ -334,16 +340,14 @@ const admin = {
       page_size?: number;
       event?: string;
       is_active?: boolean;
-    }): Promise<any> {
+    }): Promise<DistributionRule[]> {
       return serverFetch<any>('/api/admin/notification-rules', { params });
     },
 
     /**
      * Get notification event groups
-     */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async getEventGroups(): Promise<any> {
-      return serverFetch<any>('/api/notifications/event-groups');
+     */    async getEventGroups(): Promise<EventGroup[]> {
+      return serverFetch<EventGroup[]>('/api/notifications/event-groups');
     },
   },
 
@@ -364,26 +368,20 @@ const admin = {
 
     /**
      * Get degree levels
-     */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async getDegreeLevels(params?: { active_only?: boolean }): Promise<any> {
-      return serverFetch<any>('/api/admin/degree-levels', { params });
+     */    async getDegreeLevels(params?: { active_only?: boolean }): Promise<DegreeLevel[]> {
+      return serverFetch<DegreeLevel[]>('/api/admin/degree-levels', { params });
     },
 
     /**
      * Get offering types
-     */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async getOfferingTypes(params?: { active_only?: boolean }): Promise<any> {
-      return serverFetch<any>('/api/admin/offering-types', { params });
+     */    async getOfferingTypes(params?: { active_only?: boolean }): Promise<OfferingType[]> {
+      return serverFetch<OfferingType[]>('/api/admin/offering-types', { params });
     },
 
     /**
      * Get document types
-     */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async getDocumentTypes(params?: { active_only?: boolean }): Promise<any> {
-      return serverFetch<any>('/api/admin/document-types', { params });
+     */    async getDocumentTypes(params?: { active_only?: boolean }): Promise<DocumentType[]> {
+      return serverFetch<DocumentType[]>('/api/admin/document-types', { params });
     },
   },
 
@@ -397,8 +395,8 @@ const admin = {
     async getPolicies(params?: {
       page?: number;
       page_size?: number;
-    }): Promise<any> {
-      return serverFetch<any>('/api/admin/tuition-discount-policies', { params });
+    }): Promise<TuitionDiscountPoliciesPage> {
+      return serverFetch<TuitionDiscountPoliciesPage>('/api/admin/tuition-discount-policies', { params });
     },
   },
 
@@ -412,8 +410,8 @@ const admin = {
     async getDistributionStats(params?: {
       start_date?: string;
       end_date?: string;
-    }): Promise<any> {
-      return serverFetch<any>('/api/admin/distribution/stats', { params });
+    }): Promise<DistributionStats> {
+      return serverFetch<DistributionStats>('/api/admin/distribution/stats', { params });
     },
   },
 
@@ -423,10 +421,8 @@ const admin = {
   distributionRules: {
     /**
      * Get all distribution rules
-     */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async getRules(): Promise<any> {
-      return serverFetch<any>('/api/admin/distribution-rules');
+     */    async getRules(): Promise<DistributionRule[]> {
+      return serverFetch<DistributionRule[]>('/api/admin/distribution-rules');
     },
   },
 
@@ -436,10 +432,8 @@ const admin = {
   policies: {
     /**
      * Get policy statistics
-     */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async getStatistics(): Promise<any> {
-      return serverFetch<any>('/api/admin/permissions/statistics');
+     */    async getStatistics(): Promise<PermissionStatistics> {
+      return serverFetch<PermissionStatistics>('/api/admin/permissions/statistics');
     },
   },
 };
@@ -464,26 +458,22 @@ const notifications = {
     page?: number;
     page_size?: number;
     unread_only?: boolean;
-  }): Promise<any> {
-    return serverFetch<any>('/api/notifications', { params });
+  }): Promise<NotificationsPage> {
+    return serverFetch<NotificationsPage>('/api/notifications', { params });
   },
 
   /**
    * Get notification preferences
    * ✅ PHASE 1 - WEEK 3 - DAY 1
-   */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  async getPreferences(): Promise<any> {
-    return serverFetch<any>('/api/notifications/preferences');
+   */  async getPreferences(): Promise<NotificationPreferences> {
+    return serverFetch<NotificationPreferences>('/api/notifications/preferences');
   },
 
   /**
    * Get event group preferences
    * ✅ PHASE 1 - WEEK 3 - DAY 1
-   */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  async getEventGroupPreferences(): Promise<any> {
-    return serverFetch<any>('/api/notifications/event-groups');
+   */  async getEventGroupPreferences(): Promise<EventGroup[]> {
+    return serverFetch<EventGroup[]>('/api/notifications/event-groups');
   },
 };
 
@@ -494,10 +484,8 @@ const notifications = {
 const sessions = {
   /**
    * Get active user sessions
-   */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  async getActiveSessions(): Promise<any> {
-    return serverFetch<any>('/api/sessions');
+   */  async getActiveSessions(): Promise<ActiveSession[]> {
+    return serverFetch<ActiveSession[]>('/api/sessions');
   },
 };
 
