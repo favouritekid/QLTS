@@ -30,6 +30,12 @@ import {
   type AdmissionProfileUpdate,
 } from "@/lib/zod/admissions"
 
+interface SubmitResult {
+  status: "approved" | "rejected";
+  message?: string;
+  errors?: string[];
+}
+
 interface AdmissionDetailClientProps {
   profileId: number
   initialData: AdmissionProfileResponse
@@ -49,7 +55,7 @@ export function AdmissionDetailClient({
   const submitMutation = useSubmitAdmission(profileId)
   const enrollMutation = useEnrollStudent(profileId)
 
-  const [submitResult, setSubmitResult] = useState<unknown>(null)
+  const [submitResult, setSubmitResult] = useState<SubmitResult | null>(null)
 
   const isDraft = profile?.status === "draft"
   const isApproved = profile?.status === "approved"

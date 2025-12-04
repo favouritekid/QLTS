@@ -52,25 +52,29 @@ export const admissionsKeys = {
  * Get admission profile by ID
  *
  * @param id - AdmissionProfile ID
- * @param enabled - Enable/disable query (default: true)
+ * @param options - Query options including enabled flag and initialData for SSR
  *
  * @example
  * ```tsx
- * const { data: profile, isLoading, error } = useGetAdmission(456)
- * if (isLoading) return <Loading />
- * if (error) return <Error />
- * return <div>{profile.status}</div>
+ * const { data: profile } = useGetAdmission(456, { initialData })
  * ```
  */
-export function useGetAdmission(id: number, enabled: boolean = true) {
+export function useGetAdmission(
+  id: number,
+  options?: {
+    enabled?: boolean;
+    initialData?: AdmissionProfileResponse;
+    staleTime?: number;
+  }
+) {
   return useQuery<AdmissionProfileResponse, AxiosError<ApiErrorResponse>>({
     queryKey: admissionsKeys.detail(id),
     queryFn: async () => await admissionsApi.getAdmission(id),
-    enabled: enabled && !!id && id > 0,
-    staleTime: 60_000, // 1 minute
-    gcTime: 300_000, // 5 minutes
+    enabled: (options?.enabled ?? true) && !!id && id > 0,
+    initialData: options?.initialData,
+    staleTime: options?.staleTime ?? 60_000,
+    gcTime: 300_000,
     retry: (failureCount, error) => {
-      // Don't retry on 404 or 403
       if (error.response?.status === 404 || error.response?.status === 403) {
         return false
       }
