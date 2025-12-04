@@ -149,7 +149,7 @@ async def get_event_group_preferences(
 @router.patch("/event-groups")
 async def update_event_group_preference(
     request: Request,
-    request: UpdateGroupPreferenceRequest,
+    body: UpdateGroupPreferenceRequest,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
 ):
@@ -169,7 +169,7 @@ async def update_event_group_preference(
     """
     # Validate event group
     valid_groups = [g.value for g in NotificationEventGroup]
-    if request.event_group.lower() not in valid_groups:
+    if body.event_group.lower() not in valid_groups:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid event_group. Must be one of: {valid_groups}"
@@ -177,7 +177,7 @@ async def update_event_group_preference(
 
     # Validate channel
     valid_channels = [c.value for c in NotificationChannel]
-    if request.channel.lower() not in valid_channels:
+    if body.channel.lower() not in valid_channels:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid channel. Must be one of: {valid_channels}"
@@ -187,25 +187,25 @@ async def update_event_group_preference(
     preference = await notification_preference_service.set_user_group_preference(
         db=db,
         user_id=current_user.id,
-        group=request.event_group,
-        channel=request.channel,
-        enabled=request.enabled
+        group=body.event_group,
+        channel=body.channel,
+        enabled=body.enabled
     )
 
     log.info(
         "User updated event group preference",
         user_id=current_user.id,
         username=current_user.username,
-        group=request.event_group,
-        channel=request.channel,
-        enabled=request.enabled
+        group=body.event_group,
+        channel=body.channel,
+        enabled=body.enabled
     )
 
     return {
         "success": True,
-        "group": request.event_group,
-        "channel": request.channel,
-        "enabled": request.enabled
+        "group": body.event_group,
+        "channel": body.channel,
+        "enabled": body.enabled
     }
 
 

@@ -31,9 +31,9 @@ import {
 } from "@/lib/zod/admissions"
 
 interface SubmitResult {
-  status: "approved" | "rejected";
-  message?: string;
-  errors?: string[];
+  status: "approved" | "rejected" | null;
+  message?: string | null;
+  errors?: string[] | null;
 }
 
 interface AdmissionDetailClientProps {
