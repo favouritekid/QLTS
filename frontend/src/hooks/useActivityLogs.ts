@@ -57,8 +57,12 @@ export function useActivityLogs(params: UseActivityLogsParams = {}) {
 // 📈 USER STATISTICS QUERY
 // ============================================
 
+/**
+ * ✅ PHASE 1 - WEEK 3 - DAY 2: Added initialData support for SSR
+ */
 interface UseUserStatisticsOptions {
   enabled?: boolean;
+  initialData?: UserStatistics;
 }
 
 export function useUserStatistics(options: UseUserStatisticsOptions = {}) {
@@ -70,6 +74,7 @@ export function useUserStatistics(options: UseUserStatisticsOptions = {}) {
       );
       return response.data;
     },
+    initialData: options.initialData, // ✅ PHASE 1 - WEEK 3 - DAY 2: SSR support
     staleTime: 60000, // 1 minute
     enabled: options.enabled !== false, // Default to true, but allow disabling
   });
