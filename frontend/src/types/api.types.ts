@@ -1,226 +1,452 @@
-/**
- * Server API Response Types
- *
- * Architecture: Type-safe API client for Next.js Server Components
- *
- * This file defines TypeScript interfaces for all backend API responses,
- * ensuring type safety and data consistency between frontend and backend.
- *
- * Organization:
- * - User & Authentication Types
- * - Admin Management Types
- * - Pipeline & Organization Types
- * - Notification Types
- * - Configuration Types
- * - Statistics & Metrics Types
- */
+// src/types/api.types.ts
 
-// ============================================
-// USER & AUTHENTICATION TYPES
-// ============================================
-
+// Định nghĩa cấu trúc User dựa trên backend model (app/models/user.py)
+// và response schema (app/schemas/user.py -> User)
 export interface User {
-  id: number;
+  id: number; // Backend dùng Integer
   username: string;
   email: string;
-  full_name: string | null;
-  phone_number: string | null;
-  role: 'admin' | 'officer' | 'manager';
-  is_active: boolean;
-  avatar_url: string | null;
-  organization_unit_id: number | null;
-  created_at: string;
-  updated_at: string;
+  full_name?: string | null; // Có thể null
+  avatar_url?: string | null; // Có thể null
+  phone_number?: string | null; // Có thể null
+  role: string; // Dynamic roles from Casbin (e.g., "user", "admin", "manager", "support", etc.)
+  status: "active" | "pending" | "banned"; // Các status có trong backend
+  unit_id?: number | null; // Có thể null
+  skills?: string[] | null; // User skills
+  availability_status?: string | null; // Availability status
+  max_capacity?: number | null; // Max capacity
 }
 
+// Kiểu dữ liệu cho request body khi login (khớp schemas/user.py -> LoginSchema)
+export interface LoginRequest {
+  username: string; // Backend dùng username thay vì email
+  password: string;
+}
+
+// ✅ SECURITY FIX: Updated to match new HttpOnly cookie implementation
+// Backend now returns user object in response body
+// Refresh token is in HttpOnly cookie (not in response body)
+export interface LoginResponse {
+  access_token: string;
+  token_type: string;
+  user: User; // ✅ User object now returned directly from /login
+  // refresh_token removed - now in HttpOnly cookie
+}
+
+// Kiểu dữ liệu cho response từ /users/me
+export type MeResponse = User;
+
+// Kiểu dữ liệu chung cho lỗi API (có thể mở rộng)
+export interface ApiErrorResponse {
+  detail?: string | { msg: string; type: string }[]; // FastAPI validation errors
+  message?: string; // Hoặc dùng 'message' nếu backend trả về
+}
+
+// Schema for user registration - matches backend UserCreate
+// Note: confirm_password is validated on frontend only, not sent to backend
+export interface UserCreate {
+  username: string;
+  email: string;
+  password: string;
+  full_name?: string | null;
+}
+
+// Schema for forgot password request
+export interface ForgotPasswordSchema {
+  email: string;
+}
+
+// Schema for reset password - matches backend ResetPasswordSchema
+// Note: confirm_new_password is validated on frontend only, not sent to backend
+export interface ResetPasswordSchema {
+  token: string;
+  new_password: string;
+}
+
+// Schema for change password - matches backend ChangePasswordSchema
+// Note: confirm_new_password is validated on frontend only, not sent to backend
+export interface ChangePasswordSchema {
+  old_password: string;
+  new_password: string;
+}
+
+// Schema for updating user profile
+export interface UserUpdateProfile {
+  full_name?: string | null;
+  phone_number?: string | null;
+  email?: string;
+  avatar?: File;
+}
+
+// Admin - User Management Types
 export interface UsersPage {
+  total_count: number;
   users: User[];
-  total: number;
-  page: number;
-  page_size: number;
-  total_pages: number;
+}
+
+export interface AdminUserCreate {
+  username: string;
+  email: string;
+  password: string;
+  full_name?: string | null;
+  role?: string; // Dynamic roles from Casbin
+  status?: "active" | "pending" | "banned";
+  avatar?: File;
+}
+
+export interface AdminUserUpdate {
+  full_name?: string | null;
+  email?: string;
+  phone_number?: string | null;
+  role?: string; // Dynamic roles from Casbin
+  status?: "active" | "pending" | "banned";
+  avatar?: File;
+  skills?: string[];
+  max_capacity?: number;
+  unit_id?: number | null; // Organizational unit assignment
+}
+
+export interface AdminSetPassword {
+  new_password: string;
+}
+
+// Admin - Permissions Types
+export interface RoleAssignment {
+  user_id: number;
+  role: string;
+}
+
+export interface PolicyCreate {
+  subject: string;
+  object: string;
+  action: string;
+}
+
+// Advanced Permission Tools Types
+export interface WhoCanAccessResponse {
+  object: string;
+  action: string;
+  allowed_subjects: string[];
+  total_count: number;
+}
+
+export interface PermissionSimulateRequest {
+  subject: string;
+  object: string;
+  action: string;
+}
+
+export interface PermissionSimulateResponse {
+  subject: string;
+  object: string;
+  action: string;
+  is_allowed: boolean;
+  message: string;
+}
+
+export interface FeatureStatus {
+  feature_id: string;
+  display_name: string;
+  enabled: boolean;
+  policy_count: number;
+}
+
+export interface RoleFeaturesResponse {
+  role: string;
+  features: FeatureStatus[];
+}
+
+export interface ToggleFeatureRequest {
+  feature_id: string;
+  enabled: boolean;
+}
+
+export interface BulkAction {
+  action: "delete" | "change_status";
+  user_ids: number[];
+  status?: "active" | "pending" | "banned";
+}
+
+// Activity Log Types
+export interface UserActivityLog {
+  id: number;
+  actor_id: number | null;
+  target_user_id: number | null;
+  action: string;
+  resource_type: string;
+  resource_id: number | null;
+  description: string | null;
+  changes: Record<string, unknown> | null;
+  ip_address: string | null;
+  user_agent: string | null;
+  created_at: string;
+  actor_username: string | null;
+  actor_full_name: string | null;
+  target_username: string | null;
+  target_full_name: string | null;
+}
+
+export interface ActivityLogsPage {
+  total_count: number;
+  logs: UserActivityLog[];
 }
 
 export interface UserStatistics {
   total_users: number;
   active_users: number;
-  inactive_users: number;
-  by_role: {
-    admin: number;
-    officer: number;
-    manager: number;
-  };
-  recent_registrations: number;
+  pending_users: number;
+  banned_users: number;
+  new_users_last_7_days: number;
+  new_users_last_30_days: number;
+  users_by_role: Record<string, number>;
+  recent_activities: UserActivityLog[];
+}
+
+// Notification Types
+export interface Notification {
+  id: number;
+  user_id: number;
+  type: "info" | "success" | "warning" | "error" | "admin_update" | "system" | "reminder";
+  title: string;
+  message: string;
+  link: string | null;
+  data: Record<string, unknown> | null;
+  is_read: boolean;
+  created_at: string;
+  read_at: string | null;
+}
+
+export interface NotificationsPage {
+  total_count: number;
+  unread_count: number;
+  notifications: Notification[];
+}
+
+export interface MarkAsReadRequest {
+  notification_ids: number[];
+}
+
+// Notification Preference Types
+export interface NotificationTypePreference {
+  email: boolean;
+  browser: boolean;
+  sound: boolean;
+}
+
+export interface NotificationPreference {
+  id: number;
+  user_id: number;
+  email_enabled: boolean;
+  sound_enabled: boolean;
+  browser_enabled: boolean;
+  email_digest: "instant" | "daily" | "weekly" | "disabled";
+  type_preferences: Record<string, NotificationTypePreference> | null;
+  quiet_hours_enabled: boolean;
+  quiet_hours_start: string | null; // HH:mm format
+  quiet_hours_end: string | null; // HH:mm format
+}
+
+// Alias for consistency with server.ts
+export type NotificationPreferences = NotificationPreference;
+
+export interface NotificationPreferenceUpdate {
+  email_enabled?: boolean;
+  sound_enabled?: boolean;
+  browser_enabled?: boolean;
+  email_digest?: "instant" | "daily" | "weekly" | "disabled";
+  type_preferences?: Record<string, NotificationTypePreference>;
+  quiet_hours_enabled?: boolean;
+  quiet_hours_start?: string | null;
+  quiet_hours_end?: string | null;
 }
 
 // ============================================
-// PIPELINE & ORGANIZATION TYPES
+// ✅ PHASE 2.4: NOTIFICATION RULES (Admin)
 // ============================================
 
-export interface ConsultationStatus {
-  id: number;
-  code: string;
-  label: string;
-  color: string;
-  stage_id: number;
-  order_index: number;
-  is_initial: boolean;
-  is_final: boolean;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
+// ✅ NOTIFICATION 2.0: Multi-Step Workflow Support
+export interface NotificationAction {
+  id?: number; // Optional for create
+  rule_id?: number; // Optional for create
+  step: number; // Step order (1, 2, 3, ...)
+  channel: string; // "socket" | "email" | "zalo" | "sms"
+  template_code: string | null; // Template code to use
+  delay_minutes: number; // Delay before sending (0 = immediate)
+  config: Record<string, unknown> | null; // Additional channel config
 }
 
-export interface PipelineStage {
-  id: number;
-  name: string;
-  code: string;
-  description: string | null;
-  order_index: number;
-  is_active: boolean;
-  statuses?: ConsultationStatus[];
-  created_at: string;
-  updated_at: string;
-}
-
-export interface PipelineWithStages {
-  stages: PipelineStage[];
-  total_stages: number;
-  active_stages: number;
-}
-
-export interface OrganizationUnit {
-  id: number;
-  code: string;
-  name: string;
-  unit_type: string;
-  parent_id: number | null;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-  children?: OrganizationUnit[];
-}
-
-export interface OrganizationTreeWithAggregation extends OrganizationUnit {
-  lead_count?: number;
-  officer_count?: number;
-}
-
-export interface MajorProgram {
-  id: number;
-  code: string;
-  name: string;
-  organization_unit_id: number;
-  degree_level_id: number | null;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface ProgramOffering {
-  id: number;
-  major_program_id: number;
-  offering_type_id: number | null;
-  code: string;
-  name: string;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-// ============================================
-// NOTIFICATION TYPES
-// ============================================
-
-export interface NotificationTemplate {
-  id: number;
-  code: string;
-  name: string;
-  channel: 'email' | 'sms' | 'socket' | 'all';
-  subject_template: string | null;
-  body_template: string;
-  variables: string[];
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface NotificationTemplatesPage {
-  templates: NotificationTemplate[];
-  total: number;
-  page: number;
-  page_size: number;
+export interface NotificationActionCreate {
+  step: number;
+  channel: string;
+  template_code?: string | null;
+  delay_minutes?: number;
+  config?: Record<string, unknown> | null;
 }
 
 export interface NotificationRule {
   id: number;
-  event_code: string;
-  template_id: number;
-  priority: 'low' | 'medium' | 'high' | 'critical';
-  is_active: boolean;
-  conditions: Record<string, unknown>;
+  event: string; // SystemEvents enum value
+  title_template: string;
+  message_template: string;
+  notification_type: string; // info, success, warning, error
+  link_template: string | null;
+  channels: string[]; // ["socket", "email", "zalo", "sms"] - DEPRECATED, use actions
+  recipient_config: Record<string, unknown>; // {resolver_type, params}
+  condition: Record<string, unknown> | null; // Optional activation conditions
+  enabled: boolean;
+  actions: NotificationAction[]; // ✅ NOTIFICATION 2.0: Multi-step workflow
   created_at: string;
   updated_at: string;
-  template?: NotificationTemplate;
+}
+
+export interface NotificationRuleCreate {
+  event: string;
+  title_template: string;
+  message_template: string;
+  notification_type: string;
+  link_template?: string | null;
+  channels: string[]; // Fallback for backward compatibility
+  recipient_config: Record<string, unknown>;
+  condition?: Record<string, unknown> | null;
+  enabled?: boolean;
+  actions?: NotificationActionCreate[]; // ✅ NOTIFICATION 2.0: Multi-step workflow
+}
+
+export interface NotificationRuleUpdate {
+  title_template?: string;
+  message_template?: string;
+  notification_type?: string;
+  link_template?: string | null;
+  channels?: string[];
+  recipient_config?: Record<string, unknown>;
+  condition?: Record<string, unknown> | null;
+  enabled?: boolean;
+  actions?: NotificationActionCreate[]; // ✅ NOTIFICATION 2.0: Multi-step workflow
 }
 
 export interface NotificationRulesPage {
-  rules: NotificationRule[];
-  total: number;
-  page: number;
-  page_size: number;
-}
-
-export interface EventGroup {
-  group_code: string;
-  group_label: string;
-  events: {
-    code: string;
-    label: string;
-    description: string;
-  }[];
-}
-
-export interface NotificationPreferences {
-  user_id: number;
-  email_enabled: boolean;
-  sms_enabled: boolean;
-  socket_enabled: boolean;
-  event_preferences: Record<string, unknown>;
-  updated_at: string;
-}
-
-export interface NotificationsPage {
-  notifications: Notification[];
   total_count: number;
-  unread_count: number;
+  rules: NotificationRule[];
 }
 
 // ============================================
-// CONFIGURATION TYPES
+// ✅ PHASE 3.1: NOTIFICATION TEMPLATES (Admin)
 // ============================================
 
-export interface AssignmentConfig {
+export interface NotificationTemplate {
   id: number;
-  organization_unit_id: number;
-  auto_assign_enabled: boolean;
-  round_robin_enabled: boolean;
-  skill_based_enabled: boolean;
-  max_leads_per_officer: number | null;
+  name: string; // Unique template name
+  description: string | null;
+  title_template: string;
+  message_template: string;
+  link_template: string | null;
+  variables: string[] | null; // Available variables like ["lead_name", "officer_id"]
+  category: string | null; // Template category (lead, consultation, etc.)
+  is_system: boolean; // System template (cannot be deleted)
+  usage_count: number; // Number of rules using this template
+  created_by: number | null;
   created_at: string;
   updated_at: string;
 }
 
-export interface SkillRule {
-  id: number;
-  skill_name: string;
-  skill_value: string;
-  priority: number;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
+export interface NotificationTemplateCreate {
+  name: string;
+  description?: string | null;
+  title_template: string;
+  message_template: string;
+  link_template?: string | null;
+  variables?: string[] | null;
+  category?: string | null;
+  is_system?: boolean;
 }
 
+export interface NotificationTemplateUpdate {
+  name?: string;
+  description?: string | null;
+  title_template?: string;
+  message_template?: string;
+  link_template?: string | null;
+  variables?: string[] | null;
+  category?: string | null;
+}
+
+export interface NotificationTemplatesPage {
+  total_count: number;
+  templates: NotificationTemplate[];
+}
+
+// ============================================
+// ✅ NOTIFICATION 2.0: METADATA FOR DYNAMIC BUILDER
+// ============================================
+
+export interface EventVariable {
+  name: string;
+  type: string; // "string" | "integer" | "datetime" | "boolean" | "float"
+  description: string;
+  required?: boolean;
+}
+
+export interface EventMetadata {
+  event: string; // SystemEvents enum value
+  display_name: string;
+  description: string;
+  variables: EventVariable[];
+  filter_fields: string[];
+  default_channels: string[];
+  category: string; // "lead" | "application" | "consultation" | "finance" | etc.
+}
+
+export interface ResolverTypeOption {
+  value: string; // "assigned_officer" | "lead_owner" | etc.
+  label: string; // Vietnamese label
+  description: string;
+  example: string;
+  requires_params: boolean;
+}
+
+export interface OperatorOption {
+  value: string; // "==" | "!=" | ">" | "<" | etc.
+  label: string; // Vietnamese label
+  description: string;
+}
+
+export interface NotificationMetadata {
+  events: EventMetadata[];
+  channels: string[]; // ["socket", "email", "zalo", "sms"]
+  resolver_types: ResolverTypeOption[];
+  operators: OperatorOption[];
+}
+
+// ============================================
+// RE-EXPORTS FROM OTHER TYPE FILES
+// ============================================
+
+// Pipeline types
+export type {
+  ConsultationStatus,
+  PipelineStage,
+  OutcomeType,
+} from './pipeline.types';
+
+// Organization types
+export type {
+  OrganizationUnit,
+  MajorProgram,
+  ProgramOffering,
+  OrganizationTreeNodeWithAggregation as OrganizationTreeWithAggregation,
+  AssignmentConfig,
+  ConfigDegreeLevel as DegreeLevel,
+  ConfigOfferingType as OfferingType,
+  ConfigDocumentType as DocumentType,
+} from './organization.types';
+
+// Tuition discount types
+export type {
+  TuitionDiscountPolicy,
+  TuitionDiscountPolicyListResponse as TuitionDiscountPoliciesPage,
+} from './tuition-discount.types';
+
+// Distribution Rule (for lead distribution)
 export interface DistributionRule {
   id: number;
   name: string;
@@ -232,6 +458,28 @@ export interface DistributionRule {
   updated_at: string;
 }
 
+// Session types
+export type {
+  UserSession as ActiveSession,
+} from './session';
+
+// Additional types needed by server.ts
+export interface PipelineWithStages {
+  stages: import('./pipeline.types').PipelineStage[];
+  total_stages: number;
+  active_stages: number;
+}
+
+export interface EventGroup {
+  group_code: string;
+  group_label: string;
+  events: Array<{
+    code: string;
+    label: string;
+    description: string;
+  }>;
+}
+
 export interface DistributionStats {
   total_rules: number;
   active_rules: number;
@@ -241,109 +489,7 @@ export interface DistributionStats {
   failed_distributions: number;
 }
 
-export interface DegreeLevel {
-  id: number;
-  code: string;
-  name: string;
-  order_index: number;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface OfferingType {
-  id: number;
-  code: string;
-  name: string;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface DocumentType {
-  id: number;
-  code: string;
-  name: string;
-  is_required: boolean;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-// ============================================
-// TUITION & DISCOUNT TYPES
-// ============================================
-
-export interface TuitionDiscountPolicy {
-  id: number;
-  code: string;
-  name: string;
-  discount_type: 'percentage' | 'fixed';
-  discount_value: number;
-  conditions: Record<string, unknown>;
-  priority: number;
-  is_active: boolean;
-  valid_from: string | null;
-  valid_to: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface TuitionDiscountPoliciesPage {
-  policies: TuitionDiscountPolicy[];
-  total: number;
-  page: number;
-  page_size: number;
-}
-
-// ============================================
-// PERMISSIONS & ROLES TYPES
-// ============================================
-
-export interface PermissionStatistics {
-  total_policies: number;
-  total_roles: number;
-  total_grouping_policies: number;
-  policies_by_resource: Record<string, number>;
-  users_by_role: Record<string, number>;
-}
-
-// ============================================
-// SESSION TYPES
-// ============================================
-
-export interface ActiveSession {
-  id: number;
-  user_id: number;
-  refresh_jti: string;
-  user_agent: string | null;
-  ip_address: string | null;
-  created_at: string;
-  last_used_at: string;
-  expires_at: string;
-  revoked_at: string | null;
-}
-
-// ============================================
-// GENERIC API RESPONSE TYPES
-// ============================================
-
-export interface ApiResponse<T> {
-  data: T;
-  message?: string;
-  success: boolean;
-}
-
-export interface PaginatedResponse<T> {
-  items: T[];
-  total: number;
-  page: number;
-  page_size: number;
-  total_pages: number;
-}
-
-export interface ApiError {
-  detail: string;
-  error_code?: string;
-  status_code: number;
-}
+// Policy types
+export type {
+  PolicyStatistics as PermissionStatistics,
+} from './policy.types';
