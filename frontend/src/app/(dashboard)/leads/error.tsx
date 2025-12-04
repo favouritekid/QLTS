@@ -31,7 +31,7 @@ export default function LeadsError({
         <AlertTriangle className="h-4 w-4" />
         <AlertTitle>Failed to Load Leads</AlertTitle>
         <AlertDescription>
-          We couldn't load the leads data. Please try again.
+          We could not load the leads data. Please try again.
         </AlertDescription>
       </Alert>
 

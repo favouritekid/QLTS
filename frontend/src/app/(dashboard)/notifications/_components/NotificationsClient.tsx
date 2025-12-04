@@ -43,7 +43,7 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
     page,
     page_size: pageSize,
     unread_only: currentTab === "unread",
-  });
+  };
 
   const markAsRead = useMarkAsRead();
   const markAllAsRead = useMarkAllAsRead();
