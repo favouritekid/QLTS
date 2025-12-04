@@ -226,6 +226,26 @@ export interface MarkAsReadRequest {
   notification_ids: number[];
 }
 
+// Event Group Preference Types
+export interface EventGroupInfo {
+  id: string;
+  name_en: string;
+  name_vi: string;
+  description_en: string;
+  description_vi: string;
+}
+
+export interface EventGroupPreferencesResponse {
+  groups: EventGroupInfo[];
+  preferences: Record<string, Record<string, boolean>>;
+}
+
+export interface UpdateGroupPreferenceRequest {
+  event_group: string;
+  channel: string;
+  enabled: boolean;
+}
+
 // Notification Preference Types
 export interface NotificationTypePreference {
   email: boolean;
@@ -449,25 +469,36 @@ export type {
 // Distribution Rule (for lead distribution)
 export interface DistributionRule {
   id: number;
-  name: string;
+  offering_id: number;
+  unit_id: number;
+  weight: number;
   priority: number;
   is_active: boolean;
-  conditions: Record<string, unknown>;
-  actions: Record<string, unknown>;
-  created_at: string;
-  updated_at: string;
+  offering_name?: string;
+  unit_name?: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 // Session types
 export type {
   UserSession as ActiveSession,
+  UserSession,
 } from './session';
+
+// User Session List Response (for sessions page)
+export interface UserSessionListResponse {
+  sessions: import('./session').UserSession[];
+  total: number;
+  current_session_id: number | null;
+}
 
 // Additional types needed by server.ts
 export interface PipelineWithStages {
   stages: import('./pipeline.types').PipelineStage[];
   total_stages: number;
   active_stages: number;
+  total_leads: number;
 }
 
 export interface EventGroup {

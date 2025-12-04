@@ -47,14 +47,11 @@ import type {
   OrganizationTreeWithAggregation,
   MajorProgram,
   ProgramOffering,
-  NotificationTemplate,
   NotificationTemplatesPage,
-  NotificationRule,
   NotificationRulesPage,
   EventGroup,
   NotificationPreferences,
   NotificationsPage,
-  AssignmentConfig,
   DistributionRule,
   DistributionStats,
   DegreeLevel,
@@ -62,7 +59,8 @@ import type {
   DocumentType,
   TuitionDiscountPoliciesPage,
   PermissionStatistics,
-  ActiveSession,
+  EventGroupPreferencesResponse,
+  UserSessionListResponse,
 } from '@/types/api.types';
 
 // ============================================
@@ -89,7 +87,8 @@ function getBackendUrl(): string {
 // SERVER-SIDE FETCH WRAPPER
 // ============================================
 
-interface FetchOptions extends RequestInit {  params?: Record<string, any>; // Generic query parameters - type varies by endpoint
+interface FetchOptions extends RequestInit {
+  params?: Record<string, unknown>; // Generic query parameters - type varies by endpoint
 }
 
 /**
@@ -236,8 +235,8 @@ const admin = {
       status?: string;
       sort_by?: string;
       order?: string;
-    }): Promise<any> {
-      return serverFetch<any>('/api/admin/users', { params });
+    }): Promise<UsersPage> {
+      return serverFetch<UsersPage>('/api/admin/users', { params });
     },
 
     /**
@@ -248,8 +247,9 @@ const admin = {
 
     /**
      * Get user statistics (admin dashboard)
-     */    async getStatistics(): Promise<PermissionStatistics> {
-      return serverFetch<PermissionStatistics>('/api/admin/users/statistics');
+     */
+    async getStatistics(): Promise<UserStatistics> {
+      return serverFetch<UserStatistics>('/api/admin/users/statistics');
     },
   },
 
@@ -278,7 +278,7 @@ const admin = {
       date_from?: string;
       date_to?: string;
     }): Promise<PipelineWithStages> {
-      return serverFetch<any>('/api/pipeline', { params });
+      return serverFetch<PipelineWithStages>('/api/pipeline', { params });
     },
   },
 
@@ -340,8 +340,8 @@ const admin = {
       page_size?: number;
       event?: string;
       is_active?: boolean;
-    }): Promise<DistributionRule[]> {
-      return serverFetch<any>('/api/admin/notification-rules', { params });
+    }): Promise<NotificationRulesPage> {
+      return serverFetch<NotificationRulesPage>('/api/admin/notification-rules', { params });
     },
 
     /**
@@ -362,8 +362,8 @@ const admin = {
       page?: number;
       page_size?: number;
       search?: string;
-    }): Promise<any> {
-      return serverFetch<any>('/api/admin/config', { params });
+    }): Promise<unknown> {
+      return serverFetch<unknown>('/api/admin/config', { params });
     },
 
     /**
@@ -472,8 +472,9 @@ const notifications = {
   /**
    * Get event group preferences
    * ✅ PHASE 1 - WEEK 3 - DAY 1
-   */  async getEventGroupPreferences(): Promise<EventGroup[]> {
-    return serverFetch<EventGroup[]>('/api/notifications/event-groups');
+   */
+  async getEventGroupPreferences(): Promise<EventGroupPreferencesResponse> {
+    return serverFetch<EventGroupPreferencesResponse>('/api/notifications/event-groups');
   },
 };
 
@@ -484,8 +485,9 @@ const notifications = {
 const sessions = {
   /**
    * Get active user sessions
-   */  async getActiveSessions(): Promise<ActiveSession[]> {
-    return serverFetch<ActiveSession[]>('/api/sessions');
+   */
+  async getActiveSessions(): Promise<UserSessionListResponse> {
+    return serverFetch<UserSessionListResponse>('/api/sessions');
   },
 };
 
