@@ -52,8 +52,8 @@ async def get_my_notifications(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("/mark-as-read", status_code=status.HTTP_200_OK)
 async def mark_notifications_as_read(
-    http_request: Request,
-    request: schemas.MarkAsReadRequest,
+    request: Request,  # Required for rate limiter (SlowAPI requires this name)
+    body: schemas.MarkAsReadRequest,  # Renamed from 'request' to avoid conflict
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
 ):
@@ -61,7 +61,7 @@ async def mark_notifications_as_read(
     count, callback = await notification_service.mark_as_read(
         db=db,
         user_id=current_user.id,
-        notification_ids=request.notification_ids,
+        notification_ids=body.notification_ids,  # Changed from request. to body.
     )
     await db.commit()
     await callback()

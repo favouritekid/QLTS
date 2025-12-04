@@ -324,6 +324,7 @@ async def update_distribution_rule(
     }
 )
 async def delete_distribution_rule(
+    request: Request,  # Required for rate limiter
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
     rule: models.OfferingDistributionConfig = deps.DistributionRuleAccessDep,
