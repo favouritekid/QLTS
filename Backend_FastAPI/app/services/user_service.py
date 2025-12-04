@@ -124,32 +124,41 @@ async def emit_data_updated(
 async def get_user_by_username(
     db: AsyncSession, username: str
 ) -> Optional[models.User]:
-    # (username đã được strip bởi Pydantic schema hoặc Form() data)
-    query = select(models.User).where(models.User.username == username)  # <--- SỬA
-    result = await db.execute(query)
-    user = result.scalar_one_or_none()
-    if user:
-        # await db.refresh(user)
-        return user
-    return None
+    """
+    Get user by username.
+
+    ✅ PHASE 2 - WEEK 2: Refactored to use UserRepository
+    """
+    from app.repositories import UserRepository
+
+    repo = UserRepository(db)
+    return await repo.get_by_username(username)
 
 
 async def get_user_by_email(db: AsyncSession, email: str) -> Optional[models.User]:
-    # (EmailStr đã tự động chuẩn hóa)
-    query = select(models.User).where(models.User.email == email)  # <--- SỬA
-    result = await db.execute(query)
-    user = result.scalar_one_or_none()
-    if user:
-        # await db.refresh(user)
-        return user
-    return None
+    """
+    Get user by email address.
+
+    ✅ PHASE 2 - WEEK 2: Refactored to use UserRepository
+    """
+    from app.repositories import UserRepository
+
+    repo = UserRepository(db)
+    return await repo.get_by_email(email)
 
 
 async def get_user_by_id(db: AsyncSession, user_id: int) -> models.User:
-    user = await db.get(models.User, user_id)
+    """
+    Get user by ID.
+
+    ✅ PHASE 2 - WEEK 2: Refactored to use UserRepository
+    """
+    from app.repositories import UserRepository
+
+    repo = UserRepository(db)
+    user = await repo.get_by_id(user_id)
     if not user:
         raise ResourceNotFoundError(detail=f"User with id {user_id} not found.")
-    # await db.refresh(user)
     return user
 
 
