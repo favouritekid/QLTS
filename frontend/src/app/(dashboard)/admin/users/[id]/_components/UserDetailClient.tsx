@@ -35,9 +35,7 @@ interface UserDetailClientProps {
 }
 
 export function UserDetailClient({ userId, initialData }: UserDetailClientProps) {
-  // const params = useParams();
   const router = useRouter();
-  const userId = parseInt(params.id as string, 10);
 
   const [userDialogOpen, setUserDialogOpen] = useState(false);
   const [setPasswordDialogOpen, setSetPasswordDialogOpen] = useState(false);

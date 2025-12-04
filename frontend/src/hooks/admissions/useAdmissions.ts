@@ -185,6 +185,9 @@ export function useUpdateAdmission(profileId: number) {
           {
             ...previousProfile,
             ...newData,
+            family_info: newData.family_info || previousProfile.family_info,
+            academic_history: newData.academic_history || previousProfile.academic_history,
+            documents_checklist: newData.documents_checklist || previousProfile.documents_checklist,
             updated_at: new Date().toISOString(),
           }
         )
@@ -205,7 +208,7 @@ export function useUpdateAdmission(profileId: number) {
       )
     },
 
-    onError: (error, _newData, context) => {
+    onError: (error, _newData, context: { previousProfile?: AdmissionProfileResponse } | undefined) => {
       // Rollback optimistic update
       if (context?.previousProfile) {
         queryClient.setQueryData(

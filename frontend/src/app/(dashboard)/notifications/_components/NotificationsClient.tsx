@@ -39,11 +39,6 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
   }, {
     initialData: page === 1 && currentTab === "all" ? initialData : undefined,
   });
-  const _oldParams = {
-    page,
-    page_size: pageSize,
-    unread_only: currentTab === "unread",
-  };
 
   const markAsRead = useMarkAsRead();
   const markAllAsRead = useMarkAllAsRead();

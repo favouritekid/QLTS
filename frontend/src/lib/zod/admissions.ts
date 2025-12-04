@@ -40,6 +40,7 @@ export const familyMemberSchema = z.object({
     .string()
     .max(255, "Nghề nghiệp không được quá 255 ký tự")
     .trim()
+    .optional()
     .default(""),
   phone: z
     .string()
@@ -200,7 +201,7 @@ export const admissionProfileResponseSchema = z.object({
   lead_id: z.number(),
   citizen_id: z.string().nullable(),
   status: z.enum(["draft", "approved", "rejected", "enrolled"]),
-  applied_rules: z.record(z.any()), // JSONB object
+  applied_rules: z.record(z.string(), z.any()), // JSONB object
   family_info: z.array(familyMemberSchema).default([]),
   academic_history: z.array(academicRecordSchema).default([]),
   admission_scores: admissionScoreSchema.nullable(),

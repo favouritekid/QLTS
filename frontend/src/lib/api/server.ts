@@ -94,9 +94,9 @@ async function serverFetch<T>(
   const cookieHeader = cookieStore.toString();
 
   // Prepare headers
-  const headers: HeadersInit = {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...fetchOptions.headers,
+    ...(fetchOptions.headers as Record<string, string>),
   };
 
   // Forward authentication cookies
@@ -301,7 +301,7 @@ const admin = {
   },
 
   /**
-   * Notification Management
+   * Notification Management (Admin)
    */
   notifications: {
     /**
@@ -425,50 +425,59 @@ const admin = {
       return serverFetch<any>('/api/admin/permissions/statistics');
     },
   },
+};
 
+// ============================================
+// TOP-LEVEL ENDPOINTS (User-facing)
+// ============================================
+
+/**
+ * Pipeline (alias to admin.pipeline for convenience)
+ */
+const pipeline = admin.pipeline;
+
+/**
+ * User Notifications
+ */
+const notifications = {
   /**
-   * User Notifications
+   * Get user notifications
    */
-  notifications: {
-    /**
-     * Get user notifications
-     */
-    async getNotifications(params?: {
-      page?: number;
-      page_size?: number;
-      unread_only?: boolean;
-    }): Promise<any> {
-      return serverFetch<any>('/api/notifications', { params });
-    },
-
-    /**
-     * Get notification preferences
-     * ✅ PHASE 1 - WEEK 3 - DAY 1
-     */
-    async getPreferences(): Promise<any> {
-      return serverFetch<any>('/api/notifications/preferences');
-    },
-
-    /**
-     * Get event group preferences
-     * ✅ PHASE 1 - WEEK 3 - DAY 1
-     */
-    async getEventGroupPreferences(): Promise<any> {
-      return serverFetch<any>('/api/notifications/event-groups');
-    },
+  async getNotifications(params?: {
+    page?: number;
+    page_size?: number;
+    unread_only?: boolean;
+  }): Promise<any> {
+    return serverFetch<any>('/api/notifications', { params });
   },
 
   /**
-   * User Sessions
+   * Get notification preferences
    * ✅ PHASE 1 - WEEK 3 - DAY 1
    */
-  sessions: {
-    /**
-     * Get active user sessions
-     */
-    async getActiveSessions(): Promise<any> {
-      return serverFetch<any>('/api/sessions');
-    },
+  async getPreferences(): Promise<any> {
+    return serverFetch<any>('/api/notifications/preferences');
+  },
+
+  /**
+   * Get event group preferences
+   * ✅ PHASE 1 - WEEK 3 - DAY 1
+   */
+  async getEventGroupPreferences(): Promise<any> {
+    return serverFetch<any>('/api/notifications/event-groups');
+  },
+};
+
+/**
+ * User Sessions
+ * ✅ PHASE 1 - WEEK 3 - DAY 1
+ */
+const sessions = {
+  /**
+   * Get active user sessions
+   */
+  async getActiveSessions(): Promise<any> {
+    return serverFetch<any>('/api/sessions');
   },
 };
 
@@ -485,6 +494,9 @@ export const serverApi = {
   leads,
   users,
   admin,
+  pipeline,
+  notifications,
+  sessions,
 };
 
 /**

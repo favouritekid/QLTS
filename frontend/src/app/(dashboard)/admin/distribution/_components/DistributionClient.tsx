@@ -95,6 +95,7 @@ export function DistributionClient({ initialData }: DistributionClientProps) {
   const { data: rules = [], isLoading, error } = useDistributionRules({ initialData });
   const deleteMutation = useDeleteDistributionRule();
   const bulkDeleteMutation = useBulkDeleteDistributionRules();
+  const toggleMutation = useToggleDistributionRule();
 
   // Filter and sort rules
   const filteredRules = useMemo(() => {
@@ -307,7 +308,7 @@ export function DistributionClient({ initialData }: DistributionClientProps) {
         },
       },
     ],
-    [getSortIcon, handleSort, toggleMutation]
+    [getSortIcon, handleSort]
   );
 
   // Setup table
