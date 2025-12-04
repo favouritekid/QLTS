@@ -90,9 +90,10 @@ import type { User } from "@/types/api.types";
 import { api } from "@/lib/api/client";
 import { API_ENDPOINTS } from "@/lib/api/endpoints";
 import { toast } from "sonner";
+import type { UsersPage } from "@/types/api.types";
 
 interface AdminUsersClientProps {
-  initialData: any; // ✅ Initial data from server
+  initialData: UsersPage; // ✅ Initial data from server
 }
 
 export function AdminUsersClient({ initialData }: AdminUsersClientProps) {

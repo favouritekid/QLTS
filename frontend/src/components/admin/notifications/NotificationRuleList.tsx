@@ -110,7 +110,7 @@ interface RuleGroup {
 }
 
 interface NotificationRuleListProps {
-  initialData?: any; // ✅ PHASE 1 - WEEK 2: Accept initialData from server
+  initialData?: import("@/types/api.types").NotificationRulesPage; // ✅ PHASE 1 - WEEK 2: Accept initialData from server
 }
 
 export function NotificationRuleList({ initialData }: NotificationRuleListProps) {

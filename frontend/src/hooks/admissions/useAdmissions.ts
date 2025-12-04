@@ -39,7 +39,7 @@ import type { ApiErrorResponse } from "@/types/api.types"
 export const admissionsKeys = {
   all: ["admissions"] as const,
   lists: () => [...admissionsKeys.all, "list"] as const,
-  list: (filters?: any) => [...admissionsKeys.lists(), filters] as const,
+  list: (filters?: Record<string, unknown>) => [...admissionsKeys.lists(), filters] as const,
   details: () => [...admissionsKeys.all, "detail"] as const,
   detail: (id: number) => [...admissionsKeys.details(), id] as const,
 }

@@ -37,6 +37,9 @@ import type {
   LeadInsights,
 } from '@/types/lead.types';
 import type {
+  FullPipeline,
+} from '@/types/pipeline.types';
+import type {
   User,
   UsersPage,
   UserStatistics,
@@ -176,7 +179,7 @@ const leads = {
    * ```
    */
   async getLeads(params?: LeadListParams): Promise<LeadsPage> {
-    return serverFetch<LeadsPage>('/api/leads', { params });
+    return serverFetch<LeadsPage>('/api/leads', { params: params as Record<string, unknown> });
   },
 
   /**
@@ -277,8 +280,8 @@ const admin = {
       include_stats?: boolean;
       date_from?: string;
       date_to?: string;
-    }): Promise<PipelineWithStages> {
-      return serverFetch<PipelineWithStages>('/api/pipeline', { params });
+    }): Promise<FullPipeline> {
+      return serverFetch<FullPipeline>('/api/pipeline', { params });
     },
   },
 
