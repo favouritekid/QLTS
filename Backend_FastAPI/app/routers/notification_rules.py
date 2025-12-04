@@ -56,6 +56,7 @@ class MetadataResponse(BaseModel):
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/metadata", response_model=MetadataResponse)
 async def get_notification_metadata(
+    request: Request,
     current_admin: models.User = AdminPermissionDep,
 ):
     """
@@ -137,6 +138,7 @@ async def get_notification_metadata(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("", response_model=schemas.NotificationRulesPage)
 async def list_notification_rules(
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = AdminPermissionDep,
     page: int = Query(1, ge=1),
@@ -201,6 +203,7 @@ async def list_notification_rules(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/{rule_id}", response_model=schemas.NotificationRule)
 async def get_notification_rule(
+    request: Request,
     rule: models.NotificationRule = Depends(deps.get_notification_rule_for_admin),
     current_admin: models.User = AdminPermissionDep,
 ):
@@ -223,6 +226,7 @@ async def get_notification_rule(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("", response_model=schemas.NotificationRule, status_code=status.HTTP_201_CREATED)
 async def create_notification_rule(
+    request: Request,
     rule_data: schemas.NotificationRuleCreate,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = AdminPermissionDep,
@@ -327,6 +331,7 @@ async def create_notification_rule(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.put("/{rule_id}", response_model=schemas.NotificationRule)
 async def update_notification_rule(
+    request: Request,
     rule_update: schemas.NotificationRuleUpdate,
     rule: models.NotificationRule = Depends(deps.get_notification_rule_for_admin),
     db: AsyncSession = Depends(database.get_db),
@@ -439,6 +444,7 @@ async def update_notification_rule(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.patch("/{rule_id}/toggle", response_model=schemas.NotificationRule)
 async def toggle_notification_rule(
+    request: Request,
     rule: models.NotificationRule = Depends(deps.get_notification_rule_for_admin),
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = AdminPermissionDep,
@@ -478,6 +484,7 @@ async def toggle_notification_rule(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_notification_rule(
+    request: Request,
     rule: models.NotificationRule = Depends(deps.get_notification_rule_for_admin),
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = AdminPermissionDep,

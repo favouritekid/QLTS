@@ -37,6 +37,7 @@ PermissionDep = Depends(deps.check_permission)
     summary="Lấy danh sách chính sách ưu đãi",
 )
 async def list_policies(
+    request: Request,
     page: int = Query(1, ge=1, description="Trang hiện tại"),
     page_size: int = Query(20, ge=1, le=100, description="Số item mỗi trang"),
     is_active: Optional[bool] = Query(None, description="Lọc theo trạng thái"),
@@ -91,6 +92,7 @@ async def list_policies(
     summary="Lấy chi tiết chính sách ưu đãi",
 )
 async def get_policy(
+    request: Request,
     policy_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
@@ -121,6 +123,7 @@ async def get_policy(
     summary="Tạo chính sách ưu đãi mới",
 )
 async def create_policy(
+    request: Request,
     policy_data: schemas.TuitionDiscountPolicyCreate,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
@@ -176,6 +179,7 @@ async def create_policy(
     summary="Cập nhật chính sách ưu đãi",
 )
 async def update_policy(
+    request: Request,
     policy_id: int,
     policy_data: schemas.TuitionDiscountPolicyUpdate,
     db: AsyncSession = Depends(database.get_db),
@@ -214,6 +218,7 @@ async def update_policy(
     summary="Xóa chính sách ưu đãi",
 )
 async def delete_policy(
+    request: Request,
     policy_id: int,
     hard_delete: bool = Query(False, description="Xóa vĩnh viễn (mặc định: soft delete)"),
     db: AsyncSession = Depends(database.get_db),
@@ -250,6 +255,7 @@ async def delete_policy(
     summary="Tính toán ưu đãi học phí",
 )
 async def calculate_discount(
+    request: Request,
     request: schemas.DiscountCalculationRequest,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,

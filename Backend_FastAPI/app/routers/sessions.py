@@ -23,6 +23,7 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("", response_model=schemas.UserSessionListResponse)
 async def get_active_sessions(
+    request: Request,
     current_user: models.User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(database.get_db),
     refresh_token: Optional[str] = Cookie(
@@ -118,6 +119,7 @@ async def get_active_sessions(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_session(
+    request: Request,
     session_id: int,
     db: AsyncSession = Depends(database.get_db),  # ✅ PHASE 1: Inject db session (DI pattern)
     current_user: models.User = Depends(deps.get_current_user),
@@ -185,6 +187,7 @@ async def revoke_session(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("/revoke-all", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_all_other_sessions(
+    request: Request,
     request_data: schemas.RevokeAllSessionsRequest,
     db: AsyncSession = Depends(database.get_db),  # ✅ PHASE 1: Inject db session (DI pattern)
     current_user: models.User = Depends(deps.get_current_user),

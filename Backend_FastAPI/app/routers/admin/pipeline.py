@@ -52,6 +52,7 @@ PermissionDep = Depends(deps.check_permission)
     response_model=List[schemas.PipelineStage],
 )
 async def get_all_pipeline_stages_list(
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
@@ -69,6 +70,7 @@ async def get_all_pipeline_stages_list(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_new_pipeline_stage(
+    request: Request,
     stage_in: schemas.PipelineStageCreate,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -104,6 +106,7 @@ async def create_new_pipeline_stage(
     response_model=schemas.PipelineStage,
 )
 async def get_pipeline_stage_details(
+    request: Request,
     stage_id: str,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -118,6 +121,7 @@ async def get_pipeline_stage_details(
     response_model=schemas.PipelineStage,
 )
 async def update_existing_pipeline_stage(
+    request: Request,
     stage_id: str,
     stage_in: schemas.PipelineStageUpdate,
     db: AsyncSession = Depends(database.get_db),
@@ -154,6 +158,7 @@ async def update_existing_pipeline_stage(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_existing_pipeline_stage(
+    request: Request,
     stage_id: str,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -194,6 +199,7 @@ async def delete_existing_pipeline_stage(
     response_model=List[schemas.ConsultationStatus],
 )
 async def get_all_consultation_statuses_list(
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
@@ -211,6 +217,7 @@ async def get_all_consultation_statuses_list(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_new_consultation_status(
+    request: Request,
     status_in: schemas.ConsultationStatusCreate,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -246,6 +253,7 @@ async def create_new_consultation_status(
     response_model=schemas.ConsultationStatus,
 )
 async def get_consultation_status_details(
+    request: Request,
     status_id: str,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -260,6 +268,7 @@ async def get_consultation_status_details(
     response_model=schemas.ConsultationStatus,
 )
 async def update_existing_consultation_status(
+    request: Request,
     status_id: str,
     status_in: schemas.ConsultationStatusUpdate,
     db: AsyncSession = Depends(database.get_db),
@@ -296,6 +305,7 @@ async def update_existing_consultation_status(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_existing_consultation_status(
+    request: Request,
     status_id: str,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -336,6 +346,7 @@ async def delete_existing_consultation_status(
     response_model=List[schemas.AllowedTransition],
 )
 async def get_all_allowed_transitions(
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
@@ -351,6 +362,7 @@ async def get_all_allowed_transitions(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_new_allowed_transition(
+    request: Request,
     transition_in: schemas.AllowedTransitionCreate,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -365,6 +377,7 @@ async def create_new_allowed_transition(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_existing_allowed_transition(
+    request: Request,
     transition_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -387,6 +400,7 @@ async def delete_existing_allowed_transition(
     summary="Admin reverts the last status change of a Lead",
 )
 async def admin_revert_lead_status(
+    request: Request,
     lead_id: int,
     current_user: models.User = PermissionDep,
     reason: Optional[str] = Body(

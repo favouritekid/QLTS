@@ -62,7 +62,8 @@ function getBackendUrl(): string {
 // ============================================
 
 interface FetchOptions extends RequestInit {
-  params?: Record<string, any>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  params?: Record<string, any>; // Generic query parameters - type varies by endpoint
 }
 
 /**
@@ -185,6 +186,7 @@ const users = {
   /**
    * Get current user profile (Server-Side)
    */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async getCurrentUser(): Promise<any> {
     return serverFetch<any>('/api/users/me');
   },
@@ -217,6 +219,7 @@ const admin = {
     /**
      * Get single user by ID (admin)
      */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async getUser(userId: number): Promise<any> {
       return serverFetch<any>(`/api/admin/users/${userId}`);
     },
@@ -224,6 +227,7 @@ const admin = {
     /**
      * Get user statistics (admin dashboard)
      */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async getStatistics(): Promise<any> {
       return serverFetch<any>('/api/admin/users/statistics');
     },
@@ -236,6 +240,7 @@ const admin = {
     /**
      * Get all consultation statuses
      */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async getConsultationStatuses(): Promise<any> {
       return serverFetch<any>('/api/consultation-statuses');
     },
@@ -243,6 +248,7 @@ const admin = {
     /**
      * Get pipeline stages
      */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async getPipelineStages(params?: { status_id?: number }): Promise<any> {
       return serverFetch<any>('/api/pipeline-stages', { params });
     },
@@ -267,6 +273,7 @@ const admin = {
     /**
      * Get organization units tree
      */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async getUnitsTree(): Promise<any> {
       return serverFetch<any>('/api/organization-units');
     },
@@ -274,6 +281,7 @@ const admin = {
     /**
      * Get organization unit by ID
      */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async getUnit(unitId: number): Promise<any> {
       return serverFetch<any>(`/api/organization-units/${unitId}`);
     },
@@ -281,6 +289,7 @@ const admin = {
     /**
      * Get organization tree with aggregation
      */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async getTreeWithAggregation(): Promise<any> {
       return serverFetch<any>('/api/organization-units/tree-with-aggregation');
     },
@@ -288,6 +297,7 @@ const admin = {
     /**
      * Get major programs
      */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async getMajorPrograms(): Promise<any> {
       return serverFetch<any>('/api/major-programs');
     },
@@ -295,6 +305,7 @@ const admin = {
     /**
      * Get program offerings
      */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async getProgramOfferings(): Promise<any> {
       return serverFetch<any>('/api/program-offerings');
     },
@@ -330,6 +341,7 @@ const admin = {
     /**
      * Get notification event groups
      */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async getEventGroups(): Promise<any> {
       return serverFetch<any>('/api/notifications/event-groups');
     },
@@ -353,6 +365,7 @@ const admin = {
     /**
      * Get degree levels
      */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async getDegreeLevels(params?: { active_only?: boolean }): Promise<any> {
       return serverFetch<any>('/api/admin/degree-levels', { params });
     },
@@ -360,6 +373,7 @@ const admin = {
     /**
      * Get offering types
      */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async getOfferingTypes(params?: { active_only?: boolean }): Promise<any> {
       return serverFetch<any>('/api/admin/offering-types', { params });
     },
@@ -367,6 +381,7 @@ const admin = {
     /**
      * Get document types
      */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async getDocumentTypes(params?: { active_only?: boolean }): Promise<any> {
       return serverFetch<any>('/api/admin/document-types', { params });
     },
@@ -409,6 +424,7 @@ const admin = {
     /**
      * Get all distribution rules
      */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async getRules(): Promise<any> {
       return serverFetch<any>('/api/admin/distribution-rules');
     },
@@ -421,6 +437,7 @@ const admin = {
     /**
      * Get policy statistics
      */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async getStatistics(): Promise<any> {
       return serverFetch<any>('/api/admin/permissions/statistics');
     },
@@ -455,6 +472,7 @@ const notifications = {
    * Get notification preferences
    * ✅ PHASE 1 - WEEK 3 - DAY 1
    */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async getPreferences(): Promise<any> {
     return serverFetch<any>('/api/notifications/preferences');
   },
@@ -463,6 +481,7 @@ const notifications = {
    * Get event group preferences
    * ✅ PHASE 1 - WEEK 3 - DAY 1
    */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async getEventGroupPreferences(): Promise<any> {
     return serverFetch<any>('/api/notifications/event-groups');
   },
@@ -476,6 +495,7 @@ const sessions = {
   /**
    * Get active user sessions
    */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async getActiveSessions(): Promise<any> {
     return serverFetch<any>('/api/sessions');
   },

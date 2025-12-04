@@ -374,6 +374,7 @@ async def login_for_access_token(
 @router.post("/logout")
 @limiter.limit(RateLimits.DATA_WRITE)  # ✅ RATE LIMIT: 200/hour - Normal write operation
 async def logout(
+    request: Request,
     response: Response,
     refresh_token: str = Cookie(None, alias="refresh_token"),
     db: AsyncSession = Depends(database.get_db),
@@ -477,6 +478,7 @@ async def logout(
 @router.get("/check-status")
 @limiter.limit(RateLimits.DATA_READ)  # ✅ RATE LIMIT: 1000/hour - Normal read operation
 async def check_session_status(
+    request: Request,
     current_user: models.User = Depends(deps.get_current_user),
     authorization: Annotated[str | None, Header()] = None,
     db: AsyncSession = Depends(database.get_db),
@@ -630,6 +632,7 @@ async def perform_password_reset(
 @router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
 @limiter.limit(RateLimits.AUTH_PASSWORD_CHANGE)  # ✅ RATE LIMIT: 10/hour - Moderate for authenticated users
 async def perform_change_password(
+    request: Request,
     password_data: schemas.ChangePasswordSchema,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = deps.CurrentUser,
@@ -686,6 +689,7 @@ async def perform_change_password(
 @router.post("/refresh")
 @limiter.limit(RateLimits.AUTH_REFRESH_TOKEN)  # ✅ RATE LIMIT: 20/hour - Higher for token refresh
 async def refresh_access_token(
+    request: Request,
     refresh_token: str = Cookie(None, alias="refresh_token"),
     db: AsyncSession = Depends(database.get_db),
 ):

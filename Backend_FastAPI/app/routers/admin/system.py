@@ -47,6 +47,7 @@ PermissionDep = Depends(deps.check_permission)
     summary="Create system-wide alert",
 )
 async def create_system_alert(
+    request: Request,
     severity: str,  # info, warning, error
     message: str,
     action_url: Optional[str] = None,
@@ -132,6 +133,7 @@ async def create_system_alert(
     summary="Create system-wide announcement",
 )
 async def create_system_announcement(
+    request: Request,
     title: str,
     message: str,
     priority: str = "normal",  # normal, high

@@ -70,6 +70,7 @@ class UpdateGroupPreferenceRequest(BaseModel):
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/preferences", response_model=schemas.NotificationPreference)
 async def get_notification_preferences(
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
 ):
@@ -84,6 +85,7 @@ async def get_notification_preferences(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.put("/preferences", response_model=schemas.NotificationPreference)
 async def update_notification_preferences(
+    request: Request,
     preference_update: schemas.NotificationPreferenceUpdate,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
@@ -109,6 +111,7 @@ async def update_notification_preferences(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/event-groups", response_model=EventGroupPreferencesResponse)
 async def get_event_group_preferences(
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
 ):
@@ -145,6 +148,7 @@ async def get_event_group_preferences(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.patch("/event-groups")
 async def update_event_group_preference(
+    request: Request,
     request: UpdateGroupPreferenceRequest,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
@@ -208,6 +212,7 @@ async def update_event_group_preference(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/event-groups/metadata", response_model=List[EventGroupInfo])
 async def get_event_groups_metadata(
+    request: Request,
     current_user: models.User = PermissionDep,
 ):
     """

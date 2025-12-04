@@ -53,6 +53,7 @@ async def get_my_notifications(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("/mark-as-read", status_code=status.HTTP_200_OK)
 async def mark_notifications_as_read(
+    http_request: Request,
     request: schemas.MarkAsReadRequest,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
@@ -72,6 +73,7 @@ async def mark_notifications_as_read(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("/mark-all-as-read", status_code=status.HTTP_200_OK)
 async def mark_all_notifications_as_read(
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
 ):
@@ -89,6 +91,7 @@ async def mark_all_notifications_as_read(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.delete("/{notification_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_notification(
+    request: Request,
     notification_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,

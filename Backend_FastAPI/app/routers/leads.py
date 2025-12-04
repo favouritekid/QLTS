@@ -26,6 +26,7 @@ LeadAccessDep = Depends(deps.get_lead_for_user)
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("", response_model=schemas.Lead, status_code=status.HTTP_201_CREATED)
 async def create_new_lead(
+    request: Request,
     lead_in: schemas.LeadCreate,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
@@ -48,6 +49,7 @@ async def create_new_lead(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/distribution-preview")
 async def get_distribution_preview(
+    request: Request,
     offering_id: int = Query(..., description="Offering ID to preview distribution"),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
@@ -99,6 +101,7 @@ async def get_distribution_preview(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("", response_model=schemas.LeadsPage)
 async def get_all_leads(
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
     page: int = Query(1, ge=1),
@@ -159,6 +162,7 @@ async def get_all_leads(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/{lead_id}", response_model=schemas.Lead)
 async def get_lead_details(
+    request: Request,
     lead: models.Lead = LeadAccessDep,
 ):
     """Lấy thông tin chi tiết của một Lead."""
@@ -168,6 +172,7 @@ async def get_lead_details(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.put("/{lead_id}", response_model=schemas.Lead)
 async def update_existing_lead(
+    request: Request,
     lead_in: schemas.LeadUpdate,
     lead: models.Lead = LeadAccessDep,
     # Lấy current_user từ Casbin check hoặc get_current_user
@@ -244,6 +249,7 @@ async def update_existing_lead(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.delete("/{lead_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_lead(
+    request: Request,
     lead_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
@@ -297,6 +303,7 @@ async def delete_lead(
     status_code=status.HTTP_201_CREATED,
 )
 async def add_new_consultation(
+    request: Request,
     consultation_in: schemas.ConsultationCreate,
     lead: models.Lead = LeadAccessDep,  # <-- THAY ĐỔI (IDOR Check)
     current_user: models.User = PermissionDep,  # <-- THAY ĐỔI (Casbin Check)
@@ -340,6 +347,7 @@ async def add_new_consultation(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("/{lead_id}/assign", response_model=schemas.Lead)
 async def assign_lead_manually(
+    request: Request,
     assign_data: schemas.AssignLead,
     lead: models.Lead = LeadAccessDep,  # <-- THAY ĐỔI (IDOR Check)
     current_user: models.User = PermissionDep,  # <-- THAY ĐỔI (Casbin Check)
@@ -374,6 +382,7 @@ async def assign_lead_manually(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("/{lead_id}/action", response_model=schemas.Lead)
 async def perform_lead_action(
+    request: Request,
     action_data: schemas.LeadAction,
     lead: models.Lead = LeadAccessDep,  # <-- THAY ĐỔI (IDOR Check)
     current_user: models.User = PermissionDep,  # <-- THAY ĐỔI (Casbin Check)
@@ -390,6 +399,7 @@ async def perform_lead_action(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/{lead_id}/timeline", response_model=List[schemas.TimelineItem])
 async def get_lead_timeline(
+    request: Request,
     lead: models.Lead = LeadAccessDep,  # <-- THAY ĐỔI (IDOR Check)
     db: AsyncSession = Depends(database.get_db),
 ):
@@ -400,6 +410,7 @@ async def get_lead_timeline(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/{lead_id}/insights", response_model=schemas.LeadInsights)
 async def get_lead_insights(
+    request: Request,
     lead: models.Lead = LeadAccessDep,  # <-- THAY ĐỔI (IDOR Check)
     db: AsyncSession = Depends(database.get_db),
 ):
@@ -413,6 +424,7 @@ async def get_lead_insights(
     "/{lead_id}/consultations/{consultation_id}", response_model=schemas.Consultation
 )
 async def update_a_consultation(
+    request: Request,
     consultation_id: int,
     consultation_in: schemas.ConsultationUpdate,
     lead: models.Lead = LeadAccessDep,  # <-- IDOR Check
@@ -469,6 +481,7 @@ async def update_a_consultation(
     "/{lead_id}/consultations/{consultation_id}", status_code=status.HTTP_204_NO_CONTENT
 )
 async def delete_a_consultation(
+    request: Request,
     consultation_id: int,
     lead: models.Lead = LeadAccessDep,  # <-- THAY ĐỔI (IDOR Check)
     current_user: models.User = PermissionDep,  # <-- THAY ĐỔI (Casbin Check)
@@ -508,6 +521,7 @@ async def delete_a_consultation(
 @limiter.limit(RateLimits.DATA_EXPORT)  # 20/hour - Export operation
 @router.get("/export")
 async def export_leads(
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
     format: str = Query("csv", description="Export format (csv or xlsx)"),
@@ -688,6 +702,7 @@ async def export_leads(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/import/template")
 async def download_import_template(
+    request: Request,
     format: str = Query("csv", description="Template format (csv or xlsx)"),
     current_user: models.User = PermissionDep,
 ):
@@ -823,6 +838,7 @@ async def download_import_template(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("/bulk-assign", status_code=status.HTTP_200_OK)
 async def bulk_assign_leads(
+    request: Request,
     bulk_assign_data: schemas.BulkAssignLeadsSchema,
     officer_id: int = Query(..., description="Officer ID to assign leads to"),
     db: AsyncSession = Depends(database.get_db),
@@ -879,6 +895,7 @@ async def bulk_assign_leads(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("/import", response_model=schemas.LeadImportResult)
 async def officer_import_leads(
+    request: Request,
     file: UploadFile = File(
         ..., description="CSV or Excel file containing lead data (.csv, .xlsx)"
     ),

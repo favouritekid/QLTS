@@ -39,8 +39,7 @@ export const familyMemberSchema = z.object({
   occupation: z
     .string()
     .max(255, "Nghề nghiệp không được quá 255 ký tự")
-    .trim()
-    .default(""),
+    .trim(),
   phone: z
     .string()
     .regex(

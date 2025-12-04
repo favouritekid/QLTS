@@ -42,6 +42,7 @@ PermissionDep = Depends(deps.check_permission)
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/celery/workers")
 async def get_celery_workers(
+    request: Request,
     current_admin: models.User = PermissionDep,
 ):
     """
@@ -99,6 +100,7 @@ async def get_celery_workers(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/celery/tasks")
 async def get_celery_tasks(
+    request: Request,
     current_admin: models.User = PermissionDep,
 ):
     """
@@ -166,6 +168,7 @@ async def get_celery_tasks(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/celery/stats")
 async def get_celery_stats(
+    request: Request,
     current_admin: models.User = PermissionDep,
 ):
     """
@@ -225,6 +228,7 @@ async def get_celery_stats(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/redis/info")
 async def get_redis_info(
+    request: Request,
     current_admin: models.User = PermissionDep,
 ):
     """
@@ -302,6 +306,7 @@ async def get_redis_info(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/socket/connections")
 async def get_socket_connections(
+    request: Request,
     current_admin: models.User = PermissionDep,
 ):
     """
@@ -352,6 +357,7 @@ async def get_socket_connections(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/notifications/metrics")
 async def get_notification_metrics(
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
@@ -535,6 +541,7 @@ async def get_notification_metrics(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/system/overview")
 async def get_system_overview(
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):

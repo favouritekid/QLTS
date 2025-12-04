@@ -47,6 +47,7 @@ PermissionDep = Depends(deps.check_permission)
     response_model=schemas.AssignmentConfig,
 )
 async def get_assignment_config_route(
+    request: Request,
     unit: models.OrganizationUnit = Depends(deps.get_organizational_unit_for_user),
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -73,6 +74,7 @@ async def get_assignment_config_route(
     response_model=schemas.AssignmentConfig,
 )
 async def update_assignment_config_route(
+    request: Request,
     config_in: schemas.AssignmentConfig,
     unit: models.OrganizationUnit = Depends(deps.get_organizational_unit_for_user),
     db: AsyncSession = Depends(database.get_db),
@@ -112,6 +114,7 @@ async def update_assignment_config_route(
     response_model=List[schemas.SkillRule],
 )
 async def get_all_skill_rules_route(
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
@@ -126,6 +129,7 @@ async def get_all_skill_rules_route(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_new_skill_rule_route(
+    request: Request,
     rule_in: schemas.SkillRuleCreate,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -140,6 +144,7 @@ async def create_new_skill_rule_route(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_skill_rule_route(
+    request: Request,
     rule_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -157,6 +162,7 @@ async def delete_skill_rule_route(
 @limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/distribution/{offering_id}/stats")
 async def get_distribution_stats(
+    request: Request,
     offering_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -216,6 +222,7 @@ async def get_distribution_stats(
     response_model=List[schemas.DistributionRuleResponse],
 )
 async def list_distribution_rules(
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
@@ -245,6 +252,7 @@ async def list_distribution_rules(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_distribution_rule(
+    request: Request,
     rule_in: schemas.DistributionRuleCreate,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -277,6 +285,7 @@ async def create_distribution_rule(
     response_model=schemas.DistributionRuleResponse,
 )
 async def update_distribution_rule(
+    request: Request,
     rule_in: schemas.DistributionRuleUpdate,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -345,6 +354,7 @@ async def delete_distribution_rule(
     response_model=List[schemas.ConfigDegreeLevel],
 )
 async def list_degree_levels(
+    request: Request,
     active_only: bool = True,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -365,6 +375,7 @@ async def list_degree_levels(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_degree_level(
+    request: Request,
     level_in: schemas.ConfigDegreeLevelCreate,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -379,6 +390,7 @@ async def create_degree_level(
     response_model=schemas.ConfigDegreeLevel,
 )
 async def update_degree_level(
+    request: Request,
     level_id: int,
     level_in: schemas.ConfigDegreeLevelUpdate,
     db: AsyncSession = Depends(database.get_db),
@@ -394,6 +406,7 @@ async def update_degree_level(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_degree_level(
+    request: Request,
     level_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -414,6 +427,7 @@ async def delete_degree_level(
     response_model=List[schemas.ConfigOfferingType],
 )
 async def list_offering_types(
+    request: Request,
     active_only: bool = True,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -434,6 +448,7 @@ async def list_offering_types(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_offering_type(
+    request: Request,
     type_in: schemas.ConfigOfferingTypeCreate,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -448,6 +463,7 @@ async def create_offering_type(
     response_model=schemas.ConfigOfferingType,
 )
 async def update_offering_type(
+    request: Request,
     type_id: int,
     type_in: schemas.ConfigOfferingTypeUpdate,
     db: AsyncSession = Depends(database.get_db),
@@ -463,6 +479,7 @@ async def update_offering_type(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_offering_type(
+    request: Request,
     type_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -483,6 +500,7 @@ async def delete_offering_type(
     response_model=List[schemas.ConfigDocumentType],
 )
 async def list_document_types(
+    request: Request,
     active_only: bool = True,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -503,6 +521,7 @@ async def list_document_types(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_document_type(
+    request: Request,
     type_in: schemas.ConfigDocumentTypeCreate,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -517,6 +536,7 @@ async def create_document_type(
     response_model=schemas.ConfigDocumentType,
 )
 async def update_document_type(
+    request: Request,
     type_id: int,
     type_in: schemas.ConfigDocumentTypeUpdate,
     db: AsyncSession = Depends(database.get_db),
@@ -532,6 +552,7 @@ async def update_document_type(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_document_type(
+    request: Request,
     type_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
