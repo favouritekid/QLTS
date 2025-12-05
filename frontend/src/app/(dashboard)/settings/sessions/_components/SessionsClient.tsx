@@ -30,10 +30,10 @@ export function SessionsClient({ initialData }: SessionsClientProps) {
     try {
       setError(null);
       await revokeSessionMutation.mutateAsync(sessionId);
-      setSuccessMessage("Session revoked successfully");
+      setSuccessMessage("Thu hồi phiên thành công");
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err) {
-      setError("Failed to revoke session. Please try again.");
+      setError("Không thể thu hồi phiên. Vui lòng thử lại.");
       console.error("Error revoking session:", err);
     }
   };
@@ -45,10 +45,10 @@ export function SessionsClient({ initialData }: SessionsClientProps) {
       await revokeAllOthersMutation.mutateAsync({
         currentSessionId: currentSession?.id,
       });
-      setSuccessMessage("All other sessions revoked successfully");
+      setSuccessMessage("Thu hồi tất cả phiên khác thành công");
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (err) {
-      setError("Failed to revoke sessions. Please try again.");
+      setError("Không thể thu hồi phiên. Vui lòng thử lại.");
       console.error("Error revoking all sessions:", err);
     }
   };
@@ -62,7 +62,7 @@ export function SessionsClient({ initialData }: SessionsClientProps) {
       {successMessage && (
         <Alert className="mb-6 border-green-500 bg-green-50">
           <CheckCircle2 className="h-4 w-4 text-green-600" />
-          <AlertTitle className="text-green-800">Success</AlertTitle>
+          <AlertTitle className="text-green-800">Thành công</AlertTitle>
           <AlertDescription className="text-green-700">
             {successMessage}
           </AlertDescription>
@@ -73,7 +73,7 @@ export function SessionsClient({ initialData }: SessionsClientProps) {
       {error && (
         <Alert variant="destructive" className="mb-6">
           <AlertCircle className="h-4 w-4" />
-          <AlertTitle>Error</AlertTitle>
+          <AlertTitle>Lỗi</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}

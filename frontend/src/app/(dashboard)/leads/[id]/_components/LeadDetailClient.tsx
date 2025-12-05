@@ -118,9 +118,9 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
       <div className="container mx-auto py-6">
         <Card className="border-red-200 bg-red-50">
           <CardHeader>
-            <CardTitle className="text-red-900">Error Loading Lead</CardTitle>
+            <CardTitle className="text-red-900">Lỗi Tải Lead</CardTitle>
             <CardDescription className="text-red-700">
-              {error?.message || "Lead not found"}
+              {error?.message || "Không tìm thấy lead"}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -172,18 +172,18 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
             onClick={() => setAssignDialogOpen(true)}
           >
             <UserPlus className="mr-2 h-4 w-4" />
-            Assign
+            Phân công
           </Button>
           <Button onClick={() => setEditDialogOpen(true)}>
             <Edit className="mr-2 h-4 w-4" />
-            Edit
+            Sửa
           </Button>
           <Button
             variant="destructive"
             onClick={() => setDeleteDialogOpen(true)}
           >
             <Trash2 className="mr-2 h-4 w-4" />
-            Delete
+            Xoá
           </Button>
         </div>
       </div>
@@ -192,24 +192,24 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
       <div className="grid gap-4 md:grid-cols-3">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Lead Score</CardTitle>
+            <CardTitle className="text-sm font-medium">Điểm Lead</CardTitle>
             <TrendingUp className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{lead.lead_score}/100</div>
             <p className="text-xs text-muted-foreground">
               {lead.lead_score >= 75
-                ? "High quality lead"
+                ? "Lead chất lượng cao"
                 : lead.lead_score >= 50
-                  ? "Medium quality lead"
-                  : "Low quality lead"}
+                  ? "Lead chất lượng trung bình"
+                  : "Lead chất lượng thấp"}
             </p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Time in Pipeline</CardTitle>
+            <CardTitle className="text-sm font-medium">Thời Gian Trong Pipeline</CardTitle>
             <Clock className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
@@ -218,23 +218,23 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
                 (new Date().getTime() - new Date(lead.created_at).getTime()) /
                   (1000 * 60 * 60 * 24)
               )}{" "}
-              days
+              ngày
             </div>
             <p className="text-xs text-muted-foreground">
-              Since {new Date(lead.created_at).toLocaleDateString()}
+              Từ {new Date(lead.created_at).toLocaleDateString()}
             </p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Timeline Events</CardTitle>
+            <CardTitle className="text-sm font-medium">Sự Kiện Timeline</CardTitle>
             <Calendar className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{timeline?.length || 0}</div>
             <p className="text-xs text-muted-foreground">
-              Total activities recorded
+              Tổng hoạt động đã ghi
             </p>
           </CardContent>
         </Card>
@@ -243,13 +243,13 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
       {/* Tabs */}
       <Tabs defaultValue="info" className="space-y-4">
         <TabsList className="grid w-full grid-cols-5">
-          <TabsTrigger value="info">Information</TabsTrigger>
+          <TabsTrigger value="info">Thông tin</TabsTrigger>
           <TabsTrigger value="application" className="flex items-center gap-1">
             <FileText className="h-4 w-4" />
             Hồ sơ
           </TabsTrigger>
-          <TabsTrigger value="timeline">Timeline</TabsTrigger>
-          <TabsTrigger value="consultations">Consultations</TabsTrigger>
+          <TabsTrigger value="timeline">Lịch sử</TabsTrigger>
+          <TabsTrigger value="consultations">Tư vấn</TabsTrigger>
           <TabsTrigger value="insights">AI Insights</TabsTrigger>
         </TabsList>
 
@@ -302,24 +302,24 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+            <AlertDialogTitle>Bạn có chắc chắn?</AlertDialogTitle>
             <AlertDialogDescription>
-              This action will soft delete the lead <strong>{lead.full_name}</strong> (ID: #{lead.id}).
+              Thao tác này sẽ xoá mềm lead <strong>{lead.full_name}</strong> (ID: #{lead.id}).
               <br /><br />
-              The lead will be marked as deleted and hidden from the lead list.
-              All historical data (consultations, applications, logs) will be preserved.
+              Lead sẽ được đánh dấu đã xoá và ẩn khỏi danh sách.
+              Tất cả dữ liệu lịch sử (tư vấn, hồ sơ, nhật ký) sẽ được giữ lại.
               <br /><br />
-              This action can be reversed by an administrator if needed.
+              Admin có thể hoàn tác thao tác này nếu cần.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>Hủy</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDelete}
               disabled={deleteMutation.isPending}
               className="bg-red-600 hover:bg-red-700"
             >
-              {deleteMutation.isPending ? "Deleting..." : "Delete Lead"}
+              {deleteMutation.isPending ? "Đang xoá..." : "Xoá Lead"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
