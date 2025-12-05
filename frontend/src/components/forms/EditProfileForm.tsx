@@ -26,17 +26,17 @@ import { getAvatarUrl } from "@/lib/utils";
 
 // Zod schema cho form validation
 const editProfileSchema = z.object({
-  full_name: z.string().max(120, "Full name must be less than 120 characters").optional(),
+  full_name: z.string().max(120, "Họ tên không được vượt quá 120 ký tự").optional(),
   phone_number: z
     .string()
-    .max(20, "Phone number must be less than 20 characters")
-    .regex(/^[0-9+\-\s()]*$/, "Phone number can only contain digits, +, -, spaces, and parentheses")
+    .max(20, "Số điện thoại không được vượt quá 20 ký tự")
+    .regex(/^[0-9+\-\s()]*$/, "Số điện thoại chỉ được chứa số, +, -, khoảng trắng và dấu ngoặc")
     .optional()
     .or(z.literal("")),
   email: z
     .string()
-    .email("Invalid email format")
-    .min(1, "Email is required"),
+    .email("Định dạng email không hợp lệ")
+    .min(1, "Email là bắt buộc"),
   avatar: z.instanceof(File).optional(),
 });
 
@@ -125,9 +125,9 @@ export function EditProfileForm() {
   return (
     <Card className="max-w-2xl">
       <CardHeader>
-        <CardTitle>Edit Profile</CardTitle>
+        <CardTitle>Sửa Hồ Sơ</CardTitle>
         <CardDescription>
-          Update your profile information and avatar. Changes will be saved when you click Save Changes.
+          Cập nhật thông tin hồ sơ và ảnh đại diện của bạn. Thay đổi sẽ được lưu khi bạn nhấn Lưu Thay Đổi.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -150,9 +150,9 @@ export function EditProfileForm() {
                 </button>
               </div>
               <div className="space-y-1">
-                <p className="text-sm font-medium">Profile Picture</p>
+                <p className="text-sm font-medium">Ảnh Đại Diện</p>
                 <p className="text-muted-foreground text-xs">
-                  Click the camera icon to upload a new avatar. JPG, PNG or GIF. Max size 5MB.
+                  Nhấn vào biểu tượng máy ảnh để tải ảnh đại diện mới. JPG, PNG hoặc GIF. Tối đa 5MB.
                 </p>
                 <input
                   ref={fileInputRef}
@@ -174,10 +174,10 @@ export function EditProfileForm() {
               name="full_name"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Full Name</FormLabel>
+                  <FormLabel>Họ và Tên</FormLabel>
                   <FormControl>
                     <Input
-                      placeholder="Enter your full name"
+                      placeholder="Nhập họ và tên của bạn"
                       disabled={isUpdatingProfile}
                       {...field}
                     />
@@ -214,7 +214,7 @@ export function EditProfileForm() {
               name="phone_number"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Phone Number</FormLabel>
+                  <FormLabel>Số Điện Thoại</FormLabel>
                   <FormControl>
                     <Input
                       type="tel"
@@ -231,14 +231,14 @@ export function EditProfileForm() {
 
             {/* Username (Read-only) */}
             <div className="space-y-2">
-              <Label className="text-muted-foreground">Username</Label>
+              <Label className="text-muted-foreground">Tên đăng nhập</Label>
               <Input value={user.username} disabled className="bg-muted cursor-not-allowed" />
-              <p className="text-muted-foreground text-xs">Username cannot be changed</p>
+              <p className="text-muted-foreground text-xs">Tên đăng nhập không thể thay đổi</p>
             </div>
 
             {/* Role (Read-only) */}
             <div className="space-y-2">
-              <Label className="text-muted-foreground">Role</Label>
+              <Label className="text-muted-foreground">Vai trò</Label>
               <Input
                 value={user.role}
                 disabled
@@ -252,10 +252,10 @@ export function EditProfileForm() {
                 {isUpdatingProfile ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Saving...
+                    Đang lưu...
                   </>
                 ) : (
-                  "Save Changes"
+                  "Lưu Thay Đổi"
                 )}
               </Button>
               <Button
@@ -267,7 +267,7 @@ export function EditProfileForm() {
                 }}
                 disabled={isUpdatingProfile}
               >
-                Reset
+                Đặt lại
               </Button>
             </div>
           </form>

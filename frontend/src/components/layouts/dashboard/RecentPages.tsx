@@ -79,7 +79,7 @@ export function RecentPages({ isCollapsed }: RecentPagesProps) {
       {/* Header */}
       <div className="flex items-center justify-between px-4 mb-2">
         <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Recent
+          Gần đây
         </h4>
         <Clock className="h-3.5 w-3.5 text-muted-foreground/70" />
       </div>

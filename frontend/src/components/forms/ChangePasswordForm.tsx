@@ -38,19 +38,19 @@ import type { ChangePasswordSchema } from "@/types/api.types";
 // Schema validation
 const changePasswordSchema = z
   .object({
-    old_password: z.string().min(1, { message: "Current password is required" }),
+    old_password: z.string().min(1, { message: "Mật khẩu hiện tại là bắt buộc" }),
     new_password: z
       .string()
-      .min(1, { message: "Password is required" })
-      .min(8, { message: "Password must be at least 8 characters" })
-      .regex(/[A-Z]/, { message: "Must contain an uppercase letter" })
-      .regex(/[a-z]/, { message: "Must contain a lowercase letter" })
-      .regex(/[0-9]/, { message: "Must contain a number" })
-      .regex(/[^A-Za-z0-9]/, { message: "Must contain a special character" }),
-    confirm_new_password: z.string().min(1, { message: "Please confirm your password" }),
+      .min(1, { message: "Mật khẩu là bắt buộc" })
+      .min(8, { message: "Mật khẩu phải có ít nhất 8 ký tự" })
+      .regex(/[A-Z]/, { message: "Phải chứa chữ cái viết hoa" })
+      .regex(/[a-z]/, { message: "Phải chứa chữ cái viết thường" })
+      .regex(/[0-9]/, { message: "Phải chứa số" })
+      .regex(/[^A-Za-z0-9]/, { message: "Phải chứa ký tự đặc biệt" }),
+    confirm_new_password: z.string().min(1, { message: "Vui lòng xác nhận mật khẩu" }),
   })
   .refine((data) => data.new_password === data.confirm_new_password, {
-    message: "New passwords do not match",
+    message: "Mật khẩu mới không khớp",
     path: ["confirm_new_password"],
   });
 
@@ -109,31 +109,31 @@ export function ChangePasswordForm() {
 
   return (
     <div className="w-full max-w-xl space-y-4">
-      <h2 className="text-xl font-semibold">Change Password</h2>
+      <h2 className="text-xl font-semibold">Đổi Mật Khẩu</h2>
 
       {/* Security Warning Alert */}
       <Alert variant="destructive">
         <AlertTriangle className="h-4 w-4" />
-        <AlertTitle>Security Notice</AlertTitle>
+        <AlertTitle>Lưu ý Bảo mật</AlertTitle>
         <AlertDescription className="space-y-2">
           <p>
-            Changing your password will <strong>log you out from all devices</strong>. You will
-            need to log in again with your new password.
+            Đổi mật khẩu sẽ <strong>đăng xuất bạn khỏi tất cả thiết bị</strong>. Bạn sẽ
+            cần đăng nhập lại với mật khẩu mới.
           </p>
           {isLoadingSessions ? (
             <Skeleton className="h-4 w-64" />
           ) : activeSessionsCount > 1 ? (
             <p className="mt-2 text-sm">
-              📱 You are currently logged in on <strong>{activeSessionsCount} devices</strong>.
+              📱 Bạn đang đăng nhập trên <strong>{activeSessionsCount} thiết bị</strong>.
             </p>
           ) : null}
           {activeSessionsCount > 1 && (
             <p className="mt-2 text-sm">
-              💡 Tip:{" "}
+              💡 Mẹo:{" "}
               <Link href="/settings/sessions" className="underline font-medium hover:text-destructive-foreground">
-                Review your active sessions
+                Xem các phiên đang hoạt động
               </Link>{" "}
-              before changing your password to identify any suspicious logins.
+              trước khi đổi mật khẩu để phát hiện đăng nhập đáng ngờ.
             </p>
           )}
         </AlertDescription>
@@ -146,7 +146,7 @@ export function ChangePasswordForm() {
             name="old_password"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Current Password</FormLabel>
+                <FormLabel>Mật khẩu hiện tại</FormLabel>
                 <FormControl>
                   <Input
                     type="password"
@@ -164,7 +164,7 @@ export function ChangePasswordForm() {
             name="new_password"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>New Password</FormLabel>
+                <FormLabel>Mật khẩu mới</FormLabel>
                 <FormControl>
                   <Input
                     type="password"
@@ -182,7 +182,7 @@ export function ChangePasswordForm() {
             name="confirm_new_password"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Confirm New Password</FormLabel>
+                <FormLabel>Xác nhận mật khẩu mới</FormLabel>
                 <FormControl>
                   <Input
                     type="password"
@@ -196,7 +196,7 @@ export function ChangePasswordForm() {
             )}
           />
           <Button type="submit" disabled={isChangingPassword} className="mt-4">
-            {isChangingPassword ? "Changing..." : "Change Password"}
+            {isChangingPassword ? "Đang đổi..." : "Đổi Mật Khẩu"}
           </Button>
         </form>
       </Form>
@@ -205,23 +205,23 @@ export function ChangePasswordForm() {
       <AlertDialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Confirm Password Change</AlertDialogTitle>
+            <AlertDialogTitle>Xác nhận Đổi Mật Khẩu</AlertDialogTitle>
             <AlertDialogDescription>
-              You will be logged out from{" "}
+              Bạn sẽ bị đăng xuất khỏi{" "}
               <strong>
-                {activeSessionsCount === 1 ? "this device" : `all ${activeSessionsCount} devices`}
+                {activeSessionsCount === 1 ? "thiết bị này" : `tất cả ${activeSessionsCount} thiết bị`}
               </strong>
-              . Are you sure you want to continue?
+              . Bạn có chắc chắn muốn tiếp tục?
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={isChangingPassword}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={isChangingPassword}>Hủy</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleConfirmChange}
               disabled={isChangingPassword}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {isChangingPassword ? "Changing..." : "Yes, Change Password"}
+              {isChangingPassword ? "Đang đổi..." : "Có, Đổi Mật Khẩu"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

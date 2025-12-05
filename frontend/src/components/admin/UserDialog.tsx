@@ -254,11 +254,11 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
     <Dialog open={open} onOpenChange={handleDialogOpenChange}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[600px]">
         <DialogHeader>
-          <DialogTitle>{isCreate ? "Create New User" : "Edit User"}</DialogTitle>
+          <DialogTitle>{isCreate ? "Tạo Người dùng Mới" : "Chỉnh sửa Người dùng"}</DialogTitle>
           <DialogDescription>
             {isCreate
-              ? "Add a new user to the system. All fields marked with * are required."
-              : "Update user information. Leave avatar empty to keep current image."}
+              ? "Thêm người dùng mới vào hệ thống. Các trường có dấu * là bắt buộc."
+              : "Cập nhật thông tin người dùng. Để trống ảnh đại diện để giữ ảnh hiện tại."}
           </DialogDescription>
         </DialogHeader>
 
@@ -281,9 +281,9 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                 </button>
               </div>
               <div className="flex-1 space-y-1">
-                <p className="text-sm font-medium">Profile Picture</p>
+                <p className="text-sm font-medium">Ảnh đại diện</p>
                 <p className="text-muted-foreground text-xs">
-                  JPG, PNG or GIF. Max size 5MB.
+                  JPG, PNG hoặc GIF. Tối đa 5MB.
                 </p>
                 <input
                   ref={fileInputRef}
@@ -309,12 +309,12 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                 name="username"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Username *</FormLabel>
+                    <FormLabel>Tên đăng nhập *</FormLabel>
                     <FormControl>
-                      <Input placeholder="johndoe" disabled={isPending} {...field} />
+                      <Input placeholder="nguyenvana" disabled={isPending} {...field} />
                     </FormControl>
                     <FormDescription>
-                      Must be unique. Can only contain letters, numbers, hyphens, and underscores.
+                      Phải duy nhất. Chỉ chứa chữ cái, số, dấu gạch ngang và gạch dưới.
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -328,9 +328,9 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
               name="full_name"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Full Name</FormLabel>
+                  <FormLabel>Họ và tên</FormLabel>
                   <FormControl>
-                    <Input placeholder="John Doe" disabled={isPending} {...field} />
+                    <Input placeholder="Nguyễn Văn A" disabled={isPending} {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -364,7 +364,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                 name="phone_number"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Phone Number</FormLabel>
+                    <FormLabel>Số điện thoại</FormLabel>
                     <FormControl>
                       <Input
                         type="tel"
@@ -386,7 +386,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                 name="password"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Password *</FormLabel>
+                    <FormLabel>Mật khẩu *</FormLabel>
                     <FormControl>
                       <Input
                         type="password"
@@ -412,7 +412,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
               name="role"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Role *</FormLabel>
+                  <FormLabel>Vai trò *</FormLabel>
                   <Select
                     onValueChange={field.onChange}
                     defaultValue={field.value}
@@ -420,17 +420,17 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                   >
                     <FormControl>
                       <SelectTrigger>
-                        <SelectValue placeholder={rolesLoading ? "Loading roles..." : "Select a role"} />
+                        <SelectValue placeholder={rolesLoading ? "Đang tải vai trò..." : "Chọn vai trò"} />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
                       {rolesLoading ? (
                         <SelectItem value="" disabled>
-                          Loading roles...
+                          Đang tải vai trò...
                         </SelectItem>
                       ) : availableRoles.length === 0 ? (
                         <SelectItem value="" disabled>
-                          No roles available
+                          Không có vai trò nào
                         </SelectItem>
                       ) : (
                         availableRoles.map((role) => (
@@ -442,9 +442,9 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                     </SelectContent>
                   </Select>
                   <FormDescription>
-                    Determines what the user can access in the system.
+                    Xác định những gì người dùng có thể truy cập trong hệ thống.
                     {availableRoles.length > 0 && (
-                      <> ({availableRoles.length} roles available)</>
+                      <> ({availableRoles.length} vai trò có sẵn)</>
                     )}
                   </FormDescription>
                   <FormMessage />
@@ -458,7 +458,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
               name="status"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Status *</FormLabel>
+                  <FormLabel>Trạng thái *</FormLabel>
                   <Select
                     onValueChange={field.onChange}
                     defaultValue={field.value}
@@ -466,17 +466,17 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                   >
                     <FormControl>
                       <SelectTrigger>
-                        <SelectValue placeholder="Select status" />
+                        <SelectValue placeholder="Chọn trạng thái" />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      <SelectItem value="active">Active</SelectItem>
-                      <SelectItem value="pending">Pending</SelectItem>
-                      <SelectItem value="banned">Banned</SelectItem>
+                      <SelectItem value="active">Hoạt động</SelectItem>
+                      <SelectItem value="pending">Chờ duyệt</SelectItem>
+                      <SelectItem value="banned">Bị khóa</SelectItem>
                     </SelectContent>
                   </Select>
                   <FormDescription>
-                    Active users can log in. Banned users are blocked.
+                    Người dùng Hoạt động có thể đăng nhập. Người dùng Bị khóa không thể truy cập.
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -490,16 +490,16 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
                 onClick={() => handleDialogOpenChange(false)}
                 disabled={isPending}
               >
-                Cancel
+                Hủy
               </Button>
               <Button type="submit" disabled={isPending}>
                 {isPending ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {isCreate ? "Creating..." : "Saving..."}
+                    {isCreate ? "Đang tạo..." : "Đang lưu..."}
                   </>
                 ) : (
-                  <>{isCreate ? "Create User" : "Save Changes"}</>
+                  <>{isCreate ? "Tạo Người dùng" : "Lưu thay đổi"}</>
                 )}
               </Button>
             </DialogFooter>

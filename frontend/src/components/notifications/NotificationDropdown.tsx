@@ -75,7 +75,7 @@ export function NotificationDropdown() {
               {unreadCount > 9 ? "9+" : unreadCount}
             </span>
           )}
-          <span className="sr-only">Notifications</span>
+          <span className="sr-only">Thông báo</span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
@@ -87,11 +87,11 @@ export function NotificationDropdown() {
         <div className="flex items-center justify-between border-b p-4">
           <div className="flex items-center gap-2">
             <DropdownMenuLabel className="p-0 text-base font-semibold">
-              Notifications
+              Thông báo
             </DropdownMenuLabel>
             {unreadCount > 0 && (
               <Badge variant="secondary" className="text-xs">
-                {unreadCount} new
+                {unreadCount} mới
               </Badge>
             )}
           </div>
@@ -104,7 +104,7 @@ export function NotificationDropdown() {
               disabled={markAllAsRead.isPending}
             >
               <CheckCheck className="mr-1 h-3 w-3" />
-              Mark all read
+              Đánh dấu đã đọc
             </Button>
           )}
         </div>
@@ -125,7 +125,7 @@ export function NotificationDropdown() {
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <Bell className="text-muted-foreground mb-2 h-10 w-10" />
               <p className="text-muted-foreground text-sm">
-                No notifications yet
+                Chưa có thông báo
               </p>
             </div>
           ) : (
@@ -210,7 +210,7 @@ export function NotificationDropdown() {
                   variant="ghost"
                   className="h-8 w-full text-xs font-medium"
                 >
-                  View all notifications
+                  Xem tất cả thông báo
                 </Button>
               </Link>
             </div>

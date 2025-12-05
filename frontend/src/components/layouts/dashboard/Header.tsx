@@ -16,16 +16,16 @@ const TopNav = () => (
       href="/dashboard"
       className="text-muted-foreground hover:text-foreground transition-colors"
     >
-      Dashboard
+      Bảng điều khiển
     </Link>
     <Link href="/leads" className="text-muted-foreground hover:text-foreground transition-colors">
-      Leads
+      Lead
     </Link>
     <Link
       href="/admin/users"
       className="text-muted-foreground hover:text-foreground transition-colors"
     >
-      Users
+      Người dùng
     </Link>
   </nav>
 );
@@ -76,7 +76,7 @@ export function Header() {
         >
           <Search className="h-4 w-4 md:h-4 md:w-4 transition-transform duration-200 group-hover:scale-110" />
           <span className="hidden md:inline-flex transition-colors duration-200 group-hover:text-foreground">
-            Search...
+            Tìm kiếm...
           </span>
           <kbd className={cn(
             "pointer-events-none ml-auto hidden h-5 select-none items-center gap-1",

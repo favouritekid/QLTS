@@ -186,7 +186,7 @@ export function CommandPalette() {
       >
         {/* Search Input */}
         <CommandInput
-          placeholder="Search pages, actions, or type a command..."
+          placeholder="Tìm kiếm trang, thao tác, hoặc nhập lệnh..."
           value={query}
           onValueChange={setQuery}
           className="h-14 border-none focus:ring-0 transition-all duration-200"
@@ -198,14 +198,14 @@ export function CommandPalette() {
           <CommandEmpty className="py-8 text-center">
             <div className="text-muted-foreground space-y-2 animate-in fade-in-0 zoom-in-95 duration-500">
               <div className="text-4xl">🔍</div>
-              <p className="text-sm font-medium">No results found for &quot;{query}&quot;</p>
-              <p className="text-xs">Try searching for pages or features</p>
+              <p className="text-sm font-medium">Không tìm thấy kết quả cho "{query}"</p>
+              <p className="text-xs">Thử tìm kiếm trang hoặc tính năng</p>
             </div>
           </CommandEmpty>
 
           {/* Recent Pages Group */}
           {groupedItems.recent.length > 0 && (
-            <CommandGroup heading="Recent Pages">
+            <CommandGroup heading="Trang Gần Đây">
               {groupedItems.recent.map((item, idx) =>
                 renderItem(item, idx)
               )}
@@ -214,7 +214,7 @@ export function CommandPalette() {
 
           {/* Navigation Group */}
           {groupedItems.navigation.length > 0 && (
-            <CommandGroup heading={query ? "Pages" : "All Pages"}>
+            <CommandGroup heading={query ? "Trang" : "Tất cả Trang"}>
               {groupedItems.navigation.map((item, idx) => {
                 const globalIndex = groupedItems.recent.length + idx;
                 return renderItem(item, globalIndex);
@@ -224,7 +224,7 @@ export function CommandPalette() {
 
           {/* Actions Group (Future) */}
           {groupedItems.actions.length > 0 && (
-            <CommandGroup heading="Actions">
+            <CommandGroup heading="Thao tác">
               {groupedItems.actions.map((item, idx) => {
                 const globalIndex =
                   groupedItems.recent.length +
@@ -243,26 +243,26 @@ export function CommandPalette() {
               <kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium">
                 ↑↓
               </kbd>
-              <span>Navigate</span>
+              <span>Điều hướng</span>
             </div>
             <div className="flex items-center gap-1">
               <kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium">
                 ↵
               </kbd>
-              <span>Select</span>
+              <span>Chọn</span>
             </div>
             <div className="flex items-center gap-1">
               <kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium">
                 ESC
               </kbd>
-              <span>Close</span>
+              <span>Đóng</span>
             </div>
           </div>
           <div className="flex items-center gap-1">
             <kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium">
               ⌘K
             </kbd>
-            <span>to open</span>
+            <span>để mở</span>
           </div>
         </div>
       </Command>

@@ -122,8 +122,8 @@ export function SessionList({
       {/* Header (giữ nguyên) */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight">Active Sessions</h2>
-          <p className="text-muted-foreground">Manage your active login sessions across devices</p>
+          <h2 className="text-2xl font-bold tracking-tight">Phiên Đang Hoạt Động</h2>
+          <p className="text-muted-foreground">Quản lý các phiên đăng nhập trên các thiết bị</p>
         </div>
         {otherSessions.length > 0 && (
           <Button
@@ -131,7 +131,7 @@ export function SessionList({
             onClick={() => setShowRevokeAllDialog(true)}
             disabled={isLoading}
           >
-            Revoke All Other Sessions
+            Thu hồi Tất cả Phiên Khác
           </Button>
         )}
       </div>
@@ -145,11 +145,11 @@ export function SessionList({
                 {/* ✅ 5. Sử dụng hàm render icon mới */}
                 {renderIconWithStatus(currentSession)}
                 <div>
-                  <CardTitle className="text-lg">Current Session</CardTitle>
+                  <CardTitle className="text-lg">Phiên Hiện Tại</CardTitle>
                   <CardDescription>{formatDeviceInfo(currentSession)}</CardDescription>
                 </div>
               </div>
-              <Badge variant="default">Active Now</Badge>
+              <Badge variant="default">Đang hoạt động</Badge>
             </div>
           </CardHeader>
           <CardContent>
@@ -161,7 +161,7 @@ export function SessionList({
       {/* Other Sessions */}
       {otherSessions.length > 0 ? (
         <div className="space-y-4">
-          <h3 className="text-lg font-semibold">Other Sessions</h3>
+          <h3 className="text-lg font-semibold">Phiên Khác</h3>
           {otherSessions.map((session) => (
             <Card key={session.id}>
               <CardHeader>
@@ -172,7 +172,7 @@ export function SessionList({
                     <div>
                       <CardTitle className="text-lg">{formatDeviceInfo(session)}</CardTitle>
                       <CardDescription>
-                        Last active {getRelativeTime(session.last_activity_at)}
+                        Hoạt động lần cuối {getRelativeTime(session.last_activity_at)}
                       </CardDescription>
                     </div>
                   </div>
@@ -180,7 +180,7 @@ export function SessionList({
                     {session.is_suspicious && (
                       <Badge variant="destructive" className="gap-1">
                         <AlertTriangle className="h-3 w-3" />
-                        Suspicious
+                        Đáng ngờ
                       </Badge>
                     )}
                     {/* ✅ DEFENSE IN DEPTH: Disable revoke button for current session */}
@@ -189,9 +189,9 @@ export function SessionList({
                       size="sm"
                       onClick={() => setSessionToRevoke(session)}
                       disabled={isLoading || session.is_current}
-                      title={session.is_current ? "This is your current session" : "Revoke this session"}
+                      title={session.is_current ? "Đây là phiên hiện tại" : "Thu hồi phiên này"}
                     >
-                      {session.is_current ? "Current" : "Revoke"}
+                      {session.is_current ? "Hiện tại" : "Thu hồi"}
                     </Button>
                   </div>
                 </div>
@@ -205,7 +205,7 @@ export function SessionList({
       ) : (
         <Card>
           <CardContent className="text-muted-foreground py-8 text-center">
-            No other active sessions
+            Không có phiên khác đang hoạt động
           </CardContent>
         </Card>
       )}
@@ -217,21 +217,21 @@ export function SessionList({
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Revoke this session?</AlertDialogTitle>
+            <AlertDialogTitle>Thu hồi phiên này?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will log out the session on{" "}
-              <strong>{sessionToRevoke ? formatDeviceInfo(sessionToRevoke) : "this device"}</strong>
-              . This action cannot be undone.
+              Thao tác này sẽ đăng xuất phiên trên{" "}
+              <strong>{sessionToRevoke ? formatDeviceInfo(sessionToRevoke) : "thiết bị này"}</strong>
+              . Không thể hoàn tác.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={isRevokingSingle}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={isRevokingSingle}>Hủy</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleConfirmRevokeSingle}
               disabled={isRevokingSingle}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {isRevokingSingle ? "Revoking..." : "Revoke Session"}
+              {isRevokingSingle ? "Đang thu hồi..." : "Thu hồi Phiên"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -241,20 +241,20 @@ export function SessionList({
       <AlertDialog open={showRevokeAllDialog} onOpenChange={setShowRevokeAllDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Revoke all other sessions?</AlertDialogTitle>
+            <AlertDialogTitle>Thu hồi tất cả phiên khác?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will log you out from all other devices. You will remain logged in on this
-              device. This action cannot be undone.
+              Thao tác này sẽ đăng xuất bạn khỏi tất cả thiết bị khác. Bạn sẽ vẫn đăng nhập trên
+              thiết bị này. Không thể hoàn tác.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={isRevokingAll}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={isRevokingAll}>Hủy</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleRevokeAllOthers}
               disabled={isRevokingAll}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {isRevokingAll ? "Revoking..." : "Revoke All"}
+              {isRevokingAll ? "Đang thu hồi..." : "Thu hồi Tất cả"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -274,7 +274,7 @@ function SessionDetails({ session }: { session: UserSession }) {
       <div className="text-muted-foreground flex items-center gap-2">
         <Clock className="h-4 w-4" />
         <span>
-          Created {getRelativeTime(session.created_at)} • Expires{" "}
+          Tạo lúc {getRelativeTime(session.created_at)} • Hết hạn{" "}
           {getTimeUntilExpiration(session.expires_at)}
         </span>
       </div>

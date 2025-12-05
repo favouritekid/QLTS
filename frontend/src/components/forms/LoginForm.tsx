@@ -21,8 +21,8 @@ import type { LoginRequest } from "@/types/api.types"; // Import kiểu LoginReq
 
 // Định nghĩa Zod schema khớp với LoginRequest và yêu cầu backend
 const loginSchema = z.object({
-  username: z.string().min(1, { message: "Username is required" }), // Backend dùng username
-  password: z.string().min(6, { message: "Password must be at least 6 characters" }),
+  username: z.string().min(1, { message: "Tên đăng nhập là bắt buộc" }),
+  password: z.string().min(6, { message: "Mật khẩu phải có ít nhất 6 ký tự" }),
 });
 
 // Suy luận kiểu TypeScript từ Zod schema
@@ -51,8 +51,8 @@ export function LoginForm() {
   return (
     <div className="bg-card mx-auto w-full max-w-md space-y-6 rounded border p-6 shadow-md md:p-8">
       <div className="space-y-2 text-center">
-        <h1 className="text-3xl font-bold">Welcome back</h1>
-        <p className="text-muted-foreground">Enter your credentials to access your account</p>
+        <h1 className="text-3xl font-bold">Chào mừng trở lại</h1>
+        <p className="text-muted-foreground">Nhập thông tin đăng nhập để truy cập tài khoản của bạn</p>
       </div>
 
       <Form {...form}>
@@ -63,10 +63,10 @@ export function LoginForm() {
             name="username"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Username</FormLabel>
+                <FormLabel>Tên đăng nhập</FormLabel>
                 <FormControl>
                   <Input
-                    placeholder="your_username"
+                    placeholder="Tên đăng nhập"
                     autoComplete="username"
                     disabled={isLoading} // Vô hiệu hóa khi đang loading
                     {...field} // Kết nối input với react-hook-form
@@ -84,13 +84,13 @@ export function LoginForm() {
             render={({ field }) => (
               <FormItem>
                 <div className="flex items-center justify-between">
-                  <FormLabel>Password</FormLabel>
+                  <FormLabel>Mật khẩu</FormLabel>
                   {/* Link Forgot Password */}
                   <Link
-                    href="/forgot-password" // Cần tạo trang này sau
+                    href="/forgot-password"
                     className="text-primary text-sm hover:underline"
                   >
-                    Forgot password?
+                    Quên mật khẩu?
                   </Link>
                 </div>
                 <FormControl>
@@ -109,19 +109,19 @@ export function LoginForm() {
 
           {/* Nút Submit */}
           <Button type="submit" className="w-full" disabled={isLoading}>
-            {isLoading ? "Logging in..." : "Login"}
+            {isLoading ? "Đang đăng nhập..." : "Đăng nhập"}
           </Button>
         </form>
       </Form>
 
       {/* Link Sign Up */}
       <p className="text-muted-foreground mt-4 text-center text-sm">
-        Don&apos;t have an account?{" "}
+        Chưa có tài khoản?{" "}
         <Link
-          href="/register" // Cần tạo trang này sau
+          href="/register"
           className="text-primary font-medium hover:underline"
         >
-          Sign up
+          Đăng ký
         </Link>
       </p>
     </div>

@@ -23,26 +23,25 @@ const registerSchema = z
   .object({
     username: z
       .string()
-      .min(1, { message: "Username is required" })
-      .min(3, { message: "Username must be at least 3 characters" }),
+      .min(1, { message: "Tên đăng nhập là bắt buộc" })
+      .min(3, { message: "Tên đăng nhập phải có ít nhất 3 ký tự" }),
     email: z
       .string()
-      .min(1, { message: "Email is required" })
-      .email({ message: "Invalid email address" }),
+      .min(1, { message: "Email là bắt buộc" })
+      .email({ message: "Địa chỉ email không hợp lệ" }),
     full_name: z.string().optional(),
     password: z
       .string()
-      .min(1, { message: "Password is required" })
-      .min(8, { message: "Password must be at least 8 characters" })
-      // ... (các regex rules)
-      .regex(/[A-Z]/, { message: "Password must contain an uppercase letter" })
-      .regex(/[a-z]/, { message: "Password must contain a lowercase letter" })
-      .regex(/[0-9]/, { message: "Password must contain a number" })
-      .regex(/[^A-Za-z0-9]/, { message: "Password must contain a special character" }),
-    confirmPassword: z.string().min(1, { message: "Please confirm your password" }),
+      .min(1, { message: "Mật khẩu là bắt buộc" })
+      .min(8, { message: "Mật khẩu phải có ít nhất 8 ký tự" })
+      .regex(/[A-Z]/, { message: "Mật khẩu phải chứa chữ cái viết hoa" })
+      .regex(/[a-z]/, { message: "Mật khẩu phải chứa chữ cái viết thường" })
+      .regex(/[0-9]/, { message: "Mật khẩu phải chứa số" })
+      .regex(/[^A-Za-z0-9]/, { message: "Mật khẩu phải chứa ký tự đặc biệt" }),
+    confirmPassword: z.string().min(1, { message: "Vui lòng xác nhận mật khẩu" }),
   })
   .refine((data) => data.password === data.confirmPassword, {
-    message: "Passwords do not match",
+    message: "Mật khẩu không khớp",
     path: ["confirmPassword"],
   });
 
@@ -80,8 +79,8 @@ export function RegisterForm() {
   return (
     <div className="bg-card mx-auto w-full max-w-md space-y-6 rounded border p-6 shadow-md md:p-8">
       <div className="space-y-2 text-center">
-        <h1 className="text-3xl font-bold">Create an account</h1>
-        <p className="text-muted-foreground">Enter your details below to register</p>
+        <h1 className="text-3xl font-bold">Tạo tài khoản</h1>
+        <p className="text-muted-foreground">Nhập thông tin của bạn để đăng ký</p>
       </div>
       <Form {...form}>
         {/* ❌ Đã xóa hàm onError (chỉ chứa log) khỏi handleSubmit */}
@@ -91,9 +90,9 @@ export function RegisterForm() {
             name="username"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Username</FormLabel>
+                <FormLabel>Tên đăng nhập</FormLabel>
                 <FormControl>
-                  <Input placeholder="your_username" disabled={isLoading} {...field} />
+                  <Input placeholder="Tên đăng nhập" disabled={isLoading} {...field} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -124,9 +123,9 @@ export function RegisterForm() {
             name="full_name"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Full Name (Optional)</FormLabel>
+                <FormLabel>Họ và tên (Tùy chọn)</FormLabel>
                 <FormControl>
-                  <Input placeholder="Your Full Name" disabled={isLoading} {...field} />
+                  <Input placeholder="Nguyễn Văn A" disabled={isLoading} {...field} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -138,7 +137,7 @@ export function RegisterForm() {
             name="password"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Password</FormLabel>
+                <FormLabel>Mật khẩu</FormLabel>
                 <FormControl>
                   <Input type="password" placeholder="••••••••" disabled={isLoading} {...field} />
                 </FormControl>
@@ -152,7 +151,7 @@ export function RegisterForm() {
             name="confirmPassword"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Confirm Password</FormLabel>
+                <FormLabel>Xác nhận mật khẩu</FormLabel>
                 <FormControl>
                   <Input type="password" placeholder="••••••••" disabled={isLoading} {...field} />
                 </FormControl>
@@ -162,14 +161,14 @@ export function RegisterForm() {
           />
 
           <Button type="submit" className="w-full" disabled={isLoading}>
-            {isLoading ? "Registering..." : "Register"}
+            {isLoading ? "Đang đăng ký..." : "Đăng ký"}
           </Button>
         </form>
       </Form>
       <p className="text-muted-foreground mt-4 text-center text-sm">
-        Already have an account?
+        Đã có tài khoản?
         <Link href="/login" className="text-primary font-medium hover:underline">
-          Log in
+          Đăng nhập
         </Link>
       </p>
     </div>
