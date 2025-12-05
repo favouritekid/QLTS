@@ -62,7 +62,7 @@ export const API_ENDPOINTS = {
       DELETE: (id: number) => `/api/admin/users/${id}`,
       SET_PASSWORD: (id: number) => `/api/admin/users/${id}/set-password`,
       BULK_ACTION: "/api/admin/users/bulk",
-      ROLES: (id: number) => `/api/admin/users/${id}/roles`,
+      ROLES: (id: number) => `/api/admin/roles/users/${id}/roles`,
       EXPORT: "/api/admin/users/export",
       EXPORT_CSV_STREAM: "/api/admin/users/export-csv",
     },

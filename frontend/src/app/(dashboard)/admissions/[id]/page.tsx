@@ -45,21 +45,22 @@ async function getAdmissionProfile(
 /**
  * Page Component (Server Component)
  *
- * @param params - Route params from Next.js
+ * Next.js 16: params is now a Promise that must be awaited
  */
 export default async function AdmissionProfilePage({
   params,
 }: {
-  params: { id: string }
+  params: Promise<{ id: string }>
 }) {
-  const profileId = parseInt(params.id, 10)
+  const { id } = await params;
+  const profileId = parseInt(id, 10)
 
   if (isNaN(profileId)) {
     notFound()
   }
 
   // Server-side fetch (no loading spinner)
-  const initialData = await getAdmissionProfile(params.id)
+  const initialData = await getAdmissionProfile(id)
 
   if (!initialData) {
     notFound()
@@ -79,9 +80,16 @@ export default async function AdmissionProfilePage({
 
 /**
  * Metadata for SEO
+ *
+ * Next.js 16: params is now a Promise that must be awaited
  */
-export async function generateMetadata({ params }: { params: { id: string } }) {
-  const profile = await getAdmissionProfile(params.id)
+export async function generateMetadata({
+  params
+}: {
+  params: Promise<{ id: string }>
+}) {
+  const { id } = await params;
+  const profile = await getAdmissionProfile(id)
 
   if (!profile) {
     return {

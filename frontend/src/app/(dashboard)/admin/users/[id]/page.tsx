@@ -54,10 +54,15 @@ async function UserDetailPageContent({ userId }: { userId: number }) {
 /**
  * Page Component (Server Component)
  *
- * Next.js automatically provides params for dynamic routes
+ * Next.js 16: params is now a Promise that must be awaited
  */
-export default function UserDetailPage({ params }: { params: { id: string } }) {
-  const userId = Number(params.id);
+export default async function UserDetailPage({
+  params
+}: {
+  params: Promise<{ id: string }>
+}) {
+  const { id } = await params;
+  const userId = Number(id);
 
   return (
     <Suspense fallback={<UserDetailLoading />}>
