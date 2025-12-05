@@ -55,10 +55,15 @@ async function LeadDetailPageContent({ leadId }: { leadId: number }) {
 /**
  * Page Component (Server Component)
  *
- * Next.js automatically provides params for dynamic routes
+ * Next.js 16: params is now a Promise that must be awaited
  */
-export default function LeadDetailPage({ params }: { params: { id: string } }) {
-  const leadId = Number(params.id);
+export default async function LeadDetailPage({
+  params
+}: {
+  params: Promise<{ id: string }>
+}) {
+  const { id } = await params;
+  const leadId = Number(id);
 
   return (
     <Suspense fallback={<LeadDetailLoading />}>
