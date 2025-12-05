@@ -33,27 +33,27 @@ export function DashboardClient({ initialUser, initialStats }: DashboardClientPr
   // User statistics for admin/manager
   const userStats = stats ? [
     {
-      title: "Total Users",
+      title: "Tổng Người Dùng",
       value: stats.total_users.toString(),
-      change: `+${stats.new_users_last_7_days} this week`,
+      change: `+${stats.new_users_last_7_days} tuần này`,
       icon: Users,
       trend: "up" as const,
     },
     {
-      title: "Active Users",
+      title: "Người Dùng Hoạt Động",
       value: stats.active_users.toString(),
       change: `${((stats.active_users / stats.total_users) * 100).toFixed(1)}%`,
       icon: UserCheck,
       trend: "up" as const,
     },
     {
-      title: "Pending Users",
+      title: "Chờ Duyệt",
       value: stats.pending_users.toString(),
       icon: UserPlus,
       trend: "neutral" as const,
     },
     {
-      title: "Banned Users",
+      title: "Bị Cấm",
       value: stats.banned_users.toString(),
       icon: UserX,
       trend: "down" as const,
@@ -63,28 +63,28 @@ export function DashboardClient({ initialUser, initialStats }: DashboardClientPr
   // Default placeholder stats for non-admin users
   const defaultStats = [
     {
-      title: "Total Revenue",
+      title: "Tổng Doanh Thu",
       value: "$45,231.89",
       change: "+20.1%",
       icon: DollarSign,
       trend: "up" as const,
     },
     {
-      title: "Active Users",
+      title: "Người Dùng",
       value: "2,350",
       change: "+180.1%",
       icon: Users,
       trend: "up" as const,
     },
     {
-      title: "Sales",
+      title: "Doanh Số",
       value: "+12,234",
       change: "+19%",
       icon: TrendingUp,
       trend: "up" as const,
     },
     {
-      title: "Active Now",
+      title: "Đang Hoạt Động",
       value: "573",
       change: "+201",
       icon: Activity,
@@ -99,20 +99,20 @@ export function DashboardClient({ initialUser, initialStats }: DashboardClientPr
       {/* Page Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="space-y-1">
-          <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Dashboard</h1>
+          <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Bảng Điều Khiển</h1>
           <p className="text-muted-foreground text-sm">
-            Welcome back,{" "}
-            <span className="text-foreground font-medium">{user?.username || "Guest"}</span>!
+            Chào mừng trở lại,{" "}
+            <span className="text-foreground font-medium">{user?.username || "Khách"}</span>!
           </p>
         </div>
 
         {/* Buttons */}
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm">
-            Download Report
+            Tải Báo Cáo
           </Button>
           <Button onClick={() => logout()} variant="destructive" size="sm">
-            Logout
+            Đăng Xuất
           </Button>
         </div>
       </div>
@@ -158,8 +158,8 @@ export function DashboardClient({ initialUser, initialStats }: DashboardClientPr
         {isAdmin && (
           <Card className="lg:col-span-2">
             <CardHeader>
-              <CardTitle>Recent User Activities</CardTitle>
-              <CardDescription>Latest user management actions</CardDescription>
+              <CardTitle>Hoạt Động Người Dùng Gần Đây</CardTitle>
+              <CardDescription>Các thao tác quản lý người dùng mới nhất</CardDescription>
             </CardHeader>
             <CardContent>
               {isLoadingStats || !stats?.recent_activities ? (
@@ -192,7 +192,7 @@ export function DashboardClient({ initialUser, initialStats }: DashboardClientPr
                 </div>
               ) : (
                 <p className="text-muted-foreground text-center text-sm py-8">
-                  No recent activities
+                  Chưa có hoạt động gần đây
                 </p>
               )}
             </CardContent>
@@ -203,8 +203,8 @@ export function DashboardClient({ initialUser, initialStats }: DashboardClientPr
         {!isAdmin && (
           <Card className="lg:col-span-2">
             <CardHeader>
-              <CardTitle>Recent Activity</CardTitle>
-              <CardDescription>Your latest updates and actions</CardDescription>
+              <CardTitle>Hoạt Động Gần Đây</CardTitle>
+              <CardDescription>Cập nhật và thao tác mới nhất của bạn</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
@@ -217,11 +217,11 @@ export function DashboardClient({ initialUser, initialStats }: DashboardClientPr
                       <Activity className="text-primary h-4 w-4" />
                     </div>
                     <div className="flex-1 space-y-0.5">
-                      <p className="text-sm leading-none font-medium">Activity {item}</p>
-                      <p className="text-muted-foreground text-xs">2 hours ago</p>
+                      <p className="text-sm leading-none font-medium">Hoạt động {item}</p>
+                      <p className="text-muted-foreground text-xs">2 giờ trước</p>
                     </div>
                     <Button variant="ghost" size="sm">
-                      View
+                      Xem
                     </Button>
                   </div>
                 ))}
@@ -234,29 +234,29 @@ export function DashboardClient({ initialUser, initialStats }: DashboardClientPr
         {isAdmin && (
           <Card>
             <CardHeader>
-              <CardTitle>Quick Actions</CardTitle>
-              <CardDescription>User management shortcuts</CardDescription>
+              <CardTitle>Thao Tác Nhanh</CardTitle>
+              <CardDescription>Phím tắt quản lý người dùng</CardDescription>
             </CardHeader>
             <CardContent className="space-y-2">
               <Link href="/admin/users">
                 <Button className="w-full justify-start" variant="outline" size="sm">
                   <Users className="mr-2 h-4 w-4" />
-                  Manage Users
+                  Quản Lý Người Dùng
                 </Button>
               </Link>
               <Link href="/admin/policies">
                 <Button className="w-full justify-start" variant="outline" size="sm">
                   <Shield className="mr-2 h-4 w-4" />
-                  Manage Policies
+                  Quản Lý Chính Sách
                 </Button>
               </Link>
               <Button className="w-full justify-start" variant="outline" size="sm" disabled>
                 <TrendingUp className="mr-2 h-4 w-4" />
-                View Reports
+                Xem Báo Cáo
               </Button>
               <Button className="w-full justify-start" variant="outline" size="sm" disabled>
                 <Activity className="mr-2 h-4 w-4" />
-                Activity Logs
+                Nhật Ký Hoạt Động
               </Button>
             </CardContent>
           </Card>
@@ -266,25 +266,25 @@ export function DashboardClient({ initialUser, initialStats }: DashboardClientPr
         {!isAdmin && (
           <Card>
             <CardHeader>
-              <CardTitle>Quick Actions</CardTitle>
-              <CardDescription>Common tasks and shortcuts</CardDescription>
+              <CardTitle>Thao Tác Nhanh</CardTitle>
+              <CardDescription>Các nhiệm vụ và phím tắt thường dùng</CardDescription>
             </CardHeader>
             <CardContent className="space-y-2">
               <Button className="w-full justify-start" variant="outline" size="sm">
                 <Users className="mr-2 h-4 w-4" />
-                Add New User
+                Thêm Người Dùng Mới
               </Button>
               <Button className="w-full justify-start" variant="outline" size="sm">
                 <TrendingUp className="mr-2 h-4 w-4" />
-                Create Report
+                Tạo Báo Cáo
               </Button>
               <Button className="w-full justify-start" variant="outline" size="sm">
                 <DollarSign className="mr-2 h-4 w-4" />
-                View Revenue
+                Xem Doanh Thu
               </Button>
               <Button className="w-full justify-start" variant="outline" size="sm">
                 <Activity className="mr-2 h-4 w-4" />
-                Monitor Activity
+                Theo Dõi Hoạt Động
               </Button>
             </CardContent>
           </Card>
@@ -295,12 +295,12 @@ export function DashboardClient({ initialUser, initialStats }: DashboardClientPr
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>User Information</CardTitle>
-            <CardDescription>Your account details</CardDescription>
+            <CardTitle>Thông Tin Người Dùng</CardTitle>
+            <CardDescription>Chi tiết tài khoản của bạn</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2.5">
             <div className="flex justify-between text-sm">
-              <span className="font-medium">Username:</span>
+              <span className="font-medium">Tên đăng nhập:</span>
               <span className="text-muted-foreground">{user?.username}</span>
             </div>
             <div className="flex justify-between text-sm">
@@ -308,11 +308,11 @@ export function DashboardClient({ initialUser, initialStats }: DashboardClientPr
               <span className="text-muted-foreground">{user?.email}</span>
             </div>
             <div className="flex justify-between text-sm">
-              <span className="font-medium">Role:</span>
+              <span className="font-medium">Vai trò:</span>
               <Badge variant="outline">{user?.role}</Badge>
             </div>
             <div className="flex justify-between text-sm">
-              <span className="font-medium">Status:</span>
+              <span className="font-medium">Trạng thái:</span>
               <Badge variant={user?.status === "active" ? "default" : "secondary"}>
                 {user?.status}
               </Badge>
@@ -322,14 +322,14 @@ export function DashboardClient({ initialUser, initialStats }: DashboardClientPr
 
         <Card>
           <CardHeader>
-            <CardTitle>System Status</CardTitle>
-            <CardDescription>All systems operational</CardDescription>
+            <CardTitle>Trạng Thái Hệ Thống</CardTitle>
+            <CardDescription>Tất cả hệ thống hoạt động bình thường</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2.5">
-            {["API Server", "Database", "Cache", "Storage"].map((service) => (
+            {["Máy chủ API", "Cơ sở dữ liệu", "Bộ nhớ đệm", "Lưu trữ"].map((service) => (
               <div key={service} className="flex items-center justify-between text-sm">
                 <span className="font-medium">{service}</span>
-                <Badge className="bg-green-500 hover:bg-green-600">Operational</Badge>
+                <Badge className="bg-green-500 hover:bg-green-600">Hoạt động</Badge>
               </div>
             ))}
           </CardContent>

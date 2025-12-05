@@ -144,7 +144,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
       deleteMutation.mutate(leadToDelete.id, {
         onSuccess: () => {
           setLeadToDelete(null);
-          toast.success("Lead deleted successfully");
+          toast.success("Xoá lead thành công");
         },
       });
     }
@@ -207,9 +207,9 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
                 <Command className="h-5 w-5 text-primary" />
               </div>
               <div>
-                <h1 className="text-2xl font-bold tracking-tight">Lead Command Center</h1>
+                <h1 className="text-2xl font-bold tracking-tight">Trung Tâm Quản Lý Lead</h1>
                 <p className="text-sm text-muted-foreground">
-                  Manage and track all your leads in one place
+                  Quản lý và theo dõi tất cả lead của bạn
                 </p>
               </div>
             </div>
@@ -228,7 +228,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
                 disabled={importMutation.isPending}
               >
                 <Upload className="mr-2 h-4 w-4" />
-                Import
+                Nhập
               </Button>
               <Button
                 variant="outline"
@@ -237,7 +237,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
                 disabled={exportMutation.isPending}
               >
                 <Download className="mr-2 h-4 w-4" />
-                Export
+                Xuất
               </Button>
               <Button
                 size="sm"
@@ -248,7 +248,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
                 }}
               >
                 <Plus className="mr-2 h-4 w-4" />
-                New Lead
+                Lead Mới
               </Button>
             </div>
           </div>
@@ -294,7 +294,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
             {/* List Header */}
             <div className="shrink-0 px-4 py-2 border-b bg-muted/30 flex items-center justify-between">
               <span className="text-sm text-muted-foreground">
-                {filteredLeads.length} of {leadsPage?.total_count || 0} leads
+                {filteredLeads.length} / {leadsPage?.total_count || 0} lead
               </span>
               {/* Pagination */}
               <div className="flex items-center gap-1">
@@ -305,7 +305,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
                   disabled={page === 1}
                   className="h-7 px-2 text-xs"
                 >
-                  Prev
+                  Trước
                 </Button>
                 <span className="text-xs text-muted-foreground px-1">
                   {page}
@@ -317,7 +317,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
                   disabled={filteredLeads.length < pageSize}
                   className="h-7 px-2 text-xs"
                 >
-                  Next
+                  Sau
                 </Button>
               </div>
             </div>
@@ -332,18 +332,18 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
                 ) : isError ? (
                   <div className="flex items-center justify-center h-40">
                     <div className="text-center">
-                      <p className="text-red-600 font-medium text-sm">Error loading leads</p>
+                      <p className="text-red-600 font-medium text-sm">Lỗi tải lead</p>
                       <p className="text-xs text-muted-foreground mt-1">
-                        {error?.message || "Unknown error"}
+                        {error?.message || "Lỗi không xác định"}
                       </p>
                     </div>
                   </div>
                 ) : filteredLeads.length === 0 ? (
                   <div className="flex items-center justify-center h-40">
                     <div className="text-center">
-                      <p className="font-medium text-sm">No leads found</p>
+                      <p className="font-medium text-sm">Không tìm thấy lead</p>
                       <p className="text-xs text-muted-foreground mt-1">
-                        Try adjusting your filters
+                        Thử điều chỉnh bộ lọc
                       </p>
                     </div>
                   </div>
@@ -392,19 +392,19 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
       <AlertDialog open={!!leadToDelete} onOpenChange={() => setLeadToDelete(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Lead</AlertDialogTitle>
+            <AlertDialogTitle>Xoá Lead</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete &quot;{leadToDelete?.full_name}&quot;?
-              This action cannot be undone.
+              Bạn có chắc muốn xoá "{leadToDelete?.full_name}"?
+              Không thể hoàn tác thao tác này.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>Hủy</AlertDialogCancel>
             <AlertDialogAction
               onClick={confirmDelete}
               className="bg-red-600 hover:bg-red-700"
             >
-              Delete
+              Xoá
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -91,13 +91,13 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
     };
 
     const labels: Record<Notification["type"], string> = {
-      info: "Info",
-      success: "Success",
-      warning: "Warning",
-      error: "Error",
-      admin_update: "Admin Update",
-      system: "System",
-      reminder: "Reminder",
+      info: "Thông tin",
+      success: "Thành công",
+      warning: "Cảnh báo",
+      error: "Lỗi",
+      admin_update: "Admin cập nhật",
+      system: "Hệ thống",
+      reminder: "Nhắc nhở",
     };
 
     return (
@@ -111,13 +111,13 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
     <PageContainer maxWidth="md">
       {/* Header */}
       <PageHeader
-        title="Notifications"
-        description="Stay updated with your latest notifications"
+        title="Thông Báo"
+        description="Cập nhật thông báo mới nhất của bạn"
         actions={
           unreadCount > 0 ? (
             <Button onClick={handleMarkAllAsRead} disabled={markAllAsRead.isPending}>
               <CheckCheck className="mr-2 h-4 w-4" />
-              Mark all as read
+              Đánh dấu đã đọc tất cả
             </Button>
           ) : undefined
         }
@@ -127,13 +127,13 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader className="pb-3">
-            <CardDescription>Total Notifications</CardDescription>
+            <CardDescription>Tổng Thông Báo</CardDescription>
             <CardTitle className="text-3xl">{totalCount}</CardTitle>
           </CardHeader>
         </Card>
         <Card>
           <CardHeader className="pb-3">
-            <CardDescription>Unread Notifications</CardDescription>
+            <CardDescription>Chưa Đọc</CardDescription>
             <CardTitle className="text-3xl">{unreadCount}</CardTitle>
           </CardHeader>
         </Card>
@@ -143,7 +143,7 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
       <Tabs value={currentTab} onValueChange={(v) => setCurrentTab(v as typeof currentTab)}>
         <TabsList className="grid w-full max-w-md grid-cols-2">
           <TabsTrigger value="all">
-            All
+            Tất cả
             {totalCount > 0 && (
               <Badge variant="secondary" className="ml-2">
                 {totalCount}
@@ -151,7 +151,7 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
             )}
           </TabsTrigger>
           <TabsTrigger value="unread">
-            Unread
+            Chưa đọc
             {unreadCount > 0 && (
               <Badge variant="destructive" className="ml-2">
                 {unreadCount}
@@ -184,11 +184,11 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
             <Card>
               <CardContent className="flex flex-col items-center justify-center py-12">
                 <Bell className="text-muted-foreground mb-4 h-16 w-16" />
-                <h3 className="text-lg font-semibold">No notifications</h3>
+                <h3 className="text-lg font-semibold">Không có thông báo</h3>
                 <p className="text-muted-foreground text-sm">
                   {currentTab === "unread"
-                    ? "You're all caught up!"
-                    : "You don't have any notifications yet."}
+                    ? "Bạn đã đọc hết!"
+                    : "Bạn chưa có thông báo nào."}
                 </p>
               </CardContent>
             </Card>
@@ -256,7 +256,7 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
                                   size="icon"
                                   className="h-8 w-8"
                                   onClick={() => handleMarkAsRead(notification.id)}
-                                  title="Mark as read"
+                                  title="Đánh dấu đã đọc"
                                 >
                                   <Check className="h-4 w-4" />
                                 </Button>
@@ -266,7 +266,7 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
                                 size="icon"
                                 className="h-8 w-8 text-destructive hover:text-destructive"
                                 onClick={() => handleDelete(notification.id)}
-                                title="Delete"
+                                title="Xoá"
                               >
                                 <Trash2 className="h-4 w-4" />
                               </Button>
@@ -298,8 +298,7 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
       {!isLoading && notifications.length > 0 && totalCount > pageSize && (
         <div className="flex items-center justify-between border-t pt-4">
           <p className="text-muted-foreground text-sm">
-            Showing {(page - 1) * pageSize + 1} to {Math.min(page * pageSize, totalCount)} of{" "}
-            {totalCount} notifications
+            Hiển thị {(page - 1) * pageSize + 1} đến {Math.min(page * pageSize, totalCount)} / {totalCount} thông báo
           </p>
           <div className="flex gap-2">
             <Button
@@ -308,7 +307,7 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={page === 1}
             >
-              Previous
+              Trước
             </Button>
             <Button
               variant="outline"
@@ -316,7 +315,7 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
               onClick={() => setPage((p) => p + 1)}
               disabled={page * pageSize >= totalCount}
             >
-              Next
+              Sau
             </Button>
           </div>
         </div>
