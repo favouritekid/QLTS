@@ -1,7 +1,7 @@
 """add admission_profile and student tables
 
 Revision ID: a4b5c6d7e8f9
-Revises: z3a4b5c6d7e8
+Revises: j6k7l8m9n0o1
 Create Date: 2025-12-03 10:00:00.000000
 
 """
@@ -13,7 +13,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = 'a4b5c6d7e8f9'
-down_revision: Union[str, None] = 'z3a4b5c6d7e8'
+down_revision: Union[str, None] = 'j6k7l8m9n0o1'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
