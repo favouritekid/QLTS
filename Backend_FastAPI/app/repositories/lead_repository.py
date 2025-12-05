@@ -152,7 +152,7 @@ class LeadRepository(BaseRepository[models.Lead]):
                 sort_column.asc()
             )
 
-        # Apply eager loading and pagination
+        # ✅ Apply eager loading with ALL relationships required by schema
         leads_query = (
             leads_query.options(
                 selectinload(models.Lead.offering).options(
@@ -162,6 +162,8 @@ class LeadRepository(BaseRepository[models.Lead]):
                 selectinload(models.Lead.unit),
                 selectinload(models.Lead.consultation_status),
                 selectinload(models.Lead.pipeline_stage),
+                # ✅ FIX: Add missing eager load for application to prevent MissingGreenlet error
+                selectinload(models.Lead.application),
             )
             .offset(skip)
             .limit(limit)
