@@ -540,7 +540,7 @@ class EventDispatcher:
         self._handlers[event_name].append(handler)
         import structlog
         log = structlog.get_logger(__name__)
-        log.debug("Event handler registered", event=event_name, handler=handler.__name__)
+        log.debug("Event handler registered", event_name=event_name, handler=handler.__name__)
 
     async def dispatch(self, event_name: str, **data):
         """
@@ -555,17 +555,17 @@ class EventDispatcher:
 
         import structlog
         log = structlog.get_logger(__name__)
-        log.info("Dispatching event", event=event_name, handler_count=len(self._handlers[event_name]))
+        log.info("Dispatching event", event_name=event_name, handler_count=len(self._handlers[event_name]))
 
         for handler in self._handlers[event_name]:
             try:
                 await handler(**data)
-                log.debug("Event handler succeeded", event=event_name, handler=handler.__name__)
+                log.debug("Event handler succeeded", event_name=event_name, handler=handler.__name__)
             except Exception as e:
                 # Log error but continue dispatching to other handlers
                 log.error(
                     "Event handler failed",
-                    event=event_name,
+                    event_name=event_name,
                     handler=handler.__name__,
                     error=str(e),
                     exc_info=True

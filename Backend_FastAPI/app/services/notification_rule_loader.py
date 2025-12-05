@@ -57,9 +57,9 @@ async def invalidate_rule_cache(event: str) -> None:
     cache_key = f"{RULE_CACHE_PREFIX}{event}"
     try:
         await safe_redis_delete(cache_key)
-        log.info("Invalidated rule cache", event=event, cache_key=cache_key)
+        log.info("Invalidated rule cache", event_name=event, cache_key=cache_key)
     except Exception as e:
-        log.warning("Failed to invalidate rule cache", event=event, error=str(e))
+        log.warning("Failed to invalidate rule cache", event_name=event, error=str(e))
 
 
 # =============================================================================
