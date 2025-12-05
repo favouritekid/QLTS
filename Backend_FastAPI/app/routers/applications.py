@@ -1,4 +1,3 @@
-from app.core.rate_limits import limiter, RateLimits
 # app/routers/applications.py
 """
 Router cho Application (Hồ sơ Tuyển sinh).
@@ -9,6 +8,7 @@ Endpoints:
 - GET /api/applications/{application_id} - Lấy Application theo ID
 - DELETE /api/applications/{application_id} - Xóa Application (Admin only, soft delete)
 """
+from app.core.rate_limits import limiter, RateLimits
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog

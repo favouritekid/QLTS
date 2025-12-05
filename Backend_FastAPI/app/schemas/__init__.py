@@ -4,7 +4,16 @@
 # Giúp import dễ dàng hơn bằng cách "export" tất cả các schema
 # ra cấp cao nhất của package 'schemas' (vd: schemas.UserCreate)
 
-# --- Từ config.py ---
+# =============================================================================
+# IMPORT ORDER: Follow dependency graph to prevent circular imports
+# 1. config (base, no dependencies)
+# 2. organization (depends on: config)
+# 3. pipeline (depends on: config, organization)
+# 4. lead (depends on: organization, pipeline)
+# 5. admission (depends on: lead, organization)
+# =============================================================================
+
+# --- 1. Từ config.py (Base layer) ---
 from .config import (
     AssignmentConfig,
     ScoringConfig,
@@ -13,53 +22,7 @@ from .config import (
     SkillRuleCreate,
 )
 
-# --- Từ lead.py ---
-from .lead import (
-    AssignLead,
-    AssignmentLog,
-    BulkAssignLeadsSchema,
-    Consultation,
-    ConsultationBase,
-    ConsultationCreate,
-    ConsultationUpdate,
-    Lead,
-    LeadAction,
-    LeadBase,
-    LeadCreate,
-    LeadImportError,
-    LeadImportResult,
-    LeadInsights,
-    LeadsPage,
-    LeadUpdate,
-    TimelineItem,
-    # Application schemas (Hồ sơ Tuyển sinh - Legacy)
-    Application,
-    ApplicationBase,
-    ApplicationCreate,
-    ApplicationUpdate,
-    ApplicationDocuments,
-    ChecklistItem,
-)
-
-# --- Từ admission.py (NEW: Replacement for Application) ---
-from .admission import (
-    # Nested schemas
-    FamilyMemberSchema,
-    AcademicRecordSchema,
-    AdmissionScoreSchema,
-    DocumentItemSchema,
-    # AdmissionProfile schemas
-    AdmissionProfileCreate,
-    AdmissionProfileUpdate,
-    AdmissionProfileResponse,
-    AdmissionSubmitResponse,
-    EnrollStudentResponse,
-    # Student schemas
-    StudentDocumentResponse,
-    StudentResponse,
-)
-
-# --- Từ organization.py ---
+# --- 2. Từ organization.py (Depends on: config) ---
 from .organization import (
     # Legacy schemas (for backward compatibility / aliases)
     Major,
@@ -115,6 +78,69 @@ from .organization import (
     DistributionRuleResponse,
 )
 
+# --- 3. Từ pipeline.py (Depends on: config, organization) ---
+from .pipeline import (
+    ConsultationStatus,
+    ConsultationStatusBase,
+    ConsultationStatusCreate,
+    ConsultationStatusUpdate,
+    FullPipeline,
+    PipelineStage,
+    PipelineStageBase,
+    PipelineStageCreate,
+    PipelineStageUpdate,
+    AllowedTransition,
+    AllowedTransitionBase,
+    AllowedTransitionCreate,
+    AllowedTransitionUpdate,
+)
+
+# --- 4. Từ lead.py (Depends on: organization, pipeline) ---
+from .lead import (
+    AssignLead,
+    AssignmentLog,
+    BulkAssignLeadsSchema,
+    Consultation,
+    ConsultationBase,
+    ConsultationCreate,
+    ConsultationUpdate,
+    Lead,
+    LeadAction,
+    LeadBase,
+    LeadCreate,
+    LeadImportError,
+    LeadImportResult,
+    LeadInsights,
+    LeadsPage,
+    LeadUpdate,
+    TimelineItem,
+    # Application schemas (Hồ sơ Tuyển sinh - Legacy)
+    Application,
+    ApplicationBase,
+    ApplicationCreate,
+    ApplicationUpdate,
+    ApplicationDocuments,
+    ChecklistItem,
+)
+
+# --- 5. Từ admission.py (Depends on: lead, organization) ---
+from .admission import (
+    # Nested schemas
+    FamilyMemberSchema,
+    AcademicRecordSchema,
+    AdmissionScoreSchema,
+    DocumentItemSchema,
+    # AdmissionProfile schemas
+    AdmissionProfileCreate,
+    AdmissionProfileUpdate,
+    AdmissionProfileResponse,
+    AdmissionSubmitResponse,
+    EnrollStudentResponse,
+    # Student schemas
+    StudentDocumentResponse,
+    StudentResponse,
+)
+
 # --- Từ permissions.py ---
 from .permissions import (
     Policy,
@@ -141,23 +167,6 @@ from .permissions import (
     ToggleFeatureRequest,
     PolicySuggestionsResponse,
     PermissionExplainResponse,
-)
-
-# --- Từ pipeline.py ---
-from .pipeline import (
-    ConsultationStatus,
-    ConsultationStatusBase,
-    ConsultationStatusCreate,
-    ConsultationStatusUpdate,
-    FullPipeline,
-    PipelineStage,
-    PipelineStageBase,
-    PipelineStageCreate,
-    PipelineStageUpdate,
-    AllowedTransition,
-    AllowedTransitionBase,
-    AllowedTransitionCreate,
-    AllowedTransitionUpdate,
 )
 
 # --- Từ user.py ---

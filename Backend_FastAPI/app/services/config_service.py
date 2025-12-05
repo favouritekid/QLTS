@@ -27,17 +27,17 @@ async def get_assignment_config(db: AsyncSession, unit_id: int) -> dict:
     cache_key = f"config:assignment:{unit_id}"
     log.debug(
         "Fetching assignment config", unit_id=unit_id, cache_key=cache_key
-    )  # THÊM await
+    )
 
     # 1. Try cache first
     try:
         cached_data = await safe_redis_get(cache_key)
         if cached_data:
-            log.debug("Cache hit for assignment config", unit_id=unit_id)  # THÊM await
+            log.debug("Cache hit for assignment config", unit_id=unit_id)
             return json.loads(cached_data)
     except Exception as e_redis_get:
         # Log error but proceed to DB query (fail-open)
-        log.error(  # THÊM await
+        log.error(
             "Failed to get assignment config from cache",
             unit_id=unit_id,
             error=str(e_redis_get),
@@ -45,7 +45,7 @@ async def get_assignment_config(db: AsyncSession, unit_id: int) -> dict:
 
     log.debug(
         "Cache miss for assignment config, querying DB", unit_id=unit_id
-    )  # THÊM await
+    )
     # 2. Cache Miss: Query DB
     config = await db.scalar(
         select(models.OfficerAssignmentConfig).where(
@@ -73,13 +73,13 @@ async def get_assignment_config(db: AsyncSession, unit_id: int) -> dict:
         await safe_redis_set(
             cache_key, json.dumps(config_params), ex=CONFIG_CACHE_TTL_SECONDS
         )
-        log.debug(  # THÊM await
+        log.debug(
             "Stored assignment config in cache",
             unit_id=unit_id,
             ttl=CONFIG_CACHE_TTL_SECONDS,
         )
     except Exception as e_redis_set:
-        log.error(  # THÊM await
+        log.error(
             "Failed to set assignment config in cache",
             unit_id=unit_id,
             error=str(e_redis_set),
