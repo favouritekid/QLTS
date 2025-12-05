@@ -42,8 +42,8 @@ from ..security import (
     verify_password_reset_token,
 )
 
-# ✅ 2. THÊM IMPORT: Thêm `sio` và `metrics`
-from ..socket_manager import sio
+# ✅ 2. Event Dispatcher Pattern (replaces direct Socket.IO dependency)
+from ..core.events import dispatcher, TransportEvents
 from ..socket_metrics import socket_emit_failures_total, socket_events_emitted_total
 from ..utils import file_helpers
 from . import activity_service
@@ -94,13 +94,16 @@ async def emit_data_updated(
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
-        # Broadcast to ALL connected clients (not just specific rooms)
-        # This ensures all admins see updates in real-time
-        await sio.emit("data_updated", event_data)
+        # Dispatch event (Event Dispatcher Pattern - transport-agnostic)
+        # Broadcast to ALL connected clients via registered handlers
+        await dispatcher.dispatch(
+            "data.updated",  # Domain event
+            event_data=event_data
+        )
 
         socket_events_emitted_total.labels(event_type="data_updated").inc()
         log.info(
-            "Emitted real-time data_updated event",
+            "Dispatched data_updated event",
             resource_type=resource_type,
             operation=operation,
             resource_id=resource_id,
@@ -1217,18 +1220,20 @@ async def invalidate_all_sessions(db: AsyncSession, user: models.User):
                 )
                 # Không ném lỗi ở đây, vì DB đã commit (nhưng cần log)
 
-        # 6. ✅ GỬI SOCKET EVENT (SAU KHI MỌI THỨ HOÀN TẤT)
+        # 6. ✅ DISPATCH EVENT (Event Dispatcher Pattern - SAU KHI MỌI THỨ HOÀN TẤT)
         try:
-            room_name = f"user_room_{user_id}"
-            await sio.emit(
-                "force_logout_all", {"reason": "Password changed"}, room=room_name
+            await dispatcher.dispatch(
+                TransportEvents.USER_FORCE_LOGOUT,
+                user_id=user_id,
+                reason="Password changed",
+                revoked_jtis=[]  # All sessions revoked
             )
             socket_events_emitted_total.labels(event_type="force_logout_all").inc()
-            log.info("Emitted 'force_logout_all' event", room=room_name)
-        except Exception as e_socket:
+            log.info("Dispatched force_logout event (password change)", user_id=user_id)
+        except Exception as e_dispatch:
             socket_emit_failures_total.labels(event_type="force_logout_all").inc()
             log.error(
-                "Failed to emit socket event for invalidate-all", error=str(e_socket)
+                "Failed to dispatch logout event", error=str(e_dispatch)
             )
 
     except Exception as e:
