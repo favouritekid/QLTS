@@ -39,8 +39,7 @@ export const familyMemberSchema = z.object({
   occupation: z
     .string()
     .max(255, "Nghề nghiệp không được quá 255 ký tự")
-    .trim()
-    .default(""),
+    .trim(),
   phone: z
     .string()
     .regex(
@@ -133,9 +132,7 @@ export const documentItemSchema = z.object({
     .min(1, "Tên tài liệu không được để trống")
     .max(255, "Tên tài liệu không được quá 255 ký tự")
     .trim(),
-  status: z.enum(["missing", "uploaded", "verified", "rejected"], {
-    errorMap: () => ({ message: "Trạng thái không hợp lệ" }),
-  }),
+  status: z.enum(["missing", "uploaded", "verified", "rejected"]),
   file_path: z
     .string()
     .max(512, "Đường dẫn file không được quá 512 ký tự")
@@ -200,7 +197,7 @@ export const admissionProfileResponseSchema = z.object({
   lead_id: z.number(),
   citizen_id: z.string().nullable(),
   status: z.enum(["draft", "approved", "rejected", "enrolled"]),
-  applied_rules: z.record(z.any()), // JSONB object
+  applied_rules: z.record(z.string(), z.any()), // JSONB object
   family_info: z.array(familyMemberSchema).default([]),
   academic_history: z.array(academicRecordSchema).default([]),
   admission_scores: admissionScoreSchema.nullable(),

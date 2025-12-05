@@ -40,7 +40,7 @@ export default function AdminError({
         <AlertDescription>
           {isPermissionError
             ? 'You do not have permission to access this admin feature.'
-            : 'We couldn't load the admin panel. Please try again.'}
+            : 'We could not load the admin panel. Please try again.'}
         </AlertDescription>
       </Alert>
 

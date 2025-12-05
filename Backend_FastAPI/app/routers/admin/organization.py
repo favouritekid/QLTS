@@ -18,6 +18,7 @@ import structlog
 from fastapi import (
     APIRouter,
     Depends,
+    Request,
     status,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,6 +49,7 @@ PermissionDep = Depends(deps.check_permission)
     status_code=status.HTTP_201_CREATED,
 )
 async def create_new_organization_unit(
+    request: Request,
     unit_in: schemas.OrganizationUnitCreate,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -62,6 +64,7 @@ async def create_new_organization_unit(
     response_model=schemas.OrganizationUnit,
 )
 async def get_organization_unit_details(
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
     unit: models.OrganizationUnit = Depends(
@@ -94,6 +97,7 @@ async def get_organization_unit_details(
     response_model=schemas.OrganizationUnit,
 )
 async def update_existing_organization_unit(
+    request: Request,
     unit_in: schemas.OrganizationUnitUpdate,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -125,6 +129,7 @@ async def update_existing_organization_unit(
     }
 )
 async def delete_existing_organization_unit(
+    request: Request,  # Required for rate limiter
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
     unit: models.OrganizationUnit = deps.OrgUnitAccessDep,
@@ -160,6 +165,7 @@ async def delete_existing_organization_unit(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_new_program(
+    request: Request,
     program_in: schemas.MajorProgramCreate,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -174,6 +180,7 @@ async def create_new_program(
     response_model=schemas.MajorProgram,
 )
 async def get_program_details(
+    request: Request,
     program_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -188,6 +195,7 @@ async def get_program_details(
     response_model=schemas.MajorProgram,
 )
 async def update_existing_program(
+    request: Request,
     program_id: int,
     program_in: schemas.MajorProgramUpdate,
     db: AsyncSession = Depends(database.get_db),
@@ -203,6 +211,7 @@ async def update_existing_program(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_existing_program(
+    request: Request,
     program_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -224,6 +233,7 @@ async def delete_existing_program(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_new_offering(
+    request: Request,
     program_id: int,
     offering_in: schemas.ProgramOfferingCreate,
     db: AsyncSession = Depends(database.get_db),
@@ -243,6 +253,7 @@ async def create_new_offering(
     response_model=schemas.ProgramOffering,
 )
 async def get_offering_details(
+    request: Request,
     offering_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -257,6 +268,7 @@ async def get_offering_details(
     response_model=schemas.ProgramOffering,
 )
 async def update_existing_offering(
+    request: Request,
     offering_id: int,
     offering_in: schemas.ProgramOfferingUpdate,
     db: AsyncSession = Depends(database.get_db),
@@ -272,6 +284,7 @@ async def update_existing_offering(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_existing_offering(
+    request: Request,
     offering_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -293,6 +306,7 @@ async def delete_existing_offering(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_new_academic_info(
+    request: Request,
     offering_id: int,
     academic_info_in: schemas.OfferingAcademicInfoCreate,
     db: AsyncSession = Depends(database.get_db),
@@ -321,6 +335,7 @@ async def create_new_academic_info(
     response_model=schemas.OfferingAcademicInfo,
 )
 async def update_existing_academic_info(
+    request: Request,
     academic_info_id: int,
     academic_info_in: schemas.OfferingAcademicInfoUpdate,
     db: AsyncSession = Depends(database.get_db),
@@ -346,6 +361,7 @@ async def update_existing_academic_info(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_existing_academic_info(
+    request: Request,
     academic_info_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
@@ -367,6 +383,7 @@ async def delete_existing_academic_info(
     response_model=schemas.OfferingAcademicInfo,
 )
 async def restore_deleted_academic_info(
+    request: Request,
     academic_info_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,

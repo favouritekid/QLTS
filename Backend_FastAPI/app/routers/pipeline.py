@@ -1,7 +1,7 @@
 # app/routers/pipeline.py
 from typing import List
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, models, schemas
@@ -17,6 +17,7 @@ PermissionDep = Depends(deps.check_permission)
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/stages", response_model=List[schemas.PipelineStage])
 async def get_pipeline_stages(
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
 ):
@@ -28,6 +29,7 @@ async def get_pipeline_stages(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/all", response_model=schemas.FullPipeline)
 async def get_full_pipeline(
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     # <<< SỬA Ở ĐÂY: Đổi dependency để kiểm tra quyền >>>
     current_user: models.User = PermissionDep,  # Yêu cầu Casbin check
@@ -42,6 +44,7 @@ async def get_full_pipeline(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/allowed-next-statuses", response_model=List[schemas.ConsultationStatus])
 async def get_allowed_next_statuses(
+    request: Request,
     current_status_id: str | None = None,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,

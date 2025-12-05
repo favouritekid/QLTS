@@ -13,6 +13,7 @@ Exception Hierarchy:
     │   ├── OrganizationNotFoundError
     │   └── SessionNotFoundError
     ├── DuplicateResourceError
+    ├── ConflictError
     ├── ValidationError
     │   ├── FileValidationError
     │   │   ├── FileSizeError
@@ -138,6 +139,23 @@ class DuplicateResourceError(BaseAppException):
     status_code = status.HTTP_409_CONFLICT
     detail = "This resource already exists."
     error_code = "DUPLICATE_RESOURCE"
+
+
+class ConflictError(BaseAppException):
+    """
+    State conflict error (HTTP 409).
+
+    Used for:
+    - Optimistic locking failures (version mismatch)
+    - Concurrent operation conflicts (race conditions)
+    - Business logic state conflicts
+
+    Different from DuplicateResourceError which is for unique constraint violations.
+    """
+
+    status_code = status.HTTP_409_CONFLICT
+    detail = "Request conflicts with current state."
+    error_code = "CONFLICT"
 
 
 # ============================================================================
@@ -327,6 +345,7 @@ EXCEPTION_HTTP_STATUS_MAP = {
     SessionNotFoundError: 404,
     # 409 Conflict
     DuplicateResourceError: 409,
+    ConflictError: 409,
     # 500 Internal Server Error
     BaseAppException: 500,
     ServiceError: 500,

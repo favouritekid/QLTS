@@ -1,10 +1,9 @@
 // src/app/(dashboard)/admin/users/[id]/_components/UserDetailClient.tsx
-// src/app/(dashboard)/admin/users/[id]/page.tsx
-import type { User } from "@/types/api.types";
 "use client";
 
+import type { User } from "@/types/api.types";
 import { useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { ArrowLeft, Edit, Key, Shield, Activity, User as UserIcon } from "lucide-react";
 import { format } from "date-fns";
 
@@ -36,9 +35,7 @@ interface UserDetailClientProps {
 }
 
 export function UserDetailClient({ userId, initialData }: UserDetailClientProps) {
-  // const params = useParams();
   const router = useRouter();
-  const userId = parseInt(params.id as string, 10);
 
   const [userDialogOpen, setUserDialogOpen] = useState(false);
   const [setPasswordDialogOpen, setSetPasswordDialogOpen] = useState(false);

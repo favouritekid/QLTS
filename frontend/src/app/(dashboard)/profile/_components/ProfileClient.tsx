@@ -11,7 +11,7 @@ interface ProfileClientProps {
 
 export function ProfileClient({ initialUser }: ProfileClientProps) {
   // Use hook with initialData for hydration
-  const { user } = useAuth({ initialData: initialUser });
+  useAuth({ initialData: initialUser });
 
   return (
     <div className="space-y-6">

@@ -11,7 +11,7 @@ This module provides endpoints for:
 from typing import Dict, List
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -70,6 +70,7 @@ class UpdateGroupPreferenceRequest(BaseModel):
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/preferences", response_model=schemas.NotificationPreference)
 async def get_notification_preferences(
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
 ):
@@ -84,6 +85,7 @@ async def get_notification_preferences(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.put("/preferences", response_model=schemas.NotificationPreference)
 async def update_notification_preferences(
+    request: Request,
     preference_update: schemas.NotificationPreferenceUpdate,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
@@ -109,6 +111,7 @@ async def update_notification_preferences(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/event-groups", response_model=EventGroupPreferencesResponse)
 async def get_event_group_preferences(
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
 ):
@@ -145,7 +148,8 @@ async def get_event_group_preferences(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.patch("/event-groups")
 async def update_event_group_preference(
-    request: UpdateGroupPreferenceRequest,
+    request: Request,
+    body: UpdateGroupPreferenceRequest,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
 ):
@@ -165,7 +169,7 @@ async def update_event_group_preference(
     """
     # Validate event group
     valid_groups = [g.value for g in NotificationEventGroup]
-    if request.event_group.lower() not in valid_groups:
+    if body.event_group.lower() not in valid_groups:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid event_group. Must be one of: {valid_groups}"
@@ -173,7 +177,7 @@ async def update_event_group_preference(
 
     # Validate channel
     valid_channels = [c.value for c in NotificationChannel]
-    if request.channel.lower() not in valid_channels:
+    if body.channel.lower() not in valid_channels:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid channel. Must be one of: {valid_channels}"
@@ -183,31 +187,32 @@ async def update_event_group_preference(
     preference = await notification_preference_service.set_user_group_preference(
         db=db,
         user_id=current_user.id,
-        group=request.event_group,
-        channel=request.channel,
-        enabled=request.enabled
+        group=body.event_group,
+        channel=body.channel,
+        enabled=body.enabled
     )
 
     log.info(
         "User updated event group preference",
         user_id=current_user.id,
         username=current_user.username,
-        group=request.event_group,
-        channel=request.channel,
-        enabled=request.enabled
+        group=body.event_group,
+        channel=body.channel,
+        enabled=body.enabled
     )
 
     return {
         "success": True,
-        "group": request.event_group,
-        "channel": request.channel,
-        "enabled": request.enabled
+        "group": body.event_group,
+        "channel": body.channel,
+        "enabled": body.enabled
     }
 
 
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/event-groups/metadata", response_model=List[EventGroupInfo])
 async def get_event_groups_metadata(
+    request: Request,
     current_user: models.User = PermissionDep,
 ):
     """

@@ -226,6 +226,26 @@ export interface MarkAsReadRequest {
   notification_ids: number[];
 }
 
+// Event Group Preference Types
+export interface EventGroupInfo {
+  id: string;
+  name_en: string;
+  name_vi: string;
+  description_en: string;
+  description_vi: string;
+}
+
+export interface EventGroupPreferencesResponse {
+  groups: EventGroupInfo[];
+  preferences: Record<string, Record<string, boolean>>;
+}
+
+export interface UpdateGroupPreferenceRequest {
+  event_group: string;
+  channel: string;
+  enabled: boolean;
+}
+
 // Notification Preference Types
 export interface NotificationTypePreference {
   email: boolean;
@@ -245,6 +265,9 @@ export interface NotificationPreference {
   quiet_hours_start: string | null; // HH:mm format
   quiet_hours_end: string | null; // HH:mm format
 }
+
+// Alias for consistency with server.ts
+export type NotificationPreferences = NotificationPreference;
 
 export interface NotificationPreferenceUpdate {
   email_enabled?: boolean;
@@ -413,3 +436,91 @@ export interface NotificationMetadata {
   resolver_types: ResolverTypeOption[];
   operators: OperatorOption[];
 }
+
+// ============================================
+// RE-EXPORTS FROM OTHER TYPE FILES
+// ============================================
+
+// Pipeline types
+export type {
+  ConsultationStatus,
+  PipelineStage,
+  OutcomeType,
+} from './pipeline.types';
+
+// Organization types
+export type {
+  OrganizationUnit,
+  MajorProgram,
+  ProgramOffering,
+  OrganizationTreeNodeWithAggregation as OrganizationTreeWithAggregation,
+  AssignmentConfig,
+  ConfigDegreeLevel as DegreeLevel,
+  ConfigOfferingType as OfferingType,
+  ConfigDocumentType as DocumentType,
+} from './organization.types';
+
+// Tuition discount types
+export type {
+  TuitionDiscountPolicy,
+  TuitionDiscountPolicyListResponse as TuitionDiscountPoliciesPage,
+} from './tuition-discount.types';
+
+// Distribution Rule (for lead distribution)
+export interface DistributionRule {
+  id: number;
+  offering_id: number;
+  unit_id: number;
+  weight: number;
+  priority: number;
+  is_active: boolean;
+  offering_name?: string;
+  unit_name?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+// Session types
+export type {
+  UserSession as ActiveSession,
+  UserSession,
+} from './session';
+
+// User Session List Response (for sessions page)
+export interface UserSessionListResponse {
+  sessions: import('./session').UserSession[];
+  total: number;
+  current_session_id: number | null;
+}
+
+// Additional types needed by server.ts
+export interface PipelineWithStages {
+  stages: import('./pipeline.types').PipelineStage[];
+  total_stages: number;
+  active_stages: number;
+  total_leads: number;
+}
+
+export interface EventGroup {
+  group_code: string;
+  group_label: string;
+  events: Array<{
+    code: string;
+    label: string;
+    description: string;
+  }>;
+}
+
+export interface DistributionStats {
+  total_rules: number;
+  active_rules: number;
+  inactive_rules: number;
+  total_distributions: number;
+  successful_distributions: number;
+  failed_distributions: number;
+}
+
+// Policy types
+export type {
+  PolicyStatistics as PermissionStatistics,
+} from './policy.types';

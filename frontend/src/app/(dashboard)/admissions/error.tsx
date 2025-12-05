@@ -31,7 +31,7 @@ export default function AdmissionsError({
         <AlertTriangle className="h-4 w-4" />
         <AlertTitle>Failed to Load Admissions</AlertTitle>
         <AlertDescription>
-          We couldn't load the admissions data. Please try again.
+          We could not load the admissions data. Please try again.
         </AlertDescription>
       </Alert>
 

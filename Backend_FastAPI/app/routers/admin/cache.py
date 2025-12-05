@@ -8,7 +8,7 @@ Only accessible by admins.
 from app.core.rate_limits import limiter, RateLimits  # ✅ Rate limiting
 
 from typing import Optional, List
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, Request
 from pydantic import BaseModel
 
 from app.core import deps
@@ -76,6 +76,7 @@ KNOWN_CACHE_PATTERNS = {
 @limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/keys", response_model=List[CacheKeyInfo])
 async def list_cache_keys(
+    request: Request,
     current_admin: models.User = PermissionDep,
     pattern: str = Query("*", description="Key pattern to search (e.g., 'org:*', 'pipeline:*')"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum keys to return"),
@@ -124,6 +125,7 @@ async def list_cache_keys(
 @limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/keys/{key:path}")
 async def get_cache_value(
+    request: Request,
     key: str,
     current_admin: models.User = PermissionDep,
 ):
@@ -173,6 +175,7 @@ async def get_cache_value(
 @limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
 @router.delete("/keys/{key:path}")
 async def delete_cache_key(
+    request: Request,
     key: str,
     current_admin: models.User = PermissionDep,
 ):
@@ -201,7 +204,8 @@ async def delete_cache_key(
 @limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post("/clear", response_model=ClearCacheResponse)
 async def clear_cache_by_patterns(
-    request: ClearCacheRequest,
+    request: Request,  # Required for rate limiter
+    body: ClearCacheRequest,  # Renamed from 'request' to avoid conflict
     current_admin: models.User = PermissionDep,
 ):
     """
@@ -217,7 +221,7 @@ async def clear_cache_by_patterns(
     deleted_keys = []
 
     try:
-        for pattern in request.patterns:
+        for pattern in body.patterns:  # Changed from request. to body.
             # Safety check - warn about auth keys
             if pattern in ["session:*", "blacklist:*", "*"]:
                 # Still allow but log warning
@@ -241,6 +245,7 @@ async def clear_cache_by_patterns(
 @limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/stats", response_model=CacheStats)
 async def get_cache_stats(
+    request: Request,
     current_admin: models.User = PermissionDep,
 ):
     """
@@ -264,6 +269,7 @@ async def get_cache_stats(
 @limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/patterns")
 async def get_known_patterns(
+    request: Request,
     current_admin: models.User = PermissionDep,
 ):
     """
@@ -280,6 +286,7 @@ async def get_known_patterns(
 @limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post("/invalidate/organization")
 async def invalidate_organization_cache(
+    request: Request,
     current_admin: models.User = PermissionDep,
 ):
     """
@@ -311,6 +318,7 @@ async def invalidate_organization_cache(
 @limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post("/invalidate/pipeline")
 async def invalidate_pipeline_cache(
+    request: Request,
     current_admin: models.User = PermissionDep,
 ):
     """
@@ -342,6 +350,7 @@ async def invalidate_pipeline_cache(
 @limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post("/invalidate/config")
 async def invalidate_config_cache(
+    request: Request,
     current_admin: models.User = PermissionDep,
     unit_id: Optional[int] = Query(None, description="Specific unit ID, or None for all"),
 ):

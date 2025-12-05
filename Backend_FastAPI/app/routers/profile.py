@@ -48,6 +48,7 @@ async def log_profile_activity(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("", response_model=schemas.User)
 async def read_current_user_profile(
+    request: Request,
     current_user: models.User = PermissionDep,  # <-- THAY ĐỔI
 ):
     """

@@ -59,6 +59,7 @@ limiter = Limiter(key_func=get_remote_address)
     summary="Create admission profile for lead",
 )
 async def create_admission_profile(
+    request: Request,
     data: schemas.AdmissionProfileCreate,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
@@ -145,6 +146,7 @@ async def create_admission_profile(
     summary="Get admission profile by ID",
 )
 async def get_admission_profile(
+    request: Request,
     profile_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
@@ -190,6 +192,7 @@ async def get_admission_profile(
     summary="Update admission profile (draft only)",
 )
 async def update_admission_profile(
+    request: Request,
     profile_id: int,
     data: schemas.AdmissionProfileUpdate,
     db: AsyncSession = Depends(database.get_db),
@@ -258,6 +261,7 @@ async def update_admission_profile(
     summary="Submit admission profile for evaluation",
 )
 async def submit_admission_profile(
+    request: Request,
     profile_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,

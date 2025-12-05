@@ -1,5 +1,5 @@
 from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models, schemas
@@ -20,6 +20,7 @@ PermissionDep = Depends(deps.check_permission)
     summary="Get officer dashboard statistics"
 )
 async def get_officer_stats(
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
     # ✅ Auto-check quyền truy cập vào URL /api/officer/stats
     current_user: Annotated[models.User, PermissionDep]
@@ -39,6 +40,7 @@ async def get_officer_stats(
     summary="Update availability status"
 )
 async def update_availability(
+    request: Request,
     status_data: schemas.AvailabilityUpdate, # ✅ Validate Input bằng Pydantic
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[models.User, PermissionDep]

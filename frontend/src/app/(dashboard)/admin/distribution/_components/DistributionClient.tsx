@@ -95,6 +95,31 @@ export function DistributionClient({ initialData }: DistributionClientProps) {
   const { data: rules = [], isLoading, error } = useDistributionRules({ initialData });
   const deleteMutation = useDeleteDistributionRule();
   const bulkDeleteMutation = useBulkDeleteDistributionRules();
+  const toggleMutation = useToggleDistributionRule();
+
+  // Filter and sort rules
+  const filteredRules = useMemo(() => {
+    let filtered = rules;
+
+    // Filter by search
+    if (search) {
+      filtered = filtered.filter((rule) =>
+        rule.offering_name?.toLowerCase().includes(search.toLowerCase()) ||
+        rule.unit_name?.toLowerCase().includes(search.toLowerCase())
+      );
+    }
+
+    // Filter by status
+    if (statusFilter !== "all") {
+      filtered = filtered.filter((rule) =>
+        statusFilter === "active" ? rule.is_active : !rule.is_active
+      );
+    }
+
+    // Sort
+    filtered = filtered.sort((a, b) => {
+      let aVal: string | number;
+      let bVal: string | number;
 
       switch (sortBy) {
         case "priority":

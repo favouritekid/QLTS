@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, models, schemas
 from ..core import deps
-from ..ratelimit import RATE_LIMITS, limiter
 from ..services import notification_service
 from ..socket_manager import sio
 from app.core.rate_limits import limiter, RateLimits
@@ -53,7 +52,8 @@ async def get_my_notifications(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("/mark-as-read", status_code=status.HTTP_200_OK)
 async def mark_notifications_as_read(
-    request: schemas.MarkAsReadRequest,
+    request: Request,  # Required for rate limiter (SlowAPI requires this name)
+    body: schemas.MarkAsReadRequest,  # Renamed from 'request' to avoid conflict
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
 ):
@@ -61,7 +61,7 @@ async def mark_notifications_as_read(
     count, callback = await notification_service.mark_as_read(
         db=db,
         user_id=current_user.id,
-        notification_ids=request.notification_ids,
+        notification_ids=body.notification_ids,  # Changed from request. to body.
     )
     await db.commit()
     await callback()
@@ -72,6 +72,7 @@ async def mark_notifications_as_read(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("/mark-all-as-read", status_code=status.HTTP_200_OK)
 async def mark_all_notifications_as_read(
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
 ):
@@ -89,6 +90,7 @@ async def mark_all_notifications_as_read(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.delete("/{notification_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_notification(
+    request: Request,
     notification_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,

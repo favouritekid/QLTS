@@ -10,7 +10,7 @@ from app.core.rate_limits import limiter, RateLimits  # ✅ Rate limiting
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models, schemas
@@ -37,6 +37,7 @@ PermissionDep = Depends(deps.check_permission)
     summary="Lấy danh sách chính sách ưu đãi",
 )
 async def list_policies(
+    request: Request,
     page: int = Query(1, ge=1, description="Trang hiện tại"),
     page_size: int = Query(20, ge=1, le=100, description="Số item mỗi trang"),
     is_active: Optional[bool] = Query(None, description="Lọc theo trạng thái"),
@@ -91,6 +92,7 @@ async def list_policies(
     summary="Lấy chi tiết chính sách ưu đãi",
 )
 async def get_policy(
+    request: Request,
     policy_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
@@ -121,6 +123,7 @@ async def get_policy(
     summary="Tạo chính sách ưu đãi mới",
 )
 async def create_policy(
+    request: Request,
     policy_data: schemas.TuitionDiscountPolicyCreate,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
@@ -176,6 +179,7 @@ async def create_policy(
     summary="Cập nhật chính sách ưu đãi",
 )
 async def update_policy(
+    request: Request,
     policy_id: int,
     policy_data: schemas.TuitionDiscountPolicyUpdate,
     db: AsyncSession = Depends(database.get_db),
@@ -214,6 +218,7 @@ async def update_policy(
     summary="Xóa chính sách ưu đãi",
 )
 async def delete_policy(
+    request: Request,
     policy_id: int,
     hard_delete: bool = Query(False, description="Xóa vĩnh viễn (mặc định: soft delete)"),
     db: AsyncSession = Depends(database.get_db),
@@ -250,7 +255,8 @@ async def delete_policy(
     summary="Tính toán ưu đãi học phí",
 )
 async def calculate_discount(
-    request: schemas.DiscountCalculationRequest,
+    request: Request,  # Required for rate limiter
+    body: schemas.DiscountCalculationRequest,  # Renamed from 'request' to avoid conflict
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = PermissionDep,
 ):
@@ -289,24 +295,24 @@ async def calculate_discount(
     # Get applicable policies
     policies = await tuition_discount_service.get_applicable_policies(
         db,
-        major_program_id=request.major_program_id,
-        major_program_code=request.major_program_code,
-        is_heavy_program=request.is_heavy_program,
-        offering_id=request.offering_id,
-        student_priority_type=request.student_priority_type,
-        student_region=request.student_region,
+        major_program_id=body.major_program_id,  # Changed from request. to body.
+        major_program_code=body.major_program_code,  # Changed from request. to body.
+        is_heavy_program=body.is_heavy_program,  # Changed from request. to body.
+        offering_id=body.offering_id,  # Changed from request. to body.
+        student_priority_type=body.student_priority_type,  # Changed from request. to body.
+        student_region=body.student_region,  # Changed from request. to body.
     )
 
     # Calculate discount
     total_discount, applied = tuition_discount_service.calculate_discount(
-        request.tuition_fee,
+        body.tuition_fee,  # Changed from request. to body.
         policies
     )
 
     return schemas.DiscountCalculationResponse(
-        original_tuition=request.tuition_fee,
+        original_tuition=body.tuition_fee,  # Changed from request. to body.
         total_discount=total_discount,
-        final_tuition=request.tuition_fee - total_discount,
+        final_tuition=body.tuition_fee - total_discount,  # Changed from request. to body.
         applied_policies=[
             schemas.AppliedDiscount(**p) for p in applied
         ]

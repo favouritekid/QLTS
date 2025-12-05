@@ -223,6 +223,7 @@ async def get_all_users(
 @limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/list")
 async def list_users(
+    request: Request,
     unit_id: Optional[int] = Query(None, description="Filter by organization unit ID"),
     include_children: bool = Query(False, description="Include users from child units (hierarchical filter)"),
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
@@ -303,6 +304,7 @@ async def list_users(
 @limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post("/{user_id}/password")
 async def admin_set_user_password(
+    request: Request,
     user_id: int,
     password_data: schemas.AdminSetPasswordSchema,
     db: AsyncSession = Depends(database.get_db),
@@ -612,6 +614,7 @@ async def sync_users(
 @limiter.limit(RateLimits.ADMIN_BULK)  # 10/hour - Bulk operation
 @router.post("/leads/bulk-assign")
 async def bulk_assign_leads(
+    request: Request,
     assignment_data: schemas.BulkAssignLeadsSchema,  # Sử dụng schema mới
     current_admin: models.User = PermissionDep,  # Yêu cầu quyền admin (qua Casbin)
 ):
@@ -671,6 +674,7 @@ async def bulk_assign_leads(
 @limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.post("/leads/import")
 async def import_leads_from_file(
+    request: Request,
     file: UploadFile = File(
         ..., description="CSV or Excel file containing lead data (.csv, .xlsx)"
     ),
@@ -748,6 +752,7 @@ async def import_leads_from_file(
 @limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/statistics")
 async def get_user_statistics(
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
@@ -776,6 +781,7 @@ async def get_user_statistics(
 @limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/{user_id}")
 async def get_user_details(
+    request: Request,
     user_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,

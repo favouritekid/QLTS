@@ -1,5 +1,5 @@
 # app/routers/users.py
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from .. import models, schemas
 from ..core import deps
@@ -10,7 +10,10 @@ router = APIRouter(tags=["Users"])
 
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/me", response_model=schemas.User)
-async def read_users_me(current_user: models.User = deps.CurrentUser):
+async def read_users_me(
+    request: Request,
+    current_user: models.User = deps.CurrentUser
+):
     """
     Lấy thông tin của chính người dùng đang đăng nhập.
 

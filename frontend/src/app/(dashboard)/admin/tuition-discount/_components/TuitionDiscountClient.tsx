@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import * z from "zod";
+import * as z from "zod";
 import { format } from "date-fns";
 import { vi } from "date-fns/locale";
 import { CalendarIcon, Loader2, Pencil, Plus, Trash2, Percent, Banknote } from "lucide-react";

@@ -1,7 +1,7 @@
 # app/routers/organization.py
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, schemas
@@ -17,7 +17,7 @@ PermissionDep = Depends(deps.check_permission)
 
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/organization-unit-types", response_model=List[str])
-async def get_organization_unit_types():
+async def get_organization_unit_types(request: Request):
     """Lấy danh sách các loại đơn vị tổ chức cho phép."""
     return schemas.OrganizationUnitType.values()
 
@@ -25,6 +25,7 @@ async def get_organization_unit_types():
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/organization-units", response_model=List[schemas.OrganizationUnit])
 async def get_all_organization_units(
+    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_user: schemas.User = PermissionDep,  # ✅ SECURITY FIX: Casbin RBAC enforcement
 ):
@@ -35,6 +36,7 @@ async def get_all_organization_units(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/organization-units/tree-with-aggregation", response_model=List[schemas.OrganizationTreeNodeWithAggregation])
 async def get_organization_tree_with_aggregation(
+    request: Request,
     academic_year: Optional[int] = None,
     include_inactive: bool = False,
     db: AsyncSession = Depends(database.get_db),
@@ -60,6 +62,7 @@ async def get_organization_tree_with_aggregation(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/programs", response_model=List[schemas.MajorProgram])
 async def get_filtered_programs(
+    request: Request,
     unitId: int,
     search: Optional[str] = None,
     db: AsyncSession = Depends(database.get_db),
@@ -86,6 +89,7 @@ async def get_filtered_programs(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/programs/{program_id}/offerings", response_model=List[schemas.ProgramOffering])
 async def get_program_offerings(
+    request: Request,
     program_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_user: schemas.User = PermissionDep  # ✅ SECURITY FIX: Casbin RBAC enforcement,
@@ -108,6 +112,7 @@ async def get_program_offerings(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/offerings/{offering_id}/academic-info", response_model=List[schemas.OfferingAcademicInfo])
 async def get_offering_academic_history(
+    request: Request,
     offering_id: int,
     published_only: bool = False,
     db: AsyncSession = Depends(database.get_db),
@@ -129,6 +134,7 @@ async def get_offering_academic_history(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/offerings/{offering_id}/academic-info/{year}", response_model=schemas.OfferingAcademicInfo)
 async def get_offering_academic_info_by_year(
+    request: Request,
     offering_id: int,
     year: int,
     db: AsyncSession = Depends(database.get_db),
@@ -153,6 +159,7 @@ async def get_offering_academic_info_by_year(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/offerings/{offering_id}/academic-info/current", response_model=schemas.OfferingAcademicInfo)
 async def get_offering_current_academic_info(
+    request: Request,
     offering_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_user: schemas.User = PermissionDep  # ✅ SECURITY FIX: Casbin RBAC enforcement,
@@ -175,6 +182,7 @@ async def get_offering_current_academic_info(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("/offerings/{offering_id}/academic-info", response_model=schemas.OfferingAcademicInfo)
 async def create_offering_academic_info(
+    request: Request,
     offering_id: int,
     academic_info_in: schemas.OfferingAcademicInfoCreate,
     db: AsyncSession = Depends(database.get_db),
@@ -201,6 +209,7 @@ async def create_offering_academic_info(
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/program-offerings", response_model=List[schemas.ProgramOffering])
 async def get_all_program_offerings(
+    request: Request,
     is_active: Optional[bool] = None,
     skip: int = 0,
     limit: int = 1000, # Default limit lớn cho dropdown
@@ -230,6 +239,7 @@ async def get_all_program_offerings(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.patch("/academic-info/{academic_info_id}", response_model=schemas.OfferingAcademicInfo)
 async def update_offering_academic_info(
+    request: Request,
     academic_info_id: int,
     academic_info_in: schemas.OfferingAcademicInfoUpdate,
     db: AsyncSession = Depends(database.get_db),
@@ -252,6 +262,7 @@ async def update_offering_academic_info(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.delete("/academic-info/{academic_info_id}", status_code=204)
 async def delete_offering_academic_info(
+    request: Request,
     academic_info_id: int,
     db: AsyncSession = Depends(database.get_db),
     current_user: schemas.User = PermissionDep  # ✅ SECURITY FIX: Casbin RBAC enforcement,

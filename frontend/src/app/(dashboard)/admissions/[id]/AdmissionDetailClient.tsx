@@ -30,6 +30,12 @@ import {
   type AdmissionProfileUpdate,
 } from "@/lib/zod/admissions"
 
+interface SubmitResult {
+  status: "approved" | "rejected" | null;
+  message?: string | null;
+  errors?: string[] | null;
+}
+
 interface AdmissionDetailClientProps {
   profileId: number
   initialData: AdmissionProfileResponse
@@ -43,13 +49,13 @@ export function AdmissionDetailClient({
   const { data: profile } = useGetAdmission(profileId, {
     initialData,
     staleTime: 60000,
-  } as any)
+  })
 
   const updateMutation = useUpdateAdmission(profileId)
   const submitMutation = useSubmitAdmission(profileId)
   const enrollMutation = useEnrollStudent(profileId)
 
-  const [submitResult, setSubmitResult] = useState<any>(null)
+  const [submitResult, setSubmitResult] = useState<SubmitResult | null>(null)
 
   const isDraft = profile?.status === "draft"
   const isApproved = profile?.status === "approved"
@@ -94,8 +100,8 @@ export function AdmissionDetailClient({
                 {new Date(profile.created_at).toLocaleDateString("vi-VN")}
               </CardDescription>
             </div>
-            <Badge className={getStatusColor(profile.status as any)}>
-              {getStatusLabel(profile.status as any)}
+            <Badge className={getStatusColor(profile.status)}>
+              {getStatusLabel(profile.status)}
             </Badge>
           </div>
         </CardHeader>

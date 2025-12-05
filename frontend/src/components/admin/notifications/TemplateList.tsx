@@ -74,7 +74,7 @@ const CATEGORIES = [
 ];
 
 interface TemplateListProps {
-  initialData?: any; // ✅ PHASE 1 - WEEK 2: Accept initialData from server
+  initialData?: import("@/types/api.types").NotificationTemplatesPage; // ✅ PHASE 1 - WEEK 2: Accept initialData from server
 }
 
 export function TemplateList({ initialData }: TemplateListProps) {

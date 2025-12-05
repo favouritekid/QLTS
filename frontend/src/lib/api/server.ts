@@ -36,6 +36,34 @@ import type {
   TimelineItem,
   LeadInsights,
 } from '@/types/lead.types';
+import type {
+  FullPipeline,
+} from '@/types/pipeline.types';
+import type {
+  User,
+  UsersPage,
+  UserStatistics,
+  ConsultationStatus,
+  PipelineStage,
+  OrganizationUnit,
+  OrganizationTreeWithAggregation,
+  MajorProgram,
+  ProgramOffering,
+  NotificationTemplatesPage,
+  NotificationRulesPage,
+  EventGroup,
+  NotificationPreferences,
+  NotificationsPage,
+  DistributionRule,
+  DistributionStats,
+  DegreeLevel,
+  OfferingType,
+  DocumentType,
+  TuitionDiscountPoliciesPage,
+  PermissionStatistics,
+  EventGroupPreferencesResponse,
+  UserSessionListResponse,
+} from '@/types/api.types';
 
 // ============================================
 // CONFIGURATION
@@ -62,7 +90,7 @@ function getBackendUrl(): string {
 // ============================================
 
 interface FetchOptions extends RequestInit {
-  params?: Record<string, any>;
+  params?: Record<string, unknown>; // Generic query parameters - type varies by endpoint
 }
 
 /**
@@ -94,9 +122,9 @@ async function serverFetch<T>(
   const cookieHeader = cookieStore.toString();
 
   // Prepare headers
-  const headers: HeadersInit = {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...fetchOptions.headers,
+    ...(fetchOptions.headers as Record<string, string>),
   };
 
   // Forward authentication cookies
@@ -150,7 +178,7 @@ const leads = {
    * ```
    */
   async getLeads(params?: LeadListParams): Promise<LeadsPage> {
-    return serverFetch<LeadsPage>('/api/leads', { params });
+    return serverFetch<LeadsPage>('/api/leads', { params: params as Record<string, unknown> });
   },
 
   /**
@@ -184,9 +212,8 @@ const leads = {
 const users = {
   /**
    * Get current user profile (Server-Side)
-   */
-  async getCurrentUser(): Promise<any> {
-    return serverFetch<any>('/api/users/me');
+   */  async getCurrentUser(): Promise<User> {
+    return serverFetch<User>('/api/users/me');
   },
 };
 
@@ -210,22 +237,21 @@ const admin = {
       status?: string;
       sort_by?: string;
       order?: string;
-    }): Promise<any> {
-      return serverFetch<any>('/api/admin/users', { params });
+    }): Promise<UsersPage> {
+      return serverFetch<UsersPage>('/api/admin/users', { params });
     },
 
     /**
      * Get single user by ID (admin)
-     */
-    async getUser(userId: number): Promise<any> {
-      return serverFetch<any>(`/api/admin/users/${userId}`);
+     */    async getUser(userId: number): Promise<User> {
+      return serverFetch<User>(`/api/admin/users/${userId}`);
     },
 
     /**
      * Get user statistics (admin dashboard)
      */
-    async getStatistics(): Promise<any> {
-      return serverFetch<any>('/api/admin/users/statistics');
+    async getStatistics(): Promise<UserStatistics> {
+      return serverFetch<UserStatistics>('/api/admin/users/statistics');
     },
   },
 
@@ -235,16 +261,14 @@ const admin = {
   pipeline: {
     /**
      * Get all consultation statuses
-     */
-    async getConsultationStatuses(): Promise<any> {
-      return serverFetch<any>('/api/consultation-statuses');
+     */    async getConsultationStatuses(): Promise<ConsultationStatus[]> {
+      return serverFetch<ConsultationStatus[]>('/api/consultation-statuses');
     },
 
     /**
      * Get pipeline stages
-     */
-    async getPipelineStages(params?: { status_id?: number }): Promise<any> {
-      return serverFetch<any>('/api/pipeline-stages', { params });
+     */    async getPipelineStages(params?: { status_id?: number }): Promise<PipelineStage[]> {
+      return serverFetch<PipelineStage[]>('/api/pipeline-stages', { params });
     },
 
     /**
@@ -255,8 +279,8 @@ const admin = {
       include_stats?: boolean;
       date_from?: string;
       date_to?: string;
-    }): Promise<any> {
-      return serverFetch<any>('/api/pipeline', { params });
+    }): Promise<FullPipeline> {
+      return serverFetch<FullPipeline>('/api/pipeline', { params });
     },
   },
 
@@ -266,42 +290,37 @@ const admin = {
   organization: {
     /**
      * Get organization units tree
-     */
-    async getUnitsTree(): Promise<any> {
-      return serverFetch<any>('/api/organization-units');
+     */    async getUnitsTree(): Promise<OrganizationUnit[]> {
+      return serverFetch<OrganizationUnit[]>('/api/organization-units');
     },
 
     /**
      * Get organization unit by ID
-     */
-    async getUnit(unitId: number): Promise<any> {
-      return serverFetch<any>(`/api/organization-units/${unitId}`);
+     */    async getUnit(unitId: number): Promise<OrganizationUnit> {
+      return serverFetch<OrganizationUnit>(`/api/organization-units/${unitId}`);
     },
 
     /**
      * Get organization tree with aggregation
-     */
-    async getTreeWithAggregation(): Promise<any> {
-      return serverFetch<any>('/api/organization-units/tree-with-aggregation');
+     */    async getTreeWithAggregation(): Promise<OrganizationTreeWithAggregation[]> {
+      return serverFetch<OrganizationTreeWithAggregation[]>('/api/organization-units/tree-with-aggregation');
     },
 
     /**
      * Get major programs
-     */
-    async getMajorPrograms(): Promise<any> {
-      return serverFetch<any>('/api/major-programs');
+     */    async getMajorPrograms(): Promise<MajorProgram[]> {
+      return serverFetch<MajorProgram[]>('/api/major-programs');
     },
 
     /**
      * Get program offerings
-     */
-    async getProgramOfferings(): Promise<any> {
-      return serverFetch<any>('/api/program-offerings');
+     */    async getProgramOfferings(): Promise<ProgramOffering[]> {
+      return serverFetch<ProgramOffering[]>('/api/program-offerings');
     },
   },
 
   /**
-   * Notification Management
+   * Notification Management (Admin)
    */
   notifications: {
     /**
@@ -311,8 +330,8 @@ const admin = {
       page?: number;
       page_size?: number;
       search?: string;
-    }): Promise<any> {
-      return serverFetch<any>('/api/admin/notification-templates', { params });
+    }): Promise<NotificationTemplatesPage> {
+      return serverFetch<NotificationTemplatesPage>('/api/admin/notification-templates', { params });
     },
 
     /**
@@ -323,15 +342,14 @@ const admin = {
       page_size?: number;
       event?: string;
       is_active?: boolean;
-    }): Promise<any> {
-      return serverFetch<any>('/api/admin/notification-rules', { params });
+    }): Promise<NotificationRulesPage> {
+      return serverFetch<NotificationRulesPage>('/api/admin/notification-rules', { params });
     },
 
     /**
      * Get notification event groups
-     */
-    async getEventGroups(): Promise<any> {
-      return serverFetch<any>('/api/notifications/event-groups');
+     */    async getEventGroups(): Promise<EventGroup[]> {
+      return serverFetch<EventGroup[]>('/api/notifications/event-groups');
     },
   },
 
@@ -346,29 +364,26 @@ const admin = {
       page?: number;
       page_size?: number;
       search?: string;
-    }): Promise<any> {
-      return serverFetch<any>('/api/admin/config', { params });
+    }): Promise<unknown> {
+      return serverFetch<unknown>('/api/admin/config', { params });
     },
 
     /**
      * Get degree levels
-     */
-    async getDegreeLevels(params?: { active_only?: boolean }): Promise<any> {
-      return serverFetch<any>('/api/admin/degree-levels', { params });
+     */    async getDegreeLevels(params?: { active_only?: boolean }): Promise<DegreeLevel[]> {
+      return serverFetch<DegreeLevel[]>('/api/admin/degree-levels', { params });
     },
 
     /**
      * Get offering types
-     */
-    async getOfferingTypes(params?: { active_only?: boolean }): Promise<any> {
-      return serverFetch<any>('/api/admin/offering-types', { params });
+     */    async getOfferingTypes(params?: { active_only?: boolean }): Promise<OfferingType[]> {
+      return serverFetch<OfferingType[]>('/api/admin/offering-types', { params });
     },
 
     /**
      * Get document types
-     */
-    async getDocumentTypes(params?: { active_only?: boolean }): Promise<any> {
-      return serverFetch<any>('/api/admin/document-types', { params });
+     */    async getDocumentTypes(params?: { active_only?: boolean }): Promise<DocumentType[]> {
+      return serverFetch<DocumentType[]>('/api/admin/document-types', { params });
     },
   },
 
@@ -382,8 +397,8 @@ const admin = {
     async getPolicies(params?: {
       page?: number;
       page_size?: number;
-    }): Promise<any> {
-      return serverFetch<any>('/api/admin/tuition-discount-policies', { params });
+    }): Promise<TuitionDiscountPoliciesPage> {
+      return serverFetch<TuitionDiscountPoliciesPage>('/api/admin/tuition-discount-policies', { params });
     },
   },
 
@@ -397,8 +412,8 @@ const admin = {
     async getDistributionStats(params?: {
       start_date?: string;
       end_date?: string;
-    }): Promise<any> {
-      return serverFetch<any>('/api/admin/distribution/stats', { params });
+    }): Promise<DistributionStats> {
+      return serverFetch<DistributionStats>('/api/admin/distribution/stats', { params });
     },
   },
 
@@ -408,9 +423,8 @@ const admin = {
   distributionRules: {
     /**
      * Get all distribution rules
-     */
-    async getRules(): Promise<any> {
-      return serverFetch<any>('/api/admin/distribution-rules');
+     */    async getRules(): Promise<DistributionRule[]> {
+      return serverFetch<DistributionRule[]>('/api/admin/distribution-rules');
     },
   },
 
@@ -420,55 +434,62 @@ const admin = {
   policies: {
     /**
      * Get policy statistics
-     */
-    async getStatistics(): Promise<any> {
-      return serverFetch<any>('/api/admin/permissions/statistics');
+     */    async getStatistics(): Promise<PermissionStatistics> {
+      return serverFetch<PermissionStatistics>('/api/admin/permissions/statistics');
     },
   },
+};
 
+// ============================================
+// TOP-LEVEL ENDPOINTS (User-facing)
+// ============================================
+
+/**
+ * Pipeline (alias to admin.pipeline for convenience)
+ */
+const pipeline = admin.pipeline;
+
+/**
+ * User Notifications
+ */
+const notifications = {
   /**
-   * User Notifications
+   * Get user notifications
    */
-  notifications: {
-    /**
-     * Get user notifications
-     */
-    async getNotifications(params?: {
-      page?: number;
-      page_size?: number;
-      unread_only?: boolean;
-    }): Promise<any> {
-      return serverFetch<any>('/api/notifications', { params });
-    },
-
-    /**
-     * Get notification preferences
-     * ✅ PHASE 1 - WEEK 3 - DAY 1
-     */
-    async getPreferences(): Promise<any> {
-      return serverFetch<any>('/api/notifications/preferences');
-    },
-
-    /**
-     * Get event group preferences
-     * ✅ PHASE 1 - WEEK 3 - DAY 1
-     */
-    async getEventGroupPreferences(): Promise<any> {
-      return serverFetch<any>('/api/notifications/event-groups');
-    },
+  async getNotifications(params?: {
+    page?: number;
+    page_size?: number;
+    unread_only?: boolean;
+  }): Promise<NotificationsPage> {
+    return serverFetch<NotificationsPage>('/api/notifications', { params });
   },
 
   /**
-   * User Sessions
+   * Get notification preferences
+   * ✅ PHASE 1 - WEEK 3 - DAY 1
+   */  async getPreferences(): Promise<NotificationPreferences> {
+    return serverFetch<NotificationPreferences>('/api/notifications/preferences');
+  },
+
+  /**
+   * Get event group preferences
    * ✅ PHASE 1 - WEEK 3 - DAY 1
    */
-  sessions: {
-    /**
-     * Get active user sessions
-     */
-    async getActiveSessions(): Promise<any> {
-      return serverFetch<any>('/api/sessions');
-    },
+  async getEventGroupPreferences(): Promise<EventGroupPreferencesResponse> {
+    return serverFetch<EventGroupPreferencesResponse>('/api/notifications/event-groups');
+  },
+};
+
+/**
+ * User Sessions
+ * ✅ PHASE 1 - WEEK 3 - DAY 1
+ */
+const sessions = {
+  /**
+   * Get active user sessions
+   */
+  async getActiveSessions(): Promise<UserSessionListResponse> {
+    return serverFetch<UserSessionListResponse>('/api/sessions');
   },
 };
 
@@ -485,6 +506,9 @@ export const serverApi = {
   leads,
   users,
   admin,
+  pipeline,
+  notifications,
+  sessions,
 };
 
 /**
