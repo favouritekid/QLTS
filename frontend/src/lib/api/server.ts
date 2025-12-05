@@ -324,18 +324,18 @@ const admin = {
    */
   notifications: {
     /**
-     * Get notification templates
+     * Get notification templates (Admin endpoint - no /admin prefix in backend)
      */
     async getTemplates(params?: {
       page?: number;
       page_size?: number;
       search?: string;
     }): Promise<NotificationTemplatesPage> {
-      return serverFetch<NotificationTemplatesPage>('/api/admin/notification-templates', { params });
+      return serverFetch<NotificationTemplatesPage>('/api/notification-templates', { params });
     },
 
     /**
-     * Get notification rules
+     * Get notification rules (Admin endpoint - no /admin prefix in backend)
      */
     async getRules(params?: {
       page?: number;
@@ -343,7 +343,7 @@ const admin = {
       event?: string;
       is_active?: boolean;
     }): Promise<NotificationRulesPage> {
-      return serverFetch<NotificationRulesPage>('/api/admin/notification-rules', { params });
+      return serverFetch<NotificationRulesPage>('/api/notification-rules', { params });
     },
 
     /**
@@ -433,9 +433,9 @@ const admin = {
    */
   policies: {
     /**
-     * Get policy statistics
+     * Get policy statistics (Admin endpoint under roles router)
      */    async getStatistics(): Promise<PermissionStatistics> {
-      return serverFetch<PermissionStatistics>('/api/admin/permissions/statistics');
+      return serverFetch<PermissionStatistics>('/api/admin/roles/policies/statistics');
     },
   },
 };
