@@ -75,9 +75,17 @@ async def get_notification_preferences(
     current_user: models.User = PermissionDep,
 ):
     """Get user's notification preferences."""
-    preference = await notification_preference_service.get_user_preference(
+    # ✅ TRANSACTION FIX: Unpack tuple from service
+    preference, callback = await notification_preference_service.get_user_preference(
         db, current_user.id
     )
+
+    # ✅ Router commits transaction
+    await db.commit()
+
+    # ✅ Execute post-commit callback if exists
+    if callback:
+        await callback()
 
     return preference
 
@@ -91,9 +99,17 @@ async def update_notification_preferences(
     current_user: models.User = PermissionDep,
 ):
     """Update user's notification preferences."""
-    preference = await notification_preference_service.update_user_preference(
+    # ✅ TRANSACTION FIX: Unpack tuple from service
+    preference, callback = await notification_preference_service.update_user_preference(
         db, current_user.id, preference_update
     )
+
+    # ✅ Router commits transaction
+    await db.commit()
+
+    # ✅ Execute post-commit callback if exists
+    if callback:
+        await callback()
 
     log.info(
         "User updated notification preferences",
@@ -183,14 +199,21 @@ async def update_event_group_preference(
             detail=f"Invalid channel. Must be one of: {valid_channels}"
         )
 
-    # Update preference
-    preference = await notification_preference_service.set_user_group_preference(
+    # ✅ TRANSACTION FIX: Unpack tuple from service
+    preference, callback = await notification_preference_service.set_user_group_preference(
         db=db,
         user_id=current_user.id,
         group=body.event_group,
         channel=body.channel,
         enabled=body.enabled
     )
+
+    # ✅ Router commits transaction
+    await db.commit()
+
+    # ✅ Execute post-commit callback if exists
+    if callback:
+        await callback()
 
     log.info(
         "User updated event group preference",
