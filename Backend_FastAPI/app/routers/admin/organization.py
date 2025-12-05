@@ -55,7 +55,10 @@ async def create_new_organization_unit(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Tạo một đơn vị tổ chức mới."""
-    return await organization_service.create_organization_unit(db, unit_in)
+    unit, post_commit = await organization_service.create_organization_unit(db, unit_in)
+    await db.commit()
+    await post_commit()
+    return unit
 
 
 @limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
@@ -114,7 +117,10 @@ async def update_existing_organization_unit(
     Admin: Can update all units
     Manager: Can update only managed units
     """
-    return await organization_service.update_organization_unit(db, unit.id, unit_in)
+    updated_unit, post_commit = await organization_service.update_organization_unit(db, unit.id, unit_in)
+    await db.commit()
+    await post_commit()
+    return updated_unit
 
 
 @limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
@@ -149,7 +155,9 @@ async def delete_existing_organization_unit(
     Admin: Can delete all units
     Manager: Can delete only managed units
     """
-    await organization_service.delete_organization_unit(db, unit.id)
+    _, post_commit = await organization_service.delete_organization_unit(db, unit.id)
+    await db.commit()
+    await post_commit()
     return None
 
 
@@ -171,7 +179,10 @@ async def create_new_program(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Tạo chương trình đào tạo mới (Level 1)."""
-    return await organization_service.create_major_program(db, program_in)
+    program, post_commit = await organization_service.create_major_program(db, program_in)
+    await db.commit()
+    await post_commit()
+    return program
 
 
 @limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
@@ -202,7 +213,10 @@ async def update_existing_program(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Cập nhật chương trình đào tạo."""
-    return await organization_service.update_major_program(db, program_id, program_in)
+    program, post_commit = await organization_service.update_major_program(db, program_id, program_in)
+    await db.commit()
+    await post_commit()
+    return program
 
 
 @limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
@@ -217,7 +231,9 @@ async def delete_existing_program(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Xóa chương trình đào tạo (soft delete)."""
-    await organization_service.delete_major_program(db, program_id)
+    _, post_commit = await organization_service.delete_major_program(db, program_id)
+    await db.commit()
+    await post_commit()
     return None
 
 
@@ -244,7 +260,10 @@ async def create_new_offering(
     if offering_in.program_id != program_id:
         raise BadRequest(detail="program_id in path must match program_id in request body")
 
-    return await organization_service.create_program_offering(db, offering_in)
+    offering, post_commit = await organization_service.create_program_offering(db, offering_in)
+    await db.commit()
+    await post_commit()
+    return offering
 
 
 @limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
@@ -275,7 +294,18 @@ async def update_existing_offering(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Cập nhật loại hình đào tạo."""
-    return await organization_service.update_program_offering(db, offering_id, offering_in)
+    # Service returns (offering, callback) tuple
+    offering, post_commit = await organization_service.update_program_offering(
+        db, offering_id, offering_in
+    )
+
+    # Commit transaction
+    await db.commit()
+
+    # Execute post-commit callback
+    await post_commit()
+
+    return offering
 
 
 @limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
@@ -290,7 +320,9 @@ async def delete_existing_offering(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Xóa loại hình đào tạo (soft delete)."""
-    await organization_service.delete_program_offering(db, offering_id)
+    _, post_commit = await organization_service.delete_program_offering(db, offering_id)
+    await db.commit()
+    await post_commit()
     return None
 
 
@@ -322,11 +354,14 @@ async def create_new_academic_info(
     if academic_info_in.offering_id != offering_id:
         raise BadRequest(detail="offering_id in path must match offering_id in request body")
 
-    return await organization_service.create_academic_info(
+    academic_info, post_commit = await organization_service.create_academic_info(
         db,
         academic_info_in=academic_info_in,
         created_by_user_id=current_admin.id
     )
+    await db.commit()
+    await post_commit()
+    return academic_info
 
 
 @limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
@@ -347,12 +382,15 @@ async def update_existing_academic_info(
     Supports partial updates.
     Returns 404 nếu academic info không tồn tại.
     """
-    return await organization_service.update_academic_info(
+    academic_info, post_commit = await organization_service.update_academic_info(
         db,
         academic_info_id=academic_info_id,
         academic_info_in=academic_info_in,
         updated_by_user_id=current_admin.id
     )
+    await db.commit()
+    await post_commit()
+    return academic_info
 
 
 @limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
@@ -373,7 +411,9 @@ async def delete_existing_academic_info(
     Có thể khôi phục bằng endpoint POST /academic-info/{id}/restore.
     Returns 404 nếu academic info không tồn tại.
     """
-    await organization_service.delete_academic_info(db, academic_info_id=academic_info_id)
+    _, post_commit = await organization_service.delete_academic_info(db, academic_info_id=academic_info_id)
+    await db.commit()
+    await post_commit()
     return None
 
 
@@ -396,4 +436,7 @@ async def restore_deleted_academic_info(
     Returns 400 nếu bản ghi chưa bị xóa.
     Returns 404 nếu academic info không tồn tại.
     """
-    return await organization_service.restore_academic_info(db, academic_info_id=academic_info_id)
+    academic_info, post_commit = await organization_service.restore_academic_info(db, academic_info_id=academic_info_id)
+    await db.commit()
+    await post_commit()
+    return academic_info
