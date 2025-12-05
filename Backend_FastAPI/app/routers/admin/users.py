@@ -51,6 +51,7 @@ from app.config import settings
 from app.core import deps
 from app.database import get_db
 from app.services import activity_service, lead_service, user_service
+from app.tasks import process_automatic_lead_assignment_task
 from app.utils.exceptions import (
     DuplicateResourceError,
     PermissionDeniedError,
@@ -715,7 +716,7 @@ async def import_leads_from_file(
 
     # Call service layer with file content (DI pattern)
     try:
-        result = await services.lead_service.import_leads_from_file_content(
+        result = await lead_service.import_leads_from_file_content(
             file_content=content,
             filename=file.filename or "unknown",
             db=db,
@@ -811,8 +812,8 @@ async def get_user_details(
 @limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
 @router.put("/{user_id}")
 async def update_existing_user(
+    request: Request,  # Required for rate limiter (must be first)
     user_id: int,
-    request: Request,
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
     full_name: Optional[str] = Form(None),

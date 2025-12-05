@@ -1,6 +1,6 @@
 # app/schemas/notification.py
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict
 
@@ -246,12 +246,16 @@ class CompoundCondition(BaseModel):
         }
     """
     operator: str  # "and" or "or"
-    conditions: List[Any]  # List of SimpleCondition or CompoundCondition (recursive)
+    conditions: List[Union["SimpleCondition", "CompoundCondition"]]  # Recursive: can contain simple or compound conditions
 
-    class Config:
+    model_config = ConfigDict(
         # Allow recursive validation
-        arbitrary_types_allowed = True
+        arbitrary_types_allowed=True
+    )
 
 
 # Union type for condition validation
 Condition = SimpleCondition | CompoundCondition | None
+
+# Rebuild to resolve forward references in CompoundCondition
+CompoundCondition.model_rebuild()

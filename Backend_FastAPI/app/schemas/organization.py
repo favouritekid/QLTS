@@ -492,11 +492,10 @@ class DistributionRuleUpdate(BaseModel):
 class DistributionRuleResponse(DistributionRuleBase):
     id: int
     # Để hiển thị tên cho đẹp
-    offering_name: Optional[str] = None 
+    offering_name: Optional[str] = None
     unit_name: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # Resolve forward references
 ProgramOffering.model_rebuild()

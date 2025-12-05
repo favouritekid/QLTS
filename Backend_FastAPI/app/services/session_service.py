@@ -7,7 +7,6 @@ from sqlalchemy import and_, select
 from sqlalchemy.exc import NoResultFound  # ✅ Thêm exception
 from sqlalchemy.ext.asyncio import AsyncSession
 from user_agents import parse as parse_user_agent
-from fastapi import status
 
 from .. import models
 from ..database import safe_redis_delete, safe_redis_set
@@ -16,7 +15,7 @@ from ..utils.exceptions import (  # ✅ PHASE 1: Custom exceptions (protocol-ind
     SessionRevocationError,
     SessionServiceError,
 )
-from ..socket_manager import sio
+from ..core.events import dispatcher, TransportEvents  # ✅ Event Dispatcher Pattern
 from ..socket_metrics import socket_emit_failures_total  # ✅ Thêm Metrics
 from ..socket_metrics import (
     socket_events_emitted_total,
@@ -421,21 +420,20 @@ async def revoke_session(
             }
         )
 
-    # 4. Gửi Socket.IO (Chỉ khi transaction thành công)
+    # 4. Dispatch event (Chỉ khi transaction thành công) - Event Dispatcher Pattern
     if session_to_emit:
         async with track_event_latency("force_logout_batch"):
             try:
-                room_name = f"user_room_{user_id}"
-                await sio.emit(
-                    "force_logout_batch",
-                    {"revoked_jtis": [session_to_emit]},
-                    room=room_name,
+                await dispatcher.dispatch(
+                    TransportEvents.USER_FORCE_LOGOUT,
+                    user_id=user_id,
+                    revoked_jtis=[session_to_emit]
                 )
                 socket_events_emitted_total.labels(event_type="force_logout_batch").inc()
-                log.info("Emitted 'force_logout_batch' event (single)", session_id=session_id)
-            except Exception as e_socket:
+                log.info("Dispatched force_logout event (single)", session_id=session_id)
+            except Exception as e_dispatch:
                 socket_emit_failures_total.labels(event_type="force_logout_batch").inc()
-                log.error("Failed to emit socket event for revoke", error=str(e_socket))
+                log.error("Failed to dispatch logout event", error=str(e_dispatch))
 
     return True
 
@@ -559,24 +557,24 @@ async def revoke_all_other_sessions(
         raise e # Ném lại lỗi để router xử lý (trả về 500)
 
 
-    # Gửi sự kiện Socket.IO (Sau khi đã commit)
+    # Dispatch event (Sau khi đã commit) - Event Dispatcher Pattern
     if revoked_jtis:
         async with track_event_latency("force_logout_batch_all"):
             try:
-                room_name = f"user_room_{user_id}"
-                await sio.emit(
-                    "force_logout_batch", {"revoked_jtis": revoked_jtis}, room=room_name
+                await dispatcher.dispatch(
+                    TransportEvents.USER_FORCE_LOGOUT,
+                    user_id=user_id,
+                    revoked_jtis=revoked_jtis
                 )
                 socket_events_emitted_total.labels(event_type="force_logout_batch").inc(
                     len(revoked_jtis)
                 )
-                # ✅ 6. SỬA LỖI GHI LOG
                 log.info(
-                    "Emitted 'force_logout_batch' event (multiple)",
+                    "Dispatched force_logout event (multiple)",
                     user_id=user_id,
                     revoked_count=revoked_count
                 )
-            except Exception as e_socket:
+            except Exception as e_dispatch:
                 socket_emit_failures_total.labels(event_type="force_logout_batch").inc()
                 log.error(
                     "Failed to emit socket event for revoke-all", 

@@ -234,6 +234,13 @@ class SessionRevokedError(AuthenticationError):
     error_code = "SESSION_REVOKED"
 
 
+class SessionExpiredError(AuthenticationError):
+    """User session has expired."""
+
+    detail = "Your session has expired. Please login again."
+    error_code = "SESSION_EXPIRED"
+
+
 class PermissionDeniedError(BaseAppException):
     """User does not have permission (HTTP 403)."""
 

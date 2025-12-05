@@ -289,3 +289,8 @@ class Application(ApplicationBase):
     lead: Optional["Lead"] = None  # Forward reference
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# Rebuild models to resolve forward references
+Lead.model_rebuild()
+Application.model_rebuild()

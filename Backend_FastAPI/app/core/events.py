@@ -497,3 +497,99 @@ class SystemEvents(str, Enum):
 
     Recipients: All admins and managers (for workload visibility)
     """
+
+
+# =============================================================================
+# EVENT DISPATCHER PATTERN
+# =============================================================================
+
+class EventDispatcher:
+    """
+    Framework-agnostic event dispatcher for service layer.
+
+    Decouples service layer from transport layer (Socket.IO, WebHooks, etc.)
+    Services dispatch domain events, handlers deliver via specific transports.
+
+    Usage in services:
+        from ..core.events import dispatcher
+        await dispatcher.dispatch("user.profile_updated", user_id=123, changes={...})
+
+    Usage in socket_manager (register on startup):
+        from app.core.events import dispatcher
+
+        async def emit_profile_updated(user_id: int, changes: dict, **kwargs):
+            await sio.emit("profile_updated", {"user_id": user_id, "changes": changes})
+
+        dispatcher.register("user.profile_updated", emit_profile_updated)
+    """
+
+    def __init__(self):
+        self._handlers: dict[str, list] = {}
+
+    def register(self, event_name: str, handler):
+        """
+        Register a handler for a domain event.
+
+        Args:
+            event_name: Event identifier (e.g., "user.profile_updated")
+            handler: Async function to handle event
+        """
+        if event_name not in self._handlers:
+            self._handlers[event_name] = []
+
+        self._handlers[event_name].append(handler)
+        import structlog
+        log = structlog.get_logger(__name__)
+        log.debug("Event handler registered", event=event_name, handler=handler.__name__)
+
+    async def dispatch(self, event_name: str, **data):
+        """
+        Dispatch a domain event to all registered handlers.
+
+        Args:
+            event_name: Event identifier
+            **data: Event payload (passed to handlers as kwargs)
+        """
+        if event_name not in self._handlers:
+            return
+
+        import structlog
+        log = structlog.get_logger(__name__)
+        log.info("Dispatching event", event=event_name, handler_count=len(self._handlers[event_name]))
+
+        for handler in self._handlers[event_name]:
+            try:
+                await handler(**data)
+                log.debug("Event handler succeeded", event=event_name, handler=handler.__name__)
+            except Exception as e:
+                # Log error but continue dispatching to other handlers
+                log.error(
+                    "Event handler failed",
+                    event=event_name,
+                    handler=handler.__name__,
+                    error=str(e),
+                    exc_info=True
+                )
+
+
+# Global dispatcher instance for transport-agnostic event handling
+dispatcher = EventDispatcher()
+
+
+# =============================================================================
+# DOMAIN EVENTS FOR TRANSPORT LAYER
+# =============================================================================
+
+class TransportEvents:
+    """
+    Domain events for transport layer (Socket.IO, etc.)
+    Use these instead of calling sio.emit() directly in services.
+    """
+
+    # User events
+    USER_FORCE_LOGOUT = "user.force_logout"
+    USER_PROFILE_UPDATED = "user.profile_updated"
+
+    # Session events
+    SESSION_EXPIRED_BATCH = "session.expired_batch"
+

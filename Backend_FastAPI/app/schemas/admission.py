@@ -269,7 +269,8 @@ class AdmissionProfileUpdate(BaseModel):
     )
     academic_history: Optional[List[AcademicRecordSchema]] = Field(
         None,
-        description="Array of academic records (schools attended)"
+        max_items=20,
+        description="Array of academic records (schools attended, max 20)"
     )
     admission_scores: Optional[AdmissionScoreSchema] = Field(
         None,

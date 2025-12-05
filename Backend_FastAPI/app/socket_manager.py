@@ -556,3 +556,60 @@ async def emit_to_all(event: str, data: dict, namespace: str = "/"):
 #   - emit_consultation_created()
 #   - emit_lead_updated()
 # =====================================================================
+
+
+# =====================================================================
+# EVENT DISPATCHER HANDLERS (Architecture Refactoring)
+# =====================================================================
+# Services dispatch domain events → dispatcher routes to transport handlers
+# This decouples service layer from Socket.IO (framework-agnostic)
+
+from .core.events import dispatcher, TransportEvents
+
+
+async def emit_force_logout(user_id: int, revoked_jtis: list, **kwargs):
+    """
+    Socket.IO handler for user.force_logout event.
+
+    Args:
+        user_id: User to logout
+        revoked_jtis: List of revoked session JTIs
+        **kwargs: Additional event data (ignored)
+    """
+    try:
+        room_name = f"user_room_{user_id}"
+        await sio.emit(
+            "force_logout_batch",
+            {"revoked_jtis": revoked_jtis},
+            room=room_name
+        )
+        log.debug("Emitted force_logout_batch event", user_id=user_id, count=len(revoked_jtis))
+    except Exception as e:
+        log.error("Failed to emit force_logout event", user_id=user_id, error=str(e))
+
+
+async def emit_data_updated(event_data: dict, **kwargs):
+    """
+    Socket.IO handler for data.updated event.
+
+    Args:
+        event_data: Event payload with resource info
+        **kwargs: Additional event data (ignored)
+    """
+    try:
+        # Broadcast to all connected clients
+        await sio.emit("data_updated", event_data)
+        log.debug("Emitted data_updated event", resource=event_data.get("resource_type"))
+    except Exception as e:
+        log.error("Failed to emit data_updated event", error=str(e))
+
+
+# Register handlers on module import
+dispatcher.register(TransportEvents.USER_FORCE_LOGOUT, emit_force_logout)
+dispatcher.register("data.updated", emit_data_updated)
+
+log.info("✅ Event Dispatcher handlers registered", handlers=[
+    f"{TransportEvents.USER_FORCE_LOGOUT} → emit_force_logout",
+    "data.updated → emit_data_updated"
+])
+# =====================================================================

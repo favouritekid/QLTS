@@ -205,6 +205,14 @@ class TuitionDiscountPolicyUpdate(BaseModel):
                 raise ValueError("Phần trăm ưu đãi không được vượt quá 100%")
         return self
 
+    @model_validator(mode='after')
+    def validate_date_range(self):
+        """Kiểm tra valid_from <= valid_to nếu cả hai được cung cấp"""
+        if self.valid_from and self.valid_to:
+            if self.valid_from > self.valid_to:
+                raise ValueError("valid_from phải nhỏ hơn hoặc bằng valid_to")
+        return self
+
 
 # =============================================================================
 # RESPONSE SCHEMA
