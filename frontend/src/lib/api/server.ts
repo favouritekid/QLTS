@@ -260,19 +260,19 @@ const admin = {
    */
   pipeline: {
     /**
-     * Get all consultation statuses
+     * Get all consultation statuses (Admin endpoint)
      */    async getConsultationStatuses(): Promise<ConsultationStatus[]> {
-      return serverFetch<ConsultationStatus[]>('/api/consultation-statuses');
+      return serverFetch<ConsultationStatus[]>('/api/admin/consultation-statuses');
     },
 
     /**
-     * Get pipeline stages
+     * Get pipeline stages (Admin endpoint)
      */    async getPipelineStages(params?: { status_id?: number }): Promise<PipelineStage[]> {
-      return serverFetch<PipelineStage[]>('/api/pipeline-stages', { params });
+      return serverFetch<PipelineStage[]>('/api/admin/pipeline-stages', { params });
     },
 
     /**
-     * Get full pipeline with leads and stats
+     * Get full pipeline with leads and stats (Public endpoint)
      */
     async getFullPipeline(params?: {
       include_leads?: boolean;
@@ -280,7 +280,7 @@ const admin = {
       date_from?: string;
       date_to?: string;
     }): Promise<FullPipeline> {
-      return serverFetch<FullPipeline>('/api/pipeline', { params });
+      return serverFetch<FullPipeline>('/api/pipeline/all', { params });
     },
   },
 
