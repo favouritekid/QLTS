@@ -7,7 +7,6 @@ from sqlalchemy import and_, select
 from sqlalchemy.exc import NoResultFound  # ✅ Thêm exception
 from sqlalchemy.ext.asyncio import AsyncSession
 from user_agents import parse as parse_user_agent
-from fastapi import status
 
 from .. import models
 from ..database import safe_redis_delete, safe_redis_set
