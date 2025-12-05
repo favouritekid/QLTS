@@ -276,11 +276,11 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{isCreate ? "Create New Lead" : "Edit Lead"}</DialogTitle>
+          <DialogTitle>{isCreate ? "Tạo Lead Mới" : "Chỉnh sửa Lead"}</DialogTitle>
           <DialogDescription>
             {isCreate
-              ? "Add a new lead to the system. Fill in the required information below."
-              : "Update the lead information. Changes will be saved immediately."}
+              ? "Thêm lead mới vào hệ thống. Vui lòng điền các thông tin bên dưới."
+              : "Cập nhật thông tin lead. Các thay đổi sẽ được lưu ngay lập tức."}
           </DialogDescription>
         </DialogHeader>
 
@@ -288,16 +288,16 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             {/* Basic Information */}
             <div className="space-y-4">
-              <h3 className="text-sm font-semibold">Basic Information</h3>
+              <h3 className="text-sm font-semibold">Thông tin cơ bản</h3>
 
               <FormField
                 control={form.control}
                 name="full_name"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Full Name *</FormLabel>
+                    <FormLabel>Họ và tên *</FormLabel>
                     <FormControl>
-                      <Input placeholder="John Doe" {...field} />
+                      <Input placeholder="Nguyễn Văn A" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -324,7 +324,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                   name="phone"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Phone *</FormLabel>
+                      <FormLabel>Số điện thoại *</FormLabel>
                       <FormControl>
                         <Input placeholder="0909123456" {...field} />
                       </FormControl>
@@ -339,7 +339,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                 name="phone2"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Secondary Phone</FormLabel>
+                    <FormLabel>Số điện thoại phụ</FormLabel>
                     <FormControl>
                       <Input
                         placeholder="0909123456"
@@ -347,7 +347,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                         value={field.value ?? ""}
                       />
                     </FormControl>
-                    <FormDescription>Optional secondary phone number</FormDescription>
+                    <FormDescription>Số điện thoại liên hệ phụ (không bắt buộc)</FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -359,11 +359,11 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                   name="source"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Source *</FormLabel>
+                      <FormLabel>Nguồn lead *</FormLabel>
                       <Select onValueChange={field.onChange} value={field.value}>
                         <FormControl>
                           <SelectTrigger>
-                            <SelectValue placeholder="Select source" />
+                            <SelectValue placeholder="Chọn nguồn" />
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
@@ -391,30 +391,30 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                     return (
                       <FormItem>
                         <FormLabel>
-                          Organization Unit {!unitOptional && !hideUnitSelector && "*"}
+                          Đơn vị tổ chức {!unitOptional && !hideUnitSelector && "*"}
                         </FormLabel>
                         <FormControl>
                           <SmartUnitSelector
                             value={field.value ?? ""}
                             onChange={(val) => field.onChange(val || "")}
-                            placeholder={unitOptional ? "Auto (from distribution)" : "Select unit"}
+                            placeholder={unitOptional ? "Tự động (từ cấu hình phân phối)" : "Chọn đơn vị"}
                             disabled={hideUnitSelector}
                             variant="select"
                           />
                         </FormControl>
                         {isOfficer && (
                           <FormDescription>
-                            You can only create leads in your assigned unit
+                            Bạn chỉ có thể tạo lead trong đơn vị được phân công
                           </FormDescription>
                         )}
                         {isManager && (
                           <FormDescription>
-                            Leads will be created in your unit
+                            Lead sẽ được tạo trong đơn vị của bạn
                           </FormDescription>
                         )}
                         {unitOptional && (
                           <FormDescription className="text-blue-600">
-                            Optional - unit will be determined from distribution config
+                            Tùy chọn - đơn vị sẽ được xác định từ cấu hình phân phối
                           </FormDescription>
                         )}
                         <FormMessage />
@@ -451,37 +451,37 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                 <div className="rounded-lg border bg-muted/50 p-4 space-y-2">
                   <div className="flex items-center gap-2 text-sm font-medium">
                     <Info className="h-4 w-4 text-blue-500" />
-                    Distribution Preview
+                    Xem trước phân phối
                   </div>
                   {isLoadingPreview ? (
                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
                       <Loader2 className="h-4 w-4 animate-spin" />
-                      Loading distribution config...
+                      Đang tải cấu hình phân phối...
                     </div>
                   ) : distributionPreview?.has_config ? (
                     <div className="space-y-2 text-sm">
                       <div className="flex items-center justify-between">
-                        <span className="text-muted-foreground">Next unit to receive lead:</span>
+                        <span className="text-muted-foreground">Đơn vị tiếp theo nhận lead:</span>
                         <span className="font-medium text-green-600">
                           {distributionPreview.next_unit_name}
                         </span>
                       </div>
                       <div className="text-xs text-muted-foreground">
-                        Distribution: {distributionPreview.configs.map(c =>
-                          `${c.unit_name} (weight: ${c.weight})`
+                        Phân phối: {distributionPreview.configs.map(c =>
+                          `${c.unit_name} (trọng số: ${c.weight})`
                         ).join(", ")}
                       </div>
                       <div className="text-xs text-blue-600">
                         {isManager
-                          ? "Lead will be routed to this unit via distribution config."
-                          : "Unit will be auto-determined. You don't need to select unit manually."}
+                          ? "Lead sẽ được chuyển đến đơn vị này theo cấu hình phân phối."
+                          : "Đơn vị sẽ được xác định tự động. Bạn không cần chọn đơn vị thủ công."}
                       </div>
                     </div>
                   ) : (
                     <div className="text-sm text-amber-600">
                       {isManager
-                        ? "No distribution config. Lead will stay in your unit."
-                        : "No distribution config for this offering. Please select a unit manually."}
+                        ? "Không có cấu hình phân phối. Lead sẽ ở lại đơn vị của bạn."
+                        : "Không có cấu hình phân phối cho chương trình này. Vui lòng chọn đơn vị thủ công."}
                     </div>
                   )}
                 </div>
@@ -494,19 +494,19 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                   name="assigned_officer_id"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Assign to Officer</FormLabel>
+                      <FormLabel>Phân công cho tư vấn viên</FormLabel>
                       <Select
                         onValueChange={field.onChange}
                         value={field.value || "auto"}
                       >
                         <FormControl>
                           <SelectTrigger>
-                            <SelectValue placeholder="Select officer" />
+                            <SelectValue placeholder="Chọn tư vấn viên" />
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
                           <SelectItem value="auto">
-                            🔄 Automatic Assignment (Round Robin)
+                            🔄 Phân công tự động (Round Robin)
                           </SelectItem>
                           {availableOfficers.map((officer) => (
                             <SelectItem key={officer.id} value={officer.id.toString()}>
@@ -517,8 +517,8 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                       </Select>
                       <FormDescription>
                         {field.value === "auto" || !field.value
-                          ? "System will automatically assign to an available officer"
-                          : "Lead will be directly assigned to the selected officer"}
+                          ? "Hệ thống sẽ tự động phân công cho tư vấn viên có sẵn"
+                          : "Lead sẽ được phân công trực tiếp cho tư vấn viên đã chọn"}
                       </FormDescription>
                       <FormMessage />
                     </FormItem>
@@ -529,7 +529,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
 
             {/* Academic Information */}
             <div className="space-y-4">
-              <h3 className="text-sm font-semibold">Academic Information</h3>
+              <h3 className="text-sm font-semibold">Thông tin học vấn</h3>
 
               <div className="grid grid-cols-2 gap-4">
                 <FormField
@@ -537,23 +537,23 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                   name="education_level"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Education Level</FormLabel>
+                      <FormLabel>Trình độ học vấn</FormLabel>
                       <Select
                         onValueChange={field.onChange}
                         value={field.value || undefined}
                       >
                         <FormControl>
                           <SelectTrigger>
-                            <SelectValue placeholder="Select level" />
+                            <SelectValue placeholder="Chọn trình độ" />
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          <SelectItem value="high_school">High School</SelectItem>
-                          <SelectItem value="diploma">Diploma</SelectItem>
-                          <SelectItem value="bachelor">Bachelor</SelectItem>
-                          <SelectItem value="master">Master</SelectItem>
-                          <SelectItem value="phd">PhD</SelectItem>
-                          <SelectItem value="other">Other</SelectItem>
+                          <SelectItem value="high_school">THPT</SelectItem>
+                          <SelectItem value="diploma">Trung cấp / Cao đẳng</SelectItem>
+                          <SelectItem value="bachelor">Đại học</SelectItem>
+                          <SelectItem value="master">Thạc sĩ</SelectItem>
+                          <SelectItem value="phd">Tiến sĩ</SelectItem>
+                          <SelectItem value="other">Khác</SelectItem>
                         </SelectContent>
                       </Select>
                       <FormMessage />
@@ -583,7 +583,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                           }
                         />
                       </FormControl>
-                      <FormDescription>Scale: 0.0 - 4.0</FormDescription>
+                      <FormDescription>Thang điểm: 0.0 - 4.0</FormDescription>
                       <FormMessage />
                     </FormItem>
                   )}
@@ -595,10 +595,10 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                 name="location"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Location</FormLabel>
+                    <FormLabel>Địa điểm</FormLabel>
                     <FormControl>
                       <Input
-                        placeholder="Ho Chi Minh City"
+                        placeholder="TP. Hồ Chí Minh"
                         {...field}
                         value={field.value ?? ""}
                       />
@@ -616,11 +616,11 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                 onClick={() => onOpenChange(false)}
                 disabled={isSubmitting}
               >
-                Cancel
+                Hủy
               </Button>
               <Button type="submit" disabled={isSubmitting}>
                 {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                {isCreate ? "Create Lead" : "Save Changes"}
+                {isCreate ? "Tạo Lead" : "Lưu thay đổi"}
               </Button>
             </DialogFooter>
           </form>
