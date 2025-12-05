@@ -20,8 +20,6 @@ Endpoints:
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 import structlog
 
 from .. import database, models, schemas
@@ -42,9 +40,6 @@ router = APIRouter(prefix="/admissions", tags=["Admissions"])
 
 # Dependencies
 PermissionDep = Depends(deps.check_permission)
-
-# Rate Limiter (for enroll endpoint)
-limiter = Limiter(key_func=get_remote_address)
 
 
 # ==============================================================================

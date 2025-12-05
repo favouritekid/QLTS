@@ -11,7 +11,7 @@ from .. import models, schemas
 # 👈 *** ADD REDIS IMPORTS ***
 from ..database import safe_redis_delete, safe_redis_get, safe_redis_set
 from ..services.pipeline_service import invalidate_pipeline_cache
-from ..utils.exceptions import ResourceNotFoundError
+from ..utils.exceptions import DuplicateResourceError, ResourceNotFoundError
 
 log = structlog.get_logger(__name__)
 
@@ -1295,5 +1295,3 @@ async def delete_distribution_rule(
         )
 
     return None, _post_commit
-
-    log.info("Distribution rule deleted successfully", rule_id=rule_id)

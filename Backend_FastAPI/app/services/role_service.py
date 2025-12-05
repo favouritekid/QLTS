@@ -12,7 +12,7 @@ Business Rules:
 - Role priority: admin > manager > officer > user
 """
 
-from typing import Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 import logging
 
 import casbin
@@ -38,7 +38,7 @@ async def remove_role_from_users(
     enforcer: casbin.AsyncEnforcer,
     user_ids: List[int],
     role_to_remove: str,
-) -> Tuple[Dict[str, any], Callable]:
+) -> Tuple[Dict[str, Any], Callable]:
     """
     Remove a specific role from multiple users.
 
