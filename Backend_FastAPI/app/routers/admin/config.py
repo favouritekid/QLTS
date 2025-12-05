@@ -136,7 +136,10 @@ async def create_new_skill_rule_route(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Tạo một quy tắc kỹ năng mới."""
-    return await config_service.create_skill_rule(db, rule_in)
+    rule, callback = await config_service.create_skill_rule(db, rule_in)
+    await db.commit()
+    await callback()
+    return rule
 
 
 @limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
@@ -150,8 +153,10 @@ async def delete_skill_rule_route(
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
-    """(Admin only) Xóa một quy tắc kỹ năng."""
-    await config_service.delete_skill_rule(db, rule_id)
+    """(Admin only) Xoá một quy tắc kỹ năng."""
+    _, callback = await config_service.delete_skill_rule(db, rule_id)
+    await db.commit()
+    await callback()
     return None
 
 
@@ -383,7 +388,10 @@ async def create_degree_level(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Create a new degree level."""
-    return await config_service.create_degree_level(db, level_in)
+    level, callback = await config_service.create_degree_level(db, level_in)
+    await db.commit()
+    await callback()
+    return level
 
 
 @limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
@@ -399,7 +407,10 @@ async def update_degree_level(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Update a degree level."""
-    return await config_service.update_degree_level(db, level_id, level_in)
+    level, callback = await config_service.update_degree_level(db, level_id, level_in)
+    await db.commit()
+    await callback()
+    return level
 
 
 @limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
@@ -414,7 +425,9 @@ async def delete_degree_level(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Delete a degree level (soft delete)."""
-    await config_service.delete_degree_level(db, level_id)
+    _, callback = await config_service.delete_degree_level(db, level_id)
+    await db.commit()
+    await callback()
     return None
 
 
@@ -456,7 +469,10 @@ async def create_offering_type(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Create a new offering type."""
-    return await config_service.create_offering_type(db, type_in)
+    offering_type, callback = await config_service.create_offering_type(db, type_in)
+    await db.commit()
+    await callback()
+    return offering_type
 
 
 @limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
@@ -472,7 +488,10 @@ async def update_offering_type(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Update an offering type."""
-    return await config_service.update_offering_type(db, type_id, type_in)
+    offering_type, callback = await config_service.update_offering_type(db, type_id, type_in)
+    await db.commit()
+    await callback()
+    return offering_type
 
 
 @limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
@@ -487,7 +506,9 @@ async def delete_offering_type(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Delete an offering type (soft delete)."""
-    await config_service.delete_offering_type(db, type_id)
+    _, callback = await config_service.delete_offering_type(db, type_id)
+    await db.commit()
+    await callback()
     return None
 
 
@@ -529,7 +550,10 @@ async def create_document_type(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Create a new document type."""
-    return await config_service.create_document_type(db, type_in)
+    doc_type, callback = await config_service.create_document_type(db, type_in)
+    await db.commit()
+    await callback()
+    return doc_type
 
 
 @limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
@@ -545,7 +569,10 @@ async def update_document_type(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Update a document type."""
-    return await config_service.update_document_type(db, type_id, type_in)
+    doc_type, callback = await config_service.update_document_type(db, type_id, type_in)
+    await db.commit()
+    await callback()
+    return doc_type
 
 
 @limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
@@ -560,5 +587,7 @@ async def delete_document_type(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Delete a document type (soft delete)."""
-    await config_service.delete_document_type(db, type_id)
+    _, callback = await config_service.delete_document_type(db, type_id)
+    await db.commit()
+    await callback()
     return None

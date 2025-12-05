@@ -77,7 +77,9 @@ async def create_new_pipeline_stage(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Tạo một Giai đoạn (Stage) mới trong Pipeline."""
-    result = await pipeline_service.create_pipeline_stage(db, stage_in, current_user=current_admin)
+    stage, callback = await pipeline_service.create_pipeline_stage(db, stage_in, current_user=current_admin)
+    await db.commit()
+    await callback()
 
     # ✅ NOTIFICATION 2.0: Dispatch PIPELINE_CONFIG_UPDATED
     try:
@@ -89,16 +91,16 @@ async def create_new_pipeline_stage(
             payload={
                 "config_type": "pipeline_stage",
                 "operation": "create",
-                "resource_id": result.id,
-                "resource_name": result.name,
+                "resource_id": stage.id,
+                "resource_name": stage.name,
                 "actor_id": current_admin.id,
             },
-            dedupe_key=f"pipeline_config:create:stage:{result.id}"
+            dedupe_key=f"pipeline_config:create:stage:{stage.id}"
         )
     except Exception as e:
         log.warning("Failed to dispatch PIPELINE_CONFIG_UPDATED", error=str(e))
 
-    return result
+    return stage
 
 
 @limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
@@ -129,7 +131,9 @@ async def update_existing_pipeline_stage(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Cập nhật một Giai đoạn (Stage)."""
-    result = await pipeline_service.update_pipeline_stage(db, stage_id, stage_in, current_user=current_admin)
+    stage, callback = await pipeline_service.update_pipeline_stage(db, stage_id, stage_in, current_user=current_admin)
+    await db.commit()
+    await callback()
 
     # ✅ NOTIFICATION 2.0: Dispatch PIPELINE_CONFIG_UPDATED
     try:
@@ -142,7 +146,7 @@ async def update_existing_pipeline_stage(
                 "config_type": "pipeline_stage",
                 "operation": "update",
                 "resource_id": stage_id,
-                "resource_name": result.name,
+                "resource_name": stage.name,
                 "actor_id": current_admin.id,
             },
             dedupe_key=f"pipeline_config:update:stage:{stage_id}"
@@ -150,7 +154,7 @@ async def update_existing_pipeline_stage(
     except Exception as e:
         log.warning("Failed to dispatch PIPELINE_CONFIG_UPDATED", error=str(e))
 
-    return result
+    return stage
 
 
 @limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
@@ -164,8 +168,10 @@ async def delete_existing_pipeline_stage(
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
-    """(Admin only) Xóa một Giai đoạn (Stage). (Chỉ thành công nếu không có Status nào liên kết)"""
-    await pipeline_service.delete_pipeline_stage(db, stage_id, current_user=current_admin)
+    """(Admin only) Xoá một Giai đoạn (Stage). (Chỉ thành công nếu không có Status nào liên kết)"""
+    _, callback = await pipeline_service.delete_pipeline_stage(db, stage_id, current_user=current_admin)
+    await db.commit()
+    await callback()
 
     # ✅ NOTIFICATION 2.0: Dispatch PIPELINE_CONFIG_UPDATED
     try:
@@ -224,7 +230,9 @@ async def create_new_consultation_status(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Tạo một Trạng thái tư vấn (Status) mới."""
-    result = await pipeline_service.create_consultation_status(db, status_in, current_user=current_admin)
+    consultation_status, callback = await pipeline_service.create_consultation_status(db, status_in, current_user=current_admin)
+    await db.commit()
+    await callback()
 
     # ✅ NOTIFICATION 2.0: Dispatch PIPELINE_CONFIG_UPDATED
     try:
@@ -236,16 +244,16 @@ async def create_new_consultation_status(
             payload={
                 "config_type": "consultation_status",
                 "operation": "create",
-                "resource_id": result.id,
-                "resource_name": result.name,
+                "resource_id": consultation_status.id,
+                "resource_name": consultation_status.name,
                 "actor_id": current_admin.id,
             },
-            dedupe_key=f"pipeline_config:create:status:{result.id}"
+            dedupe_key=f"pipeline_config:create:status:{consultation_status.id}"
         )
     except Exception as e:
         log.warning("Failed to dispatch PIPELINE_CONFIG_UPDATED", error=str(e))
 
-    return result
+    return consultation_status
 
 
 @limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
@@ -276,7 +284,9 @@ async def update_existing_consultation_status(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Cập nhật một Trạng thái tư vấn (Status)."""
-    result = await pipeline_service.update_consultation_status(db, status_id, status_in, current_user=current_admin)
+    consultation_status, callback = await pipeline_service.update_consultation_status(db, status_id, status_in, current_user=current_admin)
+    await db.commit()
+    await callback()
 
     # ✅ NOTIFICATION 2.0: Dispatch PIPELINE_CONFIG_UPDATED
     try:
@@ -289,7 +299,7 @@ async def update_existing_consultation_status(
                 "config_type": "consultation_status",
                 "operation": "update",
                 "resource_id": status_id,
-                "resource_name": result.name,
+                "resource_name": consultation_status.name,
                 "actor_id": current_admin.id,
             },
             dedupe_key=f"pipeline_config:update:status:{status_id}"
@@ -297,7 +307,7 @@ async def update_existing_consultation_status(
     except Exception as e:
         log.warning("Failed to dispatch PIPELINE_CONFIG_UPDATED", error=str(e))
 
-    return result
+    return consultation_status
 
 
 @limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
@@ -311,8 +321,10 @@ async def delete_existing_consultation_status(
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
-    """(Admin only) Xóa một Trạng thái tư vấn (Status). (Chỉ thành công nếu không có Lead nào sử dụng)"""
-    await pipeline_service.delete_consultation_status(db, status_id, current_user=current_admin)
+    """(Admin only) Xoá một Trạng thái tư vấn (Status). (Chỉ thành công nếu không có Lead nào sử dụng)"""
+    _, callback = await pipeline_service.delete_consultation_status(db, status_id, current_user=current_admin)
+    await db.commit()
+    await callback()
 
     # ✅ NOTIFICATION 2.0: Dispatch PIPELINE_CONFIG_UPDATED
     try:
@@ -369,7 +381,10 @@ async def create_new_allowed_transition(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Tạo một Allowed Transition mới."""
-    return await pipeline_service.create_allowed_transition(db, transition_in, current_user=current_admin)
+    transition, callback = await pipeline_service.create_allowed_transition(db, transition_in, current_user=current_admin)
+    await db.commit()
+    await callback()
+    return transition
 
 
 @limiter.limit(RateLimits.ADMIN_DELETE)  # 50/hour
@@ -383,8 +398,10 @@ async def delete_existing_allowed_transition(
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = PermissionDep,
 ):
-    """(Admin only) Xóa một Allowed Transition."""
-    await pipeline_service.delete_allowed_transition(db, transition_id, current_user=current_admin)
+    """(Admin only) Xoá một Allowed Transition."""
+    _, callback = await pipeline_service.delete_allowed_transition(db, transition_id, current_user=current_admin)
+    await db.commit()
+    await callback()
     return None
 
 
