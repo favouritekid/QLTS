@@ -300,7 +300,7 @@ async def execute_workflow(
     start_time = datetime.now(timezone.utc)
 
     try:
-        log.info("Starting workflow execution", rule_id=rule.id, event=rule.event)
+        log.info("Starting workflow execution", rule_id=rule.id, event_name=rule.event)
 
         # Step 1: Evaluate condition
         if not evaluate_condition(rule.condition, payload):
@@ -429,7 +429,7 @@ async def execute_notification_workflow(
         )
     """
     try:
-        log.info("Executing notification workflow", event=event.value)
+        log.info("Executing notification workflow", event_name=event.value)
 
         # Find enabled rules for this event
         result = await db.execute(
@@ -444,10 +444,10 @@ async def execute_notification_workflow(
         rules = result.scalars().all()
 
         if not rules:
-            log.info("No enabled rules found for event", event=event.value)
+            log.info("No enabled rules found for event", event_name=event.value)
             return []
 
-        log.info("Found rules to execute", event=event.value, count=len(rules))
+        log.info("Found rules to execute", event_name=event.value, count=len(rules))
 
         # Execute each rule's workflow
         results = []
