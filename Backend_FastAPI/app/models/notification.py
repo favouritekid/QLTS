@@ -224,7 +224,7 @@ class NotificationTemplate(Base):
 
     # Audit fields
     created_by = Column(Integer, ForeignKey("user.id", ondelete="SET NULL"),
-                       nullable=True, comment="User ID who created this template")
+                       nullable=True, index=True, comment="User ID who created this template")  # ✅ FIX: Added index
     created_at = Column(DateTime(timezone=True), server_default=func.now(),
                        nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(),

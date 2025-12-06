@@ -15,7 +15,7 @@ class LeadStatusHistory(Base):
 
     # Ai thay đổi và lý do (Giữ nguyên)
     changed_by_user_id = Column(
-        Integer, ForeignKey("user.id"), nullable=True
+        Integer, ForeignKey("user.id"), nullable=True, index=True  # ✅ FIX: Added index
     )  # Có thể là System (NULL) hoặc User ID
     reason = Column(Text, nullable=True)
     changed_at = Column(
@@ -33,23 +33,23 @@ class LeadStatusHistory(Base):
 
     # 2. Trạng thái Pipeline (lead.consultation_status_id)
     old_consultation_status_id = Column(
-        String(50), ForeignKey("consultation_status.id"), nullable=True
+        String(50), ForeignKey("consultation_status.id"), nullable=True, index=True  # ✅ FIX: Added index
     )
     new_consultation_status_id = Column(
-        String(50), ForeignKey("consultation_status.id"), nullable=True
+        String(50), ForeignKey("consultation_status.id"), nullable=True, index=True  # ✅ FIX: Added index
     )
 
     # 3. Giai đoạn Pipeline (lead.pipeline_stage_id)
     old_pipeline_stage_id = Column(
-        String(50), ForeignKey("pipeline_stage.id"), nullable=True
+        String(50), ForeignKey("pipeline_stage.id"), nullable=True, index=True  # ✅ FIX: Added index
     )
     new_pipeline_stage_id = Column(
-        String(50), ForeignKey("pipeline_stage.id"), nullable=True
+        String(50), ForeignKey("pipeline_stage.id"), nullable=True, index=True  # ✅ FIX: Added index
     )
 
     # 4. Nhân viên phụ trách (lead.assigned_officer_id)
-    old_assigned_officer_id = Column(Integer, ForeignKey("user.id"), nullable=True)
-    new_assigned_officer_id = Column(Integer, ForeignKey("user.id"), nullable=True)
+    old_assigned_officer_id = Column(Integer, ForeignKey("user.id"), nullable=True, index=True)  # ✅ FIX: Added index
+    new_assigned_officer_id = Column(Integer, ForeignKey("user.id"), nullable=True, index=True)  # ✅ FIX: Added index
     # === KẾT THÚC MỞ RỘNG ===
 
     # Relationships

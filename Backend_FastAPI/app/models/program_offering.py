@@ -55,7 +55,8 @@ class ProgramOffering(Base):
     program_id = Column(
         Integer,
         ForeignKey("major_program.id", ondelete="CASCADE"),
-        nullable=False
+        nullable=False,
+        index=True  # ✅ FIX: Added index
     )
     program = relationship("MajorProgram", back_populates="offerings")
 

@@ -22,7 +22,7 @@ class User(Base):
     # ===== CACHE FIELDS (for performance) =====
     # These are denormalized from UserUnitAssignment for fast access
     role = Column(String(50), nullable=False, default="user")
-    unit_id = Column(Integer, ForeignKey("organization_unit.id"), nullable=True)
+    unit_id = Column(Integer, ForeignKey("organization_unit.id"), nullable=True, index=True)  # ✅ FIX: Added index
 
     # NEW: Pointer to current assignment (source of truth)
     # ✅ FIX: use_alter=True to resolve circular dependency with user_unit_assignment

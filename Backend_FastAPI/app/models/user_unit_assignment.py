@@ -65,7 +65,8 @@ class UserUnitAssignment(Base):
     assigned_by_user_id = Column(
         Integer,
         ForeignKey("user.id", ondelete="SET NULL"),
-        nullable=True  # NULL = system/migration/initial assignment
+        nullable=True,  # NULL = system/migration/initial assignment
+        index=True  # ✅ FIX: Added index
     )
 
     # Assignment Details
