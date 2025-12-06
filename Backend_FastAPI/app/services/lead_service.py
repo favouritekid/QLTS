@@ -539,7 +539,7 @@ async def create_lead(
             .with_for_update()  # Khóa để tránh race condition khi tạo
         )
         existing_lead_result = await db.execute(existing_lead_query)
-        existing_lead = existing_lead_result.scalar_one_or_none()
+        existing_lead = existing_lead_result.scalars().first()
         if existing_lead:
             # Determine which field caused the duplicate
             if lead_in.email and existing_lead.email == lead_in.email:
@@ -791,7 +791,7 @@ async def update_lead(
                     models.Lead.id != lead_id,  # Loại trừ chính lead này
                 )
                 existing_lead_result = await db.execute(existing_lead_query)
-                if existing_lead_result.scalar_one_or_none():
+                if existing_lead_result.scalars().first():
                     raise DuplicateResourceError(
                         detail="Another lead with this email already exists in the unit."
                     )
@@ -822,7 +822,7 @@ async def update_lead(
                         or_(*phone_conditions)
                     )
                     existing_lead_result = await db.execute(existing_lead_query)
-                    if existing_lead_result.scalar_one_or_none():
+                    if existing_lead_result.scalars().first():
                         raise DuplicateResourceError(
                             detail="Another lead with this phone number already exists in the unit."
                         )
@@ -1005,12 +1005,23 @@ async def update_lead(
 
         except Exception as e:
             # Rollback tự động xảy ra khi có lỗi trong `async with`
-            log.error(
-                "Failed to update lead, rolling back nested transaction",
-                lead_id=lead_id,
-                error=str(e),
-                exc_info=True,
-            )
+            # Phân biệt giữa lỗi business logic và lỗi hệ thống
+            from app.utils.exceptions import DuplicateResourceError, NotFoundError, ForbiddenError
+            if isinstance(e, (DuplicateResourceError, NotFoundError, ForbiddenError)):
+                # Business logic exceptions - không cần traceback
+                log.warning(
+                    "Lead update rejected due to business rule",
+                    lead_id=lead_id,
+                    error=str(e),
+                )
+            else:
+                # Unexpected system errors - cần traceback để debug
+                log.error(
+                    "Failed to update lead, rolling back nested transaction",
+                    lead_id=lead_id,
+                    error=str(e),
+                    exc_info=True,
+                )
             raise e  # Ném lại lỗi để router xử lý
 
         # === POST-COMMIT ACTIONS (Only if transaction succeeded) ===
@@ -1662,20 +1673,34 @@ async def update_consultation(
             )
 
             # Kiểm tra quyền
-            if current_user.role == "admin":
-                # Admin có quyền update bất kỳ consultation nào
+            if current_user.role in ("admin", "manager"):
+                # Admin và Manager có quyền update bất kỳ consultation nào
                 pass
             elif current_user.role == "officer":
-                # Officer chỉ được update consultation mới nhất
+                # === BUSINESS RULES FOR OFFICER ===
+                # 1. Phải là consultation mới nhất (chain integrity)
                 if not is_latest_consultation:
                     raise PermissionDeniedError(
                         detail="Officers can only update the most recent consultation to maintain consultation chain integrity."
                     )
 
-                # Kiểm tra officer có được gán cho Lead này không
+                # 2. Phải được gán cho Lead này
                 if lead.assigned_officer_id != current_user.id:
                     raise PermissionDeniedError(
                         detail="You are not assigned to this lead."
+                    )
+
+                # 3. Phải là người tạo consultation
+                if consultation.officer_id != current_user.id:
+                    raise PermissionDeniedError(
+                        detail="Bạn chỉ có thể chỉnh sửa consultation do chính mình tạo."
+                    )
+
+                # 4. Phải trong vòng 24 giờ kể từ khi tạo
+                consultation_age = datetime.now(timezone.utc) - consultation.consultation_date
+                if consultation_age.total_seconds() > 24 * 60 * 60:  # 24 hours in seconds
+                    raise PermissionDeniedError(
+                        detail="Ngoài giờ không được chỉnh sửa, hãy liên hệ admin hoặc manager để nhờ hỗ trợ."
                     )
             else:
                 # Các role khác không có quyền update consultation

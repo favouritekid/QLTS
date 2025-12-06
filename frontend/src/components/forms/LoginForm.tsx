@@ -44,7 +44,6 @@ export function LoginForm() {
   function onSubmit(values: LoginFormValues) {
     // Gọi hàm login từ useAuth hook với dữ liệu form đã validate
     // Lưu ý: Backend dùng username, nên values.username là đúng
-    console.log("Form Values on Submit:", values);
     login(values as LoginRequest); // Ép kiểu sang LoginRequest nếu cần
   }
 

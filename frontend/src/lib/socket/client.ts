@@ -279,4 +279,11 @@ export const socket = {
   emit(event: string, ...args: unknown[]) {
     socketService.getSocket()?.emit(event, ...args);
   },
+  // ✅ DEBUG: Add onAny for debugging all events
+  onAny(handler: (event: string, ...args: unknown[]) => void) {
+    socketService.getSocket()?.onAny(handler);
+  },
+  offAny(handler?: (event: string, ...args: unknown[]) => void) {
+    socketService.getSocket()?.offAny(handler);
+  },
 };

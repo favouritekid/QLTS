@@ -369,7 +369,7 @@ class DatabaseRuleConfig:
         except ValueError:
             log.warning(
                 "Unknown event for group derivation",
-                event=event,
+                event_name=event,
                 rule_id=rule_id
             )
             # Default to SYSTEM group if event not found
@@ -436,7 +436,7 @@ async def get_rule_for_event(
             rule_data = json.loads(cached_data)
             log.debug(
                 "Rule loaded from cache",
-                event=event_name,
+                event_type=event_name,
                 cache_key=cache_key
             )
 
@@ -446,7 +446,7 @@ async def get_rule_for_event(
             except Exception as e:
                 log.error(
                     "Failed to deserialize resolver from cache",
-                    event=event_name,
+                    event_type=event_name,
                     error=str(e)
                 )
                 # Invalidate bad cache entry
@@ -469,7 +469,7 @@ async def get_rule_for_event(
     except Exception as e:
         log.warning(
             "Cache read failed, falling back to database",
-            event=event_name,
+            event_type=event_name,
             error=str(e)
         )
 
@@ -486,7 +486,7 @@ async def get_rule_for_event(
     if not rule:
         log.debug(
             "No enabled rule found for event",
-            event=event_name
+            event_type=event_name
         )
         return None
 
@@ -497,7 +497,7 @@ async def get_rule_for_event(
         log.error(
             "Failed to deserialize resolver for rule",
             rule_id=rule.id,
-            event=event_name,
+            event_type=event_name,
             error=str(e),
             recipient_config=rule.recipient_config
         )
@@ -576,21 +576,21 @@ async def get_rule_for_event(
         )
         log.debug(
             "Cached rule data",
-            event=event_name,
+            event_type=event_name,
             cache_key=cache_key,
             ttl=RULE_CACHE_TTL
         )
     except Exception as e:
         log.warning(
             "Failed to cache rule data",
-            event=event_name,
+            event_type=event_name,
             error=str(e)
         )
 
     log.info(
         "Loaded notification rule from database",
         rule_id=rule.id,
-        event=event_name,
+        event_type=event_name,
         channels=rule.channels,
         resolver_type=rule.recipient_config.get("resolver_type")
     )

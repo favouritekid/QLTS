@@ -67,6 +67,58 @@ from app.services.notification_service import (
 BULK_INSERT_CHUNK_SIZE = 100
 
 
+# =============================================================================
+# DOMAIN EVENT EMITTER - Real-time UI Refresh
+# =============================================================================
+
+async def _emit_domain_event(
+    event: SystemEvents,
+    payload: dict,
+) -> None:
+    """
+    ✅ REAL-TIME SYNC: Emit domain event via Socket.IO for instant UI refresh.
+    
+    This broadcasts to ALL connected clients, enabling real-time data sync:
+    - Frontend receives event (e.g., "lead_created")
+    - React Query invalidates relevant queries
+    - UI automatically refetches fresh data
+    
+    Race condition prevention:
+    - Includes timestamp for event ordering
+    - Includes event_id for deduplication
+    - Only called AFTER transaction commit (data is persisted)
+    
+    Args:
+        event: SystemEvents enum (e.g., LEAD_CREATED, CONSULTATION_UPDATED)
+        payload: Event payload to send to clients
+    """
+    from app.socket_manager import sio
+    
+    try:
+        # Create event data with timestamp for race condition handling
+        event_data = {
+            **payload,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event_id": f"{event.value}:{payload.get('lead_id', payload.get('consultation_id', 'unknown'))}:{int(datetime.now().timestamp() * 1000)}",
+        }
+        
+        # Broadcast to all connected clients
+        await sio.emit(event.value, event_data)
+        
+        log.info(
+            "Domain event broadcast",
+            event_type=event.value,
+            payload_keys=list(payload.keys())
+        )
+    except Exception as e:
+        # Non-critical failure - log warning but don't raise
+        log.warning(
+            "Failed to emit domain event (non-critical)",
+            event_type=event.value,
+            error=str(e)
+        )
+
+
 async def _send_via_channel(
     channel_name: str,
     notifications: List[Any],
@@ -164,7 +216,7 @@ async def dispatch(
     """
     log.info(
         "Dispatching notification event",
-        event=event.value,
+        event_type=event.value,
         dedupe_key=dedupe_key,
         payload_keys=list(payload.keys())
     )
@@ -180,18 +232,27 @@ async def dispatch(
         rule_source = "registry" if config else None
 
     if not config:
-        log.error(
-            "No notification rule found for event",
-            event=event.value,
+        log.warning(
+            "No notification rule found for event (still emitting domain event for UI sync)",
+            event_type=event.value,
             checked_sources=["database", "registry"]
         )
-        async def _empty_callback():
-            pass
-        return [], _empty_callback
+        # ✅ IMPORTANT: Still emit domain event for real-time UI refresh
+        # Notification rules are for per-user notifications
+        # Domain events are for broadcasting data changes to ALL clients
+        async def _domain_only_callback():
+            await _emit_domain_event(event, payload)
+        
+        # auto_commit mode for service callbacks
+        if auto_commit:
+            await _domain_only_callback()
+            return [], None
+        
+        return [], _domain_only_callback
 
     log.info(
         "Loaded notification rule",
-        event=event.value,
+        event_type=event.value,
         rule_source=rule_source,
         rule_id=getattr(config, 'rule_id', None),
         channels=config.channels
@@ -202,33 +263,42 @@ async def dispatch(
         if not config.should_activate(payload):
             log.info(
                 "Notification rule condition not met, skipping dispatch",
-                event=event.value,
+                event_type=event.value,
                 rule_id=config.rule_id,
                 condition=config.condition
             )
-            async def _empty_callback():
-                pass
-            return [], _empty_callback
+            async def _domain_only_callback():
+                await _emit_domain_event(event, payload)
+            if auto_commit:
+                await _domain_only_callback()
+                return [], None
+            return [], _domain_only_callback
 
     # Step 2: Resolve recipients
     try:
         user_ids = await config.resolver.resolve_users(db, payload)
     except Exception as e:
         log.error(
-            "Failed to resolve users for event",
+            "Failed to resolve users for event (still emitting domain event)",
             event_type=event.value,
             error=str(e),
             resolver=config.resolver.__class__.__name__
         )
-        async def _empty_callback():
-            pass
-        return [], _empty_callback
+        async def _domain_only_callback():
+            await _emit_domain_event(event, payload)
+        if auto_commit:
+            await _domain_only_callback()
+            return [], None
+        return [], _domain_only_callback
 
     if not user_ids:
-        log.info("No recipients resolved for event", event_type=event.value)
-        async def _empty_callback():
-            pass
-        return [], _empty_callback
+        log.info("No recipients resolved for event (still emitting domain event)", event_type=event.value)
+        async def _domain_only_callback():
+            await _emit_domain_event(event, payload)
+        if auto_commit:
+            await _domain_only_callback()
+            return [], None
+        return [], _domain_only_callback
 
     log.info(
         "Recipients resolved successfully",
@@ -248,17 +318,20 @@ async def dispatch(
 
         if not user_ids:
             log.info(
-                "All recipients filtered out by preferences",
-                event=event.value,
+                "All recipients filtered out by preferences (still emitting domain event)",
+                event_type=event.value,
                 group=group.value
             )
-            async def _empty_callback():
-                pass
-            return [], _empty_callback
+            async def _domain_only_callback():
+                await _emit_domain_event(event, payload)
+            if auto_commit:
+                await _domain_only_callback()
+                return [], None
+            return [], _domain_only_callback
 
         log.info(
             "Recipients after preference filtering",
-            event=event.value,
+            event_type=event.value,
             filtered_count=len(user_ids)
         )
 
@@ -269,17 +342,20 @@ async def dispatch(
 
         if not user_ids:
             log.info(
-                "All recipients filtered out by deduplication",
-                event=event.value,
+                "All recipients filtered out by deduplication (still emitting domain event)",
+                event_type=event.value,
                 dedupe_key=dedupe_key
             )
-            async def _empty_callback():
-                pass
-            return [], _empty_callback
+            async def _domain_only_callback():
+                await _emit_domain_event(event, payload)
+            if auto_commit:
+                await _domain_only_callback()
+                return [], None
+            return [], _domain_only_callback
 
         log.info(
             "Recipients after deduplication",
-            event=event.value,
+            event_type=event.value,
             original_count=original_count,
             deduplicated_count=len(user_ids),
             filtered_out=original_count - len(user_ids)
@@ -316,7 +392,7 @@ async def dispatch(
     if not notification_ids:
         log.error(
             "Failed to create notifications for event",
-            event=event.value
+            event_type=event.value
         )
         # Return empty with empty callback
         async def _empty_callback():
@@ -331,10 +407,14 @@ async def dispatch(
         """Execute after router commits the transaction."""
         log.info(
             "Notifications committed successfully",
-            event=event.value,
+            event_type=event.value,
             notification_count=len(notification_ids),
             notification_type=notification_type
         )
+
+        # Step 7.25: ✅ REAL-TIME SYNC: Emit domain event for UI refresh
+        # This broadcasts to ALL connected clients (separate from per-user notifications)
+        await _emit_domain_event(event, payload)
 
         # Step 7.5: ✅ PHASE 1.2: Prepend new notifications to inbox cache
         await _prepend_to_inbox_cache(user_ids, notification_ids)
@@ -363,7 +443,7 @@ async def dispatch(
                     notifications=notifications,
                     recipient_ids=user_ids,
                     context=payload,
-                    event=event.value
+                    event_type=event.value
                 )
                 for channel_name in config.channels
             ]
@@ -376,7 +456,7 @@ async def dispatch(
                 if isinstance(result, Exception):
                     log.error(
                         "Unexpected channel delivery exception",
-                        event=event.value,
+                        event_type=event.value,
                         error=str(result)
                     )
                     continue
@@ -386,7 +466,7 @@ async def dispatch(
                 if error_msg:
                     log.error(
                         "Channel delivery failed",
-                        event=event.value,
+                        event_type=event.value,
                         channel=channel_name,
                         error=error_msg,
                         notification_count=len(notifications)
@@ -394,7 +474,7 @@ async def dispatch(
                 elif channel_result:
                     log.info(
                         "Channel delivery completed",
-                        event=event.value,
+                        event_type=event.value,
                         channel=channel_name,
                         sent_count=channel_result.sent_count,
                         failed_count=len(channel_result.failed_ids),
@@ -404,7 +484,7 @@ async def dispatch(
                     if channel_result.failed_ids:
                         log.warning(
                             "Some recipients failed for channel",
-                            event=event.value,
+                            event_type=event.value,
                             channel=channel_name,
                             failed_ids=channel_result.failed_ids[:10],
                             failed_count=len(channel_result.failed_ids)
@@ -413,7 +493,7 @@ async def dispatch(
         except Exception as e:
             log.error(
                 "Channel delivery system failed",
-                event=event.value,
+                event_type=event.value,
                 error=str(e),
                 notification_count=len(notification_ids),
                 channels=config.channels,

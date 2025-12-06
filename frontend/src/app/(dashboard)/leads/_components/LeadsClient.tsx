@@ -13,7 +13,7 @@
  * React Query uses initialData for instant render, then revalidates.
  */
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { Plus, Download, Upload, Command } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -115,6 +115,16 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
       (lead) => lead.lead_score >= scoreRange[0] && lead.lead_score <= scoreRange[1]
     );
   }, [leadsPage, scoreRange]);
+
+  // ✅ AUTO-CLEAR: Clear selectedLeadId if lead is deleted/no longer exists
+  useEffect(() => {
+    if (selectedLeadId) {
+      const leadStillExists = filteredLeads.some(lead => lead.id === selectedLeadId);
+      if (!leadStillExists) {
+        setSelectedLeadId(null);
+      }
+    }
+  }, [filteredLeads, selectedLeadId]);
 
   // =====================================================================
   // HANDLERS

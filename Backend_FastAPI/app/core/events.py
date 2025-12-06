@@ -96,6 +96,22 @@ class SystemEvents(str, Enum):
     Recipients: The assigned officer
     """
 
+    LEAD_UPDATED = "lead_updated"
+    """
+    Triggered when a lead is updated (any field change).
+
+    Payload Schema:
+        {
+            "lead_id": int,               # Required: ID of the lead
+            "updated_fields": List[str],  # List of field names that were updated
+            "status_changed": bool,       # Whether status/stage changed
+            "actor_id": int,              # User who updated the lead
+            "actor_name": str             # Name of the user who updated
+        }
+
+    Recipients: The assigned officer, unit managers
+    """
+
     LEAD_CREATED = "lead_created"
     """
     Triggered when a new lead is created.

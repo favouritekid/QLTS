@@ -46,9 +46,9 @@ sio = socketio.AsyncServer(
     cors_allowed_origins=cors_origins_list,
     # ✅ FIX: Enable credentials to allow httpOnly cookies in WebSocket handshake
     engineio_cors_credentials=True,
-    # ✅ FIX: Enable logging in development for debugging
-    logger=not is_prod,
-    engineio_logger=not is_prod,
+    # ✅ FIX: Disable internal loggers to reduce noise (we have our own structured logs)
+    logger=False,
+    engineio_logger=False,
     # ✅ CRITICAL: Add Redis manager for cross-process communication (Celery → API server)
     client_manager=client_manager,
 )
