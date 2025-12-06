@@ -6,20 +6,22 @@ from app.core.rate_limits import limiter, RateLimits
 Admin-only API endpoints for managing notification rules.
 Allows administrators to create, read, update, and delete notification
 rules through UI instead of modifying code.
+
+REFACTORED: CRUD logic moved to notification_rule_crud_service.py
+Router now only handles HTTP concerns and orchestration.
 """
 from typing import Optional, Dict, Any, List
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 from pydantic import BaseModel
 
 from .. import database, models, schemas
 from ..core import deps
 from ..core.event_metadata import get_all_events_metadata
-from ..services.notification_rule_loader import invalidate_rule_cache
+from ..services import notification_rule_crud_service
+from ..utils.exceptions import BadRequest
 
 log = structlog.get_logger(__name__)
 router = APIRouter(prefix="/notification-rules", tags=["Notification Rules (Admin)"])
@@ -160,30 +162,13 @@ async def list_notification_rules(
     """
     skip = (page - 1) * page_size
 
-    # Build query with filters (eager load actions)
-    query = select(models.NotificationRule).options(selectinload(models.NotificationRule.actions))
-    count_query = select(func.count()).select_from(models.NotificationRule)
-
-    if event:
-        query = query.where(models.NotificationRule.event == event)
-        count_query = count_query.where(models.NotificationRule.event == event)
-
-    if enabled is not None:
-        query = query.where(models.NotificationRule.enabled == enabled)
-        count_query = count_query.where(models.NotificationRule.enabled == enabled)
-
-    # Order by event name
-    query = query.order_by(models.NotificationRule.event)
-
-    # Apply pagination
-    query = query.offset(skip).limit(page_size)
-
-    # Execute queries
-    result = await db.execute(query)
-    rules = result.scalars().all()
-
-    result = await db.execute(count_query)
-    total = result.scalar()
+    rules, total = await notification_rule_crud_service.get_rules(
+        db=db,
+        skip=skip,
+        limit=page_size,
+        event=event,
+        enabled=enabled,
+    )
 
     log.info(
         "Listed notification rules",
@@ -249,83 +234,23 @@ async def create_notification_rule(
     Returns:
         Created NotificationRule
     """
-    # Check if rule already exists for this event
-    existing_result = await db.execute(
-        select(models.NotificationRule)
-        .where(models.NotificationRule.event == rule_data.event)
-    )
-    existing_rule = existing_result.scalar_one_or_none()
-
-    if existing_rule:
-        log.warning(
-            "Duplicate notification rule attempt",
-            event_type=rule_data.event,
-            existing_rule_id=existing_rule.id,
-            admin_id=current_admin.id
+    try:
+        rule, callback = await notification_rule_crud_service.create_rule(
+            db=db,
+            rule_data=rule_data,
         )
+
+        # ✅ TRANSACTION PATTERN: Commit and execute callback
+        await db.commit()
+        await callback()
+
+        return rule
+
+    except BadRequest as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Notification rule for event '{rule_data.event}' already exists (ID: {existing_rule.id})"
+            detail=str(e)
         )
-
-    # Create new rule
-    new_rule = models.NotificationRule(
-        event=rule_data.event,
-        title_template=rule_data.title_template,
-        message_template=rule_data.message_template,
-        notification_type=rule_data.notification_type,
-        link_template=rule_data.link_template,
-        channels=rule_data.channels,
-        recipient_config=rule_data.recipient_config,
-        condition=rule_data.condition,
-        enabled=rule_data.enabled,
-        template_id=rule_data.template_id  # ✅ Include template_id
-    )
-
-    db.add(new_rule)
-    await db.flush()  # Get the rule ID
-
-    # ✅ NOTIFICATION 2.0: Create actions for this rule
-    for action_data in rule_data.actions:
-        new_action = models.NotificationAction(
-            rule_id=new_rule.id,
-            step=action_data.step,
-            channel=action_data.channel,
-            template_code=action_data.template_code,
-            delay_minutes=action_data.delay_minutes,
-            config=action_data.config
-        )
-        db.add(new_action)
-
-    # ✅ FIX: Increment usage_count if template is referenced
-    if rule_data.template_id:
-        await db.execute(
-            update(models.NotificationTemplate)
-            .where(models.NotificationTemplate.id == rule_data.template_id)
-            .values(usage_count=models.NotificationTemplate.usage_count + 1)
-        )
-        log.debug(
-            "Incremented template usage_count",
-            template_id=rule_data.template_id
-        )
-
-    await db.commit()
-    await db.refresh(new_rule)
-
-    # ✅ Invalidate cache for this event
-    await invalidate_rule_cache(new_rule.event)
-
-    log.info(
-        "Created notification rule",
-        rule_id=new_rule.id,
-        event_type=new_rule.event,
-        admin_id=current_admin.id,
-        channels=new_rule.channels,
-        template_id=new_rule.template_id,
-        actions_count=len(rule_data.actions)
-    )
-
-    return new_rule
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
@@ -348,97 +273,17 @@ async def update_notification_rule(
     Returns:
         Updated NotificationRule
     """
+    updated_rule, callback = await notification_rule_crud_service.update_rule(
+        db=db,
+        rule=rule,
+        rule_update=rule_update,
+    )
 
-    # ✅ FIX: Track template_id changes for usage_count updates
-    old_template_id = rule.template_id
-    updated_fields = []
+    # ✅ TRANSACTION PATTERN: Commit and execute callback
+    await db.commit()
+    await callback()
 
-    # Update fields if provided (exclude actions, handle separately)
-    update_data = rule_update.model_dump(exclude_unset=True, exclude={"actions"})
-    for field, value in update_data.items():
-        if value is not None:
-            setattr(rule, field, value)
-            updated_fields.append(field)
-
-    # ✅ NOTIFICATION 2.0: Handle actions update
-    if rule_update.actions is not None:
-        # Delete all existing actions
-        from sqlalchemy import delete
-        await db.execute(
-            delete(models.NotificationAction)
-            .where(models.NotificationAction.rule_id == rule.id)
-        )
-
-        # Create new actions
-        for action_data in rule_update.actions:
-            new_action = models.NotificationAction(
-                rule_id=rule.id,
-                step=action_data.step,
-                channel=action_data.channel,
-                template_code=action_data.template_code,
-                delay_minutes=action_data.delay_minutes,
-                config=action_data.config
-            )
-            db.add(new_action)
-
-        updated_fields.append("actions")
-        log.debug(
-            "Updated notification rule actions",
-            rule_id=rule.id,
-            actions_count=len(rule_update.actions)
-        )
-
-    # ✅ FIX: Update usage_count if template_id changed
-    if "template_id" in updated_fields:
-        new_template_id = rule.template_id
-
-        # Decrement old template's usage_count
-        if old_template_id:
-            await db.execute(
-                update(models.NotificationTemplate)
-                .where(models.NotificationTemplate.id == old_template_id)
-                .values(usage_count=models.NotificationTemplate.usage_count - 1)
-            )
-            log.debug(
-                "Decremented old template usage_count",
-                old_template_id=old_template_id
-            )
-
-        # Increment new template's usage_count
-        if new_template_id:
-            await db.execute(
-                update(models.NotificationTemplate)
-                .where(models.NotificationTemplate.id == new_template_id)
-                .values(usage_count=models.NotificationTemplate.usage_count + 1)
-            )
-            log.debug(
-                "Incremented new template usage_count",
-                new_template_id=new_template_id
-            )
-
-    if updated_fields:
-        await db.commit()
-        await db.refresh(rule)
-
-        # ✅ Invalidate cache for this event
-        await invalidate_rule_cache(rule.event)
-
-        log.info(
-            "Updated notification rule",
-            rule_id=rule.id,
-            event_type=rule.event,
-            admin_id=current_admin.id,
-            updated_fields=updated_fields,
-            template_changed=("template_id" in updated_fields)
-        )
-    else:
-        log.info(
-            "No fields to update for notification rule",
-            rule_id=rule.id,
-            admin_id=current_admin.id
-        )
-
-    return rule
+    return updated_rule
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
@@ -458,27 +303,16 @@ async def toggle_notification_rule(
     Returns:
         Updated NotificationRule with toggled enabled status
     """
-
-    # Toggle enabled status
-    old_status = rule.enabled
-    rule.enabled = not rule.enabled
-
-    await db.commit()
-    await db.refresh(rule)
-
-    # ✅ Invalidate cache for this event
-    await invalidate_rule_cache(rule.event)
-
-    log.info(
-        "Toggled notification rule status",
-        rule_id=rule.id,
-        event_type=rule.event,
-        admin_id=current_admin.id,
-        old_status=old_status,
-        new_status=rule.enabled
+    toggled_rule, callback = await notification_rule_crud_service.toggle_rule(
+        db=db,
+        rule=rule,
     )
 
-    return rule
+    # ✅ TRANSACTION PATTERN: Commit and execute callback
+    await db.commit()
+    await callback()
+
+    return toggled_rule
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
@@ -498,36 +332,13 @@ async def delete_notification_rule(
     Returns:
         No content (204)
     """
-
-    # Store for logging
-    event_type = rule.event
-    template_id = rule.template_id
-
-    # ✅ FIX: Decrement usage_count if template is referenced
-    if template_id:
-        await db.execute(
-            update(models.NotificationTemplate)
-            .where(models.NotificationTemplate.id == template_id)
-            .values(usage_count=models.NotificationTemplate.usage_count - 1)
-        )
-        log.debug(
-            "Decremented template usage_count",
-            template_id=template_id
-        )
-
-    # Delete the rule
-    await db.delete(rule)
-    await db.commit()
-
-    # ✅ Invalidate cache for this event
-    await invalidate_rule_cache(event_type)
-
-    log.info(
-        "Deleted notification rule",
-        rule_id=rule.id,
-        event_type=event_type,
-        template_id=template_id,
-        admin_id=current_admin.id
+    _, callback = await notification_rule_crud_service.delete_rule(
+        db=db,
+        rule=rule,
     )
+
+    # ✅ TRANSACTION PATTERN: Commit and execute callback
+    await db.commit()
+    await callback()
 
     return None

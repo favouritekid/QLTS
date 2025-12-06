@@ -5,16 +5,20 @@ from app.core.rate_limits import limiter, RateLimits
 
 Admin-only API endpoints for managing reusable notification templates.
 Templates can be shared across multiple notification rules to reduce duplication.
+
+REFACTORED: CRUD logic moved to notification_template_service.py
+Router now only handles HTTP concerns and orchestration.
 """
 from typing import Optional
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, models, schemas
 from ..core import deps
+from ..services import notification_template_service
+from ..utils.exceptions import BadRequest, PermissionDeniedError, ResourceNotFoundError
 
 log = structlog.get_logger(__name__)
 router = APIRouter(prefix="/notification-templates", tags=["Notification Templates (Admin)"])
@@ -55,57 +59,16 @@ async def list_notification_templates(
     """
     skip = (page - 1) * page_size
 
-    # Build query with filters
-    query = select(models.NotificationTemplate)
-    count_query = select(func.count()).select_from(models.NotificationTemplate)
-
-    if category:
-        query = query.where(models.NotificationTemplate.category == category)
-        count_query = count_query.where(models.NotificationTemplate.category == category)
-
-    if is_system is not None:
-        query = query.where(models.NotificationTemplate.is_system == is_system)
-        count_query = count_query.where(models.NotificationTemplate.is_system == is_system)
-
-    if search:
-        search_pattern = f"%{search}%"
-        search_filter = (
-            models.NotificationTemplate.name.ilike(search_pattern) |
-            models.NotificationTemplate.description.ilike(search_pattern)
-        )
-        query = query.where(search_filter)
-        count_query = count_query.where(search_filter)
-
-    # ✅ NOTIFICATION 2.0: Filter by allowed_event
-    if allowed_event:
-        from sqlalchemy import or_
-        # Match templates where allowed_events is null OR contains the event
-        event_filter = or_(
-            models.NotificationTemplate.allowed_events.is_(None),
-            models.NotificationTemplate.allowed_events.contains([allowed_event])
-        )
-        query = query.where(event_filter)
-        count_query = count_query.where(event_filter)
-
-    # ✅ NOTIFICATION 2.0: Filter by supported_channel
-    if supported_channel:
-        # Match templates where supported_channels contains the channel
-        channel_filter = models.NotificationTemplate.supported_channels.contains([supported_channel])
-        query = query.where(channel_filter)
-        count_query = count_query.where(channel_filter)
-
-    # Order by name
-    query = query.order_by(models.NotificationTemplate.name)
-
-    # Apply pagination
-    query = query.offset(skip).limit(page_size)
-
-    # Execute queries
-    result = await db.execute(query)
-    templates = result.scalars().all()
-
-    result = await db.execute(count_query)
-    total = result.scalar()
+    templates, total = await notification_template_service.get_templates(
+        db=db,
+        skip=skip,
+        limit=page_size,
+        category=category,
+        is_system=is_system,
+        search=search,
+        allowed_event=allowed_event,
+        supported_channel=supported_channel,
+    )
 
     log.info(
         "Listed notification templates",
@@ -176,52 +139,24 @@ async def create_notification_template(
     Returns:
         Created NotificationTemplate
     """
-    # Check if template with same name already exists
-    existing_result = await db.execute(
-        select(models.NotificationTemplate)
-        .where(models.NotificationTemplate.name == template_data.name)
-    )
-    existing_template = existing_result.scalar_one_or_none()
-
-    if existing_template:
-        log.warning(
-            "Duplicate template name attempt",
-            template_name=template_data.name,
-            existing_template_id=existing_template.id,
-            admin_id=current_admin.id
+    try:
+        template, callback = await notification_template_service.create_template(
+            db=db,
+            template_data=template_data,
+            created_by_user_id=current_admin.id,
         )
+
+        # ✅ TRANSACTION PATTERN: Commit and execute callback
+        await db.commit()
+        await callback()
+
+        return template
+
+    except BadRequest as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Template with name '{template_data.name}' already exists (ID: {existing_template.id})"
+            detail=str(e)
         )
-
-    # Create new template
-    new_template = models.NotificationTemplate(
-        name=template_data.name,
-        description=template_data.description,
-        title_template=template_data.title_template,
-        message_template=template_data.message_template,
-        link_template=template_data.link_template,
-        variables=template_data.variables,
-        category=template_data.category,
-        is_system=template_data.is_system,
-        created_by=current_admin.id,
-        usage_count=0
-    )
-
-    db.add(new_template)
-    await db.commit()
-    await db.refresh(new_template)
-
-    log.info(
-        "Created notification template",
-        template_id=new_template.id,
-        template_name=new_template.name,
-        category=new_template.category,
-        admin_id=current_admin.id
-    )
-
-    return new_template
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
@@ -244,49 +179,24 @@ async def update_notification_template(
     Returns:
         Updated NotificationTemplate
     """
-
-    # Check if updating name to existing name
-    if template_update.name and template_update.name != template.name:
-        existing_result = await db.execute(
-            select(models.NotificationTemplate)
-            .where(models.NotificationTemplate.name == template_update.name)
+    try:
+        updated_template, callback = await notification_template_service.update_template(
+            db=db,
+            template=template,
+            template_update=template_update,
         )
-        existing_template = existing_result.scalar_one_or_none()
-        if existing_template:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Template with name '{template_update.name}' already exists"
-            )
 
-    # Track which fields were updated
-    updated_fields = []
-
-    # Update fields if provided
-    update_data = template_update.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
-        if value is not None:
-            setattr(template, field, value)
-            updated_fields.append(field)
-
-    if updated_fields:
+        # ✅ TRANSACTION PATTERN: Commit and execute callback
         await db.commit()
-        await db.refresh(template)
+        await callback()
 
-        log.info(
-            "Updated notification template",
-            template_id=template_id,
-            template_name=template.name,
-            admin_id=current_admin.id,
-            updated_fields=updated_fields
-        )
-    else:
-        log.info(
-            "No fields to update for notification template",
-            template_id=template_id,
-            admin_id=current_admin.id
-        )
+        return updated_template
 
-    return template
+    except BadRequest as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
@@ -305,46 +215,25 @@ async def delete_notification_template(
     Returns:
         No content (204)
     """
-
-    # Check if system template
-    if template.is_system:
-        log.warning(
-            "Attempted to delete system template",
-            template_id=template.id,
-            template_name=template.name,
-            admin_id=current_admin.id
+    try:
+        _, callback = await notification_template_service.delete_template(
+            db=db,
+            template=template,
         )
+
+        # ✅ TRANSACTION PATTERN: Commit and execute callback
+        await db.commit()
+        await callback()
+
+        return None
+
+    except PermissionDeniedError as e:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Cannot delete system template '{template.name}'"
+            detail=str(e)
         )
-
-    # Check if template is in use
-    if template.usage_count > 0:
-        log.warning(
-            "Attempted to delete template in use",
-            template_id=template.id,
-            template_name=template.name,
-            usage_count=template.usage_count,
-            admin_id=current_admin.id
-        )
+    except BadRequest as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cannot delete template '{template.name}' - currently used by {template.usage_count} rule(s)"
+            detail=str(e)
         )
-
-    # Store name for logging
-    template_name = template.name
-
-    # Delete the template
-    await db.delete(template)
-    await db.commit()
-
-    log.info(
-        "Deleted notification template",
-        template_id=template.id,
-        template_name=template_name,
-        admin_id=current_admin.id
-    )
-
-    return None
