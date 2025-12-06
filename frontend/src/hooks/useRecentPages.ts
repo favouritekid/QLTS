@@ -3,7 +3,7 @@
  * Custom hook for tracking recently visited pages
  * Provides quick access to frequently used pages in navigation
  */
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { usePathname } from "next/navigation";
 import { navigationConfig } from "@/lib/config/navigation";
 import type { NavItem } from "@/types/navigation";
@@ -156,23 +156,21 @@ interface UseRecentPagesReturn {
  */
 export function useRecentPages(maxItems: number = MAX_RECENT_ITEMS): UseRecentPagesReturn {
   const pathname = usePathname();
-  // Use lazy initialization to load from localStorage without useEffect
-  const [recentPages, setRecentPages] = useState<RecentPage[]>(() => {
-    // During SSR, return empty array to avoid hydration mismatch
-    if (typeof window === 'undefined') return [];
-    return loadRecentPages();
-  });
-  // Use ref for hydration flag to avoid unnecessary re-renders
-  const isHydratedRef = useRef(false);
+  // Start with empty state to match SSR output
+  const [recentPages, setRecentPages] = useState<RecentPage[]>([]);
+  // Track hydration state with useState to trigger re-render
+  const [isHydrated, setIsHydrated] = useState(false);
 
-  // Mark as hydrated on mount
+  // Load from localStorage AFTER mount (client-side only)
   useEffect(() => {
-    isHydratedRef.current = true;
+    const stored = loadRecentPages();
+    setRecentPages(stored);
+    setIsHydrated(true);
   }, []);
 
   // Track current page visit
   useEffect(() => {
-    if (!isHydratedRef.current || !pathname || !shouldTrackPath(pathname)) {
+    if (!isHydrated || !pathname || !shouldTrackPath(pathname)) {
       return;
     }
 
