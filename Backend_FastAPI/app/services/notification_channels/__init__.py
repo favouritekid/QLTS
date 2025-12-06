@@ -15,7 +15,7 @@ from .email_channel import EmailChannel
 
 # Channel Registry: Maps channel names to channel classes
 CHANNEL_REGISTRY: Dict[str, Type[BaseChannel]] = {
-    "socket": SocketChannel,
+    "browser": SocketChannel,  # Real-time notifications via Socket.IO
     "email": EmailChannel,
     # "zalo": ZaloChannel,    # TODO
     # "sms": SMSChannel,      # TODO

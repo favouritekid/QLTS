@@ -443,7 +443,7 @@ async def dispatch(
                     notifications=notifications,
                     recipient_ids=user_ids,
                     context=payload,
-                    event_type=event.value
+                    event=event.value
                 )
                 for channel_name in config.channels
             ]

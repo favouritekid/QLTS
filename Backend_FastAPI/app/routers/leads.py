@@ -395,7 +395,7 @@ async def assign_lead_manually(
             "actor_id": current_user.id,
             "actor_name": current_user.full_name,
             "source": result.source,
-            "priority": result.priority,
+            "priority": "normal",  # Lead model doesn't have priority field
         },
         dedupe_key=f"lead_assigned:{result.id}:{result.assigned_officer_id}",
         auto_commit=True  # Already committed above, emit domain event immediately

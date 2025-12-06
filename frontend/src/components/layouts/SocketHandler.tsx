@@ -325,39 +325,13 @@ export function SocketHandler() {
       priority: string;
       message: string;
     }) => {
-      console.log("[SocketHandler] Received lead_assigned event:", data);
+      console.log("[SocketHandler] lead_assigned → invalidating queries (silent sync)");
 
       // Invalidate lead-related queries to refresh officer's lead list
       queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
       queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
       queryClient.invalidateQueries({ queryKey: leadsKeys.insights(data.lead_id) });
-
-      // Show prominent success toast with action button
-      toast.success(data.message, {
-        description: `${data.offering_name} • ${data.unit_name}`,
-        duration: 10000, // 10 seconds for important notifications
-        action: {
-          label: "Xem Lead",
-          onClick: () => {
-            // Navigate to the lead detail page
-            window.location.href = `/dashboard/officer/leads/${data.lead_id}`;
-          },
-        },
-      });
-
-      // Play notification sound if preferences allow
-      if (preferences?.sound_enabled) {
-        playNotificationSound();
-      }
-
-      // Show browser notification if enabled
-      if (preferences?.browser_enabled) {
-        showBrowserNotification("Lead Mới Được Gán", {
-          body: `${data.lead_name} - ${data.offering_name}`,
-          icon: "/favicon.ico",
-          tag: `lead-assigned-${data.lead_id}`,
-        });
-      }
+      // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
 
     // ✅ REAL-TIME APPLICATION EVENTS (Week 2): Lắng nghe sự kiện application_created
@@ -371,29 +345,13 @@ export function SocketHandler() {
       created_at: string;
       message: string;
     }) => {
-      console.log("[SocketHandler] Received application_created event:", data);
+      console.log("[SocketHandler] application_created → invalidating queries (silent sync)");
 
       // Invalidate application-related queries
       queryClient.invalidateQueries({ queryKey: ["applications"] });
       queryClient.invalidateQueries({ queryKey: ["officer", "applications"] });
       queryClient.invalidateQueries({ queryKey: ["lead", data.lead_id] });
-
-      // Show toast notification
-      toast.info(data.message, {
-        description: `${data.major_program_name} • ${data.status}`,
-        duration: 5000,
-        action: {
-          label: "Xem Hồ Sơ",
-          onClick: () => {
-            window.location.href = `/dashboard/officer/applications/${data.application_id}`;
-          },
-        },
-      });
-
-      // Play notification sound if preferences allow
-      if (preferences?.sound_enabled) {
-        playNotificationSound();
-      }
+      // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
 
     // ✅ REAL-TIME APPLICATION EVENTS (Week 2): Lắng nghe sự kiện application_status_changed
@@ -406,41 +364,13 @@ export function SocketHandler() {
       changed_at: string;
       message: string;
     }) => {
-      console.log("[SocketHandler] Received application_status_changed event:", data);
+      console.log("[SocketHandler] application_status_changed → invalidating queries (silent sync)");
 
       // Invalidate application-related queries
       queryClient.invalidateQueries({ queryKey: ["applications"] });
       queryClient.invalidateQueries({ queryKey: ["application", data.application_id] });
       queryClient.invalidateQueries({ queryKey: ["officer", "applications"] });
-
-      // Determine toast variant based on new status
-      const variant =
-        data.new_status === "passed" ? "success" :
-        data.new_status === "failed" ? "error" :
-        "info";
-
-      // Show toast notification
-      if (variant === "success") {
-        toast.success(data.message, {
-          description: `Updated by ${data.changed_by}`,
-          duration: 7000,
-        });
-      } else if (variant === "error") {
-        toast.error(data.message, {
-          description: `Updated by ${data.changed_by}`,
-          duration: 7000,
-        });
-      } else {
-        toast.info(data.message, {
-          description: `Updated by ${data.changed_by}`,
-          duration: 5000,
-        });
-      }
-
-      // Play notification sound for important status changes
-      if (preferences?.sound_enabled && (data.new_status === "passed" || data.new_status === "failed")) {
-        playNotificationSound();
-      }
+      // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
 
     // ✅ REAL-TIME APPLICATION EVENTS (Week 2): Lắng nghe sự kiện application_documents_updated
@@ -476,25 +406,14 @@ export function SocketHandler() {
       updated_at: string;
       message: string;
     }) => {
-      console.log("[SocketHandler] Received pipeline_config_updated event:", data);
+      console.log("[SocketHandler] pipeline_config_updated → invalidating queries (silent sync)");
 
       // Invalidate pipeline-related queries for auto-refresh
       queryClient.invalidateQueries({ queryKey: ["pipeline-stages"] });
       queryClient.invalidateQueries({ queryKey: ["consultation-statuses"] });
       queryClient.invalidateQueries({ queryKey: ["allowed-transitions"] });
       queryClient.invalidateQueries({ queryKey: ["admin", "pipeline"] });
-
-      // Show toast notification with config type and operation
-      const operationEmoji = {
-        create: "✅",
-        update: "✏️",
-        delete: "🗑️"
-      }[data.operation];
-
-      toast.info(`${operationEmoji} ${data.message}`, {
-        description: `Updated by ${data.updated_by}`,
-        duration: 5000,
-      });
+      // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
 
     // ✅ REAL-TIME CONSULTATION MANAGEMENT: Lắng nghe sự kiện consultation_created
@@ -506,19 +425,14 @@ export function SocketHandler() {
       created_at: string;
       message: string;
     }) => {
-      console.log("[SocketHandler] Received consultation_created event:", data);
+      console.log("[SocketHandler] consultation_created → invalidating queries (silent sync)");
 
       // Invalidate lead-related queries to refresh timeline and status
       queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
       queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
       queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(data.lead_id) });
       queryClient.invalidateQueries({ queryKey: ["pipeline"] });
-
-      // Show toast notification
-      toast.info("➕ New consultation added", {
-        description: `Added by ${data.created_by}`,
-        duration: 4000,
-      });
+      // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
 
     // ✅ REAL-TIME CONSULTATION MANAGEMENT: Lắng nghe sự kiện consultation_deleted
@@ -530,19 +444,14 @@ export function SocketHandler() {
       deleted_at: string;
       message: string;
     }) => {
-      console.log("[SocketHandler] Received consultation_deleted event:", data);
+      console.log("[SocketHandler] consultation_deleted → invalidating queries (silent sync)");
 
       // Invalidate lead-related queries to refresh timeline and status
       queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
       queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
       queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(data.lead_id) });
       queryClient.invalidateQueries({ queryKey: ["pipeline"] });
-
-      // Show toast notification
-      toast.info("🗑️ Consultation deleted", {
-        description: `Lead status reverted. Deleted by ${data.deleted_by}`,
-        duration: 4000,
-      });
+      // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
 
     // ✅ REAL-TIME CONSULTATION MANAGEMENT: Lắng nghe sự kiện consultation_updated
@@ -554,19 +463,14 @@ export function SocketHandler() {
       updated_at: string;
       message: string;
     }) => {
-      console.log("[SocketHandler] Received consultation_updated event:", data);
+      console.log("[SocketHandler] consultation_updated → invalidating queries (silent sync)");
 
       // Invalidate lead-related queries to refresh timeline and status
       queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
       queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
       queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(data.lead_id) });
       queryClient.invalidateQueries({ queryKey: ["pipeline"] });
-
-      // Show toast notification
-      toast.info("✏️ Consultation updated", {
-        description: `Updated by ${data.updated_by}`,
-        duration: 4000,
-      });
+      // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
 
     // ✅ REAL-TIME LEAD MANAGEMENT: Lắng nghe sự kiện lead_updated
@@ -608,7 +512,7 @@ export function SocketHandler() {
       officer_id: number;
       actor_id: number;
     }) => {
-      console.log("[SocketHandler] Received lead_deleted event:", data);
+      console.log("[SocketHandler] lead_deleted → invalidating queries (silent sync)");
 
       // Invalidate lead-related queries to refresh all views
       queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
@@ -616,12 +520,7 @@ export function SocketHandler() {
       queryClient.removeQueries({ queryKey: leadsKeys.timeline(data.lead_id) });
       queryClient.invalidateQueries({ queryKey: ["pipeline"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-
-      // Show toast notification
-      toast.warning("🗑️ Lead deleted", {
-        description: `${data.lead_name || `Lead #${data.lead_id}`} has been deleted`,
-        duration: 4000,
-      });
+      // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
     const handleLeadCreated = (data: {
       lead_id: number;
@@ -636,23 +535,12 @@ export function SocketHandler() {
       assignment_status: string;
       message: string;
     }) => {
-      console.log("[SocketHandler] Received lead_created event:", data);
+      console.log("[SocketHandler] lead_created → invalidating queries (silent sync)");
 
       // Invalidate lead-related queries to refresh dashboard
       queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-
-      // Show toast notification for admin/manager
-      toast.success(`🆕 ${data.message}`, {
-        description: `${data.offering_name || "N/A"} • ${data.unit_name || "N/A"} • by ${data.created_by}`,
-        duration: 5000,
-        action: {
-          label: "Xem Lead",
-          onClick: () => {
-            window.location.href = `/dashboard/admin/leads/${data.lead_id}`;
-          },
-        },
-      });
+      // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
 
     // ✅ REAL-TIME ASSIGNMENT FAILURE: Lắng nghe sự kiện lead_assignment_failed
@@ -666,23 +554,12 @@ export function SocketHandler() {
       assignment_status: string;
       message: string;
     }) => {
-      console.log("[SocketHandler] Received lead_assignment_failed event:", data);
+      console.log("[SocketHandler] lead_assignment_failed → invalidating queries (silent sync)");
 
       // Invalidate lead-related queries to refresh dashboard
       queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
       queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
-
-      // Show warning toast for admin/manager
-      toast.warning(`⚠️ Assignment Failed`, {
-        description: `Lead #${data.lead_id} (${data.lead_name}): ${data.reason_display}`,
-        duration: 8000,
-        action: {
-          label: "Xem Chi Tiết",
-          onClick: () => {
-            window.location.href = `/dashboard/admin/leads/${data.lead_id}`;
-          },
-        },
-      });
+      // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
 
     // ✅ REAL-TIME OFFICER STATUS: Lắng nghe sự kiện officer_availability_changed
@@ -693,20 +570,13 @@ export function SocketHandler() {
       username: string;
       unit_id?: number;
     }) => {
-      console.log("[SocketHandler] Received officer_availability_changed event:", data);
+      console.log("[SocketHandler] officer_availability_changed → invalidating queries (silent sync)");
 
       // Invalidate officer-related queries for admin dashboard
       queryClient.invalidateQueries({ queryKey: ["admin", "officers"] });
       queryClient.invalidateQueries({ queryKey: ["admin", "users"] });
       queryClient.invalidateQueries({ queryKey: ["officer", "stats"] });
-
-      // Show toast notification
-      const statusEmoji = data.new_status === "available" ? "🟢" :
-                         data.new_status === "busy" ? "🟡" : "🔴";
-      toast.info(`${statusEmoji} Officer Status Changed`, {
-        description: `${data.username} is now ${data.new_status}`,
-        duration: 4000,
-      });
+      // ✅ NO TOAST - Per-user notification will show toast via "new_notification" event
     };
 
     // ✅ REAL-TIME LEAD STATUS: Lắng nghe sự kiện lead_status_changed
@@ -804,6 +674,94 @@ export function SocketHandler() {
       }
     };
 
+    // ✅ REAL-TIME LEAD REASSIGNMENT: Lắng nghe sự kiện lead_reassigned
+    const handleLeadReassigned = (data: {
+      lead_id: number;
+      old_officer_id: number | null;
+      new_officer_id: number | null;
+      old_unit_id: number;
+      new_unit_id: number;
+      actor_id: number;
+      reason: string;
+    }) => {
+      console.log("[SocketHandler] lead_reassigned → invalidating queries (silent sync)");
+
+      // Invalidate lead-related queries for both old and new assignments
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      // ✅ NO TOAST - Per-user notification will show toast via "notification" event
+    };
+
+    // ✅ REAL-TIME CONSULTATION REMINDER: Lắng nghe sự kiện consultation_reminder
+    const handleConsultationReminder = (data: {
+      consultation_id: number;
+      lead_id: number;
+      lead_name: string;
+      lead_phone: string;
+      officer_id: number;
+      scheduled_at: string;
+      minutes_until: number;
+    }) => {
+      console.log("[SocketHandler] consultation_reminder → showing reminder toast");
+
+      // Reminders are special - they DO show toast directly (not through notification channel)
+      // because they are time-critical alerts
+      toast.warning(`⏰ Nhắc nhở: Lịch hẹn tư vấn`, {
+        description: `Bạn có lịch hẹn gọi ${data.lead_name} (${data.lead_phone}) trong ${data.minutes_until} phút nữa.`,
+        duration: 15000, // Long duration for reminders
+        action: {
+          label: "Xem Lead",
+          onClick: () => window.location.href = `/leads/${data.lead_id}`,
+        },
+      });
+
+      // Play sound for reminders
+      if (preferences?.sound_enabled) {
+        playNotificationSound();
+      }
+    };
+
+    // ✅ REAL-TIME APPLICATION DELETION: Lắng nghe sự kiện application_deleted
+    const handleApplicationDeleted = (data: {
+      application_id: number;
+      lead_id: number;
+      officer_id: number;
+      lead_name: string;
+      actor_id: number;
+    }) => {
+      console.log("[SocketHandler] application_deleted → invalidating queries (silent sync)");
+
+      // Invalidate application and lead queries
+      queryClient.invalidateQueries({ queryKey: ["applications"] });
+      queryClient.removeQueries({ queryKey: ["application", data.application_id] });
+      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(data.lead_id) });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      // ✅ NO TOAST - Per-user notification will show toast via "notification" event
+    };
+
+    // ✅ REAL-TIME USER DEACTIVATION: Lắng nghe sự kiện user_deactivated
+    const handleUserDeactivated = (data: {
+      user_id: number;
+      username: string;
+      old_status: string;
+      reason: string;
+      actor_id: number;
+    }) => {
+      console.log("[SocketHandler] user_deactivated → showing critical alert and logging out");
+
+      // This is a critical event - user will be logged out
+      toast.error("⚠️ Tài khoản đã bị vô hiệu hóa", {
+        description: `Lý do: ${data.reason}. Bạn sẽ được đăng xuất tự động.`,
+        duration: 10000,
+      });
+
+      // Auto logout after showing message
+      setTimeout(() => {
+        logoutRef.current();
+      }, 3000);
+    };
+
     // Đăng ký listeners
     socket.on("force_logout_batch", handleForceLogoutBatch);
     socket.on("force_logout_all", handleForceLogoutAll);
@@ -826,6 +784,10 @@ export function SocketHandler() {
     socket.on("user_role_changed", handleUserRoleChanged);
     socket.on("system_alert", handleSystemAlert);
     socket.on("system_announcement", handleSystemAnnouncement);
+    socket.on("lead_reassigned", handleLeadReassigned);
+    socket.on("consultation_reminder", handleConsultationReminder);
+    socket.on("application_deleted", handleApplicationDeleted);
+    socket.on("user_deactivated", handleUserDeactivated);
 
     // ✅ DEBUG: Log all incoming Socket.IO events to diagnose real-time sync issues
     const handleAnyEvent = (event: string, ...args: unknown[]) => {
@@ -856,6 +818,10 @@ export function SocketHandler() {
       socket.off("user_role_changed", handleUserRoleChanged);
       socket.off("system_alert", handleSystemAlert);
       socket.off("system_announcement", handleSystemAnnouncement);
+      socket.off("lead_reassigned", handleLeadReassigned);
+      socket.off("consultation_reminder", handleConsultationReminder);
+      socket.off("application_deleted", handleApplicationDeleted);
+      socket.off("user_deactivated", handleUserDeactivated);
       socket.offAny(handleAnyEvent);
     };
     // ✅ FIX: Added isSocketConnected to dependencies to trigger listener setup when socket connects

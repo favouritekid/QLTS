@@ -175,6 +175,21 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         link_template="/leads"  # No specific lead page since it's deleted
     ),
 
+    SystemEvents.LEAD_UPDATED: NotificationConfig(
+        group=NotificationEventGroup.LEAD,
+        resolver=ActorExcludedResolver(CompositeResolver([
+            LeadOwnerResolver(),
+            UnitManagersResolver()
+        ])),
+        template={
+            "title": "Lead Information Updated",
+            "message": "Lead #${lead_id} has been updated by ${actor_name}."
+        },
+        channels=["browser"],
+        notification_type="info",
+        link_template="/leads/${lead_id}"
+    ),
+
     # =========================================================================
     # CONSULTATION EVENTS
     # =========================================================================
