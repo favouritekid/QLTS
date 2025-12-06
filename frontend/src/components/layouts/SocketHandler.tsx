@@ -1,7 +1,7 @@
 // components/layouts/SocketHandler.tsx
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuthStore } from "@/lib/stores/auth.store";
 import { socketService } from "@/lib/socket/client";
 import { toast } from "sonner";
@@ -28,6 +28,9 @@ export function SocketHandler() {
     logoutRef.current = logout;
   }, [logout]);
 
+  // ✅ FIX: Track socket connection state to trigger listener setup
+  const [isSocketConnected, setIsSocketConnected] = useState(false);
+
   // ✅ SECURITY FIX: Manage Socket.io connection based on authentication state
   // No longer tracks JTI or token - backend reads auth from httpOnly cookies
   // ✅ PHASE 1.1.3: Staggered reconnection with random delay (Thundering Herd protection)
@@ -51,23 +54,58 @@ export function SocketHandler() {
       return () => {
         clearTimeout(timeoutId);
         socketService.disconnect();
+        setIsSocketConnected(false);
       };
     } else {
       // When not authenticated, disconnect immediately (no delay needed)
       console.log("[SocketHandler] User not authenticated, disconnecting Socket.io...");
       socketService.disconnect();
+      setIsSocketConnected(false);
       return undefined;
     }
   }, [isAuthenticated]); // Chạy lại khi `isAuthenticated` thay đổi
 
-  // 2. Lắng nghe sự kiện
+  // ✅ FIX: Listen for socket connection to trigger listener setup
+  useEffect(() => {
+    const checkConnection = () => {
+      const socket = socketService.getSocket();
+      if (socket?.connected && !isSocketConnected) {
+        console.log("[SocketHandler] Socket connected, setting up listeners...");
+        setIsSocketConnected(true);
+      }
+    };
+
+    // Check immediately
+    checkConnection();
+
+    // Also check when socket emits 'connect' event
+    const socket = socketService.getSocket();
+    if (socket) {
+      const handleConnect = () => {
+        console.log("[SocketHandler] Socket 'connect' event received");
+        setIsSocketConnected(true);
+      };
+      socket.on("connect", handleConnect);
+      return () => {
+        socket.off("connect", handleConnect);
+      };
+    }
+
+    // Polling fallback for connection state
+    const intervalId = setInterval(checkConnection, 500);
+    return () => clearInterval(intervalId);
+  }, [isAuthenticated, isSocketConnected]);
+
+  // 2. Lắng nghe sự kiện - NOW DEPENDS ON isSocketConnected
   useEffect(() => {
     const socket = socketService.getSocket();
-    if (!socket) {
-      // Socket chưa sẵn sàng
-      // effect [isAuthenticated] ở trên sẽ chạy và kích hoạt lại effect này
+    if (!socket || !isSocketConnected) {
+      // Socket chưa sẵn sàng - effect sẽ chạy lại khi isSocketConnected thay đổi
+      console.log("[SocketHandler] Socket not ready, waiting...", { hasSocket: !!socket, isSocketConnected });
       return;
     }
+
+    console.log("[SocketHandler] ✅ Registering event listeners (socket connected)");
 
     // ✅ SECURITY FIX: Simplified force logout handlers
     // Backend emits to user_room_{user_id}, so all sessions receive the event
@@ -562,7 +600,29 @@ export function SocketHandler() {
       });
     };
 
-    // ✅ REAL-TIME LEAD CREATION: Lắng nghe sự kiện lead_created
+    // ✅ REAL-TIME LEAD DELETION: Lắng nghe sự kiện lead_deleted
+    const handleLeadDeleted = (data: {
+      lead_id: number;
+      lead_name: string;
+      unit_id: number;
+      officer_id: number;
+      actor_id: number;
+    }) => {
+      console.log("[SocketHandler] Received lead_deleted event:", data);
+
+      // Invalidate lead-related queries to refresh all views
+      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+      queryClient.removeQueries({ queryKey: leadsKeys.detail(data.lead_id) });
+      queryClient.removeQueries({ queryKey: leadsKeys.timeline(data.lead_id) });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+
+      // Show toast notification
+      toast.warning("🗑️ Lead deleted", {
+        description: `${data.lead_name || `Lead #${data.lead_id}`} has been deleted`,
+        duration: 4000,
+      });
+    };
     const handleLeadCreated = (data: {
       lead_id: number;
       lead_name: string;
@@ -761,10 +821,17 @@ export function SocketHandler() {
     socket.on("consultation_deleted", handleConsultationDeleted);
     socket.on("consultation_updated", handleConsultationUpdated);
     socket.on("lead_updated", handleLeadUpdated);
+    socket.on("lead_deleted", handleLeadDeleted);
     socket.on("officer_availability_changed", handleOfficerAvailabilityChanged);
     socket.on("user_role_changed", handleUserRoleChanged);
     socket.on("system_alert", handleSystemAlert);
     socket.on("system_announcement", handleSystemAnnouncement);
+
+    // ✅ DEBUG: Log all incoming Socket.IO events to diagnose real-time sync issues
+    const handleAnyEvent = (event: string, ...args: unknown[]) => {
+      console.log(`[SocketHandler] 🔔 Event received: ${event}`, args);
+    };
+    socket.onAny(handleAnyEvent);
 
     // Cleanup listeners khi effect này chạy lại hoặc component unmount
     return () => {
@@ -784,13 +851,15 @@ export function SocketHandler() {
       socket.off("consultation_deleted", handleConsultationDeleted);
       socket.off("consultation_updated", handleConsultationUpdated);
       socket.off("lead_updated", handleLeadUpdated);
+      socket.off("lead_deleted", handleLeadDeleted);
       socket.off("officer_availability_changed", handleOfficerAvailabilityChanged);
       socket.off("user_role_changed", handleUserRoleChanged);
       socket.off("system_alert", handleSystemAlert);
       socket.off("system_announcement", handleSystemAnnouncement);
+      socket.offAny(handleAnyEvent);
     };
-    // ✅ SECURITY FIX: Removed 'token' from dependencies, now use 'isAuthenticated'
-  }, [isAuthenticated, addNotification, preferences, queryClient]);
+    // ✅ FIX: Added isSocketConnected to dependencies to trigger listener setup when socket connects
+  }, [isAuthenticated, isSocketConnected, addNotification, preferences, queryClient]);
 
   return null; // Không render gì cả
 }

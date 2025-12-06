@@ -40,10 +40,10 @@ import type { Lead } from "@/types/lead.types";
 
 // Validation schema
 const assignSchema = z.object({
-  officer_id: z.string().min(1, "Please select an officer"),
+  officer_id: z.string().min(1, "Vui lòng chọn tư vấn viên"),
   reason: z
     .string()
-    .max(500, "Reason must be less than 500 characters")
+    .max(500, "Lý do không được quá 500 ký tự")
     .optional(),
 });
 
@@ -141,13 +141,13 @@ export function AssignLeadDialog({
         <DialogHeader>
           <DialogTitle>
             {isBulk
-              ? `Assign ${leadIds?.length} Leads`
-              : `Assign Lead: ${lead?.full_name}`}
+              ? `Phân công ${leadIds?.length} Lead`
+              : `Phân công Lead: ${lead?.full_name}`}
           </DialogTitle>
           <DialogDescription>
             {isBulk
-              ? `Assign ${leadIds?.length} selected leads to an officer.`
-              : "Assign this lead to an officer for follow-up."}
+              ? `Phân công ${leadIds?.length} lead đã chọn cho tư vấn viên.`
+              : "Phân công lead này cho tư vấn viên để theo dõi."}
           </DialogDescription>
         </DialogHeader>
 
@@ -158,7 +158,7 @@ export function AssignLeadDialog({
               name="officer_id"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Assign to Officer *</FormLabel>
+                  <FormLabel>Phân công cho *</FormLabel>
                   <Select
                     onValueChange={field.onChange}
                     value={field.value}
@@ -166,13 +166,13 @@ export function AssignLeadDialog({
                   >
                     <FormControl>
                       <SelectTrigger>
-                        <SelectValue placeholder="Select an officer" />
+                        <SelectValue placeholder="Chọn tư vấn viên" />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
                       {officers.length === 0 ? (
                         <div className="p-2 text-sm text-muted-foreground">
-                          No officers available
+                          Không có tư vấn viên nào
                         </div>
                       ) : (
                         officers.map((officer) => (
@@ -189,7 +189,7 @@ export function AssignLeadDialog({
                     </SelectContent>
                   </Select>
                   <FormDescription>
-                    Select the officer who will handle {isBulk ? "these leads" : "this lead"}
+                    Chọn tư vấn viên sẽ xử lý {isBulk ? "các lead này" : "lead này"}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -201,17 +201,17 @@ export function AssignLeadDialog({
               name="reason"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Reason (Optional)</FormLabel>
+                  <FormLabel>Lý do (Tùy chọn)</FormLabel>
                   <FormControl>
                     <Textarea
-                      placeholder="e.g., Has expertise in this field, available capacity, etc."
+                      placeholder="VD: Có chuyên môn trong lĩnh vực này, có thời gian sẵn, ..."
                       className="resize-none"
                       rows={3}
                       {...field}
                     />
                   </FormControl>
                   <FormDescription>
-                    Provide a reason for this assignment (optional)
+                    Cung cấp lý do cho việc phân công này (tùy chọn)
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -225,11 +225,11 @@ export function AssignLeadDialog({
                 onClick={() => onOpenChange(false)}
                 disabled={isSubmitting}
               >
-                Cancel
+                Hủy
               </Button>
               <Button type="submit" disabled={isSubmitting || officers.length === 0}>
                 {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                {isBulk ? `Assign ${leadIds?.length} Leads` : "Assign Lead"}
+                {isBulk ? `Phân công ${leadIds?.length} Lead` : "Phân công Lead"}
               </Button>
             </DialogFooter>
           </form>

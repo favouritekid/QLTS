@@ -62,7 +62,7 @@ class MajorProgram(Base):
     )
 
     # Liên kết với Khoa/Đơn vị
-    unit_id = Column(Integer, ForeignKey("organization_unit.id"), nullable=False)
+    unit_id = Column(Integer, ForeignKey("organization_unit.id"), nullable=False, index=True)  # ✅ FIX: Added index
     unit = relationship("OrganizationUnit", back_populates="major_programs")
 
     # Liên kết 1-Nhiều đến Cấp 2 (Loại hình)

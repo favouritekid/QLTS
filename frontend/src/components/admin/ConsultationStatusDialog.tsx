@@ -57,22 +57,22 @@ import {
 const statusFormSchema = z.object({
   id: z
     .string()
-    .min(1, "Status ID is required")
+    .min(1, "Mã trạng thái là bắt buộc")
     .regex(
       /^[a-z0-9_]+$/,
-      "Status ID must contain only lowercase letters, numbers, and underscores"
+      "Mã trạng thái chỉ được chứa chữ thường, số và gạch dưới"
     )
-    .max(50, "Status ID must not exceed 50 characters"),
+    .max(50, "Mã trạng thái không vượt quá 50 ký tự"),
   name: z
     .string()
-    .min(1, "Status name is required")
-    .min(2, "Status name must be at least 2 characters")
-    .max(100, "Status name must not exceed 100 characters"),
+    .min(1, "Tên trạng thái là bắt buộc")
+    .min(2, "Tên trạng thái phải có ít nhất 2 ký tự")
+    .max(100, "Tên trạng thái không vượt quá 100 ký tự"),
   color_code: z
     .string()
-    .min(1, "Color is required")
-    .regex(/^#[0-9A-Fa-f]{6}$/, "Color must be a valid hex color (e.g., #FF5733)"),
-  stage_id: z.string().min(1, "Stage is required"),
+    .min(1, "Màu sắc là bắt buộc")
+    .regex(/^#[0-9A-Fa-f]{6}$/, "Màu phải là mã hex hợp lệ (VD: #FF5733)"),
+  stage_id: z.string().min(1, "Giai đoạn là bắt buộc"),
   outcome_type: z.enum(["positive", "neutral", "negative"]),
   is_final_status: z.boolean(),
   legacy_status: z.string().nullable().optional(),
@@ -213,12 +213,12 @@ export function ConsultationStatusDialog({
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
           <DialogTitle>
-            {isEditMode ? "Edit Consultation Status" : "Create New Consultation Status"}
+            {isEditMode ? "Sửa Trạng thái Tư vấn" : "Tạo Trạng thái Tư vấn Mới"}
           </DialogTitle>
           <DialogDescription>
             {isEditMode
-              ? "Update the consultation status information"
-              : "Enter information to create a new consultation status"}
+              ? "Cập nhật thông tin trạng thái tư vấn"
+              : "Nhập thông tin để tạo trạng thái tư vấn mới"}
           </DialogDescription>
         </DialogHeader>
 
@@ -232,13 +232,13 @@ export function ConsultationStatusDialog({
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>
-                      Status ID <span className="text-red-500">*</span>
+                      Mã trạng thái <span className="text-red-500">*</span>
                     </FormLabel>
                     <FormControl>
-                      <Input placeholder="e.g., rescheduled" {...field} disabled={isSubmitting} />
+                      <Input placeholder="VD: hen_lai" {...field} disabled={isSubmitting} />
                     </FormControl>
                     <FormDescription>
-                      Unique identifier (lowercase, numbers, underscores only)
+                      Mã định danh duy nhất (chữ thường, số, gạch dưới)
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -253,12 +253,12 @@ export function ConsultationStatusDialog({
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>
-                    Status Name <span className="text-red-500">*</span>
+                    Tên trạng thái <span className="text-red-500">*</span>
                   </FormLabel>
                   <FormControl>
-                    <Input placeholder="e.g., Rescheduled" {...field} disabled={isSubmitting} />
+                    <Input placeholder="VD: Hẹn lại" {...field} disabled={isSubmitting} />
                   </FormControl>
-                  <FormDescription>Display name for this status</FormDescription>
+                  <FormDescription>Tên hiển thị của trạng thái này</FormDescription>
                   <FormMessage />
                 </FormItem>
               )}
@@ -271,7 +271,7 @@ export function ConsultationStatusDialog({
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>
-                    Pipeline Stage <span className="text-red-500">*</span>
+                    Giai đoạn Pipeline <span className="text-red-500">*</span>
                   </FormLabel>
                   <Select
                     onValueChange={field.onChange}
@@ -280,17 +280,17 @@ export function ConsultationStatusDialog({
                   >
                     <FormControl>
                       <SelectTrigger>
-                        <SelectValue placeholder="Select a stage" />
+                        <SelectValue placeholder="Chọn giai đoạn" />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
                       {stagesLoading ? (
                         <SelectItem value="loading" disabled>
-                          Loading...
+                          Đang tải...
                         </SelectItem>
                       ) : stages.length === 0 ? (
                         <SelectItem value="empty" disabled>
-                          No stages available
+                          Không có giai đoạn nào
                         </SelectItem>
                       ) : (
                         stages.map((stage) => (
@@ -301,7 +301,7 @@ export function ConsultationStatusDialog({
                       )}
                     </SelectContent>
                   </Select>
-                  <FormDescription>Which pipeline stage this status applies to</FormDescription>
+                  <FormDescription>Trạng thái này thuộc giai đoạn pipeline nào</FormDescription>
                   <FormMessage />
                 </FormItem>
               )}
@@ -314,7 +314,7 @@ export function ConsultationStatusDialog({
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>
-                    Color <span className="text-red-500">*</span>
+                    Màu sắc <span className="text-red-500">*</span>
                   </FormLabel>
                   <div className="flex gap-2">
                     <FormControl>
@@ -330,7 +330,7 @@ export function ConsultationStatusDialog({
                       style={{ backgroundColor: field.value }}
                     />
                   </div>
-                  <FormDescription>Hex color code for this status</FormDescription>
+                  <FormDescription>Mã màu hex cho trạng thái này</FormDescription>
                   {/* Color Presets */}
                   <div className="mt-2 flex gap-2">
                     {PRESET_COLORS.map((color) => (
@@ -359,7 +359,7 @@ export function ConsultationStatusDialog({
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>
-                    Outcome Type <span className="text-red-500">*</span>
+                    Loại kết quả <span className="text-red-500">*</span>
                   </FormLabel>
                   <Select
                     onValueChange={field.onChange}
@@ -368,29 +368,29 @@ export function ConsultationStatusDialog({
                   >
                     <FormControl>
                       <SelectTrigger>
-                        <SelectValue placeholder="Select outcome type" />
+                        <SelectValue placeholder="Chọn loại kết quả" />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
                       <SelectItem value="positive">
                         <span className="flex items-center gap-2">
-                          <span className="text-green-500">●</span> Positive
+                          <span className="text-green-500">●</span> Tích cực
                         </span>
                       </SelectItem>
                       <SelectItem value="neutral">
                         <span className="flex items-center gap-2">
-                          <span className="text-gray-500">●</span> Neutral
+                          <span className="text-gray-500">●</span> Trung lập
                         </span>
                       </SelectItem>
                       <SelectItem value="negative">
                         <span className="flex items-center gap-2">
-                          <span className="text-red-500">●</span> Negative
+                          <span className="text-red-500">●</span> Tiêu cực
                         </span>
                       </SelectItem>
                     </SelectContent>
                   </Select>
                   <FormDescription>
-                    Classify this status outcome (used for reporting and analytics)
+                    Phân loại kết quả của trạng thái (dùng cho báo cáo và phân tích)
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -407,11 +407,11 @@ export function ConsultationStatusDialog({
                     <ShadcnCheckbox checked={field.value} onCheckedChange={field.onChange} />
                   </FormControl>
                   <div className="space-y-1 leading-none">
-                    <FormLabel>Final Status</FormLabel>
+                    <FormLabel>Trạng thái cuối</FormLabel>
                     <FormDescription>
-                      Mark this as end of lead lifecycle (e.g., &apos;Enrolled&apos;,
-                      &apos;Rejected&apos;). Leads with final status won&apos;t be counted in active
-                      pipeline.
+                      Đánh dấu là kết thúc vòng đời lead (VD: &apos;Đã ghi danh&apos;,
+                      &apos;Từ chối&apos;). Lead có trạng thái cuối sẽ không được tính trong
+                      pipeline đang hoạt động.
                     </FormDescription>
                   </div>
                 </FormItem>
@@ -466,7 +466,7 @@ export function ConsultationStatusDialog({
               name="legacy_status"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Legacy Status (Optional)</FormLabel>
+                  <FormLabel>Legacy Status (Tùy chọn)</FormLabel>
                   <Select
                     onValueChange={(value) => field.onChange(value === "_none_" ? null : value)}
                     value={field.value || "_none_"}
@@ -474,12 +474,12 @@ export function ConsultationStatusDialog({
                   >
                     <FormControl>
                       <SelectTrigger>
-                        <SelectValue placeholder="Auto-derived from stage/outcome" />
+                        <SelectValue placeholder="Tự động từ giai đoạn/kết quả" />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
                       <SelectItem value="_none_">
-                        <span className="text-muted-foreground">Auto-derived (recommended)</span>
+                        <span className="text-muted-foreground">Tự động (khuyến nghị)</span>
                       </SelectItem>
                       {LEGACY_STATUS_OPTIONS.map((status) => (
                         <SelectItem key={status.value} value={status.value}>
@@ -489,8 +489,8 @@ export function ConsultationStatusDialog({
                     </SelectContent>
                   </Select>
                   <FormDescription>
-                    Maps to lead.status for backward compatibility. Leave empty to auto-derive from
-                    stage and outcome type.
+                    Ánh xạ sang lead.status để tương thích ngược. Để trống để tự động
+                    xác định từ giai đoạn và loại kết quả.
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -504,11 +504,11 @@ export function ConsultationStatusDialog({
                 onClick={() => onOpenChange(false)}
                 disabled={isSubmitting}
               >
-                Cancel
+                Hủy
               </Button>
               <Button type="submit" disabled={isSubmitting}>
                 {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                {isEditMode ? "Update" : "Create"}
+                {isEditMode ? "Cập nhật" : "Tạo mới"}
               </Button>
             </DialogFooter>
           </form>

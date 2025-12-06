@@ -113,6 +113,17 @@ logging.getLogger("engineio").setLevel(logging.WARNING)
 # Tắt log DEBUG của thư viện user-agents
 logging.getLogger("user_agents").setLevel(logging.INFO)
 
+# Tắt log verbose của bcrypt và passlib (chỉ hiển thị WARNING)
+logging.getLogger("passlib").setLevel(logging.WARNING)
+logging.getLogger("bcrypt").setLevel(logging.WARNING)
+
+# Tắt log verbose của multipart form parser (chỉ hiển thị WARNING)
+logging.getLogger("multipart").setLevel(logging.WARNING)
+logging.getLogger("python_multipart").setLevel(logging.WARNING)
+
+# Tắt log verbose của Casbin (chỉ hiển thị WARNING)
+logging.getLogger("casbin").setLevel(logging.WARNING)
+
 # === ✅ KẾT THÚC TẮT TIẾNG LOG THỪA ===
 
 # Cấu hình log uvicorn

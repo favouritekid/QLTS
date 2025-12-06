@@ -51,7 +51,7 @@ class Lead(Base):
     next_activity_at = Column(DateTime(timezone=True), nullable=True, index=True)
     # NEW 3-TIER ARCHITECTURE: Link to ProgramOffering instead of Major
     offering_id = Column(Integer, ForeignKey("program_offering.id", ondelete="SET NULL"), nullable=True, index=True)
-    unit_id = Column(Integer, ForeignKey("organization_unit.id"), nullable=False)
+    unit_id = Column(Integer, ForeignKey("organization_unit.id"), nullable=False, index=True)  # ✅ FIX: Added index
     assigned_officer_id = Column(
         Integer, ForeignKey("user.id"), nullable=True, index=True
     )
@@ -119,9 +119,9 @@ class Consultation(Base):
     notes = Column(Text)
     outcome = Column(String(50))
     duration_minutes = Column(Integer, nullable=True)
-    officer_id = Column(Integer, ForeignKey("user.id"), nullable=False)
+    officer_id = Column(Integer, ForeignKey("user.id"), nullable=False, index=True)  # ✅ FIX: Added index
     consultation_status_id = Column(
-        String(50), ForeignKey("consultation_status.id"), nullable=True
+        String(50), ForeignKey("consultation_status.id"), nullable=True, index=True  # ✅ FIX: Added index
     )
 
     consultation_status = relationship("ConsultationStatus")
@@ -159,7 +159,7 @@ class Application(Base):
     status = Column(String(50), nullable=False, default="pending", index=True)
 
     # Legacy field
-    officer_id = Column(Integer, ForeignKey("user.id"), nullable=True)
+    officer_id = Column(Integer, ForeignKey("user.id"), nullable=True, index=True)  # ✅ FIX: Added index
 
     # Timestamps
     created_at = Column(
@@ -192,7 +192,7 @@ class CRMInteraction(Base):
     __tablename__ = "crm_interaction"
 
     id = Column(Integer, primary_key=True)
-    lead_id = Column(Integer, ForeignKey("lead.id"), nullable=False)
+    lead_id = Column(Integer, ForeignKey("lead.id"), nullable=False, index=True)  # ✅ FIX: Added index
     type = Column(String(50))
     details = Column(JSON)
     created_at = Column(
@@ -210,7 +210,7 @@ class AssignmentLog(Base):
     __tablename__ = "assignment_log"
 
     id = Column(Integer, primary_key=True)
-    lead_id = Column(Integer, ForeignKey("lead.id"), nullable=False)
+    lead_id = Column(Integer, ForeignKey("lead.id"), nullable=False, index=True)  # ✅ FIX: Added index
     method = Column(String(50))
     timestamp = Column(
         DateTime(timezone=True),
@@ -218,7 +218,7 @@ class AssignmentLog(Base):
         default=lambda: datetime.now(timezone.utc),
     )
     reason = Column(Text, nullable=True)
-    officer_id = Column(Integer, ForeignKey("user.id"), nullable=False)
+    officer_id = Column(Integer, ForeignKey("user.id"), nullable=False, index=True)  # ✅ FIX: Added index
 
     officer = relationship(
         "User", back_populates="assignment_logs_involved", foreign_keys=[officer_id]

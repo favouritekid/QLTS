@@ -23,7 +23,7 @@ interface ForgotPasswordSchema {
 }
 
 const forgotPasswordSchema = z.object({
-  email: z.string().email({ message: "Invalid email address" }),
+  email: z.string().email({ message: "Địa chỉ email không hợp lệ" }),
 });
 
 type ForgotPasswordFormValues = z.infer<typeof forgotPasswordSchema>;
@@ -43,8 +43,8 @@ export function ForgotPasswordForm() {
   return (
     <div className="bg-card mx-auto w-full max-w-md space-y-6 rounded border p-6 shadow-md md:p-8">
       <div className="space-y-2 text-center">
-        <h1 className="text-2xl font-bold">Forgot Password</h1>
-        <p className="text-muted-foreground">Enter your email to receive a password reset link.</p>
+        <h1 className="text-2xl font-bold">Quên Mật Khẩu</h1>
+        <p className="text-muted-foreground">Nhập email để nhận liên kết đặt lại mật khẩu.</p>
       </div>
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
@@ -67,14 +67,14 @@ export function ForgotPasswordForm() {
             )}
           />
           <Button type="submit" className="w-full" disabled={isLoading}>
-            {isLoading ? "Sending..." : "Send Reset Link"}
+            {isLoading ? "Đang gửi..." : "Gửi Liên Kết Đặt Lại"}
           </Button>
         </form>
       </Form>
       <p className="text-muted-foreground mt-4 text-center text-sm">
-        Remembered your password?{" "}
+        Đã nhớ mật khẩu?{" "}
         <Link href="/login" className="text-primary font-medium hover:underline">
-          Log in
+          Đăng nhập
         </Link>
       </p>
     </div>

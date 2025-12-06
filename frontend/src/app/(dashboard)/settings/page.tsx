@@ -22,9 +22,9 @@ export default function SettingsPasswordPage() {
   return (
     <Card className="max-w-2xl">
       <CardHeader>
-        <CardTitle>Change Password</CardTitle>
+        <CardTitle>Đổi Mật Khẩu</CardTitle>
         <CardDescription>
-          Enter your current password and a new password. You will be logged out after success.
+          Nhập mật khẩu hiện tại và mật khẩu mới. Bạn sẽ được đăng xuất sau khi thành công.
         </CardDescription>
       </CardHeader>
       <CardContent>

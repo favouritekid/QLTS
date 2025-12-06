@@ -462,7 +462,7 @@ async def execute_notification_workflow(
 
         log.info(
             "Workflow execution summary",
-            event=event.value,
+            event_type=event.value,
             total_rules=len(rules),
             completed=completed,
             skipped=skipped,
@@ -474,7 +474,7 @@ async def execute_notification_workflow(
     except Exception as e:
         log.error(
             "Workflow execution failed",
-            event=event.value,
+            event_type=event.value,
             error=str(e)
         )
         return []

@@ -31,15 +31,15 @@ const resetPasswordSchema = z
   .object({
     new_password: z
       .string()
-      .min(8, { message: "Password must be at least 8 characters" })
-      .regex(/[A-Z]/, { message: "Must contain an uppercase letter" })
-      .regex(/[a-z]/, { message: "Must contain a lowercase letter" })
-      .regex(/[0-9]/, { message: "Must contain a number" })
-      .regex(/[^A-Za-z0-9]/, { message: "Must contain a special character" }),
+      .min(8, { message: "Mật khẩu phải có ít nhất 8 ký tự" })
+      .regex(/[A-Z]/, { message: "Phải chứa chữ cái viết hoa" })
+      .regex(/[a-z]/, { message: "Phải chứa chữ cái viết thường" })
+      .regex(/[0-9]/, { message: "Phải chứa số" })
+      .regex(/[^A-Za-z0-9]/, { message: "Phải chứa ký tự đặc biệt" }),
     confirm_new_password: z.string(),
   })
   .refine((data) => data.new_password === data.confirm_new_password, {
-    message: "Passwords do not match",
+    message: "Mật khẩu không khớp",
     path: ["confirm_new_password"],
   });
 
@@ -73,13 +73,13 @@ export function ResetPasswordForm() {
       <div className="mx-auto w-full max-w-md space-y-4">
         <Alert variant="destructive">
           <Terminal className="h-4 w-4" />
-          <AlertTitle>Error</AlertTitle>
+          <AlertTitle>Lỗi</AlertTitle>
           <AlertDescription>
-            Invalid or missing password reset token. Please request a new link.
+            Token đặt lại mật khẩu không hợp lệ hoặc thiếu. Vui lòng yêu cầu liên kết mới.
           </AlertDescription>
         </Alert>
         <Button onClick={() => router.push("/forgot-password")} variant="outline">
-          Request New Link
+          Yêu cầu Liên kết Mới
         </Button>
       </div>
     );
@@ -88,8 +88,8 @@ export function ResetPasswordForm() {
   return (
     <div className="bg-card mx-auto w-full max-w-md space-y-6 rounded border p-6 shadow-md md:p-8">
       <div className="space-y-2 text-center">
-        <h1 className="text-2xl font-bold">Reset Password</h1>
-        <p className="text-muted-foreground">Enter your new password below.</p>
+        <h1 className="text-2xl font-bold">Đặt Lại Mật Khẩu</h1>
+        <p className="text-muted-foreground">Nhập mật khẩu mới của bạn dưới đây.</p>
       </div>
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
@@ -98,7 +98,7 @@ export function ResetPasswordForm() {
             name="new_password"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>New Password</FormLabel>
+                <FormLabel>Mật khẩu mới</FormLabel>
                 <FormControl>
                   <Input type="password" placeholder="••••••••" disabled={isLoading} {...field} />
                 </FormControl>
@@ -111,7 +111,7 @@ export function ResetPasswordForm() {
             name="confirm_new_password"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Confirm New Password</FormLabel>
+                <FormLabel>Xác nhận mật khẩu mới</FormLabel>
                 <FormControl>
                   <Input type="password" placeholder="••••••••" disabled={isLoading} {...field} />
                 </FormControl>
@@ -120,14 +120,14 @@ export function ResetPasswordForm() {
             )}
           />
           <Button type="submit" className="w-full" disabled={isLoading}>
-            {isLoading ? "Resetting..." : "Reset Password"}
+            {isLoading ? "Đang đặt lại..." : "Đặt Lại Mật Khẩu"}
           </Button>
         </form>
       </Form>
       <p className="text-muted-foreground mt-4 text-center text-sm">
-        Remembered your password?{" "}
+        Đã nhớ mật khẩu?{" "}
         <Link href="/login" className="text-primary font-medium hover:underline">
-          Log in
+          Đăng nhập
         </Link>
       </p>
     </div>

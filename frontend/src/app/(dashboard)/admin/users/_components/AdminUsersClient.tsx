@@ -175,14 +175,14 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
           <Checkbox
             checked={table.getIsAllPageRowsSelected()}
             onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
-            aria-label="Select all"
+            aria-label="Chọn tất cả"
           />
         ),
         cell: ({ row }) => (
           <Checkbox
             checked={row.getIsSelected()}
             onCheckedChange={(value) => row.toggleSelected(!!value)}
-            aria-label="Select row"
+            aria-label="Chọn dòng"
           />
         ),
         enableSorting: false,
@@ -190,7 +190,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
       },
       {
         accessorKey: "user",
-        header: "User",
+        header: "Người dùng",
         cell: ({ row }) => {
           const user = row.original;
           return (
@@ -220,7 +220,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
         accessorKey: "role",
         header: () => (
           <Button variant="ghost" onClick={() => handleSort("role")} className="-ml-4 h-8">
-            Role
+            Vai trò
             {getSortIcon("role")}
           </Button>
         ),
@@ -235,7 +235,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
         accessorKey: "status",
         header: () => (
           <Button variant="ghost" onClick={() => handleSort("status")} className="-ml-4 h-8">
-            Status
+            Trạng thái
             {getSortIcon("status")}
           </Button>
         ),
@@ -258,17 +258,17 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                <DropdownMenuLabel>Thao tác</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem asChild>
                   <Link href={`/admin/users/${user.id}`}>
                     <Eye className="mr-2 h-4 w-4" />
-                    View Details
+                    Xem chi tiết
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => handleEditUser(user)}>
                   <Edit className="mr-2 h-4 w-4" />
-                  Edit User
+                  Sửa người dùng
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={() => {
@@ -277,7 +277,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
                   }}
                 >
                   <Key className="mr-2 h-4 w-4" />
-                  Set Password
+                  Đặt mật khẩu
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={() => {
@@ -286,7 +286,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
                   }}
                 >
                   <Shield className="mr-2 h-4 w-4" />
-                  Manage Roles
+                  Quản lý vai trò
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
@@ -294,7 +294,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
                   onClick={() => setUserToDelete(user)}
                 >
                   <Trash2 className="mr-2 h-4 w-4" />
-                  Delete User
+                  Xoá người dùng
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -377,7 +377,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
   };
 
   const handleExportCSV = async () => {
-    toast.info("Starting CSV export...");
+    toast.info("Đang xuất CSV...");
 
     try {
       const params = new URLSearchParams();
@@ -408,10 +408,10 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
       document.body.removeChild(link);
       URL.revokeObjectURL(blobUrl);
 
-      toast.success("CSV export finished successfully.");
+      toast.success("Xuất CSV thành công.");
     } catch (error) {
       console.error("Error exporting users CSV:", error);
-      toast.error("Failed to export CSV");
+      toast.error("Xuất CSV thất bại");
     }
   };
 
@@ -421,12 +421,12 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
     return (
       <div className="space-y-6">
         <header>
-          <h1 className="text-3xl font-bold tracking-tight">User Management</h1>
-          <p className="text-muted-foreground">Manage users, roles, and permissions.</p>
+          <h1 className="text-3xl font-bold tracking-tight">Quản Lý Người Dùng</h1>
+          <p className="text-muted-foreground">Quản lý người dùng, vai trò và quyền hạn.</p>
         </header>
         <Card>
           <CardContent className="pt-6">
-            <p className="text-destructive">Error loading users: {error.message}</p>
+            <p className="text-destructive">Lỗi tải người dùng: {error.message}</p>
           </CardContent>
         </Card>
       </div>
@@ -438,17 +438,17 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
       {/* Header */}
       <header className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">User Management</h1>
-          <p className="text-muted-foreground">Manage users, roles, and permissions.</p>
+          <h1 className="text-3xl font-bold tracking-tight">Quản Lý Người Dùng</h1>
+          <p className="text-muted-foreground">Quản lý người dùng, vai trò và quyền hạn.</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={handleExportCSV} disabled={!data?.users.length}>
             <Download className="mr-2 h-4 w-4" />
-            Export CSV
+            Xuất CSV
           </Button>
           <Button onClick={handleCreateUser}>
             <Plus className="mr-2 h-4 w-4" />
-            Add User
+            Thêm Người Dùng
           </Button>
         </div>
       </header>
@@ -459,37 +459,37 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
           <CardContent className="flex items-center justify-between p-4">
             <div className="flex items-center gap-2">
               <CheckSquare className="text-primary h-5 w-5" />
-              <span className="font-medium">{selectedCount} user(s) selected</span>
+              <span className="font-medium">{selectedCount} người dùng được chọn</span>
             </div>
             <div className="flex gap-2">
               <Button variant="outline" size="sm" onClick={() => table.resetRowSelection()}>
                 <Square className="mr-2 h-4 w-4" />
-                Deselect All
+                Bỏ chọn tất cả
               </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm">
                     <Edit className="mr-2 h-4 w-4" />
-                    Change Status
+                    Đổi trạng thái
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuLabel>Set status to:</DropdownMenuLabel>
+                  <DropdownMenuLabel>Đặt trạng thái:</DropdownMenuLabel>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={() => handleBulkChangeStatus("active")}>
-                    Active
+                    Hoạt động
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => handleBulkChangeStatus("pending")}>
-                    Pending
+                    Chờ duyệt
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => handleBulkChangeStatus("banned")}>
-                    Banned
+                    Bị cấm
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
               <Button variant="destructive" size="sm" onClick={handleOpenBulkDelete}>
                 <Trash2 className="mr-2 h-4 w-4" />
-                Delete Selected
+                Xoá đã chọn
               </Button>
             </div>
           </CardContent>
@@ -499,15 +499,15 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
       {/* Filters */}
       <Card>
         <CardHeader>
-          <CardTitle>Filters</CardTitle>
-          <CardDescription>Search and filter users</CardDescription>
+          <CardTitle>Bộ lọc</CardTitle>
+          <CardDescription>Tìm kiếm và lọc người dùng</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex flex-col gap-4 md:flex-row">
             <div className="relative flex-1">
               <Search className="text-muted-foreground absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2" />
               <Input
-                placeholder="Search by username or email..."
+                placeholder="Tìm theo tên hoặc email..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="pl-9"
@@ -515,25 +515,25 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
             </div>
             <Select value={roleFilter} onValueChange={setRoleFilter}>
               <SelectTrigger className="w-full md:w-[180px]">
-                <SelectValue placeholder="All Roles" />
+                <SelectValue placeholder="Tất cả vai trò" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Roles</SelectItem>
+                <SelectItem value="all">Tất cả vai trò</SelectItem>
                 <SelectItem value="admin">Admin</SelectItem>
-                <SelectItem value="manager">Manager</SelectItem>
-                <SelectItem value="officer">Officer</SelectItem>
-                <SelectItem value="user">User</SelectItem>
+                <SelectItem value="manager">Quản lý</SelectItem>
+                <SelectItem value="officer">Nhân viên</SelectItem>
+                <SelectItem value="user">Người dùng</SelectItem>
               </SelectContent>
             </Select>
             <Select value={statusFilter} onValueChange={setStatusFilter}>
               <SelectTrigger className="w-full md:w-[180px]">
-                <SelectValue placeholder="All Status" />
+                <SelectValue placeholder="Tất cả trạng thái" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Status</SelectItem>
-                <SelectItem value="active">Active</SelectItem>
-                <SelectItem value="pending">Pending</SelectItem>
-                <SelectItem value="banned">Banned</SelectItem>
+                <SelectItem value="all">Tất cả trạng thái</SelectItem>
+                <SelectItem value="active">Hoạt động</SelectItem>
+                <SelectItem value="pending">Chờ duyệt</SelectItem>
+                <SelectItem value="banned">Bị cấm</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -579,7 +579,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
                   ) : (
                     <TableRow>
                       <TableCell colSpan={columns.length} className="h-24 text-center">
-                        No users found.
+                        Không tìm thấy người dùng.
                       </TableCell>
                     </TableRow>
                   )}
@@ -594,8 +594,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
       {data && data.total_count > 10 && (
         <div className="flex items-center justify-between">
           <div className="text-muted-foreground text-sm">
-            Showing {(page - 1) * 10 + 1} to {Math.min(page * 10, data.total_count)} of{" "}
-            {data.total_count} users
+            Hiển thị {(page - 1) * 10 + 1} đến {Math.min(page * 10, data.total_count)} / {data.total_count} người dùng
           </div>
           <div className="flex gap-2">
             <Button
@@ -604,7 +603,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={page === 1}
             >
-              Previous
+              Trước
             </Button>
             <Button
               variant="outline"
@@ -612,7 +611,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
               onClick={() => setPage((p) => Math.min(Math.ceil(data.total_count / 10), p + 1))}
               disabled={page === Math.ceil(data.total_count / 10)}
             >
-              Next
+              Sau
             </Button>
           </div>
         </div>
@@ -645,19 +644,18 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
       <AlertDialog open={!!userToDelete} onOpenChange={() => setUserToDelete(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+            <AlertDialogTitle>Bạn có chắc?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete the user <strong>{userToDelete?.username}</strong>. This
-              action cannot be undone.
+              Thao tác này sẽ xoá vĩnh viễn người dùng <strong>{userToDelete?.username}</strong>. Không thể hoàn tác.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>Hủy</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDeleteUser}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Delete
+              Xoá
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -666,20 +664,19 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
       <AlertDialog open={bulkDeleteDialogOpen} onOpenChange={setBulkDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Multiple Users?</AlertDialogTitle>
+            <AlertDialogTitle>Xoá nhiều người dùng?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete <strong>{selectedCount} user(s)</strong>. This action
-              cannot be undone.
+              Thao tác này sẽ xoá vĩnh viễn <strong>{selectedCount} người dùng</strong>. Không thể hoàn tác.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>Hủy</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleBulkDelete}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               disabled={bulkActionMutation.isPending}
             >
-              {bulkActionMutation.isPending ? "Deleting..." : "Delete All"}
+              {bulkActionMutation.isPending ? "Đang xoá..." : "Xoá tất cả"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

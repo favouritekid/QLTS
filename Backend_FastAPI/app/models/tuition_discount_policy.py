@@ -150,14 +150,14 @@ class TuitionDiscountPolicy(Base):
 
     # === Audit trail ===
     created_at = Column(
-        DateTime,
+        DateTime(timezone=True),  # ✅ FIX: Added timezone=True
         nullable=False,
         default=datetime.utcnow,
         server_default="now()",
         comment="Thời điểm tạo"
     )
     updated_at = Column(
-        DateTime,
+        DateTime(timezone=True),  # ✅ FIX: Added timezone=True
         nullable=False,
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
@@ -168,12 +168,14 @@ class TuitionDiscountPolicy(Base):
         Integer,
         ForeignKey("user.id", ondelete="SET NULL"),
         nullable=True,
+        index=True,  # ✅ FIX: Added index
         comment="User tạo chính sách"
     )
     updated_by_user_id = Column(
         Integer,
         ForeignKey("user.id", ondelete="SET NULL"),
         nullable=True,
+        index=True,  # ✅ FIX: Added index
         comment="User cập nhật cuối"
     )
 

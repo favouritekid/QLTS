@@ -99,28 +99,28 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
     <PageContainer>
       {/* Header */}
       <PageHeader
-        title="Pipeline Settings"
-        description="Manage pipeline stages, consultation statuses, and workflow rules."
-        backButton={{ href: "/admin", label: "Back to Admin" }}
+        title="Cấu Hình Pipeline"
+        description="Quản lý các giai đoạn pipeline, trạng thái tư vấn và quy tắc workflow."
+        backButton={{ href: "/admin", label: "Quay lại Admin" }}
       />
 
       {/* Tabs */}
       <Tabs defaultValue="stages" className="space-y-6">
         <TabsList>
-          <TabsTrigger value="stages">Pipeline Stages</TabsTrigger>
-          <TabsTrigger value="statuses">Consultation Statuses</TabsTrigger>
+          <TabsTrigger value="stages">Giai Đoạn Pipeline</TabsTrigger>
+          <TabsTrigger value="statuses">Trạng Thái Tư Vấn</TabsTrigger>
           <TabsTrigger value="workflow" className="gap-2">
             <Workflow className="h-4 w-4" />
-            Workflow Rules
+            Quy Tắc Workflow
           </TabsTrigger>
         </TabsList>
 
         {/* Pipeline Stages Tab */}
         <TabsContent value="stages" className="space-y-4">
           <div className="flex items-center justify-between">
-            <p className="text-muted-foreground text-sm">Manage the stages in your lead pipeline</p>
+            <p className="text-muted-foreground text-sm">Quản lý các giai đoạn trong pipeline lead</p>
             <Button onClick={handleCreateStage}>
-              <Plus className="mr-2 h-4 w-4" /> Add Stage
+              <Plus className="mr-2 h-4 w-4" /> Thêm giai đoạn
             </Button>
           </div>
           {stagesLoading ? (
@@ -134,7 +134,7 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
                       <div className="flex items-center gap-2">
                         <Badge variant="outline">{stage.order}</Badge>
                         <CardTitle className="text-lg">{stage.name}</CardTitle>
-                        {stage.is_final_stage && <Badge variant="destructive">Final Stage</Badge>}
+                        {stage.is_final_stage && <Badge variant="destructive">Giai đoạn cuối</Badge>}
                       </div>
                       <div className="flex gap-2">
                         <Button size="sm" variant="outline" onClick={() => handleEditStage(stage)}>
@@ -161,10 +161,10 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
         <TabsContent value="statuses" className="space-y-6">
           <div className="flex items-center justify-between">
             <p className="text-muted-foreground text-sm">
-              Manage consultation status options grouped by stage
+              Quản lý các tùy chọn trạng thái tư vấn theo giai đoạn
             </p>
             <Button onClick={handleCreateStatus}>
-              <Plus className="mr-2 h-4 w-4" /> Add Status
+              <Plus className="mr-2 h-4 w-4" /> Thêm trạng thái
             </Button>
           </div>
 
@@ -202,7 +202,7 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
                     {/* Grid Statuses của Stage này */}
                     {stageStatuses.length === 0 ? (
                       <div className="bg-muted/10 text-muted-foreground flex h-24 items-center justify-center rounded-lg border border-dashed text-sm">
-                        No statuses defined for this stage
+                        Chưa có trạng thái cho giai đoạn này
                       </div>
                     ) : (
                       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -261,7 +261,7 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
                                     variant="outline"
                                     className="border-primary text-primary h-5 px-1.5 text-[10px]"
                                   >
-                                    Final
+                                    Cuối
                                   </Badge>
                                 )}
 
@@ -270,7 +270,7 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
                                     variant="outline"
                                     className="border-amber-500 text-amber-700 bg-amber-50 h-5 px-1.5 text-[10px]"
                                   >
-                                    Universal
+                                    Toàn cầu
                                   </Badge>
                                 )}
 
@@ -279,7 +279,7 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
                                     variant="outline"
                                     className="border-blue-500 text-blue-700 bg-blue-50 h-5 px-1.5 text-[10px]"
                                   >
-                                    No Update
+                                    Không cập nhật
                                   </Badge>
                                 )}
                               </div>
@@ -303,7 +303,7 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
                       !
                     </div>
                     <h3 className="text-destructive text-lg font-semibold">
-                      Orphaned Statuses (Missing Stage)
+                      Trạng Thái Mồ Côi (Thiếu Giai Đoạn)
                     </h3>
                     <div className="bg-destructive/20 ml-2 h-px flex-1"></div>
                   </div>
@@ -335,7 +335,7 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
                               </div>
                             </div>
                             <p className="text-destructive text-xs">
-                              Stage ID: {status.stage_id} (Not found)
+                              Stage ID: {status.stage_id} (Không tìm thấy)
                             </p>
                           </CardHeader>
                         </Card>
@@ -369,9 +369,9 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
         open={!!deletingStageId}
         onOpenChange={(open) => !open && setDeletingStageId(null)}
         onConfirm={handleDeleteStage}
-        title="Delete Stage"
-        description="Are you sure?"
-        confirmText="Delete"
+        title="Xoá giai đoạn"
+        description="Bạn có chắc?"
+        confirmText="Xoá"
         variant="destructive"
         isLoading={deleteStage.isPending}
       />
@@ -379,9 +379,9 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
         open={!!deletingStatusId}
         onOpenChange={(open) => !open && setDeletingStatusId(null)}
         onConfirm={handleDeleteStatus}
-        title="Delete Status"
-        description="Are you sure?"
-        confirmText="Delete"
+        title="Xoá trạng thái"
+        description="Bạn có chắc?"
+        confirmText="Xoá"
         variant="destructive"
         isLoading={deleteStatus.isPending}
       />

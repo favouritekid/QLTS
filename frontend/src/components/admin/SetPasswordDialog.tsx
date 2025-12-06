@@ -32,14 +32,14 @@ import type { User } from "@/types/api.types";
 const setPasswordSchema = z.object({
   new_password: z
     .string()
-    .min(8, "Password must be at least 8 characters")
-    .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
-    .regex(/[a-z]/, "Password must contain at least one lowercase letter")
-    .regex(/\d/, "Password must contain at least one number")
-    .regex(/[@$!%*?&]/, "Password must contain at least one special character"),
+    .min(8, "Mật khẩu phải có ít nhất 8 ký tự")
+    .regex(/[A-Z]/, "Mật khẩu phải có ít nhất một chữ cái viết hoa")
+    .regex(/[a-z]/, "Mật khẩu phải có ít nhất một chữ cái viết thường")
+    .regex(/\d/, "Mật khẩu phải có ít nhất một số")
+    .regex(/[@$!%*?&]/, "Mật khẩu phải có ít nhất một ký tự đặc biệt"),
   confirm_password: z.string(),
 }).refine((data) => data.new_password === data.confirm_password, {
-  message: "Passwords don't match",
+  message: "Mật khẩu không khớp",
   path: ["confirm_password"],
 });
 
@@ -85,10 +85,10 @@ export function SetPasswordDialog({ open, onOpenChange, user }: SetPasswordDialo
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
-          <DialogTitle>Set Password</DialogTitle>
+          <DialogTitle>Đặt Mật Khẩu</DialogTitle>
           <DialogDescription>
-            Set a new password for <span className="font-semibold">{user.username}</span>.
-            The user will be able to log in with this new password immediately.
+            Đặt mật khẩu mới cho <span className="font-semibold">{user.username}</span>.
+            Người dùng sẽ có thể đăng nhập bằng mật khẩu mới ngay lập tức.
           </DialogDescription>
         </DialogHeader>
 
@@ -100,12 +100,12 @@ export function SetPasswordDialog({ open, onOpenChange, user }: SetPasswordDialo
               name="new_password"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>New Password</FormLabel>
+                  <FormLabel>Mật khẩu mới</FormLabel>
                   <FormControl>
                     <div className="relative">
                       <Input
                         type={showPassword ? "text" : "password"}
-                        placeholder="Enter new password"
+                        placeholder="Nhập mật khẩu mới"
                         {...field}
                         onChange={(e) => {
                           field.onChange(e);
@@ -142,12 +142,12 @@ export function SetPasswordDialog({ open, onOpenChange, user }: SetPasswordDialo
               name="confirm_password"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Confirm Password</FormLabel>
+                  <FormLabel>Xác nhận mật khẩu</FormLabel>
                   <FormControl>
                     <div className="relative">
                       <Input
                         type={showConfirmPassword ? "text" : "password"}
-                        placeholder="Confirm new password"
+                        placeholder="Xác nhận mật khẩu mới"
                         {...field}
                         disabled={isPending}
                         className="pr-10"
@@ -182,10 +182,10 @@ export function SetPasswordDialog({ open, onOpenChange, user }: SetPasswordDialo
                 }}
                 disabled={isPending}
               >
-                Cancel
+                Hủy
               </Button>
               <Button type="submit" disabled={isPending}>
-                {isPending ? "Setting..." : "Set Password"}
+                {isPending ? "Đang đặt..." : "Đặt Mật Khẩu"}
               </Button>
             </DialogFooter>
           </form>

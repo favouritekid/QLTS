@@ -43,18 +43,18 @@ import { Checkbox as ShadcnCheckbox } from "@/components/ui/checkbox";
 const stageFormSchema = z.object({
   id: z
     .string()
-    .min(1, "Stage ID is required")
-    .regex(/^[a-z0-9_]+$/, "Stage ID must contain only lowercase letters, numbers, and underscores")
-    .max(50, "Stage ID must not exceed 50 characters"),
+    .min(1, "Mã giai đoạn là bắt buộc")
+    .regex(/^[a-z0-9_]+$/, "Mã giai đoạn chỉ được chứa chữ thường, số và gạch dưới")
+    .max(50, "Mã giai đoạn không vượt quá 50 ký tự"),
   name: z
     .string()
-    .min(1, "Stage name is required")
-    .min(2, "Stage name must be at least 2 characters")
-    .max(100, "Stage name must not exceed 100 characters"),
+    .min(1, "Tên giai đoạn là bắt buộc")
+    .min(2, "Tên giai đoạn phải có ít nhất 2 ký tự")
+    .max(100, "Tên giai đoạn không vượt quá 100 ký tự"),
   order: z
     .number()
-    .int("Order must be an integer")
-    .min(0, "Order must be 0 or greater"),
+    .int("Thứ tự phải là số nguyên")
+    .min(0, "Thứ tự phải lớn hơn hoặc bằng 0"),
   is_final_stage: z.boolean(),
 });
 
@@ -157,12 +157,12 @@ export function PipelineStageDialog({
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
           <DialogTitle>
-            {isEditMode ? "Edit Pipeline Stage" : "Create New Pipeline Stage"}
+            {isEditMode ? "Chỉnh sửa Giai đoạn" : "Tạo Giai đoạn Mới"}
           </DialogTitle>
           <DialogDescription>
             {isEditMode
-              ? "Update the pipeline stage information"
-              : "Enter information to create a new pipeline stage"}
+              ? "Cập nhật thông tin giai đoạn pipeline"
+              : "Nhập thông tin để tạo giai đoạn pipeline mới"}
           </DialogDescription>
         </DialogHeader>
 
@@ -176,17 +176,17 @@ export function PipelineStageDialog({
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>
-                      Stage ID <span className="text-red-500">*</span>
+                      Mã giai đoạn <span className="text-red-500">*</span>
                     </FormLabel>
                     <FormControl>
                       <Input
-                        placeholder="e.g., follow_up_call"
+                        placeholder="VD: Theo dõi cuộc gọi"
                         {...field}
                         disabled={isSubmitting}
                       />
                     </FormControl>
                     <FormDescription>
-                      Unique identifier (lowercase, numbers, underscores only)
+                      Mã định danh duy nhất (chữ thường, số, gạch dưới)
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -201,17 +201,17 @@ export function PipelineStageDialog({
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>
-                    Stage Name <span className="text-red-500">*</span>
+                    Tên giai đoạn <span className="text-red-500">*</span>
                   </FormLabel>
                   <FormControl>
                     <Input
-                      placeholder="e.g., Follow-up Call"
+                      placeholder="VD: Gọi theo dõi"
                       {...field}
                       disabled={isSubmitting}
                     />
                   </FormControl>
                   <FormDescription>
-                    Display name for this stage
+                    Tên hiển thị của giai đoạn này
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -225,7 +225,7 @@ export function PipelineStageDialog({
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>
-                    Order <span className="text-red-500">*</span>
+                    Thứ tự <span className="text-red-500">*</span>
                   </FormLabel>
                   <FormControl>
                     <Input
@@ -237,7 +237,7 @@ export function PipelineStageDialog({
                     />
                   </FormControl>
                   <FormDescription>
-                    Position in the pipeline (0 = first)
+                    Vị trí trong pipeline (0 = đầu tiên)
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -258,11 +258,11 @@ export function PipelineStageDialog({
                   </FormControl>
                   <div className="space-y-1 leading-none">
                     <FormLabel>
-                      Final Stage
+                      Giai đoạn cuối
                     </FormLabel>
                     <FormDescription>
-                      Mark this as a final stage (Won/Lost/Closed).
-                      Final stages represent end of the conversion funnel.
+                      Đánh dấu đây là giai đoạn cuối cùng (Thắng/Thua/Đóng).
+                      Giai đoạn cuối đại diện cho điểm kết thúc của phễu chuyển đổi.
                     </FormDescription>
                   </div>
                 </FormItem>
@@ -276,11 +276,11 @@ export function PipelineStageDialog({
                 onClick={() => onOpenChange(false)}
                 disabled={isSubmitting}
               >
-                Cancel
+                Hủy
               </Button>
               <Button type="submit" disabled={isSubmitting}>
                 {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                {isEditMode ? "Update" : "Create"}
+                {isEditMode ? "Cập nhật" : "Tạo mới"}
               </Button>
             </DialogFooter>
           </form>

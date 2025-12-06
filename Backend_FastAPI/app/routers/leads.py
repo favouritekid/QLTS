@@ -210,7 +210,8 @@ async def update_existing_lead(
                     "actor_id": current_user.id,
                     "reason": "Unit transfer by admin",
                 },
-                dedupe_key=f"lead_reassigned:{result.id}:{result.unit_id}"
+                dedupe_key=f"lead_reassigned:{result.id}:{result.unit_id}",
+                auto_commit=True  # Already committed above
             )
         except Exception as e:
             log.warning("Failed to dispatch LEAD_REASSIGNED notification", error=str(e))
@@ -234,7 +235,8 @@ async def update_existing_lead(
                     "actor_name": current_user.full_name,
                     "updated_fields": updated_fields,
                 },
-                dedupe_key=f"lead_status_changed:{result.id}:{result.consultation_status_id}"
+                dedupe_key=f"lead_status_changed:{result.id}:{result.consultation_status_id}",
+                auto_commit=True  # Already committed above
             )
         except Exception as e:
             log.warning(
@@ -242,6 +244,26 @@ async def update_existing_lead(
                 lead_id=lead.id,
                 error=str(e)
             )
+
+    # ✅ REAL-TIME SYNC: Always dispatch LEAD_UPDATED for UI refresh
+    try:
+        await dispatch(
+            db=db,
+            event=SystemEvents.LEAD_UPDATED,
+            payload={
+                "lead_id": result.id,
+                "updated_fields": updated_fields,
+                "status_changed": status_changed,
+                "actor_id": current_user.id,
+                "updated_by": current_user.full_name or current_user.username,  # Frontend expects updated_by
+                "updated_at": datetime.now().isoformat(),
+                "message": f"Lead updated by {current_user.full_name or current_user.username}",
+            },
+            dedupe_key=f"lead_updated:{result.id}:{int(datetime.now().timestamp())}",
+            auto_commit=True  # Already committed above
+        )
+    except Exception as e:
+        log.warning("Failed to dispatch LEAD_UPDATED notification", lead_id=result.id, error=str(e))
 
     return result
 
@@ -286,7 +308,8 @@ async def delete_lead(
                 "officer_id": deleted_lead.assigned_officer_id,  # May be None
                 "actor_id": current_user.id,
             },
-            dedupe_key=f"lead_deleted:{deleted_lead.id}"
+            dedupe_key=f"lead_deleted:{deleted_lead.id}",
+            auto_commit=True  # Already committed above, emit domain event immediately
         )
     except Exception as e:
         # Log but don't fail - deletion already succeeded
@@ -331,7 +354,8 @@ async def add_new_consultation(
                 "status_id": result.consultation_status_id or "",
                 "actor_id": current_user.id,
                 "unit_id": lead.unit_id,  # For unit managers notification
-            }
+            },
+            auto_commit=True  # Already committed, emit domain event immediately
         )
     except Exception as e:
         log.warning(
@@ -373,7 +397,8 @@ async def assign_lead_manually(
             "source": result.source,
             "priority": result.priority,
         },
-        dedupe_key=f"lead_assigned:{result.id}:{result.assigned_officer_id}"
+        dedupe_key=f"lead_assigned:{result.id}:{result.assigned_officer_id}",
+        auto_commit=True  # Already committed above, emit domain event immediately
     )
 
     return result
@@ -454,6 +479,12 @@ async def update_a_consultation(
         db, lead.id, consultation_id, consultation_in, current_user
     )
 
+    # ✅ TRANSACTION PATTERN: Router commits the transaction
+    await db.commit()
+    
+    # ✅ Refresh to load relationships for response serialization
+    await db.refresh(result, ["officer", "consultation_status"])
+
     # ✅ NOTIFICATION 2.0: Dispatch CONSULTATION_UPDATED if status changed
     if old_status_id and result.consultation_status_id != old_status_id:
         try:
@@ -468,7 +499,8 @@ async def update_a_consultation(
                     "new_status_id": result.consultation_status_id,
                     "actor_id": current_user.id,
                 },
-                dedupe_key=f"consultation_updated:{result.id}:{result.consultation_status_id}"
+                dedupe_key=f"consultation_updated:{result.id}:{result.consultation_status_id}",
+                auto_commit=True  # Already committed above, emit domain event immediately
             )
         except Exception as e:
             log.warning("Failed to dispatch CONSULTATION_UPDATED notification", error=str(e))
@@ -499,6 +531,9 @@ async def delete_a_consultation(
     """
     await lead_service.delete_consultation(db, lead.id, consultation_id, current_user)
 
+    # ✅ TRANSACTION PATTERN: Router commits the transaction
+    await db.commit()
+
     # ✅ NOTIFICATION 2.0: Dispatch CONSULTATION_DELETED
     try:
         await dispatch(
@@ -510,7 +545,8 @@ async def delete_a_consultation(
                 "officer_id": lead.assigned_officer_id,
                 "actor_id": current_user.id,
             },
-            dedupe_key=f"consultation_deleted:{consultation_id}"
+            dedupe_key=f"consultation_deleted:{consultation_id}",
+            auto_commit=True  # Already committed above, emit domain event immediately
         )
     except Exception as e:
         log.warning("Failed to dispatch CONSULTATION_DELETED notification", error=str(e))
