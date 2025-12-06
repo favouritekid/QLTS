@@ -40,7 +40,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { EditConsultationDialog } from "./EditConsultationDialog";
+import { ConsultationDialog } from "./ConsultationDialog";
 import type { Consultation, TimelineItem as TimelineItemBase } from "@/types/lead.types";
 
 // Extended timeline type for backward compatibility with old structure
@@ -462,11 +462,12 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
       </AlertDialog>
 
       {/* Edit Consultation Dialog */}
-      <EditConsultationDialog
+      <ConsultationDialog
         open={editDialogOpen}
         onOpenChange={setEditDialogOpen}
         leadId={leadId}
         consultation={editingConsultation}
+        mode="edit"
       />
     </>
   );

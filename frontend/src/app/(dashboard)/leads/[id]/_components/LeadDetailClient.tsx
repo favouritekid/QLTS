@@ -296,6 +296,7 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
         open={consultationDialogOpen}
         onOpenChange={setConsultationDialogOpen}
         leadId={leadId}
+        mode="create"
       />
 
       {/* Delete Confirmation Dialog */}

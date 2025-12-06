@@ -10,8 +10,8 @@ import { useQuery } from "@tanstack/react-query";
 import { leadsApi } from "@/lib/api/leads";
 
 import { Button } from "@/components/ui/button";
+import { FormDialog } from "@/components/ui/form-dialog";
 import {
-  Dialog,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -271,9 +271,10 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
   };
 
   const isSubmitting = createMutation.isPending || updateMutation.isPending;
+  const { isDirty } = form.formState;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <FormDialog open={open} onOpenChange={onOpenChange} isDirty={isDirty}>
       <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{isCreate ? "Tạo Lead Mới" : "Chỉnh sửa Lead"}</DialogTitle>
@@ -626,6 +627,6 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
           </form>
         </Form>
       </DialogContent>
-    </Dialog>
+    </FormDialog>
   );
 }
