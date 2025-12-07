@@ -1126,6 +1126,38 @@ async def add_consultation(
                     detail=f"Consultation status with id {data.status_id} not found."
                 )
 
+            # ✅ NEW: Validate workflow transition (following update_lead pattern)
+            # Chỉ validate nếu lead đã có status và status thực sự thay đổi
+            current_status_id = lead.consultation_status_id
+            if current_status_id and current_status_id != data.status_id:
+                is_valid = await pipeline_service.validate_status_transition(
+                    db, 
+                    from_status_id=current_status_id, 
+                    to_status_id=data.status_id
+                )
+                
+                if not is_valid:
+                    # Admin có thể bypass rule này
+                    if officer.role != "admin":
+                        raise BadRequest(
+                            detail=f"Không thể chuyển trạng thái từ '{current_status_id}' sang '{data.status_id}'. "
+                                   f"Quy trình không cho phép (Allowed Transitions). "
+                                   f"Liên hệ Admin nếu cần bypass."
+                        )
+                    else:
+                        # Log admin bypass cho audit
+                        log.warning(
+                            "Admin bypassed transition rule in add_consultation",
+                            admin_id=officer.id,
+                            admin_username=officer.username,
+                            lead_id=lead_id,
+                            from_status=current_status_id,
+                            to_status=data.status_id,
+                            to_status_name=new_status.name,
+                            is_universal=new_status.is_universal,
+                            reason="Admin override - no explicit transition rule exists",
+                        )
+
             # Lưu trạng thái Lead cũ
             old_state = _get_current_lead_state(lead)
 
