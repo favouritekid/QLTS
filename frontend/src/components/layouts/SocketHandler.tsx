@@ -17,7 +17,7 @@ import { leadsKeys } from "@/hooks/useLeads";
  * Quản lý kết nối Socket.IO và lắng nghe các sự kiện auth toàn cục.
  */
 export function SocketHandler() {
-  const { isAuthenticated, logout } = useAuthStore();
+  const { isAuthenticated, logout, user } = useAuthStore();
   const addNotification = useAddNotification();
   const { data: preferences } = useNotificationPreferences();
   const queryClient = useQueryClient();
@@ -494,14 +494,16 @@ export function SocketHandler() {
         queryClient.invalidateQueries({ queryKey: ["pipeline"] });
       }
 
-      // Show toast notification with field summary
-      const fieldsText = data.updated_fields.slice(0, 3).join(", ");
-      const moreFields = data.updated_fields.length > 3 ? ` +${data.updated_fields.length - 3} more` : "";
-
-      toast.info("📝 Lead updated", {
-        description: `${fieldsText}${moreFields} by ${data.updated_by}`,
-        duration: 4000,
-      });
+      // ✅ FIX: Only show toast for human updates, not system updates
+      // System updates (like Celery updating next_activity_at) should be silent
+      if (data.updated_by !== "system") {
+        const fieldsText = data.updated_fields.slice(0, 3).join(", ");
+        const moreFields = data.updated_fields.length > 3 ? ` +${data.updated_fields.length - 3} more` : "";
+        toast.info("📝 Lead updated", {
+          description: `${fieldsText}${moreFields} by ${data.updated_by}`,
+          duration: 4000,
+        });
+      }
     };
 
     // ✅ REAL-TIME LEAD DELETION: Lắng nghe sự kiện lead_deleted
@@ -703,6 +705,13 @@ export function SocketHandler() {
       scheduled_at: string;
       minutes_until: number;
     }) => {
+      // ✅ FIX: Only show toast if current user is the target officer
+      // Domain events broadcast to all clients, but reminders are per-user
+      if (data.officer_id !== user?.id) {
+        console.log(`[SocketHandler] consultation_reminder → skipping (for officer ${data.officer_id}, not current user ${user?.id})`);
+        return;
+      }
+
       console.log("[SocketHandler] consultation_reminder → showing reminder toast");
 
       // Reminders are special - they DO show toast directly (not through notification channel)

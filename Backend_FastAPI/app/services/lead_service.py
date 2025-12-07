@@ -1199,7 +1199,14 @@ async def add_consultation(
 
             # ✅ Quick Disposition: Cập nhật next_activity_at dựa trên tất cả consultations
             if data.scheduled_at:
+                # ✅ FIX: Flush pending changes so query sees new consultation
+                await db.flush()
                 await update_lead_next_activity(db, lead_id)
+                log.info(
+                    "Updated lead.next_activity_at after adding consultation",
+                    lead_id=lead_id,
+                    consultation_scheduled_at=data.scheduled_at.isoformat() if data.scheduled_at else None,
+                )
 
             log.info(
                 "New consultation added for lead",
@@ -1555,7 +1562,10 @@ async def delete_consultation(
             )
 
             # ✅ Quick Disposition: Cập nhật next_activity_at sau khi xóa consultation
+            # FIX: Flush to ensure deletion is visible to query
+            await db.flush()
             await update_lead_next_activity(db, lead_id)
+            log.info("Updated lead.next_activity_at after deleting consultation", lead_id=lead_id, deleted_consultation_id=consultation_id)
 
             # Store values for use after transaction
             _lead_id = lead_id

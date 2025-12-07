@@ -42,7 +42,7 @@ import structlog
 from datetime import datetime, timezone
 from typing import Any, Callable, List, Optional, Tuple
 
-from sqlalchemy import and_, insert, select
+from sqlalchemy import and_, cast, insert, select, String
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -536,7 +536,9 @@ async def _apply_deduplication(
             .where(
                 and_(
                     models.Notification.user_id.in_(user_ids),
-                    models.Notification.data["dedupe_key"].astext == dedupe_key
+                    # ✅ FIX: Use cast() instead of .astext which fails in async SQLAlchemy
+                    # PostgreSQL JSONB: data->>'dedupe_key' = :value
+                    cast(models.Notification.data["dedupe_key"], String) == dedupe_key
                 )
             )
         )
