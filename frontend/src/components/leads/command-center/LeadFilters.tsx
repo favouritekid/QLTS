@@ -2,7 +2,7 @@
 "use client";
 
 import React from "react";
-import { Search, X, RotateCcw, Calendar } from "lucide-react";
+import { Search, X, RotateCcw } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -24,6 +24,9 @@ import {
 import type { LeadStatus } from "@/types/lead.types";
 import { SmartOfferingSelector } from "@/components/common/selectors";
 import { LEAD_STATUS_OPTIONS, LEAD_SOURCE_OPTIONS } from "@/constants";
+import { usePipelineStages } from "@/hooks/usePipeline";
+import { STAGE_COLORS } from "@/types/pipeline.types";
+import { useAuth } from "@/hooks/useAuth";
 
 interface LeadFiltersProps {
   search: string;
@@ -36,6 +39,9 @@ interface LeadFiltersProps {
   onScoreRangeChange: (range: [number, number]) => void;
   offeringFilter: string;
   onOfferingChange: (offeringId: string) => void;
+  // === PIPELINE STAGE FILTER ===
+  pipelineStageFilter: string;
+  onPipelineStageChange: (stageId: string) => void;
   // === DATE RANGE FILTER ===
   dateFrom: string;
   dateTo: string;
@@ -60,6 +66,9 @@ export const LeadFilters = React.memo(function LeadFilters({
   onScoreRangeChange,
   offeringFilter,
   onOfferingChange,
+  // === PIPELINE STAGE FILTER ===
+  pipelineStageFilter,
+  onPipelineStageChange,
   // === DATE RANGE FILTER ===
   dateFrom,
   dateTo,
@@ -69,6 +78,11 @@ export const LeadFilters = React.memo(function LeadFilters({
   onDateFieldChange,
   onReset,
 }: LeadFiltersProps) {
+  // Fetch pipeline stages
+  const { data: pipelineStages = [] } = usePipelineStages();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
+
   const handleStatusToggle = (status: LeadStatus) => {
     if (statusFilters.includes(status)) {
       onStatusChange(statusFilters.filter((s) => s !== status));
@@ -84,6 +98,7 @@ export const LeadFilters = React.memo(function LeadFilters({
     scoreRange[0] > 0 ||
     scoreRange[1] < 100 ||
     offeringFilter !== "all" ||
+    pipelineStageFilter !== "all" ||
     dateFrom ||
     dateTo;
 
@@ -126,36 +141,71 @@ export const LeadFilters = React.memo(function LeadFilters({
         </div>
 
         {/* Bộ lọc */}
-        <Accordion type="multiple" defaultValue={["status", "source"]} className="space-y-2">
-          {/* Bộ lọc trạng thái */}
-          <AccordionItem value="status" className="border rounded-lg px-3">
+        <Accordion type="multiple" defaultValue={["pipeline_stage"]} className="space-y-2">
+          {/* Bộ lọc trạng thái - Chỉ hiển thị cho Admin */}
+          {isAdmin && (
+            <AccordionItem value="status" className="border rounded-lg px-3">
+              <AccordionTrigger className="text-sm font-medium py-3 hover:no-underline">
+                Vòng đời Lead
+                {statusFilters.length > 0 && (
+                  <span className="ml-auto mr-2 text-xs bg-primary text-primary-foreground px-1.5 py-0.5 rounded-full">
+                    {statusFilters.length}
+                  </span>
+                )}
+              </AccordionTrigger>
+              <AccordionContent className="pb-3">
+                <div className="space-y-2">
+                  {LEAD_STATUS_OPTIONS.map((option) => (
+                    <div key={option.value} className="flex items-center space-x-2">
+                      <Checkbox
+                        id={`status-${option.value}`}
+                        checked={statusFilters.includes(option.value)}
+                        onCheckedChange={() => handleStatusToggle(option.value)}
+                      />
+                      <Label
+                        htmlFor={`status-${option.value}`}
+                        className="text-sm font-normal cursor-pointer flex items-center gap-2"
+                      >
+                        <span className={`w-2 h-2 rounded-full ${option.color}`} />
+                        {option.label}
+                      </Label>
+                    </div>
+                  ))}
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+          )}
+
+          {/* Bộ lọc Pipeline Stage */}
+          <AccordionItem value="pipeline_stage" className="border rounded-lg px-3">
             <AccordionTrigger className="text-sm font-medium py-3 hover:no-underline">
-              Vòng đời Lead
-              {statusFilters.length > 0 && (
+              Giai đoạn Pipeline
+              {pipelineStageFilter !== "all" && (
                 <span className="ml-auto mr-2 text-xs bg-primary text-primary-foreground px-1.5 py-0.5 rounded-full">
-                  {statusFilters.length}
+                  1
                 </span>
               )}
             </AccordionTrigger>
             <AccordionContent className="pb-3">
-              <div className="space-y-2">
-                {LEAD_STATUS_OPTIONS.map((option) => (
-                  <div key={option.value} className="flex items-center space-x-2">
-                    <Checkbox
-                      id={`status-${option.value}`}
-                      checked={statusFilters.includes(option.value)}
-                      onCheckedChange={() => handleStatusToggle(option.value)}
-                    />
-                    <Label
-                      htmlFor={`status-${option.value}`}
-                      className="text-sm font-normal cursor-pointer flex items-center gap-2"
-                    >
-                      <span className={`w-2 h-2 rounded-full ${option.color}`} />
-                      {option.label}
-                    </Label>
-                  </div>
-                ))}
-              </div>
+              <Select value={pipelineStageFilter} onValueChange={onPipelineStageChange}>
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Tất cả giai đoạn" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Tất cả giai đoạn</SelectItem>
+                  {pipelineStages.map((stage) => (
+                    <SelectItem key={stage.id} value={stage.id}>
+                      <div className="flex items-center gap-2">
+                        <span 
+                          className="w-2.5 h-2.5 rounded-full" 
+                          style={{ backgroundColor: STAGE_COLORS[stage.id] || '#6B7280' }}
+                        />
+                        {stage.name}
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </AccordionContent>
           </AccordionItem>
 
@@ -225,7 +275,6 @@ export const LeadFilters = React.memo(function LeadFilters({
           <AccordionItem value="date" className="border rounded-lg px-3">
             <AccordionTrigger className="text-sm font-medium py-3 hover:no-underline">
               <div className="flex items-center gap-2">
-                <Calendar className="h-4 w-4" />
                 Khoảng thời gian
               </div>
               {(dateFrom || dateTo) && (

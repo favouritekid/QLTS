@@ -1,7 +1,7 @@
 // src/components/leads/command-center/LeadDetailPanel.tsx
 "use client";
 
-import React from "react";
+import React, { useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -22,10 +22,11 @@ import {
   Zap,
   History,
 } from "lucide-react";
-// import { cn } from "@/lib/utils"; // TODO: Use when needed
+import { cn } from "@/lib/utils";
 import { useLead } from "@/hooks/useLeads";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { QuickConsultationSection } from "@/components/leads/QuickConsultationSection";
+import { STAGE_COLORS } from "@/types/pipeline.types";
 import type { Lead } from "@/types/lead.types";
 
 interface LeadDetailPanelProps {
@@ -92,6 +93,14 @@ export function LeadDetailPanel({
   onAssign,
 }: LeadDetailPanelProps) {
   const { data: lead, isLoading } = useLead(leadId || 0, !!leadId);
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to top when leadId changes
+  useEffect(() => {
+    if (leadId && scrollAreaRef.current) {
+      scrollAreaRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [leadId]);
 
   // Empty state
   if (!leadId) {
@@ -144,11 +153,23 @@ export function LeadDetailPanel({
           <div className="flex-1 space-y-1 min-w-0">
             <h2 className="text-lg font-semibold truncate">{lead.full_name}</h2>
             <div className="flex items-center gap-2 flex-wrap">
-              {lead.pipeline_stage && (
-                <Badge variant="outline" className="font-medium">
-                  {lead.pipeline_stage.name}
-                </Badge>
-              )}
+              {lead.pipeline_stage && (() => {
+                const stageColor = lead.pipeline_stage.color_code || STAGE_COLORS[lead.pipeline_stage.id];
+                return (
+                  <Badge 
+                    variant="outline" 
+                    className={cn(
+                      "font-medium border-0",
+                      stageColor && "text-white"
+                    )}
+                    style={{
+                      backgroundColor: stageColor || undefined,
+                    }}
+                  >
+                    {lead.pipeline_stage.name}
+                  </Badge>
+                );
+              })()}
               <Badge variant="secondary">
                 <Calendar className="h-3 w-3 mr-1.5" />
                 {new Date(lead.created_at).toLocaleDateString("vi-VN")}
@@ -191,7 +212,7 @@ export function LeadDetailPanel({
       </div>
 
       {/* Scrollable Content */}
-      <ScrollArea className="flex-1">
+      <ScrollArea className="flex-1" ref={scrollAreaRef}>
         <div className="p-4 space-y-4">
           {/* Thông tin liên hệ */}
           <Card>
@@ -256,8 +277,9 @@ export function LeadDetailPanel({
                 <div className="flex items-center gap-3 text-sm">
                   <Building className="h-4 w-4 text-muted-foreground shrink-0" />
                   <span className="truncate">
+                    {lead.offering.program?.degree_level && `${lead.offering.program.degree_level} `}
                     {lead.offering.program?.name || lead.offering.offering_type}
-                    {lead.offering.program && ` (${lead.offering.offering_type})`}
+                    {lead.offering.offering_type && ` (${lead.offering.offering_type})`}
                   </span>
                 </div>
               )}

@@ -22,6 +22,7 @@ export interface PipelineStage {
   name: string
   order: number
   is_final_stage: boolean // Whether this is a final stage (Won/Lost/Closed)
+  color_code?: string // Hex color for stage (e.g., '#4CAF50')
 
   // Statistics (when loaded with full pipeline)
   lead_count?: number
@@ -357,15 +358,26 @@ export interface StageTrigger {
 
 /**
  * Pipeline stage color mapping (for UI)
+ * Maps stage IDs to background colors
  */
 export const STAGE_COLORS: Record<string, string> = {
-  new_lead: '#E3F2FD', // Light Blue
-  contacted: '#FFF9C4', // Light Yellow
-  consultation_scheduled: '#FFE0B2', // Light Orange
-  consultation_completed: '#C8E6C9', // Light Green
-  application_submitted: '#B2DFDB', // Light Teal
-  enrolled: '#4CAF50', // Green
-  lost: '#FFCDD2', // Light Red
+  // Database stage IDs (stg01-stg07)
+  stg01: '#3B82F6', // Blue - Chưa tư vấn
+  stg02: '#F59E0B', // Amber - Đang tư vấn
+  stg03: '#8B5CF6', // Purple - Đã nộp hồ sơ
+  stg04: '#06B6D4', // Cyan - Chuẩn bị nhập học
+  stg05: '#10B981', // Emerald - Đã nộp học phí
+  stg06: '#22C55E', // Green - Đã nhập học
+  stg07: '#EF4444', // Red - Không theo học
+
+  // Legacy string-based IDs (fallback)
+  new_lead: '#3B82F6', // Blue
+  contacted: '#F59E0B', // Amber
+  consultation_scheduled: '#8B5CF6', // Purple
+  consultation_completed: '#06B6D4', // Cyan
+  application_submitted: '#10B981', // Emerald
+  enrolled: '#22C55E', // Green
+  lost: '#EF4444', // Red
 }
 
 /**
