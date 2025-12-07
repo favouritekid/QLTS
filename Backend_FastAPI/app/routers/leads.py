@@ -123,6 +123,16 @@ async def get_all_leads(
     ),
     sort_by: str = Query("created_at", description="Field to sort by"),
     order: str = Query("desc", description="Sort order (asc or desc)"),
+    # === DATE RANGE FILTER ===
+    date_from: Optional[datetime] = Query(
+        None, description="Filter leads created/updated from this date (ISO format)"
+    ),
+    date_to: Optional[datetime] = Query(
+        None, description="Filter leads created/updated until this date (ISO format)"
+    ),
+    date_field: str = Query(
+        "created_at", description="Date field to filter on (created_at or updated_at)"
+    ),
     # === KẾT THÚC THÊM THAM SỐ ===
 ):
     """
@@ -154,6 +164,10 @@ async def get_all_leads(
         search=search,
         sort_by=sort_by,
         order=order,
+        # === DATE RANGE FILTER ===
+        date_from=date_from,
+        date_to=date_to,
+        date_field=date_field,
         # === KẾT THÚC TRUYỀN THAM SỐ ===
     )
     return {"total_count": total, "leads": leads}

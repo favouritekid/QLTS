@@ -469,6 +469,10 @@ export interface LeadListParams extends PaginationParams {
   search?: string
   sort_by?: string
   order?: 'asc' | 'desc'
+  // === DATE RANGE FILTER ===
+  date_from?: string  // ISO datetime
+  date_to?: string    // ISO datetime
+  date_field?: 'created_at' | 'updated_at'
 }
 
 /**

@@ -60,7 +60,8 @@ export function SocketHandler() {
       // When not authenticated, disconnect immediately (no delay needed)
       console.log("[SocketHandler] User not authenticated, disconnecting Socket.io...");
       socketService.disconnect();
-      setIsSocketConnected(false);
+      // Use queueMicrotask to avoid synchronous setState in effect
+      queueMicrotask(() => setIsSocketConnected(false));
       return undefined;
     }
   }, [isAuthenticated]); // Chạy lại khi `isAuthenticated` thay đổi

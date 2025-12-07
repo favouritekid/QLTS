@@ -164,8 +164,11 @@ export function useRecentPages(maxItems: number = MAX_RECENT_ITEMS): UseRecentPa
   // Load from localStorage AFTER mount (client-side only)
   useEffect(() => {
     const stored = loadRecentPages();
-    setRecentPages(stored);
-    setIsHydrated(true);
+    // Use queueMicrotask to avoid synchronous setState in effect
+    queueMicrotask(() => {
+      setRecentPages(stored);
+      setIsHydrated(true);
+    });
   }, []);
 
   // Track current page visit

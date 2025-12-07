@@ -72,6 +72,11 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
   const [scoreRange, setScoreRange] = useState<[number, number]>([0, 100]);
   const [offeringFilter, setOfferingFilter] = useState("all");
 
+  // === DATE RANGE FILTER ===
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [dateField, setDateField] = useState<"created_at" | "updated_at">("created_at");
+
   // Selection & Dialogs
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
   const [leadDialogOpen, setLeadDialogOpen] = useState(false);
@@ -96,12 +101,23 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
     if (sourceFilter !== "all") params.source = sourceFilter;
     if (offeringFilter !== "all") params.offering_id = parseInt(offeringFilter);
 
+    // === DATE RANGE FILTER ===
+    if (dateFrom) params.date_from = new Date(dateFrom).toISOString();
+    if (dateTo) {
+      // Set to end of day for inclusive filtering
+      const endDate = new Date(dateTo);
+      endDate.setHours(23, 59, 59, 999);
+      params.date_to = endDate.toISOString();
+    }
+    if (dateFrom || dateTo) params.date_field = dateField;
+
     return params;
-  }, [page, pageSize, search, statusFilters, sourceFilter, offeringFilter]);
+  }, [page, pageSize, search, statusFilters, sourceFilter, offeringFilter, dateFrom, dateTo, dateField]);
 
   // ✅ Fetch data with initialData from Server Component
+  // Only use initialData when no filters are applied (pure first load)
   const { data: leadsPage, isLoading, isError, error } = useLeads(apiFilters, {
-    initialData: page === 1 && !search && statusFilters.length === 0 ? initialData : undefined,
+    initialData: page === 1 && !search && statusFilters.length === 0 && offeringFilter === "all" && sourceFilter === "all" && !dateFrom && !dateTo ? initialData : undefined,
   });
 
   const deleteMutation = useDeleteLead();
@@ -121,7 +137,8 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
     if (selectedLeadId) {
       const leadStillExists = filteredLeads.some(lead => lead.id === selectedLeadId);
       if (!leadStillExists) {
-        setSelectedLeadId(null);
+        // Use queueMicrotask to avoid synchronous setState in effect
+        queueMicrotask(() => setSelectedLeadId(null));
       }
     }
   }, [filteredLeads, selectedLeadId]);
@@ -178,6 +195,10 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
     setSourceFilter("all");
     setScoreRange([0, 100]);
     setOfferingFilter("all");
+    // === DATE RANGE FILTER ===
+    setDateFrom("");
+    setDateTo("");
+    setDateField("created_at");
     setPage(1);
   }, []);
 
@@ -198,6 +219,22 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
 
   const handleOfferingChange = useCallback((offering: string) => {
     setOfferingFilter(offering);
+    setPage(1);
+  }, []);
+
+  // === DATE RANGE FILTER HANDLERS ===
+  const handleDateFromChange = useCallback((date: string) => {
+    setDateFrom(date);
+    setPage(1);
+  }, []);
+
+  const handleDateToChange = useCallback((date: string) => {
+    setDateTo(date);
+    setPage(1);
+  }, []);
+
+  const handleDateFieldChange = useCallback((field: "created_at" | "updated_at") => {
+    setDateField(field);
     setPage(1);
   }, []);
 
@@ -291,6 +328,13 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
               onScoreRangeChange={setScoreRange}
               offeringFilter={offeringFilter}
               onOfferingChange={handleOfferingChange}
+              // === DATE RANGE FILTER ===
+              dateFrom={dateFrom}
+              dateTo={dateTo}
+              dateField={dateField}
+              onDateFromChange={handleDateFromChange}
+              onDateToChange={handleDateToChange}
+              onDateFieldChange={handleDateFieldChange}
               onReset={resetFilters}
             />
           </div>
@@ -404,7 +448,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
           <AlertDialogHeader>
             <AlertDialogTitle>Xoá Lead</AlertDialogTitle>
             <AlertDialogDescription>
-              Bạn có chắc muốn xoá "{leadToDelete?.full_name}"?
+              Bạn có chắc muốn xoá &ldquo;{leadToDelete?.full_name}&rdquo;?
               Không thể hoàn tác thao tác này.
             </AlertDialogDescription>
           </AlertDialogHeader>

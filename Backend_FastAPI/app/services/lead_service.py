@@ -361,6 +361,10 @@ async def get_leads(
     search: Optional[str] = None,
     sort_by: str = "created_at",
     order: str = "desc",
+    # === DATE RANGE FILTER ===
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    date_field: str = "created_at",
 ) -> Tuple[int, List[models.Lead]]:
     """
     Lấy danh sách Leads (List View).
@@ -381,6 +385,10 @@ async def get_leads(
         search=search,
         sort_by=sort_by,
         order=order,
+        # === DATE RANGE FILTER ===
+        date_from=date_from,
+        date_to=date_to,
+        date_field=date_field,
     )
 
 

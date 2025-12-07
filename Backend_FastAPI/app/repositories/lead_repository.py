@@ -47,6 +47,10 @@ class LeadRepository(BaseRepository[models.Lead]):
         search: Optional[str] = None,
         sort_by: str = "created_at",
         order: str = "desc",
+        # === DATE RANGE FILTER ===
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        date_field: str = "created_at",
     ) -> Tuple[int, List[models.Lead]]:
         """
         Get filtered list of leads with pagination and eager loading.
@@ -109,6 +113,20 @@ class LeadRepository(BaseRepository[models.Lead]):
                 models.Lead.phone.ilike(search_term),
             )
             filters.append(search_conditions)
+
+        # === DATE RANGE FILTER ===
+        # Filter by date_from and/or date_to on specified date_field (created_at or updated_at)
+        if date_from or date_to:
+            # Validate date_field - only allow created_at or updated_at
+            if date_field not in ("created_at", "updated_at"):
+                date_field = "created_at"  # Default fallback
+            
+            date_column = getattr(models.Lead, date_field)
+            
+            if date_from:
+                filters.append(date_column >= date_from)
+            if date_to:
+                filters.append(date_column <= date_to)
 
         # Apply filters to both queries
         if filters:

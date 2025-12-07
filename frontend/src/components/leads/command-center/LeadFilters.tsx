@@ -2,7 +2,7 @@
 "use client";
 
 import React from "react";
-import { Search, X, RotateCcw } from "lucide-react";
+import { Search, X, RotateCcw, Calendar } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -36,6 +36,13 @@ interface LeadFiltersProps {
   onScoreRangeChange: (range: [number, number]) => void;
   offeringFilter: string;
   onOfferingChange: (offeringId: string) => void;
+  // === DATE RANGE FILTER ===
+  dateFrom: string;
+  dateTo: string;
+  dateField: "created_at" | "updated_at";
+  onDateFromChange: (date: string) => void;
+  onDateToChange: (date: string) => void;
+  onDateFieldChange: (field: "created_at" | "updated_at") => void;
   onReset: () => void;
 }
 
@@ -53,6 +60,13 @@ export const LeadFilters = React.memo(function LeadFilters({
   onScoreRangeChange,
   offeringFilter,
   onOfferingChange,
+  // === DATE RANGE FILTER ===
+  dateFrom,
+  dateTo,
+  dateField,
+  onDateFromChange,
+  onDateToChange,
+  onDateFieldChange,
   onReset,
 }: LeadFiltersProps) {
   const handleStatusToggle = (status: LeadStatus) => {
@@ -69,7 +83,9 @@ export const LeadFilters = React.memo(function LeadFilters({
     sourceFilter !== "all" ||
     scoreRange[0] > 0 ||
     scoreRange[1] < 100 ||
-    offeringFilter !== "all";
+    offeringFilter !== "all" ||
+    dateFrom ||
+    dateTo;
 
   return (
     <div className="h-full bg-card">
@@ -202,6 +218,58 @@ export const LeadFilters = React.memo(function LeadFilters({
                 allLabel="Tất cả chương trình"
                 variant="combobox"
               />
+            </AccordionContent>
+          </AccordionItem>
+
+          {/* Bộ lọc ngày tạo/cập nhật */}
+          <AccordionItem value="date" className="border rounded-lg px-3">
+            <AccordionTrigger className="text-sm font-medium py-3 hover:no-underline">
+              <div className="flex items-center gap-2">
+                <Calendar className="h-4 w-4" />
+                Khoảng thời gian
+              </div>
+              {(dateFrom || dateTo) && (
+                <span className="ml-auto mr-2 text-xs bg-primary text-primary-foreground px-1.5 py-0.5 rounded-full">
+                  1
+                </span>
+              )}
+            </AccordionTrigger>
+            <AccordionContent className="pb-3 space-y-3">
+              {/* Date field selector */}
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Lọc theo</Label>
+                <Select value={dateField} onValueChange={(val) => onDateFieldChange(val as "created_at" | "updated_at")}>
+                  <SelectTrigger className="w-full h-8 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="created_at">Ngày tạo</SelectItem>
+                    <SelectItem value="updated_at">Ngày cập nhật</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Date from */}
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Từ ngày</Label>
+                <Input
+                  type="date"
+                  value={dateFrom}
+                  onChange={(e) => onDateFromChange(e.target.value)}
+                  className="h-8 text-sm"
+                />
+              </div>
+
+              {/* Date to */}
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Đến ngày</Label>
+                <Input
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => onDateToChange(e.target.value)}
+                  className="h-8 text-sm"
+                />
+              </div>
             </AccordionContent>
           </AccordionItem>
         </Accordion>
