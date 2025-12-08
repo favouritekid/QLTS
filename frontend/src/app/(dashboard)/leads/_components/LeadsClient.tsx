@@ -11,9 +11,12 @@
  *
  * Server Component (parent) fetches initial data and passes it here.
  * React Query uses initialData for instant render, then revalidates.
+ *
+ * ✅ URL Search Params: Filters are synced with URL for sharing/bookmarking
  */
 
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { Plus, Download, Upload, Command } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -43,27 +46,147 @@ interface LeadsClientProps {
   initialData: LeadsPage;
 }
 
+// LocalStorage key for filter persistence
+const LEADS_FILTERS_STORAGE_KEY = "leads_filters_v1";
+
+// Filter state type for localStorage
+interface StoredFilters {
+  search: string;
+  statusFilters: LeadStatus[];
+  sourceFilter: string;
+  offeringFilter: string;
+  pipelineStageFilter: string;
+  officerFilter: string;
+  dateFrom: string;
+  dateTo: string;
+  dateField: "created_at" | "updated_at";
+}
+
+// Default filter values
+const DEFAULT_FILTERS: StoredFilters = {
+  search: "",
+  statusFilters: [],
+  sourceFilter: "all",
+  offeringFilter: "all",
+  pipelineStageFilter: "all",
+  officerFilter: "all",
+  dateFrom: "",
+  dateTo: "",
+  dateField: "created_at",
+};
+
+// Helper to save filters to localStorage
+function saveFiltersToStorage(filters: StoredFilters) {
+  try {
+    localStorage.setItem(LEADS_FILTERS_STORAGE_KEY, JSON.stringify(filters));
+  } catch {
+    // Ignore localStorage errors (e.g., quota exceeded, private browsing)
+  }
+}
+
+// Helper to load filters from localStorage
+function loadFiltersFromStorage(): StoredFilters | null {
+  try {
+    const stored = localStorage.getItem(LEADS_FILTERS_STORAGE_KEY);
+    if (stored) {
+      return JSON.parse(stored) as StoredFilters;
+    }
+  } catch {
+    // Ignore parse errors
+  }
+  return null;
+}
+
+// Helper to clear filters from localStorage
+function clearFiltersFromStorage() {
+  try {
+    localStorage.removeItem(LEADS_FILTERS_STORAGE_KEY);
+  } catch {
+    // Ignore
+  }
+}
+
+// Check if URL has any filter params
+function hasUrlFilterParams(searchParams: URLSearchParams): boolean {
+  return !!(
+    searchParams.get("q") ||
+    searchParams.get("status") ||
+    searchParams.get("source") ||
+    searchParams.get("offering") ||
+    searchParams.get("stage") ||
+    searchParams.get("officer") ||
+    searchParams.get("from") ||
+    searchParams.get("to")
+  );
+}
+
+// Helper to parse URL params
+function parseSearchParams(searchParams: URLSearchParams): StoredFilters & { page: number } {
+  return {
+    page: parseInt(searchParams.get("page") || "1"),
+    search: searchParams.get("q") || "",
+    statusFilters: searchParams.get("status")?.split(",").filter(Boolean) as LeadStatus[] || [],
+    sourceFilter: searchParams.get("source") || "all",
+    offeringFilter: searchParams.get("offering") || "all",
+    pipelineStageFilter: searchParams.get("stage") || "all",
+    officerFilter: searchParams.get("officer") || "all",
+    dateFrom: searchParams.get("from") || "",
+    dateTo: searchParams.get("to") || "",
+    dateField: (searchParams.get("date_field") || "created_at") as "created_at" | "updated_at",
+  };
+}
+
 export function LeadsClient({ initialData }: LeadsClientProps) {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const isInitialMount = useRef(true);
+
   // =====================================================================
-  // STATE MANAGEMENT
+  // STATE MANAGEMENT (initialized from URL, fallback to localStorage)
   // =====================================================================
 
+  // Determine initial values: URL params take priority, then localStorage
+  const initialValues = useMemo(() => {
+    // If URL has filter params, use them (for sharing/bookmarking)
+    if (hasUrlFilterParams(searchParams)) {
+      return parseSearchParams(searchParams);
+    }
+    
+    // Otherwise, try to restore from localStorage (for nav link back)
+    const storedFilters = loadFiltersFromStorage();
+    if (storedFilters) {
+      return {
+        page: 1, // Always start at page 1 when restoring from storage
+        ...storedFilters,
+      };
+    }
+    
+    // Default values
+    return {
+      page: 1,
+      ...DEFAULT_FILTERS,
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run once on mount
+
   // Pagination
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(initialValues.page);
   const [pageSize] = useState(50);
 
   // Filters
-  const [search, setSearch] = useState("");
-  const [statusFilters, setStatusFilters] = useState<LeadStatus[]>([]);
-  const [sourceFilter, setSourceFilter] = useState("all");
+  const [search, setSearch] = useState(initialValues.search);
+  const [statusFilters, setStatusFilters] = useState<LeadStatus[]>(initialValues.statusFilters);
+  const [sourceFilter, setSourceFilter] = useState(initialValues.sourceFilter);
   const [scoreRange, setScoreRange] = useState<[number, number]>([0, 100]);
-  const [offeringFilter, setOfferingFilter] = useState("all");
-  const [pipelineStageFilter, setPipelineStageFilter] = useState("all");
+  const [offeringFilter, setOfferingFilter] = useState(initialValues.offeringFilter);
+  const [pipelineStageFilter, setPipelineStageFilter] = useState(initialValues.pipelineStageFilter);
+  const [officerFilter, setOfficerFilter] = useState(initialValues.officerFilter);
 
   // === DATE RANGE FILTER ===
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-  const [dateField, setDateField] = useState<"created_at" | "updated_at">("created_at");
+  const [dateFrom, setDateFrom] = useState(initialValues.dateFrom);
+  const [dateTo, setDateTo] = useState(initialValues.dateTo);
+  const [dateField, setDateField] = useState<"created_at" | "updated_at">(initialValues.dateField);
 
   // Selection & Dialogs
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
@@ -72,6 +195,95 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);
   const [leadToDelete, setLeadToDelete] = useState<Lead | null>(null);
+
+  // =====================================================================
+  // URL SYNC - Update URL when filters change
+  // =====================================================================
+  useEffect(() => {
+    // Skip on initial mount to avoid unnecessary URL update
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+
+    const params = new URLSearchParams();
+
+    // Only add non-default values to URL
+    if (page > 1) params.set("page", page.toString());
+    if (search) params.set("q", search);
+    if (statusFilters.length > 0) params.set("status", statusFilters.join(","));
+    if (sourceFilter !== "all") params.set("source", sourceFilter);
+    if (offeringFilter !== "all") params.set("offering", offeringFilter);
+    if (pipelineStageFilter !== "all") params.set("stage", pipelineStageFilter);
+    if (officerFilter !== "all") params.set("officer", officerFilter);
+    if (dateFrom) params.set("from", dateFrom);
+    if (dateTo) params.set("to", dateTo);
+    if (dateField !== "created_at") params.set("date_field", dateField);
+
+    const queryString = params.toString();
+    const newUrl = queryString ? `${pathname}?${queryString}` : pathname;
+
+    // Use replace to avoid adding to browser history for every filter change
+    router.replace(newUrl, { scroll: false });
+  }, [
+    page,
+    search,
+    statusFilters,
+    sourceFilter,
+    offeringFilter,
+    pipelineStageFilter,
+    officerFilter,
+    dateFrom,
+    dateTo,
+    dateField,
+    pathname,
+    router,
+  ]);
+
+  // =====================================================================
+  // LOCALSTORAGE SYNC - Save filters for nav link restoration
+  // =====================================================================
+  useEffect(() => {
+    // Save current filters to localStorage (excluding page)
+    const filtersToSave: StoredFilters = {
+      search,
+      statusFilters,
+      sourceFilter,
+      offeringFilter,
+      pipelineStageFilter,
+      officerFilter,
+      dateFrom,
+      dateTo,
+      dateField,
+    };
+
+    // Only save if there are active filters
+    const hasActiveFilters =
+      search ||
+      statusFilters.length > 0 ||
+      sourceFilter !== "all" ||
+      offeringFilter !== "all" ||
+      pipelineStageFilter !== "all" ||
+      officerFilter !== "all" ||
+      dateFrom ||
+      dateTo;
+
+    if (hasActiveFilters) {
+      saveFiltersToStorage(filtersToSave);
+    } else {
+      clearFiltersFromStorage();
+    }
+  }, [
+    search,
+    statusFilters,
+    sourceFilter,
+    offeringFilter,
+    pipelineStageFilter,
+    officerFilter,
+    dateFrom,
+    dateTo,
+    dateField,
+  ]);
 
   // =====================================================================
   // API CALLS
@@ -89,6 +301,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
     if (sourceFilter !== "all") params.source = sourceFilter;
     if (offeringFilter !== "all") params.offering_id = parseInt(offeringFilter);
     if (pipelineStageFilter !== "all") params.pipeline_stage_id = pipelineStageFilter;
+    if (officerFilter !== "all") params.assigned_officer_id = parseInt(officerFilter);
 
     // === DATE RANGE FILTER ===
     if (dateFrom) params.date_from = new Date(dateFrom).toISOString();
@@ -109,6 +322,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
     sourceFilter,
     offeringFilter,
     pipelineStageFilter,
+    officerFilter,
     dateFrom,
     dateTo,
     dateField,
@@ -129,6 +343,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
       offeringFilter === "all" &&
       sourceFilter === "all" &&
       pipelineStageFilter === "all" &&
+      officerFilter === "all" &&
       !dateFrom &&
       !dateTo
         ? initialData
@@ -211,11 +426,14 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
     setScoreRange([0, 100]);
     setOfferingFilter("all");
     setPipelineStageFilter("all");
+    setOfficerFilter("all");
     // === DATE RANGE FILTER ===
     setDateFrom("");
     setDateTo("");
     setDateField("created_at");
     setPage(1);
+    // Clear localStorage as well
+    clearFiltersFromStorage();
   }, []);
 
   const handleSearchChange = useCallback((value: string) => {
@@ -240,6 +458,12 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
 
   const handlePipelineStageChange = useCallback((stageId: string) => {
     setPipelineStageFilter(stageId);
+    setPage(1);
+  }, []);
+
+  // === OFFICER FILTER HANDLER ===
+  const handleOfficerChange = useCallback((officerId: string) => {
+    setOfficerFilter(officerId);
     setPage(1);
   }, []);
 
@@ -349,6 +573,9 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
               // === PIPELINE STAGE FILTER ===
               pipelineStageFilter={pipelineStageFilter}
               onPipelineStageChange={handlePipelineStageChange}
+              // === OFFICER FILTER (admin/manager only) ===
+              officerFilter={officerFilter}
+              onOfficerChange={handleOfficerChange}
               // === DATE RANGE FILTER ===
               dateFrom={dateFrom}
               dateTo={dateTo}

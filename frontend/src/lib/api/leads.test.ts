@@ -182,7 +182,6 @@ describe("Leads API Client", () => {
       // Arrange
       const updateData: LeadUpdate = {
         full_name: 'Updated Name',
-        status: 'contacted',
       }
 
       server.use(

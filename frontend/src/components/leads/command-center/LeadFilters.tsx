@@ -25,6 +25,7 @@ import type { LeadStatus } from "@/types/lead.types";
 import { SmartOfferingSelector } from "@/components/common/selectors";
 import { LEAD_STATUS_OPTIONS, LEAD_SOURCE_OPTIONS } from "@/constants";
 import { usePipelineStages } from "@/hooks/usePipeline";
+import { useAdminUsersList } from "@/hooks/useAdminUsers";
 import { STAGE_COLORS } from "@/types/pipeline.types";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -42,6 +43,9 @@ interface LeadFiltersProps {
   // === PIPELINE STAGE FILTER ===
   pipelineStageFilter: string;
   onPipelineStageChange: (stageId: string) => void;
+  // === OFFICER FILTER (admin/manager only) ===
+  officerFilter: string;
+  onOfficerChange: (officerId: string) => void;
   // === DATE RANGE FILTER ===
   dateFrom: string;
   dateTo: string;
@@ -69,6 +73,9 @@ export const LeadFilters = React.memo(function LeadFilters({
   // === PIPELINE STAGE FILTER ===
   pipelineStageFilter,
   onPipelineStageChange,
+  // === OFFICER FILTER ===
+  officerFilter,
+  onOfficerChange,
   // === DATE RANGE FILTER ===
   dateFrom,
   dateTo,
@@ -81,7 +88,22 @@ export const LeadFilters = React.memo(function LeadFilters({
   // Fetch pipeline stages
   const { data: pipelineStages = [] } = usePipelineStages();
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
+
+  // Hydration-safe role checks - only render role-dependent UI after mount
+  const [isMounted, setIsMounted] = React.useState(false);
+  React.useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
+  // Role checks only work after hydration to prevent server/client mismatch
+  const isAdmin = isMounted && user?.role === "admin";
+  const isManager = isMounted && user?.role === "manager";
+  const canFilterByOfficer = isAdmin || isManager;
+
+  // Fetch officers list (always fetch, conditionally render UI)
+  // We fetch all active users and filter by role on the client
+  const { data: usersData } = useAdminUsersList({ page: 1, page_size: 100, status: "active" });
+  const officers = usersData?.users?.filter((u) => u.role === "officer" || u.role === "manager") || [];
 
   const handleStatusToggle = (status: LeadStatus) => {
     if (statusFilters.includes(status)) {
@@ -99,6 +121,7 @@ export const LeadFilters = React.memo(function LeadFilters({
     scoreRange[1] < 100 ||
     offeringFilter !== "all" ||
     pipelineStageFilter !== "all" ||
+    officerFilter !== "all" ||
     dateFrom ||
     dateTo;
 
@@ -265,6 +288,35 @@ export const LeadFilters = React.memo(function LeadFilters({
               />
             </AccordionContent>
           </AccordionItem>
+
+          {/* Bộ lọc cán bộ phụ trách - Chỉ cho Admin/Manager */}
+          {(isAdmin || isManager) && (
+            <AccordionItem value="officer" className="rounded-lg border px-3">
+              <AccordionTrigger className="py-3 text-sm font-medium hover:no-underline">
+                Cán bộ phụ trách
+                {officerFilter !== "all" && (
+                  <span className="bg-primary text-primary-foreground mr-2 ml-auto rounded-full px-1.5 py-0.5 text-xs">
+                    1
+                  </span>
+                )}
+              </AccordionTrigger>
+              <AccordionContent className="pb-3">
+                <Select value={officerFilter} onValueChange={onOfficerChange}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Tất cả cán bộ" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Tất cả cán bộ</SelectItem>
+                    {officers.map((officer) => (
+                      <SelectItem key={officer.id} value={officer.id.toString()}>
+                        {officer.full_name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </AccordionContent>
+            </AccordionItem>
+          )}
 
           {/* Bộ lọc ngày tạo/cập nhật */}
           <AccordionItem value="date" className="rounded-lg border px-3">

@@ -44,7 +44,7 @@ const methodOptions: { value: ConsultationMethod; label: string; icon: React.Ele
   { value: "phone", label: "Gọi điện", icon: Phone },
   { value: "email", label: "Email", icon: Mail },
   { value: "video_call", label: "Video", icon: Video },
-  { value: "online", label: "Online", icon: MessageSquare },
+  { value: "sms", label: "SMS", icon: MessageSquare },
   { value: "in_person", label: "Gặp mặt", icon: User },
 ];
 
