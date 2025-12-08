@@ -354,15 +354,15 @@ async def get_leads(
     skip: int = 0,
     limit: int = 10,
     status: Optional[str] = None,
-    assigned_officer_id: Optional[int] = None,
+    assigned_officer_id: Optional[str] = None,  # Now comma-separated string for multi-select
     unit_id: Optional[int] = None,
-    offering_id: Optional[int] = None,
+    offering_id: Optional[str] = None,  # Now comma-separated string for multi-select
     source: Optional[str] = None,
     search: Optional[str] = None,
     sort_by: str = "created_at",
     order: str = "desc",
     # === PIPELINE STAGE FILTER ===
-    pipeline_stage_id: Optional[str] = None,
+    pipeline_stage_id: Optional[str] = None,  # Already string, now comma-separated for multi
     # === DATE RANGE FILTER ===
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
@@ -372,6 +372,7 @@ async def get_leads(
     Lấy danh sách Leads (List View).
 
     ✅ PHASE 2 - WEEK 2: Refactored to use LeadRepository
+    ✅ Multi-select filters: status, source, offering_id, pipeline_stage_id, assigned_officer_id now accept comma-separated values
     """
     from app.repositories import LeadRepository
 

@@ -110,11 +110,13 @@ async def get_all_leads(
     status: Optional[str] = Query(
         None, description="Filter by status (comma-separated)"
     ),
-    assigned_officer_id: Optional[int] = Query(
-        None, description="Filter by assigned officer ID"
+    assigned_officer_id: Optional[str] = Query(
+        None, description="Filter by assigned officer ID(s) (comma-separated, e.g. '1,2,3')"
     ),
     unit_id: Optional[int] = Query(None, description="Filter by organization unit ID"),
-    offering_id: Optional[int] = Query(None, description="Filter by program offering ID"),
+    offering_id: Optional[str] = Query(
+        None, description="Filter by program offering ID(s) (comma-separated, e.g. '1,2,3')"
+    ),
     source: Optional[str] = Query(
         None, description="Filter by source (comma-separated)"
     ),
@@ -125,7 +127,7 @@ async def get_all_leads(
     order: str = Query("desc", description="Sort order (asc or desc)"),
     # === PIPELINE STAGE FILTER ===
     pipeline_stage_id: Optional[str] = Query(
-        None, description="Filter by pipeline stage ID"
+        None, description="Filter by pipeline stage ID(s) (comma-separated, e.g. 'stg01,stg02')"
     ),
     # === DATE RANGE FILTER ===
     date_from: Optional[datetime] = Query(
@@ -153,7 +155,7 @@ async def get_all_leads(
     effective_officer_id = assigned_officer_id
     if current_user.role == "officer":
         # Force filter by current officer, ignore any passed assigned_officer_id
-        effective_officer_id = current_user.id
+        effective_officer_id = str(current_user.id)
 
     total, leads = await lead_service.get_leads(
         db,
@@ -161,15 +163,15 @@ async def get_all_leads(
         limit=page_size,
         # === ⭐️ TRUYỀN THAM SỐ VÀO SERVICE ===
         status=status,
-        assigned_officer_id=effective_officer_id,
+        assigned_officer_id=effective_officer_id,  # Now a string (comma-separated for multi)
         unit_id=unit_id,
-        offering_id=offering_id,
+        offering_id=offering_id,  # Now a string (comma-separated for multi)
         source=source,
         search=search,
         sort_by=sort_by,
         order=order,
         # === PIPELINE STAGE FILTER ===
-        pipeline_stage_id=pipeline_stage_id,
+        pipeline_stage_id=pipeline_stage_id,  # Already string (comma-separated for multi)
         # === DATE RANGE FILTER ===
         date_from=date_from,
         date_to=date_to,

@@ -40,15 +40,15 @@ class LeadRepository(BaseRepository[models.Lead]):
         skip: int = 0,
         limit: int = 10,
         status: Optional[str] = None,
-        assigned_officer_id: Optional[int] = None,
+        assigned_officer_id: Optional[str] = None,  # Comma-separated IDs for multi-select
         unit_id: Optional[int] = None,
-        offering_id: Optional[int] = None,
+        offering_id: Optional[str] = None,  # Comma-separated IDs for multi-select
         source: Optional[str] = None,
         search: Optional[str] = None,
         sort_by: str = "created_at",
         order: str = "desc",
         # === PIPELINE STAGE FILTER ===
-        pipeline_stage_id: Optional[str] = None,
+        pipeline_stage_id: Optional[str] = None,  # Comma-separated IDs for multi-select
         # === DATE RANGE FILTER ===
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
@@ -62,17 +62,21 @@ class LeadRepository(BaseRepository[models.Lead]):
         - Today's activities appear second
         - Future/no activities appear last
 
+        Multi-select filters:
+        - status, source, offering_id, pipeline_stage_id, assigned_officer_id accept comma-separated values
+
         Args:
             skip: Number of records to skip
             limit: Maximum number of records to return
             status: Comma-separated status filter
-            assigned_officer_id: Filter by assigned officer
+            assigned_officer_id: Comma-separated officer IDs (e.g. "1,2,3")
             unit_id: Filter by organization unit
-            offering_id: Filter by program offering
+            offering_id: Comma-separated offering IDs (e.g. "1,2,3")
             source: Comma-separated source filter
             search: Search term for name/email/phone
             sort_by: Column to sort by (default: created_at)
             order: Sort order (asc/desc)
+            pipeline_stage_id: Comma-separated stage IDs (e.g. "stg01,stg02")
 
         Returns:
             Tuple of (total_count, lead_list)
@@ -92,14 +96,26 @@ class LeadRepository(BaseRepository[models.Lead]):
             if statuses:
                 filters.append(models.Lead.status.in_(statuses))
 
-        if assigned_officer_id is not None:
-            filters.append(models.Lead.assigned_officer_id == assigned_officer_id)
+        # Multi-select: assigned_officer_id
+        if assigned_officer_id:
+            officer_ids = [int(s.strip()) for s in assigned_officer_id.split(",") if s.strip().isdigit()]
+            if officer_ids:
+                if len(officer_ids) == 1:
+                    filters.append(models.Lead.assigned_officer_id == officer_ids[0])
+                else:
+                    filters.append(models.Lead.assigned_officer_id.in_(officer_ids))
 
         if unit_id is not None:
             filters.append(models.Lead.unit_id == unit_id)
 
-        if offering_id is not None:
-            filters.append(models.Lead.offering_id == offering_id)
+        # Multi-select: offering_id
+        if offering_id:
+            offer_ids = [int(s.strip()) for s in offering_id.split(",") if s.strip().isdigit()]
+            if offer_ids:
+                if len(offer_ids) == 1:
+                    filters.append(models.Lead.offering_id == offer_ids[0])
+                else:
+                    filters.append(models.Lead.offering_id.in_(offer_ids))
 
         if source:
             sources = [s.strip() for s in source.split(",") if s.strip()]
@@ -116,9 +132,14 @@ class LeadRepository(BaseRepository[models.Lead]):
             )
             filters.append(search_conditions)
 
-        # === PIPELINE STAGE FILTER ===
+        # Multi-select: pipeline_stage_id
         if pipeline_stage_id:
-            filters.append(models.Lead.pipeline_stage_id == pipeline_stage_id)
+            stage_ids = [s.strip() for s in pipeline_stage_id.split(",") if s.strip()]
+            if stage_ids:
+                if len(stage_ids) == 1:
+                    filters.append(models.Lead.pipeline_stage_id == stage_ids[0])
+                else:
+                    filters.append(models.Lead.pipeline_stage_id.in_(stage_ids))
 
         # === DATE RANGE FILTER ===
         # Filter by date_from and/or date_to on specified date_field (created_at or updated_at)

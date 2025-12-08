@@ -47,16 +47,16 @@ interface LeadsClientProps {
 }
 
 // LocalStorage key for filter persistence
-const LEADS_FILTERS_STORAGE_KEY = "leads_filters_v1";
+const LEADS_FILTERS_STORAGE_KEY = "leads_filters_v2"; // Bumped version for new structure
 
-// Filter state type for localStorage
+// Filter state type for localStorage - now with multi-select arrays
 interface StoredFilters {
   search: string;
   statusFilters: LeadStatus[];
-  sourceFilter: string;
-  offeringFilter: string;
-  pipelineStageFilter: string;
-  officerFilter: string;
+  sourceFilters: string[];      // Multi-select
+  offeringFilters: string[];    // Multi-select
+  stageFilters: string[];       // Multi-select
+  officerFilters: string[];     // Multi-select
   dateFrom: string;
   dateTo: string;
   dateField: "created_at" | "updated_at";
@@ -66,10 +66,10 @@ interface StoredFilters {
 const DEFAULT_FILTERS: StoredFilters = {
   search: "",
   statusFilters: [],
-  sourceFilter: "all",
-  offeringFilter: "all",
-  pipelineStageFilter: "all",
-  officerFilter: "all",
+  sourceFilters: [],
+  offeringFilters: [],
+  stageFilters: [],
+  officerFilters: [],
   dateFrom: "",
   dateTo: "",
   dateField: "created_at",
@@ -120,16 +120,16 @@ function hasUrlFilterParams(searchParams: URLSearchParams): boolean {
   );
 }
 
-// Helper to parse URL params
+// Helper to parse URL params - now returns arrays for multi-select
 function parseSearchParams(searchParams: URLSearchParams): StoredFilters & { page: number } {
   return {
     page: parseInt(searchParams.get("page") || "1"),
     search: searchParams.get("q") || "",
     statusFilters: searchParams.get("status")?.split(",").filter(Boolean) as LeadStatus[] || [],
-    sourceFilter: searchParams.get("source") || "all",
-    offeringFilter: searchParams.get("offering") || "all",
-    pipelineStageFilter: searchParams.get("stage") || "all",
-    officerFilter: searchParams.get("officer") || "all",
+    sourceFilters: searchParams.get("source")?.split(",").filter(Boolean) || [],
+    offeringFilters: searchParams.get("offering")?.split(",").filter(Boolean) || [],
+    stageFilters: searchParams.get("stage")?.split(",").filter(Boolean) || [],
+    officerFilters: searchParams.get("officer")?.split(",").filter(Boolean) || [],
     dateFrom: searchParams.get("from") || "",
     dateTo: searchParams.get("to") || "",
     dateField: (searchParams.get("date_field") || "created_at") as "created_at" | "updated_at",
@@ -174,14 +174,14 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
   const [page, setPage] = useState(initialValues.page);
   const [pageSize] = useState(50);
 
-  // Filters
+  // Filters - multi-select arrays for source, offering, stage, officer
   const [search, setSearch] = useState(initialValues.search);
   const [statusFilters, setStatusFilters] = useState<LeadStatus[]>(initialValues.statusFilters);
-  const [sourceFilter, setSourceFilter] = useState(initialValues.sourceFilter);
+  const [sourceFilters, setSourceFilters] = useState<string[]>(initialValues.sourceFilters);
   const [scoreRange, setScoreRange] = useState<[number, number]>([0, 100]);
-  const [offeringFilter, setOfferingFilter] = useState(initialValues.offeringFilter);
-  const [pipelineStageFilter, setPipelineStageFilter] = useState(initialValues.pipelineStageFilter);
-  const [officerFilter, setOfficerFilter] = useState(initialValues.officerFilter);
+  const [offeringFilters, setOfferingFilters] = useState<string[]>(initialValues.offeringFilters);
+  const [stageFilters, setStageFilters] = useState<string[]>(initialValues.stageFilters);
+  const [officerFilters, setOfficerFilters] = useState<string[]>(initialValues.officerFilters);
 
   // === DATE RANGE FILTER ===
   const [dateFrom, setDateFrom] = useState(initialValues.dateFrom);
@@ -212,10 +212,10 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
     if (page > 1) params.set("page", page.toString());
     if (search) params.set("q", search);
     if (statusFilters.length > 0) params.set("status", statusFilters.join(","));
-    if (sourceFilter !== "all") params.set("source", sourceFilter);
-    if (offeringFilter !== "all") params.set("offering", offeringFilter);
-    if (pipelineStageFilter !== "all") params.set("stage", pipelineStageFilter);
-    if (officerFilter !== "all") params.set("officer", officerFilter);
+    if (sourceFilters.length > 0) params.set("source", sourceFilters.join(","));
+    if (offeringFilters.length > 0) params.set("offering", offeringFilters.join(","));
+    if (stageFilters.length > 0) params.set("stage", stageFilters.join(","));
+    if (officerFilters.length > 0) params.set("officer", officerFilters.join(","));
     if (dateFrom) params.set("from", dateFrom);
     if (dateTo) params.set("to", dateTo);
     if (dateField !== "created_at") params.set("date_field", dateField);
@@ -229,10 +229,10 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
     page,
     search,
     statusFilters,
-    sourceFilter,
-    offeringFilter,
-    pipelineStageFilter,
-    officerFilter,
+    sourceFilters,
+    offeringFilters,
+    stageFilters,
+    officerFilters,
     dateFrom,
     dateTo,
     dateField,
@@ -248,10 +248,10 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
     const filtersToSave: StoredFilters = {
       search,
       statusFilters,
-      sourceFilter,
-      offeringFilter,
-      pipelineStageFilter,
-      officerFilter,
+      sourceFilters,
+      offeringFilters,
+      stageFilters,
+      officerFilters,
       dateFrom,
       dateTo,
       dateField,
@@ -261,10 +261,10 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
     const hasActiveFilters =
       search ||
       statusFilters.length > 0 ||
-      sourceFilter !== "all" ||
-      offeringFilter !== "all" ||
-      pipelineStageFilter !== "all" ||
-      officerFilter !== "all" ||
+      sourceFilters.length > 0 ||
+      offeringFilters.length > 0 ||
+      stageFilters.length > 0 ||
+      officerFilters.length > 0 ||
       dateFrom ||
       dateTo;
 
@@ -276,10 +276,10 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
   }, [
     search,
     statusFilters,
-    sourceFilter,
-    offeringFilter,
-    pipelineStageFilter,
-    officerFilter,
+    sourceFilters,
+    offeringFilters,
+    stageFilters,
+    officerFilters,
     dateFrom,
     dateTo,
     dateField,
@@ -289,7 +289,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
   // API CALLS
   // =====================================================================
 
-  // Build filters for API
+  // Build filters for API - now sends comma-separated values for multi-select
   const apiFilters = useMemo(() => {
     const params: Record<string, unknown> = {
       page,
@@ -298,10 +298,10 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
 
     if (search) params.search = search;
     if (statusFilters.length > 0) params.status = statusFilters.join(",");
-    if (sourceFilter !== "all") params.source = sourceFilter;
-    if (offeringFilter !== "all") params.offering_id = parseInt(offeringFilter);
-    if (pipelineStageFilter !== "all") params.pipeline_stage_id = pipelineStageFilter;
-    if (officerFilter !== "all") params.assigned_officer_id = parseInt(officerFilter);
+    if (sourceFilters.length > 0) params.source = sourceFilters.join(",");
+    if (offeringFilters.length > 0) params.offering_id = offeringFilters.join(",");
+    if (stageFilters.length > 0) params.pipeline_stage_id = stageFilters.join(",");
+    if (officerFilters.length > 0) params.assigned_officer_id = officerFilters.join(",");
 
     // === DATE RANGE FILTER ===
     if (dateFrom) params.date_from = new Date(dateFrom).toISOString();
@@ -319,10 +319,10 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
     pageSize,
     search,
     statusFilters,
-    sourceFilter,
-    offeringFilter,
-    pipelineStageFilter,
-    officerFilter,
+    sourceFilters,
+    offeringFilters,
+    stageFilters,
+    officerFilters,
     dateFrom,
     dateTo,
     dateField,
@@ -340,10 +340,10 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
       page === 1 &&
       !search &&
       statusFilters.length === 0 &&
-      offeringFilter === "all" &&
-      sourceFilter === "all" &&
-      pipelineStageFilter === "all" &&
-      officerFilter === "all" &&
+      offeringFilters.length === 0 &&
+      sourceFilters.length === 0 &&
+      stageFilters.length === 0 &&
+      officerFilters.length === 0 &&
       !dateFrom &&
       !dateTo
         ? initialData
@@ -422,11 +422,11 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
   const resetFilters = useCallback(() => {
     setSearch("");
     setStatusFilters([]);
-    setSourceFilter("all");
+    setSourceFilters([]);
     setScoreRange([0, 100]);
-    setOfferingFilter("all");
-    setPipelineStageFilter("all");
-    setOfficerFilter("all");
+    setOfferingFilters([]);
+    setStageFilters([]);
+    setOfficerFilters([]);
     // === DATE RANGE FILTER ===
     setDateFrom("");
     setDateTo("");
@@ -446,24 +446,24 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
     setPage(1);
   }, []);
 
-  const handleSourceChange = useCallback((source: string) => {
-    setSourceFilter(source);
+  // Multi-select handlers - now accept arrays
+  const handleSourceChange = useCallback((sources: string[]) => {
+    setSourceFilters(sources);
     setPage(1);
   }, []);
 
-  const handleOfferingChange = useCallback((offering: string) => {
-    setOfferingFilter(offering);
+  const handleOfferingChange = useCallback((offerings: string[]) => {
+    setOfferingFilters(offerings);
     setPage(1);
   }, []);
 
-  const handlePipelineStageChange = useCallback((stageId: string) => {
-    setPipelineStageFilter(stageId);
+  const handleStageChange = useCallback((stages: string[]) => {
+    setStageFilters(stages);
     setPage(1);
   }, []);
 
-  // === OFFICER FILTER HANDLER ===
-  const handleOfficerChange = useCallback((officerId: string) => {
-    setOfficerFilter(officerId);
+  const handleOfficerChange = useCallback((officers: string[]) => {
+    setOfficerFilters(officers);
     setPage(1);
   }, []);
 
@@ -564,17 +564,17 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
               onSearchChange={handleSearchChange}
               statusFilters={statusFilters}
               onStatusChange={handleStatusChange}
-              sourceFilter={sourceFilter}
+              // Multi-select filters
+              sourceFilters={sourceFilters}
               onSourceChange={handleSourceChange}
               scoreRange={scoreRange}
               onScoreRangeChange={setScoreRange}
-              offeringFilter={offeringFilter}
+              offeringFilters={offeringFilters}
               onOfferingChange={handleOfferingChange}
-              // === PIPELINE STAGE FILTER ===
-              pipelineStageFilter={pipelineStageFilter}
-              onPipelineStageChange={handlePipelineStageChange}
+              stageFilters={stageFilters}
+              onStageChange={handleStageChange}
               // === OFFICER FILTER (admin/manager only) ===
-              officerFilter={officerFilter}
+              officerFilters={officerFilters}
               onOfficerChange={handleOfficerChange}
               // === DATE RANGE FILTER ===
               dateFrom={dateFrom}

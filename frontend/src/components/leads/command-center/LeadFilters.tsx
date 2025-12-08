@@ -34,18 +34,18 @@ interface LeadFiltersProps {
   onSearchChange: (value: string) => void;
   statusFilters: LeadStatus[];
   onStatusChange: (statuses: LeadStatus[]) => void;
-  sourceFilter: string;
-  onSourceChange: (source: string) => void;
+  // Multi-select arrays
+  sourceFilters: string[];
+  onSourceChange: (sources: string[]) => void;
   scoreRange: [number, number];
   onScoreRangeChange: (range: [number, number]) => void;
-  offeringFilter: string;
-  onOfferingChange: (offeringId: string) => void;
-  // === PIPELINE STAGE FILTER ===
-  pipelineStageFilter: string;
-  onPipelineStageChange: (stageId: string) => void;
+  offeringFilters: string[];
+  onOfferingChange: (offeringIds: string[]) => void;
+  stageFilters: string[];
+  onStageChange: (stageIds: string[]) => void;
   // === OFFICER FILTER (admin/manager only) ===
-  officerFilter: string;
-  onOfficerChange: (officerId: string) => void;
+  officerFilters: string[];
+  onOfficerChange: (officerIds: string[]) => void;
   // === DATE RANGE FILTER ===
   dateFrom: string;
   dateTo: string;
@@ -64,17 +64,17 @@ export const LeadFilters = React.memo(function LeadFilters({
   onSearchChange,
   statusFilters,
   onStatusChange,
-  sourceFilter,
+  // Multi-select
+  sourceFilters,
   onSourceChange,
   scoreRange,
   onScoreRangeChange,
-  offeringFilter,
+  offeringFilters,
   onOfferingChange,
-  // === PIPELINE STAGE FILTER ===
-  pipelineStageFilter,
-  onPipelineStageChange,
+  stageFilters,
+  onStageChange,
   // === OFFICER FILTER ===
-  officerFilter,
+  officerFilters,
   onOfficerChange,
   // === DATE RANGE FILTER ===
   dateFrom,
@@ -113,15 +113,40 @@ export const LeadFilters = React.memo(function LeadFilters({
     }
   };
 
+  // Multi-select toggle helpers
+  const handleSourceToggle = (source: string) => {
+    if (sourceFilters.includes(source)) {
+      onSourceChange(sourceFilters.filter((s) => s !== source));
+    } else {
+      onSourceChange([...sourceFilters, source]);
+    }
+  };
+
+  const handleStageToggle = (stageId: string) => {
+    if (stageFilters.includes(stageId)) {
+      onStageChange(stageFilters.filter((s) => s !== stageId));
+    } else {
+      onStageChange([...stageFilters, stageId]);
+    }
+  };
+
+  const handleOfficerToggle = (officerId: string) => {
+    if (officerFilters.includes(officerId)) {
+      onOfficerChange(officerFilters.filter((o) => o !== officerId));
+    } else {
+      onOfficerChange([...officerFilters, officerId]);
+    }
+  };
+
   const hasActiveFilters =
     search ||
     statusFilters.length > 0 ||
-    sourceFilter !== "all" ||
+    sourceFilters.length > 0 ||
     scoreRange[0] > 0 ||
     scoreRange[1] < 100 ||
-    offeringFilter !== "all" ||
-    pipelineStageFilter !== "all" ||
-    officerFilter !== "all" ||
+    offeringFilters.length > 0 ||
+    stageFilters.length > 0 ||
+    officerFilters.length > 0 ||
     dateFrom ||
     dateTo;
 
@@ -194,58 +219,69 @@ export const LeadFilters = React.memo(function LeadFilters({
             </AccordionItem>
           )}
 
-          {/* Bộ lọc Pipeline Stage */}
+          {/* Bộ lọc Pipeline Stage - Multi-select */}
           <AccordionItem value="pipeline_stage" className="rounded-lg border px-3">
             <AccordionTrigger className="py-3 text-sm font-medium hover:no-underline">
               Giai đoạn Pipeline
-              {pipelineStageFilter !== "all" && (
+              {stageFilters.length > 0 && (
                 <span className="bg-primary text-primary-foreground mr-2 ml-auto rounded-full px-1.5 py-0.5 text-xs">
-                  1
+                  {stageFilters.length}
                 </span>
               )}
             </AccordionTrigger>
             <AccordionContent className="pb-3">
-              <Select value={pipelineStageFilter} onValueChange={onPipelineStageChange}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Tất cả giai đoạn" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Tất cả giai đoạn</SelectItem>
-                  {pipelineStages.map((stage) => (
-                    <SelectItem key={stage.id} value={stage.id}>
-                      <div className="flex items-center gap-2">
-                        <span
-                          className="h-2.5 w-2.5 rounded-full"
-                          style={{ backgroundColor: STAGE_COLORS[stage.id] || "#6B7280" }}
-                        />
-                        {stage.name}
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="space-y-2">
+                {pipelineStages.map((stage) => (
+                  <div key={stage.id} className="flex items-center space-x-2">
+                    <Checkbox
+                      id={`stage-${stage.id}`}
+                      checked={stageFilters.includes(stage.id)}
+                      onCheckedChange={() => handleStageToggle(stage.id)}
+                    />
+                    <Label
+                      htmlFor={`stage-${stage.id}`}
+                      className="flex cursor-pointer items-center gap-2 text-sm font-normal"
+                    >
+                      <span
+                        className="h-2.5 w-2.5 rounded-full"
+                        style={{ backgroundColor: STAGE_COLORS[stage.id] || "#6B7280" }}
+                      />
+                      {stage.name}
+                    </Label>
+                  </div>
+                ))}
+              </div>
             </AccordionContent>
           </AccordionItem>
 
-          {/* Bộ lọc nguồn */}
+          {/* Bộ lọc nguồn - Multi-select */}
           <AccordionItem value="source" className="rounded-lg border px-3">
             <AccordionTrigger className="py-3 text-sm font-medium hover:no-underline">
               Nguồn
+              {sourceFilters.length > 0 && (
+                <span className="bg-primary text-primary-foreground mr-2 ml-auto rounded-full px-1.5 py-0.5 text-xs">
+                  {sourceFilters.length}
+                </span>
+              )}
             </AccordionTrigger>
             <AccordionContent className="pb-3">
-              <Select value={sourceFilter} onValueChange={onSourceChange}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Tất cả nguồn" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Tất cả nguồn</SelectItem>
-                  {LEAD_SOURCE_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
+              <div className="space-y-2">
+                {LEAD_SOURCE_OPTIONS.map((option) => (
+                  <div key={option.value} className="flex items-center space-x-2">
+                    <Checkbox
+                      id={`source-${option.value}`}
+                      checked={sourceFilters.includes(option.value)}
+                      onCheckedChange={() => handleSourceToggle(option.value)}
+                    />
+                    <Label
+                      htmlFor={`source-${option.value}`}
+                      className="cursor-pointer text-sm font-normal"
+                    >
                       {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                    </Label>
+                  </div>
+                ))}
+              </div>
             </AccordionContent>
           </AccordionItem>
 
@@ -272,48 +308,58 @@ export const LeadFilters = React.memo(function LeadFilters({
             </AccordionContent>
           </AccordionItem>
 
-          {/* Bộ lọc chương trình */}
+          {/* Bộ lọc chương trình - Multi-select (still uses SmartOfferingSelector for now, will need separate update) */}
           <AccordionItem value="offering" className="rounded-lg border px-3">
             <AccordionTrigger className="py-3 text-sm font-medium hover:no-underline">
               Chương trình
+              {offeringFilters.length > 0 && (
+                <span className="bg-primary text-primary-foreground mr-2 ml-auto rounded-full px-1.5 py-0.5 text-xs">
+                  {offeringFilters.length}
+                </span>
+              )}
             </AccordionTrigger>
             <AccordionContent className="pb-3">
               <SmartOfferingSelector
-                value={offeringFilter === "all" ? undefined : offeringFilter}
-                onChange={(val) => onOfferingChange(val || "all")}
+                value={offeringFilters.length === 1 ? offeringFilters[0] : undefined}
+                onChange={(val) => onOfferingChange(val ? [val] : [])}
                 placeholder="Chọn chương trình..."
                 allowAll
                 allLabel="Tất cả chương trình"
                 variant="combobox"
               />
+              {/* TODO: Implement proper multi-select for offerings */}
             </AccordionContent>
           </AccordionItem>
 
-          {/* Bộ lọc cán bộ phụ trách - Chỉ cho Admin/Manager */}
+          {/* Bộ lọc cán bộ phụ trách - Multi-select, chỉ cho Admin/Manager */}
           {(isAdmin || isManager) && (
             <AccordionItem value="officer" className="rounded-lg border px-3">
               <AccordionTrigger className="py-3 text-sm font-medium hover:no-underline">
                 Cán bộ phụ trách
-                {officerFilter !== "all" && (
+                {officerFilters.length > 0 && (
                   <span className="bg-primary text-primary-foreground mr-2 ml-auto rounded-full px-1.5 py-0.5 text-xs">
-                    1
+                    {officerFilters.length}
                   </span>
                 )}
               </AccordionTrigger>
               <AccordionContent className="pb-3">
-                <Select value={officerFilter} onValueChange={onOfficerChange}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Tất cả cán bộ" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Tất cả cán bộ</SelectItem>
-                    {officers.map((officer) => (
-                      <SelectItem key={officer.id} value={officer.id.toString()}>
+                <div className="max-h-48 space-y-2 overflow-y-auto">
+                  {officers.map((officer) => (
+                    <div key={officer.id} className="flex items-center space-x-2">
+                      <Checkbox
+                        id={`officer-${officer.id}`}
+                        checked={officerFilters.includes(officer.id.toString())}
+                        onCheckedChange={() => handleOfficerToggle(officer.id.toString())}
+                      />
+                      <Label
+                        htmlFor={`officer-${officer.id}`}
+                        className="cursor-pointer text-sm font-normal"
+                      >
                         {officer.full_name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                      </Label>
+                    </div>
+                  ))}
+                </div>
               </AccordionContent>
             </AccordionItem>
           )}
