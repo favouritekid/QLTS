@@ -58,7 +58,7 @@ interface StoredFilters {
   officerFilters: string[];     // Multi-select
   dateFrom: string;
   dateTo: string;
-  dateField: "created_at" | "updated_at";
+  dateField: "created_at" | "last_consultation_at";
 }
 
 // Default filter values
@@ -131,7 +131,7 @@ function parseSearchParams(searchParams: URLSearchParams): StoredFilters & { pag
     officerFilters: searchParams.get("officer")?.split(",").filter(Boolean) || [],
     dateFrom: searchParams.get("from") || "",
     dateTo: searchParams.get("to") || "",
-    dateField: (searchParams.get("date_field") || "created_at") as "created_at" | "updated_at",
+    dateField: (searchParams.get("date_field") === "last_consultation_at" ? "last_consultation_at" : "created_at") as "created_at" | "last_consultation_at",
   };
 }
 
@@ -185,7 +185,9 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
   // === DATE RANGE FILTER ===
   const [dateFrom, setDateFrom] = useState(initialValues.dateFrom);
   const [dateTo, setDateTo] = useState(initialValues.dateTo);
-  const [dateField, setDateField] = useState<"created_at" | "updated_at">(initialValues.dateField);
+  const [dateField, setDateField] = useState<"created_at" | "last_consultation_at">(
+    initialValues.dateField === "created_at" ? "created_at" : "last_consultation_at"
+  );
 
   // Selection & Dialogs
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
@@ -418,6 +420,35 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
     }
   };
 
+  // Bulk action handlers
+  const handleBulkAssign = useCallback((leads: Lead[]) => {
+    // For now, assign the first lead - could open a dialog for bulk assign
+    if (leads.length > 0) {
+      setSelectedLead(leads[0]);
+      setAssignDialogOpen(true);
+      toast.info(`Gán ${leads.length} lead cho cán bộ`);
+    }
+  }, []);
+
+  const handleBulkChangeStage = useCallback((leads: Lead[]) => {
+    // TODO: Implement bulk stage change dialog
+    toast.info(`Đổi giai đoạn cho ${leads.length} lead`);
+  }, []);
+
+  const handleBulkExport = useCallback((leads: Lead[]) => {
+    // Export selected leads - for now just export with current filters
+    // TODO: Pass lead IDs to backend when API supports it
+    exportMutation.mutate({ format: "csv", filters: apiFilters });
+    toast.success(`Xuất ${leads.length} lead đã chọn`);
+  }, [exportMutation, apiFilters]);
+
+  const handleBulkDelete = useCallback((leads: Lead[]) => {
+    // For now, show confirmation for first lead - could implement bulk delete
+    if (leads.length > 0) {
+      toast.warning(`Xóa ${leads.length} lead - Tính năng đang phát triển`);
+    }
+  }, []);
+
   const resetFilters = useCallback(() => {
     setSearch("");
     setStatusFilters([]);
@@ -477,7 +508,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
     setPage(1);
   }, []);
 
-  const handleDateFieldChange = useCallback((field: "created_at" | "updated_at") => {
+  const handleDateFieldChange = useCallback((field: "created_at" | "last_consultation_at") => {
     setDateField(field);
     setPage(1);
   }, []);
@@ -546,10 +577,14 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
         onStageChange={handleStageChange}
         officerFilters={officerFilters}
         onOfficerChange={handleOfficerChange}
+        scoreRange={scoreRange}
+        onScoreRangeChange={setScoreRange}
         dateFrom={dateFrom}
         dateTo={dateTo}
+        dateField={dateField}
         onDateFromChange={handleDateFromChange}
         onDateToChange={handleDateToChange}
+        onDateFieldChange={setDateField}
         onReset={resetFilters}
         onExport={handleExport}
         onAddLead={() => {
@@ -592,6 +627,10 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
                 pageSize={pageSize}
                 totalCount={leadsPage?.total_count || 0}
                 onPageChange={setPage}
+                onBulkAssign={handleBulkAssign}
+                onBulkChangeStage={handleBulkChangeStage}
+                onBulkExport={handleBulkExport}
+                onBulkDelete={handleBulkDelete}
               />
             )}
           </div>

@@ -6,3 +6,5 @@ export { LeadsTable } from "./LeadsTable";
 export { LeadListItem } from "./LeadListItem";
 export { LeadDetailSheet } from "./LeadDetailSheet";
 export { LeadDetailPanel } from "./LeadDetailPanel";
+export { BulkActionsBar } from "./BulkActionsBar";
+export { TableToolbar } from "./TableToolbar";

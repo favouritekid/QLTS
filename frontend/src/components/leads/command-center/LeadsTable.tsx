@@ -1,18 +1,20 @@
 // src/components/leads/command-center/LeadsTable.tsx
 /**
- * LeadsTable - Data table for leads with sorting, selection, and animations
+ * LeadsTable - Advanced data table for leads
  * 
  * Features:
  * - @tanstack/react-table for state management
  * - Row selection with keyboard navigation
- * - Sortable columns
- * - Smooth hover/select animations
+ * - Sortable columns with column resize
+ * - Compact/Normal view modes
+ * - Column visibility toggle
  * - Footer with pagination
+ * - Keyboard shortcuts
  */
 
 "use client";
 
-import React, { useMemo, useCallback } from "react";
+import React, { useMemo, useCallback, useEffect, useRef } from "react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -21,6 +23,8 @@ import {
   createColumnHelper,
   type SortingState,
   type RowSelectionState,
+  type ColumnResizeMode,
+  type VisibilityState,
 } from "@tanstack/react-table";
 import { format } from "date-fns";
 import { vi } from "date-fns/locale";
@@ -31,6 +35,7 @@ import {
   MoreHorizontal,
   ChevronLeft,
   ChevronRight,
+  GripVertical,
 } from "lucide-react";
 import {
   Table,
@@ -39,7 +44,6 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-  TableFooter,
 } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
@@ -55,6 +59,8 @@ import { cn } from "@/lib/utils";
 import type { Lead } from "@/types/lead.types";
 import { LEAD_SOURCE_OPTIONS } from "@/constants";
 import { STAGE_COLORS } from "@/types/pipeline.types";
+import { TableToolbar } from "./TableToolbar";
+import { BulkActionsBar } from "./BulkActionsBar";
 
 // =============================================================================
 // TYPES
@@ -72,15 +78,24 @@ interface LeadsTableProps {
   pageSize?: number;
   totalCount?: number;
   onPageChange?: (page: number) => void;
+  // Bulk action handlers
+  onBulkAssign?: (leads: Lead[]) => void;
+  onBulkChangeStage?: (leads: Lead[]) => void;
+  onBulkExport?: (leads: Lead[]) => void;
+  onBulkDelete?: (leads: Lead[]) => void;
+  // Search focus
+  onSearchFocus?: () => void;
 }
 
 // =============================================================================
-// COLUMN HELPER
+// CONSTANTS
 // =============================================================================
+
+const COLUMN_VISIBILITY_STORAGE_KEY = "leads_table_columns";
+const COMPACT_MODE_STORAGE_KEY = "leads_table_compact";
 
 const columnHelper = createColumnHelper<Lead>();
 
-// Get source label
 const getSourceLabel = (value: string) =>
   LEAD_SOURCE_OPTIONS.find((o) => o.value === value)?.label || value;
 
@@ -99,11 +114,45 @@ export function LeadsTable({
   pageSize = 50,
   totalCount = 0,
   onPageChange,
+  onBulkAssign,
+  onBulkChangeStage,
+  onBulkExport,
+  onBulkDelete,
+  onSearchFocus,
 }: LeadsTableProps) {
+  const tableContainerRef = useRef<HTMLDivElement>(null);
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
+  const [columnResizeMode] = React.useState<ColumnResizeMode>("onChange");
+  const [focusedRowIndex, setFocusedRowIndex] = React.useState<number>(-1);
+  
+  // Load persisted states
+  const [isCompact, setIsCompact] = React.useState(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem(COMPACT_MODE_STORAGE_KEY) === "true";
+  });
+  
+  const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>(() => {
+    if (typeof window === "undefined") return {};
+    try {
+      const saved = localStorage.getItem(COLUMN_VISIBILITY_STORAGE_KEY);
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
 
   const totalPages = Math.ceil(totalCount / pageSize);
+
+  // Persist compact mode
+  useEffect(() => {
+    localStorage.setItem(COMPACT_MODE_STORAGE_KEY, String(isCompact));
+  }, [isCompact]);
+
+  // Persist column visibility
+  useEffect(() => {
+    localStorage.setItem(COLUMN_VISIBILITY_STORAGE_KEY, JSON.stringify(columnVisibility));
+  }, [columnVisibility]);
 
   // Column definitions
   const columns = useMemo(
@@ -130,6 +179,8 @@ export function LeadsTable({
           />
         ),
         size: 40,
+        enableResizing: false,
+        enableHiding: false,
       }),
 
       // Name column
@@ -151,11 +202,12 @@ export function LeadsTable({
           </Button>
         ),
         cell: ({ row }) => (
-          <div className="font-medium">{row.original.full_name || "—"}</div>
+          <div className="text-sm font-medium">{row.original.full_name || "—"}</div>
         ),
+        size: 180,
       }),
 
-      // Phone column (no icon)
+      // Phone column
       columnHelper.accessor("phone", {
         header: "SĐT",
         cell: ({ row }) => (
@@ -163,6 +215,7 @@ export function LeadsTable({
             {row.original.phone || "—"}
           </div>
         ),
+        size: 120,
       }),
 
       // Source column
@@ -177,6 +230,7 @@ export function LeadsTable({
             </Badge>
           );
         },
+        size: 100,
       }),
 
       // Pipeline Stage column
@@ -199,27 +253,27 @@ export function LeadsTable({
             </Badge>
           );
         },
+        size: 120,
       }),
 
-      // Consultation Status column
+      // Consultation Status column - text color from status.color
       columnHelper.accessor("consultation_status", {
         header: "Trạng thái TĐ",
         cell: ({ row }) => {
           const status = row.original.consultation_status;
-          if (!status) return <span className="text-muted-foreground text-sm">—</span>;
+          if (!status) return <span className="text-muted-foreground">—</span>;
           return (
             <Badge
               variant="secondary"
               className="text-xs font-normal"
-              style={{
-                backgroundColor: status.color ? `${status.color}20` : undefined,
-                color: status.color || undefined,
-              }}
             >
-              {status.name}
+              <span style={{ color: status.color || "inherit" }}>
+                {status.name}
+              </span>
             </Badge>
           );
         },
+        size: 130,
       }),
 
       // Officer column
@@ -232,9 +286,10 @@ export function LeadsTable({
             <div className="text-sm">{officer.full_name}</div>
           );
         },
+        size: 140,
       }),
 
-      // Created at column
+      // Created at column - MEDIUM font
       columnHelper.accessor("created_at", {
         header: ({ column }) => (
           <Button
@@ -261,6 +316,7 @@ export function LeadsTable({
             </div>
           );
         },
+        size: 100,
       }),
 
       // Actions column
@@ -292,6 +348,8 @@ export function LeadsTable({
           </DropdownMenu>
         ),
         size: 50,
+        enableResizing: false,
+        enableHiding: false,
       }),
     ],
     [onEditLead, onDeleteLead]
@@ -304,21 +362,91 @@ export function LeadsTable({
     state: {
       sorting,
       rowSelection,
+      columnVisibility,
     },
     enableRowSelection: true,
+    enableColumnResizing: true,
+    columnResizeMode,
     onSortingChange: setSorting,
     onRowSelectionChange: setRowSelection,
+    onColumnVisibilityChange: setColumnVisibility,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
   });
 
+  // Get selected leads
+  const selectedLeads = useMemo(() => {
+    const selectedRows = table.getSelectedRowModel().rows;
+    return selectedRows.map((row) => row.original);
+  }, [table, rowSelection]);
+
   // Handle row click
   const handleRowClick = useCallback(
-    (lead: Lead) => {
+    (lead: Lead, index: number) => {
       onSelectLead(lead);
+      setFocusedRowIndex(index);
     },
     [onSelectLead]
   );
+
+  // Clear selection
+  const handleClearSelection = useCallback(() => {
+    setRowSelection({});
+  }, []);
+
+  // Keyboard navigation
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // / to focus search
+      if (e.key === "/" && !e.ctrlKey && !e.metaKey) {
+        const target = e.target as HTMLElement;
+        if (target.tagName !== "INPUT" && target.tagName !== "TEXTAREA") {
+          e.preventDefault();
+          onSearchFocus?.();
+          return;
+        }
+      }
+
+      // If focus is on table
+      if (!tableContainerRef.current?.contains(document.activeElement)) {
+        return;
+      }
+
+      const rows = table.getRowModel().rows;
+      if (rows.length === 0) return;
+
+      switch (e.key) {
+        case "ArrowDown":
+          e.preventDefault();
+          setFocusedRowIndex((prev) => Math.min(prev + 1, rows.length - 1));
+          break;
+        case "ArrowUp":
+          e.preventDefault();
+          setFocusedRowIndex((prev) => Math.max(prev - 1, 0));
+          break;
+        case "Enter":
+          e.preventDefault();
+          if (focusedRowIndex >= 0 && focusedRowIndex < rows.length) {
+            onSelectLead(rows[focusedRowIndex].original);
+          }
+          break;
+        case " ":
+          e.preventDefault();
+          if (focusedRowIndex >= 0 && focusedRowIndex < rows.length) {
+            rows[focusedRowIndex].toggleSelected();
+          }
+          break;
+        case "Escape":
+          e.preventDefault();
+          handleClearSelection();
+          setFocusedRowIndex(-1);
+          break;
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [table, focusedRowIndex, onSelectLead, onSearchFocus, handleClearSelection]);
 
   // Loading skeleton
   if (isLoading) {
@@ -332,9 +460,32 @@ export function LeadsTable({
   }
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex-1 overflow-auto">
-        <Table>
+    <div className="flex h-full flex-col" ref={tableContainerRef} tabIndex={0}>
+      {/* Toolbar */}
+      <div className="bg-muted/30 flex shrink-0 items-center justify-between border-b px-4 py-2">
+        <span className="text-muted-foreground text-sm">
+          {selectedLeads.length > 0 ? (
+            <span className="text-primary font-medium">{selectedLeads.length} đã chọn</span>
+          ) : (
+            `${leads.length} lead`
+          )}
+        </span>
+        <TableToolbar
+          isCompact={isCompact}
+          onCompactChange={setIsCompact}
+          columnVisibility={columnVisibility}
+          onColumnVisibilityChange={(columnId, isVisible) => {
+            setColumnVisibility((prev) => ({
+              ...prev,
+              [columnId]: isVisible,
+            }));
+          }}
+        />
+      </div>
+
+      {/* Table */}
+      <div className="flex-1 overflow-x-auto overflow-y-auto">
+        <Table className="w-full">
           <TableHeader className="bg-muted/50 sticky top-0 z-10">
             {table.getHeaderGroups().map((headerGroup) => (
               <TableRow key={headerGroup.id}>
@@ -342,11 +493,26 @@ export function LeadsTable({
                   <TableHead
                     key={header.id}
                     style={{ width: header.getSize() }}
-                    className="h-10 whitespace-nowrap"
+                    className={cn(
+                      "relative h-10 whitespace-nowrap",
+                      isCompact && "h-8"
+                    )}
                   >
                     {header.isPlaceholder
                       ? null
                       : flexRender(header.column.columnDef.header, header.getContext())}
+                    {/* Resize handle */}
+                    {header.column.getCanResize() && (
+                      <div
+                        onMouseDown={header.getResizeHandler()}
+                        onTouchStart={header.getResizeHandler()}
+                        className={cn(
+                          "absolute top-0 right-0 h-full w-1 cursor-col-resize select-none touch-none",
+                          "hover:bg-primary/50 active:bg-primary",
+                          header.column.getIsResizing() && "bg-primary"
+                        )}
+                      />
+                    )}
                   </TableHead>
                 ))}
               </TableRow>
@@ -362,21 +528,29 @@ export function LeadsTable({
                 </TableCell>
               </TableRow>
             ) : (
-              table.getRowModel().rows.map((row) => {
+              table.getRowModel().rows.map((row, index) => {
                 const isSelected = row.original.id === selectedLeadId;
+                const isFocused = index === focusedRowIndex;
                 return (
                   <TableRow
                     key={row.id}
                     data-state={isSelected ? "selected" : undefined}
-                    onClick={() => handleRowClick(row.original)}
+                    onClick={() => handleRowClick(row.original, index)}
                     className={cn(
                       "cursor-pointer transition-all duration-150",
                       "hover:bg-muted/50",
-                      isSelected && "bg-primary/5 border-l-primary border-l-2"
+                      isSelected && "bg-primary/5 border-l-primary border-l-2",
+                      isFocused && !isSelected && "ring-primary/50 ring-1 ring-inset"
                     )}
                   >
                     {row.getVisibleCells().map((cell) => (
-                      <TableCell key={cell.id} className="py-3">
+                      <TableCell
+                        key={cell.id}
+                        style={{ width: cell.column.getSize() }}
+                        className={cn(
+                          isCompact ? "py-1" : "py-3"
+                        )}
+                      >
                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                       </TableCell>
                     ))}
@@ -388,7 +562,7 @@ export function LeadsTable({
         </Table>
       </div>
 
-      {/* Table Footer with Pagination */}
+      {/* Footer with Pagination */}
       <div className="bg-muted/30 flex shrink-0 items-center justify-between border-t px-4 py-2">
         <div className="text-muted-foreground text-sm">
           Hiển thị {leads.length > 0 ? (page - 1) * pageSize + 1 : 0}-
@@ -418,6 +592,18 @@ export function LeadsTable({
           </Button>
         </div>
       </div>
+
+      {/* Bulk Actions Bar */}
+      {onBulkAssign && onBulkChangeStage && onBulkExport && onBulkDelete && (
+        <BulkActionsBar
+          selectedLeads={selectedLeads}
+          onClearSelection={handleClearSelection}
+          onBulkAssign={onBulkAssign}
+          onBulkChangeStage={onBulkChangeStage}
+          onBulkExport={onBulkExport}
+          onBulkDelete={onBulkDelete}
+        />
+      )}
     </div>
   );
 }

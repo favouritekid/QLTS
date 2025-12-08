@@ -39,6 +39,14 @@ import { useAdminUsersList } from "@/hooks/useAdminUsers";
 import { STAGE_COLORS } from "@/types/pipeline.types";
 import { useAuth } from "@/hooks/useAuth";
 import { MultiOfferingSelector } from "@/components/common/selectors";
+import { Slider } from "@/components/ui/slider";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 // =============================================================================
 // TYPES
@@ -60,11 +68,16 @@ interface LeadFilterBarProps {
   onStageChange: (stages: string[]) => void;
   officerFilters: string[];
   onOfficerChange: (officers: string[]) => void;
+  // Score range
+  scoreRange: [number, number];
+  onScoreRangeChange: (range: [number, number]) => void;
   // Date range
   dateFrom: string;
   dateTo: string;
+  dateField: "created_at" | "last_consultation_at";
   onDateFromChange: (date: string) => void;
   onDateToChange: (date: string) => void;
+  onDateFieldChange: (field: "created_at" | "last_consultation_at") => void;
   // Actions
   onReset: () => void;
   onExport: () => void;
@@ -159,10 +172,14 @@ export function LeadFilterBar({
   onStageChange,
   officerFilters,
   onOfficerChange,
+  scoreRange,
+  onScoreRangeChange,
   dateFrom,
   dateTo,
+  dateField,
   onDateFromChange,
   onDateToChange,
+  onDateFieldChange,
   onReset,
   onExport,
   onAddLead,
@@ -223,6 +240,7 @@ export function LeadFilterBar({
   }, [officerFilters, onOfficerChange]);
 
   // Check if any filters are active
+  const hasScoreFilter = scoreRange[0] > 0 || scoreRange[1] < 100;
   const hasActiveFilters =
     search ||
     statusFilters.length > 0 ||
@@ -230,6 +248,7 @@ export function LeadFilterBar({
     offeringFilters.length > 0 ||
     stageFilters.length > 0 ||
     officerFilters.length > 0 ||
+    hasScoreFilter ||
     dateFrom ||
     dateTo;
 
@@ -372,6 +391,34 @@ export function LeadFilterBar({
             </FilterDropdown>
           )}
 
+          {/* Score Filter */}
+          <FilterDropdown
+            label="Điểm"
+            count={hasScoreFilter ? 1 : 0}
+          >
+            <div className="space-y-4">
+              <div className="flex items-center justify-between text-sm">
+                <span>Điểm lead</span>
+                <span className="text-muted-foreground">
+                  {scoreRange[0]} - {scoreRange[1]}
+                </span>
+              </div>
+              <Slider
+                value={scoreRange}
+                onValueChange={(value) => onScoreRangeChange(value as [number, number])}
+                min={0}
+                max={100}
+                step={5}
+                className="w-full"
+              />
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>0</span>
+                <span>50</span>
+                <span>100</span>
+              </div>
+            </div>
+          </FilterDropdown>
+
           {/* Date Range */}
           <Popover>
             <PopoverTrigger asChild>
@@ -384,7 +431,7 @@ export function LeadFilterBar({
                 )}
               >
                 <Calendar className="h-3.5 w-3.5" />
-                Ngày
+                {dateField === "created_at" ? "Ngày tạo" : "Ngày TĐ"}
                 {(dateFrom || dateTo) && (
                   <Badge variant="secondary" className="bg-primary text-primary-foreground ml-1 h-5 px-1.5 text-xs">
                     1
@@ -395,6 +442,19 @@ export function LeadFilterBar({
             </PopoverTrigger>
             <PopoverContent className="w-72 p-3" align="start">
               <div className="space-y-3">
+                {/* Date Field Selector */}
+                <div>
+                  <Label className="text-xs">Lọc theo</Label>
+                  <Select value={dateField} onValueChange={(v) => onDateFieldChange(v as "created_at" | "last_consultation_at")}>
+                    <SelectTrigger className="mt-1 h-8">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="created_at">Ngày tạo</SelectItem>
+                      <SelectItem value="last_consultation_at">Ngày tư vấn cuối</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
                 <div>
                   <Label className="text-xs">Từ ngày</Label>
                   <Input
@@ -489,9 +549,16 @@ export function LeadFilterBar({
             />
           ))}
           
+          {hasScoreFilter && (
+            <FilterPill
+              label={`Điểm: ${scoreRange[0]}-${scoreRange[1]}`}
+              onRemove={() => onScoreRangeChange([0, 100])}
+            />
+          )}
+          
           {(dateFrom || dateTo) && (
             <FilterPill
-              label={`${dateFrom || "..."} → ${dateTo || "..."}`}
+              label={`${dateField === "created_at" ? "Tạo" : "TĐ"}: ${dateFrom || "..."} → ${dateTo || "..."}`}
               onRemove={() => {
                 onDateFromChange("");
                 onDateToChange("");
