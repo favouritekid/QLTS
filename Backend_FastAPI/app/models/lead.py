@@ -17,6 +17,39 @@ class ConsultationMethodEnum(str, enum.Enum):
     in_person = "in_person"
 
 
+class LeadStatusEnum(str, enum.Enum):
+    """Lead lifecycle status."""
+    new = "new"
+    assigned = "assigned"
+    contacted = "contacted"
+    qualified = "qualified"
+    unqualified = "unqualified"
+    converted = "converted"
+    rejected = "rejected"
+
+
+class LeadSourceEnum(str, enum.Enum):
+    """Source where the lead came from."""
+    website = "website"
+    referral = "referral"
+    social_media = "social_media"
+    walk_in = "walk_in"
+    email = "email"
+    phone = "phone"
+    event = "event"
+    other = "other"
+
+
+class EducationLevelEnum(str, enum.Enum):
+    """Education level of the lead."""
+    high_school = "high_school"
+    diploma = "diploma"
+    bachelor = "bachelor"
+    master = "master"
+    phd = "phd"
+    other = "other"
+
+
 class Lead(Base):
     """Model cho học viên tiềm năng (Lead)."""
 

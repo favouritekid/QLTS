@@ -129,6 +129,9 @@ class LeadCreate(LeadBase):
     - None (default): Use automatic distribution/assignment (Celery task)
     - Integer: Directly assign to specified officer (skip auto-assignment)
     """
+    education_level: Optional[str] = None
+    gpa: Optional[float] = None
+    location: Optional[str] = None
     assigned_officer_id: Optional[int] = None  # None = auto-assign, Integer = direct assign
 
 

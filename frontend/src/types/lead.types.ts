@@ -67,6 +67,7 @@ export interface Lead {
   phone2?: string | null; // Số điện thoại phụ
   source: LeadSource;
   status: LeadStatus;
+  assignment_status?: "pending" | "assigned" | "failed" | "reassign_pending";
   lead_score: number;
   education_level?: EducationLevel | null;
   gpa?: number | null;
@@ -128,7 +129,6 @@ export interface LeadUpdate {
   phone?: string;
   phone2?: string | null; // Số điện thoại phụ
   source?: LeadSource;
-  status?: LeadStatus;
   education_level?: EducationLevel | null;
   gpa?: number | null;
   location?: string | null;
@@ -136,6 +136,7 @@ export interface LeadUpdate {
   officer_summary?: string | null;
   offering_id?: number | null;
   unit_id?: number | null; // Allow null for unit reassignment
+  consultation_status_id?: string | null;
   pipeline_stage_id?: string | null;
 }
 
@@ -462,15 +463,17 @@ export interface LeadsPage {
 
 /**
  * Lead import result
+ * Aligned with backend LeadImportResult schema
  */
 export interface LeadImportResult {
-  message: string;
-  total_rows: number;
+  total_rows_processed: number;
   successful_imports: number;
   failed_imports: number;
+  created_lead_ids?: number[];
   errors: Array<{
-    row: number;
-    error: string;
+    row_number: number;
+    error_message: string;
+    row_data?: Record<string, unknown>;
   }>;
 }
 
