@@ -86,37 +86,28 @@ const getEducationLevelLabel = (level: string) => {
   return labels[level] || level;
 };
 
-export function LeadDetailPanel({
-  leadId,
-  onEdit,
-  onDelete,
-  onAssign,
-}: LeadDetailPanelProps) {
+export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDetailPanelProps) {
   const { data: lead, isLoading } = useLead(leadId || 0, !!leadId);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to top when leadId changes
   useEffect(() => {
     if (leadId && scrollAreaRef.current) {
-      scrollAreaRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+      scrollAreaRef.current.scrollTo({ top: 0, behavior: "smooth" });
     }
   }, [leadId]);
 
   // Empty state
   if (!leadId) {
     return (
-      <div className="h-full flex items-center justify-center bg-muted/20">
-        <div className="text-center space-y-3">
-          <div className="mx-auto w-12 h-12 rounded-full bg-muted flex items-center justify-center">
-            <User className="h-6 w-6 text-muted-foreground" />
+      <div className="bg-muted/20 flex h-full items-center justify-center">
+        <div className="space-y-3 text-center">
+          <div className="bg-muted mx-auto flex h-12 w-12 items-center justify-center rounded-full">
+            <User className="text-muted-foreground h-6 w-6" />
           </div>
           <div>
-            <p className="font-medium text-muted-foreground">
-              Chọn lead để xem chi tiết
-            </p>
-            <p className="text-sm text-muted-foreground/70">
-              Click vào lead trong danh sách
-            </p>
+            <p className="text-muted-foreground font-medium">Chọn lead để xem chi tiết</p>
+            <p className="text-muted-foreground/70 text-sm">Click vào lead trong danh sách</p>
           </div>
         </div>
       </div>
@@ -126,7 +117,7 @@ export function LeadDetailPanel({
   // Loading state
   if (isLoading || !lead) {
     return (
-      <div className="h-full p-4 space-y-4">
+      <div className="h-full space-y-4 p-4">
         <div className="flex items-center gap-4">
           <Skeleton className="h-16 w-16 rounded-full" />
           <div className="space-y-2">
@@ -141,61 +132,50 @@ export function LeadDetailPanel({
   }
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="flex h-full flex-col">
       {/* Header */}
-      <div className="shrink-0 p-4 border-b bg-background">
+      <div className="bg-background shrink-0 border-b p-4">
         <div className="flex items-start gap-4">
           <Avatar className="h-14 w-14">
-            <AvatarFallback className="text-base font-semibold bg-primary/10 text-primary">
+            <AvatarFallback className="bg-primary/10 text-primary text-base font-semibold">
               {getInitials(lead.full_name)}
             </AvatarFallback>
           </Avatar>
-          <div className="flex-1 space-y-1 min-w-0">
-            <h2 className="text-lg font-semibold truncate">{lead.full_name}</h2>
-            <div className="flex items-center gap-2 flex-wrap">
-              {lead.pipeline_stage && (() => {
-                const stageColor = lead.pipeline_stage.color_code || STAGE_COLORS[lead.pipeline_stage.id];
-                return (
-                  <Badge 
-                    variant="outline" 
-                    className={cn(
-                      "font-medium border-0",
-                      stageColor && "text-white"
-                    )}
-                    style={{
-                      backgroundColor: stageColor || undefined,
-                    }}
-                  >
-                    {lead.pipeline_stage.name}
-                  </Badge>
-                );
-              })()}
+          <div className="min-w-0 flex-1 space-y-1">
+            <h2 className="truncate text-lg font-semibold">{lead.full_name}</h2>
+            <div className="flex flex-wrap items-center gap-2">
+              {lead.pipeline_stage &&
+                (() => {
+                  const stageColor =
+                    lead.pipeline_stage.color_code || STAGE_COLORS[lead.pipeline_stage.id];
+                  return (
+                    <Badge
+                      variant="outline"
+                      className={cn("border-0 font-medium", stageColor && "text-white")}
+                      style={{
+                        backgroundColor: stageColor || undefined,
+                      }}
+                    >
+                      {lead.pipeline_stage.name}
+                    </Badge>
+                  );
+                })()}
               <Badge variant="secondary">
-                <Calendar className="h-3 w-3 mr-1.5" />
+                <Calendar className="mr-1.5 h-3 w-3" />
                 {new Date(lead.created_at).toLocaleDateString("vi-VN")}
               </Badge>
             </div>
           </div>
 
           {/* Các nút hành động */}
-          <div className="flex gap-2 shrink-0">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => onEdit(lead)}
-              className="h-8"
-            >
-              <Edit className="h-3.5 w-3.5 mr-1.5" />
+          <div className="flex shrink-0 gap-2">
+            <Button variant="outline" size="sm" onClick={() => onEdit(lead)} className="h-8">
+              <Edit className="mr-1.5 h-3.5 w-3.5" />
               Chỉnh sửa
             </Button>
             {!lead.assigned_officer && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onAssign(lead)}
-                className="h-8"
-              >
-                <UserPlus className="h-3.5 w-3.5 mr-1.5" />
+              <Button variant="outline" size="sm" onClick={() => onAssign(lead)} className="h-8">
+                <UserPlus className="mr-1.5 h-3.5 w-3.5" />
                 Phân công
               </Button>
             )}
@@ -213,17 +193,17 @@ export function LeadDetailPanel({
 
       {/* Scrollable Content */}
       <ScrollArea className="flex-1" ref={scrollAreaRef}>
-        <div className="p-4 space-y-4">
+        <div className="space-y-4 p-4">
           {/* Thông tin liên hệ */}
           <Card>
-            <CardHeader className="py-3 px-4">
+            <CardHeader className="px-4 py-3">
               <CardTitle className="text-sm font-medium">Thông tin liên hệ</CardTitle>
             </CardHeader>
-            <CardContent className="px-4 pb-4 pt-0 space-y-2.5">
+            <CardContent className="space-y-2.5 px-4 pt-0 pb-4">
               {/* Phone with Call Button */}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3 text-sm">
-                  <Phone className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <Phone className="text-muted-foreground h-4 w-4 shrink-0" />
                   <span className="truncate">{lead.phone}</span>
                   {lead.phone2 && (
                     <>
@@ -235,10 +215,10 @@ export function LeadDetailPanel({
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-7 px-2 text-xs text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                  className="h-7 px-2 text-xs text-blue-600 hover:bg-blue-50 hover:text-blue-700"
                   onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
                 >
-                  <Phone className="h-3 w-3 mr-1" />
+                  <Phone className="mr-1 h-3 w-3" />
                   Gọi
                 </Button>
               </div>
@@ -246,8 +226,11 @@ export function LeadDetailPanel({
               {/* Email */}
               {lead.email && (
                 <div className="flex items-center gap-3 text-sm">
-                  <Mail className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <a href={`mailto:${lead.email}`} className="hover:underline truncate text-blue-600">
+                  <Mail className="text-muted-foreground h-4 w-4 shrink-0" />
+                  <a
+                    href={`mailto:${lead.email}`}
+                    className="truncate text-blue-600 hover:underline"
+                  >
                     {lead.email}
                   </a>
                 </div>
@@ -256,7 +239,7 @@ export function LeadDetailPanel({
               {/* Location */}
               {lead.location && (
                 <div className="flex items-center gap-3 text-sm">
-                  <MapPin className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <MapPin className="text-muted-foreground h-4 w-4 shrink-0" />
                   <span className="truncate">{lead.location}</span>
                 </div>
               )}
@@ -264,7 +247,7 @@ export function LeadDetailPanel({
               {/* Trình độ học vấn */}
               {lead.education_level && (
                 <div className="flex items-center gap-3 text-sm">
-                  <GraduationCap className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <GraduationCap className="text-muted-foreground h-4 w-4 shrink-0" />
                   <span className="truncate">
                     {getEducationLevelLabel(lead.education_level)}
                     {lead.gpa && ` (GPA: ${lead.gpa})`}
@@ -275,9 +258,10 @@ export function LeadDetailPanel({
               {/* Chương trình */}
               {lead.offering && (
                 <div className="flex items-center gap-3 text-sm">
-                  <Building className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <Building className="text-muted-foreground h-4 w-4 shrink-0" />
                   <span className="truncate">
-                    {lead.offering.program?.degree_level && `${lead.offering.program.degree_level} `}
+                    {lead.offering.program?.degree_level &&
+                      `${lead.offering.program.degree_level} `}
                     {lead.offering.program?.name || lead.offering.offering_type}
                     {lead.offering.offering_type && ` (${lead.offering.offering_type})`}
                   </span>
@@ -287,7 +271,7 @@ export function LeadDetailPanel({
               {/* Tư vấn viên phụ trách */}
               {lead.assigned_officer && (
                 <div className="flex items-center gap-3 text-sm">
-                  <UserPlus className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <UserPlus className="text-muted-foreground h-4 w-4 shrink-0" />
                   <span className="truncate">
                     <strong>{lead.assigned_officer.full_name}</strong>
                   </span>
@@ -295,37 +279,35 @@ export function LeadDetailPanel({
               )}
 
               {/* Ngày tạo */}
-              <div className="flex items-center gap-3 text-sm text-muted-foreground">
+              <div className="text-muted-foreground flex items-center gap-3 text-sm">
                 <Calendar className="h-4 w-4 shrink-0" />
-                <span>
-                  Ngày tạo: {new Date(lead.created_at).toLocaleDateString("vi-VN")}
-                </span>
+                <span>Ngày tạo: {new Date(lead.created_at).toLocaleDateString("vi-VN")}</span>
               </div>
             </CardContent>
           </Card>
 
           {/* Ghi nhận tư vấn nhanh */}
-          <Card className="bg-slate-50 border-slate-200">
-            <CardHeader className="py-3 px-4">
-              <CardTitle className="text-sm font-medium flex items-center gap-2">
+          <Card className="border-slate-200 bg-slate-50">
+            <CardHeader className="px-4 py-3">
+              <CardTitle className="flex items-center gap-2 text-sm font-medium">
                 <Zap className="h-4 w-4 text-amber-500" />
                 Ghi nhận tư vấn
               </CardTitle>
             </CardHeader>
-            <CardContent className="px-4 pb-4 pt-0">
+            <CardContent className="px-4 pt-0 pb-4">
               <QuickConsultationSection leadId={lead.id} />
             </CardContent>
           </Card>
 
           {/* Dòng thời gian */}
           <Card>
-            <CardHeader className="py-3 px-4">
-              <CardTitle className="text-sm font-medium flex items-center gap-2">
-                <History className="h-4 w-4 text-muted-foreground" />
+            <CardHeader className="px-4 py-3">
+              <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                <History className="text-muted-foreground h-4 w-4" />
                 Dòng thời gian
               </CardTitle>
             </CardHeader>
-            <CardContent className="px-4 pb-4 pt-0">
+            <CardContent className="px-4 pt-0 pb-4">
               <LeadTimelineTab leadId={lead.id} />
             </CardContent>
           </Card>

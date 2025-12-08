@@ -1,0 +1,482 @@
+// src/app/(dashboard)/leads/_components/LeadsClient.tsx
+"use client";
+
+/**
+ * ✅ PHASE 1 - WEEK 1: Client Component for Interactive Features
+ *
+ * This component handles all client-side interactivity:
+ * - State management (pagination, filters, selection)
+ * - Mutations (create, update, delete, import, export)
+ * - Dialogs and user interactions
+ *
+ * Server Component (parent) fetches initial data and passes it here.
+ * React Query uses initialData for instant render, then revalidates.
+ */
+
+import { useState, useMemo, useCallback, useEffect } from "react";
+import { Plus, Download, Upload, Command } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
+import { ScrollArea } from "@/components/ui/scroll-area";
+
+import { useLeads, useDeleteLead, useExportLeads, useImportLeads } from "@/hooks/useLeads";
+import { LeadDialog } from "@/components/leads/LeadDialog";
+import { AssignLeadDialog } from "@/components/leads/AssignLeadDialog";
+import { LeadCard } from "@/components/leads/LeadCard";
+import { LeadStats, LeadFilters, LeadDetailPanel } from "@/components/leads/command-center";
+import type { Lead, LeadStatus, LeadsPage } from "@/types/lead.types";
+import { toast } from "sonner";
+
+interface LeadsClientProps {
+  initialData: LeadsPage;
+}
+
+export function LeadsClient({ initialData }: LeadsClientProps) {
+  // =====================================================================
+  // STATE MANAGEMENT
+  // =====================================================================
+
+  // Pagination
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(50);
+
+  // Filters
+  const [search, setSearch] = useState("");
+  const [statusFilters, setStatusFilters] = useState<LeadStatus[]>([]);
+  const [sourceFilter, setSourceFilter] = useState("all");
+  const [scoreRange, setScoreRange] = useState<[number, number]>([0, 100]);
+  const [offeringFilter, setOfferingFilter] = useState("all");
+  const [pipelineStageFilter, setPipelineStageFilter] = useState("all");
+
+  // === DATE RANGE FILTER ===
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [dateField, setDateField] = useState<"created_at" | "updated_at">("created_at");
+
+  // Selection & Dialogs
+  const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
+  const [leadDialogOpen, setLeadDialogOpen] = useState(false);
+  const [dialogMode, setDialogMode] = useState<"create" | "edit">("create");
+  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  const [assignDialogOpen, setAssignDialogOpen] = useState(false);
+  const [leadToDelete, setLeadToDelete] = useState<Lead | null>(null);
+
+  // =====================================================================
+  // API CALLS
+  // =====================================================================
+
+  // Build filters for API
+  const apiFilters = useMemo(() => {
+    const params: Record<string, unknown> = {
+      page,
+      page_size: pageSize,
+    };
+
+    if (search) params.search = search;
+    if (statusFilters.length > 0) params.status = statusFilters.join(",");
+    if (sourceFilter !== "all") params.source = sourceFilter;
+    if (offeringFilter !== "all") params.offering_id = parseInt(offeringFilter);
+    if (pipelineStageFilter !== "all") params.pipeline_stage_id = pipelineStageFilter;
+
+    // === DATE RANGE FILTER ===
+    if (dateFrom) params.date_from = new Date(dateFrom).toISOString();
+    if (dateTo) {
+      // Set to end of day for inclusive filtering
+      const endDate = new Date(dateTo);
+      endDate.setHours(23, 59, 59, 999);
+      params.date_to = endDate.toISOString();
+    }
+    if (dateFrom || dateTo) params.date_field = dateField;
+
+    return params;
+  }, [
+    page,
+    pageSize,
+    search,
+    statusFilters,
+    sourceFilter,
+    offeringFilter,
+    pipelineStageFilter,
+    dateFrom,
+    dateTo,
+    dateField,
+  ]);
+
+  // ✅ Fetch data with initialData from Server Component
+  // Only use initialData when no filters are applied (pure first load)
+  const {
+    data: leadsPage,
+    isLoading,
+    isError,
+    error,
+  } = useLeads(apiFilters, {
+    initialData:
+      page === 1 &&
+      !search &&
+      statusFilters.length === 0 &&
+      offeringFilter === "all" &&
+      sourceFilter === "all" &&
+      pipelineStageFilter === "all" &&
+      !dateFrom &&
+      !dateTo
+        ? initialData
+        : undefined,
+  });
+
+  const deleteMutation = useDeleteLead();
+  const exportMutation = useExportLeads();
+  const importMutation = useImportLeads();
+
+  // Filter leads by score range (client-side for better UX)
+  const filteredLeads = useMemo(() => {
+    if (!leadsPage?.leads) return [];
+    return leadsPage.leads.filter(
+      (lead) => lead.lead_score >= scoreRange[0] && lead.lead_score <= scoreRange[1]
+    );
+  }, [leadsPage, scoreRange]);
+
+  // ✅ AUTO-CLEAR: Clear selectedLeadId if lead is deleted/no longer exists
+  useEffect(() => {
+    if (selectedLeadId) {
+      const leadStillExists = filteredLeads.some((lead) => lead.id === selectedLeadId);
+      if (!leadStillExists) {
+        // Use queueMicrotask to avoid synchronous setState in effect
+        queueMicrotask(() => setSelectedLeadId(null));
+      }
+    }
+  }, [filteredLeads, selectedLeadId]);
+
+  // =====================================================================
+  // HANDLERS
+  // =====================================================================
+
+  const handleLeadSelect = useCallback((lead: Lead) => {
+    setSelectedLeadId(lead.id);
+  }, []);
+
+  const handleEdit = useCallback((lead: Lead) => {
+    setSelectedLead(lead);
+    setDialogMode("edit");
+    setLeadDialogOpen(true);
+  }, []);
+
+  const handleDelete = useCallback((lead: Lead) => {
+    setLeadToDelete(lead);
+  }, []);
+
+  const handleAssign = useCallback((lead: Lead) => {
+    setSelectedLead(lead);
+    setAssignDialogOpen(true);
+  }, []);
+
+  const confirmDelete = async () => {
+    if (leadToDelete) {
+      deleteMutation.mutate(leadToDelete.id, {
+        onSuccess: () => {
+          setLeadToDelete(null);
+          toast.success("Xoá lead thành công");
+        },
+      });
+    }
+  };
+
+  const handleExport = () => {
+    exportMutation.mutate({ format: "csv", filters: apiFilters });
+  };
+
+  const handleImport = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      importMutation.mutate(file);
+      event.target.value = "";
+    }
+  };
+
+  const resetFilters = useCallback(() => {
+    setSearch("");
+    setStatusFilters([]);
+    setSourceFilter("all");
+    setScoreRange([0, 100]);
+    setOfferingFilter("all");
+    setPipelineStageFilter("all");
+    // === DATE RANGE FILTER ===
+    setDateFrom("");
+    setDateTo("");
+    setDateField("created_at");
+    setPage(1);
+  }, []);
+
+  const handleSearchChange = useCallback((value: string) => {
+    setSearch(value);
+    setPage(1);
+  }, []);
+
+  const handleStatusChange = useCallback((statuses: LeadStatus[]) => {
+    setStatusFilters(statuses);
+    setPage(1);
+  }, []);
+
+  const handleSourceChange = useCallback((source: string) => {
+    setSourceFilter(source);
+    setPage(1);
+  }, []);
+
+  const handleOfferingChange = useCallback((offering: string) => {
+    setOfferingFilter(offering);
+    setPage(1);
+  }, []);
+
+  const handlePipelineStageChange = useCallback((stageId: string) => {
+    setPipelineStageFilter(stageId);
+    setPage(1);
+  }, []);
+
+  // === DATE RANGE FILTER HANDLERS ===
+  const handleDateFromChange = useCallback((date: string) => {
+    setDateFrom(date);
+    setPage(1);
+  }, []);
+
+  const handleDateToChange = useCallback((date: string) => {
+    setDateTo(date);
+    setPage(1);
+  }, []);
+
+  const handleDateFieldChange = useCallback((field: "created_at" | "updated_at") => {
+    setDateField(field);
+    setPage(1);
+  }, []);
+
+  // =====================================================================
+  // RENDER
+  // =====================================================================
+
+  return (
+    <div className="flex h-full flex-col">
+      {/* Header */}
+      <div className="bg-background/95 supports-[backdrop-filter]:bg-background/60 shrink-0 border-b backdrop-blur">
+        <div className="container space-y-4 py-4">
+          {/* Title & Actions */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="bg-primary/10 rounded-lg p-2">
+                <Command className="text-primary h-5 w-5" />
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold tracking-tight">Trung Tâm Quản Lý Lead</h1>
+                <p className="text-muted-foreground text-sm">
+                  Quản lý và theo dõi tất cả lead của bạn
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="file"
+                accept=".csv,.xlsx"
+                onChange={handleImport}
+                className="hidden"
+                id="import-file"
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => document.getElementById("import-file")?.click()}
+                disabled={importMutation.isPending}
+              >
+                <Upload className="mr-2 h-4 w-4" />
+                Nhập
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleExport}
+                disabled={exportMutation.isPending}
+              >
+                <Download className="mr-2 h-4 w-4" />
+                Xuất
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => {
+                  setSelectedLead(null);
+                  setDialogMode("create");
+                  setLeadDialogOpen(true);
+                }}
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                Lead Mới
+              </Button>
+            </div>
+          </div>
+
+          {/* Stats Cards */}
+          <LeadStats
+            leads={leadsPage?.leads || []}
+            totalCount={leadsPage?.total_count || 0}
+            isLoading={isLoading}
+          />
+        </div>
+      </div>
+
+      {/* Main Content - 3 Pane Resizable Layout */}
+      <ResizablePanelGroup direction="horizontal" className="flex-1">
+        {/* Pane 1: Left Sidebar - Filters (18%) */}
+        <ResizablePanel defaultSize={18} minSize={12} maxSize={25}>
+          <div className="h-full overflow-hidden border-r">
+            <LeadFilters
+              search={search}
+              onSearchChange={handleSearchChange}
+              statusFilters={statusFilters}
+              onStatusChange={handleStatusChange}
+              sourceFilter={sourceFilter}
+              onSourceChange={handleSourceChange}
+              scoreRange={scoreRange}
+              onScoreRangeChange={setScoreRange}
+              offeringFilter={offeringFilter}
+              onOfferingChange={handleOfferingChange}
+              // === PIPELINE STAGE FILTER ===
+              pipelineStageFilter={pipelineStageFilter}
+              onPipelineStageChange={handlePipelineStageChange}
+              // === DATE RANGE FILTER ===
+              dateFrom={dateFrom}
+              dateTo={dateTo}
+              dateField={dateField}
+              onDateFromChange={handleDateFromChange}
+              onDateToChange={handleDateToChange}
+              onDateFieldChange={handleDateFieldChange}
+              onReset={resetFilters}
+            />
+          </div>
+        </ResizablePanel>
+
+        <ResizableHandle withHandle />
+
+        {/* Pane 2: Center - Lead List (32%) */}
+        <ResizablePanel defaultSize={32} minSize={20} maxSize={45}>
+          <div className="flex h-full flex-col overflow-hidden">
+            {/* List Header */}
+            <div className="bg-muted/30 flex shrink-0 items-center justify-between border-b px-4 py-2">
+              <span className="text-muted-foreground text-sm">
+                {filteredLeads.length} / {leadsPage?.total_count || 0} lead
+              </span>
+              {/* Pagination */}
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setPage(Math.max(1, page - 1))}
+                  disabled={page === 1}
+                  className="h-7 px-2 text-xs"
+                >
+                  Trước
+                </Button>
+                <span className="text-muted-foreground px-1 text-xs">{page}</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setPage(page + 1)}
+                  disabled={filteredLeads.length < pageSize}
+                  className="h-7 px-2 text-xs"
+                >
+                  Sau
+                </Button>
+              </div>
+            </div>
+
+            {/* Lead List */}
+            <ScrollArea className="flex-1">
+              <div className="space-y-2 p-2">
+                {isLoading ? (
+                  [...Array(10)].map((_, i) => (
+                    <Skeleton key={i} className="h-20 w-full rounded-lg" />
+                  ))
+                ) : isError ? (
+                  <div className="flex h-40 items-center justify-center">
+                    <div className="text-center">
+                      <p className="text-sm font-medium text-red-600">Lỗi tải lead</p>
+                      <p className="text-muted-foreground mt-1 text-xs">
+                        {error?.message || "Lỗi không xác định"}
+                      </p>
+                    </div>
+                  </div>
+                ) : filteredLeads.length === 0 ? (
+                  <div className="flex h-40 items-center justify-center">
+                    <div className="text-center">
+                      <p className="text-sm font-medium">Không tìm thấy lead</p>
+                      <p className="text-muted-foreground mt-1 text-xs">Thử điều chỉnh bộ lọc</p>
+                    </div>
+                  </div>
+                ) : (
+                  filteredLeads.map((lead) => (
+                    <LeadCard
+                      key={lead.id}
+                      lead={lead}
+                      isSelected={selectedLeadId === lead.id}
+                      onSelect={handleLeadSelect}
+                    />
+                  ))
+                )}
+              </div>
+            </ScrollArea>
+          </div>
+        </ResizablePanel>
+
+        <ResizableHandle withHandle />
+
+        {/* Pane 3: Right - Lead Details (50%) */}
+        <ResizablePanel defaultSize={50} minSize={35}>
+          <LeadDetailPanel
+            leadId={selectedLeadId}
+            onEdit={handleEdit}
+            onDelete={handleDelete}
+            onAssign={handleAssign}
+          />
+        </ResizablePanel>
+      </ResizablePanelGroup>
+
+      {/* Dialogs */}
+      <LeadDialog
+        open={leadDialogOpen}
+        onOpenChange={setLeadDialogOpen}
+        lead={selectedLead}
+        mode={dialogMode}
+      />
+
+      <AssignLeadDialog
+        open={assignDialogOpen}
+        onOpenChange={setAssignDialogOpen}
+        lead={selectedLead}
+      />
+
+      <AlertDialog open={!!leadToDelete} onOpenChange={() => setLeadToDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Xoá Lead</AlertDialogTitle>
+            <AlertDialogDescription>
+              Bạn có chắc muốn xoá &ldquo;{leadToDelete?.full_name}&rdquo;? Không thể hoàn tác thao
+              tác này.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Hủy</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700">
+              Xoá
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}

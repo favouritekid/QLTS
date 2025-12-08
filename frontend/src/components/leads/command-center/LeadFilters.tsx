@@ -103,19 +103,14 @@ export const LeadFilters = React.memo(function LeadFilters({
     dateTo;
 
   return (
-    <div className="h-full bg-card">
-      <div className="h-full overflow-y-auto p-4 space-y-4">
+    <div className="bg-card h-full">
+      <div className="h-full space-y-4 overflow-y-auto p-4">
         {/* Tiêu đề */}
         <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-sm">Bộ lọc</h3>
+          <h3 className="text-sm font-semibold">Bộ lọc</h3>
           {hasActiveFilters && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onReset}
-              className="h-7 px-2 text-xs"
-            >
-              <RotateCcw className="h-3 w-3 mr-1" />
+            <Button variant="ghost" size="sm" onClick={onReset} className="h-7 px-2 text-xs">
+              <RotateCcw className="mr-1 h-3 w-3" />
               Đặt lại
             </Button>
           )}
@@ -123,17 +118,17 @@ export const LeadFilters = React.memo(function LeadFilters({
 
         {/* Tìm kiếm */}
         <div className="relative">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Search className="text-muted-foreground absolute top-2.5 left-2.5 h-4 w-4" />
           <Input
             placeholder="Tìm kiếm tên, số điện thoại, email..."
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
-            className="pl-8 pr-8"
+            className="pr-8 pl-8"
           />
           {search && (
             <button
               onClick={() => onSearchChange("")}
-              className="absolute right-2.5 top-2.5 text-muted-foreground hover:text-foreground"
+              className="text-muted-foreground hover:text-foreground absolute top-2.5 right-2.5"
             >
               <X className="h-4 w-4" />
             </button>
@@ -144,11 +139,11 @@ export const LeadFilters = React.memo(function LeadFilters({
         <Accordion type="multiple" defaultValue={["pipeline_stage"]} className="space-y-2">
           {/* Bộ lọc trạng thái - Chỉ hiển thị cho Admin */}
           {isAdmin && (
-            <AccordionItem value="status" className="border rounded-lg px-3">
-              <AccordionTrigger className="text-sm font-medium py-3 hover:no-underline">
+            <AccordionItem value="status" className="rounded-lg border px-3">
+              <AccordionTrigger className="py-3 text-sm font-medium hover:no-underline">
                 Vòng đời Lead
                 {statusFilters.length > 0 && (
-                  <span className="ml-auto mr-2 text-xs bg-primary text-primary-foreground px-1.5 py-0.5 rounded-full">
+                  <span className="bg-primary text-primary-foreground mr-2 ml-auto rounded-full px-1.5 py-0.5 text-xs">
                     {statusFilters.length}
                   </span>
                 )}
@@ -164,9 +159,9 @@ export const LeadFilters = React.memo(function LeadFilters({
                       />
                       <Label
                         htmlFor={`status-${option.value}`}
-                        className="text-sm font-normal cursor-pointer flex items-center gap-2"
+                        className="flex cursor-pointer items-center gap-2 text-sm font-normal"
                       >
-                        <span className={`w-2 h-2 rounded-full ${option.color}`} />
+                        <span className={`h-2 w-2 rounded-full ${option.color}`} />
                         {option.label}
                       </Label>
                     </div>
@@ -177,11 +172,11 @@ export const LeadFilters = React.memo(function LeadFilters({
           )}
 
           {/* Bộ lọc Pipeline Stage */}
-          <AccordionItem value="pipeline_stage" className="border rounded-lg px-3">
-            <AccordionTrigger className="text-sm font-medium py-3 hover:no-underline">
+          <AccordionItem value="pipeline_stage" className="rounded-lg border px-3">
+            <AccordionTrigger className="py-3 text-sm font-medium hover:no-underline">
               Giai đoạn Pipeline
               {pipelineStageFilter !== "all" && (
-                <span className="ml-auto mr-2 text-xs bg-primary text-primary-foreground px-1.5 py-0.5 rounded-full">
+                <span className="bg-primary text-primary-foreground mr-2 ml-auto rounded-full px-1.5 py-0.5 text-xs">
                   1
                 </span>
               )}
@@ -196,9 +191,9 @@ export const LeadFilters = React.memo(function LeadFilters({
                   {pipelineStages.map((stage) => (
                     <SelectItem key={stage.id} value={stage.id}>
                       <div className="flex items-center gap-2">
-                        <span 
-                          className="w-2.5 h-2.5 rounded-full" 
-                          style={{ backgroundColor: STAGE_COLORS[stage.id] || '#6B7280' }}
+                        <span
+                          className="h-2.5 w-2.5 rounded-full"
+                          style={{ backgroundColor: STAGE_COLORS[stage.id] || "#6B7280" }}
                         />
                         {stage.name}
                       </div>
@@ -210,8 +205,8 @@ export const LeadFilters = React.memo(function LeadFilters({
           </AccordionItem>
 
           {/* Bộ lọc nguồn */}
-          <AccordionItem value="source" className="border rounded-lg px-3">
-            <AccordionTrigger className="text-sm font-medium py-3 hover:no-underline">
+          <AccordionItem value="source" className="rounded-lg border px-3">
+            <AccordionTrigger className="py-3 text-sm font-medium hover:no-underline">
               Nguồn
             </AccordionTrigger>
             <AccordionContent className="pb-3">
@@ -232,11 +227,11 @@ export const LeadFilters = React.memo(function LeadFilters({
           </AccordionItem>
 
           {/* Bộ lọc điểm Lead */}
-          <AccordionItem value="score" className="border rounded-lg px-3">
-            <AccordionTrigger className="text-sm font-medium py-3 hover:no-underline">
+          <AccordionItem value="score" className="rounded-lg border px-3">
+            <AccordionTrigger className="py-3 text-sm font-medium hover:no-underline">
               Điểm Lead
             </AccordionTrigger>
-            <AccordionContent className="pb-3 pt-2">
+            <AccordionContent className="pt-2 pb-3">
               <div className="space-y-4">
                 <Slider
                   value={scoreRange}
@@ -246,7 +241,7 @@ export const LeadFilters = React.memo(function LeadFilters({
                   step={5}
                   className="w-full"
                 />
-                <div className="flex justify-between text-xs text-muted-foreground">
+                <div className="text-muted-foreground flex justify-between text-xs">
                   <span>{scoreRange[0]}</span>
                   <span>{scoreRange[1]}</span>
                 </div>
@@ -255,8 +250,8 @@ export const LeadFilters = React.memo(function LeadFilters({
           </AccordionItem>
 
           {/* Bộ lọc chương trình */}
-          <AccordionItem value="offering" className="border rounded-lg px-3">
-            <AccordionTrigger className="text-sm font-medium py-3 hover:no-underline">
+          <AccordionItem value="offering" className="rounded-lg border px-3">
+            <AccordionTrigger className="py-3 text-sm font-medium hover:no-underline">
               Chương trình
             </AccordionTrigger>
             <AccordionContent className="pb-3">
@@ -272,23 +267,24 @@ export const LeadFilters = React.memo(function LeadFilters({
           </AccordionItem>
 
           {/* Bộ lọc ngày tạo/cập nhật */}
-          <AccordionItem value="date" className="border rounded-lg px-3">
-            <AccordionTrigger className="text-sm font-medium py-3 hover:no-underline">
-              <div className="flex items-center gap-2">
-                Khoảng thời gian
-              </div>
+          <AccordionItem value="date" className="rounded-lg border px-3">
+            <AccordionTrigger className="py-3 text-sm font-medium hover:no-underline">
+              <div className="flex items-center gap-2">Khoảng thời gian</div>
               {(dateFrom || dateTo) && (
-                <span className="ml-auto mr-2 text-xs bg-primary text-primary-foreground px-1.5 py-0.5 rounded-full">
+                <span className="bg-primary text-primary-foreground mr-2 ml-auto rounded-full px-1.5 py-0.5 text-xs">
                   1
                 </span>
               )}
             </AccordionTrigger>
-            <AccordionContent className="pb-3 space-y-3">
+            <AccordionContent className="space-y-3 pb-3">
               {/* Date field selector */}
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Lọc theo</Label>
-                <Select value={dateField} onValueChange={(val) => onDateFieldChange(val as "created_at" | "updated_at")}>
-                  <SelectTrigger className="w-full h-8 text-sm">
+                <Label className="text-muted-foreground text-xs">Lọc theo</Label>
+                <Select
+                  value={dateField}
+                  onValueChange={(val) => onDateFieldChange(val as "created_at" | "updated_at")}
+                >
+                  <SelectTrigger className="h-8 w-full text-sm">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -300,7 +296,7 @@ export const LeadFilters = React.memo(function LeadFilters({
 
               {/* Date from */}
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Từ ngày</Label>
+                <Label className="text-muted-foreground text-xs">Từ ngày</Label>
                 <Input
                   type="date"
                   value={dateFrom}
@@ -311,7 +307,7 @@ export const LeadFilters = React.memo(function LeadFilters({
 
               {/* Date to */}
               <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Đến ngày</Label>
+                <Label className="text-muted-foreground text-xs">Đến ngày</Label>
                 <Input
                   type="date"
                   value={dateTo}

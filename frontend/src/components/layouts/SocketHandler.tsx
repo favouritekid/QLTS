@@ -102,7 +102,10 @@ export function SocketHandler() {
     const socket = socketService.getSocket();
     if (!socket || !isSocketConnected) {
       // Socket chưa sẵn sàng - effect sẽ chạy lại khi isSocketConnected thay đổi
-      console.log("[SocketHandler] Socket not ready, waiting...", { hasSocket: !!socket, isSocketConnected });
+      console.log("[SocketHandler] Socket not ready, waiting...", {
+        hasSocket: !!socket,
+        isSocketConnected,
+      });
       return;
     }
 
@@ -173,12 +176,14 @@ export function SocketHandler() {
         toast.warning(notification.title, {
           description: notification.message,
           duration: 15000, // 15 seconds for reminders - more prominent
-          action: notification.link ? {
-            label: "Xem Lead",
-            onClick: () => {
-              window.location.href = notification.link!;
-            },
-          } : undefined,
+          action: notification.link
+            ? {
+                label: "Xem Lead",
+                onClick: () => {
+                  window.location.href = notification.link!;
+                },
+              }
+            : undefined,
         });
       } else {
         toast.info(notification.title, {
@@ -208,9 +213,11 @@ export function SocketHandler() {
 
           // Show subtle toast for real-time updates
           const operationText =
-            data.operation === "create" ? "created" :
-            data.operation === "update" ? "updated" :
-            "deleted";
+            data.operation === "create"
+              ? "created"
+              : data.operation === "update"
+                ? "updated"
+                : "deleted";
 
           toast.info(`User ${operationText}`, {
             description: `Data refreshed automatically`,
@@ -228,9 +235,11 @@ export function SocketHandler() {
 
           // Show toast for organization updates
           const orgOperation =
-            data.operation === "create" ? "đã tạo" :
-            data.operation === "update" ? "đã cập nhật" :
-            "đã xóa";
+            data.operation === "create"
+              ? "đã tạo"
+              : data.operation === "update"
+                ? "đã cập nhật"
+                : "đã xóa";
 
           toast.info(`Đơn vị tổ chức ${orgOperation}`, {
             description: "Dữ liệu đã được làm mới tự động",
@@ -244,9 +253,11 @@ export function SocketHandler() {
           queryClient.invalidateQueries({ queryKey: ["organization", "major-programs"] });
 
           const programOperation =
-            data.operation === "create" ? "đã tạo" :
-            data.operation === "update" ? "đã cập nhật" :
-            "đã xóa";
+            data.operation === "create"
+              ? "đã tạo"
+              : data.operation === "update"
+                ? "đã cập nhật"
+                : "đã xóa";
 
           toast.info(`Chương trình đào tạo ${programOperation}`, {
             description: "Dữ liệu đã được làm mới tự động",
@@ -260,9 +271,11 @@ export function SocketHandler() {
           queryClient.invalidateQueries({ queryKey: ["organization", "offerings"] });
 
           const offeringOperation =
-            data.operation === "create" ? "đã tạo" :
-            data.operation === "update" ? "đã cập nhật" :
-            "đã xóa";
+            data.operation === "create"
+              ? "đã tạo"
+              : data.operation === "update"
+                ? "đã cập nhật"
+                : "đã xóa";
 
           toast.info(`Loại hình đào tạo ${offeringOperation}`, {
             description: "Dữ liệu đã được làm mới tự động",
@@ -276,9 +289,11 @@ export function SocketHandler() {
           queryClient.invalidateQueries({ queryKey: ["organization", "academic-info"] });
 
           const academicOperation =
-            data.operation === "create" ? "đã tạo" :
-            data.operation === "update" ? "đã cập nhật" :
-            "đã xóa";
+            data.operation === "create"
+              ? "đã tạo"
+              : data.operation === "update"
+                ? "đã cập nhật"
+                : "đã xóa";
 
           toast.info(`Thông tin tuyển sinh ${academicOperation}`, {
             description: "Dữ liệu đã được làm mới tự động",
@@ -293,9 +308,11 @@ export function SocketHandler() {
 
           // Show toast for major updates
           const majorOperation =
-            data.operation === "create" ? "đã tạo" :
-            data.operation === "update" ? "đã cập nhật" :
-            "đã xóa";
+            data.operation === "create"
+              ? "đã tạo"
+              : data.operation === "update"
+                ? "đã cập nhật"
+                : "đã xóa";
 
           toast.info(`Ngành học ${majorOperation}`, {
             description: "Dữ liệu đã được làm mới tự động",
@@ -365,7 +382,9 @@ export function SocketHandler() {
       changed_at: string;
       message: string;
     }) => {
-      console.log("[SocketHandler] application_status_changed → invalidating queries (silent sync)");
+      console.log(
+        "[SocketHandler] application_status_changed → invalidating queries (silent sync)"
+      );
 
       // Invalidate application-related queries
       queryClient.invalidateQueries({ queryKey: ["applications"] });
@@ -499,7 +518,8 @@ export function SocketHandler() {
       // System updates (like Celery updating next_activity_at) should be silent
       if (data.updated_by !== "system") {
         const fieldsText = data.updated_fields.slice(0, 3).join(", ");
-        const moreFields = data.updated_fields.length > 3 ? ` +${data.updated_fields.length - 3} more` : "";
+        const moreFields =
+          data.updated_fields.length > 3 ? ` +${data.updated_fields.length - 3} more` : "";
         toast.info("📝 Lead updated", {
           description: `${fieldsText}${moreFields} by ${data.updated_by}`,
           duration: 4000,
@@ -573,7 +593,9 @@ export function SocketHandler() {
       username: string;
       unit_id?: number;
     }) => {
-      console.log("[SocketHandler] officer_availability_changed → invalidating queries (silent sync)");
+      console.log(
+        "[SocketHandler] officer_availability_changed → invalidating queries (silent sync)"
+      );
 
       // Invalidate officer-related queries for admin dashboard
       queryClient.invalidateQueries({ queryKey: ["admin", "officers"] });
@@ -635,16 +657,22 @@ export function SocketHandler() {
       console.log("[SocketHandler] Received system_alert event:", data);
 
       // Show toast based on severity
-      const toastFn = data.severity === "error" ? toast.error :
-                     data.severity === "warning" ? toast.warning : toast.info;
+      const toastFn =
+        data.severity === "error"
+          ? toast.error
+          : data.severity === "warning"
+            ? toast.warning
+            : toast.info;
 
       toastFn(`🚨 System Alert`, {
         description: data.message,
         duration: 10000,
-        action: data.action_url ? {
-          label: "View",
-          onClick: () => window.location.href = data.action_url!,
-        } : undefined,
+        action: data.action_url
+          ? {
+              label: "View",
+              onClick: () => (window.location.href = data.action_url!),
+            }
+          : undefined,
       });
 
       // Play sound for important alerts
@@ -709,7 +737,9 @@ export function SocketHandler() {
       // ✅ FIX: Only show toast if current user is the target officer
       // Domain events broadcast to all clients, but reminders are per-user
       if (data.officer_id !== user?.id) {
-        console.log(`[SocketHandler] consultation_reminder → skipping (for officer ${data.officer_id}, not current user ${user?.id})`);
+        console.log(
+          `[SocketHandler] consultation_reminder → skipping (for officer ${data.officer_id}, not current user ${user?.id})`
+        );
         return;
       }
 
@@ -722,7 +752,7 @@ export function SocketHandler() {
         duration: 15000, // Long duration for reminders
         action: {
           label: "Xem Lead",
-          onClick: () => window.location.href = `/leads/${data.lead_id}`,
+          onClick: () => (window.location.href = `/leads/${data.lead_id}`),
         },
       });
 
