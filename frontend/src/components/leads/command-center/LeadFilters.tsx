@@ -22,7 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { LeadStatus } from "@/types/lead.types";
-import { SmartOfferingSelector } from "@/components/common/selectors";
+import { MultiOfferingSelector } from "@/components/common/selectors";
 import { LEAD_STATUS_OPTIONS, LEAD_SOURCE_OPTIONS } from "@/constants";
 import { usePipelineStages } from "@/hooks/usePipeline";
 import { useAdminUsersList } from "@/hooks/useAdminUsers";
@@ -308,7 +308,7 @@ export const LeadFilters = React.memo(function LeadFilters({
             </AccordionContent>
           </AccordionItem>
 
-          {/* Bộ lọc chương trình - Multi-select (still uses SmartOfferingSelector for now, will need separate update) */}
+          {/* Bộ lọc chương trình - Multi-select */}
           <AccordionItem value="offering" className="rounded-lg border px-3">
             <AccordionTrigger className="py-3 text-sm font-medium hover:no-underline">
               Chương trình
@@ -319,15 +319,10 @@ export const LeadFilters = React.memo(function LeadFilters({
               )}
             </AccordionTrigger>
             <AccordionContent className="pb-3">
-              <SmartOfferingSelector
-                value={offeringFilters.length === 1 ? offeringFilters[0] : undefined}
-                onChange={(val) => onOfferingChange(val ? [val] : [])}
-                placeholder="Chọn chương trình..."
-                allowAll
-                allLabel="Tất cả chương trình"
-                variant="combobox"
+              <MultiOfferingSelector
+                values={offeringFilters}
+                onChange={onOfferingChange}
               />
-              {/* TODO: Implement proper multi-select for offerings */}
             </AccordionContent>
           </AccordionItem>
 

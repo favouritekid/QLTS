@@ -17,6 +17,10 @@ export type { SmartUnitSelectorProps } from "./SmartUnitSelector";
 export { SmartConsultationStatusSelector } from "./SmartConsultationStatusSelector";
 export type { SmartConsultationStatusSelectorProps } from "./SmartConsultationStatusSelector";
 
-// Program Offering Selector
+// Program Offering Selector (single-select)
 export { SmartOfferingSelector } from "./SmartOfferingSelector";
 export type { SmartOfferingSelectorProps } from "./SmartOfferingSelector";
+
+// Program Offering Selector (multi-select)
+export { MultiOfferingSelector } from "./MultiOfferingSelector";
+export type { MultiOfferingSelectorProps } from "./MultiOfferingSelector";
