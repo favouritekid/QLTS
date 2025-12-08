@@ -16,10 +16,8 @@ from .user import User
 
 
 class ConsultationBase(BaseModel):
-    method: str
-    # ✅ SỬA: Thêm strip_whitespace
-    notes: str = Field(..., strip_whitespace=True)
-    outcome: Optional[str] = None
+    method: Optional[str] = "phone"  # Default to phone
+    notes: Optional[str] = Field(None, strip_whitespace=True)
     duration_minutes: Optional[int] = None
 
 
@@ -36,7 +34,6 @@ class ConsultationUpdate(BaseModel):
     """
     method: Optional[str] = None
     notes: Optional[str] = Field(None, strip_whitespace=True)
-    outcome: Optional[str] = None
     duration_minutes: Optional[int] = None
     status_id: Optional[str] = None
     scheduled_at: Optional[datetime] = None

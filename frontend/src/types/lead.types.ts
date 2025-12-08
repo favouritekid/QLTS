@@ -43,18 +43,9 @@ export type EducationLevel = "high_school" | "diploma" | "bachelor" | "master" |
 
 /**
  * Consultation Method Enum
+ * Aligned with backend ConsultationMethodEnum
  */
-export type ConsultationMethod = "phone" | "email" | "in_person" | "online" | "video_call";
-
-/**
- * Consultation Outcome Enum
- */
-export type ConsultationOutcome =
-  | "interested"
-  | "not_interested"
-  | "follow_up"
-  | "converted"
-  | "no_show";
+export type ConsultationMethod = "phone" | "email" | "sms" | "video_call" | "in_person";
 
 /**
  * Assignment Method Enum
@@ -194,7 +185,6 @@ export interface Consultation {
   scheduled_at?: string | null; // ISO datetime
   method: ConsultationMethod;
   notes?: string | null;
-  outcome?: ConsultationOutcome | null;
   duration_minutes?: number | null;
   officer_id: number;
   consultation_status_id?: string | null;
@@ -214,7 +204,6 @@ export interface ConsultationCreate {
   scheduled_at?: string | null; // ISO datetime - for follow-up scheduling
   method?: ConsultationMethod;
   notes?: string;
-  outcome?: ConsultationOutcome;
   duration_minutes?: number;
   status_id: string; // Required - consultation status ID
 }
@@ -226,7 +215,6 @@ export interface ConsultationCreate {
 export interface ConsultationUpdate {
   method?: ConsultationMethod;
   notes?: string;
-  outcome?: ConsultationOutcome;
   duration_minutes?: number;
   status_id?: string; // consultation status ID
   scheduled_at?: string | null; // ISO datetime - for follow-up scheduling

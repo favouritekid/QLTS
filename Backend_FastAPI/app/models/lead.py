@@ -1,10 +1,20 @@
 # app/models/lead.py
+import enum
 from datetime import datetime, timezone
 
 from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from .base import Base
+
+
+class ConsultationMethodEnum(str, enum.Enum):
+    """Method of consultation contact."""
+    phone = "phone"
+    email = "email"
+    sms = "sms"
+    video_call = "video_call"
+    in_person = "in_person"
 
 
 class Lead(Base):
@@ -117,7 +127,6 @@ class Consultation(Base):
     reminder_sent = Column(Boolean, default=False, nullable=False, index=True)
     method = Column(String(50))
     notes = Column(Text)
-    outcome = Column(String(50))
     duration_minutes = Column(Integer, nullable=True)
     officer_id = Column(Integer, ForeignKey("user.id"), nullable=False, index=True)  # ✅ FIX: Added index
     consultation_status_id = Column(

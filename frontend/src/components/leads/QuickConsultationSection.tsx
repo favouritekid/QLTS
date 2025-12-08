@@ -29,7 +29,7 @@ import { DateTimePicker } from "@/components/common/form";
 import { cn } from "@/lib/utils";
 import { useAllowedNextStatuses } from "@/hooks/usePipeline";
 import { useAddConsultation, useLead } from "@/hooks/useLeads";
-import type { ConsultationStatus, ConsultationCreate } from "@/types/lead.types";
+import type { ConsultationStatus, ConsultationCreate, ConsultationMethod } from "@/types/lead.types";
 
 interface QuickConsultationSectionProps {
   leadId: number;
@@ -39,15 +39,12 @@ interface QuickConsultationSectionProps {
 // Schedule option type
 type ScheduleOption = "none" | "30m" | "1h" | "tomorrow" | "custom";
 
-// Consultation method type
-type ConsultationMethod = "phone" | "sms" | "email" | "video" | "in_person";
-
 // Method options configuration
 const methodOptions: { value: ConsultationMethod; label: string; icon: React.ElementType }[] = [
   { value: "phone", label: "Gọi điện", icon: Phone },
-  { value: "sms", label: "Nhắn tin", icon: MessageSquare },
   { value: "email", label: "Email", icon: Mail },
-  { value: "video", label: "Video", icon: Video },
+  { value: "video_call", label: "Video", icon: Video },
+  { value: "online", label: "Online", icon: MessageSquare },
   { value: "in_person", label: "Gặp mặt", icon: User },
 ];
 
