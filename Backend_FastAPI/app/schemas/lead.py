@@ -194,6 +194,17 @@ class BulkAssignLeadsSchema(BaseModel):
     lead_ids: List[int] = Field(..., min_length=1)
 
 
+class BulkUpdateStageSchema(BaseModel):
+    """Schema for bulk updating leads pipeline stage."""
+    lead_ids: List[int] = Field(..., min_length=1)
+    pipeline_stage_id: str = Field(..., min_length=1)
+
+
+class BulkDeleteSchema(BaseModel):
+    """Schema for bulk deleting leads."""
+    lead_ids: List[int] = Field(..., min_length=1)
+
+
 class LeadImportError(BaseModel):
     row_number: int  # Số dòng trong file gốc (bắt đầu từ 1 hoặc 2 tùy header)
     error_message: str

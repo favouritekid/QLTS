@@ -951,6 +951,65 @@ async def bulk_assign_leads(
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.post("/bulk-update-stage", status_code=status.HTTP_200_OK)
+async def bulk_update_leads_stage(
+    request: Request,
+    bulk_data: schemas.BulkUpdateStageSchema,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = PermissionDep,
+):
+    """
+    (Admin only) Bulk update pipeline stage for multiple leads.
+
+    **Request Body:**
+    ```json
+    {"lead_ids": [1, 2, 3], "pipeline_stage_id": "stage_2"}
+    ```
+    """
+    updated_count = 0
+    for lead_id in bulk_data.lead_ids:
+        try:
+            lead = await db.get(models.Lead, lead_id)
+            if lead and not lead.deleted_at:
+                lead.pipeline_stage_id = bulk_data.pipeline_stage_id
+                updated_count += 1
+        except Exception as e:
+            log.warning(f"Failed to update lead {lead_id}: {e}")
+
+    await db.commit()
+    return {"message": f"Updated {updated_count} leads", "updated_count": updated_count}
+
+
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.post("/bulk-delete", status_code=status.HTTP_200_OK)
+async def bulk_delete_leads(
+    request: Request,
+    bulk_data: schemas.BulkDeleteSchema,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = PermissionDep,
+):
+    """
+    (Admin only) Bulk soft delete multiple leads.
+
+    **Request Body:**
+    ```json
+    {"lead_ids": [1, 2, 3]}
+    ```
+    """
+    deleted_count = 0
+    for lead_id in bulk_data.lead_ids:
+        try:
+            deleted_lead = await lead_service.delete_lead(db, lead_id, deleted_by=current_user)
+            if deleted_lead:
+                deleted_count += 1
+        except Exception as e:
+            log.warning(f"Failed to delete lead {lead_id}: {e}")
+
+    await db.commit()
+    return {"message": f"Deleted {deleted_count} leads", "deleted_count": deleted_count}
+
+
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("/import", response_model=schemas.LeadImportResult)
 async def officer_import_leads(
     request: Request,

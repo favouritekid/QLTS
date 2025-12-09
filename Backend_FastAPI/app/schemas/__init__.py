@@ -100,6 +100,8 @@ from .lead import (
     AssignLead,
     AssignmentLog,
     BulkAssignLeadsSchema,
+    BulkUpdateStageSchema,  # ✅ Option B: Bulk stage update
+    BulkDeleteSchema,       # ✅ Option B: Bulk delete
     Consultation,
     ConsultationBase,
     ConsultationCreate,

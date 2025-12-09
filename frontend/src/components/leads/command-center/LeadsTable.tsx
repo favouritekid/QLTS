@@ -4,6 +4,7 @@
  * 
  * Features:
  * - @tanstack/react-table for state management
+ * - @tanstack/react-virtual for virtualization (Option A)
  * - Row selection with keyboard navigation
  * - Sortable columns with column resize
  * - Compact/Normal view modes
@@ -15,6 +16,7 @@
 "use client";
 
 import React, { useMemo, useCallback, useEffect, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   useReactTable,
   getCoreRowModel,
@@ -85,6 +87,8 @@ interface LeadsTableProps {
   onBulkDelete?: (leads: Lead[]) => void;
   // Search focus
   onSearchFocus?: () => void;
+  // Reset selection when this key changes (e.g., after bulk action)
+  resetSelectionKey?: number;
 }
 
 // =============================================================================
@@ -119,6 +123,7 @@ export function LeadsTable({
   onBulkExport,
   onBulkDelete,
   onSearchFocus,
+  resetSelectionKey,
 }: LeadsTableProps) {
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const [sorting, setSorting] = React.useState<SortingState>([]);
@@ -153,6 +158,13 @@ export function LeadsTable({
   useEffect(() => {
     localStorage.setItem(COLUMN_VISIBILITY_STORAGE_KEY, JSON.stringify(columnVisibility));
   }, [columnVisibility]);
+
+  // Reset row selection when resetSelectionKey changes (after bulk actions)
+  useEffect(() => {
+    if (resetSelectionKey !== undefined) {
+      setRowSelection({});
+    }
+  }, [resetSelectionKey]);
 
   // Column definitions
   const columns = useMemo(
@@ -374,6 +386,19 @@ export function LeadsTable({
     getSortedRowModel: getSortedRowModel(),
   });
 
+  // Get all rows for virtualization
+  const rows = table.getRowModel().rows;
+
+  // ✅ Option A: Virtualization setup
+  const tableScrollRef = useRef<HTMLDivElement>(null);
+  const rowVirtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => tableScrollRef.current,
+    estimateSize: () => (isCompact ? 36 : 52), // Estimated row height based on compact mode
+    overscan: 5, // Render 5 extra rows above/below viewport
+  });
+  const virtualRows = rowVirtualizer.getVirtualItems();
+
   // Get selected leads
   const selectedLeads = useMemo(() => {
     const selectedRows = table.getSelectedRowModel().rows;
@@ -483,8 +508,11 @@ export function LeadsTable({
         />
       </div>
 
-      {/* Table */}
-      <div className="flex-1 overflow-x-auto overflow-y-auto">
+      {/* Table with Virtualization */}
+      <div 
+        ref={tableScrollRef}
+        className="flex-1 overflow-x-auto overflow-y-auto"
+      >
         <Table className="w-full">
           <TableHeader className="bg-muted/50 sticky top-0 z-10">
             {table.getHeaderGroups().map((headerGroup) => (
@@ -519,7 +547,7 @@ export function LeadsTable({
             ))}
           </TableHeader>
           <TableBody>
-            {table.getRowModel().rows.length === 0 ? (
+            {rows.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={columns.length} className="h-32 text-center">
                   <div className="text-muted-foreground">
@@ -528,35 +556,49 @@ export function LeadsTable({
                 </TableCell>
               </TableRow>
             ) : (
-              table.getRowModel().rows.map((row, index) => {
-                const isSelected = row.original.id === selectedLeadId;
-                const isFocused = index === focusedRowIndex;
-                return (
-                  <TableRow
-                    key={row.id}
-                    data-state={isSelected ? "selected" : undefined}
-                    onClick={() => handleRowClick(row.original, index)}
-                    className={cn(
-                      "cursor-pointer transition-all duration-150",
-                      "hover:bg-muted/50",
-                      isSelected && "bg-primary/5 border-l-primary border-l-2",
-                      isFocused && !isSelected && "ring-primary/50 ring-1 ring-inset"
-                    )}
-                  >
-                    {row.getVisibleCells().map((cell) => (
-                      <TableCell
-                        key={cell.id}
-                        style={{ width: cell.column.getSize() }}
-                        className={cn(
-                          isCompact ? "py-1" : "py-3"
-                        )}
-                      >
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                );
-              })
+              <>
+                {/* Virtualization spacer - top */}
+                {virtualRows.length > 0 && virtualRows[0].start > 0 && (
+                  <tr style={{ height: virtualRows[0].start }} />
+                )}
+                {/* Virtualized rows */}
+                {virtualRows.map((virtualRow) => {
+                  const row = rows[virtualRow.index];
+                  const isSelected = row.original.id === selectedLeadId;
+                  const isFocused = virtualRow.index === focusedRowIndex;
+                  return (
+                    <TableRow
+                      key={row.id}
+                      data-index={virtualRow.index}
+                      data-state={isSelected ? "selected" : undefined}
+                      onClick={() => handleRowClick(row.original, virtualRow.index)}
+                      className={cn(
+                        "cursor-pointer transition-all duration-150",
+                        "hover:bg-muted/50",
+                        isSelected && "bg-primary/5 border-l-primary border-l-2",
+                        isFocused && !isSelected && "ring-primary/50 ring-1 ring-inset"
+                      )}
+                      style={{ height: virtualRow.size }}
+                    >
+                      {row.getVisibleCells().map((cell) => (
+                        <TableCell
+                          key={cell.id}
+                          style={{ width: cell.column.getSize() }}
+                          className={cn(
+                            isCompact ? "py-1" : "py-3"
+                          )}
+                        >
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  );
+                })}
+                {/* Virtualization spacer - bottom */}
+                {virtualRows.length > 0 && (
+                  <tr style={{ height: rowVirtualizer.getTotalSize() - (virtualRows[virtualRows.length - 1]?.end || 0) }} />
+                )}
+              </>
             )}
           </TableBody>
         </Table>

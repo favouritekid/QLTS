@@ -198,6 +198,10 @@ export function LeadFilterBar({
   const isManager = isMounted && user?.role === "manager";
   const canFilterByOfficer = isAdmin || isManager;
 
+  // Collapsible filter pills state
+  const [isFiltersExpanded, setIsFiltersExpanded] = React.useState(false);
+  const MAX_VISIBLE_PILLS = 5;
+
   // Toggle handlers
   const handleStatusToggle = useCallback((status: LeadStatus) => {
     startTransition(() => {
@@ -505,72 +509,78 @@ export function LeadFilterBar({
         </div>
       </div>
 
-      {/* Active Filter Pills */}
-      {hasActiveFilters && (
-        <div className="flex flex-wrap items-center gap-2 border-t px-4 py-2">
-          <span className="text-muted-foreground text-xs">Đang lọc:</span>
-          
-          {search && (
-            <FilterPill
-              label={`"${search}"`}
-              onRemove={() => onSearchChange("")}
-            />
-          )}
-          
-          {statusFilters.map((status) => (
-            <FilterPill
-              key={status}
-              label={getStatusLabel(status)}
-              onRemove={() => handleStatusToggle(status)}
-            />
-          ))}
-          
-          {sourceFilters.map((source) => (
-            <FilterPill
-              key={source}
-              label={getSourceLabel(source)}
-              onRemove={() => handleSourceToggle(source)}
-            />
-          ))}
-          
-          {stageFilters.map((stage) => (
-            <FilterPill
-              key={stage}
-              label={getStageLabel(stage)}
-              onRemove={() => handleStageToggle(stage)}
-            />
-          ))}
-          
-          {officerFilters.map((officer) => (
-            <FilterPill
-              key={officer}
-              label={getOfficerLabel(officer)}
-              onRemove={() => handleOfficerToggle(officer)}
-            />
-          ))}
-          
-          {hasScoreFilter && (
-            <FilterPill
-              label={`Điểm: ${scoreRange[0]}-${scoreRange[1]}`}
-              onRemove={() => onScoreRangeChange([0, 100])}
-            />
-          )}
-          
-          {(dateFrom || dateTo) && (
-            <FilterPill
-              label={`${dateField === "created_at" ? "Tạo" : "TĐ"}: ${dateFrom || "..."} → ${dateTo || "..."}`}
-              onRemove={() => {
-                onDateFromChange("");
-                onDateToChange("");
-              }}
-            />
-          )}
+      {/* Active Filter Pills - Collapsible */}
+      {hasActiveFilters && (() => {
+        // Build all pills as an array
+        const allPills: { key: string; label: string; onRemove: () => void }[] = [];
+        
+        if (search) {
+          allPills.push({ key: "search", label: `"${search}"`, onRemove: () => onSearchChange("") });
+        }
+        statusFilters.forEach((status) => {
+          allPills.push({ key: `status-${status}`, label: getStatusLabel(status), onRemove: () => handleStatusToggle(status) });
+        });
+        sourceFilters.forEach((source) => {
+          allPills.push({ key: `source-${source}`, label: getSourceLabel(source), onRemove: () => handleSourceToggle(source) });
+        });
+        stageFilters.forEach((stage) => {
+          allPills.push({ key: `stage-${stage}`, label: getStageLabel(stage), onRemove: () => handleStageToggle(stage) });
+        });
+        officerFilters.forEach((officer) => {
+          allPills.push({ key: `officer-${officer}`, label: getOfficerLabel(officer), onRemove: () => handleOfficerToggle(officer) });
+        });
+        if (hasScoreFilter) {
+          allPills.push({ key: "score", label: `Điểm: ${scoreRange[0]}-${scoreRange[1]}`, onRemove: () => onScoreRangeChange([0, 100]) });
+        }
+        if (dateFrom || dateTo) {
+          allPills.push({
+            key: "date",
+            label: `${dateField === "created_at" ? "Tạo" : "TĐ"}: ${dateFrom || "..."} → ${dateTo || "..."}`,
+            onRemove: () => { onDateFromChange(""); onDateToChange(""); },
+          });
+        }
 
-          <span className="text-muted-foreground ml-2 text-xs">
-            • {totalCount.toLocaleString()} kết quả
-          </span>
-        </div>
-      )}
+        const visiblePills = isFiltersExpanded ? allPills : allPills.slice(0, MAX_VISIBLE_PILLS);
+        const hiddenCount = allPills.length - MAX_VISIBLE_PILLS;
+
+        return (
+          <div className="flex flex-wrap items-center gap-2 border-t px-4 py-2">
+            <span className="text-muted-foreground text-xs">Đang lọc:</span>
+            
+            {visiblePills.map((pill) => (
+              <FilterPill key={pill.key} label={pill.label} onRemove={pill.onRemove} />
+            ))}
+            
+            {/* Show "+X more" button when collapsed and has hidden pills */}
+            {!isFiltersExpanded && hiddenCount > 0 && (
+              <Badge
+                variant="outline"
+                className="h-6 cursor-pointer gap-1 px-2 text-xs transition-colors hover:bg-primary/10"
+                onClick={() => setIsFiltersExpanded(true)}
+              >
+                +{hiddenCount} more
+                <ChevronDown className="h-3 w-3" />
+              </Badge>
+            )}
+            
+            {/* Show "Thu gọn" button when expanded */}
+            {isFiltersExpanded && allPills.length > MAX_VISIBLE_PILLS && (
+              <Badge
+                variant="outline"
+                className="h-6 cursor-pointer gap-1 px-2 text-xs transition-colors hover:bg-primary/10"
+                onClick={() => setIsFiltersExpanded(false)}
+              >
+                Thu gọn
+                <ChevronDown className="h-3 w-3 rotate-180" />
+              </Badge>
+            )}
+
+            <span className="text-muted-foreground ml-2 text-xs">
+              • {totalCount.toLocaleString()} kết quả
+            </span>
+          </div>
+        );
+      })()}
     </div>
   );
 }

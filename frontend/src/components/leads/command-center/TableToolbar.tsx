@@ -5,6 +5,7 @@
  * Features:
  * - Compact/Normal view toggle
  * - Column visibility dropdown
+ * - ✅ Option C: Keyboard shortcuts help
  */
 
 "use client";
@@ -32,6 +33,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { VisibilityState } from "@tanstack/react-table";
+import { KeyboardShortcutsHelp } from "./KeyboardShortcutsHelp";
 
 // =============================================================================
 // TYPES
@@ -135,6 +137,9 @@ export function TableToolbar({
             })}
           </DropdownMenuContent>
         </DropdownMenu>
+
+        {/* ✅ Option C: Keyboard Shortcuts Help */}
+        <KeyboardShortcutsHelp className="h-8 w-8 p-0" />
       </TooltipProvider>
     </div>
   );

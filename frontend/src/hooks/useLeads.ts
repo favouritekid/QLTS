@@ -419,6 +419,95 @@ export function useBulkAssignLeads() {
   });
 }
 
+/**
+ * Bulk update leads pipeline stage
+ * ✅ Option B: Bulk Stage Change
+ *
+ * @example
+ * ```tsx
+ * const bulkUpdateStage = useBulkUpdateLeadsStage();
+ *
+ * bulkUpdateStage.mutate({
+ *   lead_ids: [1, 2, 3],
+ *   pipeline_stage_id: 'stage_2',
+ * });
+ * ```
+ */
+export function useBulkUpdateLeadsStage() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    { message: string; updated_count: number },
+    AxiosError<ApiErrorResponse>,
+    { lead_ids: number[]; pipeline_stage_id: string }
+  >({
+    mutationFn: async (data) => {
+      return await leadsApi.bulkUpdateLeadsStage(data);
+    },
+
+    onSuccess: async (result) => {
+      // Force refetch leads list queries immediately (matches useLeads queryKey)
+      await queryClient.refetchQueries({ queryKey: leadsKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+    },
+
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Failed to update leads stage";
+      toast.error("Error", { description: message });
+    },
+  });
+}
+
+/**
+ * Bulk delete leads
+ * ✅ Option B: Bulk Delete
+ *
+ * @example
+ * ```tsx
+ * const bulkDelete = useBulkDeleteLeads();
+ *
+ * bulkDelete.mutate({
+ *   lead_ids: [1, 2, 3],
+ * });
+ * ```
+ */
+export function useBulkDeleteLeads() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    { message: string; deleted_count: number },
+    AxiosError<ApiErrorResponse>,
+    { lead_ids: number[] }
+  >({
+    mutationFn: async (data) => {
+      return await leadsApi.bulkDeleteLeads(data);
+    },
+
+    onSuccess: async (result) => {
+      // Force refetch leads list queries immediately (matches useLeads queryKey)
+      await queryClient.refetchQueries({ queryKey: leadsKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+    },
+
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Failed to delete leads";
+      toast.error("Error", { description: message });
+    },
+  });
+}
+
 // =====================================================================
 // MUTATIONS - LEAD ACTIONS
 // =====================================================================

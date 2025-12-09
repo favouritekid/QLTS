@@ -8,3 +8,9 @@ export { LeadDetailSheet } from "./LeadDetailSheet";
 export { LeadDetailPanel } from "./LeadDetailPanel";
 export { BulkActionsBar } from "./BulkActionsBar";
 export { TableToolbar } from "./TableToolbar";
+// ✅ Option B: Bulk action dialogs
+export { BulkStageDialog } from "./BulkStageDialog";
+export { BulkDeleteDialog } from "./BulkDeleteDialog";
+// ✅ Option C: Keyboard shortcuts help (to be added)
+export { KeyboardShortcutsHelp } from "./KeyboardShortcutsHelp";
+

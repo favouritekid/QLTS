@@ -2,22 +2,19 @@
 "use client";
 
 /**
- * ✅ PHASE 1 - WEEK 1: Client Component for Interactive Features
+ * ✅ REFACTORED: Client Component for Interactive Features
  *
  * This component handles all client-side interactivity:
- * - State management (pagination, filters, selection)
+ * - Filter state management via useLeadsFilter hook (Option D)
  * - Mutations (create, update, delete, import, export)
  * - Dialogs and user interactions
+ * - Bulk actions with dialogs (Option B)
  *
  * Server Component (parent) fetches initial data and passes it here.
  * React Query uses initialData for instant render, then revalidates.
- *
- * ✅ URL Search Params: Filters are synced with URL for sharing/bookmarking
- * ✅ NEW LAYOUT: Filter bar on top, Table + Detail panel split view
  */
 
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
-import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { Upload, Command } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -35,161 +32,37 @@ import {
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 
 import { useLeads, useDeleteLead, useExportLeads, useImportLeads } from "@/hooks/useLeads";
+import { useLeadsFilter } from "@/hooks/useLeadsFilter";
 import { LeadDialog } from "@/components/leads/LeadDialog";
 import { AssignLeadDialog } from "@/components/leads/AssignLeadDialog";
-import { LeadStats, LeadDetailPanel, LeadFilterBar, LeadsTable } from "@/components/leads/command-center";
-import type { Lead, LeadStatus, LeadsPage } from "@/types/lead.types";
+import { 
+  LeadStats, 
+  LeadDetailPanel, 
+  LeadFilterBar, 
+  LeadsTable,
+  BulkStageDialog,
+  BulkDeleteDialog,
+} from "@/components/leads/command-center";
+import type { Lead, LeadsPage } from "@/types/lead.types";
 import { toast } from "sonner";
+
+// =============================================================================
+// TYPES
+// =============================================================================
 
 interface LeadsClientProps {
   initialData: LeadsPage;
 }
 
-// LocalStorage key for filter persistence
-const LEADS_FILTERS_STORAGE_KEY = "leads_filters_v2"; // Bumped version for new structure
-
-// Filter state type for localStorage - now with multi-select arrays
-interface StoredFilters {
-  search: string;
-  statusFilters: LeadStatus[];
-  sourceFilters: string[];      // Multi-select
-  offeringFilters: string[];    // Multi-select
-  stageFilters: string[];       // Multi-select
-  officerFilters: string[];     // Multi-select
-  dateFrom: string;
-  dateTo: string;
-  dateField: "created_at" | "last_consultation_at";
-}
-
-// Default filter values
-const DEFAULT_FILTERS: StoredFilters = {
-  search: "",
-  statusFilters: [],
-  sourceFilters: [],
-  offeringFilters: [],
-  stageFilters: [],
-  officerFilters: [],
-  dateFrom: "",
-  dateTo: "",
-  dateField: "created_at",
-};
-
-// Helper to save filters to localStorage
-function saveFiltersToStorage(filters: StoredFilters) {
-  try {
-    localStorage.setItem(LEADS_FILTERS_STORAGE_KEY, JSON.stringify(filters));
-  } catch {
-    // Ignore localStorage errors (e.g., quota exceeded, private browsing)
-  }
-}
-
-// Helper to load filters from localStorage
-function loadFiltersFromStorage(): StoredFilters | null {
-  try {
-    const stored = localStorage.getItem(LEADS_FILTERS_STORAGE_KEY);
-    if (stored) {
-      return JSON.parse(stored) as StoredFilters;
-    }
-  } catch {
-    // Ignore parse errors
-  }
-  return null;
-}
-
-// Helper to clear filters from localStorage
-function clearFiltersFromStorage() {
-  try {
-    localStorage.removeItem(LEADS_FILTERS_STORAGE_KEY);
-  } catch {
-    // Ignore
-  }
-}
-
-// Check if URL has any filter params
-function hasUrlFilterParams(searchParams: URLSearchParams): boolean {
-  return !!(
-    searchParams.get("q") ||
-    searchParams.get("status") ||
-    searchParams.get("source") ||
-    searchParams.get("offering") ||
-    searchParams.get("stage") ||
-    searchParams.get("officer") ||
-    searchParams.get("from") ||
-    searchParams.get("to")
-  );
-}
-
-// Helper to parse URL params - now returns arrays for multi-select
-function parseSearchParams(searchParams: URLSearchParams): StoredFilters & { page: number } {
-  return {
-    page: parseInt(searchParams.get("page") || "1"),
-    search: searchParams.get("q") || "",
-    statusFilters: searchParams.get("status")?.split(",").filter(Boolean) as LeadStatus[] || [],
-    sourceFilters: searchParams.get("source")?.split(",").filter(Boolean) || [],
-    offeringFilters: searchParams.get("offering")?.split(",").filter(Boolean) || [],
-    stageFilters: searchParams.get("stage")?.split(",").filter(Boolean) || [],
-    officerFilters: searchParams.get("officer")?.split(",").filter(Boolean) || [],
-    dateFrom: searchParams.get("from") || "",
-    dateTo: searchParams.get("to") || "",
-    dateField: (searchParams.get("date_field") === "last_consultation_at" ? "last_consultation_at" : "created_at") as "created_at" | "last_consultation_at",
-  };
-}
+// =============================================================================
+// MAIN COMPONENT
+// =============================================================================
 
 export function LeadsClient({ initialData }: LeadsClientProps) {
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const pathname = usePathname();
-  const isInitialMount = useRef(true);
+  // ✅ Option D: Use extracted filter hook
+  const { state: filterState, handlers: filterHandlers, apiFilters } = useLeadsFilter();
 
-  // =====================================================================
-  // STATE MANAGEMENT (initialized from URL, fallback to localStorage)
-  // =====================================================================
-
-  // Determine initial values: URL params take priority, then localStorage
-  const initialValues = useMemo(() => {
-    // If URL has filter params, use them (for sharing/bookmarking)
-    if (hasUrlFilterParams(searchParams)) {
-      return parseSearchParams(searchParams);
-    }
-    
-    // Otherwise, try to restore from localStorage (for nav link back)
-    const storedFilters = loadFiltersFromStorage();
-    if (storedFilters) {
-      return {
-        page: 1, // Always start at page 1 when restoring from storage
-        ...storedFilters,
-      };
-    }
-    
-    // Default values
-    return {
-      page: 1,
-      ...DEFAULT_FILTERS,
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Only run once on mount
-
-  // Pagination
-  const [page, setPage] = useState(initialValues.page);
-  const [pageSize] = useState(50);
-
-  // Filters - multi-select arrays for source, offering, stage, officer
-  const [search, setSearch] = useState(initialValues.search);
-  const [statusFilters, setStatusFilters] = useState<LeadStatus[]>(initialValues.statusFilters);
-  const [sourceFilters, setSourceFilters] = useState<string[]>(initialValues.sourceFilters);
-  const [scoreRange, setScoreRange] = useState<[number, number]>([0, 100]);
-  const [offeringFilters, setOfferingFilters] = useState<string[]>(initialValues.offeringFilters);
-  const [stageFilters, setStageFilters] = useState<string[]>(initialValues.stageFilters);
-  const [officerFilters, setOfficerFilters] = useState<string[]>(initialValues.officerFilters);
-
-  // === DATE RANGE FILTER ===
-  const [dateFrom, setDateFrom] = useState(initialValues.dateFrom);
-  const [dateTo, setDateTo] = useState(initialValues.dateTo);
-  const [dateField, setDateField] = useState<"created_at" | "last_consultation_at">(
-    initialValues.dateField === "created_at" ? "created_at" : "last_consultation_at"
-  );
-
-  // Selection & Dialogs
+  // Selection & Dialog states
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
   const [leadDialogOpen, setLeadDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<"create" | "edit">("create");
@@ -197,140 +70,19 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);
   const [leadToDelete, setLeadToDelete] = useState<Lead | null>(null);
 
-  // =====================================================================
-  // URL SYNC - Update URL when filters change
-  // =====================================================================
-  useEffect(() => {
-    // Skip on initial mount to avoid unnecessary URL update
-    if (isInitialMount.current) {
-      isInitialMount.current = false;
-      return;
-    }
+  // ✅ Option B: Bulk action dialogs state
+  const [bulkStageDialogOpen, setBulkStageDialogOpen] = useState(false);
+  const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
+  const [selectedLeadsForBulk, setSelectedLeadsForBulk] = useState<Lead[]>([]);
+  const [resetSelectionKey, setResetSelectionKey] = useState(0);
 
-    const params = new URLSearchParams();
+  // Ref to auto-scroll detail panel when selecting a new lead
+  const detailPanelRef = useRef<HTMLDivElement>(null);
 
-    // Only add non-default values to URL
-    if (page > 1) params.set("page", page.toString());
-    if (search) params.set("q", search);
-    if (statusFilters.length > 0) params.set("status", statusFilters.join(","));
-    if (sourceFilters.length > 0) params.set("source", sourceFilters.join(","));
-    if (offeringFilters.length > 0) params.set("offering", offeringFilters.join(","));
-    if (stageFilters.length > 0) params.set("stage", stageFilters.join(","));
-    if (officerFilters.length > 0) params.set("officer", officerFilters.join(","));
-    if (dateFrom) params.set("from", dateFrom);
-    if (dateTo) params.set("to", dateTo);
-    if (dateField !== "created_at") params.set("date_field", dateField);
-
-    const queryString = params.toString();
-    const newUrl = queryString ? `${pathname}?${queryString}` : pathname;
-
-    // Use replace to avoid adding to browser history for every filter change
-    router.replace(newUrl, { scroll: false });
-  }, [
-    page,
-    search,
-    statusFilters,
-    sourceFilters,
-    offeringFilters,
-    stageFilters,
-    officerFilters,
-    dateFrom,
-    dateTo,
-    dateField,
-    pathname,
-    router,
-  ]);
-
-  // =====================================================================
-  // LOCALSTORAGE SYNC - Save filters for nav link restoration
-  // =====================================================================
-  useEffect(() => {
-    // Save current filters to localStorage (excluding page)
-    const filtersToSave: StoredFilters = {
-      search,
-      statusFilters,
-      sourceFilters,
-      offeringFilters,
-      stageFilters,
-      officerFilters,
-      dateFrom,
-      dateTo,
-      dateField,
-    };
-
-    // Only save if there are active filters
-    const hasActiveFilters =
-      search ||
-      statusFilters.length > 0 ||
-      sourceFilters.length > 0 ||
-      offeringFilters.length > 0 ||
-      stageFilters.length > 0 ||
-      officerFilters.length > 0 ||
-      dateFrom ||
-      dateTo;
-
-    if (hasActiveFilters) {
-      saveFiltersToStorage(filtersToSave);
-    } else {
-      clearFiltersFromStorage();
-    }
-  }, [
-    search,
-    statusFilters,
-    sourceFilters,
-    offeringFilters,
-    stageFilters,
-    officerFilters,
-    dateFrom,
-    dateTo,
-    dateField,
-  ]);
-
-  // =====================================================================
+  // ===========================================================================
   // API CALLS
-  // =====================================================================
+  // ===========================================================================
 
-  // Build filters for API - now sends comma-separated values for multi-select
-  const apiFilters = useMemo(() => {
-    const params: Record<string, unknown> = {
-      page,
-      page_size: pageSize,
-    };
-
-    if (search) params.search = search;
-    if (statusFilters.length > 0) params.status = statusFilters.join(",");
-    if (sourceFilters.length > 0) params.source = sourceFilters.join(",");
-    if (offeringFilters.length > 0) params.offering_id = offeringFilters.join(",");
-    if (stageFilters.length > 0) params.pipeline_stage_id = stageFilters.join(",");
-    if (officerFilters.length > 0) params.assigned_officer_id = officerFilters.join(",");
-
-    // === DATE RANGE FILTER ===
-    if (dateFrom) params.date_from = new Date(dateFrom).toISOString();
-    if (dateTo) {
-      // Set to end of day for inclusive filtering
-      const endDate = new Date(dateTo);
-      endDate.setHours(23, 59, 59, 999);
-      params.date_to = endDate.toISOString();
-    }
-    if (dateFrom || dateTo) params.date_field = dateField;
-
-    return params;
-  }, [
-    page,
-    pageSize,
-    search,
-    statusFilters,
-    sourceFilters,
-    offeringFilters,
-    stageFilters,
-    officerFilters,
-    dateFrom,
-    dateTo,
-    dateField,
-  ]);
-
-  // ✅ Fetch data with initialData from Server Component
-  // Only use initialData when no filters are applied (pure first load)
   const {
     data: leadsPage,
     isLoading,
@@ -338,15 +90,15 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
     error,
   } = useLeads(apiFilters, {
     initialData:
-      page === 1 &&
-      !search &&
-      statusFilters.length === 0 &&
-      offeringFilters.length === 0 &&
-      sourceFilters.length === 0 &&
-      stageFilters.length === 0 &&
-      officerFilters.length === 0 &&
-      !dateFrom &&
-      !dateTo
+      filterState.page === 1 &&
+      !filterState.search &&
+      filterState.statusFilters.length === 0 &&
+      filterState.offeringFilters.length === 0 &&
+      filterState.sourceFilters.length === 0 &&
+      filterState.stageFilters.length === 0 &&
+      filterState.officerFilters.length === 0 &&
+      !filterState.dateFrom &&
+      !filterState.dateTo
         ? initialData
         : undefined,
   });
@@ -355,28 +107,29 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
   const exportMutation = useExportLeads();
   const importMutation = useImportLeads();
 
-  // Filter leads by score range (client-side for better UX)
+  // Filter leads by score range (client-side)
   const filteredLeads = useMemo(() => {
     if (!leadsPage?.leads) return [];
     return leadsPage.leads.filter(
-      (lead) => lead.lead_score >= scoreRange[0] && lead.lead_score <= scoreRange[1]
+      (lead) => 
+        lead.lead_score >= filterState.scoreRange[0] && 
+        lead.lead_score <= filterState.scoreRange[1]
     );
-  }, [leadsPage, scoreRange]);
+  }, [leadsPage, filterState.scoreRange]);
 
-  // ✅ AUTO-CLEAR: Clear selectedLeadId if lead is deleted/no longer exists
+  // Auto-clear selectedLeadId if lead is deleted/no longer exists
   useEffect(() => {
     if (selectedLeadId) {
       const leadStillExists = filteredLeads.some((lead) => lead.id === selectedLeadId);
       if (!leadStillExists) {
-        // Use queueMicrotask to avoid synchronous setState in effect
         queueMicrotask(() => setSelectedLeadId(null));
       }
     }
   }, [filteredLeads, selectedLeadId]);
 
-  // =====================================================================
+  // ===========================================================================
   // HANDLERS
-  // =====================================================================
+  // ===========================================================================
 
   const handleLeadSelect = useCallback((lead: Lead) => {
     setSelectedLeadId(lead.id);
@@ -420,9 +173,8 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
     }
   };
 
-  // Bulk action handlers
+  // ✅ Option B: Bulk action handlers with dialogs
   const handleBulkAssign = useCallback((leads: Lead[]) => {
-    // For now, assign the first lead - could open a dialog for bulk assign
     if (leads.length > 0) {
       setSelectedLead(leads[0]);
       setAssignDialogOpen(true);
@@ -431,94 +183,33 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
   }, []);
 
   const handleBulkChangeStage = useCallback((leads: Lead[]) => {
-    // TODO: Implement bulk stage change dialog
-    toast.info(`Đổi giai đoạn cho ${leads.length} lead`);
+    setSelectedLeadsForBulk(leads);
+    setBulkStageDialogOpen(true);
   }, []);
 
   const handleBulkExport = useCallback((leads: Lead[]) => {
-    // Export selected leads - for now just export with current filters
-    // TODO: Pass lead IDs to backend when API supports it
     exportMutation.mutate({ format: "csv", filters: apiFilters });
     toast.success(`Xuất ${leads.length} lead đã chọn`);
   }, [exportMutation, apiFilters]);
 
   const handleBulkDelete = useCallback((leads: Lead[]) => {
-    // For now, show confirmation for first lead - could implement bulk delete
-    if (leads.length > 0) {
-      toast.warning(`Xóa ${leads.length} lead - Tính năng đang phát triển`);
+    setSelectedLeadsForBulk(leads);
+    setBulkDeleteDialogOpen(true);
+  }, []);
+
+  // Auto-scroll detail panel to top when selecting a new lead
+  useEffect(() => {
+    if (selectedLeadId && detailPanelRef.current) {
+      detailPanelRef.current.scrollTo({ top: 0, behavior: 'smooth' });
     }
-  }, []);
+  }, [selectedLeadId]);
 
-  const resetFilters = useCallback(() => {
-    setSearch("");
-    setStatusFilters([]);
-    setSourceFilters([]);
-    setScoreRange([0, 100]);
-    setOfferingFilters([]);
-    setStageFilters([]);
-    setOfficerFilters([]);
-    // === DATE RANGE FILTER ===
-    setDateFrom("");
-    setDateTo("");
-    setDateField("created_at");
-    setPage(1);
-    // Clear localStorage as well
-    clearFiltersFromStorage();
-  }, []);
-
-  const handleSearchChange = useCallback((value: string) => {
-    setSearch(value);
-    setPage(1);
-  }, []);
-
-  const handleStatusChange = useCallback((statuses: LeadStatus[]) => {
-    setStatusFilters(statuses);
-    setPage(1);
-  }, []);
-
-  // Multi-select handlers - now accept arrays
-  const handleSourceChange = useCallback((sources: string[]) => {
-    setSourceFilters(sources);
-    setPage(1);
-  }, []);
-
-  const handleOfferingChange = useCallback((offerings: string[]) => {
-    setOfferingFilters(offerings);
-    setPage(1);
-  }, []);
-
-  const handleStageChange = useCallback((stages: string[]) => {
-    setStageFilters(stages);
-    setPage(1);
-  }, []);
-
-  const handleOfficerChange = useCallback((officers: string[]) => {
-    setOfficerFilters(officers);
-    setPage(1);
-  }, []);
-
-  // === DATE RANGE FILTER HANDLERS ===
-  const handleDateFromChange = useCallback((date: string) => {
-    setDateFrom(date);
-    setPage(1);
-  }, []);
-
-  const handleDateToChange = useCallback((date: string) => {
-    setDateTo(date);
-    setPage(1);
-  }, []);
-
-  const handleDateFieldChange = useCallback((field: "created_at" | "last_consultation_at") => {
-    setDateField(field);
-    setPage(1);
-  }, []);
-
-  // =====================================================================
+  // ===========================================================================
   // RENDER
-  // =====================================================================
+  // ===========================================================================
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col overflow-hidden">
       {/* Header - Compact */}
       <div className="bg-background/95 supports-[backdrop-filter]:bg-background/60 shrink-0 border-b backdrop-blur">
         <div className="flex items-center justify-between px-4 py-3">
@@ -554,7 +245,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
         </div>
       </div>
 
-      {/* Stats Cards - Collapsible or compact */}
+      {/* Stats Cards */}
       <div className="shrink-0 border-b px-4 py-2">
         <LeadStats
           leads={leadsPage?.leads || []}
@@ -563,29 +254,29 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
         />
       </div>
 
-      {/* Filter Bar - Horizontal */}
+      {/* Filter Bar */}
       <LeadFilterBar
-        search={search}
-        onSearchChange={handleSearchChange}
-        statusFilters={statusFilters}
-        onStatusChange={handleStatusChange}
-        sourceFilters={sourceFilters}
-        onSourceChange={handleSourceChange}
-        offeringFilters={offeringFilters}
-        onOfferingChange={handleOfferingChange}
-        stageFilters={stageFilters}
-        onStageChange={handleStageChange}
-        officerFilters={officerFilters}
-        onOfficerChange={handleOfficerChange}
-        scoreRange={scoreRange}
-        onScoreRangeChange={setScoreRange}
-        dateFrom={dateFrom}
-        dateTo={dateTo}
-        dateField={dateField}
-        onDateFromChange={handleDateFromChange}
-        onDateToChange={handleDateToChange}
-        onDateFieldChange={setDateField}
-        onReset={resetFilters}
+        search={filterState.search}
+        onSearchChange={filterHandlers.handleSearchChange}
+        statusFilters={filterState.statusFilters}
+        onStatusChange={filterHandlers.handleStatusChange}
+        sourceFilters={filterState.sourceFilters}
+        onSourceChange={filterHandlers.handleSourceChange}
+        offeringFilters={filterState.offeringFilters}
+        onOfferingChange={filterHandlers.handleOfferingChange}
+        stageFilters={filterState.stageFilters}
+        onStageChange={filterHandlers.handleStageChange}
+        officerFilters={filterState.officerFilters}
+        onOfficerChange={filterHandlers.handleOfficerChange}
+        scoreRange={filterState.scoreRange}
+        onScoreRangeChange={filterHandlers.handleScoreRangeChange}
+        dateFrom={filterState.dateFrom}
+        dateTo={filterState.dateTo}
+        dateField={filterState.dateField}
+        onDateFromChange={filterHandlers.handleDateFromChange}
+        onDateToChange={filterHandlers.handleDateToChange}
+        onDateFieldChange={filterHandlers.handleDateFieldChange}
+        onReset={filterHandlers.resetFilters}
         onExport={handleExport}
         onAddLead={() => {
           setSelectedLead(null);
@@ -595,12 +286,11 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
         totalCount={leadsPage?.total_count || 0}
       />
 
-      {/* Main Content - Split View */}
-      <ResizablePanelGroup direction="horizontal" className="flex-1">
+      {/* Main Content - Split View with Independent Scroll */}
+      <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1">
         {/* Left: Data Table (65%) */}
         <ResizablePanel defaultSize={65} minSize={45} maxSize={80}>
-          <div className="flex h-full flex-col">
-            {/* Data Table with built-in footer pagination */}
+          <div className="flex h-full flex-col overflow-y-auto">
             {isLoading ? (
               <div className="space-y-2 p-4">
                 {Array.from({ length: 10 }).map((_, i) => (
@@ -623,14 +313,15 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
                 onSelectLead={handleLeadSelect}
                 onEditLead={handleEdit}
                 onDeleteLead={handleDelete}
-                page={page}
-                pageSize={pageSize}
+                page={filterState.page}
+                pageSize={filterState.pageSize}
                 totalCount={leadsPage?.total_count || 0}
-                onPageChange={setPage}
+                onPageChange={filterHandlers.setPage}
                 onBulkAssign={handleBulkAssign}
                 onBulkChangeStage={handleBulkChangeStage}
                 onBulkExport={handleBulkExport}
                 onBulkDelete={handleBulkDelete}
+                resetSelectionKey={resetSelectionKey}
               />
             )}
           </div>
@@ -638,9 +329,9 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
 
         <ResizableHandle withHandle />
 
-        {/* Right: Detail Panel (35%) */}
+        {/* Right: Detail Panel (35%) - Independent Scroll */}
         <ResizablePanel defaultSize={35} minSize={25} maxSize={50}>
-          <div className="animate-in slide-in-from-right-2 h-full duration-200">
+          <div ref={detailPanelRef} className="h-full overflow-y-auto">
             <LeadDetailPanel
               leadId={selectedLeadId}
               onEdit={handleEdit}
@@ -665,6 +356,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
         lead={selectedLead}
       />
 
+      {/* Single Lead Delete */}
       <AlertDialog open={!!leadToDelete} onOpenChange={() => setLeadToDelete(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -682,6 +374,28 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* ✅ Option B: Bulk Stage Change Dialog */}
+      <BulkStageDialog
+        open={bulkStageDialogOpen}
+        onOpenChange={setBulkStageDialogOpen}
+        leads={selectedLeadsForBulk}
+        onSuccess={() => {
+          setSelectedLeadsForBulk([]);
+          setResetSelectionKey(prev => prev + 1);
+        }}
+      />
+
+      {/* ✅ Option B: Bulk Delete Dialog */}
+      <BulkDeleteDialog
+        open={bulkDeleteDialogOpen}
+        onOpenChange={setBulkDeleteDialogOpen}
+        leads={selectedLeadsForBulk}
+        onSuccess={() => {
+          setSelectedLeadsForBulk([]);
+          setResetSelectionKey(prev => prev + 1);
+        }}
+      />
     </div>
   );
 }
