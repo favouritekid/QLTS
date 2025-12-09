@@ -5,6 +5,7 @@ import structlog
 from fastapi import HTTPException
 
 from . import models, security
+from .core.constants import UserRole
 from .config import settings
 from .database import AsyncSessionLocal, redis_client, safe_redis_get
 # NOTE: user_service import moved inside function to avoid circular import
@@ -330,7 +331,7 @@ async def connect(sid, environ, auth):
                 rooms_joined.append(unit_room)
 
             # 4. Admin room (for all admin users)
-            if user.role == "admin":
+            if user.role == UserRole.ADMIN:
                 await sio.enter_room(sid, "role_admin")
                 if "role_admin" not in rooms_joined:
                     rooms_joined.append("role_admin")
@@ -387,7 +388,7 @@ async def disconnect(sid):
                 rooms_left.append(unit_room)
 
             # 4. Admin room
-            if role == "admin":
+            if role == UserRole.ADMIN:
                 await sio.leave_room(sid, "role_admin")
                 if "role_admin" not in rooms_left:
                     rooms_left.append("role_admin")

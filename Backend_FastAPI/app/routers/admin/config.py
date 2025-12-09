@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models, schemas
 from app.core import deps
+from app.core.constants import UserRole
 from app.services import config_service
 
 log = structlog.get_logger(__name__)
@@ -243,7 +244,7 @@ async def list_distribution_rules(
     Returns distribution rules ordered by priority (highest first).
     """
     # Admin gets all rules
-    if current_admin.role == "admin":
+    if current_admin.role == UserRole.ADMIN:
         return await config_service.get_all_distribution_rules(db)
 
     # Manager gets rules in their managed units only

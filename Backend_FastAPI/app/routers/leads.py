@@ -13,6 +13,7 @@ from ..core import deps
 from ..services import distribution_service, insights_service, lead_service
 from ..services.notification_dispatcher import dispatch  # ✅ NOTIFICATION 2.0
 from ..core.events import SystemEvents  # ✅ NOTIFICATION 2.0
+from ..core.constants import UserRole
 from app.core.rate_limits import limiter, RateLimits
 
 log = structlog.get_logger(__name__)
@@ -153,7 +154,7 @@ async def get_all_leads(
     # === ROLE-BASED FILTERING ===
     # Officers can only see their assigned leads
     effective_officer_id = assigned_officer_id
-    if current_user.role == "officer":
+    if current_user.role == UserRole.OFFICER:
         # Force filter by current officer, ignore any passed assigned_officer_id
         effective_officer_id = str(current_user.id)
 

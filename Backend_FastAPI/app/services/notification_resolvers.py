@@ -26,6 +26,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
+from app.core.constants import UserRole
 
 log = logging.getLogger(__name__)
 
@@ -210,7 +211,7 @@ class UnitManagersResolver(BaseResolver):
         - [] if unit_id not provided or query fails
     """
 
-    MANAGER_ROLES = ["manager", "admin"]
+    MANAGER_ROLES = [UserRole.MANAGER, UserRole.ADMIN]
 
     async def resolve_users(
         self,
@@ -431,7 +432,7 @@ class AllAdminsResolver(BaseResolver):
             query = select(models.User.id).where(
                 and_(
                     models.User.status == "active",
-                    models.User.role == "admin"
+                    models.User.role == UserRole.ADMIN
                 )
             )
 

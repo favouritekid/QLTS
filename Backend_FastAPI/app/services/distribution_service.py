@@ -24,6 +24,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models
+from ..core.constants import UserRole
 from ..config import settings
 from ..database import redis_client, REDIS_BREAKER_EXCEPTIONS
 
@@ -221,7 +222,7 @@ async def get_target_unit_for_offering(
             .where(
                 and_(
                     models.User.unit_id == selected_unit_id,
-                    models.User.role == "officer",
+                    models.User.role == UserRole.OFFICER,
                     models.User.status == "active"
                 )
             )

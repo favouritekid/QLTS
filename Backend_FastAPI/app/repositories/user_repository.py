@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app import models
+from app.core.constants import UserRole
 from app.repositories.base import BaseRepository
 
 
@@ -262,7 +263,7 @@ class UserRepository(BaseRepository[models.User]):
         """
         result = await self.db.execute(
             select(models.User)
-            .where(models.User.role == "officer")
+            .where(models.User.role == UserRole.OFFICER)
             .where(models.User.availability_status == availability_status)
             .where(models.User.status == "active")
             .order_by(models.User.last_assigned_at.asc().nullsfirst())
@@ -287,7 +288,7 @@ class UserRepository(BaseRepository[models.User]):
         """
         query = (
             select(models.User)
-            .where(models.User.role == "officer")
+            .where(models.User.role == UserRole.OFFICER)
             .where(models.User.unit_id == unit_id)
         )
 

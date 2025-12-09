@@ -19,6 +19,7 @@ from ..utils.exceptions import (
 )
 from ..services import pipeline_service, distribution_service
 from ..core.status_mapping import sync_lead_status_from_consultation
+from ..core.constants import UserRole
 from .status_helper import StatusHelper, AssignmentStatus
 
 log = structlog.get_logger(__name__)
@@ -437,7 +438,7 @@ async def create_lead(
         if created_by:
             user_role = created_by.role
 
-            if user_role == "officer":
+            if user_role == UserRole.OFFICER:
                 # Officer: Force unit to their unit, auto-assign to themselves
                 create_data["unit_id"] = created_by.unit_id
                 direct_assignment_officer_id = created_by.id
@@ -448,7 +449,7 @@ async def create_lead(
                     unit_id=created_by.unit_id
                 )
 
-            elif user_role == "manager":
+            elif user_role == UserRole.MANAGER:
                 # Manager: Always use their unit
                 create_data["unit_id"] = created_by.unit_id
                 # Can choose officer in their unit or use auto-assignment
@@ -459,7 +460,7 @@ async def create_lead(
                         raise PermissionDeniedError(
                             detail="Manager can only assign leads to officers in their unit"
                         )
-                    if officer.role != "officer":
+                    if officer.role != UserRole.OFFICER:
                         raise PermissionDeniedError(
                             detail="Can only assign leads to users with 'officer' role"
                         )
@@ -472,7 +473,7 @@ async def create_lead(
                     )
                 # If no officer specified, use auto-assignment (Celery)
 
-            elif user_role == "admin":
+            elif user_role == UserRole.ADMIN:
                 # Admin: unit_id can be auto-determined from offering distribution
                 # If offering_id is provided, try to get unit from distribution config FIRST
                 if create_data.get("offering_id") and not create_data.get("unit_id"):
@@ -509,7 +510,7 @@ async def create_lead(
                         raise ResourceNotFoundError(
                             detail=f"Officer with id {create_data['assigned_officer_id']} not found"
                         )
-                    if officer.role != "officer":
+                    if officer.role != UserRole.OFFICER:
                         raise PermissionDeniedError(
                             detail="Can only assign leads to users with 'officer' role"
                         )
@@ -891,7 +892,7 @@ async def update_lead(
                         
                         if not is_valid:
                             # Chỉ cho phép Admin bypass quy tắc này (Tùy chọn)
-                            if updated_by.role != "admin":
+                            if updated_by.role != UserRole.ADMIN:
                                 raise BadRequest(
                                     detail=f"Không thể chuyển trạng thái từ '{current_status_id}' sang '{new_status_id}'. Quy trình không cho phép (Allowed Transitions)."
                                 )
@@ -1152,7 +1153,7 @@ async def add_consultation(
                 
                 if not is_valid:
                     # Admin có thể bypass rule này
-                    if officer.role != "admin":
+                    if officer.role != UserRole.ADMIN:
                         raise BadRequest(
                             detail=f"Không thể chuyển trạng thái từ '{current_status_id}' sang '{data.status_id}'. "
                                    f"Quy trình không cho phép (Allowed Transitions). "
@@ -1294,7 +1295,7 @@ async def assign_lead_manually(
                 raise ResourceNotFoundError(
                     detail=f"User (Officer) with id {officer_id} not found."
                 )
-            if officer.role != "officer":
+            if officer.role != UserRole.OFFICER:
                 raise PermissionDeniedError(
                     detail=f"User with id {officer_id} is not an officer."
                 )
@@ -1490,10 +1491,10 @@ async def delete_consultation(
                 )
 
             # Kiểm tra quyền
-            if current_user.role == "admin":
+            if current_user.role == UserRole.ADMIN:
                 # Admin có quyền xóa bất kỳ consultation nào
                 pass
-            elif current_user.role == "officer":
+            elif current_user.role == UserRole.OFFICER:
                 # Officer chỉ được xóa consultation mới nhất
                 # Tìm consultation mới nhất của Lead này
                 latest_consultation_query = (
@@ -1729,10 +1730,10 @@ async def update_consultation(
             )
 
             # Kiểm tra quyền
-            if current_user.role in ("admin", "manager"):
+            if current_user.role in (UserRole.ADMIN, UserRole.MANAGER):
                 # Admin và Manager có quyền update bất kỳ consultation nào
                 pass
-            elif current_user.role == "officer":
+            elif current_user.role == UserRole.OFFICER:
                 # === BUSINESS RULES FOR OFFICER ===
                 # 1. Phải là consultation mới nhất (chain integrity)
                 if not is_latest_consultation:
@@ -2529,7 +2530,7 @@ async def bulk_assign_leads(
     officer = await db.get(models.User, officer_id)
     if not officer:
         raise ResourceNotFoundError(f"Officer with id {officer_id} not found")
-    if officer.role != "officer":
+    if officer.role != UserRole.OFFICER:
         raise PermissionDeniedError(f"User {officer_id} is not an officer")
     if officer.status != "active":
         raise BadRequest(f"Officer {officer_id} is not active")

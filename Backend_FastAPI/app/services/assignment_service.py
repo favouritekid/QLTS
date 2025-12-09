@@ -14,6 +14,7 @@ from sqlalchemy.exc import OperationalError  # Dùng để bắt LockNotAvailabl
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models
+from ..core.constants import UserRole
 from ..core.events import SystemEvents
 from .notification_dispatcher import dispatch
 from .status_helper import StatusHelper, AssignmentStatus
@@ -75,7 +76,7 @@ async def automatically_assign_lead(
                 # === BƯỚC 2: Khóa các Officer liên quan (SỬ DỤNG SKIP LOCKED) ===
                 available_officers_query = (
                     select(models.User).where(
-                        models.User.role == "officer",
+                        models.User.role == UserRole.OFFICER,
                         models.User.status == "active",
                         models.User.availability_status
                         == "available",  # Chỉ lấy officer đang sẵn sàng

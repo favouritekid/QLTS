@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, joinedload
 
 from .. import models
+from ..core.constants import UserRole
 from ..utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
@@ -63,7 +64,7 @@ def _check_admin_or_unit_access(
     Raises:
         PermissionDeniedError: If user doesn't have access
     """
-    if current_user.role == "admin":
+    if current_user.role == UserRole.ADMIN:
         return  # Admin has full access
 
     if profile.lead.unit_id != current_user.unit_id:
@@ -168,7 +169,7 @@ async def create_profile(
         raise ResourceNotFoundError(f"Lead with ID {lead_id} not found")
 
     # Step 2: IDOR Check
-    if current_user.role != "admin":
+    if current_user.role != UserRole.ADMIN:
         if lead.unit_id != current_user.unit_id:
             log.warning(
                 "IDOR attempt: User tried to create profile for lead in different unit",
