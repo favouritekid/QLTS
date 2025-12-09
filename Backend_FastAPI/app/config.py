@@ -120,6 +120,41 @@ class Settings(BaseSettings):
     DEFAULT_REASSIGN_LEAD_STATUS: str = "reassigned_pending"  # DEPRECATED: Use AssignmentStatus.REASSIGN_PENDING
     DEFAULT_ADMISSIONS_UNIT_ID: int = 1  # Fallback unit when no distribution config found
 
+    # -- Security: Account Lockout --
+    # These settings control brute-force protection for login attempts
+    ACCOUNT_LOCKOUT_MAX_ATTEMPTS: int = Field(
+        default=5, validation_alias="ACCOUNT_LOCKOUT_MAX_ATTEMPTS"
+    )  # Lock after N failed attempts
+    ACCOUNT_LOCKOUT_DURATION_MINUTES: int = Field(
+        default=15, validation_alias="ACCOUNT_LOCKOUT_DURATION_MINUTES"
+    )  # Lock duration in minutes
+    ACCOUNT_LOCKOUT_WINDOW_MINUTES: int = Field(
+        default=30, validation_alias="ACCOUNT_LOCKOUT_WINDOW_MINUTES"
+    )  # Reset counter after N minutes of no attempts
+
+    # -- Security: Anomaly Detection --
+    # These settings control suspicious activity detection on login
+    ANOMALY_MAX_FAILED_LOGINS_PER_HOUR: int = Field(
+        default=5, validation_alias="ANOMALY_MAX_FAILED_LOGINS_PER_HOUR"
+    )
+    ANOMALY_MAX_SESSIONS_PER_USER: int = Field(
+        default=10, validation_alias="ANOMALY_MAX_SESSIONS_PER_USER"
+    )  # Max concurrent sessions before warning
+    ANOMALY_SUSPICIOUS_COUNTRY_CHANGE_HOURS: int = Field(
+        default=2, validation_alias="ANOMALY_SUSPICIOUS_COUNTRY_CHANGE_HOURS"
+    )  # Hours between logins from different countries to flag
+    ANOMALY_UNUSUAL_LOGIN_START_HOUR: int = Field(
+        default=2, validation_alias="ANOMALY_UNUSUAL_LOGIN_START_HOUR"
+    )  # Start of unusual login hours (local time)
+    ANOMALY_UNUSUAL_LOGIN_END_HOUR: int = Field(
+        default=6, validation_alias="ANOMALY_UNUSUAL_LOGIN_END_HOUR"
+    )  # End of unusual login hours (local time)
+
+    # -- Security: Socket Rate Limiting --
+    SOCKET_MAX_CONN_PER_MINUTE: int = Field(
+        default=60, validation_alias="SOCKET_MAX_CONN_PER_MINUTE"
+    )  # Max WebSocket connections per minute per IP
+
     # -- Lead Scoring Defaults (Không từ env) --
     LEAD_SCORING_ENGAGEMENT_POINTS: Dict[str, Any] = {
         "consultation_count_multiplier": 5,

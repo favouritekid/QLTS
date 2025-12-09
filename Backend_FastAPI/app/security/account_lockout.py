@@ -25,10 +25,9 @@ from ..models import UserActivityLog
 
 log = structlog.get_logger(__name__)
 
-# Configuration
-MAX_FAILED_ATTEMPTS = 5  # Lock after 5 failed attempts
-LOCKOUT_DURATION_MINUTES = 15  # Lock for 15 minutes
-ATTEMPT_WINDOW_MINUTES = 30  # Reset counter after 30 minutes of no attempts
+# Configuration now comes from settings (see config.py)
+# These can be overridden via environment variables:
+#   ACCOUNT_LOCKOUT_MAX_ATTEMPTS, ACCOUNT_LOCKOUT_DURATION_MINUTES, ACCOUNT_LOCKOUT_WINDOW_MINUTES
 
 
 class AccountLockoutService:
@@ -61,7 +60,7 @@ class AccountLockoutService:
             if is_locked:
                 # Get remaining TTL
                 ttl_str = await safe_redis_get(f"{lockout_key}:ttl")
-                remaining_seconds = int(ttl_str) if ttl_str else LOCKOUT_DURATION_MINUTES * 60
+                remaining_seconds = int(ttl_str) if ttl_str else settings.ACCOUNT_LOCKOUT_DURATION_MINUTES * 60
 
                 log.warning(
                     "Account lockout check: Account is locked",
@@ -116,7 +115,7 @@ class AccountLockoutService:
 
             # Store updated counter with expiration
             await safe_redis_set(
-                attempts_key, str(current_attempts), ex=ATTEMPT_WINDOW_MINUTES * 60
+                attempts_key, str(current_attempts), ex=settings.ACCOUNT_LOCKOUT_WINDOW_MINUTES * 60
             )
 
             log.info(
@@ -124,13 +123,13 @@ class AccountLockoutService:
                 username=username,
                 ip_address=ip_address,
                 attempt_count=current_attempts,
-                max_attempts=MAX_FAILED_ATTEMPTS,
+                max_attempts=settings.ACCOUNT_LOCKOUT_MAX_ATTEMPTS,
             )
 
             # Check if threshold exceeded
-            if current_attempts >= MAX_FAILED_ATTEMPTS:
+            if current_attempts >= settings.ACCOUNT_LOCKOUT_MAX_ATTEMPTS:
                 # Lock the account
-                lockout_duration_seconds = LOCKOUT_DURATION_MINUTES * 60
+                lockout_duration_seconds = settings.ACCOUNT_LOCKOUT_DURATION_MINUTES * 60
                 await safe_redis_set(lockout_key, "1", ex=lockout_duration_seconds)
                 await safe_redis_set(
                     f"{lockout_key}:ttl",
@@ -146,7 +145,7 @@ class AccountLockoutService:
                     username=username,
                     ip_address=ip_address,
                     failed_attempts=current_attempts,
-                    lockout_duration_minutes=LOCKOUT_DURATION_MINUTES,
+                    lockout_duration_minutes=settings.ACCOUNT_LOCKOUT_DURATION_MINUTES,
                 )
 
                 # ✅ Log to database for audit trail
@@ -160,7 +159,7 @@ class AccountLockoutService:
                             "username": username,
                             "reason": "excessive_failed_login_attempts",
                             "failed_attempts": current_attempts,
-                            "lockout_duration_minutes": LOCKOUT_DURATION_MINUTES,
+                            "lockout_duration_minutes": settings.ACCOUNT_LOCKOUT_DURATION_MINUTES,
                             "ip_address": ip_address,
                         },
                         ip_address=ip_address,

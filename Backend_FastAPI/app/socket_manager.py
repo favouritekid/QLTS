@@ -55,9 +55,8 @@ sio = socketio.AsyncServer(
 )
 
 # === ✅ CẢI TIẾN: Vấn đề #1 - Rate Limiting bằng Redis LUA Script ===
-# Increased from 20 to 60 to accommodate legitimate usage patterns
-# 20 req/min was too strict and caused false positives
-MAX_CONN_PER_MINUTE = 60
+# Configuration now comes from settings (see config.py)
+# Can be overridden via SOCKET_MAX_CONN_PER_MINUTE environment variable
 RATE_LIMIT_SCRIPT_SHA = None  # Sẽ được load khi khởi động
 
 # LUA script (atomic)
@@ -125,7 +124,7 @@ async def check_rate_limit(client_ip: str) -> bool:
     try:
         # Chạy script bằng SHA (nhanh hơn)
         result = await redis_client.evalsha(
-            RATE_LIMIT_SCRIPT_SHA, 1, key, MAX_CONN_PER_MINUTE, 60  # TTL 60 giây
+            RATE_LIMIT_SCRIPT_SHA, 1, key, settings.SOCKET_MAX_CONN_PER_MINUTE, 60  # TTL 60 giây
         )
         return bool(result)
     except Exception as e:
@@ -138,7 +137,7 @@ async def check_rate_limit(client_ip: str) -> bool:
         try:
             await load_rate_limit_script()  # Tải lại script
             result = await redis_client.evalsha(
-                RATE_LIMIT_SCRIPT_SHA, 1, key, MAX_CONN_PER_MINUTE, 60
+                RATE_LIMIT_SCRIPT_SHA, 1, key, settings.SOCKET_MAX_CONN_PER_MINUTE, 60
             )
             return bool(result)
         except Exception as e2:
