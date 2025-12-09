@@ -5,7 +5,18 @@ import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Loader2, Info } from "lucide-react";
+import { 
+  Loader2, 
+  Info, 
+  User, 
+  Mail, 
+  Phone, 
+  Building2, 
+  GraduationCap, 
+  MapPin,
+  Users,
+  Megaphone
+} from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { leadsApi } from "@/lib/api/leads";
 
@@ -313,18 +324,24 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-            {/* Basic Information */}
+            {/* Basic Information Section */}
             <div className="space-y-4">
-              <h3 className="text-sm font-semibold">Thông tin cơ bản</h3>
+              <div className="flex items-center gap-2 pb-2 border-b">
+                <User className="h-4 w-4 text-muted-foreground" />
+                <h3 className="text-sm font-semibold">Thông tin cơ bản</h3>
+              </div>
 
               <FormField
                 control={form.control}
                 name="full_name"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Họ và tên *</FormLabel>
+                    <FormLabel>Họ và tên <span className="text-destructive">*</span></FormLabel>
                     <FormControl>
-                      <Input placeholder="Nguyễn Văn A" {...field} />
+                      <div className="relative">
+                        <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                        <Input className="pl-10" placeholder="Nguyễn Văn A" {...field} />
+                      </div>
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -339,7 +356,16 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                     <FormItem>
                       <FormLabel>Email</FormLabel>
                       <FormControl>
-                        <Input type="email" placeholder="john@example.com" {...field} value={field.value ?? ""} />
+                        <div className="relative">
+                          <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                          <Input 
+                            className="pl-10" 
+                            type="email" 
+                            placeholder="email@example.com" 
+                            {...field} 
+                            value={field.value ?? ""} 
+                          />
+                        </div>
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -351,9 +377,12 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                   name="phone"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Số điện thoại *</FormLabel>
+                      <FormLabel>Số điện thoại <span className="text-destructive">*</span></FormLabel>
                       <FormControl>
-                        <Input placeholder="0909123456" {...field} />
+                        <div className="relative">
+                          <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                          <Input className="pl-10" placeholder="0901234567" {...field} />
+                        </div>
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -368,13 +397,17 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                   <FormItem>
                     <FormLabel>Số điện thoại phụ</FormLabel>
                     <FormControl>
-                      <Input
-                        placeholder="0909123456"
-                        {...field}
-                        value={field.value ?? ""}
-                      />
+                      <div className="relative">
+                        <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/60" />
+                        <Input
+                          className="pl-10"
+                          placeholder="0901234567"
+                          {...field}
+                          value={field.value ?? ""}
+                        />
+                      </div>
                     </FormControl>
-                    <FormDescription>Số điện thoại liên hệ phụ (không bắt buộc)</FormDescription>
+                    <FormDescription>Số liên hệ phụ (không bắt buộc)</FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -386,7 +419,10 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                   name="source"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Nguồn lead *</FormLabel>
+                      <FormLabel className="flex items-center gap-1.5">
+                        <Megaphone className="h-3.5 w-3.5" />
+                        Nguồn lead <span className="text-destructive">*</span>
+                      </FormLabel>
                       <Select onValueChange={field.onChange} value={field.value}>
                         <FormControl>
                           <SelectTrigger>
@@ -417,8 +453,9 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
 
                     return (
                       <FormItem>
-                        <FormLabel>
-                          Đơn vị tổ chức {!unitOptional && !hideUnitSelector && "*"}
+                        <FormLabel className="flex items-center gap-1.5">
+                          <Building2 className="h-3.5 w-3.5" />
+                          Đơn vị tổ chức {!unitOptional && !hideUnitSelector && <span className="text-destructive">*</span>}
                         </FormLabel>
                         <FormControl>
                           <SmartUnitSelector
@@ -554,9 +591,12 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
               )}
             </div>
 
-            {/* Academic Information */}
+            {/* Academic Information Section */}
             <div className="space-y-4">
-              <h3 className="text-sm font-semibold">Thông tin học vấn</h3>
+              <div className="flex items-center gap-2 pb-2 border-b">
+                <GraduationCap className="h-4 w-4 text-muted-foreground" />
+                <h3 className="text-sm font-semibold">Thông tin học vấn</h3>
+              </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <FormField
@@ -564,7 +604,10 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                   name="education_level"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Trình độ học vấn</FormLabel>
+                      <FormLabel className="flex items-center gap-1.5">
+                        <GraduationCap className="h-3.5 w-3.5" />
+                        Trình độ học vấn
+                      </FormLabel>
                       <Select
                         onValueChange={field.onChange}
                         value={field.value || undefined}
@@ -622,13 +665,20 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                 name="location"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Địa điểm</FormLabel>
+                    <FormLabel className="flex items-center gap-1.5">
+                      <MapPin className="h-3.5 w-3.5" />
+                      Địa điểm
+                    </FormLabel>
                     <FormControl>
-                      <Input
-                        placeholder="TP. Hồ Chí Minh"
-                        {...field}
-                        value={field.value ?? ""}
-                      />
+                      <div className="relative">
+                        <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                        <Input
+                          className="pl-10"
+                          placeholder="TP. Hồ Chí Minh"
+                          {...field}
+                          value={field.value ?? ""}
+                        />
+                      </div>
                     </FormControl>
                     <FormMessage />
                   </FormItem>
