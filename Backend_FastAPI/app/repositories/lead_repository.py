@@ -244,7 +244,7 @@ class LeadRepository(BaseRepository[models.Lead]):
 
     async def get_by_email(self, email: str) -> Optional[models.Lead]:
         """
-        Get lead by email address.
+        Get lead by email address (case-insensitive).
 
         Args:
             email: Email to search
@@ -254,7 +254,7 @@ class LeadRepository(BaseRepository[models.Lead]):
         """
         result = await self.db.execute(
             select(models.Lead)
-            .where(models.Lead.email == email)
+            .where(func.lower(models.Lead.email) == email.lower())
             .where(models.Lead.deleted_at.is_(None))
         )
         return result.scalars().first()

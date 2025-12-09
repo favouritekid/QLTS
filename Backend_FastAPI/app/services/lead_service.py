@@ -535,8 +535,8 @@ async def create_lead(
             phone_conditions.append(models.Lead.phone2 == lead_in.phone)
             phone_conditions.append(models.Lead.phone2 == lead_in.phone2)
 
-        # Build email condition - only check if email is provided
-        email_condition = models.Lead.email == lead_in.email if lead_in.email else None
+        # Build email condition - only check if email is provided (case-insensitive)
+        email_condition = func.lower(models.Lead.email) == lead_in.email.lower() if lead_in.email else None
 
         # Build OR conditions
         if email_condition is not None:
@@ -551,19 +551,30 @@ async def create_lead(
                 models.Lead.deleted_at.is_(None),  # Exclude soft-deleted
                 duplicate_conditions
             )
-            .with_for_update()  # Khóa để tránh race condition khi tạo
+            .with_for_update()  # Lock to prevent race condition
         )
         existing_lead_result = await db.execute(existing_lead_query)
         existing_lead = existing_lead_result.scalars().first()
         if existing_lead:
-            # Determine which field caused the duplicate
-            if lead_in.email and existing_lead.email == lead_in.email:
+            # Fetch officer info separately (can't use joinedload with FOR UPDATE)
+            officer_name = "Chưa phân công"
+            if existing_lead.assigned_officer_id:
+                officer = await db.get(models.User, existing_lead.assigned_officer_id)
+                if officer:
+                    officer_name = officer.full_name or "N/A"
+            
+            # Build detailed error message with lead info and officer
+            lead_name = existing_lead.full_name or "N/A"
+            lead_phone = existing_lead.phone or "N/A"
+            
+            # Determine which field caused the duplicate (case-insensitive email check)
+            if lead_in.email and existing_lead.email and existing_lead.email.lower() == lead_in.email.lower():
                 raise DuplicateResourceError(
-                    detail="Lead with this email already exists in the unit."
+                    detail=f"Email này đã tồn tại. Lead: {lead_name} (SĐT: {lead_phone}) - Đang được quản lý bởi: {officer_name}"
                 )
             else:
                 raise DuplicateResourceError(
-                    detail="Lead with this phone number already exists in the unit."
+                    detail=f"Số điện thoại này đã tồn tại. Lead: {lead_name} (SĐT: {lead_phone}) - Đang được quản lý bởi: {officer_name}"
                 )
 
         # === NEW FEATURE: Shared Offering Distribution ===
@@ -798,17 +809,29 @@ async def update_lead(
 
             # (Dọn dẹp .strip() đã bị xóa vì Pydantic xử lý)
 
-            # Kiểm tra trùng lặp email nếu email được cập nhật
-            if "email" in update_data and update_data["email"] != db_lead.email:
-                existing_lead_query = select(models.Lead).where(
-                    models.Lead.email == update_data["email"],
-                    models.Lead.unit_id == db_lead.unit_id,  # Trong cùng unit
-                    models.Lead.id != lead_id,  # Loại trừ chính lead này
+            # Kiểm tra trùng lặp email nếu email được cập nhật (case-insensitive)
+            if "email" in update_data and update_data["email"] and (
+                not db_lead.email or update_data["email"].lower() != db_lead.email.lower()
+            ):
+                existing_lead_query = (
+                    select(models.Lead)
+                    .options(joinedload(models.Lead.assigned_officer))
+                    .where(
+                        func.lower(models.Lead.email) == update_data["email"].lower(),
+                        models.Lead.unit_id == db_lead.unit_id,  # Trong cùng unit
+                        models.Lead.id != lead_id,  # Loại trừ chính lead này
+                    )
                 )
                 existing_lead_result = await db.execute(existing_lead_query)
-                if existing_lead_result.scalars().first():
+                dup_lead = existing_lead_result.scalars().first()
+                if dup_lead:
+                    officer_name = (
+                        dup_lead.assigned_officer.full_name 
+                        if dup_lead.assigned_officer 
+                        else "Chưa phân công"
+                    )
                     raise DuplicateResourceError(
-                        detail="Another lead with this email already exists in the unit."
+                        detail=f"Email này đã được sử dụng. Lead: {dup_lead.full_name} (SĐT: {dup_lead.phone}) - Đang được quản lý bởi: {officer_name}"
                     )
 
             # Kiểm tra trùng lặp phone/phone2 nếu được cập nhật
@@ -830,16 +853,26 @@ async def update_lead(
                     phone_conditions.append(models.Lead.phone2 == new_phone2)
 
                 if phone_conditions:
-                    existing_lead_query = select(models.Lead).where(
-                        models.Lead.unit_id == db_lead.unit_id,  # Trong cùng unit
-                        models.Lead.id != lead_id,  # Loại trừ chính lead này
-                        models.Lead.deleted_at.is_(None),  # Exclude soft-deleted
-                        or_(*phone_conditions)
+                    existing_lead_query = (
+                        select(models.Lead)
+                        .options(joinedload(models.Lead.assigned_officer))
+                        .where(
+                            models.Lead.unit_id == db_lead.unit_id,  # Trong cùng unit
+                            models.Lead.id != lead_id,  # Loại trừ chính lead này
+                            models.Lead.deleted_at.is_(None),  # Exclude soft-deleted
+                            or_(*phone_conditions)
+                        )
                     )
                     existing_lead_result = await db.execute(existing_lead_query)
-                    if existing_lead_result.scalars().first():
+                    dup_lead = existing_lead_result.scalars().first()
+                    if dup_lead:
+                        officer_name = (
+                            dup_lead.assigned_officer.full_name 
+                            if dup_lead.assigned_officer 
+                            else "Chưa phân công"
+                        )
                         raise DuplicateResourceError(
-                            detail="Another lead with this phone number already exists in the unit."
+                            detail=f"Số điện thoại này đã được sử dụng. Lead: {dup_lead.full_name} (SĐT: {dup_lead.phone}) - Đang được quản lý bởi: {officer_name}"
                         )
 
             # === NEW FEATURE: Auto-Reassign on Offering Change ===
@@ -2317,10 +2350,11 @@ async def import_leads_from_file_content(
     initial_stage_id = initial_status_obj.stage_id
     initial_legacy_status = initial_status_obj.legacy_status or "new"
 
-    # Get existing emails to check for duplicates efficiently
+    # Get existing emails to check for duplicates efficiently (case-insensitive)
     existing_emails_in_db = set()
     async for email_tuple in await db.stream(select(models.Lead.email)):
-        existing_emails_in_db.add(email_tuple[0])
+        if email_tuple[0]:  # Only add non-null emails
+            existing_emails_in_db.add(email_tuple[0].lower())
     emails_in_current_file = set()
 
     # --- 4. Process each row ---
@@ -2378,16 +2412,18 @@ async def import_leads_from_file_content(
 
             lead_in = schemas.LeadCreate(**cleaned_data)
 
-            # Check email duplication
-            if (
-                lead_in.email in existing_emails_in_db
-                or lead_in.email in emails_in_current_file
+            # Check email duplication (case-insensitive)
+            email_lower = lead_in.email.lower() if lead_in.email else None
+            if email_lower and (
+                email_lower in existing_emails_in_db
+                or email_lower in emails_in_current_file
             ):
                 raise ValueError(
-                    f"Email '{lead_in.email}' already exists in the database or this file."
+                    f"Email '{lead_in.email}' đã tồn tại trong cơ sở dữ liệu hoặc file này."
                 )
 
-            emails_in_current_file.add(lead_in.email)
+            if email_lower:
+                emails_in_current_file.add(email_lower)
 
             # Prepare dict for bulk insert
             lead_dict = lead_in.model_dump()
