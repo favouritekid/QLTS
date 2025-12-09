@@ -106,8 +106,59 @@ class LeadBase(BaseModel):
     @classmethod
     def empty_string_to_none(cls, v):
         """Convert empty string to None so EmailStr validation passes."""
-        if v == "":
+        if v == "" or (isinstance(v, str) and v.strip() == ""):
             return None
+        return v
+
+    @field_validator("phone", "phone2", mode="before")
+    @classmethod
+    def normalize_and_validate_phone(cls, v, info):
+        """
+        Normalize and validate Vietnam phone numbers.
+        
+        - Normalizes +84/84 prefix to 0
+        - Validates against Vietnam phone regex: ^0(3|5|7|8|9|2)\\d{8,9}$
+        - Allows None/empty for phone2 (optional field)
+        """
+        from app.utils.phone_helpers import normalize_vietnam_phone, validate_vietnam_phone
+        
+        # Allow None for optional fields (phone2)
+        if v is None:
+            return None
+        
+        # Allow empty string for phone2, convert to None
+        if isinstance(v, str) and v.strip() == "":
+            if info.field_name == "phone2":
+                return None
+            # phone is required, empty string will fail min_length validation
+            return v
+        
+        # Normalize the phone number
+        normalized = normalize_vietnam_phone(v)
+        if normalized is None:
+            return v  # Let min_length validation handle it
+        
+        # Validate against Vietnam format
+        if not validate_vietnam_phone(normalized, normalize=False):
+            raise ValueError(
+                f"Số điện thoại không hợp lệ. Vui lòng nhập số điện thoại Việt Nam "
+                f"(VD: 0901234567, +84901234567)"
+            )
+        
+        return normalized
+
+    @field_validator("phone2", mode="after")
+    @classmethod
+    def phone2_must_differ_from_phone(cls, v, info):
+        """Ensure phone2 is different from phone."""
+        if v is None:
+            return v
+        
+        # Access phone from data (already validated)
+        phone = info.data.get("phone")
+        if phone and v == phone:
+            raise ValueError("Số điện thoại phụ phải khác số điện thoại chính")
+        
         return v
 
 
@@ -154,9 +205,40 @@ class LeadUpdate(BaseModel):
     @classmethod
     def empty_string_to_none(cls, v):
         """Convert empty string to None so EmailStr validation passes."""
-        if v == "":
+        if v == "" or (isinstance(v, str) and v.strip() == ""):
             return None
         return v
+
+    @field_validator("phone", "phone2", mode="before")
+    @classmethod
+    def normalize_and_validate_phone(cls, v, info):
+        """
+        Normalize and validate Vietnam phone numbers on update.
+        All fields optional on update, so None is always allowed.
+        """
+        from app.utils.phone_helpers import normalize_vietnam_phone, validate_vietnam_phone
+        
+        # Allow None for all fields on update
+        if v is None:
+            return None
+        
+        # Allow empty string, convert to None
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        
+        # Normalize the phone number
+        normalized = normalize_vietnam_phone(v)
+        if normalized is None:
+            return None
+        
+        # Validate against Vietnam format
+        if not validate_vietnam_phone(normalized, normalize=False):
+            raise ValueError(
+                f"Số điện thoại không hợp lệ. Vui lòng nhập số điện thoại Việt Nam "
+                f"(VD: 0901234567, +84901234567)"
+            )
+        
+        return normalized
 
 
 class Lead(LeadBase):
