@@ -43,29 +43,43 @@ import { SmartUnitSelector, SmartOfferingSelector } from "@/components/common/se
 import { LEAD_SOURCE_OPTIONS } from "@/constants";
 import type { Lead } from "@/types/lead.types";
 
+// Vietnam phone regex - matches backend validation
+// Format: 0 + (3|5|7|8|9|2) + 8-9 digits = 10-11 total
+// Supports: 0xxxxxxxxx, +84xxxxxxxxx, 84xxxxxxxxx
+const VIETNAM_PHONE_REGEX = /^(0|\+?84)(3|5|7|8|9|2)\d{8,9}$/;
+
+// Helper to normalize phone for validation (remove spaces, dashes)
+const normalizePhone = (phone: string): string => {
+  return phone.replace(/[\s\-.()/]/g, "");
+};
+
 // Validation schema - unit_id is optional (can be auto-determined from offering)
 const leadSchema = z.object({
   full_name: z
     .string()
-    .min(1, "Full name is required")
-    .max(120, "Full name must be less than 120 characters"),
+    .min(1, "Họ và tên là bắt buộc")
+    .max(120, "Họ và tên tối đa 120 ký tự"),
   email: z
     .string()
-    .email("Invalid email address")
+    .email("Email không hợp lệ")
     .optional()
     .or(z.literal(""))
     .nullable(),
   phone: z
     .string()
-    .min(1, "Phone number is required")
-    .max(20, "Phone number must be less than 20 characters")
-    .regex(/^[0-9+\-\s()]+$/, "Invalid phone number format"),
+    .min(1, "Số điện thoại là bắt buộc")
+    .transform(normalizePhone)
+    .refine((val) => VIETNAM_PHONE_REGEX.test(val), {
+      message: "Số điện thoại Việt Nam không hợp lệ (VD: 0901234567, +84901234567)",
+    }),
   phone2: z
     .string()
-    .max(20, "Phone number must be less than 20 characters")
-    .regex(/^[0-9+\-\s()]*$/, "Invalid phone number format")
-    .optional()
-    .nullable(),
+    .transform((val) => (val?.trim() === "" ? null : normalizePhone(val || "")))
+    .refine((val) => val === null || VIETNAM_PHONE_REGEX.test(val), {
+      message: "Số điện thoại phụ không hợp lệ (VD: 0901234567, +84901234567)",
+    })
+    .nullable()
+    .optional(),
   source: z.enum([
     "website",
     "referral",
@@ -89,18 +103,30 @@ const leadSchema = z.object({
     .nullable(),
   gpa: z
     .number()
-    .min(0, "GPA must be at least 0")
-    .max(4, "GPA must be at most 4")
+    .min(0, "GPA phải từ 0")
+    .max(4, "GPA tối đa 4.0")
     .optional()
     .nullable(),
-  location: z.string().max(255, "Location must be less than 255 characters").optional().nullable(),
+  location: z.string().max(255, "Địa điểm tối đa 255 ký tự").optional().nullable(),
   offering_id: z.number().optional().nullable(),
   // unit_id is optional for Admin when offering_id is provided (auto-determined from distribution config)
   unit_id: z.string().optional().nullable(),
   // For Admin/Manager: choose officer or use auto-assignment
   // "auto" = automatic distribution, number string = specific officer ID
   assigned_officer_id: z.string().optional().nullable(),
-});
+}).refine(
+  (data) => {
+    // phone2 must differ from phone (if both provided)
+    if (data.phone2 && data.phone) {
+      return data.phone2 !== data.phone;
+    }
+    return true;
+  },
+  {
+    message: "Số điện thoại phụ phải khác số điện thoại chính",
+    path: ["phone2"],
+  }
+);
 
 // Distribution preview response type
 interface DistributionPreview {
