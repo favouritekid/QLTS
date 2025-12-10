@@ -78,6 +78,103 @@ async def update_lead_next_activity(
     )
 
 
+def calculate_fit_score(
+    lead_birth_year: Optional[int],
+    lead_education_level: Optional[str],
+    lead_location_proximity: int,
+    lead_occupation_relevance: int,
+    lead_source: Optional[str],
+    lead_academic_performance: int,
+    scoring_rules: Optional[dict],
+) -> int:
+    """
+    Calculate Fit Score (0-40 points) for lead qualification.
+    
+    Scoring breakdown (40 total):
+    - Age: 0/4/8 based on target age range
+    - Education: 0/4/8 based on required education
+    - Location: 0/2/5 (Officer self-assessment)
+    - Occupation: 0/2/5 (Officer self-assessment)
+    - Hot Level: 0/4/8 (per-offering config)
+    - Source: 1-3 (fixed mapping)
+    - Academic Performance: 0/1/2/3 (Officer assessment)
+    
+    Args:
+        lead_birth_year: Lead's birth year (e.g., 2000)
+        lead_education_level: Lead's education level
+        lead_location_proximity: 0=Far, 1=Nearby, 2=Close
+        lead_occupation_relevance: 0=Unrelated, 1=Indirect, 2=Direct
+        lead_source: Lead source (referral, website, etc.)
+        lead_academic_performance: 0=Weak, 1=Average, 2=Good, 3=Excellent
+        scoring_rules: ProgramOffering.scoring_rules JSON
+        
+    Returns:
+        int: Fit Score (0-40)
+    """
+    from datetime import datetime
+    
+    score = 0
+    current_year = datetime.now().year
+    
+    # Default scoring rules if not provided
+    if not scoring_rules:
+        scoring_rules = {}
+    
+    # 1. Age Score (0/4/8 points)
+    if lead_birth_year:
+        age = current_year - lead_birth_year
+        target_min = scoring_rules.get("target_age_min", 18)
+        target_max = scoring_rules.get("target_age_max", 60)
+        
+        if target_min <= age <= target_max:
+            score += 8  # Exact match
+        elif abs(age - target_min) <= 3 or abs(age - target_max) <= 3:
+            score += 4   # Close match (within 3 years)
+        # else: 0 points
+    
+    # 2. Education Score (0/4/8 points)
+    if lead_education_level:
+        required_edu = scoring_rules.get("required_education")
+        if required_edu:
+            EDUCATION_ORDER = ["high_school", "diploma", "bachelor", "master", "phd"]
+            lead_edu_idx = EDUCATION_ORDER.index(lead_education_level.lower()) if lead_education_level.lower() in EDUCATION_ORDER else -1
+            req_edu_idx = EDUCATION_ORDER.index(required_edu.lower()) if required_edu.lower() in EDUCATION_ORDER else -1
+            
+            if lead_edu_idx >= 0 and req_edu_idx >= 0:
+                if lead_edu_idx == req_edu_idx:
+                    score += 8  # Exact match
+                elif lead_edu_idx > req_edu_idx:
+                    score += 4   # Higher than required
+                # else: 0 points (lower than required)
+    
+    # 3. Location Score (0/2/5 points) - Officer self-assessment
+    LOCATION_SCORES = {0: 0, 1: 2, 2: 5}
+    score += LOCATION_SCORES.get(lead_location_proximity, 0)
+    
+    # 4. Occupation Score (0/2/5 points) - Officer self-assessment
+    OCCUPATION_SCORES = {0: 0, 1: 2, 2: 5}
+    score += OCCUPATION_SCORES.get(lead_occupation_relevance, 0)
+    
+    # 5. Hot Level Score (0/4/8 points)
+    hot_level = scoring_rules.get("hot_level", 0)
+    HOT_LEVEL_SCORES = {0: 0, 1: 4, 2: 8}
+    score += HOT_LEVEL_SCORES.get(hot_level, 0)
+    
+    # 6. Source Score (1-3 points) - Fixed mapping
+    SOURCE_SCORES = {
+        "referral": 3, "event": 3,
+        "website": 2, "social_media": 2, "walk_in": 2,
+        "phone": 1, "email": 1, "other": 1
+    }
+    if lead_source:
+        score += SOURCE_SCORES.get(lead_source.lower(), 1)
+    
+    # 7. Academic Performance Score (0-3 points)
+    score += min(lead_academic_performance, 3)
+    
+    # Cap at 40
+    return min(score, 40)
+
 async def calculate_lead_score(
     db: AsyncSession,
     lead_education_level: Optional[str] = None,
@@ -85,6 +182,10 @@ async def calculate_lead_score(
     lead_source: Optional[str] = None,
     lead_location: Optional[str] = None,
     unit_id: Optional[int] = None,
+    # Behavioral metrics
+    consultation_count: int = 0,
+    has_application: bool = False,
+    days_since_last_activity: int = 0,
 ) -> int:
     """
     Calculate lead score based on configurable rules from LeadScoringConfig.
@@ -96,6 +197,9 @@ async def calculate_lead_score(
         lead_source: Source of lead (website, referral, social_media, etc.)
         lead_location: Location of lead
         unit_id: Organization unit ID (for unit-specific scoring config)
+        consultation_count: Number of consultations
+        has_application: Whether lead has submitted application
+        days_since_last_activity: Days since last activity (for decay)
 
     Returns:
         int: Calculated lead score (0-100)
@@ -120,6 +224,13 @@ async def calculate_lead_score(
         }
         default_gpa_multiplier = 10  # 4.0 GPA = 40 points
         default_location_bonus = 20
+        
+        # Behavioral defaults
+        default_consultation_score = 5  # Points per consultation
+        default_max_consultation_score = 25
+        default_application_score = 30
+        default_stale_penalty = 10
+        stale_threshold_days = 7
 
         score = 0
 
@@ -141,13 +252,26 @@ async def calculate_lead_score(
             gpa_multiplier = params.get("gpa_multiplier", default_gpa_multiplier)
             priority_locations = params.get("priority_locations", [])
             location_bonus = params.get("location_bonus", default_location_bonus)
+            
+            # Behavioral config
+            consultation_score_weight = params.get("consultation_score", default_consultation_score)
+            max_consultation_score = params.get("max_consultation_score", default_max_consultation_score)
+            application_score = params.get("application_score", default_application_score)
+            stale_penalty = params.get("stale_penalty", default_stale_penalty)
         else:
             education_scores = default_education_scores
             source_scores = default_source_scores
             gpa_multiplier = default_gpa_multiplier
             priority_locations = []
             location_bonus = default_location_bonus
+            
+            consultation_score_weight = default_consultation_score
+            max_consultation_score = default_max_consultation_score
+            application_score = default_application_score
+            stale_penalty = default_stale_penalty
 
+        # --- Demographic Scoring ---
+        
         # Calculate education score
         if lead_education_level:
             score += education_scores.get(lead_education_level.lower(), 0)
@@ -166,16 +290,33 @@ async def calculate_lead_score(
             if lead_location.lower() in [loc.lower() for loc in priority_locations]:
                 score += location_bonus
 
-        # Cap score at 100
-        final_score = min(score, 100)
+        # --- Behavioral Scoring (Auto) ---
+        
+        # Consultation score
+        if consultation_count > 0:
+            cons_score = min(consultation_count * consultation_score_weight, max_consultation_score)
+            score += cons_score
+            
+        # Application score
+        if has_application:
+            score += application_score
+            
+        # Stale penalty
+        if days_since_last_activity > stale_threshold_days:
+            score -= stale_penalty
+
+        # Cap score at 0-100
+        final_score = max(0, min(score, 100))
 
         log.debug(
             "Lead score calculated",
-            education_level=lead_education_level,
+            education=lead_education_level,
             gpa=lead_gpa,
-            source=lead_source,
-            location=lead_location,
-            score=final_score,
+            cons_count=consultation_count,
+            has_app=has_application,
+            stale_days=days_since_last_activity,
+            base_score=score,
+            final_score=final_score,
         )
 
         return final_score

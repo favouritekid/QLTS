@@ -184,6 +184,11 @@ class LeadCreate(LeadBase):
     gpa: Optional[float] = None
     location: Optional[str] = None
     assigned_officer_id: Optional[int] = None  # None = auto-assign, Integer = direct assign
+    # Fit Score fields (Officer input)
+    birth_year: Optional[int] = Field(None, ge=1900, le=2100)
+    location_proximity: int = Field(0, ge=0, le=2, description="0=Xa, 1=Lân cận, 2=Gần")
+    occupation_relevance: int = Field(0, ge=0, le=2, description="0=Không liên quan, 1=Gián tiếp, 2=Trực tiếp")
+    academic_performance: int = Field(0, ge=0, le=3, description="0=Yếu, 1=TB, 2=Khá, 3=Giỏi")
 
 
 class LeadUpdate(BaseModel):
@@ -200,6 +205,11 @@ class LeadUpdate(BaseModel):
     location: Optional[str] = None
     officer_rating: Optional[int] = None
     officer_summary: Optional[str] = None
+    # Fit Score fields
+    birth_year: Optional[int] = Field(None, ge=1900, le=2100)
+    location_proximity: Optional[int] = Field(None, ge=0, le=2)
+    occupation_relevance: Optional[int] = Field(None, ge=0, le=2)
+    academic_performance: Optional[int] = Field(None, ge=0, le=3)
 
     @field_validator("email", mode="before")
     @classmethod
@@ -254,6 +264,11 @@ class Lead(LeadBase):
     consultation_status_id: Optional[str] = None
     pipeline_stage_id: Optional[str] = None
     next_activity_at: Optional[datetime] = None  # Quick Disposition: bubble-up sorting
+    # Fit Score fields
+    birth_year: Optional[int] = None
+    location_proximity: int = 0
+    occupation_relevance: int = 0
+    academic_performance: int = 0
 
     offering: Optional[ProgramOffering] = None
     # THAY ĐỔI Ở ĐÂY: Sử dụng OrganizationUnitShallow

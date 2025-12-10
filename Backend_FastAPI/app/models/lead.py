@@ -76,6 +76,26 @@ class Lead(Base):
     location = Column(String(255), nullable=True)
     officer_rating = Column(Integer, nullable=True)
     officer_summary = Column(Text, nullable=True)
+    # Fit Score fields
+    birth_year = Column(Integer, nullable=True, comment="Năm sinh (VD: 2000)")
+    location_proximity = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="Officer đánh giá: 0=Xa, 1=Lân cận, 2=Gần"
+    )
+    occupation_relevance = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="Officer đánh giá: 0=Không liên quan, 1=Gián tiếp, 2=Trực tiếp"
+    )
+    academic_performance = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="Học lực: 0=Yếu/Chưa xác định, 1=Trung bình, 2=Khá, 3=Giỏi"
+    )
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,

@@ -78,6 +78,12 @@ export interface Lead {
   updated_at: string; // ISO datetime
   assigned_at?: string | null; // ISO datetime
   next_activity_at?: string | null; // ISO datetime - Quick Disposition bubble-up
+  
+  // Fit Score fields
+  birth_year?: number | null;
+  location_proximity: number; // 0=Xa, 1=Lân cận, 2=Gần
+  occupation_relevance: number; // 0=Không, 1=Gián tiếp, 2=Trực tiếp
+  academic_performance: number; // 0=Yếu, 1=TB, 2=Khá, 3=Giỏi
 
   // Foreign Keys
   offering_id?: number | null;
@@ -118,6 +124,11 @@ export interface LeadCreate {
   unit_id?: number | null;
   // Direct assignment: null = auto-assign (Celery), number = assign to specific officer
   assigned_officer_id?: number | null;
+  // Fit Score fields
+  birth_year?: number | null;
+  location_proximity?: number;
+  occupation_relevance?: number;
+  academic_performance?: number;
 }
 
 /**
@@ -138,6 +149,11 @@ export interface LeadUpdate {
   unit_id?: number | null; // Allow null for unit reassignment
   consultation_status_id?: string | null;
   pipeline_stage_id?: string | null;
+  // Fit Score fields
+  birth_year?: number | null;
+  location_proximity?: number;
+  occupation_relevance?: number;
+  academic_performance?: number;
 }
 
 /**

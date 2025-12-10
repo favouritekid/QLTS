@@ -125,6 +125,11 @@ const leadSchema = z.object({
   // For Admin/Manager: choose officer or use auto-assignment
   // "auto" = automatic distribution, number string = specific officer ID
   assigned_officer_id: z.string().optional().nullable(),
+  // Fit Score fields
+  birth_year: z.number().min(1900).max(2100).optional().nullable(),
+  location_proximity: z.number().min(0).max(2).default(0), // 0=Xa, 1=Lân cận, 2=Gần
+  occupation_relevance: z.number().min(0).max(2).default(0), // 0=Không, 1=Gián tiếp, 2=Trực tiếp
+  academic_performance: z.number().min(0).max(3).default(0), // 0=Yếu, 1=TB, 2=Khá, 3=Giỏi
 }).refine(
   (data) => {
     // phone2 must differ from phone (if both provided)
@@ -189,6 +194,11 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
           location: lead.location || null,
           offering_id: lead.offering_id ?? null,
           unit_id: lead.unit_id?.toString() || "",
+          // Fit Score fields
+          birth_year: lead.birth_year ?? null,
+          location_proximity: lead.location_proximity ?? 0,
+          occupation_relevance: lead.occupation_relevance ?? 0,
+          academic_performance: lead.academic_performance ?? 0,
         }
       : {
           full_name: "",
@@ -202,6 +212,11 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
           offering_id: null,
           unit_id: user?.unit_id?.toString() || "", // Auto-fill with current user's unit
           assigned_officer_id: "auto", // Default to auto-assignment
+          // Fit Score defaults
+          birth_year: null,
+          location_proximity: 0,
+          occupation_relevance: 0,
+          academic_performance: 0,
         },
   });
 
@@ -684,6 +699,121 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                   </FormItem>
                 )}
               />
+
+              {/* Fit Score Assessment Section */}
+              <div className="pt-4 mt-4 border-t space-y-4">
+                <div className="flex items-center gap-2 pb-2">
+                  <span className="text-sm font-semibold">📊 Đánh giá Fit Score</span>
+                  <span className="text-xs text-muted-foreground">(Officer đánh giá)</span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <FormField
+                    control={form.control}
+                    name="birth_year"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Năm sinh</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="number"
+                            min="1900"
+                            max="2100"
+                            placeholder="2000"
+                            {...field}
+                            value={field.value ?? ""}
+                            onChange={(e) =>
+                              field.onChange(
+                                e.target.value ? parseInt(e.target.value) : null
+                              )
+                            }
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="academic_performance"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Học lực</FormLabel>
+                        <Select
+                          onValueChange={(val) => field.onChange(parseInt(val))}
+                          value={field.value?.toString() || "0"}
+                        >
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Chọn học lực" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            <SelectItem value="0">Yếu / Chưa xác định</SelectItem>
+                            <SelectItem value="1">Trung bình (+1đ)</SelectItem>
+                            <SelectItem value="2">Khá (+2đ)</SelectItem>
+                            <SelectItem value="3">Giỏi (+3đ)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="location_proximity"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Khu vực</FormLabel>
+                        <Select
+                          onValueChange={(val) => field.onChange(parseInt(val))}
+                          value={field.value?.toString() || "0"}
+                        >
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Chọn mức độ gần" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            <SelectItem value="0">Xa / Không xác định</SelectItem>
+                            <SelectItem value="1">Tỉnh lân cận (+2đ)</SelectItem>
+                            <SelectItem value="2">Gần cơ sở (+5đ)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="occupation_relevance"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Nghề nghiệp liên quan</FormLabel>
+                        <Select
+                          onValueChange={(val) => field.onChange(parseInt(val))}
+                          value={field.value?.toString() || "0"}
+                        >
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Chọn mức độ" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            <SelectItem value="0">Không liên quan</SelectItem>
+                            <SelectItem value="1">Liên quan gián tiếp (+2đ)</SelectItem>
+                            <SelectItem value="2">Liên quan trực tiếp (+5đ)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+              </div>
             </div>
 
             <DialogFooter>
