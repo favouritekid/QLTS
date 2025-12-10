@@ -1,26 +1,27 @@
 // src/app/(dashboard)/leads/[id]/_components/LeadDetailClient.tsx
-// src/app/(dashboard)/leads/[id]/page.tsx
+/**
+ * LeadDetailClient - Streamlined Lead Detail Layout
+ * 
+ * Layout:
+ * - TOP BAR: Actions only (Edit, Delete) - breadcrumbs in layout
+ * - LEFT: Sidebar with name, score, stage, personal info
+ * - CENTER: Insights + Consultation (2-column: History + Quick)
+ * - FOOTER (optional): Next follow-up reminder
+ */
 "use client";
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Edit,
-  UserPlus,
-  Calendar,
-  TrendingUp,
-  Clock,
-  Mail,
-  Phone,
-  MapPin,
   Trash2,
-  FileText,
+  History,
+  Zap,
+  AlertCircle,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   AlertDialog,
@@ -37,36 +38,11 @@ import { useLead, useLeadTimeline, useLeadInsights, useDeleteLead } from "@/hook
 import { LeadDialog } from "@/components/leads/LeadDialog";
 import { AssignLeadDialog } from "@/components/leads/AssignLeadDialog";
 import { ConsultationDialog } from "@/components/leads/ConsultationDialog";
-import { LeadInfoTab } from "@/components/leads/LeadInfoTab";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
-import { LeadConsultationsTab } from "@/components/leads/LeadConsultationsTab";
+import { QuickConsultationSection } from "@/components/leads/QuickConsultationSection";
 import { LeadInsightsTab } from "@/components/leads/LeadInsightsTab";
-import { LeadApplicationTab } from "@/components/leads/LeadApplicationTab";
-import { BackButton } from "@/components/common/BackButton";
-import { Breadcrumbs } from "@/components/common/Breadcrumbs";
-import type { Lead, LeadStatus } from "@/types/lead.types";
-
-// Status badge variants (same as list page)
-const getStatusBadgeVariant = (status: LeadStatus) => {
-  switch (status) {
-    case "new":
-      return "default";
-    case "assigned":
-      return "secondary";
-    case "contacted":
-      return "outline";
-    case "qualified":
-      return "default";
-    case "unqualified":
-      return "destructive";
-    case "converted":
-      return "default";
-    case "rejected":
-      return "destructive";
-    default:
-      return "secondary";
-  }
-};
+import { LeadSidebar } from "./LeadSidebar";
+import type { Lead } from "@/types/lead.types";
 
 interface LeadDetailClientProps {
   leadId: number;
@@ -74,9 +50,7 @@ interface LeadDetailClientProps {
 }
 
 export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps) {
-  // const params = useParams();
   const router = useRouter();
-  // const leadId = Number(params.id); // Now passed as prop
 
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);
@@ -99,20 +73,49 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
     });
   };
 
+  // Get next follow-up from timeline (if any scheduled)
+  const getNextFollowUp = () => {
+    if (!lead?.consultations?.length) return null;
+    const scheduled = lead.consultations.find(
+      (c) => c.scheduled_at && new Date(c.scheduled_at) > new Date()
+    );
+    return scheduled;
+  };
+
+  const nextFollowUp = getNextFollowUp();
+
+  // Loading state
   if (isLoading) {
     return (
-      <div className="container mx-auto py-6 space-y-6">
-        <Skeleton className="h-10 w-64" />
-        <div className="grid gap-6 md:grid-cols-3">
-          {[...Array(3)].map((_, i) => (
-            <Skeleton key={i} className="h-32" />
-          ))}
+      <div className="flex flex-col h-[calc(100vh-4rem)]">
+        {/* Top bar skeleton */}
+        <div className="border-b px-6 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <Skeleton className="h-8 w-20" />
+            <Skeleton className="h-8 w-48" />
+            <Skeleton className="h-7 w-16" />
+          </div>
+          <div className="flex gap-2">
+            <Skeleton className="h-9 w-24" />
+            <Skeleton className="h-9 w-16" />
+          </div>
         </div>
-        <Skeleton className="h-96" />
+        {/* Content skeleton */}
+        <div className="flex flex-1">
+          <div className="w-72 border-r p-4 space-y-4">
+            <Skeleton className="h-32 w-full" />
+            <Skeleton className="h-32 w-full" />
+          </div>
+          <div className="flex-1 p-6">
+            <Skeleton className="h-48 w-full mb-4" />
+            <Skeleton className="h-64 w-full" />
+          </div>
+        </div>
       </div>
     );
   }
 
+  // Error state
   if (isError || !lead) {
     return (
       <div className="container mx-auto py-6">
@@ -124,7 +127,9 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <BackButton showLabel={true} />
+            <Button variant="outline" onClick={() => router.push("/leads")}>
+              ← Quay lại danh sách
+            </Button>
           </CardContent>
         </Card>
       </div>
@@ -132,151 +137,91 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
   }
 
   return (
-    <div className="container mx-auto py-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="space-y-1">
-          <div className="flex items-center gap-4">
-            <BackButton size="sm" />
-            <Breadcrumbs />
+    <div className="flex flex-col h-[calc(100vh-4rem)]">
+      {/* === TOP BAR: Actions Only === */}
+      <div className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-20">
+        <div className="px-6 py-2 flex items-center justify-end">
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => setEditDialogOpen(true)}>
+              <Edit className="mr-1.5 h-4 w-4" />
+              Chỉnh sửa
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => setDeleteDialogOpen(true)}
+            >
+              <Trash2 className="mr-1.5 h-4 w-4" />
+              Xoá
+            </Button>
           </div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-3xl font-bold tracking-tight">{lead.full_name}</h1>
-            <Badge variant={getStatusBadgeVariant(lead.status)}>
-              {lead.status.replace(/_/g, " ")}
-            </Badge>
-            <span className="text-sm text-muted-foreground">
-              Lead #{lead.id}
-            </span>
-          </div>
-          <div className="flex items-center gap-4 text-sm text-muted-foreground">
-            <div className="flex items-center gap-1">
-              <Mail className="h-4 w-4" />
-              {lead.email}
-            </div>
-            <div className="flex items-center gap-1">
-              <Phone className="h-4 w-4" />
-              {lead.phone}
-            </div>
-            {lead.location && (
-              <div className="flex items-center gap-1">
-                <MapPin className="h-4 w-4" />
-                {lead.location}
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            onClick={() => setAssignDialogOpen(true)}
-          >
-            <UserPlus className="mr-2 h-4 w-4" />
-            Phân công
-          </Button>
-          <Button onClick={() => setEditDialogOpen(true)}>
-            <Edit className="mr-2 h-4 w-4" />
-            Sửa
-          </Button>
-          <Button
-            variant="destructive"
-            onClick={() => setDeleteDialogOpen(true)}
-          >
-            <Trash2 className="mr-2 h-4 w-4" />
-            Xoá
-          </Button>
         </div>
       </div>
 
-      {/* Quick Stats */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Điểm Lead</CardTitle>
-            <TrendingUp className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{lead.lead_score}/100</div>
-            <p className="text-xs text-muted-foreground">
-              {lead.lead_score >= 75
-                ? "Lead chất lượng cao"
-                : lead.lead_score >= 50
-                  ? "Lead chất lượng trung bình"
-                  : "Lead chất lượng thấp"}
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Thời Gian Trong Pipeline</CardTitle>
-            <Clock className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">
-              {Math.floor(
-                (new Date().getTime() - new Date(lead.created_at).getTime()) /
-                  (1000 * 60 * 60 * 24)
-              )}{" "}
-              ngày
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Từ {new Date(lead.created_at).toLocaleDateString()}
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Sự Kiện Timeline</CardTitle>
-            <Calendar className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{timeline?.length || 0}</div>
-            <p className="text-xs text-muted-foreground">
-              Tổng hoạt động đã ghi
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Tabs */}
-      <Tabs defaultValue="info" className="space-y-4">
-        <TabsList className="grid w-full grid-cols-5">
-          <TabsTrigger value="info">Thông tin</TabsTrigger>
-          <TabsTrigger value="application" className="flex items-center gap-1">
-            <FileText className="h-4 w-4" />
-            Hồ sơ
-          </TabsTrigger>
-          <TabsTrigger value="timeline">Lịch sử</TabsTrigger>
-          <TabsTrigger value="consultations">Tư vấn</TabsTrigger>
-          <TabsTrigger value="insights">AI Insights</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="info">
-          <LeadInfoTab lead={lead} />
-        </TabsContent>
-
-        <TabsContent value="application">
-          <LeadApplicationTab lead={lead} />
-        </TabsContent>
-
-        <TabsContent value="timeline">
-          <LeadTimelineTab leadId={leadId} />
-        </TabsContent>
-
-        <TabsContent value="consultations">
-          <LeadConsultationsTab
-            leadId={leadId}
-            lead={lead}
-            onAddConsultation={() => setConsultationDialogOpen(true)}
+      {/* === MAIN CONTENT: Sidebar + Center === */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Sidebar - Full version with name/score/stage */}
+        <div className="w-72 shrink-0">
+          <LeadSidebar 
+            lead={lead} 
+            timeline={timeline}
+            onAssign={() => setAssignDialogOpen(true)}
           />
-        </TabsContent>
+        </div>
 
-        <TabsContent value="insights">
-          <LeadInsightsTab leadId={leadId} insights={insights} />
-        </TabsContent>
-      </Tabs>
+        {/* Center - Consultation Focus */}
+        <div className="flex-1 overflow-y-auto">
+          <div className="p-6 space-y-4">
+            {/* AI Insights - Compact Bar */}
+            <LeadInsightsTab leadId={leadId} insights={insights} />
+
+            {/* 2-column: Timeline (left) + Quick Consultation (right) */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* Left: Timeline */}
+              <Card className="h-fit lg:max-h-[500px] lg:overflow-y-auto">
+                <CardHeader className="pb-3 sticky top-0 bg-card z-10 border-b">
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <History className="h-4 w-4 text-muted-foreground" />
+                    Lịch sử tư vấn
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pt-4">
+                  <LeadTimelineTab leadId={leadId} />
+                </CardContent>
+              </Card>
+
+              {/* Right: Quick Consultation */}
+              <Card className="border-amber-200 bg-amber-50/30 h-fit">
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <Zap className="h-4 w-4 text-amber-500" />
+                    Ghi nhận tư vấn nhanh
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <QuickConsultationSection leadId={lead.id} />
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* === FOOTER: Follow-up Reminder (optional) === */}
+      {nextFollowUp && (
+        <div className="border-t bg-amber-50 px-6 py-2 flex items-center gap-3 text-sm">
+          <AlertCircle className="h-4 w-4 text-amber-600" />
+          <span className="text-amber-800">
+            <strong>Nhắc nhở:</strong> Có lịch hẹn tiếp theo vào{" "}
+            {new Date(nextFollowUp.scheduled_at!).toLocaleString("vi-VN", {
+              day: "2-digit",
+              month: "2-digit",
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </span>
+        </div>
+      )}
 
       {/* Dialogs */}
       <LeadDialog
@@ -309,8 +254,6 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
               <br /><br />
               Lead sẽ được đánh dấu đã xoá và ẩn khỏi danh sách.
               Tất cả dữ liệu lịch sử (tư vấn, hồ sơ, nhật ký) sẽ được giữ lại.
-              <br /><br />
-              Admin có thể hoàn tác thao tác này nếu cần.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

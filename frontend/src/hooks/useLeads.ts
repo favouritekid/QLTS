@@ -65,9 +65,9 @@ export function useLeads(
     queryFn: async () => {
       return await leadsApi.getLeads(params);
     },
-    staleTime: 1000 * 30, // 30 seconds
+    staleTime: 1000 * 5, // 5 seconds - shorter for real-time updates
     gcTime: 1000 * 60 * 5, // 5 minutes in cache
-    initialData: options?.initialData, // ✅ Use initialData from Server Component
+    initialData: options?.initialData,
   });
 }
 
@@ -90,8 +90,8 @@ export function useLead(
       return await leadsApi.getLead(id);
     },
     enabled: enabled && !!id,
-    initialData: options?.initialData, // ✅ PHASE 1 - WEEK 2 - DAY 5: Support SSR
-    staleTime: 1000 * 60, // 1 minute
+    initialData: options?.initialData,
+    staleTime: 1000 * 10, // 10 seconds - shorter to ensure data is fresh after updates
     gcTime: 1000 * 60 * 5, // 5 minutes in cache
   });
 }
@@ -162,13 +162,13 @@ export function useCreateLead() {
     mutationFn: async (data) => {
       return await leadsApi.createLead(data);
     },
-    onSuccess: (newLead) => {
+    onSuccess: async (newLead) => {
       toast.success("Lead created successfully!", {
         description: newLead.full_name,
       });
 
-      // Invalidate all lead lists to refetch with new data
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+      // Force immediate refetch of lead lists (not just invalidate)
+      await queryClient.refetchQueries({ queryKey: leadsKeys.lists() });
 
       // Also invalidate pipeline queries as new lead affects pipeline stats
       queryClient.invalidateQueries({ queryKey: ["pipeline"] });
@@ -247,14 +247,22 @@ export function useUpdateLead() {
       toast.error("Error", { description: message });
     },
 
-    onSuccess: (updatedLead) => {
+    onSuccess: async (updatedLead) => {
       toast.success("Lead updated successfully!", {
         description: updatedLead.full_name,
       });
 
-      // Invalidate queries - including insights which may change based on lead data
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(updatedLead.id) });
+      // CRITICAL: Update cache immediately with full response from API
+      // This ensures ALL computed fields (lead_score, etc) are updated
+      queryClient.setQueryData(leadsKeys.detail(updatedLead.id), updatedLead);
+      
+      // Also refetch to ensure any relationship data is fresh
+      await queryClient.refetchQueries({ queryKey: leadsKeys.detail(updatedLead.id) });
+      
+      // Force immediate refetch of lists (not just invalidate)
+      await queryClient.refetchQueries({ queryKey: leadsKeys.lists() });
+      
+      // Invalidate other related queries
       queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(updatedLead.id) });
       queryClient.invalidateQueries({ queryKey: leadsKeys.insights(updatedLead.id) });
       queryClient.invalidateQueries({ queryKey: ["pipeline"] });
@@ -286,7 +294,7 @@ export function useDeleteLead() {
       return { deletedLeadId: id };
     },
 
-    onSuccess: (_, __, context) => {
+    onSuccess: async (_, __, context) => {
       toast.success("Lead deleted successfully!");
 
       // Invalidate the specific lead's queries
@@ -295,8 +303,8 @@ export function useDeleteLead() {
         queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(context.deletedLeadId) });
         queryClient.invalidateQueries({ queryKey: leadsKeys.insights(context.deletedLeadId) });
       }
-      // Invalidate lists and pipeline
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+      // Force immediate refetch of lists
+      await queryClient.refetchQueries({ queryKey: leadsKeys.lists() });
       queryClient.invalidateQueries({ queryKey: ["pipeline"] });
     },
 

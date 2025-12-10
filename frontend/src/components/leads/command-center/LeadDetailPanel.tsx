@@ -2,6 +2,7 @@
 "use client";
 
 import React, { useRef, useEffect } from "react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -21,6 +22,7 @@ import {
   User,
   Zap,
   History,
+  ExternalLink,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLead } from "@/hooks/useLeads";
@@ -169,14 +171,20 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
 
           {/* Các nút hành động */}
           <div className="flex shrink-0 gap-2">
+            <Button variant="outline" size="sm" asChild className="h-8">
+              <Link href={`/leads/${lead.id}`}>
+                <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
+                Xem đầy đủ
+              </Link>
+            </Button>
             <Button variant="outline" size="sm" onClick={() => onEdit(lead)} className="h-8">
               <Edit className="mr-1.5 h-3.5 w-3.5" />
-              Chỉnh sửa
+              Sửa
             </Button>
             {!lead.assigned_officer && (
               <Button variant="outline" size="sm" onClick={() => onAssign(lead)} className="h-8">
                 <UserPlus className="mr-1.5 h-3.5 w-3.5" />
-                Phân công
+                Gán
               </Button>
             )}
             <Button

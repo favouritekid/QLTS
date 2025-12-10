@@ -426,13 +426,15 @@ export interface RecommendedAction {
 
 /**
  * Lead insights (360-degree view)
+ * Matches backend schema: engagement_score, fit_score, urgency_score, overall_score
  */
 export interface LeadInsights {
-  lead_score_breakdown: LeadScoreBreakdown;
-  engagement_metrics: EngagementMetrics;
-  conversion_probability: number;
-  recommended_actions: RecommendedAction[];
-  risk_factors: string[];
+  engagement_score: number;
+  fit_score: number;
+  urgency_score: number;
+  overall_score: number;
+  officer_rating?: number | null;
+  officer_summary?: string | null;
 }
 
 // ============================================

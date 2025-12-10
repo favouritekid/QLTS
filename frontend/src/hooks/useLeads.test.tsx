@@ -125,7 +125,7 @@ describe("useLeads Hook", () => {
         await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
         expect(result.current.data).toBeDefined();
-        expect(result.current.data?.conversion_probability).toBeDefined();
+        expect(result.current.data?.overall_score).toBeDefined();
       });
     });
   });

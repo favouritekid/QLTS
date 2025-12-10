@@ -120,34 +120,10 @@ export const mockTimeline = [
 ]
 
 export const mockInsights = {
-  lead_score_breakdown: {
-    education_level: 40,
-    gpa: 35,
-    source: 30,
-    location: 20,
-    total: 75,
-  },
-  engagement_metrics: {
-    consultations_count: 2,
-    interactions_count: 5,
-    response_rate: 0.8,
-    avg_response_time_hours: 12,
-    last_interaction_date: '2024-01-17T14:00:00Z',
-  },
-  conversion_probability: 0.65,
-  recommended_actions: [
-    {
-      action: 'schedule_followup',
-      priority: 'high',
-      description: 'Schedule follow-up consultation within 3 days',
-      reason: 'High engagement score and good response rate',
-    },
-    {
-      action: 'send_program_info',
-      priority: 'medium',
-      description: 'Send detailed program information',
-      reason: 'Lead has shown interest in multiple programs',
-    },
-  ],
-  risk_factors: [],
+  engagement_score: 70,
+  fit_score: 75,
+  urgency_score: 60,
+  overall_score: 68,
+  officer_rating: 4,
+  officer_summary: "Lead rất nghiêm túc, đã sẵn sàng tham gia chương trình",
 }
