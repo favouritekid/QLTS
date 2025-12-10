@@ -179,7 +179,7 @@ function SelectVariant({
       onValueChange={(val) => onChange(val === "none" ? undefined : val)}
       disabled={disabled || isLoading}
     >
-      <SelectTrigger className={className}>
+      <SelectTrigger className={cn("truncate [&>span]:truncate [&>span]:max-w-[90%]", className)}>
         <SelectValue placeholder={isLoading ? "Dang tai..." : placeholder} />
       </SelectTrigger>
       <SelectContent className="max-h-[300px]">
@@ -202,12 +202,10 @@ function SelectVariant({
               key={item.unit.id}
               value={String(item.unit.id)}
               className="font-mono text-sm"
+              title={`${item.unit.name} (${item.unit.type})`}
             >
-              <span className={item.level === 0 ? "font-semibold" : ""}>
+              <span className={cn("block truncate", item.level === 0 ? "font-semibold" : "")}>
                 {item.displayName}
-              </span>
-              <span className="ml-2 text-xs text-muted-foreground">
-                ({item.unit.type})
               </span>
             </SelectItem>
           ))

@@ -668,7 +668,9 @@ async def create_lead(
         create_data.pop("assigned_officer_id", None)
 
         # === DUPLICATE CHECK ===
-        # Kiểm tra trùng lặp email hoặc phone trong cùng unit
+        # Phone: Check globally across ALL units (phone must be unique system-wide)
+        # Email: Check within same unit only (email can exist in different units)
+        
         # Build phone conditions
         phone_conditions = [models.Lead.phone == lead_in.phone]
         if lead_in.phone2:
@@ -676,46 +678,66 @@ async def create_lead(
             phone_conditions.append(models.Lead.phone2 == lead_in.phone)
             phone_conditions.append(models.Lead.phone2 == lead_in.phone2)
 
-        # Build email condition - only check if email is provided (case-insensitive)
-        email_condition = func.lower(models.Lead.email) == lead_in.email.lower() if lead_in.email else None
-
-        # Build OR conditions
-        if email_condition is not None:
-            duplicate_conditions = or_(email_condition, *phone_conditions)
-        else:
-            duplicate_conditions = or_(*phone_conditions)
-
-        existing_lead_query = (
+        # Check phone duplicate GLOBALLY (across all units)
+        global_phone_query = (
             select(models.Lead)
             .where(
-                models.Lead.unit_id == create_data["unit_id"],
                 models.Lead.deleted_at.is_(None),  # Exclude soft-deleted
-                duplicate_conditions
+                or_(*phone_conditions)
             )
             .with_for_update()  # Lock to prevent race condition
         )
-        existing_lead_result = await db.execute(existing_lead_query)
-        existing_lead = existing_lead_result.scalars().first()
-        if existing_lead:
+        global_phone_result = await db.execute(global_phone_query)
+        existing_phone_lead = global_phone_result.scalars().first()
+        
+        if existing_phone_lead:
             # Fetch officer info separately (can't use joinedload with FOR UPDATE)
             officer_name = "Chưa phân công"
-            if existing_lead.assigned_officer_id:
-                officer = await db.get(models.User, existing_lead.assigned_officer_id)
+            if existing_phone_lead.assigned_officer_id:
+                officer = await db.get(models.User, existing_phone_lead.assigned_officer_id)
                 if officer:
                     officer_name = officer.full_name or "N/A"
             
-            # Build detailed error message with lead info and officer
-            lead_name = existing_lead.full_name or "N/A"
-            lead_phone = existing_lead.phone or "N/A"
+            # Get unit name
+            unit_name = "N/A"
+            if existing_phone_lead.unit_id:
+                unit = await db.get(models.OrganizationUnit, existing_phone_lead.unit_id)
+                if unit:
+                    unit_name = unit.name
             
-            # Determine which field caused the duplicate (case-insensitive email check)
-            if lead_in.email and existing_lead.email and existing_lead.email.lower() == lead_in.email.lower():
-                raise DuplicateResourceError(
-                    detail=f"Email này đã tồn tại. Lead: {lead_name} (SĐT: {lead_phone}) - Đang được quản lý bởi: {officer_name}"
+            lead_name = existing_phone_lead.full_name or "N/A"
+            lead_phone = existing_phone_lead.phone or "N/A"
+            
+            raise DuplicateResourceError(
+                detail=f"Số điện thoại này đã tồn tại. Lead: {lead_name} (SĐT: {lead_phone}) - Đơn vị: {unit_name} - Quản lý bởi: {officer_name}"
+            )
+
+        # Check email duplicate WITHIN SAME UNIT (if email provided)
+        if lead_in.email:
+            email_query = (
+                select(models.Lead)
+                .where(
+                    models.Lead.unit_id == create_data["unit_id"],
+                    models.Lead.deleted_at.is_(None),
+                    func.lower(models.Lead.email) == lead_in.email.lower()
                 )
-            else:
+                .with_for_update()
+            )
+            email_result = await db.execute(email_query)
+            existing_email_lead = email_result.scalars().first()
+            
+            if existing_email_lead:
+                officer_name = "Chưa phân công"
+                if existing_email_lead.assigned_officer_id:
+                    officer = await db.get(models.User, existing_email_lead.assigned_officer_id)
+                    if officer:
+                        officer_name = officer.full_name or "N/A"
+                
+                lead_name = existing_email_lead.full_name or "N/A"
+                lead_phone = existing_email_lead.phone or "N/A"
+                
                 raise DuplicateResourceError(
-                    detail=f"Số điện thoại này đã tồn tại. Lead: {lead_name} (SĐT: {lead_phone}) - Đang được quản lý bởi: {officer_name}"
+                    detail=f"Email này đã tồn tại trong đơn vị. Lead: {lead_name} (SĐT: {lead_phone}) - Quản lý bởi: {officer_name}"
                 )
 
         # === NEW FEATURE: Shared Offering Distribution ===
