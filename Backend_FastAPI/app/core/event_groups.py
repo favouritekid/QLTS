@@ -63,6 +63,7 @@ EVENT_GROUP_MAPPING: Dict[SystemEvents, NotificationEventGroup] = {
     SystemEvents.LEAD_REASSIGNED: NotificationEventGroup.LEAD,
     SystemEvents.LEAD_STATUS_CHANGED: NotificationEventGroup.LEAD,
     SystemEvents.LEAD_CREATED: NotificationEventGroup.LEAD,
+    SystemEvents.LEAD_UPDATED: NotificationEventGroup.LEAD,  # ✅ Added - was missing!
     SystemEvents.LEAD_ASSIGNMENT_FAILED: NotificationEventGroup.LEAD,
     SystemEvents.LEAD_DELETED: NotificationEventGroup.LEAD,
     SystemEvents.OFFICER_AVAILABILITY_CHANGED: NotificationEventGroup.LEAD,  # Affects lead distribution

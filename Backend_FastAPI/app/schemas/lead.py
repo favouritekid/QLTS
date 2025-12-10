@@ -269,6 +269,10 @@ class Lead(LeadBase):
     location_proximity: int = 0
     occupation_relevance: int = 0
     academic_performance: int = 0
+    # Education fields (were missing from response)
+    education_level: Optional[str] = None
+    gpa: Optional[float] = None
+    location: Optional[str] = None
 
     offering: Optional[ProgramOffering] = None
     # THAY ĐỔI Ở ĐÂY: Sử dụng OrganizationUnitShallow
