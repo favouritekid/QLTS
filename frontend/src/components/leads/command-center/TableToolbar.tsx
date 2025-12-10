@@ -54,6 +54,7 @@ const COLUMNS_CONFIG = [
   { id: "pipeline_stage", label: "Giai đoạn" },
   { id: "consultation_status", label: "Trạng thái TĐ" },
   { id: "assigned_officer", label: "Cán bộ" },
+  { id: "lead_score", label: "Điểm" },
   { id: "created_at", label: "Ngày tạo" },
 ];
 

@@ -81,6 +81,17 @@ export interface OfferingAcademicInfoUpdate {
  * TIER 2: ProgramOffering (Loại hình đào tạo)
  * Thông tin tĩnh về loại hình (vd: "Chính quy", "Liên thông")
  */
+
+/**
+ * ScoringRules - Cấu hình chấm điểm Fit Score cho từng ngành
+ */
+export interface ScoringRules {
+  hot_level?: number; // 0=Bình thường, 1=Hot, 2=Rất Hot (tối đa +10 điểm)
+  target_age_min?: number | null; // Độ tuổi mục tiêu tối thiểu (vd: 18)
+  target_age_max?: number | null; // Độ tuổi mục tiêu tối đa (vd: 25)
+  required_education?: string | null; // Trình độ yêu cầu: "thpt", "cao_dang", "dai_hoc"
+}
+
 export interface ProgramOffering {
   id: number;
   program_id: number; // Foreign key to MajorProgram (Tier 1)
@@ -88,6 +99,7 @@ export interface ProgramOffering {
   duration_semesters?: number | null; // Số kỳ học
   total_credits?: number | null; // Tổng số tín chỉ
   is_active: boolean; // Soft delete flag
+  scoring_rules?: ScoringRules | null; // Cấu hình chấm điểm Fit Score
 
   // Nested program info for display
   program?: {
@@ -111,6 +123,7 @@ export interface ProgramOfferingCreate {
   duration_semesters?: number | null;
   total_credits?: number | null;
   is_active?: boolean;
+  scoring_rules?: ScoringRules | null;
 }
 
 /**
@@ -121,6 +134,7 @@ export interface ProgramOfferingUpdate {
   duration_semesters?: number | null;
   total_credits?: number | null;
   is_active?: boolean;
+  scoring_rules?: ScoringRules | null;
 }
 
 /**

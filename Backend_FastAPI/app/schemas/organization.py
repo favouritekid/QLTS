@@ -133,11 +133,20 @@ class OfferingAcademicInfo(OfferingAcademicInfoBase):
 # CẤP 2: ProgramOffering
 # =============================================================================
 
+class ScoringRules(BaseModel):
+    """Cấu hình chấm điểm Fit Score cho từng ngành"""
+    hot_level: Optional[int] = Field(default=0, ge=0, le=2, description="0=Bình thường, 1=Hot, 2=Rất Hot")
+    target_age_min: Optional[int] = Field(None, ge=16, le=100, description="Độ tuổi mục tiêu tối thiểu")
+    target_age_max: Optional[int] = Field(None, ge=16, le=100, description="Độ tuổi mục tiêu tối đa")
+    required_education: Optional[str] = Field(None, max_length=50, description="Trình độ yêu cầu: thpt, cao_dang, dai_hoc")
+
+
 class ProgramOfferingBase(BaseModel):
     offering_type: str = Field(..., max_length=100, description="Loại hình (e.g., 'Chính quy')")
     duration_semesters: Optional[int] = Field(None, ge=0, description="Số học kỳ")
     total_credits: Optional[int] = Field(None, ge=0, description="Tổng số tín chỉ")
     is_active: bool = Field(default=True)
+    scoring_rules: Optional[ScoringRules] = Field(None, description="Cấu hình chấm điểm Fit Score")
 
 
 class ProgramOfferingCreate(ProgramOfferingBase):
@@ -149,6 +158,7 @@ class ProgramOfferingUpdate(BaseModel):
     duration_semesters: Optional[int] = Field(None, ge=0)
     total_credits: Optional[int] = Field(None, ge=0)
     is_active: Optional[bool] = None
+    scoring_rules: Optional[ScoringRules] = Field(None, description="Cấu hình chấm điểm Fit Score")
 
 
 class ProgramOffering(ProgramOfferingBase):

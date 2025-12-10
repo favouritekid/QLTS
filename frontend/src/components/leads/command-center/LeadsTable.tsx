@@ -301,6 +301,25 @@ export function LeadsTable({
         size: 140,
       }),
 
+      // Lead Score column
+      columnHelper.accessor("lead_score", {
+        header: "Điểm",
+        cell: ({ row }) => {
+          const score = row.original.lead_score ?? 0;
+          // Color coding based on score ranges
+          let colorClass = "text-muted-foreground";
+          if (score >= 70) colorClass = "text-green-600 font-semibold";
+          else if (score >= 50) colorClass = "text-blue-600 font-medium";
+          else if (score >= 30) colorClass = "text-yellow-600";
+          return (
+            <div className={cn("text-sm text-center", colorClass)}>
+              {score}
+            </div>
+          );
+        },
+        size: 60,
+      }),
+
       // Created at column - MEDIUM font
       columnHelper.accessor("created_at", {
         header: ({ column }) => (
