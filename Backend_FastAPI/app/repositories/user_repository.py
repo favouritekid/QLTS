@@ -132,6 +132,129 @@ class UserRepository(BaseRepository[models.User]):
 
         return total_count, users
 
+    async def search_with_hierarchy(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+        role: Optional[str] = None,
+        status: Optional[str] = None,
+        unit_id: Optional[int] = None,
+        include_children: bool = False,
+        search: Optional[str] = None,
+        sort_by: str = "id",
+        order: str = "asc",
+    ) -> Tuple[int, List[models.User]]:
+        """
+        Get users with hierarchical unit filtering and full-text search.
+        
+        ✅ SPRINT 2: Added for user_service migration.
+        
+        This method supports:
+        - Hierarchical unit filter via recursive CTE
+        - Full-text search using search_vector (PostgreSQL ts_vector)
+        - Multi-value filters (comma-separated)
+        - Eager loading for N+1 prevention
+        
+        Args:
+            skip: Number of records to skip
+            limit: Maximum number of records to return
+            role: Filter by role (comma-separated for multi-select)
+            status: Filter by status (comma-separated for multi-select)
+            unit_id: Filter by organization unit
+            include_children: If True, include users from child units (uses CTE)
+            search: Full-text search term
+            sort_by: Column to sort by
+            order: Sort order (asc/desc)
+            
+        Returns:
+            Tuple of (total_count, user_list)
+        """
+        # Build base query with eager loading
+        query = select(self.model).options(
+            selectinload(models.User.unit),
+            selectinload(models.User.sessions),
+        )
+        
+        filters = []
+        
+        # =========================================================================
+        # HIERARCHICAL UNIT FILTER (CTE-based)
+        # =========================================================================
+        if unit_id is not None:
+            if include_children:
+                # Recursive CTE to get all descendant unit IDs
+                cte_query = text("""
+                    WITH RECURSIVE unit_hierarchy AS (
+                        SELECT id FROM organization_unit WHERE id = :unit_id
+                        UNION ALL
+                        SELECT u.id FROM organization_unit u
+                        JOIN unit_hierarchy uh ON u.parent_id = uh.id
+                    )
+                    SELECT id FROM unit_hierarchy
+                """)
+                
+                # Execute CTE to get list of unit IDs
+                hierarchy_result = await self.db.execute(cte_query, {"unit_id": unit_id})
+                all_unit_ids = [row[0] for row in hierarchy_result.fetchall()]
+                
+                if all_unit_ids:
+                    filters.append(models.User.unit_id.in_(all_unit_ids))
+            else:
+                # Simple exact match
+                filters.append(models.User.unit_id == unit_id)
+        
+        # =========================================================================
+        # ROLE & STATUS FILTERS (multi-value support)
+        # =========================================================================
+        if role:
+            values = [v.strip() for v in role.split(",") if v.strip()]
+            if values:
+                filters.append(models.User.role.in_(values))
+        
+        if status:
+            values = [v.strip() for v in status.split(",") if v.strip()]
+            if values:
+                filters.append(models.User.status.in_(values))
+        
+        # =========================================================================
+        # FULL-TEXT SEARCH (using search_vector with GIN index)
+        # =========================================================================
+        if search:
+            search_term = search.strip().replace(' ', ' & ')
+            filters.append(
+                models.User.search_vector.op('@@')(
+                    func.to_tsquery('simple', search_term)
+                )
+            )
+        
+        # Apply filters
+        if filters:
+            query = query.where(*filters)
+        
+        # Count query
+        count_query = select(func.count()).select_from(query.alias())
+        total_count_result = await self.db.execute(count_query)
+        total_count = total_count_result.scalar_one()
+        
+        if total_count == 0:
+            return 0, []
+        
+        # Apply sorting
+        sort_column = getattr(models.User, sort_by, models.User.id)
+        if order.lower() == "desc":
+            query = query.order_by(sort_column.desc())
+        else:
+            query = query.order_by(sort_column.asc())
+        
+        # Apply pagination
+        query = query.offset(skip).limit(limit)
+        
+        # Execute
+        result = await self.db.execute(query)
+        users = list(result.scalars().all())
+        
+        return total_count, users
+
     async def get_by_username(self, username: str) -> Optional[models.User]:
         """
         Get user by username.

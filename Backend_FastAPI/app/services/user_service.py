@@ -509,112 +509,39 @@ async def get_users(
     """
     Get users with filtering, sorting, and pagination.
 
-    ✅ PERFORMANCE FIX: Uses eager loading (selectinload) to prevent N+1 queries
-    when accessing user relationships like unit, sessions, etc.
-
-    This is critical for performance when displaying user lists in admin panel,
-    especially when showing related data like unit names.
+    ✅ SPRINT 2 REFACTORED: Now uses UserRepository for data access.
+    
+    Supports:
+    - Hierarchical unit filter (with include_children)
+    - Full-text search (using search_vector)
+    - Multi-value filters (role, status)
+    - Eager loading for N+1 prevention
     """
-    # ✅ Eager load relationships to prevent N+1 queries
-    query = select(models.User).options(
-        selectinload(models.User.unit),  # Load organization unit (for unit.name)
-        selectinload(models.User.sessions),  # Load sessions (if needed)
-    )
-
-    allowed_filters = {
-        "role": models.User.role,
-        "status": models.User.status,
-    }
-
-    # =========================================================================
-    # ✅ HIERARCHICAL UNIT FILTER: Support include_children parameter
-    # =========================================================================
-    # Check if we should include users from child units
-    include_children = str(params.get("include_children", "")).lower() == "true"
-
+    from app.repositories import UserRepository
+    
+    repo = UserRepository(db)
+    
+    # Extract params
+    unit_id = None
     if "unit_id" in params and params["unit_id"]:
         try:
             unit_id = int(params["unit_id"])
-
-            if include_children:
-                # ✅ Recursive CTE to get all descendant unit IDs
-                # This allows filtering users from parent unit + all children
-                cte_query = text("""
-                    WITH RECURSIVE unit_hierarchy AS (
-                        -- Base case: the selected unit
-                        SELECT id FROM organization_unit WHERE id = :unit_id
-                        UNION ALL
-                        -- Recursive case: child units
-                        SELECT u.id FROM organization_unit u
-                        JOIN unit_hierarchy uh ON u.parent_id = uh.id
-                    )
-                    SELECT id FROM unit_hierarchy
-                """)
-
-                # Execute CTE to get list of unit IDs
-                hierarchy_result = await db.execute(cte_query, {"unit_id": unit_id})
-                all_unit_ids = [row[0] for row in hierarchy_result.fetchall()]
-
-                if all_unit_ids:
-                    query = query.filter(models.User.unit_id.in_(all_unit_ids))
-                    log.debug(
-                        "Hierarchical unit filter applied",
-                        parent_unit_id=unit_id,
-                        total_units=len(all_unit_ids)
-                    )
-            else:
-                # Simple exact match (for leaf units or when include_children=false)
-                query = query.filter(models.User.unit_id == unit_id)
-
         except ValueError:
             log.warning(f"Invalid unit_id value: {params['unit_id']}")
-
-    # =========================================================================
-    # ✅ SECURITY FIX: Search DoS Prevention (CVSS 7.5 HIGH)
-    # Old code used ILIKE '%term%' which caused full table scan (500ms per query)
-    # New code uses PostgreSQL Full-Text Search with GIN index (2ms per query)
-    # See migration: p1q2r3s4t5u6_add_user_search_indexes.py
-    # =========================================================================
-    for key, value in params.items():
-        # Skip unit_id - already handled above
-        if key in ["unit_id", "include_children"]:
-            continue
-
-        if key in allowed_filters and value:
-            values_to_filter = [v.strip() for v in value.split(",")]
-            query = query.filter(allowed_filters[key].in_(values_to_filter))
-        elif key == "search" and value:
-            # ✅ NEW: Use full-text search with search_vector column
-            # Convert spaces to AND operator for multi-word search
-            # Example: "john doe" → "john & doe" (both words must match)
-            search_term = value.strip().replace(' ', ' & ')
-
-            # Use PostgreSQL's @@ operator for full-text search
-            # This uses the GIN index on search_vector column (250x faster)
-            query = query.filter(
-                models.User.search_vector.op('@@')(
-                    func.to_tsquery('simple', search_term)
-                )
-            )
-
-    count_query = select(func.count()).select_from(query.alias())
-    total_count_result = await db.execute(count_query)
-    total_count = total_count_result.scalar_one()
-
-    sort = params.get("sort", "id")
-    order = params.get("order", "asc")
-    if hasattr(models.User, sort):
-        sort_column = getattr(models.User, sort)
-        if order.lower() == "desc":
-            query = query.order_by(sort_column.desc())
-        else:
-            query = query.order_by(sort_column.asc())
-
-    paged_query = query.offset(skip).limit(limit)
-    users_result = await db.execute(paged_query)
-    users = users_result.scalars().all()
-
-    return total_count, users
+    
+    include_children = str(params.get("include_children", "")).lower() == "true"
+    
+    return await repo.search_with_hierarchy(
+        skip=skip,
+        limit=limit,
+        role=params.get("role"),
+        status=params.get("status"),
+        unit_id=unit_id,
+        include_children=include_children,
+        search=params.get("search"),
+        sort_by=params.get("sort", "id"),
+        order=params.get("order", "asc"),
+    )
 
 
 # --- Hàm Cập nhật User ---
