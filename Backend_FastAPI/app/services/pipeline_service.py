@@ -78,10 +78,11 @@ async def get_all_pipeline_stages(db: AsyncSession) -> List[dict]:
 
         log.debug("Cache miss (after acquiring distributed lock), querying DB")
 
-        # 3. Cache Miss: Query DB
-        query = select(models.PipelineStage).order_by(models.PipelineStage.order)
-        result = await db.execute(query)
-        stages_models = result.scalars().all()
+        # ✅ SPRINT 4 REFACTORED: Use PipelineRepository for data access
+        from app.repositories import PipelineRepository
+        
+        repo = PipelineRepository(db)
+        stages_models = await repo.get_all_stages_ordered()
 
         # 4. Chuyển đổi models sang list[dict] (include CRM fields)
         stages_data = [
@@ -148,10 +149,11 @@ async def get_all_consultation_statuses(
 
         log.debug("Cache miss (after acquiring distributed lock), querying DB")
 
-        # 3. Cache Miss: Query DB
-        query = select(models.ConsultationStatus)
-        result = await db.execute(query)
-        statuses_models = result.scalars().all()
+        # ✅ SPRINT 4 REFACTORED: Use PipelineRepository for data access
+        from app.repositories import PipelineRepository
+        
+        repo = PipelineRepository(db)
+        statuses_models = await repo.get_all_statuses()
 
         # 4. Chuyển đổi models sang list[dict] (include CRM fields)
         statuses_data = [
@@ -833,18 +835,15 @@ async def delete_consultation_status(
 
 
 async def get_all_allowed_transitions(db: AsyncSession) -> List[models.AllowedTransition]:
-    """Lấy tất cả các allowed transitions với thông tin statuses."""
-    query = (
-        select(models.AllowedTransition)
-        .options(
-            # Eager load related statuses
-            selectinload(models.AllowedTransition.from_status),
-            selectinload(models.AllowedTransition.to_status),
-        )
-        .order_by(models.AllowedTransition.from_status_id)
-    )
-    result = await db.execute(query)
-    return list(result.scalars().all())
+    """
+    Lấy tất cả các allowed transitions với thông tin statuses.
+    
+    ✅ SPRINT 4 REFACTORED: Now uses PipelineRepository for data access.
+    """
+    from app.repositories import PipelineRepository
+    
+    repo = PipelineRepository(db)
+    return await repo.get_all_transitions_with_statuses()
 
 
 async def create_allowed_transition(
@@ -891,18 +890,11 @@ async def create_allowed_transition(
         # ✅ TRANSACTION FIX: Flush instead of commit
         await db.flush()
 
-        # ✅ FIX: Thay thế db.refresh bằng query có selectinload
-        # Điều này nạp trước các quan hệ (from_status, to_status) để tránh lỗi MissingGreenlet
-        query = (
-            select(models.AllowedTransition)
-            .options(
-                selectinload(models.AllowedTransition.from_status),
-                selectinload(models.AllowedTransition.to_status),
-            )
-            .where(models.AllowedTransition.id == db_transition.id)
-        )
-        result = await db.execute(query)
-        db_transition = result.scalar_one()
+        # ✅ SPRINT 4 REFACTORED: Use Repository for reload with relationships
+        from app.repositories import PipelineRepository
+        
+        repo = PipelineRepository(db)
+        db_transition = await repo.get_transition_by_id_with_statuses(db_transition.id)
 
         # Store names for callback
         from_name = db_transition.from_status.name if db_transition.from_status else "N/A"
@@ -955,17 +947,11 @@ async def delete_allowed_transition(
         Tuple of (None, post_commit_callback)
     """
     try:
-        # Load with relationships for socket event
-        query = (
-            select(models.AllowedTransition)
-            .options(
-                selectinload(models.AllowedTransition.from_status),
-                selectinload(models.AllowedTransition.to_status),
-            )
-            .where(models.AllowedTransition.id == transition_id)
-        )
-        result = await db.execute(query)
-        db_transition = result.scalar_one_or_none()
+        # ✅ SPRINT 4 REFACTORED: Use Repository for loading with relationships
+        from app.repositories import PipelineRepository
+        
+        repo = PipelineRepository(db)
+        db_transition = await repo.get_transition_by_id_with_statuses(transition_id)
 
         if not db_transition:
             raise ResourceNotFoundError(
@@ -1059,18 +1045,11 @@ async def validate_status_transition(
         )
         # Continue to check allowed_transitions as fallback
 
-    # TODO: Performance Opt - Có thể cache danh sách allowed_transitions vào Redis
-    # Hiện tại query DB trực tiếp để đảm bảo tính đúng đắn (Consistency)
-    query = select(models.AllowedTransition).where(
-        and_(
-            models.AllowedTransition.from_status_id == from_status_id,
-            models.AllowedTransition.to_status_id == to_status_id
-        )
-    )
-    result = await db.execute(query)
-    transition = result.scalar_one_or_none()
-
-    return transition is not None
+    # ✅ SPRINT 4 REFACTORED: Use Repository for transition check
+    from app.repositories import PipelineRepository
+    
+    repo = PipelineRepository(db)
+    return await repo.check_transition_exists(from_status_id, to_status_id)
 
 
 async def get_allowed_next_statuses(
@@ -1091,44 +1070,20 @@ async def get_allowed_next_statuses(
     Returns:
         Danh sách ConsultationStatus được phép chuyển đến
     """
+    # ✅ SPRINT 4 REFACTORED: Use Repository for all status queries
+    from app.repositories import PipelineRepository
+    
+    repo = PipelineRepository(db)
+    
     # Nếu chưa có status (lead mới), trả về tất cả statuses
     if not current_status_id:
-        query = (
-            select(models.ConsultationStatus)
-            .options(selectinload(models.ConsultationStatus.stage))
-            .order_by(
-                models.ConsultationStatus.is_universal.desc(),  # Universal first
-                models.ConsultationStatus.stage_id,
-                models.ConsultationStatus.name
-            )
-        )
-        result = await db.execute(query)
-        return list(result.scalars().all())
+        return await repo.get_all_statuses_with_stage()
 
     # Query các transitions được phép từ status hiện tại
-    query = (
-        select(models.ConsultationStatus)
-        .join(
-            models.AllowedTransition,
-            models.ConsultationStatus.id == models.AllowedTransition.to_status_id
-        )
-        .where(models.AllowedTransition.from_status_id == current_status_id)
-        .options(selectinload(models.ConsultationStatus.stage))
-        .order_by(models.ConsultationStatus.name)
-    )
+    allowed_statuses = await repo.get_allowed_next_statuses_from(current_status_id)
 
-    result = await db.execute(query)
-    allowed_statuses = list(result.scalars().all())
-
-    # ✅ NEW: Luôn thêm universal statuses (có thể dùng ở mọi stage)
-    universal_query = (
-        select(models.ConsultationStatus)
-        .where(models.ConsultationStatus.is_universal == True)
-        .options(selectinload(models.ConsultationStatus.stage))
-        .order_by(models.ConsultationStatus.name)
-    )
-    universal_result = await db.execute(universal_query)
-    universal_statuses = list(universal_result.scalars().all())
+    # ✅ Luôn thêm universal statuses (có thể dùng ở mọi stage)
+    universal_statuses = await repo.get_universal_statuses_with_stage()
 
     # Lấy current status để kiểm tra
     current_status = await _get_status_by_id(db, current_status_id)
