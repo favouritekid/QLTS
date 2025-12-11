@@ -514,6 +514,146 @@ class SystemEvents(str, Enum):
     Recipients: All admins and managers (for workload visibility)
     """
 
+    # =========================================================================
+    # ORGANIZATION EVENTS
+    # =========================================================================
+
+    UNIT_CREATED = "unit_created"
+    """
+    Triggered when a new organization unit is created.
+
+    Payload Schema:
+        {
+            "unit_id": int,               # Required: ID of the new unit
+            "unit_name": str,             # Required: Name of the unit
+            "unit_type": str,             # Type: "Trường", "Phòng", "Khoa", etc.
+            "parent_id": Optional[int],   # Parent unit ID (if any)
+            "actor_id": int               # Admin who created the unit
+        }
+
+    Recipients: All admins
+    """
+
+    UNIT_UPDATED = "unit_updated"
+    """
+    Triggered when an organization unit is updated.
+
+    Payload Schema:
+        {
+            "unit_id": int,               # Required: ID of the unit
+            "unit_name": str,             # Required: Name of the unit
+            "updated_fields": List[str],  # List of field names that were updated
+            "actor_id": int               # Admin who updated the unit
+        }
+
+    Recipients: All admins, managers of the unit
+    """
+
+    UNIT_DELETED = "unit_deleted"
+    """
+    Triggered when an organization unit is deleted (soft delete).
+
+    Payload Schema:
+        {
+            "unit_id": int,               # Required: ID of the deleted unit
+            "unit_name": str,             # Required: Name of the unit
+            "actor_id": int               # Admin who deleted the unit
+        }
+
+    Recipients: All admins
+    """
+
+    PROGRAM_CREATED = "program_created"
+    """
+    Triggered when a new major program is created.
+
+    Payload Schema:
+        {
+            "program_id": int,            # Required: ID of the program
+            "program_name": str,          # Required: Name of the program
+            "program_code": Optional[str],# Program code
+            "degree_level": str,          # Degree level
+            "actor_id": int               # Admin who created the program
+        }
+
+    Recipients: All admins
+    """
+
+    PROGRAM_UPDATED = "program_updated"
+    """
+    Triggered when a major program is updated.
+
+    Payload Schema:
+        {
+            "program_id": int,            # Required: ID of the program
+            "program_name": str,          # Required: Name of the program
+            "updated_fields": List[str],  # List of field names that were updated
+            "actor_id": int               # Admin who updated the program
+        }
+
+    Recipients: All admins
+    """
+
+    PROGRAM_DELETED = "program_deleted"
+    """
+    Triggered when a major program is deleted (soft delete).
+
+    Payload Schema:
+        {
+            "program_id": int,            # Required: ID of the program
+            "program_name": str,          # Required: Name of the program
+            "actor_id": int               # Admin who deleted the program
+        }
+
+    Recipients: All admins
+    """
+
+    OFFERING_CREATED = "offering_created"
+    """
+    Triggered when a new program offering is created.
+
+    Payload Schema:
+        {
+            "offering_id": int,           # Required: ID of the offering
+            "program_id": int,            # Required: Parent program ID
+            "program_name": str,          # Parent program name
+            "offering_type": str,         # Offering type
+            "actor_id": int               # Admin who created the offering
+        }
+
+    Recipients: All admins
+    """
+
+    OFFERING_UPDATED = "offering_updated"
+    """
+    Triggered when a program offering is updated.
+
+    Payload Schema:
+        {
+            "offering_id": int,           # Required: ID of the offering
+            "program_id": int,            # Required: Parent program ID
+            "updated_fields": List[str],  # List of field names that were updated
+            "actor_id": int               # Admin who updated the offering
+        }
+
+    Recipients: All admins
+    """
+
+    OFFERING_DELETED = "offering_deleted"
+    """
+    Triggered when a program offering is deleted (soft delete).
+
+    Payload Schema:
+        {
+            "offering_id": int,           # Required: ID of the offering
+            "program_id": int,            # Required: Parent program ID
+            "offering_type": str,         # Offering type
+            "actor_id": int               # Admin who deleted the offering
+        }
+
+    Recipients: All admins
+    """
+
 
 # =============================================================================
 # EVENT DISPATCHER PATTERN
