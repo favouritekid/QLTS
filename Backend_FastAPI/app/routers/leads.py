@@ -319,8 +319,6 @@ async def delete_lead(
 
     # Dispatch notification for lead deletion
     try:
-        from ..services.notification_dispatcher import dispatch
-        from ..core.events import SystemEvents
         await dispatch(
             db=db,
             event=SystemEvents.LEAD_DELETED,
@@ -335,9 +333,7 @@ async def delete_lead(
             auto_commit=True  # Already committed above, emit domain event immediately
         )
     except Exception as e:
-        # Log but don't fail - deletion already succeeded
-        import logging
-        logging.warning(f"Failed to dispatch lead deletion notification: {e}")
+        log.warning("Failed to dispatch lead deletion notification", error=str(e))
 
     return None
 
