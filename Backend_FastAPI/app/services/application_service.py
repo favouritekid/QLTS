@@ -49,20 +49,19 @@ async def create_application(
         ResourceNotFoundError: Nếu Lead không tồn tại
         BadRequest: Nếu Lead đã có Application
     """
+    # ✅ SPRINT 4 REFACTORED: Use ApplicationRepository for data access
+    from app.repositories import ApplicationRepository
+    
+    repo = ApplicationRepository(db)
+    
     # Kiểm tra Lead tồn tại
-    stmt = select(models.Lead).where(models.Lead.id == lead_id)
-    result = await db.execute(stmt)
-    lead = result.scalar_one_or_none()
-
+    lead = await repo.check_lead_exists(lead_id)
     if not lead:
         log.warning("Lead not found", lead_id=lead_id)
         raise ResourceNotFoundError(f"Lead với ID {lead_id} không tồn tại")
 
     # Kiểm tra Lead đã có Application chưa
-    stmt_check = select(models.Application).where(models.Application.lead_id == lead_id)
-    result_check = await db.execute(stmt_check)
-    existing_app = result_check.scalar_one_or_none()
-
+    existing_app = await repo.get_by_lead_id(lead_id, load_relationships=False, include_deleted=True)
     if existing_app:
         log.warning("Application already exists", lead_id=lead_id, application_id=existing_app.id)
         raise BadRequest(f"Lead này đã có hồ sơ tuyển sinh (ID: {existing_app.id})")
@@ -84,17 +83,8 @@ async def create_application(
     await db.flush()
     await db.refresh(new_application)
 
-    # Load relationships for socket event payload
-    stmt_reload = (
-        select(models.Application)
-        .where(models.Application.id == new_application.id)
-        .options(
-            selectinload(models.Application.lead),
-            selectinload(models.Application.major_program),
-        )
-    )
-    result_reload = await db.execute(stmt_reload)
-    new_application = result_reload.scalar_one()
+    # Load relationships for socket event payload via repository
+    new_application = await repo.get_with_lead_for_event(new_application.id)
 
     # ✅ Create post-commit callback
     async def _post_commit():
@@ -142,6 +132,8 @@ async def get_application_by_id(
     """
     Lấy Application theo ID.
 
+    ✅ SPRINT 4 REFACTORED: Now uses ApplicationRepository for data access.
+    
     Args:
         db: Database session
         application_id: ID của Application
@@ -152,31 +144,15 @@ async def get_application_by_id(
     Returns:
         Application hoặc None nếu không tìm thấy
     """
-    stmt = select(models.Application).where(models.Application.id == application_id)
-
-    # Filter out soft-deleted applications by default
-    if not include_deleted:
-        stmt = stmt.where(models.Application.deleted_at.is_(None))
-
-    # If load_lead is requested, ensure we load lead with its relationships for IDOR check
-    if load_lead or load_relationships:
-        stmt = stmt.options(
-            selectinload(models.Application.lead).options(
-                selectinload(models.Lead.assigned_officer),
-                selectinload(models.Lead.unit)
-            )
-        )
-
-    # Load other relationships if requested
-    if load_relationships:
-        stmt = stmt.options(
-            selectinload(models.Application.major_program),
-            selectinload(models.Application.program_offering),
-            selectinload(models.Application.officer),
-        )
-
-    result = await db.execute(stmt)
-    return result.scalar_one_or_none()
+    from app.repositories import ApplicationRepository
+    
+    repo = ApplicationRepository(db)
+    return await repo.get_by_id(
+        application_id,
+        load_relationships=load_relationships,
+        load_lead=load_lead,
+        include_deleted=include_deleted
+    )
 
 
 async def update_application(
@@ -238,19 +214,11 @@ async def update_application(
     await db.flush()
     await db.refresh(application)
 
-    # Load relationships after flush
-    stmt = (
-        select(models.Application)
-        .where(models.Application.id == application_id)
-        .options(
-            selectinload(models.Application.major_program),
-            selectinload(models.Application.program_offering),
-            selectinload(models.Application.officer),
-            selectinload(models.Application.lead),
-        )
-    )
-    result = await db.execute(stmt)
-    application = result.scalar_one()
+    # ✅ SPRINT 4 REFACTORED: Load relationships after flush via repository
+    from app.repositories import ApplicationRepository
+    
+    repo = ApplicationRepository(db)
+    application = await repo.get_full_for_update(application_id)
 
     # ✅ Create post-commit callback
     async def _post_commit():
@@ -324,6 +292,8 @@ async def get_application_by_lead_id(
     """
     Lấy Application theo Lead ID.
 
+    ✅ SPRINT 4 REFACTORED: Now uses ApplicationRepository for data access.
+    
     Args:
         db: Database session
         lead_id: ID của Lead
@@ -333,21 +303,14 @@ async def get_application_by_lead_id(
     Returns:
         Application hoặc None nếu không tìm thấy
     """
-    stmt = select(models.Application).where(models.Application.lead_id == lead_id)
-
-    # Filter out soft-deleted applications by default
-    if not include_deleted:
-        stmt = stmt.where(models.Application.deleted_at.is_(None))
-
-    if load_relationships:
-        stmt = stmt.options(
-            selectinload(models.Application.major_program),
-            selectinload(models.Application.program_offering),
-            selectinload(models.Application.officer),
-        )
-
-    result = await db.execute(stmt)
-    return result.scalar_one_or_none()
+    from app.repositories import ApplicationRepository
+    
+    repo = ApplicationRepository(db)
+    return await repo.get_by_lead_id(
+        lead_id,
+        load_relationships=load_relationships,
+        include_deleted=include_deleted
+    )
 
 
 async def delete_application(
