@@ -21,6 +21,7 @@ from ..services import pipeline_service, distribution_service
 from ..core.status_mapping import sync_lead_status_from_consultation
 from ..core.constants import UserRole
 from .status_helper import StatusHelper, AssignmentStatus
+from ..repositories import LeadRepository  # ✅ PHASE 2: Repository Pattern
 
 log = structlog.get_logger(__name__)
 
@@ -407,49 +408,23 @@ def _get_current_lead_state(lead: models.Lead) -> dict:
 async def get_lead_by_id(db: AsyncSession, lead_id: int, include_deleted: bool = False) -> models.Lead:
     """
     Lấy chi tiết Lead bằng ID (Detail View).
-    Hàm này giữ nguyên eager loading đầy đủ
-    vì nó cần thiết cho Timeline và Insights.
+    
+    ✅ REFACTORED: Now uses LeadRepository for data access.
+    Includes full eager loading for Timeline and Insights.
 
     Args:
         db: Database session
         lead_id: Lead ID to fetch
         include_deleted: If True, include soft-deleted leads (default: False)
+        
+    Returns:
+        Lead with all relationships loaded
+        
+    Raises:
+        ResourceNotFoundError: If lead not found
     """
-    query = (
-        select(models.Lead)
-        .options(
-            selectinload(models.Lead.offering).options(
-                selectinload(models.ProgramOffering.program)  # Eager load program for name display
-            ),
-            selectinload(models.Lead.unit).options(
-                selectinload(models.OrganizationUnit.parent),
-                selectinload(models.OrganizationUnit.children),
-                selectinload(models.OrganizationUnit.major_programs),
-            ),
-            selectinload(models.Lead.assigned_officer),
-            selectinload(models.Lead.pipeline_stage),
-            selectinload(models.Lead.consultation_status),
-            selectinload(models.Lead.application).options(
-                selectinload(models.Application.officer)
-            ),  # Fix MissingGreenlet: Eager load application and its officer
-            # Load sâu consultations và logs để dùng cho timeline/insights
-            selectinload(models.Lead.consultations).options(
-                joinedload(models.Consultation.officer),
-                joinedload(models.Consultation.consultation_status),
-            ),
-            selectinload(models.Lead.assignment_logs).options(
-                joinedload(models.AssignmentLog.officer)
-            ),
-        )
-        .where(models.Lead.id == lead_id)
-    )
-
-    # Filter deleted leads unless explicitly requested
-    if not include_deleted:
-        query = query.where(models.Lead.deleted_at.is_(None))
-
-    result = await db.execute(query)
-    lead = result.scalar_one_or_none()
+    repo = LeadRepository(db)
+    lead = await repo.get_by_id_full(lead_id, include_deleted=include_deleted)
     if not lead:
         raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found")
     return lead
@@ -457,36 +432,23 @@ async def get_lead_by_id(db: AsyncSession, lead_id: int, include_deleted: bool =
 async def get_lead_by_id_shallow(db: AsyncSession, lead_id: int, include_deleted: bool = False) -> models.Lead:
     """
     Lấy chi tiết Lead (Shallow View - Nhanh).
-    Chỉ Eager Load các quan hệ 1-1 cần thiết cho List/Detail View.
+    
+    ✅ REFACTORED: Now uses LeadRepository for data access.
+    Only loads minimal 1-1 relationships for quick operations.
 
     Args:
         db: Database session
         lead_id: Lead ID to fetch
         include_deleted: If True, include soft-deleted leads (default: False)
+        
+    Returns:
+        Lead with basic relationships loaded
+        
+    Raises:
+        ResourceNotFoundError: If lead not found
     """
-    query = (
-        select(models.Lead)
-        .options(
-            selectinload(models.Lead.offering).options(
-                selectinload(models.ProgramOffering.program)  # Eager load program for name display
-            ),
-            selectinload(models.Lead.unit), # <--- Load unit (thường là cần)
-            selectinload(models.Lead.assigned_officer),
-            selectinload(models.Lead.pipeline_stage),
-            selectinload(models.Lead.consultation_status),
-            selectinload(models.Lead.application).options(
-                selectinload(models.Application.officer)
-            ),  # Fix MissingGreenlet: Eager load application and its officer
-        )
-        .where(models.Lead.id == lead_id)
-    )
-
-    # Filter deleted leads unless explicitly requested
-    if not include_deleted:
-        query = query.where(models.Lead.deleted_at.is_(None))
-
-    result = await db.execute(query)
-    lead = result.scalar_one_or_none()
+    repo = LeadRepository(db)
+    lead = await repo.get_by_id_shallow(lead_id, include_deleted=include_deleted)
     if not lead:
         raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found")
     return lead

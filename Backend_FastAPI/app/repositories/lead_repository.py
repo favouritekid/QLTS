@@ -35,6 +35,121 @@ class LeadRepository(BaseRepository[models.Lead]):
         """
         super().__init__(db, models.Lead)
 
+    # =========================================================================
+    # DETAIL VIEW METHODS (get_by_id with eager loading)
+    # =========================================================================
+
+    async def get_by_id_full(
+        self,
+        lead_id: int,
+        include_deleted: bool = False
+    ) -> Optional[models.Lead]:
+        """
+        Get lead with ALL relationships for Detail/Timeline/Insights view.
+        
+        This is the "deep" loading strategy that includes:
+        - All direct relationships (offering, unit, officer, etc.)
+        - Nested relationships (unit.parent, unit.children, unit.major_programs)
+        - Collection relationships (consultations, assignment_logs)
+        - Nested collection relationships (consultations.officer, consultations.status)
+        
+        Use this for:
+        - Lead Detail Page
+        - Timeline View
+        - Insights Dashboard
+        
+        Args:
+            lead_id: Lead ID to fetch
+            include_deleted: If True, include soft-deleted leads
+            
+        Returns:
+            Lead with all relations loaded, or None if not found
+        """
+        from sqlalchemy.orm import joinedload
+        
+        query = (
+            select(self.model)
+            .options(
+                # Direct 1-1 relationships
+                selectinload(models.Lead.offering).options(
+                    selectinload(models.ProgramOffering.program)
+                ),
+                selectinload(models.Lead.unit).options(
+                    selectinload(models.OrganizationUnit.parent),
+                    selectinload(models.OrganizationUnit.children),
+                    selectinload(models.OrganizationUnit.major_programs),
+                ),
+                selectinload(models.Lead.assigned_officer),
+                selectinload(models.Lead.pipeline_stage),
+                selectinload(models.Lead.consultation_status),
+                selectinload(models.Lead.application).options(
+                    selectinload(models.Application.officer)
+                ),
+                # Collection relationships for timeline/insights
+                selectinload(models.Lead.consultations).options(
+                    joinedload(models.Consultation.officer),
+                    joinedload(models.Consultation.consultation_status),
+                ),
+                selectinload(models.Lead.assignment_logs).options(
+                    joinedload(models.AssignmentLog.officer)
+                ),
+            )
+            .where(self.model.id == lead_id)
+        )
+        
+        if not include_deleted:
+            query = query.where(self.model.deleted_at.is_(None))
+        
+        result = await self.db.execute(query)
+        return result.scalars().first()
+
+    async def get_by_id_shallow(
+        self,
+        lead_id: int,
+        include_deleted: bool = False
+    ) -> Optional[models.Lead]:
+        """
+        Get lead with minimal relationships for quick operations.
+        
+        This is the "shallow" loading strategy that includes only:
+        - Direct 1-1 relationships needed for display
+        - NO collection relationships (consultations, logs)
+        
+        Use this for:
+        - Quick lead lookup before update
+        - List item display
+        - Permission checks
+        
+        Args:
+            lead_id: Lead ID to fetch
+            include_deleted: If True, include soft-deleted leads
+            
+        Returns:
+            Lead with minimal relations loaded, or None if not found
+        """
+        query = (
+            select(self.model)
+            .options(
+                selectinload(models.Lead.offering).options(
+                    selectinload(models.ProgramOffering.program)
+                ),
+                selectinload(models.Lead.unit),
+                selectinload(models.Lead.assigned_officer),
+                selectinload(models.Lead.pipeline_stage),
+                selectinload(models.Lead.consultation_status),
+                selectinload(models.Lead.application).options(
+                    selectinload(models.Application.officer)
+                ),
+            )
+            .where(self.model.id == lead_id)
+        )
+        
+        if not include_deleted:
+            query = query.where(self.model.deleted_at.is_(None))
+        
+        result = await self.db.execute(query)
+        return result.scalars().first()
+
     async def get_filtered(
         self,
         skip: int = 0,
