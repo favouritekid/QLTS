@@ -1,0 +1,6 @@
+# Semgrep configuration for QLTS Backend
+# Run with: semgrep --config .semgrep/
+
+# Include our custom rules
+rules:
+  - .semgrep/rules/
