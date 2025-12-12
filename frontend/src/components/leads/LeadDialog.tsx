@@ -100,7 +100,9 @@ const leadSchema = z.object({
     "phone",
     "event",
     "other",
-  ] as const),
+  ] as const, {
+    message: "Vui lòng chọn nguồn lead hợp lệ",
+  }),
   education_level: z
     .enum([
       "high_school",

@@ -145,6 +145,9 @@ class ConsultationStatus(ConsultationStatusBase):
         None,
         description="Number of leads with this status (computed)"
     )
+    
+    # ✅ NEW: Include nested stage for Frontend Logic (Previous/Next Order)
+    stage: Optional["PipelineStage"] = None
 
     model_config = ConfigDict(from_attributes=True, use_enum_values=True)
 

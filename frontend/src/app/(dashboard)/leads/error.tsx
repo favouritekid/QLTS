@@ -14,6 +14,17 @@ import { AlertTriangle, RefreshCw } from 'lucide-react'
  * - Permission errors
  * - Network timeouts
  */
+const getFriendlyErrorMessage = (error: Error) => {
+  const msg = error.message.toLowerCase()
+  if (msg.includes('fetch failed')) {
+    return 'Không thể kết nối đến máy chủ. Vui lòng kiểm tra kết nối mạng hoặc thử lại sau.'
+  }
+  if (msg.includes('timeout')) {
+    return 'Yêu cầu hết thời gian chờ. Máy chủ có thể đang bận.'
+  }
+  return error.message || 'Đã xảy ra lỗi không mong muốn khi tải danh sách lead.'
+}
+
 export default function LeadsError({
   error,
   reset,
@@ -29,32 +40,32 @@ export default function LeadsError({
     <div className="container mx-auto p-6 space-y-4">
       <Alert variant="destructive">
         <AlertTriangle className="h-4 w-4" />
-        <AlertTitle>Failed to Load Leads</AlertTitle>
+        <AlertTitle>Không thể tải dữ liệu</AlertTitle>
         <AlertDescription>
-          We could not load the leads data. Please try again.
+          {getFriendlyErrorMessage(error)}
         </AlertDescription>
       </Alert>
 
       <Card>
         <CardContent className="pt-6 space-y-4">
           <div className="text-center space-y-2">
-            <h3 className="font-semibold">What happened?</h3>
-            <p className="text-sm text-muted-foreground max-w-md mx-auto">
-              {error.message || 'An unexpected error occurred while loading leads.'}
+            <h3 className="font-semibold">Chi tiết lỗi</h3>
+            <p className="text-sm text-muted-foreground max-w-md mx-auto bg-muted p-2 rounded font-mono">
+              {error.message}
             </p>
           </div>
 
           <div className="flex justify-center gap-3">
             <Button onClick={() => reset()} size="sm">
               <RefreshCw className="h-4 w-4 mr-2" />
-              Try Again
+              Thử lại
             </Button>
             <Button
               variant="outline"
               size="sm"
               onClick={() => window.location.href = '/dashboard'}
             >
-              Back to Dashboard
+              Về trang chủ
             </Button>
           </div>
         </CardContent>

@@ -837,7 +837,8 @@ async def create_lead(
                         "unit_id": db_lead.unit_id,
                         "lead_name": db_lead.full_name or "Unknown",
                         "source": db_lead.source or "Unknown",
-                        "actor_id": created_by.id if created_by else 0
+                        "actor_id": created_by.id if created_by else 0,
+                        "actor_name": created_by.full_name or created_by.username if created_by else "System",  # ✅ Added for template
                     },
                     dedupe_key=f"lead_created:{db_lead.id}",
                     auto_commit=True  # ✅ Auto-commit for service callback
@@ -861,6 +862,7 @@ async def create_lead(
                                 "lead_id": db_lead.id,
                                 "officer_id": direct_assignment_officer_id,
                                 "actor_id": created_by.id if created_by else 0,
+                                "actor_name": created_by.full_name or created_by.username if created_by else "System",  # ✅ Added for template
                                 "lead_name": db_lead.full_name or "Unknown",
                                 "lead_phone": db_lead.phone or "",
                                 "offering_name": offering_name
@@ -1170,8 +1172,7 @@ async def update_lead(
         except Exception as e:
             # Rollback tự động xảy ra khi có lỗi trong `async with`
             # Phân biệt giữa lỗi business logic và lỗi hệ thống
-            from app.utils.exceptions import DuplicateResourceError, NotFoundError, ForbiddenError
-            if isinstance(e, (DuplicateResourceError, NotFoundError, ForbiddenError)):
+            if isinstance(e, (DuplicateResourceError, ResourceNotFoundError, PermissionDeniedError)):
                 # Business logic exceptions - không cần traceback
                 log.warning(
                     "Lead update rejected due to business rule",
@@ -1222,6 +1223,7 @@ async def update_lead(
                         "old_unit_id": old_unit_id,  # type: ignore
                         "new_unit_id": new_target_unit_id,  # type: ignore
                         "actor_id": updated_by.id,
+                        "actor_name": updated_by.full_name or updated_by.username,  # ✅ Added for template
                         "reason": f"Offering changed from #{old_offering_id} to #{new_offering_id}",  # type: ignore
                         "user_ids": [old_officer_id] if old_officer_id else [],  # Notify old officer
                     },
@@ -1263,7 +1265,7 @@ async def add_consultation(
                 .options(
                     selectinload(models.Lead.assigned_officer),
                     selectinload(models.Lead.pipeline_stage),
-                    selectinload(models.Lead.consultation_status),
+                    selectinload(models.Lead.consultation_status).selectinload(models.ConsultationStatus.stage),
                 )
                 .where(models.Lead.id == lead_id)
                 .where(models.Lead.deleted_at.is_(None))
@@ -1514,6 +1516,7 @@ async def assign_lead_manually(
             "lead_id": lead.id,
             "officer_id": officer.id,
             "actor_id": assigner.id,
+            "actor_name": assigner.full_name or assigner.username,  # ✅ Added for template
             "lead_name": lead.full_name or "Unknown",
             "lead_phone": lead.phone or "",
             "offering_name": f"{lead.offering.program.name} - {lead.offering.offering_type}" if lead.offering and lead.offering.program else (lead.offering.offering_type if lead.offering else "N/A")

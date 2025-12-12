@@ -108,7 +108,8 @@ async def automatically_assign_lead(
                                 "unit_id": lead_unit_id,
                                 "reason": "No officers available",
                                 "lead_name": lead.full_name or "Unknown",
-                                "actor_id": 0  # System actor
+                                "actor_id": 0,  # System actor
+                                "actor_name": "System",  # ✅ Added for template
                             },
                             dedupe_key=f"lead_assignment_failed:{lead_id}:no_officers",
                             auto_commit=True  # Critical for Celery context
@@ -202,7 +203,8 @@ async def automatically_assign_lead(
                                 "unit_id": lead_unit_id,
                                 "reason": "All officers at full capacity",
                                 "lead_name": lead.full_name or "Unknown",
-                                "actor_id": 0  # System actor
+                                "actor_id": 0,  # System actor
+                                "actor_name": "System",  # ✅ Added for template
                             },
                             dedupe_key=f"lead_assignment_failed:{lead_id}:capacity",
                             auto_commit=True  # Critical for Celery context
@@ -284,7 +286,8 @@ async def automatically_assign_lead(
                 "actor_id": 0,  # System actor for automatic assignments
                 "lead_name": lead.full_name or "Unknown",
                 "lead_phone": lead.phone or "",
-                "offering_name": offering_name
+                "offering_name": offering_name,
+                "actor_name": "System (Auto Assignment)",  # ✅ Added for template
             }
 
             # Dispatch notification (saves to DB + commits + sends via Socket.IO/Email)

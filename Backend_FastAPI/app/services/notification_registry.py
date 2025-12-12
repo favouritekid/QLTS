@@ -183,7 +183,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         ])),
         template={
             "title": "Lead Information Updated",
-            "message": "Lead #${lead_id} has been updated by ${actor_name}."
+            "message": "Lead #${lead_id} updated: ${updated_summary} by ${actor_name}."
         },
         channels=["browser"],
         notification_type="info",

@@ -143,18 +143,24 @@ class PipelineRepository(BaseRepository[models.PipelineStage]):
 
     async def get_statuses_for_stage(self, stage_id: str) -> List[models.ConsultationStatus]:
         """Get all consultation statuses for a specific stage."""
+        from sqlalchemy.orm import selectinload
+        
         query = (
             select(models.ConsultationStatus)
             .where(models.ConsultationStatus.stage_id == stage_id)
+            .options(selectinload(models.ConsultationStatus.stage))
         )
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
     async def get_universal_statuses(self) -> List[models.ConsultationStatus]:
         """Get all universal (global) consultation statuses."""
+        from sqlalchemy.orm import selectinload
+        
         query = (
             select(models.ConsultationStatus)
             .where(models.ConsultationStatus.is_universal == True)
+            .options(selectinload(models.ConsultationStatus.stage))
         )
         result = await self.db.execute(query)
         return list(result.scalars().all())
@@ -170,8 +176,8 @@ class PipelineRepository(BaseRepository[models.PipelineStage]):
         query = (
             select(models.AllowedTransition)
             .options(
-                selectinload(models.AllowedTransition.from_status),
-                selectinload(models.AllowedTransition.to_status),
+                selectinload(models.AllowedTransition.from_status).selectinload(models.ConsultationStatus.stage),
+                selectinload(models.AllowedTransition.to_status).selectinload(models.ConsultationStatus.stage),
             )
             .order_by(models.AllowedTransition.from_status_id)
         )
@@ -188,8 +194,8 @@ class PipelineRepository(BaseRepository[models.PipelineStage]):
         query = (
             select(models.AllowedTransition)
             .options(
-                selectinload(models.AllowedTransition.from_status),
-                selectinload(models.AllowedTransition.to_status),
+                selectinload(models.AllowedTransition.from_status).selectinload(models.ConsultationStatus.stage),
+                selectinload(models.AllowedTransition.to_status).selectinload(models.ConsultationStatus.stage),
             )
             .where(models.AllowedTransition.id == transition_id)
         )

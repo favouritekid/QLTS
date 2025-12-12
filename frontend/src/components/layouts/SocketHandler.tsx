@@ -516,15 +516,18 @@ export function SocketHandler() {
 
       // ✅ FIX: Only show toast for human updates, not system updates
       // System updates (like Celery updating next_activity_at) should be silent
-      if (data.updated_by !== "system") {
-        const fieldsText = data.updated_fields.slice(0, 3).join(", ");
-        const moreFields =
-          data.updated_fields.length > 3 ? ` +${data.updated_fields.length - 3} more` : "";
-        toast.info("📝 Lead updated", {
-          description: `${fieldsText}${moreFields} by ${data.updated_by}`,
-          duration: 4000,
-        });
-      }
+      // if (data.updated_by !== "system") {
+      //   const fieldsText = data.updated_fields.slice(0, 3).join(", ");
+      //   const moreFields =
+      //     data.updated_fields.length > 3 ? ` +${data.updated_fields.length - 3} more` : "";
+      //   toast.info("📝 Lead updated", {
+      //     description: `${fieldsText}${moreFields} by ${data.updated_by}`,
+      //     duration: 4000,
+      //   });
+      // }
+      // ✅ REFACTOR: Removed frontend-generated toast. 
+      // We now rely on the 'notification' event from backend (handleNewNotification)
+      // which allows for template customization and unified logic.
     };
 
     // ✅ REAL-TIME LEAD DELETION: Lắng nghe sự kiện lead_deleted

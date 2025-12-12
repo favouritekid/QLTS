@@ -163,7 +163,7 @@ export function useCreateLead() {
       return await leadsApi.createLead(data);
     },
     onSuccess: async (newLead) => {
-      toast.success("Lead created successfully!", {
+      toast.success("Tạo lead thành công!", {
         description: newLead.full_name,
       });
 
@@ -179,9 +179,9 @@ export function useCreateLead() {
         typeof detail === "string"
           ? detail
           : Array.isArray(detail)
-            ? detail.map((e) => e.msg || "Validation error").join(", ")
-            : error.response?.data?.message || "Failed to create lead";
-      toast.error("Error", { description: message });
+            ? detail.map((e) => e.msg).join(", ")
+            : error.response?.data?.message || error.message || "Không thể tạo lead mới";
+      toast.error("Tạo lead thất bại", { description: message });
     },
   });
 }
@@ -238,17 +238,18 @@ export function useUpdateLead() {
       }
 
       const detail = err.response?.data?.detail;
-      const message =
+      const errorMessage =
         typeof detail === "string"
           ? detail
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
-            : "Failed to update lead";
-      toast.error("Error", { description: message });
+            : err.response?.data?.message || err.message || "Không thể cập nhật lead";
+            
+      toast.error("Cập nhật lead thất bại", { description: errorMessage });
     },
 
     onSuccess: async (updatedLead) => {
-      toast.success("Lead updated successfully!", {
+      toast.success("Cập nhật lead thành công!", {
         description: updatedLead.full_name,
       });
 
@@ -295,7 +296,7 @@ export function useDeleteLead() {
     },
 
     onSuccess: async (_, __, context) => {
-      toast.success("Lead deleted successfully!");
+      toast.success("Xóa lead thành công!");
 
       // Invalidate the specific lead's queries
       if (context?.deletedLeadId) {
@@ -315,8 +316,8 @@ export function useDeleteLead() {
           ? detail
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
-            : "Failed to delete lead";
-      toast.error("Error", { description: message });
+            : "Không thể xóa lead";
+      toast.error("Xóa lead thất bại", { description: message });
     },
   });
 }
@@ -354,8 +355,8 @@ export function useAssignLead() {
     },
 
     onSuccess: (updatedLead) => {
-      toast.success("Lead assigned successfully!", {
-        description: `Assigned to officer #${updatedLead.assigned_officer_id}`,
+      toast.success("Phân công lead thành công!", {
+        description: `Đã phân công cho tư vấn viên #${updatedLead.assigned_officer_id}`,
       });
 
       // Invalidate queries
@@ -372,8 +373,8 @@ export function useAssignLead() {
           ? detail
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
-            : "Failed to assign lead";
-      toast.error("Error", { description: message });
+            : error.response?.data?.message || error.message || "Không thể phân công lead";
+      toast.error("Phân công thất bại", { description: message });
     },
   });
 }
@@ -548,14 +549,14 @@ export function usePerformLeadAction() {
 
     onSuccess: (updatedLead, variables) => {
       const actionMessages: Record<string, string> = {
-        reject: "Lead rejected",
-        convert: "Lead converted successfully!",
-        reassign: "Lead reassigned successfully!",
-        mark_lost: "Lead marked as lost",
-        reopen: "Lead reopened",
+        reject: "Đã từ chối lead",
+        convert: "Chuyển đổi lead thành công!",
+        reassign: "Phân công lại thành công!",
+        mark_lost: "Đã đánh dấu thất bại",
+        reopen: "Đã mở lại lead",
       };
 
-      toast.success(actionMessages[variables.data.action] || "Action performed successfully", {
+      toast.success(actionMessages[variables.data.action] || "Thao tác thành công", {
         description: updatedLead.full_name,
       });
 
@@ -573,8 +574,8 @@ export function usePerformLeadAction() {
           ? detail
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
-            : `Failed to ${variables.data.action} lead`;
-      toast.error("Error", { description: message });
+            : `Thao tác ${variables.data.action} thất bại`;
+      toast.error("Lỗi thao tác", { description: message });
     },
   });
 }

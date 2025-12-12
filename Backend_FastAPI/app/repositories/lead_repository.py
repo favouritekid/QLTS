@@ -81,14 +81,14 @@ class LeadRepository(BaseRepository[models.Lead]):
                 ),
                 selectinload(models.Lead.assigned_officer),
                 selectinload(models.Lead.pipeline_stage),
-                selectinload(models.Lead.consultation_status),
+                selectinload(models.Lead.consultation_status).selectinload(models.ConsultationStatus.stage),
                 selectinload(models.Lead.application).options(
                     selectinload(models.Application.officer)
                 ),
                 # Collection relationships for timeline/insights
                 selectinload(models.Lead.consultations).options(
                     joinedload(models.Consultation.officer),
-                    joinedload(models.Consultation.consultation_status),
+                    joinedload(models.Consultation.consultation_status).joinedload(models.ConsultationStatus.stage),
                 ),
                 selectinload(models.Lead.assignment_logs).options(
                     joinedload(models.AssignmentLog.officer)
@@ -136,7 +136,7 @@ class LeadRepository(BaseRepository[models.Lead]):
                 selectinload(models.Lead.unit),
                 selectinload(models.Lead.assigned_officer),
                 selectinload(models.Lead.pipeline_stage),
-                selectinload(models.Lead.consultation_status),
+                selectinload(models.Lead.consultation_status).selectinload(models.ConsultationStatus.stage),
                 selectinload(models.Lead.application).options(
                     selectinload(models.Application.officer)
                 ),
@@ -320,7 +320,7 @@ class LeadRepository(BaseRepository[models.Lead]):
                 ),
                 selectinload(models.Lead.assigned_officer),
                 selectinload(models.Lead.unit),
-                selectinload(models.Lead.consultation_status),
+                selectinload(models.Lead.consultation_status).selectinload(models.ConsultationStatus.stage),
                 selectinload(models.Lead.pipeline_stage),
                 # ✅ FIX: Add missing eager load for application to prevent MissingGreenlet error
                 selectinload(models.Lead.application),

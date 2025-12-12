@@ -18,6 +18,8 @@ import {
   Mail,
   Video,
   User,
+  MapPin, // Icon for Current Location
+  CheckCircle2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -120,10 +122,28 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
     if (!scrollContainer) return;
 
     const handleWheel = (e: WheelEvent) => {
-      if (e.deltaY !== 0) {
-        e.preventDefault();
-        scrollContainer.scrollLeft += e.deltaY;
-      }
+      if (e.deltaY === 0) return;
+
+      // Check if content overflows
+      if (scrollContainer.scrollWidth <= scrollContainer.clientWidth) return;
+
+      const { scrollLeft, scrollWidth, clientWidth } = scrollContainer;
+      const maxScrollLeft = scrollWidth - clientWidth;
+
+      // Determine drag direction
+      // deltaY > 0 means scrolling DOWN (wheel down) -> move RIGHT
+      // deltaY < 0 means scrolling UP (wheel up) -> move LEFT
+      const isGoingRight = e.deltaY > 0;
+      const isGoingLeft = e.deltaY < 0;
+
+      // Check if we are at boundaries
+      // Allow default scroll if we're at the end and trying to go further
+      if (isGoingRight && scrollLeft >= maxScrollLeft - 1) return;
+      if (isGoingLeft && scrollLeft <= 1) return;
+
+      // Otherwise, hijack the scroll for horizontal movement
+      e.preventDefault();
+      scrollContainer.scrollLeft += e.deltaY;
     };
 
     scrollContainer.addEventListener("wheel", handleWheel, { passive: false });
@@ -133,37 +153,70 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
     };
   }, [statuses]); // Re-attach when statuses load
 
-  // Group statuses by outcome_type and universal flag
+  // ✅ REFACORTED GROUPING LOGIC (Previous -> Same -> Next)
   const groupedStatuses = useMemo(() => {
-    const universal: ConsultationStatus[] = []; // ✅ NEW - Universal/retry statuses
-    const neutral: ConsultationStatus[] = [];
-    const positive: ConsultationStatus[] = [];
-    const negative: ConsultationStatus[] = [];
+    // 1. Universal (Toàn cục - Row 1)
+    const universal: ConsultationStatus[] = [];
+    
+    // 2. Result Groups (Kết quả - Row 2)
+    const previousStage: ConsultationStatus[] = [];
+    const sameStage: ConsultationStatus[] = [];
+    const nextStage: ConsultationStatus[] = [];
 
-    statuses.forEach((status) => {
-      // ✅ NEW: Universal statuses in separate group
-      if (status.is_universal) {
-        universal.push(status);
+    // Find current status to determine current stage order
+    // We try to find it in the fetched statuses first (since backend includes current status now)
+    const currentStatusObj = statuses.find(s => s.id === currentStatusId);
+    const currentStageOrder = currentStatusObj?.stage?.order ?? -1;
+    const currentStageId = currentStatusObj?.stage_id;
+
+    console.log("QuickConsultationSection - Grouping Debug:", {
+      currentStatusId,
+      currentStageOrder,
+      totalStatuses: statuses.length
+    });
+
+    const displayStatuses = statuses.filter(s => {
+      if (s.is_universal) {
+        universal.push(s);
+        return false; // Move to universal array
+      }
+      return true;
+    });
+
+    displayStatuses.forEach((status) => {
+      // Logic: Previous vs Same vs Next
+      // We rely on stage.order. If stage info is missing, fallback to 'next' or 'same'?
+      // Since we updated schema, status.stage should be available.
+      const statusStageOrder = status.stage?.order ?? -1;
+
+      // Grouping logic
+      if (statusStageOrder < currentStageOrder && statusStageOrder !== -1 && currentStageOrder !== -1) {
+        // PREVIOUS STAGE (Revert)
+        previousStage.push(status);
+      } else if (statusStageOrder === currentStageOrder || status.stage_id === currentStageId) {
+        // SAME STAGE (Sibling / Current)
+        sameStage.push(status);
       } else {
-        // Existing grouping logic for non-universal statuses
-        switch (status.outcome_type) {
-          case "neutral":
-            neutral.push(status);
-            break;
-          case "positive":
-            positive.push(status);
-            break;
-          case "negative":
-            negative.push(status);
-            break;
-          default:
-            neutral.push(status);
-        }
+        // NEXT STAGE (Progress)
+        nextStage.push(status);
       }
     });
 
-    return { universal, neutral, positive, negative };
-  }, [statuses]);
+    // Sort Previous desc (closest to current first? or asc?) -> Let's do Ascending order
+    previousStage.sort((a, b) => (a.stage?.order ?? 0) - (b.stage?.order ?? 0));
+    
+    // Sort Next asc
+    nextStage.sort((a, b) => (a.stage?.order ?? 0) - (b.stage?.order ?? 0));
+
+    // Sort Same Stage: Current status first, then others by name
+    sameStage.sort((a, b) => {
+      if (a.id === currentStatusId) return -1;
+      if (b.id === currentStatusId) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    return { universal, previousStage, sameStage, nextStage };
+  }, [statuses, currentStatusId]);
 
   // Handle status badge click - save immediately
   const handleStatusClick = async (status: ConsultationStatus) => {
@@ -371,7 +424,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
 
       {/* Divider */}
       <div className="border-t pt-3">
-        {/* Universal Statuses - Stay at top (không thay đổi trạng thái lead) */}
+        {/* ROW 1: Universal Statuses (Trạng thái liên hệ) */}
         {groupedStatuses.universal.length > 0 && (
           <div className="mb-4">
             <div className="text-muted-foreground mb-2 flex items-center gap-2 text-xs">
@@ -413,15 +466,13 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
           </div>
         )}
 
-        {/* Horizontal Slider - Status Progression */}
-        {(groupedStatuses.negative.length > 0 ||
-          groupedStatuses.neutral.length > 0 ||
-          groupedStatuses.positive.length > 0) && (
+        {/* ROW 2: Result Statuses (Kết quả liên hệ) - Sorted by Stage Progression */}
+        {(groupedStatuses.previousStage.length > 0 || groupedStatuses.sameStage.length > 0 || groupedStatuses.nextStage.length > 0) && (
           <div className="space-y-2">
             {/* Header with help tooltip */}
             <div className="flex items-center gap-1">
               <BookmarkCheck className="text-muted-foreground h-3 w-3 text-xs" />
-              <Label className="text-muted-foreground text-xs">Kết quả liên hệ</Label>
+              <Label className="text-muted-foreground text-xs">Kết quả liên hệ ({lead?.pipeline_stage?.name})</Label>
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -439,20 +490,19 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
               {/* Horizontal scroll container - hidden scrollbar, uses wheel scroll */}
               <div
                 ref={scrollContainerRef}
-                className="cursor-grab overflow-x-auto overflow-y-hidden overscroll-x-contain [-ms-overflow-style:none] [scrollbar-width:none] active:cursor-grabbing [&::-webkit-scrollbar]:hidden"
+                className="flex flex-nowrap items-center gap-1.5 cursor-grab overflow-x-auto overflow-y-hidden overscroll-x-contain [-ms-overflow-style:none] [scrollbar-width:none] active:cursor-grabbing [&::-webkit-scrollbar]:hidden"
               >
-                <div className="flex min-w-max items-center gap-1.5 px-1">
-                  {/* Negative Zone */}
-                  {groupedStatuses.negative.length > 0 && (
+                  {/* GROUP 1: PREVIOUS STAGE (Revert) */}
+                  {groupedStatuses.previousStage.length > 0 && (
                     <>
-                      {groupedStatuses.negative.map((status) => (
+                      {groupedStatuses.previousStage.map((status) => (
                         <Button
                           key={status.id}
                           variant="ghost"
                           size="sm"
                           className={cn(
-                            "h-7 flex-shrink-0 px-2.5 text-xs",
-                            "border border-red-200 bg-red-50 text-red-600 hover:bg-red-100",
+                            "h-7 flex-shrink-0 px-2.5 text-xs font-normal",
+                            "border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100",
                             "transition-all hover:scale-[1.02]"
                           )}
                           onClick={() => handleStatusClick(status)}
@@ -469,60 +519,60 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                           {status.name}
                         </Button>
                       ))}
-                      {/* Arrow separator */}
-                      {(groupedStatuses.neutral.length > 0 ||
-                        groupedStatuses.positive.length > 0) && (
-                        <ArrowRight className="text-muted-foreground/50 mx-1 h-4 w-4 flex-shrink-0" />
-                      )}
+
+                      <ArrowRight className="text-muted-foreground/30 mx-1 h-3 w-3 flex-shrink-0" />
                     </>
                   )}
 
-                  {/* Neutral Zone */}
-                  {groupedStatuses.neutral.length > 0 && (
+                  {/* GROUP 2: SAME STAGE (Current & Siblings) */}
+                  {groupedStatuses.sameStage.length > 0 && (
                     <>
-                      {groupedStatuses.neutral.map((status) => (
+                      {groupedStatuses.sameStage.map((status) => {
+                        return (
+                          <Button
+                            key={status.id}
+                            variant="ghost"
+                            size="sm"
+                            className={cn(
+                              "h-7 flex-shrink-0 px-2.5 text-xs font-normal",
+                              "border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100",
+                              "transition-all hover:scale-[1.02]"
+                            )}
+                            onClick={() => handleStatusClick(status)}
+                            disabled={addConsultation.isPending}
+                          >
+                            {savingStatusId === status.id ? (
+                              <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                            ) : (
+                              <span
+                                className="mr-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full"
+                                style={{ backgroundColor: status.color_code }}
+                              />
+                            )}
+                            {status.name}
+                          </Button>
+                        );
+                      })}
+                    </>
+                  )}
+
+                  {/* ARROW SEPARATOR */}
+                  {groupedStatuses.sameStage.length > 0 && groupedStatuses.nextStage.length > 0 && (
+                    <ArrowRight className="text-muted-foreground/50 mx-1 h-4 w-4 flex-shrink-0" />
+                  )}
+
+                  {/* GROUP 3: NEXT STAGE (Progress) */}
+                  {groupedStatuses.nextStage.length > 0 && (
+                    <>
+                      {groupedStatuses.nextStage.map((status) => (
                         <Button
                           key={status.id}
                           variant="ghost"
                           size="sm"
                           className={cn(
-                            "h-7 flex-shrink-0 px-2.5 text-xs",
-                            "border border-slate-200 bg-slate-100 text-slate-700 hover:bg-slate-200",
+                            "h-7 flex-shrink-0 px-2.5 text-xs font-normal",
+                            "border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100",
                             "transition-all hover:scale-[1.02]"
-                          )}
-                          onClick={() => handleStatusClick(status)}
-                          disabled={addConsultation.isPending}
-                        >
-                          {savingStatusId === status.id ? (
-                            <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-                          ) : (
-                            <span
-                              className="mr-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full"
-                              style={{ backgroundColor: status.color_code }}
-                            />
-                          )}
-                          {status.name}
-                        </Button>
-                      ))}
-                      {/* Arrow separator */}
-                      {groupedStatuses.positive.length > 0 && (
-                        <ArrowRight className="text-muted-foreground/50 mx-1 h-4 w-4 flex-shrink-0" />
-                      )}
-                    </>
-                  )}
-
-                  {/* Positive Zone */}
-                  {groupedStatuses.positive.length > 0 && (
-                    <>
-                      {groupedStatuses.positive.map((status) => (
-                        <Button
-                          key={status.id}
-                          variant="outline"
-                          size="sm"
-                          className={cn(
-                            "h-7 flex-shrink-0 px-2.5 text-xs",
-                            "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
-                            "font-medium transition-all hover:scale-[1.02]"
                           )}
                           onClick={() => handleStatusClick(status)}
                           disabled={addConsultation.isPending}
@@ -543,11 +593,35 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                 </div>
               </div>
 
-              {/* Progress indicator bar */}
-              <div className="mt-2 h-1 rounded-full bg-gradient-to-r from-red-200 via-slate-200 to-emerald-200" />
+              {/* Dynamic Gradient Progress Bar */}
+              {(() => {
+                 // Calculate colors for gradient
+                 // Fallbacks: Slate-200 (Gray), Primary (Blue/Brand), Emerald-200 (Green)
+                 const prevColor = groupedStatuses.previousStage.length > 0 
+                    ? groupedStatuses.previousStage[groupedStatuses.previousStage.length - 1].color_code 
+                    : "#e2e8f0";
+                 
+                 const currColor = groupedStatuses.sameStage.find(s => s.id === currentStatusId)?.color_code 
+                    || groupedStatuses.sameStage[0]?.color_code 
+                    || "#3b82f6";
+                 
+                 const nextColor = groupedStatuses.nextStage.length > 0 
+                    ? groupedStatuses.nextStage[0].color_code 
+                    : "#a7f3d0";
+
+                 return (
+                   <div 
+                     className="mt-2 h-1 rounded-full opacity-80"
+                     style={{
+                       background: `linear-gradient(to right, ${prevColor}, ${currColor}, ${nextColor})`
+                     }}
+                   />
+                 );
+              })()}
             </div>
-          </div>
+
         )}
+
       </div>
     </div>
   );

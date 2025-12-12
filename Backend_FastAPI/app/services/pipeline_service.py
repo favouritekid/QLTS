@@ -1039,61 +1039,85 @@ async def get_allowed_next_statuses(
     """
     Lấy danh sách các trạng thái được phép chuyển đến từ trạng thái hiện tại.
 
-    Sử dụng bảng allowed_transitions để xác định workflow hợp lệ.
-    ✅ LUÔN bao gồm universal statuses (is_universal=True) bất kể workflow.
-    Nếu current_status_id là None (lead mới), trả về tất cả statuses.
+    Logic mới (User Request):
+    1.  **Current Status**: Luôn bao gồm trạng thái hiện tại.
+    2.  **Siblings**: Tự động bao gồm TẤT CẢ trạng thái trong cùng Stage hiện tại.
+    3.  **Allowed Transitions**: Các trạng thái Next Stage được cấu hình rõ ràng.
+    4.  **Universal**: Các trạng thái toàn cục (luôn có sẵn).
 
     Args:
         db: AsyncSession
         current_status_id: ID của trạng thái hiện tại (có thể None)
 
     Returns:
-        Danh sách ConsultationStatus được phép chuyển đến
+        Danh sách ConsultationStatus hợp lệ
     """
     # ✅ SPRINT 4 REFACTORED: Use Repository for all status queries
     from app.repositories import PipelineRepository
-    
+
     repo = PipelineRepository(db)
-    
+
     # Nếu chưa có status (lead mới), trả về tất cả statuses
     if not current_status_id:
         return await repo.get_all_statuses_with_stage()
 
-    # Query các transitions được phép từ status hiện tại
-    allowed_statuses = await repo.get_allowed_next_statuses_from(current_status_id)
+    # 1. Lấy thông tin Current Status để biết Stage hiện tại
+    current_status = await _get_status_by_id(db, current_status_id)
+    current_stage_id = current_status.stage_id if current_status else None
 
-    # ✅ Luôn thêm universal statuses (có thể dùng ở mọi stage)
+    # 2. Lấy danh sách Allowed Transitions (Cấu hình)
+    allowed_transition_statuses = await repo.get_allowed_next_statuses_from(current_status_id)
+
+    # 3. Lấy danh sách Universal
     universal_statuses = await repo.get_universal_statuses_with_stage()
 
-    # Lấy current status để kiểm tra
-    current_status = await _get_status_by_id(db, current_status_id)
+    # 4. ✅ NEW: Lấy danh sách Siblings (Cùng Stage)
+    sibling_statuses = []
+    if current_stage_id:
+        sibling_statuses = await repo.get_statuses_for_stage(current_stage_id)
 
-    # ✅ IMPROVED: Merge với ordering rõ ràng
-    # Thứ tự: Current (if not universal) → Universal → Allowed (sorted)
-    final_statuses = []
-    allowed_ids = {s.id for s in allowed_statuses}
-    universal_ids = {s.id for s in universal_statuses}
+    # 5. Merge và Deduplicate
+    # Sử dụng dict để loại bỏ trùng lặp (key = id)
+    final_statuses_map = {}
 
-    # 1. Current status first (nếu không phải universal và không trong allowed)
-    if current_status and not current_status.is_universal and current_status.id not in allowed_ids:
-        final_statuses.append(current_status)
+    # a. Thêm Current Status trước (để đảm bảo có mặt)
+    if current_status:
+        final_statuses_map[current_status.id] = current_status
 
-    # 2. Universal statuses (already sorted by name)
-    # Tránh duplicate với allowed list
-    for universal_status in universal_statuses:
-        if universal_status.id not in allowed_ids:
-            final_statuses.append(universal_status)
+    # b. Thêm Siblings (Ưu tiên hiển thị cùng nhóm hiện tại)
+    for s in sibling_statuses:
+        # Nếu sibling là universal, nó sẽ được xử lý ở bước d (để gom nhóm Universal riêng nếu cần)
+        # Nhưng ở đây ta cứ thêm vào, frontend sẽ lọc display.
+        # Lưu ý: Sibling đè Current nếu trùng (không sao, cùng object)
+        final_statuses_map[s.id] = s
 
-    # 3. Allowed statuses (sorted by stage_id, then name for better UX)
-    sorted_allowed = sorted(allowed_statuses, key=lambda s: (s.stage_id, s.name))
-    final_statuses.extend(sorted_allowed)
+    # c. Thêm Allowed Transitions (Next Stage)
+    for s in allowed_transition_statuses:
+        final_statuses_map[s.id] = s
 
-    log.debug(
-        "get_allowed_next_statuses",
-        current_status=current_status_id,
-        total_allowed=len(final_statuses),
-        universal_count=len(universal_statuses),
-        explicit_transitions=len(allowed_statuses),
-    )
+    # d. Thêm Universal
+    for s in universal_statuses:
+        final_statuses_map[s.id] = s
 
-    return final_statuses
+    # 6. Convert về List và Sắp xếp
+    final_list = list(final_statuses_map.values())
+
+    # Helper để sort:
+    # Order:
+    # 1. Current Stage (Siblings) include Current Status
+    # 2. Next Stages (Allowed Transitions)
+    # 3. Others (Universal outside of above logic?) - Universal thường display riêng dòng 1 Frontend.
+
+    # Tuy nhiên, hàm này trả về 1 list phẳng. Frontend sẽ group.
+    # Ta sort sơ bộ để debug dễ hơn: Stage Order -> Status Name
+    def sort_key(s):
+        stage_order = s.stage.order if s.stage else 999
+        return (stage_order, s.name)
+
+    # Cần load relationship stage cho các status (dùng repo đã load hoặc lazy load)
+    # Các hàm repo get_statuses_for_stage chưa chắc đã load stage?
+    # Kiểm tra lại repo: get_statuses_for_stage dùng select đơn giản.
+    # Để an toàn cho sort, ta nên tin tưởng frontend sort hoặc đảm bảo stage loaded.
+    # Ở đây ta trả về list, Frontend sẽ dùng field stage_id hoặc stage object để group.
+
+    return final_list

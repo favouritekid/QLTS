@@ -231,6 +231,7 @@ async def update_existing_lead(
                     "old_unit_id": old_unit_id,
                     "new_unit_id": result.unit_id,
                     "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,  # ✅ Added for template
                     "reason": "Unit transfer by admin",
                 },
                 dedupe_key=f"lead_reassigned:{result.id}:{result.unit_id}",
@@ -255,7 +256,7 @@ async def update_existing_lead(
                     "old_stage": lead.pipeline_stage_id,
                     "new_stage": result.pipeline_stage_id,
                     "actor_id": current_user.id,
-                    "actor_name": current_user.full_name,
+                    "actor_name": current_user.full_name or current_user.username,  # ✅ Added for template
                     "updated_fields": updated_fields,
                 },
                 dedupe_key=f"lead_status_changed:{result.id}:{result.consultation_status_id}",
@@ -279,6 +280,8 @@ async def update_existing_lead(
                 "status_changed": status_changed,
                 "actor_id": current_user.id,
                 "updated_by": current_user.full_name or current_user.username,  # Frontend expects updated_by
+                "actor_name": current_user.full_name or current_user.username,  # ✅ FIX: Missing for template
+                "updated_summary": ", ".join(updated_fields[:3]) + ("..." if len(updated_fields) > 3 else ""), # ✅ FIX: For template
                 "updated_at": datetime.now().isoformat(),
                 "message": f"Lead updated by {current_user.full_name or current_user.username}",
             },
@@ -328,6 +331,7 @@ async def delete_lead(
                 "unit_id": deleted_lead.unit_id,
                 "officer_id": deleted_lead.assigned_officer_id,  # May be None
                 "actor_id": current_user.id,
+                "actor_name": current_user.full_name or current_user.username,  # ✅ Added for template
             },
             dedupe_key=f"lead_deleted:{deleted_lead.id}",
             auto_commit=True  # Already committed above, emit domain event immediately
@@ -372,6 +376,7 @@ async def add_new_consultation(
                 "officer_id": lead.assigned_officer_id,
                 "status_id": result.consultation_status_id or "",
                 "actor_id": current_user.id,
+                "actor_name": current_user.full_name or current_user.username,  # ✅ Added for template
                 "unit_id": lead.unit_id,  # For unit managers notification
             },
             auto_commit=True  # Already committed, emit domain event immediately
@@ -402,23 +407,8 @@ async def assign_lead_manually(
     )
     await db.commit()
 
-    # ✅ NOTIFICATION 2.0: Dispatch LEAD_ASSIGNED event
-    await dispatch(
-        db=db,
-        event=SystemEvents.LEAD_ASSIGNED,
-        payload={
-            "lead_id": result.id,
-            "lead_name": result.full_name or result.email or f"Lead #{result.id}",
-            "officer_id": result.assigned_officer_id,
-            "officer_name": result.assigned_officer.full_name if result.assigned_officer else "Unknown",
-            "actor_id": current_user.id,
-            "actor_name": current_user.full_name,
-            "source": result.source,
-            "priority": "normal",  # Lead model doesn't have priority field
-        },
-        dedupe_key=f"lead_assigned:{result.id}:{result.assigned_officer_id}",
-        auto_commit=True  # Already committed above, emit domain event immediately
-    )
+    # ❌ REDUNDANT: lead_service.assign_lead_manually already dispatches LEAD_ASSIGNED with richer payload
+    # Removed to prevent duplicate notifications.
 
     return result
 
@@ -517,6 +507,7 @@ async def update_a_consultation(
                     "old_status_id": old_status_id,
                     "new_status_id": result.consultation_status_id,
                     "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,  # ✅ Added for template
                 },
                 dedupe_key=f"consultation_updated:{result.id}:{result.consultation_status_id}",
                 auto_commit=True  # Already committed above, emit domain event immediately
@@ -563,6 +554,7 @@ async def delete_a_consultation(
                 "lead_id": lead.id,
                 "officer_id": lead.assigned_officer_id,
                 "actor_id": current_user.id,
+                "actor_name": current_user.full_name or current_user.username,  # ✅ Added for template
             },
             dedupe_key=f"consultation_deleted:{consultation_id}",
             auto_commit=True  # Already committed above, emit domain event immediately
