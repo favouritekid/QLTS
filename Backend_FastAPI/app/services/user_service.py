@@ -1560,15 +1560,16 @@ async def sync_users_to_casbin(
         This function does NOT commit the transaction. The caller is responsible
         for calling db.commit() after this function returns.
     """
+    # ✅ SPRINT 4 HOTFIX: Use Repository for data access
+    from app.repositories import UserRepository
+    
+    repo = UserRepository(db)
+    
     # Query users to sync (specific IDs or all)
     if user_ids:
-        result = await db.execute(
-            select(models.User).where(models.User.id.in_(user_ids))
-        )
+        users = await repo.get_by_ids(user_ids)
     else:
-        result = await db.execute(select(models.User))
-
-    users = result.scalars().all()
+        users = await repo.get_all()
 
     synced_count = 0
     failed_users = []

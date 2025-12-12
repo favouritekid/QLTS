@@ -501,3 +501,37 @@ class UserRepository(BaseRepository[models.User]):
         await self.db.flush()
         await self.db.refresh(user)
         return user
+
+    # =========================================================================
+    # BULK METHODS (Sprint 4 Hotfix)
+    # =========================================================================
+
+    async def get_all(self) -> List[models.User]:
+        """
+        Get all users (for admin operations like casbin sync).
+        
+        ✅ SPRINT 4 HOTFIX: Added for sync_users_with_casbin refactoring.
+        
+        Returns:
+            List of all users
+        """
+        query = select(models.User)
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+    async def get_by_ids(self, user_ids: List[int]) -> List[models.User]:
+        """
+        Get users by list of IDs.
+        
+        ✅ SPRINT 4 HOTFIX: Added for sync_users_with_casbin refactoring.
+        
+        Args:
+            user_ids: List of user IDs
+            
+        Returns:
+            List of users matching the IDs
+        """
+        query = select(models.User).where(models.User.id.in_(user_ids))
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
