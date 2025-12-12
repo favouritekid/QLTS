@@ -43,6 +43,35 @@ ALLOWED_ACADEMIC_UNIT_TYPES = {
 
 
 # =============================================================================
+# HELPER FUNCTIONS (Module Level - exportable)
+# =============================================================================
+
+def create_recursive_unit_loader(depth: int):
+    """
+    Create recursive loader for organization units with programs.
+    
+    ✅ SPRINT 4 HOTFIX: Moved to module level for OrganizationRepository import.
+    
+    Args:
+        depth: Maximum depth for recursive loading
+        
+    Returns:
+        SQLAlchemy selectinload option for recursive children loading
+    """
+    if depth <= 0:
+        return selectinload(models.OrganizationUnit.major_programs).selectinload(
+            models.MajorProgram.offerings
+        )  # Base case: just load programs
+
+    return selectinload(models.OrganizationUnit.children).options(
+        selectinload(models.OrganizationUnit.major_programs).selectinload(
+            models.MajorProgram.offerings
+        ),
+        create_recursive_unit_loader(depth - 1)
+    )
+
+
+# =============================================================================
 # JSON ENCODER FOR DECIMAL
 # =============================================================================
 
@@ -223,23 +252,8 @@ async def get_all_organization_units(db: AsyncSession) -> List[dict]:
 
         log.debug("Querying database for organization tree")
 
-        # ✅ FIX: Performance optimization - don't load academic_info_history
-        # This function returns the basic tree structure. Academic info should be
-        # loaded on-demand when user clicks on a specific program/offering.
-        # Loading all history for all offerings can result in 30,000+ records.
-        def create_recursive_unit_loader(depth: int):
-            """Create recursive loader for organization units"""
-            if depth <= 0:
-                return selectinload(models.OrganizationUnit.major_programs).selectinload(
-                    models.MajorProgram.offerings
-                )  # Removed: academic_info_history loading
-
-            return selectinload(models.OrganizationUnit.children).options(
-                selectinload(models.OrganizationUnit.major_programs).selectinload(
-                    models.MajorProgram.offerings
-                ),  # Removed: academic_info_history loading
-                create_recursive_unit_loader(depth - 1)
-            )
+        # ✅ SPRINT 4 HOTFIX: Use module-level create_recursive_unit_loader
+        # (moved to module level for OrganizationRepository import)
 
         # ✅ SPRINT 3 REFACTORED: Use Repository for tree loading
         from app.repositories import OrganizationRepository
