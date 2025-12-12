@@ -6,8 +6,8 @@ Repository pattern implementation for Application (Hồ sơ Tuyển sinh) data a
 Centralizes all Application-related database queries.
 """
 
-from typing import Optional, List
-from sqlalchemy import select
+from typing import Optional, List, Tuple
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -23,7 +23,38 @@ class ApplicationRepository(BaseRepository[models.Application]):
     """
     
     def __init__(self, db: AsyncSession):
-        super().__init__(models.Application, db)
+        super().__init__(db, models.Application)  # ✅ Fix: correct arg order
+
+    async def get_filtered(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+        **filters
+    ) -> Tuple[int, List[models.Application]]:
+        """
+        Get filtered applications with pagination.
+        
+        ✅ SPRINT 4: Required abstract method implementation.
+        """
+        query = select(self.model).order_by(self.model.id.desc())
+        count_query = select(func.count(self.model.id))
+        
+        # Apply filters if provided
+        if filters.get("lead_id"):
+            query = query.where(self.model.lead_id == filters["lead_id"])
+            count_query = count_query.where(self.model.lead_id == filters["lead_id"])
+        
+        # Apply pagination
+        query = query.offset(skip).limit(limit)
+        
+        # Execute
+        total_result = await self.db.execute(count_query)
+        total = total_result.scalar_one()
+        
+        result = await self.db.execute(query)
+        applications = list(result.scalars().all())
+        
+        return total, applications
 
     async def get_by_id(
         self,

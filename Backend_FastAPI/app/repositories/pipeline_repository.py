@@ -6,7 +6,7 @@ Repository pattern implementation for Pipeline Configuration data access.
 Centralizes all PipelineStage and ConsultationStatus database queries.
 """
 
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,7 +23,33 @@ class PipelineRepository(BaseRepository[models.PipelineStage]):
     """
     
     def __init__(self, db: AsyncSession):
-        super().__init__(models.PipelineStage, db)
+        super().__init__(db, models.PipelineStage)  # ✅ Fix: correct arg order
+
+    async def get_filtered(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+        **filters
+    ) -> Tuple[int, List[models.PipelineStage]]:
+        """
+        Get filtered pipeline stages with pagination.
+        
+        ✅ SPRINT 4: Required abstract method implementation.
+        """
+        query = select(self.model).order_by(self.model.order)
+        count_query = select(func.count(self.model.id))
+        
+        # Apply pagination
+        query = query.offset(skip).limit(limit)
+        
+        # Execute
+        total_result = await self.db.execute(count_query)
+        total = total_result.scalar_one()
+        
+        result = await self.db.execute(query)
+        stages = list(result.scalars().all())
+        
+        return total, stages
 
     # =========================================================================
     # PIPELINE STAGE METHODS
