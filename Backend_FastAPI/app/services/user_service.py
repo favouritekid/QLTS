@@ -241,13 +241,12 @@ async def _create_or_update_user_assignment(
         user.current_assignment_id = None
         return None
 
+    # ✅ SPRINT 5: Use Repository for active assignment lookup
+    from app.repositories import UserRepository
+    user_repo = UserRepository(db)
+    
     # 1. Find and deactivate old active assignment (if exists)
-    old_assignment_query = select(models.UserUnitAssignment).where(
-        models.UserUnitAssignment.user_id == user.id,
-        models.UserUnitAssignment.is_active == True
-    )
-    result = await db.execute(old_assignment_query)
-    old_assignment = result.scalar_one_or_none()
+    old_assignment = await user_repo.get_active_assignment_by_user(user.id)
 
     if old_assignment:
         log.debug(
@@ -816,20 +815,14 @@ async def delete_user(db: AsyncSession, user_id: int) -> Tuple[None, Callable]:
         Tuple of (None, post_commit_callback)
     """
     try:
+        # ✅ SPRINT 5: Use Repository for eager loading
+        from app.repositories import UserRepository
+        user_repo = UserRepository(db)
+        
         # ✅ FIX MissingGreenlet: Eager load cascade-delete relationships
         # Without this, SQLAlchemy tries to lazy-load during cascade delete,
         # which fails in async mode with "greenlet_spawn has not been called"
-        stmt = (
-            select(models.User)
-            .where(models.User.id == user_id)
-            .options(
-                selectinload(models.User.sessions),
-                selectinload(models.User.unit_assignments),
-                selectinload(models.User.notification_preference),
-            )
-        )
-        result = await db.execute(stmt)
-        user_to_delete = result.scalar_one_or_none()
+        user_to_delete = await user_repo.get_user_for_delete(user_id)
 
         if not user_to_delete:
             raise ResourceNotFoundError(detail=f"User with id {user_id} not found.")
@@ -1252,39 +1245,30 @@ async def perform_bulk_action(
             )
             raise BadRequest(detail=f"Unsupported bulk action: {action}.")
 
+        # ✅ SPRINT 5: Use Repository for user loading
+        from app.repositories import UserRepository
+        user_repo = UserRepository(db)
+        
         # ✅ FIX MissingGreenlet: Eager load cascade-delete relationships for delete action
-        # Without this, SQLAlchemy tries to lazy-load during cascade delete
-        query = select(models.User).where(models.User.id.in_(user_ids))
         if action == "delete":
-            query = query.options(
-                selectinload(models.User.sessions),
-                selectinload(models.User.unit_assignments),
-                selectinload(models.User.notification_preference),
-            )
-        users_to_process_result = await db.execute(query)
-        users_to_process = users_to_process_result.scalars().all()
+            users_to_process = await user_repo.get_users_by_ids_for_delete(user_ids)
+        else:
+            users_to_process = await user_repo.get_by_ids(user_ids)
 
         if not users_to_process:
             log.info(
                 "Bulk action: No users found matching provided IDs.",
                 user_ids=user_ids,
                 admin_id=admin_user.id,
-            )  # ✅ SỬA LỖI: Xóa `await`
+            )  # ✅ SỬa LỖI: Xóa `await`
             return "No users found for the provided IDs. 0 users affected."
 
         processed_count = 0
         message = ""
         if action == "delete":
-            # Check for FK constraints before deleting
-            from sqlalchemy import func as sql_func
-
+            # ✅ SPRINT 5: Use Repository for consultation check
             # Check if any users have consultations (cannot delete)
-            consultation_check = await db.execute(
-                select(models.Consultation.officer_id, sql_func.count(models.Consultation.id))
-                .where(models.Consultation.officer_id.in_(user_ids))
-                .group_by(models.Consultation.officer_id)
-            )
-            users_with_consultations = {row[0]: row[1] for row in consultation_check.all()}
+            users_with_consultations = await user_repo.count_consultations_by_officers(user_ids)
 
             if users_with_consultations:
                 user_list = ", ".join(f"User ID {uid} ({count} consultations)"

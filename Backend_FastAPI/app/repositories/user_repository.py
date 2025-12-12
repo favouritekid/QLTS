@@ -535,3 +535,110 @@ class UserRepository(BaseRepository[models.User]):
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
+    # =========================================================================
+    # SPRINT 5: User Service Migration Methods
+    # =========================================================================
+
+    async def get_active_assignment_by_user(
+        self,
+        user_id: int
+    ) -> Optional[models.UserUnitAssignment]:
+        """
+        Get the active unit assignment for a user.
+        
+        ✅ SPRINT 5: Added for user_service migration.
+        
+        Args:
+            user_id: User ID
+            
+        Returns:
+            Active UserUnitAssignment or None
+        """
+        query = select(models.UserUnitAssignment).where(
+            models.UserUnitAssignment.user_id == user_id,
+            models.UserUnitAssignment.is_active == True
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
+    async def get_user_for_delete(self, user_id: int) -> Optional[models.User]:
+        """
+        Get user with all relationships loaded for cascade delete.
+        
+        ✅ SPRINT 5: Added for user_service migration.
+        Without eager loading, SQLAlchemy lazy-loads during cascade delete,
+        which fails in async mode with "greenlet_spawn has not been called".
+        
+        Args:
+            user_id: User ID
+            
+        Returns:
+            User with sessions, unit_assignments, notification_preference loaded
+        """
+        query = (
+            select(models.User)
+            .where(models.User.id == user_id)
+            .options(
+                selectinload(models.User.sessions),
+                selectinload(models.User.unit_assignments),
+                selectinload(models.User.notification_preference),
+            )
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
+    async def get_users_by_ids_for_delete(
+        self,
+        user_ids: List[int]
+    ) -> List[models.User]:
+        """
+        Get users by IDs with relationships loaded for bulk delete.
+        
+        ✅ SPRINT 5: Added for user_service bulk actions migration.
+        
+        Args:
+            user_ids: List of user IDs
+            
+        Returns:
+            List of users with cascade-delete relationships loaded
+        """
+        query = (
+            select(models.User)
+            .where(models.User.id.in_(user_ids))
+            .options(
+                selectinload(models.User.sessions),
+                selectinload(models.User.unit_assignments),
+                selectinload(models.User.notification_preference),
+            )
+        )
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+    async def count_consultations_by_officers(
+        self,
+        officer_ids: List[int]
+    ) -> Dict[int, int]:
+        """
+        Count consultations grouped by officer ID.
+        
+        ✅ SPRINT 5: Added for user_service bulk delete validation.
+        
+        Args:
+            officer_ids: List of officer (user) IDs
+            
+        Returns:
+            Dict mapping officer_id to consultation count
+        """
+        from sqlalchemy import func as sql_func
+        
+        query = (
+            select(
+                models.Consultation.officer_id,
+                sql_func.count(models.Consultation.id)
+            )
+            .where(models.Consultation.officer_id.in_(officer_ids))
+            .group_by(models.Consultation.officer_id)
+        )
+        result = await self.db.execute(query)
+        return {row[0]: row[1] for row in result.all()}
+
