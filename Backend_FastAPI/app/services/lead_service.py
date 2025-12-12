@@ -235,15 +235,14 @@ async def calculate_lead_score(
 
         score = 0
 
+        # ✅ SPRINT 5: Use Repository for scoring config
+        from app.repositories import LeadRepository
+        lead_repo = LeadRepository(db)
+        
         # Try to load scoring config from database
         scoring_config = None
         if unit_id:
-            scoring_config_query = (
-                select(models.LeadScoringConfig)
-                .where(models.LeadScoringConfig.unit_id == unit_id)
-            )
-            scoring_config_result = await db.execute(scoring_config_query)
-            scoring_config = scoring_config_result.scalar_one_or_none()
+            scoring_config = await lead_repo.get_scoring_config_by_unit(unit_id)
 
         # Extract config params or use defaults
         if scoring_config and scoring_config.params:
@@ -2232,16 +2231,12 @@ async def revert_last_status(
             if not lead:
                 raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found.")
 
+            # ✅ SPRINT 5: Use Repository for status history lookup
+            from app.repositories import LeadRepository
+            lead_repo = LeadRepository(db)
+            
             # Tìm bản ghi lịch sử gần nhất
-            last_history_entry = await db.scalar(
-                select(models.LeadStatusHistory)
-                .where(models.LeadStatusHistory.lead_id == lead_id)
-                .order_by(
-                    models.LeadStatusHistory.changed_at.desc(),
-                    models.LeadStatusHistory.id.desc(),
-                )  # Sắp xếp cả theo ID
-                .limit(1)
-            )
+            last_history_entry = await lead_repo.get_last_status_history_entry(lead_id)
 
             if not last_history_entry:
                 raise BadRequest(

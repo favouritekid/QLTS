@@ -509,3 +509,56 @@ class LeadRepository(BaseRepository[models.Lead]):
 
         result = await self.db.execute(query)
         return {row.status: row.count for row in result}
+
+    # =========================================================================
+    # SPRINT 5: Additional Methods for lead_service Migration
+    # =========================================================================
+
+    async def get_scoring_config_by_unit(
+        self,
+        unit_id: int
+    ) -> Optional[models.LeadScoringConfig]:
+        """
+        Get lead scoring config for a unit.
+        
+        ✅ SPRINT 5: Added for lead_service migration.
+        
+        Args:
+            unit_id: Organization unit ID
+            
+        Returns:
+            LeadScoringConfig or None
+        """
+        query = select(models.LeadScoringConfig).where(
+            models.LeadScoringConfig.unit_id == unit_id
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
+    async def get_last_status_history_entry(
+        self,
+        lead_id: int
+    ) -> Optional[models.LeadStatusHistory]:
+        """
+        Get the most recent status history entry for a lead.
+        
+        ✅ SPRINT 5: Added for lead_service revert_lead_status migration.
+        
+        Args:
+            lead_id: Lead ID
+            
+        Returns:
+            Most recent LeadStatusHistory or None
+        """
+        query = (
+            select(models.LeadStatusHistory)
+            .where(models.LeadStatusHistory.lead_id == lead_id)
+            .order_by(
+                models.LeadStatusHistory.changed_at.desc(),
+                models.LeadStatusHistory.id.desc(),
+            )
+            .limit(1)
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
