@@ -562,3 +562,99 @@ class LeadRepository(BaseRepository[models.Lead]):
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
+    async def check_phone_conflict(
+        self,
+        phone: Optional[str],
+        phone2: Optional[str],
+        exclude_id: Optional[int] = None
+    ) -> Optional[models.Lead]:
+        """
+        Check if any OTHER lead uses these phone numbers (Global check).
+        
+        Checks if:
+        - lead.phone == new_phone OR
+        - lead.phone == new_phone2 OR
+        - lead.phone2 == new_phone OR
+        - lead.phone2 == new_phone2
+        
+        Args:
+            phone: Primary phone to check
+            phone2: Secondary phone to check
+            exclude_id: Lead ID to exclude from check (for updates)
+            
+        Returns:
+            Conflicting Lead (with assigned_officer loaded) or None
+        """
+        # Skip if no phones provided
+        if not phone and not phone2:
+            return None
+            
+        conditions = []
+        if phone:
+            conditions.append(models.Lead.phone == phone)
+            conditions.append(models.Lead.phone2 == phone)
+        if phone2:
+            conditions.append(models.Lead.phone == phone2)
+            conditions.append(models.Lead.phone2 == phone2)
+            
+        if not conditions:
+            return None
+            
+        query = (
+            select(models.Lead)
+            .options(selectinload(models.Lead.assigned_officer))
+            .where(
+                or_(*conditions),
+                models.Lead.deleted_at.is_(None)
+            )
+        )
+        
+        if exclude_id is not None:
+            query = query.where(models.Lead.id != exclude_id)
+            
+        result = await self.db.execute(query)
+        return result.scalars().first()
+
+    async def check_batch_phone_conflict(self, phones: list[str]) -> set[str]:
+        """
+        Check which phones in the provided list already exist in DB.
+        Checks both phone and phone2 columns.
+        
+        Args:
+            phones: List of phone numbers to check
+            
+        Returns:
+            Set of phone numbers that already exist
+        """
+        if not phones:
+            return set()
+            
+        # Filter out empty strings and duplicates from input
+        valid_phones = {p for p in phones if p}
+        if not valid_phones:
+            return set()
+            
+        query = (
+            select(models.Lead.phone, models.Lead.phone2)
+            .where(
+                models.Lead.deleted_at.is_(None),
+                or_(
+                    models.Lead.phone.in_(valid_phones),
+                    models.Lead.phone2.in_(valid_phones)
+                )
+            )
+        )
+        
+        result = await self.db.execute(query)
+        rows = result.all()
+        
+        existing_phones = set()
+        for row in rows:
+            p1, p2 = row
+            if p1 in valid_phones:
+                existing_phones.add(p1)
+            if p2 in valid_phones:
+                existing_phones.add(p2)
+                
+        return existing_phones
+

@@ -967,37 +967,29 @@ async def update_lead(
                 new_phone = update_data.get("phone", db_lead.phone)
                 new_phone2 = update_data.get("phone2", db_lead.phone2)
 
-                # Build phone duplicate check conditions
-                phone_conditions = []
-                if new_phone:
-                    phone_conditions.append(models.Lead.phone == new_phone)
-                if new_phone2:
-                    phone_conditions.append(models.Lead.phone == new_phone2)
-                    phone_conditions.append(models.Lead.phone2 == new_phone)
-                    phone_conditions.append(models.Lead.phone2 == new_phone2)
+                # ✅ REFACTORED: Use Repository for global check (fixes unit-scope bug)
+                repo = LeadRepository(db)
+                dup_lead = await repo.check_phone_conflict(
+                    phone=new_phone,
+                    phone2=new_phone2,
+                    exclude_id=lead_id
+                )
 
-                if phone_conditions:
-                    existing_lead_query = (
-                        select(models.Lead)
-                        .options(joinedload(models.Lead.assigned_officer))
-                        .where(
-                            models.Lead.unit_id == db_lead.unit_id,  # Trong cùng unit
-                            models.Lead.id != lead_id,  # Loại trừ chính lead này
-                            models.Lead.deleted_at.is_(None),  # Exclude soft-deleted
-                            or_(*phone_conditions)
-                        )
+                if dup_lead:
+                    # Load unit for better error message (since it might be in another unit)
+                    if dup_lead.unit_id:
+                         await db.refresh(dup_lead, ["unit"])
+
+                    officer_name = (
+                        dup_lead.assigned_officer.full_name
+                        if dup_lead.assigned_officer
+                        else "Chưa phân công"
                     )
-                    existing_lead_result = await db.execute(existing_lead_query)
-                    dup_lead = existing_lead_result.scalars().first()
-                    if dup_lead:
-                        officer_name = (
-                            dup_lead.assigned_officer.full_name 
-                            if dup_lead.assigned_officer 
-                            else "Chưa phân công"
-                        )
-                        raise DuplicateResourceError(
-                            detail=f"Số điện thoại này đã được sử dụng. Lead: {dup_lead.full_name} (SĐT: {dup_lead.phone}) - Đang được quản lý bởi: {officer_name}"
-                        )
+                    unit_name = dup_lead.unit.name if dup_lead.unit else "N/A"
+
+                    raise DuplicateResourceError(
+                        detail=f"Số điện thoại này đã được sử dụng. Lead: {dup_lead.full_name} (SĐT: {dup_lead.phone}) - Đơn vị: {unit_name} - Quản lý bởi: {officer_name}"
+                    )
 
             # === NEW FEATURE: Auto-Reassign on Offering Change ===
             # Track offering_id change before applying updates
@@ -2477,6 +2469,18 @@ async def import_leads_from_file_content(
             existing_emails_in_db.add(email_tuple[0].lower())
     emails_in_current_file = set()
 
+    # ✅ FIX: Batch check for existing phones
+    repo = LeadRepository(db)
+    all_phones_in_file = set()
+    if 'phone' in df.columns:
+        # Extract phones, handling potential non-string types
+        raw_phones = df['phone'].dropna().astype(str).tolist()
+        # Basic cleaning (remove .0 if float conversion)
+        all_phones_in_file = {p.split(".")[0].strip() for p in raw_phones if p.strip()}
+    
+    existing_phones_in_db = await repo.check_batch_phone_conflict(list(all_phones_in_file))
+    phones_in_current_file = set()
+
     # --- 4. Process each row ---
     for index, row in df.iterrows():
         processed_row_count += 1
@@ -2497,6 +2501,22 @@ async def import_leads_from_file_content(
             )
 
             cleaned_data["source"] = str(row_data.get("source", "")).strip()
+            
+            # ✅ Extract optional fields for Scoring
+            cleaned_data["education_level"] = str(row_data.get("education_level", "")).strip() or None
+            
+            gpa_val = row_data.get("gpa")
+            if pd.notna(gpa_val):
+                 try:
+                     cleaned_data["gpa"] = float(gpa_val)
+                 except (ValueError, TypeError):
+                     # Log but don't fail row just for GPA
+                     cleaned_data["gpa"] = None
+            else:
+                cleaned_data["gpa"] = None
+                
+            cleaned_data["location"] = str(row_data.get("location", "")).strip() or None
+
 
             # Convert 'unit_id' to int (or use default if provided)
             if default_unit_id:
@@ -2545,8 +2565,26 @@ async def import_leads_from_file_content(
             if email_lower:
                 emails_in_current_file.add(email_lower)
 
+            # ✅ Phone Validation
+            phone_val = cleaned_data.get("phone")
+            if phone_val:
+                if phone_val in existing_phones_in_db or phone_val in phones_in_current_file:
+                     raise ValueError(f"Số điện thoại '{phone_val}' đã tồn tại trong hệ thống hoặc file này.")
+                phones_in_current_file.add(phone_val)
+
+            # ✅ Calculate Lead Score
+            score = await calculate_lead_score(
+                db,
+                lead_education_level=cleaned_data.get("education_level"),
+                lead_gpa=cleaned_data.get("gpa"),
+                lead_source=cleaned_data.get("source"),
+                lead_location=cleaned_data.get("location"),
+                unit_id=cleaned_data.get("unit_id"),
+            )
+
             # Prepare dict for bulk insert
             lead_dict = lead_in.model_dump()
+            lead_dict["lead_score"] = score
             lead_dict["status"] = initial_legacy_status  # Use legacy_status from DB
             lead_dict["consultation_status_id"] = initial_status_id
             lead_dict["pipeline_stage_id"] = initial_stage_id

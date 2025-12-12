@@ -300,8 +300,8 @@ def send_password_reset_confirmation_email_task(
     name="process_automatic_lead_assignment_task",
     bind=True,
     autoretry_for=(Exception,),
-    max_retries=3,
-    default_retry_delay=30,
+    max_retries=10,  # Retry for ~few hours
+    retry_backoff=60, # Exponential backoff starting at 60s
 )
 def process_automatic_lead_assignment_task(self, lead_id: int):
     """
@@ -347,6 +347,17 @@ def process_automatic_lead_assignment_task(self, lead_id: int):
 
     try:
         result = asyncio.run(_run_async_assignment())
+        
+        # ✅ RETRY LOGIC: If assignment failed (capacity/no officers), retry task
+        if result.get("status") == "failed":
+            task_log.warning(
+                f"Assignment logic returned 'failed' for lead_id: {lead_id}. "
+                f"Reason: {result.get('reason')}. Retrying..."
+            )
+            # Raise retry with exponential backoff handled by decorator (if configured) or defaults
+            # Using verify_connection=False involves internal Celery logic, omitting for simplicity
+            raise self.retry(exc=Exception(f"Assignment Failed: {result.get('reason')}"))
+
         task_log.info(f"Task completed for lead_id: {lead_id}. Result: {result}")
         return result
     except Exception as e:
