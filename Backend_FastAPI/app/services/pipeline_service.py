@@ -251,24 +251,18 @@ async def create_pipeline_stage(
                 f"Pipeline Stage ID '{stage_in.id}' already exists."
             )
 
+        # ✅ SPRINT 5: Use Repository for validation
+        from app.repositories import PipelineRepository
+        repo = PipelineRepository(db)
+
         # 2. Kiểm tra 'name' đã tồn tại
-        existing_name = await db.scalar(
-            select(models.PipelineStage).where(
-                models.PipelineStage.name == stage_in.name
-            )
-        )
-        if existing_name:
+        if await repo.check_stage_name_exists(stage_in.name):
             raise DuplicateResourceError(
                 f"Pipeline Stage name '{stage_in.name}' already exists."
             )
 
         # 3. Kiểm tra 'order' đã tồn tại
-        existing_order = await db.scalar(
-            select(models.PipelineStage).where(
-                models.PipelineStage.order == stage_in.order
-            )
-        )
-        if existing_order:
+        if await repo.check_stage_order_exists(stage_in.order):
             raise DuplicateResourceError(
                 f"Pipeline Stage order '{stage_in.order}' already exists."
             )
@@ -335,26 +329,20 @@ async def update_pipeline_stage(
         db_stage = await _get_stage_by_id(db, stage_id)
         update_data = stage_in.model_dump(exclude_unset=True)
 
+        # ✅ SPRINT 5: Use Repository for validation
+        from app.repositories import PipelineRepository
+        repo = PipelineRepository(db)
+
         # 1. Kiểm tra 'name' (nếu thay đổi)
         if "name" in update_data and update_data["name"] != db_stage.name:
-            existing_name = await db.scalar(
-                select(models.PipelineStage).where(
-                    models.PipelineStage.name == update_data["name"]
-                )
-            )
-            if existing_name:
+            if await repo.check_stage_name_exists(update_data["name"], exclude_id=stage_id):
                 raise DuplicateResourceError(
                     f"Pipeline Stage name '{update_data['name']}' already in use."
                 )
 
         # 2. Kiểm tra 'order' (nếu thay đổi)
         if "order" in update_data and update_data["order"] != db_stage.order:
-            existing_order = await db.scalar(
-                select(models.PipelineStage).where(
-                    models.PipelineStage.order == update_data["order"]
-                )
-            )
-            if existing_order:
+            if await repo.check_stage_order_exists(update_data["order"], exclude_id=stage_id):
                 raise DuplicateResourceError(
                     f"Pipeline Stage order '{update_data['order']}' already in use."
                 )
@@ -428,12 +416,12 @@ async def delete_pipeline_stage(
             "order": db_stage.order,
         }
 
+        # ✅ SPRINT 5: Use Repository for validation
+        from app.repositories import PipelineRepository
+        repo = PipelineRepository(db)
+
         # 1. KIỂM TRA RÀNG BUỘC (QUAN TRỌNG)
-        child_status_count = await db.scalar(
-            select(func.count(models.ConsultationStatus.id)).where(
-                models.ConsultationStatus.stage_id == stage_id
-            )
-        )
+        child_status_count = await repo.count_statuses_by_stage(stage_id)
         if child_status_count > 0:
             raise DuplicateResourceError(
                 f"Cannot delete stage '{stage_id}'. It has {child_status_count} consultation statuses linked to it."
@@ -507,13 +495,12 @@ async def create_consultation_status(
                 f"Consultation Status ID '{status_in.id}' already exists."
             )
 
+        # ✅ SPRINT 5: Use Repository for validation
+        from app.repositories import PipelineRepository
+        repo = PipelineRepository(db)
+
         # 2. Kiểm tra 'name' đã tồn tại
-        existing_name = await db.scalar(
-            select(models.ConsultationStatus).where(
-                models.ConsultationStatus.name == status_in.name
-            )
-        )
-        if existing_name:
+        if await repo.check_status_name_exists(status_in.name):
             raise DuplicateResourceError(
                 f"Consultation Status name '{status_in.name}' already exists."
             )
@@ -660,14 +647,13 @@ async def update_consultation_status(
                 converted_value=update_data["outcome_type"]
             )
 
+        # ✅ SPRINT 5: Use Repository for validation
+        from app.repositories import PipelineRepository
+        repo = PipelineRepository(db)
+
         # 1. Kiểm tra 'name' (nếu thay đổi)
         if "name" in update_data and update_data["name"] != db_status.name:
-            existing_name = await db.scalar(
-                select(models.ConsultationStatus).where(
-                    models.ConsultationStatus.name == update_data["name"]
-                )
-            )
-            if existing_name:
+            if await repo.check_status_name_exists(update_data["name"], exclude_id=status_id):
                 raise DuplicateResourceError(
                     f"Consultation Status name '{update_data['name']}' already in use."
                 )
@@ -766,23 +752,19 @@ async def delete_consultation_status(
             "stage_id": db_status.stage_id,
         }
 
+        # ✅ SPRINT 5: Use Repository for validation
+        from app.repositories import PipelineRepository
+        repo = PipelineRepository(db)
+
         # 1. KIỂM TRA RÀNG BUỘC (QUAN TRỌNG)
-        lead_count = await db.scalar(
-            select(func.count(models.Lead.id)).where(
-                models.Lead.consultation_status_id == status_id
-            )
-        )
+        lead_count = await repo.count_leads_by_status(status_id)
         if lead_count > 0:
             raise DuplicateResourceError(
                 f"Cannot delete status '{status_id}'. It is currently used by {lead_count} leads."
             )
 
         # (Tùy chọn) Kiểm tra xem có consultation nào đang dùng ID này không
-        consultation_count = await db.scalar(
-            select(func.count(models.Consultation.id)).where(
-                models.Consultation.consultation_status_id == status_id
-            )
-        )
+        consultation_count = await repo.count_consultations_by_status(status_id)
         if consultation_count > 0:
             raise DuplicateResourceError(
                 f"Cannot delete status '{status_id}'. It is linked to {consultation_count} consultation history records."
@@ -871,14 +853,12 @@ async def create_allowed_transition(
                 "Cannot create transition from a status to itself."
             )
 
+        # ✅ SPRINT 5: Use Repository for validation (already imported above)
+        from app.repositories import PipelineRepository
+        repo = PipelineRepository(db)
+
         # 3. Kiểm tra transition đã tồn tại chưa
-        existing = await db.scalar(
-            select(models.AllowedTransition).where(
-                models.AllowedTransition.from_status_id == transition_in.from_status_id,
-                models.AllowedTransition.to_status_id == transition_in.to_status_id,
-            )
-        )
-        if existing:
+        if await repo.check_transition_exists(transition_in.from_status_id, transition_in.to_status_id):
             raise DuplicateResourceError(
                 f"Transition from '{transition_in.from_status_id}' to '{transition_in.to_status_id}' already exists."
             )

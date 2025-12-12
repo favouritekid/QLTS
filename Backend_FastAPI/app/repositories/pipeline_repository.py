@@ -261,3 +261,154 @@ class PipelineRepository(BaseRepository[models.PipelineStage]):
         )
         result = await self.db.execute(query)
         return list(result.scalars().all())
+
+    # =========================================================================
+    # VALIDATION METHODS (Sprint 5)
+    # =========================================================================
+
+    async def check_stage_name_exists(
+        self,
+        name: str,
+        exclude_id: Optional[str] = None
+    ) -> bool:
+        """
+        Check if a pipeline stage with given name already exists.
+        
+        Args:
+            name: Stage name to check
+            exclude_id: Optional stage ID to exclude (for updates)
+            
+        Returns:
+            True if name exists, False otherwise
+        """
+        query = select(models.PipelineStage).where(
+            models.PipelineStage.name == name
+        )
+        if exclude_id:
+            query = query.where(models.PipelineStage.id != exclude_id)
+        
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none() is not None
+
+    async def check_stage_order_exists(
+        self,
+        order: int,
+        exclude_id: Optional[str] = None
+    ) -> bool:
+        """
+        Check if a pipeline stage with given order already exists.
+        
+        Args:
+            order: Stage order to check
+            exclude_id: Optional stage ID to exclude (for updates)
+            
+        Returns:
+            True if order exists, False otherwise
+        """
+        query = select(models.PipelineStage).where(
+            models.PipelineStage.order == order
+        )
+        if exclude_id:
+            query = query.where(models.PipelineStage.id != exclude_id)
+        
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none() is not None
+
+    async def count_statuses_by_stage(self, stage_id: str) -> int:
+        """
+        Count consultation statuses belonging to a stage.
+        
+        Args:
+            stage_id: Stage ID to count statuses for
+            
+        Returns:
+            Number of statuses
+        """
+        query = select(func.count(models.ConsultationStatus.id)).where(
+            models.ConsultationStatus.stage_id == stage_id
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one() or 0
+
+    async def check_status_name_exists(
+        self,
+        name: str,
+        exclude_id: Optional[str] = None
+    ) -> bool:
+        """
+        Check if a consultation status with given name already exists.
+        
+        Args:
+            name: Status name to check
+            exclude_id: Optional status ID to exclude (for updates)
+            
+        Returns:
+            True if name exists, False otherwise
+        """
+        query = select(models.ConsultationStatus).where(
+            models.ConsultationStatus.name == name
+        )
+        if exclude_id:
+            query = query.where(models.ConsultationStatus.id != exclude_id)
+        
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none() is not None
+
+    async def count_leads_by_status(self, status_id: str) -> int:
+        """
+        Count leads using a consultation status.
+        
+        Args:
+            status_id: Status ID to check
+            
+        Returns:
+            Number of leads using this status
+        """
+        query = select(func.count(models.Lead.id)).where(
+            models.Lead.consultation_status_id == status_id
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one() or 0
+
+    async def count_consultations_by_status(self, status_id: str) -> int:
+        """
+        Count consultations using a consultation status.
+        
+        Args:
+            status_id: Status ID to check
+            
+        Returns:
+            Number of consultations using this status
+        """
+        query = select(func.count(models.Consultation.id)).where(
+            models.Consultation.consultation_status_id == status_id
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one() or 0
+
+    async def check_transition_exists_by_object(
+        self,
+        from_status_id: str,
+        to_status_id: str
+    ) -> Optional[models.AllowedTransition]:
+        """
+        Get existing transition if it exists.
+        
+        Args:
+            from_status_id: Source status ID
+            to_status_id: Target status ID
+            
+        Returns:
+            AllowedTransition object or None
+        """
+        from sqlalchemy import and_
+        
+        query = select(models.AllowedTransition).where(
+            and_(
+                models.AllowedTransition.from_status_id == from_status_id,
+                models.AllowedTransition.to_status_id == to_status_id
+            )
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
