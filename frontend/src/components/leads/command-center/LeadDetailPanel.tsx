@@ -1,7 +1,7 @@
 // src/components/leads/command-center/LeadDetailPanel.tsx
 "use client";
 
-import React, { useRef, useEffect } from "react";
+import React, { useRef, useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,11 +23,13 @@ import {
   Zap,
   History,
   ExternalLink,
+  RefreshCcw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLead } from "@/hooks/useLeads";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { QuickConsultationSection } from "@/components/leads/QuickConsultationSection";
+import { ReassignLeadDialog } from "@/components/leads/ReassignLeadDialog";
 import { STAGE_COLORS } from "@/types/pipeline.types";
 import type { Lead } from "@/types/lead.types";
 
@@ -91,6 +93,7 @@ const getEducationLevelLabel = (level: string) => {
 export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDetailPanelProps) {
   const { data: lead, isLoading } = useLead(leadId || 0, !!leadId);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const [reassignOpen, setReassignOpen] = useState(false);
 
   // Auto-scroll to top when leadId changes
   useEffect(() => {
@@ -185,6 +188,17 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
               <Button variant="outline" size="sm" onClick={() => onAssign(lead)} className="h-8">
                 <UserPlus className="mr-1.5 h-3.5 w-3.5" />
                 Gán
+              </Button>
+            )}
+            {lead.assigned_officer && (
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => setReassignOpen(true)} 
+                className="h-8"
+              >
+                <RefreshCcw className="mr-1.5 h-3.5 w-3.5" />
+                Phân công lại
               </Button>
             )}
             <Button
@@ -321,6 +335,13 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
           </Card>
         </div>
       </ScrollArea>
+      
+      {/* Reassign Dialog */}
+      <ReassignLeadDialog
+        open={reassignOpen}
+        onOpenChange={setReassignOpen}
+        lead={lead}
+      />
     </div>
   );
 }

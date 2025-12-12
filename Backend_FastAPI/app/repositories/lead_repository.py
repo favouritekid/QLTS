@@ -658,3 +658,37 @@ class LeadRepository(BaseRepository[models.Lead]):
                 
         return existing_phones
 
+    # =========================================================================
+    # CONSULTATION METHODS (for response serialization)
+    # =========================================================================
+
+    async def get_consultation_with_status_stage(
+        self,
+        consultation_id: int
+    ) -> Optional[models.Consultation]:
+        """
+        Get consultation with eager loaded relationships for API response.
+        
+        Loads:
+        - officer: User who created the consultation
+        - consultation_status.stage: Nested stage for ConsultationStatus schema
+        
+        ✅ Architecture compliant: Service calls Repository for all queries.
+        
+        Args:
+            consultation_id: Consultation ID
+            
+        Returns:
+            Consultation with relationships loaded, or None if not found
+        """
+        query = (
+            select(models.Consultation)
+            .options(
+                selectinload(models.Consultation.officer),
+                selectinload(models.Consultation.consultation_status).selectinload(models.ConsultationStatus.stage),
+            )
+            .where(models.Consultation.id == consultation_id)
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+

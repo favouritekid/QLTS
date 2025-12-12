@@ -91,6 +91,8 @@ const getSchedulePreviewText = (option: ScheduleOption, customDate?: Date): stri
   }
 };
 
+
+
 export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultationSectionProps) {
   // Get lead data to determine current consultation status
   const { data: lead } = useLead(leadId);
@@ -113,47 +115,90 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
   const [method, setMethod] = useState<ConsultationMethod>("phone");
 
-  // Ref for horizontal scroll container
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-
-  // Setup wheel scroll handler with passive: false
-  useEffect(() => {
-    const scrollContainer = scrollContainerRef.current;
-    if (!scrollContainer) return;
-
+  // ✅ Drag-to-scroll using callback refs
+  // Callback refs are called when element mounts, guaranteeing element exists
+  const resultHasDraggedRef = useRef(false);
+  const universalHasDraggedRef = useRef(false);
+  
+  const setupDragToScroll = (element: HTMLDivElement | null, hasDraggedRef: React.MutableRefObject<boolean>) => {
+    if (!element) return;
+    
+    const isDragging = { current: false };
+    const startX = { current: 0 };
+    const scrollLeftStart = { current: 0 };
+    
+    // Wheel scroll handler
     const handleWheel = (e: WheelEvent) => {
       if (e.deltaY === 0) return;
+      if (element.scrollWidth <= element.clientWidth) return;
 
-      // Check if content overflows
-      if (scrollContainer.scrollWidth <= scrollContainer.clientWidth) return;
-
-      const { scrollLeft, scrollWidth, clientWidth } = scrollContainer;
+      const { scrollLeft: sl, scrollWidth, clientWidth } = element;
       const maxScrollLeft = scrollWidth - clientWidth;
 
-      // Determine drag direction
-      // deltaY > 0 means scrolling DOWN (wheel down) -> move RIGHT
-      // deltaY < 0 means scrolling UP (wheel up) -> move LEFT
-      const isGoingRight = e.deltaY > 0;
-      const isGoingLeft = e.deltaY < 0;
+      if (e.deltaY > 0 && sl >= maxScrollLeft - 1) return;
+      if (e.deltaY < 0 && sl <= 1) return;
 
-      // Check if we are at boundaries
-      // Allow default scroll if we're at the end and trying to go further
-      if (isGoingRight && scrollLeft >= maxScrollLeft - 1) return;
-      if (isGoingLeft && scrollLeft <= 1) return;
-
-      // Otherwise, hijack the scroll for horizontal movement
       e.preventDefault();
-      scrollContainer.scrollLeft += e.deltaY;
+      element.scrollLeft += e.deltaY;
     };
 
-    scrollContainer.addEventListener("wheel", handleWheel, { passive: false });
-
-    return () => {
-      scrollContainer.removeEventListener("wheel", handleWheel);
+    const handleMouseDown = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      hasDraggedRef.current = false;
+      isDragging.current = true;
+      startX.current = e.pageX - element.offsetLeft;
+      scrollLeftStart.current = element.scrollLeft;
+      element.style.cursor = "grabbing";
+      element.style.userSelect = "none";
     };
-  }, [statuses]); // Re-attach when statuses load
 
-  // ✅ REFACORTED GROUPING LOGIC (Previous -> Same -> Next)
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isDragging.current) return;
+      e.preventDefault();
+      const x = e.pageX - element.offsetLeft;
+      const walk = (x - startX.current) * 1.5;
+      if (Math.abs(x - startX.current) > 5) hasDraggedRef.current = true;
+      element.scrollLeft = scrollLeftStart.current - walk;
+    };
+
+    const handleMouseUp = () => {
+      if (!isDragging.current) return;
+      isDragging.current = false;
+      element.style.cursor = "grab";
+      element.style.removeProperty("user-select");
+    };
+
+    const handleMouseLeave = () => {
+      if (isDragging.current) {
+        isDragging.current = false;
+        element.style.cursor = "grab";
+        element.style.removeProperty("user-select");
+      }
+    };
+
+    element.style.cursor = "grab";
+    element.addEventListener("wheel", handleWheel, { passive: false });
+    element.addEventListener("mousedown", handleMouseDown);
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    element.addEventListener("mouseleave", handleMouseLeave);
+  };
+  
+  // Callback refs that setup listeners when elements mount
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const universalScrollRef = useRef<HTMLDivElement | null>(null);
+  
+  // Setup when component mounts
+  useEffect(() => {
+    if (scrollContainerRef.current) {
+      setupDragToScroll(scrollContainerRef.current, resultHasDraggedRef);
+    }
+    if (universalScrollRef.current) {
+      setupDragToScroll(universalScrollRef.current, universalHasDraggedRef);
+    }
+  }, [statuses]); // Re-run when statuses change (containers might re-render)
+
+  // ✅ REFACTORED GROUPING LOGIC (Previous -> Same -> Next)
   const groupedStatuses = useMemo(() => {
     // 1. Universal (Toàn cục - Row 1)
     const universal: ConsultationStatus[] = [];
@@ -220,6 +265,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
 
   // Handle status badge click - save immediately
   const handleStatusClick = async (status: ConsultationStatus) => {
+
     // Determine scheduled_at based on option
     let scheduledAt: string | null = null;
 
@@ -437,18 +483,28 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                 không đổi trạng thái
               </Badge>
             </div>
-            <div className="flex flex-wrap gap-1.5">
+            {/* ✅ Horizontal scroll container with drag-to-scroll */}
+            <div
+              ref={universalScrollRef}
+              className="flex flex-nowrap items-center gap-2.5 cursor-grab overflow-x-auto overflow-y-hidden overscroll-x-contain [-ms-overflow-style:none] [scrollbar-width:none] active:cursor-grabbing [&::-webkit-scrollbar]:hidden"
+            >
               {groupedStatuses.universal.map((status) => (
                 <Button
                   key={status.id}
                   variant="ghost"
                   size="sm"
                   className={cn(
-                    "h-7 px-2.5 text-xs",
+                    "h-7 flex-shrink-0 px-2.5 text-xs",
                     "border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100",
                     "transition-all hover:scale-[1.02]"
                   )}
-                  onClick={() => handleStatusClick(status)}
+                  onClick={() => {
+                    if (universalHasDraggedRef.current) {
+                      universalHasDraggedRef.current = false;
+                      return;
+                    }
+                    handleStatusClick(status);
+                  }}
                   disabled={addConsultation.isPending}
                 >
                   {savingStatusId === status.id ? (
@@ -490,7 +546,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
               {/* Horizontal scroll container - hidden scrollbar, uses wheel scroll */}
               <div
                 ref={scrollContainerRef}
-                className="flex flex-nowrap items-center gap-1.5 cursor-grab overflow-x-auto overflow-y-hidden overscroll-x-contain [-ms-overflow-style:none] [scrollbar-width:none] active:cursor-grabbing [&::-webkit-scrollbar]:hidden"
+                className="flex flex-nowrap items-center gap-2.5 cursor-grab overflow-x-auto overflow-y-hidden overscroll-x-contain [-ms-overflow-style:none] [scrollbar-width:none] active:cursor-grabbing [&::-webkit-scrollbar]:hidden"
               >
                   {/* GROUP 1: PREVIOUS STAGE (Revert) */}
                   {groupedStatuses.previousStage.length > 0 && (
@@ -502,10 +558,17 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                           size="sm"
                           className={cn(
                             "h-7 flex-shrink-0 px-2.5 text-xs font-normal",
-                            "border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100",
+                            // Previous Stage: Slate (neutral/revert)
+                            "border border-slate-300 bg-slate-100 text-slate-600 hover:bg-slate-200",
                             "transition-all hover:scale-[1.02]"
                           )}
-                          onClick={() => handleStatusClick(status)}
+                          onClick={() => {
+                            if (resultHasDraggedRef.current) {
+                              resultHasDraggedRef.current = false;
+                              return;
+                            }
+                            handleStatusClick(status);
+                          }}
                           disabled={addConsultation.isPending}
                         >
                           {savingStatusId === status.id ? (
@@ -535,10 +598,19 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                             size="sm"
                             className={cn(
                               "h-7 flex-shrink-0 px-2.5 text-xs font-normal",
-                              "border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100",
+                              // Same Stage: Blue (current focus)
+                              status.id === currentStatusId
+                                ? "border-2 border-blue-500 bg-blue-100 font-medium text-blue-800 hover:bg-blue-150"
+                                : "border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100",
                               "transition-all hover:scale-[1.02]"
                             )}
-                            onClick={() => handleStatusClick(status)}
+                            onClick={() => {
+                              if (resultHasDraggedRef.current) {
+                                resultHasDraggedRef.current = false;
+                                return;
+                              }
+                              handleStatusClick(status);
+                            }}
                             disabled={addConsultation.isPending}
                           >
                             {savingStatusId === status.id ? (
@@ -571,10 +643,17 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                           size="sm"
                           className={cn(
                             "h-7 flex-shrink-0 px-2.5 text-xs font-normal",
-                            "border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100",
+                            // Next Stage: Emerald (progress/forward)
+                            "border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
                             "transition-all hover:scale-[1.02]"
                           )}
-                          onClick={() => handleStatusClick(status)}
+                          onClick={() => {
+                            if (resultHasDraggedRef.current) {
+                              resultHasDraggedRef.current = false;
+                              return;
+                            }
+                            handleStatusClick(status);
+                          }}
                           disabled={addConsultation.isPending}
                         >
                           {savingStatusId === status.id ? (

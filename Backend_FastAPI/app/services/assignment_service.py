@@ -69,11 +69,14 @@ async def automatically_assign_lead(
                 return {"status": "skipped", "reason": "already_assigned", "lead_id": lead_id, "officer_id": lead.assigned_officer_id}
             else:
                 lead_unit_id = lead.unit_id
+                # Get blacklisted officers for this lead
+                blacklisted_officer_ids = lead.rejected_by_officer_ids or []
                 log.debug(
-                    f"[Lead ID: {lead_id}] Lead found and locked (Unit: {lead_unit_id}). Status: '{lead.status}'"
+                    f"[Lead ID: {lead_id}] Lead found and locked (Unit: {lead_unit_id}). Status: '{lead.status}', Blacklist: {blacklisted_officer_ids}"
                 )
 
                 # === BƯỚC 2: Khóa các Officer liên quan (SỬ DỤNG SKIP LOCKED) ===
+                # ✅ NEW: Also exclude blacklisted officers
                 available_officers_query = (
                     select(models.User).where(
                         models.User.role == UserRole.OFFICER,
@@ -85,6 +88,16 @@ async def automatically_assign_lead(
                     # ✅ CẢI TIẾN: Bỏ qua các officer đang bị khóa bởi transaction khác
                     .with_for_update(skip_locked=True)
                 )
+                
+                # ✅ BLACKLIST FILTER: Exclude officers who previously reassigned this lead
+                if blacklisted_officer_ids:
+                    available_officers_query = available_officers_query.where(
+                        ~models.User.id.in_(blacklisted_officer_ids)
+                    )
+                    log.info(
+                        f"[Lead ID: {lead_id}] Excluding {len(blacklisted_officer_ids)} blacklisted officers from assignment pool"
+                    )
+                
                 officer_results = await db.execute(available_officers_query)
                 # Lấy danh sách officer chưa bị khóa
                 available_officers = officer_results.scalars().all()

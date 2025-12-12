@@ -1392,8 +1392,10 @@ async def add_consultation(
             # Flush để lấy ID cho consultation mới (cần cho refresh)
             await db.flush([new_consultation])
 
-            # Refresh consultation mới để tải relations (officer, consultation_status)
-            await db.refresh(new_consultation, ["officer", "consultation_status"])
+            # ✅ ARCHITECTURE FIX: Use Repository instead of direct query
+            # Service must not query Model directly (Rule E: Repository Pattern)
+            repo = LeadRepository(db)
+            new_consultation = await repo.get_consultation_with_status_stage(new_consultation.id)
 
             # ✅ Quick Disposition: Cập nhật next_activity_at dựa trên tất cả consultations
             if data.scheduled_at:
@@ -1978,7 +1980,13 @@ async def update_consultation(
 
             # Flush to get changes ready (commit handled by begin_nested context)
             await db.flush()
-            await db.refresh(consultation)
+            
+            # ✅ FIX MissingGreenlet: Re-query with eager loading for nested relationships
+            # db.refresh() cannot load nested relationships like consultation_status.stage
+            # ✅ ARCHITECTURE FIX: Use Repository instead of direct query
+            # Service must not query Model directly (Rule E: Repository Pattern)
+            repo = LeadRepository(db)
+            consultation = await repo.get_consultation_with_status_stage(consultation.id)
 
             # ✅ Quick Disposition: Cập nhật next_activity_at nếu scheduled_at thay đổi
             if "scheduled_at" in update_data:
@@ -2040,6 +2048,56 @@ async def update_consultation(
     return consultation
 
 
+# ============================================================================
+# REASSIGN QUOTA CHECK
+# ============================================================================
+
+REASSIGN_QUOTA_LIMIT = 3  # Max reassigns per week
+REASSIGN_QUOTA_PERIOD_DAYS = 7  # Reset quota every 7 days
+
+
+async def check_reassign_quota(db: AsyncSession, officer_id: int) -> dict:
+    """
+    Check if officer has remaining reassign quota.
+    
+    Returns:
+        dict: {"allowed": bool, "used": int, "limit": int, "remaining": int}
+    """
+    from datetime import timedelta
+    
+    # Calculate start of current week (7 days ago)
+    week_start = datetime.now(timezone.utc) - timedelta(days=REASSIGN_QUOTA_PERIOD_DAYS)
+    
+    # Count reassigns in current period
+    count_query = (
+        select(func.count(models.AssignmentLog.id))
+        .where(
+            models.AssignmentLog.officer_id == officer_id,
+            models.AssignmentLog.method == "officer_reassign",
+            models.AssignmentLog.timestamp >= week_start,
+        )
+    )
+    result = await db.execute(count_query)
+    used_count = result.scalar() or 0
+    
+    remaining = max(0, REASSIGN_QUOTA_LIMIT - used_count)
+    
+    log.debug(
+        "Checked reassign quota",
+        officer_id=officer_id,
+        used=used_count,
+        limit=REASSIGN_QUOTA_LIMIT,
+        remaining=remaining,
+    )
+    
+    return {
+        "allowed": used_count < REASSIGN_QUOTA_LIMIT,
+        "used": used_count,
+        "limit": REASSIGN_QUOTA_LIMIT,
+        "remaining": remaining,
+    }
+
+
 async def process_officer_action(
     db: AsyncSession, lead_id: int, officer: models.User, action: str, reason: str
 ) -> models.Lead:
@@ -2048,6 +2106,19 @@ async def process_officer_action(
     """
     # Di chuyển import vào đây để phá vỡ circular import
     from ..celery_utils import process_automatic_lead_assignment_task
+
+    # ✅ QUOTA CHECK: Verify officer hasn't exceeded reassign limit
+    if action == "reassign":
+        quota = await check_reassign_quota(db, officer.id)
+        if not quota["allowed"]:
+            raise BadRequest(
+                detail=f"Bạn đã hết lượt phân công lại trong tuần này ({quota['used']}/{quota['limit']}). Vui lòng liên hệ quản lý."
+            )
+        log.info(
+            "Officer reassign quota check passed",
+            officer_id=officer.id,
+            remaining=quota["remaining"],
+        )
 
     trigger_reassignment = False  # Biến cờ để dispatch task sau commit
     try:
@@ -2081,6 +2152,19 @@ async def process_officer_action(
                 new_state["status"] = lead.status  # Keep status synced from consultation
                 lead.assigned_at = None
                 lead.assigned_officer = None  # Set cả relationship thành None
+                
+                # ✅ BLACKLIST: Add officer to rejected list (prevents lead from returning)
+                rejected_list = lead.rejected_by_officer_ids or []
+                if officer.id not in rejected_list:
+                    rejected_list.append(officer.id)
+                    lead.rejected_by_officer_ids = rejected_list
+                    log.info(
+                        "Added officer to lead blacklist",
+                        lead_id=lead_id,
+                        officer_id=officer.id,
+                        blacklist=rejected_list,
+                    )
+                
                 # Update assignment_status to reassign_pending
                 StatusHelper.set_assignment_status(lead, AssignmentStatus.REASSIGN_PENDING)
                 log_method = "officer_reassign"

@@ -124,6 +124,13 @@ class Lead(Base):
     pipeline_stage_id = Column(
         String(50), ForeignKey("pipeline_stage.id"), nullable=True, index=True
     )
+    # Blacklist: Officers who have reassigned this lead (cannot receive it again)
+    rejected_by_officer_ids = Column(
+        JSON,
+        nullable=True,
+        default=list,
+        comment="List of officer IDs who reassigned this lead - prevents reassignment back to them"
+    )
 
     pipeline_stage = relationship("PipelineStage", back_populates="leads")
 

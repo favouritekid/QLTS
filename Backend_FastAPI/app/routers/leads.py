@@ -48,6 +48,26 @@ async def create_new_lead(
 
 
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
+@router.get("/my/reassign-quota")
+async def get_my_reassign_quota(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = PermissionDep,
+):
+    """
+    Get current user's remaining reassign quota.
+    
+    Returns:
+        - allowed: True if user can still reassign
+        - used: Number of reassigns used this week
+        - limit: Maximum reassigns allowed per week
+        - remaining: Reassigns left this week
+    """
+    quota = await lead_service.check_reassign_quota(db, current_user.id)
+    return quota
+
+
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/distribution-preview")
 async def get_distribution_preview(
     request: Request,
@@ -490,9 +510,6 @@ async def update_a_consultation(
 
     # ✅ TRANSACTION PATTERN: Router commits the transaction
     await db.commit()
-    
-    # ✅ Refresh to load relationships for response serialization
-    await db.refresh(result, ["officer", "consultation_status"])
 
     # ✅ NOTIFICATION 2.0: Dispatch CONSULTATION_UPDATED if status changed
     if old_status_id and result.consultation_status_id != old_status_id:
