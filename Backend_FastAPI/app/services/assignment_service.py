@@ -14,6 +14,7 @@ from sqlalchemy.exc import OperationalError  # Dùng để bắt LockNotAvailabl
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models
+from ..core.constants import UserRole
 from ..core.events import SystemEvents
 from .notification_dispatcher import dispatch
 from .status_helper import StatusHelper, AssignmentStatus
@@ -68,14 +69,17 @@ async def automatically_assign_lead(
                 return {"status": "skipped", "reason": "already_assigned", "lead_id": lead_id, "officer_id": lead.assigned_officer_id}
             else:
                 lead_unit_id = lead.unit_id
+                # Get blacklisted officers for this lead
+                blacklisted_officer_ids = lead.rejected_by_officer_ids or []
                 log.debug(
-                    f"[Lead ID: {lead_id}] Lead found and locked (Unit: {lead_unit_id}). Status: '{lead.status}'"
+                    f"[Lead ID: {lead_id}] Lead found and locked (Unit: {lead_unit_id}). Status: '{lead.status}', Blacklist: {blacklisted_officer_ids}"
                 )
 
                 # === BƯỚC 2: Khóa các Officer liên quan (SỬ DỤNG SKIP LOCKED) ===
+                # ✅ NEW: Also exclude blacklisted officers
                 available_officers_query = (
                     select(models.User).where(
-                        models.User.role == "officer",
+                        models.User.role == UserRole.OFFICER,
                         models.User.status == "active",
                         models.User.availability_status
                         == "available",  # Chỉ lấy officer đang sẵn sàng
@@ -84,6 +88,16 @@ async def automatically_assign_lead(
                     # ✅ CẢI TIẾN: Bỏ qua các officer đang bị khóa bởi transaction khác
                     .with_for_update(skip_locked=True)
                 )
+                
+                # ✅ BLACKLIST FILTER: Exclude officers who previously reassigned this lead
+                if blacklisted_officer_ids:
+                    available_officers_query = available_officers_query.where(
+                        ~models.User.id.in_(blacklisted_officer_ids)
+                    )
+                    log.info(
+                        f"[Lead ID: {lead_id}] Excluding {len(blacklisted_officer_ids)} blacklisted officers from assignment pool"
+                    )
+                
                 officer_results = await db.execute(available_officers_query)
                 # Lấy danh sách officer chưa bị khóa
                 available_officers = officer_results.scalars().all()
@@ -107,14 +121,15 @@ async def automatically_assign_lead(
                                 "unit_id": lead_unit_id,
                                 "reason": "No officers available",
                                 "lead_name": lead.full_name or "Unknown",
-                                "actor_id": 0  # System actor
+                                "actor_id": 0,  # System actor
+                                "actor_name": "System",  # ✅ Added for template
                             },
-                            dedupe_key=f"lead_assignment_failed:{lead_id}:no_officers"
+                            dedupe_key=f"lead_assignment_failed:{lead_id}:no_officers",
+                            auto_commit=True  # Critical for Celery context
                         )
                     except Exception as e:
                         log.error(
-                            f"[Lead ID: {lead_id}] Failed to dispatch assignment failure notification",
-                            error=str(e)
+                            f"[Lead ID: {lead_id}] Failed to dispatch assignment failure notification: {e}"
                         )
 
                     return {"status": "failed", "reason": "no_officers_available", "lead_id": lead_id, "unit_id": lead_unit_id}
@@ -201,14 +216,15 @@ async def automatically_assign_lead(
                                 "unit_id": lead_unit_id,
                                 "reason": "All officers at full capacity",
                                 "lead_name": lead.full_name or "Unknown",
-                                "actor_id": 0  # System actor
+                                "actor_id": 0,  # System actor
+                                "actor_name": "System",  # ✅ Added for template
                             },
-                            dedupe_key=f"lead_assignment_failed:{lead_id}:capacity"
+                            dedupe_key=f"lead_assignment_failed:{lead_id}:capacity",
+                            auto_commit=True  # Critical for Celery context
                         )
                     except Exception as e:
                         log.error(
-                            f"[Lead ID: {lead_id}] Failed to dispatch assignment failure notification",
-                            error=str(e)
+                            f"[Lead ID: {lead_id}] Failed to dispatch assignment failure notification: {e}"
                         )
 
                     return {"status": "failed", "reason": "all_officers_at_capacity", "lead_id": lead_id, "unit_id": lead_unit_id}
@@ -250,7 +266,7 @@ async def automatically_assign_lead(
                     lead_id=lead.id,  # Lead ID chắc chắn đã có
                     officer_id=chosen_one.id,
                     method="automatic",
-                    reason="Assigned by system (utilization routing)",
+                    reason="Hệ thống phân công tự động",
                     timestamp=now_utc,
                 )
 
@@ -272,21 +288,32 @@ async def automatically_assign_lead(
             await db.refresh(lead, ["unit", "offering"])
 
             # Prepare notification payload according to LEAD_ASSIGNED schema
+            # Note: offering relationship should be loaded via db.refresh above
+            offering_name = "N/A"
+            if lead.offering:
+                offering_name = getattr(lead.offering, 'offering_type', 'N/A')
+
             notification_payload = {
                 "lead_id": lead.id,
                 "officer_id": chosen_one.id,
                 "actor_id": 0,  # System actor for automatic assignments
                 "lead_name": lead.full_name or "Unknown",
                 "lead_phone": lead.phone or "",
-                "offering_name": f"{lead.offering.program.name} - {lead.offering.offering_type}" if lead.offering and hasattr(lead.offering, 'program') and lead.offering.program else (lead.offering.offering_type if lead.offering else "N/A")
+                "offering_name": offering_name,
+                "actor_name": "System (Auto Assignment)",  # ✅ Added for template
+                "is_automatic": True,  # ✅ NEW: For frontend to show "Tự động" badge
+                "assignment_method": "automatic",  # ✅ NEW: Match AssignmentLog.method
             }
 
             # Dispatch notification (saves to DB + commits + sends via Socket.IO/Email)
+            # ✅ FIX: Use auto_commit=True so callback executes (socket emit, cache update)
+            # Without this, Celery workers create notifications but never emit to Socket.IO
             await dispatch(
                 db=db,
                 event=SystemEvents.LEAD_ASSIGNED,
                 payload=notification_payload,
-                dedupe_key=f"lead_assigned:{lead.id}:{chosen_one.id}"
+                dedupe_key=f"lead_assigned:{lead.id}:{chosen_one.id}",
+                auto_commit=True  # Critical for Celery context
             )
 
             log.info(
@@ -295,9 +322,7 @@ async def automatically_assign_lead(
         except Exception as e:
             # Log but don't fail - lead assignment already succeeded
             log.error(
-                f"[Lead ID: {lead_id}] Failed to dispatch assignment notification (lead still assigned successfully)",
-                error=str(e),
-                exc_info=True
+                f"[Lead ID: {lead_id}] Failed to dispatch assignment notification: {e}"
             )
 
         # Return success result

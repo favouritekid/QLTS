@@ -13,6 +13,7 @@ from ..core import deps
 from ..services import distribution_service, insights_service, lead_service
 from ..services.notification_dispatcher import dispatch  # ✅ NOTIFICATION 2.0
 from ..core.events import SystemEvents  # ✅ NOTIFICATION 2.0
+from ..core.constants import UserRole
 from app.core.rate_limits import limiter, RateLimits
 
 log = structlog.get_logger(__name__)
@@ -44,6 +45,26 @@ async def create_new_lead(
     await callback()
 
     return result
+
+
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
+@router.get("/my/reassign-quota")
+async def get_my_reassign_quota(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = PermissionDep,
+):
+    """
+    Get current user's remaining reassign quota.
+    
+    Returns:
+        - allowed: True if user can still reassign
+        - used: Number of reassigns used this week
+        - limit: Maximum reassigns allowed per week
+        - remaining: Reassigns left this week
+    """
+    quota = await lead_service.check_reassign_quota(db, current_user.id)
+    return quota
 
 
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
@@ -110,11 +131,13 @@ async def get_all_leads(
     status: Optional[str] = Query(
         None, description="Filter by status (comma-separated)"
     ),
-    assigned_officer_id: Optional[int] = Query(
-        None, description="Filter by assigned officer ID"
+    assigned_officer_id: Optional[str] = Query(
+        None, description="Filter by assigned officer ID(s) (comma-separated, e.g. '1,2,3')"
     ),
     unit_id: Optional[int] = Query(None, description="Filter by organization unit ID"),
-    offering_id: Optional[int] = Query(None, description="Filter by program offering ID"),
+    offering_id: Optional[str] = Query(
+        None, description="Filter by program offering ID(s) (comma-separated, e.g. '1,2,3')"
+    ),
     source: Optional[str] = Query(
         None, description="Filter by source (comma-separated)"
     ),
@@ -123,6 +146,20 @@ async def get_all_leads(
     ),
     sort_by: str = Query("created_at", description="Field to sort by"),
     order: str = Query("desc", description="Sort order (asc or desc)"),
+    # === PIPELINE STAGE FILTER ===
+    pipeline_stage_id: Optional[str] = Query(
+        None, description="Filter by pipeline stage ID(s) (comma-separated, e.g. 'stg01,stg02')"
+    ),
+    # === DATE RANGE FILTER ===
+    date_from: Optional[datetime] = Query(
+        None, description="Filter leads created/updated from this date (ISO format)"
+    ),
+    date_to: Optional[datetime] = Query(
+        None, description="Filter leads created/updated until this date (ISO format)"
+    ),
+    date_field: str = Query(
+        "created_at", description="Date field to filter on (created_at or updated_at)"
+    ),
     # === KẾT THÚC THÊM THAM SỐ ===
 ):
     """
@@ -137,9 +174,9 @@ async def get_all_leads(
     # === ROLE-BASED FILTERING ===
     # Officers can only see their assigned leads
     effective_officer_id = assigned_officer_id
-    if current_user.role == "officer":
+    if current_user.role == UserRole.OFFICER:
         # Force filter by current officer, ignore any passed assigned_officer_id
-        effective_officer_id = current_user.id
+        effective_officer_id = str(current_user.id)
 
     total, leads = await lead_service.get_leads(
         db,
@@ -147,13 +184,19 @@ async def get_all_leads(
         limit=page_size,
         # === ⭐️ TRUYỀN THAM SỐ VÀO SERVICE ===
         status=status,
-        assigned_officer_id=effective_officer_id,
+        assigned_officer_id=effective_officer_id,  # Now a string (comma-separated for multi)
         unit_id=unit_id,
-        offering_id=offering_id,
+        offering_id=offering_id,  # Now a string (comma-separated for multi)
         source=source,
         search=search,
         sort_by=sort_by,
         order=order,
+        # === PIPELINE STAGE FILTER ===
+        pipeline_stage_id=pipeline_stage_id,  # Already string (comma-separated for multi)
+        # === DATE RANGE FILTER ===
+        date_from=date_from,
+        date_to=date_to,
+        date_field=date_field,
         # === KẾT THÚC TRUYỀN THAM SỐ ===
     )
     return {"total_count": total, "leads": leads}
@@ -208,6 +251,7 @@ async def update_existing_lead(
                     "old_unit_id": old_unit_id,
                     "new_unit_id": result.unit_id,
                     "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,  # ✅ Added for template
                     "reason": "Unit transfer by admin",
                 },
                 dedupe_key=f"lead_reassigned:{result.id}:{result.unit_id}",
@@ -232,7 +276,7 @@ async def update_existing_lead(
                     "old_stage": lead.pipeline_stage_id,
                     "new_stage": result.pipeline_stage_id,
                     "actor_id": current_user.id,
-                    "actor_name": current_user.full_name,
+                    "actor_name": current_user.full_name or current_user.username,  # ✅ Added for template
                     "updated_fields": updated_fields,
                 },
                 dedupe_key=f"lead_status_changed:{result.id}:{result.consultation_status_id}",
@@ -256,6 +300,8 @@ async def update_existing_lead(
                 "status_changed": status_changed,
                 "actor_id": current_user.id,
                 "updated_by": current_user.full_name or current_user.username,  # Frontend expects updated_by
+                "actor_name": current_user.full_name or current_user.username,  # ✅ FIX: Missing for template
+                "updated_summary": ", ".join(updated_fields[:3]) + ("..." if len(updated_fields) > 3 else ""), # ✅ FIX: For template
                 "updated_at": datetime.now().isoformat(),
                 "message": f"Lead updated by {current_user.full_name or current_user.username}",
             },
@@ -296,8 +342,6 @@ async def delete_lead(
 
     # Dispatch notification for lead deletion
     try:
-        from ..services.notification_dispatcher import dispatch
-        from ..core.events import SystemEvents
         await dispatch(
             db=db,
             event=SystemEvents.LEAD_DELETED,
@@ -307,14 +351,13 @@ async def delete_lead(
                 "unit_id": deleted_lead.unit_id,
                 "officer_id": deleted_lead.assigned_officer_id,  # May be None
                 "actor_id": current_user.id,
+                "actor_name": current_user.full_name or current_user.username,  # ✅ Added for template
             },
             dedupe_key=f"lead_deleted:{deleted_lead.id}",
             auto_commit=True  # Already committed above, emit domain event immediately
         )
     except Exception as e:
-        # Log but don't fail - deletion already succeeded
-        import logging
-        logging.warning(f"Failed to dispatch lead deletion notification: {e}")
+        log.warning("Failed to dispatch lead deletion notification", error=str(e))
 
     return None
 
@@ -353,6 +396,7 @@ async def add_new_consultation(
                 "officer_id": lead.assigned_officer_id,
                 "status_id": result.consultation_status_id or "",
                 "actor_id": current_user.id,
+                "actor_name": current_user.full_name or current_user.username,  # ✅ Added for template
                 "unit_id": lead.unit_id,  # For unit managers notification
             },
             auto_commit=True  # Already committed, emit domain event immediately
@@ -383,23 +427,8 @@ async def assign_lead_manually(
     )
     await db.commit()
 
-    # ✅ NOTIFICATION 2.0: Dispatch LEAD_ASSIGNED event
-    await dispatch(
-        db=db,
-        event=SystemEvents.LEAD_ASSIGNED,
-        payload={
-            "lead_id": result.id,
-            "lead_name": result.full_name or result.email or f"Lead #{result.id}",
-            "officer_id": result.assigned_officer_id,
-            "officer_name": result.assigned_officer.full_name if result.assigned_officer else "Unknown",
-            "actor_id": current_user.id,
-            "actor_name": current_user.full_name,
-            "source": result.source,
-            "priority": result.priority,
-        },
-        dedupe_key=f"lead_assigned:{result.id}:{result.assigned_officer_id}",
-        auto_commit=True  # Already committed above, emit domain event immediately
-    )
+    # ❌ REDUNDANT: lead_service.assign_lead_manually already dispatches LEAD_ASSIGNED with richer payload
+    # Removed to prevent duplicate notifications.
 
     return result
 
@@ -414,10 +443,12 @@ async def perform_lead_action(
     db: AsyncSession = Depends(database.get_db),
 ):
     """Xử lý hành động (reject/reassign) của Officer (Đã xác thực 2 lớp)."""
-    result = await lead_service.process_officer_action(
+    result, callback = await lead_service.process_officer_action(
         db, lead.id, current_user, action_data.action, action_data.reason
     )
     await db.commit()
+    # ✅ FIX: Call callback AFTER commit to ensure Celery sees committed data
+    await callback()
     return result
 
 
@@ -481,9 +512,6 @@ async def update_a_consultation(
 
     # ✅ TRANSACTION PATTERN: Router commits the transaction
     await db.commit()
-    
-    # ✅ Refresh to load relationships for response serialization
-    await db.refresh(result, ["officer", "consultation_status"])
 
     # ✅ NOTIFICATION 2.0: Dispatch CONSULTATION_UPDATED if status changed
     if old_status_id and result.consultation_status_id != old_status_id:
@@ -498,6 +526,7 @@ async def update_a_consultation(
                     "old_status_id": old_status_id,
                     "new_status_id": result.consultation_status_id,
                     "actor_id": current_user.id,
+                    "actor_name": current_user.full_name or current_user.username,  # ✅ Added for template
                 },
                 dedupe_key=f"consultation_updated:{result.id}:{result.consultation_status_id}",
                 auto_commit=True  # Already committed above, emit domain event immediately
@@ -544,6 +573,7 @@ async def delete_a_consultation(
                 "lead_id": lead.id,
                 "officer_id": lead.assigned_officer_id,
                 "actor_id": current_user.id,
+                "actor_name": current_user.full_name or current_user.username,  # ✅ Added for template
             },
             dedupe_key=f"consultation_deleted:{consultation_id}",
             auto_commit=True  # Already committed above, emit domain event immediately
@@ -926,6 +956,65 @@ async def bulk_assign_leads(
     )
     await db.commit()
     return result
+
+
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.post("/bulk-update-stage", status_code=status.HTTP_200_OK)
+async def bulk_update_leads_stage(
+    request: Request,
+    bulk_data: schemas.BulkUpdateStageSchema,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = PermissionDep,
+):
+    """
+    (Admin only) Bulk update pipeline stage for multiple leads.
+
+    **Request Body:**
+    ```json
+    {"lead_ids": [1, 2, 3], "pipeline_stage_id": "stage_2"}
+    ```
+    """
+    updated_count = 0
+    for lead_id in bulk_data.lead_ids:
+        try:
+            lead = await db.get(models.Lead, lead_id)
+            if lead and not lead.deleted_at:
+                lead.pipeline_stage_id = bulk_data.pipeline_stage_id
+                updated_count += 1
+        except Exception as e:
+            log.warning(f"Failed to update lead {lead_id}: {e}")
+
+    await db.commit()
+    return {"message": f"Updated {updated_count} leads", "updated_count": updated_count}
+
+
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.post("/bulk-delete", status_code=status.HTTP_200_OK)
+async def bulk_delete_leads(
+    request: Request,
+    bulk_data: schemas.BulkDeleteSchema,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = PermissionDep,
+):
+    """
+    (Admin only) Bulk soft delete multiple leads.
+
+    **Request Body:**
+    ```json
+    {"lead_ids": [1, 2, 3]}
+    ```
+    """
+    deleted_count = 0
+    for lead_id in bulk_data.lead_ids:
+        try:
+            deleted_lead = await lead_service.delete_lead(db, lead_id, deleted_by=current_user)
+            if deleted_lead:
+                deleted_count += 1
+        except Exception as e:
+            log.warning(f"Failed to delete lead {lead_id}: {e}")
+
+    await db.commit()
+    return {"message": f"Deleted {deleted_count} leads", "deleted_count": deleted_count}
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour

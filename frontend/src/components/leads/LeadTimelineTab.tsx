@@ -414,17 +414,19 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
                               </Badge>
                             )}
 
-                            {/* Assignment: Method (automatic vs manual) */}
+                            {/* Assignment: Method (automatic, officer_reassign, manual) */}
                             {isAssignment && eventData.method && (
                               <Badge
                                 variant="outline"
                                 className={cn(
                                   "text-xs font-normal gap-1",
                                   eventData.method === "automatic" && "border-purple-200 bg-purple-50 text-purple-700",
+                                  eventData.method === "officer_reassign" && "border-blue-200 bg-blue-50 text-blue-700",
                                   eventData.method === "manual" && "border-orange-200 bg-orange-50 text-orange-700"
                                 )}
                               >
                                 {eventData.method === "automatic" && "Tự động"}
+                                {eventData.method === "officer_reassign" && "Yêu cầu phân công lại"}
                                 {eventData.method === "manual" && "Thủ công"}
                               </Badge>
                             )}

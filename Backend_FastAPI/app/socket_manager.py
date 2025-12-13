@@ -5,6 +5,7 @@ import structlog
 from fastapi import HTTPException
 
 from . import models, security
+from .core.constants import UserRole
 from .config import settings
 from .database import AsyncSessionLocal, redis_client, safe_redis_get
 # NOTE: user_service import moved inside function to avoid circular import
@@ -54,9 +55,8 @@ sio = socketio.AsyncServer(
 )
 
 # === ✅ CẢI TIẾN: Vấn đề #1 - Rate Limiting bằng Redis LUA Script ===
-# Increased from 20 to 60 to accommodate legitimate usage patterns
-# 20 req/min was too strict and caused false positives
-MAX_CONN_PER_MINUTE = 60
+# Configuration now comes from settings (see config.py)
+# Can be overridden via SOCKET_MAX_CONN_PER_MINUTE environment variable
 RATE_LIMIT_SCRIPT_SHA = None  # Sẽ được load khi khởi động
 
 # LUA script (atomic)
@@ -124,7 +124,7 @@ async def check_rate_limit(client_ip: str) -> bool:
     try:
         # Chạy script bằng SHA (nhanh hơn)
         result = await redis_client.evalsha(
-            RATE_LIMIT_SCRIPT_SHA, 1, key, MAX_CONN_PER_MINUTE, 60  # TTL 60 giây
+            RATE_LIMIT_SCRIPT_SHA, 1, key, settings.SOCKET_MAX_CONN_PER_MINUTE, 60  # TTL 60 giây
         )
         return bool(result)
     except Exception as e:
@@ -137,7 +137,7 @@ async def check_rate_limit(client_ip: str) -> bool:
         try:
             await load_rate_limit_script()  # Tải lại script
             result = await redis_client.evalsha(
-                RATE_LIMIT_SCRIPT_SHA, 1, key, MAX_CONN_PER_MINUTE, 60
+                RATE_LIMIT_SCRIPT_SHA, 1, key, settings.SOCKET_MAX_CONN_PER_MINUTE, 60
             )
             return bool(result)
         except Exception as e2:
@@ -330,7 +330,7 @@ async def connect(sid, environ, auth):
                 rooms_joined.append(unit_room)
 
             # 4. Admin room (for all admin users)
-            if user.role == "admin":
+            if user.role == UserRole.ADMIN:
                 await sio.enter_room(sid, "role_admin")
                 if "role_admin" not in rooms_joined:
                     rooms_joined.append("role_admin")
@@ -387,7 +387,7 @@ async def disconnect(sid):
                 rooms_left.append(unit_room)
 
             # 4. Admin room
-            if role == "admin":
+            if role == UserRole.ADMIN:
                 await sio.leave_room(sid, "role_admin")
                 if "role_admin" not in rooms_left:
                     rooms_left.append("role_admin")

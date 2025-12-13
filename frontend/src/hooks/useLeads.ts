@@ -65,9 +65,9 @@ export function useLeads(
     queryFn: async () => {
       return await leadsApi.getLeads(params);
     },
-    staleTime: 1000 * 30, // 30 seconds
+    staleTime: 1000 * 5, // 5 seconds - shorter for real-time updates
     gcTime: 1000 * 60 * 5, // 5 minutes in cache
-    initialData: options?.initialData, // ✅ Use initialData from Server Component
+    initialData: options?.initialData,
   });
 }
 
@@ -90,8 +90,8 @@ export function useLead(
       return await leadsApi.getLead(id);
     },
     enabled: enabled && !!id,
-    initialData: options?.initialData, // ✅ PHASE 1 - WEEK 2 - DAY 5: Support SSR
-    staleTime: 1000 * 60, // 1 minute
+    initialData: options?.initialData,
+    staleTime: 1000 * 10, // 10 seconds - shorter to ensure data is fresh after updates
     gcTime: 1000 * 60 * 5, // 5 minutes in cache
   });
 }
@@ -162,13 +162,13 @@ export function useCreateLead() {
     mutationFn: async (data) => {
       return await leadsApi.createLead(data);
     },
-    onSuccess: (newLead) => {
-      toast.success("Lead created successfully!", {
+    onSuccess: async (newLead) => {
+      toast.success("Tạo lead thành công!", {
         description: newLead.full_name,
       });
 
-      // Invalidate all lead lists to refetch with new data
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+      // Force immediate refetch of lead lists (not just invalidate)
+      await queryClient.refetchQueries({ queryKey: leadsKeys.lists() });
 
       // Also invalidate pipeline queries as new lead affects pipeline stats
       queryClient.invalidateQueries({ queryKey: ["pipeline"] });
@@ -179,9 +179,9 @@ export function useCreateLead() {
         typeof detail === "string"
           ? detail
           : Array.isArray(detail)
-            ? detail.map((e) => e.msg || "Validation error").join(", ")
-            : error.response?.data?.message || "Failed to create lead";
-      toast.error("Error", { description: message });
+            ? detail.map((e) => e.msg).join(", ")
+            : error.response?.data?.message || error.message || "Không thể tạo lead mới";
+      toast.error("Tạo lead thất bại", { description: message });
     },
   });
 }
@@ -238,23 +238,32 @@ export function useUpdateLead() {
       }
 
       const detail = err.response?.data?.detail;
-      const message =
+      const errorMessage =
         typeof detail === "string"
           ? detail
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
-            : "Failed to update lead";
-      toast.error("Error", { description: message });
+            : err.response?.data?.message || err.message || "Không thể cập nhật lead";
+            
+      toast.error("Cập nhật lead thất bại", { description: errorMessage });
     },
 
-    onSuccess: (updatedLead) => {
-      toast.success("Lead updated successfully!", {
+    onSuccess: async (updatedLead) => {
+      toast.success("Cập nhật lead thành công!", {
         description: updatedLead.full_name,
       });
 
-      // Invalidate queries - including insights which may change based on lead data
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(updatedLead.id) });
+      // CRITICAL: Update cache immediately with full response from API
+      // This ensures ALL computed fields (lead_score, etc) are updated
+      queryClient.setQueryData(leadsKeys.detail(updatedLead.id), updatedLead);
+      
+      // Also refetch to ensure any relationship data is fresh
+      await queryClient.refetchQueries({ queryKey: leadsKeys.detail(updatedLead.id) });
+      
+      // Force immediate refetch of lists (not just invalidate)
+      await queryClient.refetchQueries({ queryKey: leadsKeys.lists() });
+      
+      // Invalidate other related queries
       queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(updatedLead.id) });
       queryClient.invalidateQueries({ queryKey: leadsKeys.insights(updatedLead.id) });
       queryClient.invalidateQueries({ queryKey: ["pipeline"] });
@@ -286,8 +295,8 @@ export function useDeleteLead() {
       return { deletedLeadId: id };
     },
 
-    onSuccess: (_, __, context) => {
-      toast.success("Lead deleted successfully!");
+    onSuccess: async (_, __, context) => {
+      toast.success("Xóa lead thành công!");
 
       // Invalidate the specific lead's queries
       if (context?.deletedLeadId) {
@@ -295,8 +304,8 @@ export function useDeleteLead() {
         queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(context.deletedLeadId) });
         queryClient.invalidateQueries({ queryKey: leadsKeys.insights(context.deletedLeadId) });
       }
-      // Invalidate lists and pipeline
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
+      // Force immediate refetch of lists
+      await queryClient.refetchQueries({ queryKey: leadsKeys.lists() });
       queryClient.invalidateQueries({ queryKey: ["pipeline"] });
     },
 
@@ -307,8 +316,8 @@ export function useDeleteLead() {
           ? detail
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
-            : "Failed to delete lead";
-      toast.error("Error", { description: message });
+            : "Không thể xóa lead";
+      toast.error("Xóa lead thất bại", { description: message });
     },
   });
 }
@@ -346,8 +355,8 @@ export function useAssignLead() {
     },
 
     onSuccess: (updatedLead) => {
-      toast.success("Lead assigned successfully!", {
-        description: `Assigned to officer #${updatedLead.assigned_officer_id}`,
+      toast.success("Phân công lead thành công!", {
+        description: `Đã phân công cho tư vấn viên #${updatedLead.assigned_officer_id}`,
       });
 
       // Invalidate queries
@@ -364,8 +373,8 @@ export function useAssignLead() {
           ? detail
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
-            : "Failed to assign lead";
-      toast.error("Error", { description: message });
+            : error.response?.data?.message || error.message || "Không thể phân công lead";
+      toast.error("Phân công thất bại", { description: message });
     },
   });
 }
@@ -419,6 +428,95 @@ export function useBulkAssignLeads() {
   });
 }
 
+/**
+ * Bulk update leads pipeline stage
+ * ✅ Option B: Bulk Stage Change
+ *
+ * @example
+ * ```tsx
+ * const bulkUpdateStage = useBulkUpdateLeadsStage();
+ *
+ * bulkUpdateStage.mutate({
+ *   lead_ids: [1, 2, 3],
+ *   pipeline_stage_id: 'stage_2',
+ * });
+ * ```
+ */
+export function useBulkUpdateLeadsStage() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    { message: string; updated_count: number },
+    AxiosError<ApiErrorResponse>,
+    { lead_ids: number[]; pipeline_stage_id: string }
+  >({
+    mutationFn: async (data) => {
+      return await leadsApi.bulkUpdateLeadsStage(data);
+    },
+
+    onSuccess: async (result) => {
+      // Force refetch leads list queries immediately (matches useLeads queryKey)
+      await queryClient.refetchQueries({ queryKey: leadsKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+    },
+
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Failed to update leads stage";
+      toast.error("Error", { description: message });
+    },
+  });
+}
+
+/**
+ * Bulk delete leads
+ * ✅ Option B: Bulk Delete
+ *
+ * @example
+ * ```tsx
+ * const bulkDelete = useBulkDeleteLeads();
+ *
+ * bulkDelete.mutate({
+ *   lead_ids: [1, 2, 3],
+ * });
+ * ```
+ */
+export function useBulkDeleteLeads() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    { message: string; deleted_count: number },
+    AxiosError<ApiErrorResponse>,
+    { lead_ids: number[] }
+  >({
+    mutationFn: async (data) => {
+      return await leadsApi.bulkDeleteLeads(data);
+    },
+
+    onSuccess: async (result) => {
+      // Force refetch leads list queries immediately (matches useLeads queryKey)
+      await queryClient.refetchQueries({ queryKey: leadsKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+    },
+
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Failed to delete leads";
+      toast.error("Error", { description: message });
+    },
+  });
+}
+
 // =====================================================================
 // MUTATIONS - LEAD ACTIONS
 // =====================================================================
@@ -451,14 +549,14 @@ export function usePerformLeadAction() {
 
     onSuccess: (updatedLead, variables) => {
       const actionMessages: Record<string, string> = {
-        reject: "Lead rejected",
-        convert: "Lead converted successfully!",
-        reassign: "Lead reassigned successfully!",
-        mark_lost: "Lead marked as lost",
-        reopen: "Lead reopened",
+        reject: "Đã từ chối lead",
+        convert: "Chuyển đổi lead thành công!",
+        reassign: "Phân công lại thành công!",
+        mark_lost: "Đã đánh dấu thất bại",
+        reopen: "Đã mở lại lead",
       };
 
-      toast.success(actionMessages[variables.data.action] || "Action performed successfully", {
+      toast.success(actionMessages[variables.data.action] || "Thao tác thành công", {
         description: updatedLead.full_name,
       });
 
@@ -476,8 +574,8 @@ export function usePerformLeadAction() {
           ? detail
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
-            : `Failed to ${variables.data.action} lead`;
-      toast.error("Error", { description: message });
+            : `Thao tác ${variables.data.action} thất bại`;
+      toast.error("Lỗi thao tác", { description: message });
     },
   });
 }

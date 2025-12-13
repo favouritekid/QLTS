@@ -54,6 +54,9 @@ class NotificationEventGroup(str, Enum):
     PIPELINE = "pipeline"
     """Pipeline configuration events: stage/status updates"""
 
+    ORGANIZATION = "organization"
+    """Organization events: unit, program, offering changes (Admin only)"""
+
 
 # Mapping from SystemEvents to NotificationEventGroup
 # This determines which preference group controls each event
@@ -63,6 +66,7 @@ EVENT_GROUP_MAPPING: Dict[SystemEvents, NotificationEventGroup] = {
     SystemEvents.LEAD_REASSIGNED: NotificationEventGroup.LEAD,
     SystemEvents.LEAD_STATUS_CHANGED: NotificationEventGroup.LEAD,
     SystemEvents.LEAD_CREATED: NotificationEventGroup.LEAD,
+    SystemEvents.LEAD_UPDATED: NotificationEventGroup.LEAD,  # ✅ Added - was missing!
     SystemEvents.LEAD_ASSIGNMENT_FAILED: NotificationEventGroup.LEAD,
     SystemEvents.LEAD_DELETED: NotificationEventGroup.LEAD,
     SystemEvents.OFFICER_AVAILABILITY_CHANGED: NotificationEventGroup.LEAD,  # Affects lead distribution
@@ -100,6 +104,17 @@ EVENT_GROUP_MAPPING: Dict[SystemEvents, NotificationEventGroup] = {
 
     # Pipeline events
     SystemEvents.PIPELINE_CONFIG_UPDATED: NotificationEventGroup.PIPELINE,
+
+    # Organization events
+    SystemEvents.UNIT_CREATED: NotificationEventGroup.ORGANIZATION,
+    SystemEvents.UNIT_UPDATED: NotificationEventGroup.ORGANIZATION,
+    SystemEvents.UNIT_DELETED: NotificationEventGroup.ORGANIZATION,
+    SystemEvents.PROGRAM_CREATED: NotificationEventGroup.ORGANIZATION,
+    SystemEvents.PROGRAM_UPDATED: NotificationEventGroup.ORGANIZATION,
+    SystemEvents.PROGRAM_DELETED: NotificationEventGroup.ORGANIZATION,
+    SystemEvents.OFFERING_CREATED: NotificationEventGroup.ORGANIZATION,
+    SystemEvents.OFFERING_UPDATED: NotificationEventGroup.ORGANIZATION,
+    SystemEvents.OFFERING_DELETED: NotificationEventGroup.ORGANIZATION,
 }
 
 
@@ -190,6 +205,12 @@ EVENT_GROUP_LABELS: Dict[NotificationEventGroup, Dict[str, str]] = {
         "description_en": "Notifications about pipeline stage changes (Admin only)",
         "description_vi": "Thông báo về thay đổi cấu hình pipeline (Chỉ Admin)"
     },
+    NotificationEventGroup.ORGANIZATION: {
+        "en": "Organization Management",
+        "vi": "Quản lý Tổ chức",
+        "description_en": "Notifications about unit, program, and offering changes (Admin only)",
+        "description_vi": "Thông báo về thay đổi đơn vị, chương trình, loại hình đào tạo (Chỉ Admin)"
+    },
 }
 
 
@@ -245,6 +266,11 @@ DEFAULT_GROUP_CHANNELS: Dict[NotificationEventGroup, Dict[NotificationChannel, b
         NotificationChannel.SMS: False,
     },
     NotificationEventGroup.PIPELINE: {
+        NotificationChannel.BROWSER: True,
+        NotificationChannel.EMAIL: False,
+        NotificationChannel.SMS: False,
+    },
+    NotificationEventGroup.ORGANIZATION: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: False,
         NotificationChannel.SMS: False,

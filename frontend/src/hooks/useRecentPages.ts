@@ -164,8 +164,11 @@ export function useRecentPages(maxItems: number = MAX_RECENT_ITEMS): UseRecentPa
   // Load from localStorage AFTER mount (client-side only)
   useEffect(() => {
     const stored = loadRecentPages();
-    setRecentPages(stored);
-    setIsHydrated(true);
+    // Use queueMicrotask to avoid synchronous setState in effect
+    queueMicrotask(() => {
+      setRecentPages(stored);
+      setIsHydrated(true);
+    });
   }, []);
 
   // Track current page visit
@@ -177,39 +180,39 @@ export function useRecentPages(maxItems: number = MAX_RECENT_ITEMS): UseRecentPa
     // Use queueMicrotask to defer state update and avoid synchronous setState warning
     queueMicrotask(() => {
       setRecentPages((prev) => {
-      const existing = prev.find((p) => p.path === pathname);
+        const existing = prev.find((p) => p.path === pathname);
 
-      if (existing) {
-        // Update existing entry
-        const updated = prev.map((p) =>
-          p.path === pathname
-            ? {
-                ...p,
-                timestamp: Date.now(),
-                visits: p.visits + 1,
-              }
-            : p
-        );
+        if (existing) {
+          // Update existing entry
+          const updated = prev.map((p) =>
+            p.path === pathname
+              ? {
+                  ...p,
+                  timestamp: Date.now(),
+                  visits: p.visits + 1,
+                }
+              : p
+          );
 
-        // Sort by timestamp (most recent first)
-        const sorted = updated.sort((a, b) => b.timestamp - a.timestamp);
-        saveRecentPages(sorted);
-        return sorted;
-      } else {
-        // Add new entry
-        const label = pathToLabel(pathname);
-        const newPage: RecentPage = {
-          path: pathname,
-          label,
-          timestamp: Date.now(),
-          visits: 1,
-        };
+          // Sort by timestamp (most recent first)
+          const sorted = updated.sort((a, b) => b.timestamp - a.timestamp);
+          saveRecentPages(sorted);
+          return sorted;
+        } else {
+          // Add new entry
+          const label = pathToLabel(pathname);
+          const newPage: RecentPage = {
+            path: pathname,
+            label,
+            timestamp: Date.now(),
+            visits: 1,
+          };
 
-        const updated = [newPage, ...prev].slice(0, maxItems);
-        saveRecentPages(updated);
-        return updated;
-      }
-    });
+          const updated = [newPage, ...prev].slice(0, maxItems);
+          saveRecentPages(updated);
+          return updated;
+        }
+      });
     });
   }, [pathname, maxItems]);
 

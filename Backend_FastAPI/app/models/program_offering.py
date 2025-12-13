@@ -50,6 +50,13 @@ class ProgramOffering(Base):
         nullable=True,
         comment="Admission rules JSON: {min_gpa, mandatory_docs[], admission_method}"
     )
+    
+    # Fit Score Rules (for Lead scoring)
+    scoring_rules = Column(
+        JSONB,
+        nullable=True,
+        comment="Scoring rules: {target_age_min, target_age_max, required_education, hot_level}"
+    )
 
     # Liên kết Nhiều-1 đến Cấp 1
     program_id = Column(

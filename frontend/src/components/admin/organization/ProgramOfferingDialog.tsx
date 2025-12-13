@@ -69,6 +69,11 @@ const offeringFormSchema = z.object({
     .nullish()
     .or(z.literal("")),
   is_active: z.boolean(),
+  // Scoring Rules fields
+  hot_level: z.number().min(0).max(2).optional(),
+  target_age_min: z.number().int().min(16).max(100).nullish().or(z.literal("")),
+  target_age_max: z.number().int().min(16).max(100).nullish().or(z.literal("")),
+  required_education: z.string().optional().nullable(),
 });
 
 type OfferingFormValues = z.infer<typeof offeringFormSchema>;
@@ -111,6 +116,10 @@ export function ProgramOfferingDialog({
       duration_semesters: null,
       total_credits: null,
       is_active: true,
+      hot_level: 0,
+      target_age_min: null,
+      target_age_max: null,
+      required_education: null,
     },
   });
 
@@ -123,6 +132,10 @@ export function ProgramOfferingDialog({
           duration_semesters: offering.duration_semesters ?? null,
           total_credits: offering.total_credits ?? null,
           is_active: offering.is_active,
+          hot_level: offering.scoring_rules?.hot_level ?? 0,
+          target_age_min: offering.scoring_rules?.target_age_min ?? null,
+          target_age_max: offering.scoring_rules?.target_age_max ?? null,
+          required_education: offering.scoring_rules?.required_education ?? null,
         });
       } else {
         form.reset({
@@ -130,6 +143,10 @@ export function ProgramOfferingDialog({
           duration_semesters: null,
           total_credits: null,
           is_active: true,
+          hot_level: 0,
+          target_age_min: null,
+          target_age_max: null,
+          required_education: null,
         });
       }
     }
@@ -142,6 +159,12 @@ export function ProgramOfferingDialog({
       duration_semesters: values.duration_semesters ?? null,
       total_credits: values.total_credits ?? null,
       is_active: values.is_active,
+      scoring_rules: {
+        hot_level: values.hot_level ?? 0,
+        target_age_min: values.target_age_min ?? null,
+        target_age_max: values.target_age_max ?? null,
+        required_education: values.required_education ?? null,
+      },
     };
 
     try {
@@ -310,6 +333,122 @@ export function ProgramOfferingDialog({
                 </FormItem>
               )}
             />
+
+            {/* === SCORING RULES SECTION === */}
+            <div className="border-t pt-4 mt-4">
+              <h4 className="font-medium text-sm mb-3">Cấu hình chấm điểm Fit Score</h4>
+              
+              {/* Hot Level */}
+              <FormField
+                control={form.control}
+                name="hot_level"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Mức độ Hot</FormLabel>
+                    <Select
+                      onValueChange={(val) => field.onChange(parseInt(val))}
+                      value={field.value?.toString() ?? "0"}
+                      disabled={isSubmitting}
+                    >
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Chọn mức độ" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="0">Bình thường</SelectItem>
+                        <SelectItem value="1">🔥 Hot (+5 điểm)</SelectItem>
+                        <SelectItem value="2">🔥🔥 Rất Hot (+10 điểm)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormDescription>Ngành hot sẽ được ưu tiên khi tính điểm Fit Score</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {/* Target Age Range */}
+              <div className="grid grid-cols-2 gap-4 mt-4">
+                <FormField
+                  control={form.control}
+                  name="target_age_min"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Tuổi tối thiểu</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="number"
+                          placeholder="VD: 18"
+                          {...field}
+                          value={field.value ?? ""}
+                          onChange={(e) =>
+                            field.onChange(e.target.value ? parseInt(e.target.value) : null)
+                          }
+                          disabled={isSubmitting}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name="target_age_max"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Tuổi tối đa</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="number"
+                          placeholder="VD: 25"
+                          {...field}
+                          value={field.value ?? ""}
+                          onChange={(e) =>
+                            field.onChange(e.target.value ? parseInt(e.target.value) : null)
+                          }
+                          disabled={isSubmitting}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+              <p className="text-[0.8rem] text-muted-foreground mt-1">Độ tuổi lý tưởng để đạt điểm Fit Score cao nhất</p>
+
+              {/* Required Education */}
+              <FormField
+                control={form.control}
+                name="required_education"
+                render={({ field }) => (
+                  <FormItem className="mt-4">
+                    <FormLabel>Trình độ yêu cầu</FormLabel>
+                    <Select
+                      onValueChange={(val) => field.onChange(val === "none" ? null : val)}
+                      value={field.value ?? "none"}
+                      disabled={isSubmitting}
+                    >
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Chọn trình độ" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="none">Không yêu cầu</SelectItem>
+                        <SelectItem value="high_school">THPT / Tương đương</SelectItem>
+                        <SelectItem value="diploma">Trung cấp / Cao đẳng</SelectItem>
+                        <SelectItem value="bachelor">Đại học</SelectItem>
+                        <SelectItem value="master">Thạc sĩ</SelectItem>
+                        <SelectItem value="phd">Tiến sĩ</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormDescription>Lead đạt yêu cầu sẽ được cộng điểm học vấn</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
 
             <DialogFooter>
               <Button

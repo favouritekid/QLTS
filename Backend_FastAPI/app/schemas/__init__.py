@@ -47,6 +47,7 @@ from .organization import (
     OfferingAcademicInfoCreate,
     OfferingAcademicInfoUpdate,
     AdmissionCriterion,
+    ScoringRules,  # Fit Score configuration schema
     # Organization Unit schemas
     OrganizationUnit,
     OrganizationUnitCreate,
@@ -100,6 +101,8 @@ from .lead import (
     AssignLead,
     AssignmentLog,
     BulkAssignLeadsSchema,
+    BulkUpdateStageSchema,  # ✅ Option B: Bulk stage update
+    BulkDeleteSchema,       # ✅ Option B: Bulk delete
     Consultation,
     ConsultationBase,
     ConsultationCreate,

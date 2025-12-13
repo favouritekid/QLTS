@@ -19,7 +19,9 @@ from ..utils.exceptions import (
 )
 from ..services import pipeline_service, distribution_service
 from ..core.status_mapping import sync_lead_status_from_consultation
+from ..core.constants import UserRole
 from .status_helper import StatusHelper, AssignmentStatus
+from ..repositories import LeadRepository  # ✅ PHASE 2: Repository Pattern
 
 log = structlog.get_logger(__name__)
 
@@ -77,6 +79,103 @@ async def update_lead_next_activity(
     )
 
 
+def calculate_fit_score(
+    lead_birth_year: Optional[int],
+    lead_education_level: Optional[str],
+    lead_location_proximity: int,
+    lead_occupation_relevance: int,
+    lead_source: Optional[str],
+    lead_academic_performance: int,
+    scoring_rules: Optional[dict],
+) -> int:
+    """
+    Calculate Fit Score (0-40 points) for lead qualification.
+    
+    Scoring breakdown (40 total):
+    - Age: 0/4/8 based on target age range
+    - Education: 0/4/8 based on required education
+    - Location: 0/2/5 (Officer self-assessment)
+    - Occupation: 0/2/5 (Officer self-assessment)
+    - Hot Level: 0/4/8 (per-offering config)
+    - Source: 1-3 (fixed mapping)
+    - Academic Performance: 0/1/2/3 (Officer assessment)
+    
+    Args:
+        lead_birth_year: Lead's birth year (e.g., 2000)
+        lead_education_level: Lead's education level
+        lead_location_proximity: 0=Far, 1=Nearby, 2=Close
+        lead_occupation_relevance: 0=Unrelated, 1=Indirect, 2=Direct
+        lead_source: Lead source (referral, website, etc.)
+        lead_academic_performance: 0=Weak, 1=Average, 2=Good, 3=Excellent
+        scoring_rules: ProgramOffering.scoring_rules JSON
+        
+    Returns:
+        int: Fit Score (0-40)
+    """
+    from datetime import datetime
+    
+    score = 0
+    current_year = datetime.now().year
+    
+    # Default scoring rules if not provided
+    if not scoring_rules:
+        scoring_rules = {}
+    
+    # 1. Age Score (0/4/8 points)
+    if lead_birth_year:
+        age = current_year - lead_birth_year
+        target_min = scoring_rules.get("target_age_min", 18)
+        target_max = scoring_rules.get("target_age_max", 60)
+        
+        if target_min <= age <= target_max:
+            score += 8  # Exact match
+        elif abs(age - target_min) <= 3 or abs(age - target_max) <= 3:
+            score += 4   # Close match (within 3 years)
+        # else: 0 points
+    
+    # 2. Education Score (0/4/8 points)
+    if lead_education_level:
+        required_edu = scoring_rules.get("required_education")
+        if required_edu:
+            EDUCATION_ORDER = ["high_school", "diploma", "bachelor", "master", "phd"]
+            lead_edu_idx = EDUCATION_ORDER.index(lead_education_level.lower()) if lead_education_level.lower() in EDUCATION_ORDER else -1
+            req_edu_idx = EDUCATION_ORDER.index(required_edu.lower()) if required_edu.lower() in EDUCATION_ORDER else -1
+            
+            if lead_edu_idx >= 0 and req_edu_idx >= 0:
+                if lead_edu_idx == req_edu_idx:
+                    score += 8  # Exact match
+                elif lead_edu_idx > req_edu_idx:
+                    score += 4   # Higher than required
+                # else: 0 points (lower than required)
+    
+    # 3. Location Score (0/2/5 points) - Officer self-assessment
+    LOCATION_SCORES = {0: 0, 1: 2, 2: 5}
+    score += LOCATION_SCORES.get(lead_location_proximity, 0)
+    
+    # 4. Occupation Score (0/2/5 points) - Officer self-assessment
+    OCCUPATION_SCORES = {0: 0, 1: 2, 2: 5}
+    score += OCCUPATION_SCORES.get(lead_occupation_relevance, 0)
+    
+    # 5. Hot Level Score (0/4/8 points)
+    hot_level = scoring_rules.get("hot_level", 0)
+    HOT_LEVEL_SCORES = {0: 0, 1: 4, 2: 8}
+    score += HOT_LEVEL_SCORES.get(hot_level, 0)
+    
+    # 6. Source Score (1-3 points) - Fixed mapping
+    SOURCE_SCORES = {
+        "referral": 3, "event": 3,
+        "website": 2, "social_media": 2, "walk_in": 2,
+        "phone": 1, "email": 1, "other": 1
+    }
+    if lead_source:
+        score += SOURCE_SCORES.get(lead_source.lower(), 1)
+    
+    # 7. Academic Performance Score (0-3 points)
+    score += min(lead_academic_performance, 3)
+    
+    # Cap at 40
+    return min(score, 40)
+
 async def calculate_lead_score(
     db: AsyncSession,
     lead_education_level: Optional[str] = None,
@@ -84,6 +183,10 @@ async def calculate_lead_score(
     lead_source: Optional[str] = None,
     lead_location: Optional[str] = None,
     unit_id: Optional[int] = None,
+    # Behavioral metrics
+    consultation_count: int = 0,
+    has_application: bool = False,
+    days_since_last_activity: int = 0,
 ) -> int:
     """
     Calculate lead score based on configurable rules from LeadScoringConfig.
@@ -95,6 +198,9 @@ async def calculate_lead_score(
         lead_source: Source of lead (website, referral, social_media, etc.)
         lead_location: Location of lead
         unit_id: Organization unit ID (for unit-specific scoring config)
+        consultation_count: Number of consultations
+        has_application: Whether lead has submitted application
+        days_since_last_activity: Days since last activity (for decay)
 
     Returns:
         int: Calculated lead score (0-100)
@@ -119,18 +225,24 @@ async def calculate_lead_score(
         }
         default_gpa_multiplier = 10  # 4.0 GPA = 40 points
         default_location_bonus = 20
+        
+        # Behavioral defaults
+        default_consultation_score = 5  # Points per consultation
+        default_max_consultation_score = 25
+        default_application_score = 30
+        default_stale_penalty = 10
+        stale_threshold_days = 7
 
         score = 0
 
+        # ✅ SPRINT 5: Use Repository for scoring config
+        from app.repositories import LeadRepository
+        lead_repo = LeadRepository(db)
+        
         # Try to load scoring config from database
         scoring_config = None
         if unit_id:
-            scoring_config_query = (
-                select(models.LeadScoringConfig)
-                .where(models.LeadScoringConfig.unit_id == unit_id)
-            )
-            scoring_config_result = await db.execute(scoring_config_query)
-            scoring_config = scoring_config_result.scalar_one_or_none()
+            scoring_config = await lead_repo.get_scoring_config_by_unit(unit_id)
 
         # Extract config params or use defaults
         if scoring_config and scoring_config.params:
@@ -140,13 +252,26 @@ async def calculate_lead_score(
             gpa_multiplier = params.get("gpa_multiplier", default_gpa_multiplier)
             priority_locations = params.get("priority_locations", [])
             location_bonus = params.get("location_bonus", default_location_bonus)
+            
+            # Behavioral config
+            consultation_score_weight = params.get("consultation_score", default_consultation_score)
+            max_consultation_score = params.get("max_consultation_score", default_max_consultation_score)
+            application_score = params.get("application_score", default_application_score)
+            stale_penalty = params.get("stale_penalty", default_stale_penalty)
         else:
             education_scores = default_education_scores
             source_scores = default_source_scores
             gpa_multiplier = default_gpa_multiplier
             priority_locations = []
             location_bonus = default_location_bonus
+            
+            consultation_score_weight = default_consultation_score
+            max_consultation_score = default_max_consultation_score
+            application_score = default_application_score
+            stale_penalty = default_stale_penalty
 
+        # --- Demographic Scoring ---
+        
         # Calculate education score
         if lead_education_level:
             score += education_scores.get(lead_education_level.lower(), 0)
@@ -165,16 +290,33 @@ async def calculate_lead_score(
             if lead_location.lower() in [loc.lower() for loc in priority_locations]:
                 score += location_bonus
 
-        # Cap score at 100
-        final_score = min(score, 100)
+        # --- Behavioral Scoring (Auto) ---
+        
+        # Consultation score
+        if consultation_count > 0:
+            cons_score = min(consultation_count * consultation_score_weight, max_consultation_score)
+            score += cons_score
+            
+        # Application score
+        if has_application:
+            score += application_score
+            
+        # Stale penalty
+        if days_since_last_activity > stale_threshold_days:
+            score -= stale_penalty
+
+        # Cap score at 0-100
+        final_score = max(0, min(score, 100))
 
         log.debug(
             "Lead score calculated",
-            education_level=lead_education_level,
+            education=lead_education_level,
             gpa=lead_gpa,
-            source=lead_source,
-            location=lead_location,
-            score=final_score,
+            cons_count=consultation_count,
+            has_app=has_application,
+            stale_days=days_since_last_activity,
+            base_score=score,
+            final_score=final_score,
         )
 
         return final_score
@@ -265,49 +407,23 @@ def _get_current_lead_state(lead: models.Lead) -> dict:
 async def get_lead_by_id(db: AsyncSession, lead_id: int, include_deleted: bool = False) -> models.Lead:
     """
     Lấy chi tiết Lead bằng ID (Detail View).
-    Hàm này giữ nguyên eager loading đầy đủ
-    vì nó cần thiết cho Timeline và Insights.
+    
+    ✅ REFACTORED: Now uses LeadRepository for data access.
+    Includes full eager loading for Timeline and Insights.
 
     Args:
         db: Database session
         lead_id: Lead ID to fetch
         include_deleted: If True, include soft-deleted leads (default: False)
+        
+    Returns:
+        Lead with all relationships loaded
+        
+    Raises:
+        ResourceNotFoundError: If lead not found
     """
-    query = (
-        select(models.Lead)
-        .options(
-            selectinload(models.Lead.offering).options(
-                selectinload(models.ProgramOffering.program)  # Eager load program for name display
-            ),
-            selectinload(models.Lead.unit).options(
-                selectinload(models.OrganizationUnit.parent),
-                selectinload(models.OrganizationUnit.children),
-                selectinload(models.OrganizationUnit.major_programs),
-            ),
-            selectinload(models.Lead.assigned_officer),
-            selectinload(models.Lead.pipeline_stage),
-            selectinload(models.Lead.consultation_status),
-            selectinload(models.Lead.application).options(
-                selectinload(models.Application.officer)
-            ),  # Fix MissingGreenlet: Eager load application and its officer
-            # Load sâu consultations và logs để dùng cho timeline/insights
-            selectinload(models.Lead.consultations).options(
-                joinedload(models.Consultation.officer),
-                joinedload(models.Consultation.consultation_status),
-            ),
-            selectinload(models.Lead.assignment_logs).options(
-                joinedload(models.AssignmentLog.officer)
-            ),
-        )
-        .where(models.Lead.id == lead_id)
-    )
-
-    # Filter deleted leads unless explicitly requested
-    if not include_deleted:
-        query = query.where(models.Lead.deleted_at.is_(None))
-
-    result = await db.execute(query)
-    lead = result.scalar_one_or_none()
+    repo = LeadRepository(db)
+    lead = await repo.get_by_id_full(lead_id, include_deleted=include_deleted)
     if not lead:
         raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found")
     return lead
@@ -315,36 +431,23 @@ async def get_lead_by_id(db: AsyncSession, lead_id: int, include_deleted: bool =
 async def get_lead_by_id_shallow(db: AsyncSession, lead_id: int, include_deleted: bool = False) -> models.Lead:
     """
     Lấy chi tiết Lead (Shallow View - Nhanh).
-    Chỉ Eager Load các quan hệ 1-1 cần thiết cho List/Detail View.
+    
+    ✅ REFACTORED: Now uses LeadRepository for data access.
+    Only loads minimal 1-1 relationships for quick operations.
 
     Args:
         db: Database session
         lead_id: Lead ID to fetch
         include_deleted: If True, include soft-deleted leads (default: False)
+        
+    Returns:
+        Lead with basic relationships loaded
+        
+    Raises:
+        ResourceNotFoundError: If lead not found
     """
-    query = (
-        select(models.Lead)
-        .options(
-            selectinload(models.Lead.offering).options(
-                selectinload(models.ProgramOffering.program)  # Eager load program for name display
-            ),
-            selectinload(models.Lead.unit), # <--- Load unit (thường là cần)
-            selectinload(models.Lead.assigned_officer),
-            selectinload(models.Lead.pipeline_stage),
-            selectinload(models.Lead.consultation_status),
-            selectinload(models.Lead.application).options(
-                selectinload(models.Application.officer)
-            ),  # Fix MissingGreenlet: Eager load application and its officer
-        )
-        .where(models.Lead.id == lead_id)
-    )
-
-    # Filter deleted leads unless explicitly requested
-    if not include_deleted:
-        query = query.where(models.Lead.deleted_at.is_(None))
-
-    result = await db.execute(query)
-    lead = result.scalar_one_or_none()
+    repo = LeadRepository(db)
+    lead = await repo.get_by_id_shallow(lead_id, include_deleted=include_deleted)
     if not lead:
         raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found")
     return lead
@@ -354,18 +457,25 @@ async def get_leads(
     skip: int = 0,
     limit: int = 10,
     status: Optional[str] = None,
-    assigned_officer_id: Optional[int] = None,
+    assigned_officer_id: Optional[str] = None,  # Now comma-separated string for multi-select
     unit_id: Optional[int] = None,
-    offering_id: Optional[int] = None,
+    offering_id: Optional[str] = None,  # Now comma-separated string for multi-select
     source: Optional[str] = None,
     search: Optional[str] = None,
     sort_by: str = "created_at",
     order: str = "desc",
+    # === PIPELINE STAGE FILTER ===
+    pipeline_stage_id: Optional[str] = None,  # Already string, now comma-separated for multi
+    # === DATE RANGE FILTER ===
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    date_field: str = "created_at",
 ) -> Tuple[int, List[models.Lead]]:
     """
     Lấy danh sách Leads (List View).
 
     ✅ PHASE 2 - WEEK 2: Refactored to use LeadRepository
+    ✅ Multi-select filters: status, source, offering_id, pipeline_stage_id, assigned_officer_id now accept comma-separated values
     """
     from app.repositories import LeadRepository
 
@@ -381,7 +491,14 @@ async def get_leads(
         search=search,
         sort_by=sort_by,
         order=order,
+        # === PIPELINE STAGE FILTER ===
+        pipeline_stage_id=pipeline_stage_id,
+        # === DATE RANGE FILTER ===
+        date_from=date_from,
+        date_to=date_to,
+        date_field=date_field,
     )
+
 
 
 async def create_lead(
@@ -423,7 +540,7 @@ async def create_lead(
         if created_by:
             user_role = created_by.role
 
-            if user_role == "officer":
+            if user_role == UserRole.OFFICER:
                 # Officer: Force unit to their unit, auto-assign to themselves
                 create_data["unit_id"] = created_by.unit_id
                 direct_assignment_officer_id = created_by.id
@@ -434,7 +551,7 @@ async def create_lead(
                     unit_id=created_by.unit_id
                 )
 
-            elif user_role == "manager":
+            elif user_role == UserRole.MANAGER:
                 # Manager: Always use their unit
                 create_data["unit_id"] = created_by.unit_id
                 # Can choose officer in their unit or use auto-assignment
@@ -445,7 +562,7 @@ async def create_lead(
                         raise PermissionDeniedError(
                             detail="Manager can only assign leads to officers in their unit"
                         )
-                    if officer.role != "officer":
+                    if officer.role != UserRole.OFFICER:
                         raise PermissionDeniedError(
                             detail="Can only assign leads to users with 'officer' role"
                         )
@@ -458,7 +575,7 @@ async def create_lead(
                     )
                 # If no officer specified, use auto-assignment (Celery)
 
-            elif user_role == "admin":
+            elif user_role == UserRole.ADMIN:
                 # Admin: unit_id can be auto-determined from offering distribution
                 # If offering_id is provided, try to get unit from distribution config FIRST
                 if create_data.get("offering_id") and not create_data.get("unit_id"):
@@ -495,7 +612,7 @@ async def create_lead(
                         raise ResourceNotFoundError(
                             detail=f"Officer with id {create_data['assigned_officer_id']} not found"
                         )
-                    if officer.role != "officer":
+                    if officer.role != UserRole.OFFICER:
                         raise PermissionDeniedError(
                             detail="Can only assign leads to users with 'officer' role"
                         )
@@ -512,7 +629,9 @@ async def create_lead(
         create_data.pop("assigned_officer_id", None)
 
         # === DUPLICATE CHECK ===
-        # Kiểm tra trùng lặp email hoặc phone trong cùng unit
+        # Phone: Check globally across ALL units (phone must be unique system-wide)
+        # Email: Check within same unit only (email can exist in different units)
+        
         # Build phone conditions
         phone_conditions = [models.Lead.phone == lead_in.phone]
         if lead_in.phone2:
@@ -520,35 +639,66 @@ async def create_lead(
             phone_conditions.append(models.Lead.phone2 == lead_in.phone)
             phone_conditions.append(models.Lead.phone2 == lead_in.phone2)
 
-        # Build email condition - only check if email is provided
-        email_condition = models.Lead.email == lead_in.email if lead_in.email else None
-
-        # Build OR conditions
-        if email_condition is not None:
-            duplicate_conditions = or_(email_condition, *phone_conditions)
-        else:
-            duplicate_conditions = or_(*phone_conditions)
-
-        existing_lead_query = (
+        # Check phone duplicate GLOBALLY (across all units)
+        global_phone_query = (
             select(models.Lead)
             .where(
-                models.Lead.unit_id == create_data["unit_id"],
                 models.Lead.deleted_at.is_(None),  # Exclude soft-deleted
-                duplicate_conditions
+                or_(*phone_conditions)
             )
-            .with_for_update()  # Khóa để tránh race condition khi tạo
+            .with_for_update()  # Lock to prevent race condition
         )
-        existing_lead_result = await db.execute(existing_lead_query)
-        existing_lead = existing_lead_result.scalars().first()
-        if existing_lead:
-            # Determine which field caused the duplicate
-            if lead_in.email and existing_lead.email == lead_in.email:
-                raise DuplicateResourceError(
-                    detail="Lead with this email already exists in the unit."
+        global_phone_result = await db.execute(global_phone_query)
+        existing_phone_lead = global_phone_result.scalars().first()
+        
+        if existing_phone_lead:
+            # Fetch officer info separately (can't use joinedload with FOR UPDATE)
+            officer_name = "Chưa phân công"
+            if existing_phone_lead.assigned_officer_id:
+                officer = await db.get(models.User, existing_phone_lead.assigned_officer_id)
+                if officer:
+                    officer_name = officer.full_name or "N/A"
+            
+            # Get unit name
+            unit_name = "N/A"
+            if existing_phone_lead.unit_id:
+                unit = await db.get(models.OrganizationUnit, existing_phone_lead.unit_id)
+                if unit:
+                    unit_name = unit.name
+            
+            lead_name = existing_phone_lead.full_name or "N/A"
+            lead_phone = existing_phone_lead.phone or "N/A"
+            
+            raise DuplicateResourceError(
+                detail=f"Số điện thoại này đã tồn tại. Lead: {lead_name} (SĐT: {lead_phone}) - Đơn vị: {unit_name} - Quản lý bởi: {officer_name}"
+            )
+
+        # Check email duplicate WITHIN SAME UNIT (if email provided)
+        if lead_in.email:
+            email_query = (
+                select(models.Lead)
+                .where(
+                    models.Lead.unit_id == create_data["unit_id"],
+                    models.Lead.deleted_at.is_(None),
+                    func.lower(models.Lead.email) == lead_in.email.lower()
                 )
-            else:
+                .with_for_update()
+            )
+            email_result = await db.execute(email_query)
+            existing_email_lead = email_result.scalars().first()
+            
+            if existing_email_lead:
+                officer_name = "Chưa phân công"
+                if existing_email_lead.assigned_officer_id:
+                    officer = await db.get(models.User, existing_email_lead.assigned_officer_id)
+                    if officer:
+                        officer_name = officer.full_name or "N/A"
+                
+                lead_name = existing_email_lead.full_name or "N/A"
+                lead_phone = existing_email_lead.phone or "N/A"
+                
                 raise DuplicateResourceError(
-                    detail="Lead with this phone number already exists in the unit."
+                    detail=f"Email này đã tồn tại trong đơn vị. Lead: {lead_name} (SĐT: {lead_phone}) - Quản lý bởi: {officer_name}"
                 )
 
         # === NEW FEATURE: Shared Offering Distribution ===
@@ -687,7 +837,8 @@ async def create_lead(
                         "unit_id": db_lead.unit_id,
                         "lead_name": db_lead.full_name or "Unknown",
                         "source": db_lead.source or "Unknown",
-                        "actor_id": created_by.id if created_by else 0
+                        "actor_id": created_by.id if created_by else 0,
+                        "actor_name": created_by.full_name or created_by.username if created_by else "System",  # ✅ Added for template
                     },
                     dedupe_key=f"lead_created:{db_lead.id}",
                     auto_commit=True  # ✅ Auto-commit for service callback
@@ -711,6 +862,7 @@ async def create_lead(
                                 "lead_id": db_lead.id,
                                 "officer_id": direct_assignment_officer_id,
                                 "actor_id": created_by.id if created_by else 0,
+                                "actor_name": created_by.full_name or created_by.username if created_by else "System",  # ✅ Added for template
                                 "lead_name": db_lead.full_name or "Unknown",
                                 "lead_phone": db_lead.phone or "",
                                 "offering_name": offering_name
@@ -783,17 +935,29 @@ async def update_lead(
 
             # (Dọn dẹp .strip() đã bị xóa vì Pydantic xử lý)
 
-            # Kiểm tra trùng lặp email nếu email được cập nhật
-            if "email" in update_data and update_data["email"] != db_lead.email:
-                existing_lead_query = select(models.Lead).where(
-                    models.Lead.email == update_data["email"],
-                    models.Lead.unit_id == db_lead.unit_id,  # Trong cùng unit
-                    models.Lead.id != lead_id,  # Loại trừ chính lead này
+            # Kiểm tra trùng lặp email nếu email được cập nhật (case-insensitive)
+            if "email" in update_data and update_data["email"] and (
+                not db_lead.email or update_data["email"].lower() != db_lead.email.lower()
+            ):
+                existing_lead_query = (
+                    select(models.Lead)
+                    .options(joinedload(models.Lead.assigned_officer))
+                    .where(
+                        func.lower(models.Lead.email) == update_data["email"].lower(),
+                        models.Lead.unit_id == db_lead.unit_id,  # Trong cùng unit
+                        models.Lead.id != lead_id,  # Loại trừ chính lead này
+                    )
                 )
                 existing_lead_result = await db.execute(existing_lead_query)
-                if existing_lead_result.scalars().first():
+                dup_lead = existing_lead_result.scalars().first()
+                if dup_lead:
+                    officer_name = (
+                        dup_lead.assigned_officer.full_name 
+                        if dup_lead.assigned_officer 
+                        else "Chưa phân công"
+                    )
                     raise DuplicateResourceError(
-                        detail="Another lead with this email already exists in the unit."
+                        detail=f"Email này đã được sử dụng. Lead: {dup_lead.full_name} (SĐT: {dup_lead.phone}) - Đang được quản lý bởi: {officer_name}"
                     )
 
             # Kiểm tra trùng lặp phone/phone2 nếu được cập nhật
@@ -805,27 +969,29 @@ async def update_lead(
                 new_phone = update_data.get("phone", db_lead.phone)
                 new_phone2 = update_data.get("phone2", db_lead.phone2)
 
-                # Build phone duplicate check conditions
-                phone_conditions = []
-                if new_phone:
-                    phone_conditions.append(models.Lead.phone == new_phone)
-                if new_phone2:
-                    phone_conditions.append(models.Lead.phone == new_phone2)
-                    phone_conditions.append(models.Lead.phone2 == new_phone)
-                    phone_conditions.append(models.Lead.phone2 == new_phone2)
+                # ✅ REFACTORED: Use Repository for global check (fixes unit-scope bug)
+                repo = LeadRepository(db)
+                dup_lead = await repo.check_phone_conflict(
+                    phone=new_phone,
+                    phone2=new_phone2,
+                    exclude_id=lead_id
+                )
 
-                if phone_conditions:
-                    existing_lead_query = select(models.Lead).where(
-                        models.Lead.unit_id == db_lead.unit_id,  # Trong cùng unit
-                        models.Lead.id != lead_id,  # Loại trừ chính lead này
-                        models.Lead.deleted_at.is_(None),  # Exclude soft-deleted
-                        or_(*phone_conditions)
+                if dup_lead:
+                    # Load unit for better error message (since it might be in another unit)
+                    if dup_lead.unit_id:
+                         await db.refresh(dup_lead, ["unit"])
+
+                    officer_name = (
+                        dup_lead.assigned_officer.full_name
+                        if dup_lead.assigned_officer
+                        else "Chưa phân công"
                     )
-                    existing_lead_result = await db.execute(existing_lead_query)
-                    if existing_lead_result.scalars().first():
-                        raise DuplicateResourceError(
-                            detail="Another lead with this phone number already exists in the unit."
-                        )
+                    unit_name = dup_lead.unit.name if dup_lead.unit else "N/A"
+
+                    raise DuplicateResourceError(
+                        detail=f"Số điện thoại này đã được sử dụng. Lead: {dup_lead.full_name} (SĐT: {dup_lead.phone}) - Đơn vị: {unit_name} - Quản lý bởi: {officer_name}"
+                    )
 
             # === NEW FEATURE: Auto-Reassign on Offering Change ===
             # Track offering_id change before applying updates
@@ -877,7 +1043,7 @@ async def update_lead(
                         
                         if not is_valid:
                             # Chỉ cho phép Admin bypass quy tắc này (Tùy chọn)
-                            if updated_by.role != "admin":
+                            if updated_by.role != UserRole.ADMIN:
                                 raise BadRequest(
                                     detail=f"Không thể chuyển trạng thái từ '{current_status_id}' sang '{new_status_id}'. Quy trình không cho phép (Allowed Transitions)."
                                 )
@@ -1006,8 +1172,7 @@ async def update_lead(
         except Exception as e:
             # Rollback tự động xảy ra khi có lỗi trong `async with`
             # Phân biệt giữa lỗi business logic và lỗi hệ thống
-            from app.utils.exceptions import DuplicateResourceError, NotFoundError, ForbiddenError
-            if isinstance(e, (DuplicateResourceError, NotFoundError, ForbiddenError)):
+            if isinstance(e, (DuplicateResourceError, ResourceNotFoundError, PermissionDeniedError)):
                 # Business logic exceptions - không cần traceback
                 log.warning(
                     "Lead update rejected due to business rule",
@@ -1058,6 +1223,7 @@ async def update_lead(
                         "old_unit_id": old_unit_id,  # type: ignore
                         "new_unit_id": new_target_unit_id,  # type: ignore
                         "actor_id": updated_by.id,
+                        "actor_name": updated_by.full_name or updated_by.username,  # ✅ Added for template
                         "reason": f"Offering changed from #{old_offering_id} to #{new_offering_id}",  # type: ignore
                         "user_ids": [old_officer_id] if old_officer_id else [],  # Notify old officer
                     },
@@ -1099,7 +1265,7 @@ async def add_consultation(
                 .options(
                     selectinload(models.Lead.assigned_officer),
                     selectinload(models.Lead.pipeline_stage),
-                    selectinload(models.Lead.consultation_status),
+                    selectinload(models.Lead.consultation_status).selectinload(models.ConsultationStatus.stage),
                 )
                 .where(models.Lead.id == lead_id)
                 .where(models.Lead.deleted_at.is_(None))
@@ -1125,6 +1291,38 @@ async def add_consultation(
                 raise ResourceNotFoundError(
                     detail=f"Consultation status with id {data.status_id} not found."
                 )
+
+            # ✅ NEW: Validate workflow transition (following update_lead pattern)
+            # Chỉ validate nếu lead đã có status và status thực sự thay đổi
+            current_status_id = lead.consultation_status_id
+            if current_status_id and current_status_id != data.status_id:
+                is_valid = await pipeline_service.validate_status_transition(
+                    db, 
+                    from_status_id=current_status_id, 
+                    to_status_id=data.status_id
+                )
+                
+                if not is_valid:
+                    # Admin có thể bypass rule này
+                    if officer.role != UserRole.ADMIN:
+                        raise BadRequest(
+                            detail=f"Không thể chuyển trạng thái từ '{current_status_id}' sang '{data.status_id}'. "
+                                   f"Quy trình không cho phép (Allowed Transitions). "
+                                   f"Liên hệ Admin nếu cần bypass."
+                        )
+                    else:
+                        # Log admin bypass cho audit
+                        log.warning(
+                            "Admin bypassed transition rule in add_consultation",
+                            admin_id=officer.id,
+                            admin_username=officer.username,
+                            lead_id=lead_id,
+                            from_status=current_status_id,
+                            to_status=data.status_id,
+                            to_status_name=new_status.name,
+                            is_universal=new_status.is_universal,
+                            reason="Admin override - no explicit transition rule exists",
+                        )
 
             # Lưu trạng thái Lead cũ
             old_state = _get_current_lead_state(lead)
@@ -1194,12 +1392,21 @@ async def add_consultation(
             # Flush để lấy ID cho consultation mới (cần cho refresh)
             await db.flush([new_consultation])
 
-            # Refresh consultation mới để tải relations (officer, consultation_status)
-            await db.refresh(new_consultation, ["officer", "consultation_status"])
+            # ✅ ARCHITECTURE FIX: Use Repository instead of direct query
+            # Service must not query Model directly (Rule E: Repository Pattern)
+            repo = LeadRepository(db)
+            new_consultation = await repo.get_consultation_with_status_stage(new_consultation.id)
 
             # ✅ Quick Disposition: Cập nhật next_activity_at dựa trên tất cả consultations
             if data.scheduled_at:
+                # ✅ FIX: Flush pending changes so query sees new consultation
+                await db.flush()
                 await update_lead_next_activity(db, lead_id)
+                log.info(
+                    "Updated lead.next_activity_at after adding consultation",
+                    lead_id=lead_id,
+                    consultation_scheduled_at=data.scheduled_at.isoformat() if data.scheduled_at else None,
+                )
 
             log.info(
                 "New consultation added for lead",
@@ -1241,7 +1448,7 @@ async def assign_lead_manually(
                 raise ResourceNotFoundError(
                     detail=f"User (Officer) with id {officer_id} not found."
                 )
-            if officer.role != "officer":
+            if officer.role != UserRole.OFFICER:
                 raise PermissionDeniedError(
                     detail=f"User with id {officer_id} is not an officer."
                 )
@@ -1311,6 +1518,7 @@ async def assign_lead_manually(
             "lead_id": lead.id,
             "officer_id": officer.id,
             "actor_id": assigner.id,
+            "actor_name": assigner.full_name or assigner.username,  # ✅ Added for template
             "lead_name": lead.full_name or "Unknown",
             "lead_phone": lead.phone or "",
             "offering_name": f"{lead.offering.program.name} - {lead.offering.offering_type}" if lead.offering and lead.offering.program else (lead.offering.offering_type if lead.offering else "N/A")
@@ -1437,10 +1645,10 @@ async def delete_consultation(
                 )
 
             # Kiểm tra quyền
-            if current_user.role == "admin":
+            if current_user.role == UserRole.ADMIN:
                 # Admin có quyền xóa bất kỳ consultation nào
                 pass
-            elif current_user.role == "officer":
+            elif current_user.role == UserRole.OFFICER:
                 # Officer chỉ được xóa consultation mới nhất
                 # Tìm consultation mới nhất của Lead này
                 latest_consultation_query = (
@@ -1555,7 +1763,10 @@ async def delete_consultation(
             )
 
             # ✅ Quick Disposition: Cập nhật next_activity_at sau khi xóa consultation
+            # FIX: Flush to ensure deletion is visible to query
+            await db.flush()
             await update_lead_next_activity(db, lead_id)
+            log.info("Updated lead.next_activity_at after deleting consultation", lead_id=lead_id, deleted_consultation_id=consultation_id)
 
             # Store values for use after transaction
             _lead_id = lead_id
@@ -1673,10 +1884,10 @@ async def update_consultation(
             )
 
             # Kiểm tra quyền
-            if current_user.role in ("admin", "manager"):
+            if current_user.role in (UserRole.ADMIN, UserRole.MANAGER):
                 # Admin và Manager có quyền update bất kỳ consultation nào
                 pass
-            elif current_user.role == "officer":
+            elif current_user.role == UserRole.OFFICER:
                 # === BUSINESS RULES FOR OFFICER ===
                 # 1. Phải là consultation mới nhất (chain integrity)
                 if not is_latest_consultation:
@@ -1769,7 +1980,13 @@ async def update_consultation(
 
             # Flush to get changes ready (commit handled by begin_nested context)
             await db.flush()
-            await db.refresh(consultation)
+            
+            # ✅ FIX MissingGreenlet: Re-query with eager loading for nested relationships
+            # db.refresh() cannot load nested relationships like consultation_status.stage
+            # ✅ ARCHITECTURE FIX: Use Repository instead of direct query
+            # Service must not query Model directly (Rule E: Repository Pattern)
+            repo = LeadRepository(db)
+            consultation = await repo.get_consultation_with_status_stage(consultation.id)
 
             # ✅ Quick Disposition: Cập nhật next_activity_at nếu scheduled_at thay đổi
             if "scheduled_at" in update_data:
@@ -1831,6 +2048,50 @@ async def update_consultation(
     return consultation
 
 
+# ============================================================================
+# REASSIGN QUOTA CHECK
+# ============================================================================
+
+REASSIGN_QUOTA_LIMIT = 5  # Max reassigns per week
+REASSIGN_QUOTA_PERIOD_DAYS = 7  # Reset quota every 7 days
+
+
+async def check_reassign_quota(db: AsyncSession, officer_id: int) -> dict:
+    """
+    Check if officer has remaining reassign quota.
+    
+    ✅ ARCHITECTURE COMPLIANT: Uses LeadRepository for data access.
+    
+    Returns:
+        dict: {"allowed": bool, "used": int, "limit": int, "remaining": int}
+    """
+    from app.repositories.lead_repository import LeadRepository
+    
+    # ✅ FIX: Use repository instead of direct query
+    repo = LeadRepository(db)
+    used_count = await repo.count_reassignments_in_period(
+        officer_id=officer_id,
+        days=REASSIGN_QUOTA_PERIOD_DAYS
+    )
+    
+    remaining = max(0, REASSIGN_QUOTA_LIMIT - used_count)
+    
+    log.debug(
+        "Checked reassign quota",
+        officer_id=officer_id,
+        used=used_count,
+        limit=REASSIGN_QUOTA_LIMIT,
+        remaining=remaining,
+    )
+    
+    return {
+        "allowed": used_count < REASSIGN_QUOTA_LIMIT,
+        "used": used_count,
+        "limit": REASSIGN_QUOTA_LIMIT,
+        "remaining": remaining,
+    }
+
+
 async def process_officer_action(
     db: AsyncSession, lead_id: int, officer: models.User, action: str, reason: str
 ) -> models.Lead:
@@ -1840,20 +2101,35 @@ async def process_officer_action(
     # Di chuyển import vào đây để phá vỡ circular import
     from ..celery_utils import process_automatic_lead_assignment_task
 
+    # ✅ FIX: Capture values early to avoid lazy loading issues
+    officer_id = officer.id
+    is_admin_or_manager = officer.role in ("admin", "manager")
+    
+    # ✅ QUOTA CHECK: Only apply to Officers, not Admin/Manager
+    if action == "reassign" and not is_admin_or_manager:
+        quota = await check_reassign_quota(db, officer_id)
+        if not quota["allowed"]:
+            raise BadRequest(
+                detail=f"Bạn đã hết lượt phân công lại trong tuần này ({quota['used']}/{quota['limit']}). Vui lòng liên hệ quản lý."
+            )
+        log.info(
+            "Officer reassign quota check passed",
+            officer_id=officer_id,
+            remaining=quota["remaining"],
+        )
+    
     trigger_reassignment = False  # Biến cờ để dispatch task sau commit
     try:
         async with db.begin_nested():
-            # Lấy Lead (có thể không cần full eager loading ở đây)
-            lead_query = (
-                select(models.Lead).where(models.Lead.id == lead_id).with_for_update()
-            )
-            lead_result = await db.execute(lead_query)
-            lead = lead_result.scalar_one_or_none()
+            # ✅ ARCHITECTURE COMPLIANT: Use LeadRepository instead of direct query
+            from app.repositories.lead_repository import LeadRepository
+            repo = LeadRepository(db)
+            lead = await repo.get_by_id_for_update(lead_id)
             if not lead:
                 raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found.")
 
-            # Kiểm tra quyền: Officer phải được gán
-            if lead.assigned_officer_id != officer.id:
+            # ✅ FIX: Admin/Manager can reassign ANY lead, Officers can only reassign their own
+            if not is_admin_or_manager and lead.assigned_officer_id != officer_id:
                 raise PermissionDeniedError(detail="You are not assigned to this lead.")
 
             log_method = ""  # Method cho AssignmentLog
@@ -1870,8 +2146,28 @@ async def process_officer_action(
                 new_state["consultation_status_id"] = lead.consultation_status_id
                 new_state["pipeline_stage_id"] = lead.pipeline_stage_id
                 new_state["status"] = lead.status  # Keep status synced from consultation
+                # ✅ FIX: Must set BOTH the FK column AND the relationship
+                lead.assigned_officer_id = None  # FK column
                 lead.assigned_at = None
-                lead.assigned_officer = None  # Set cả relationship thành None
+                lead.assigned_officer = None  # Relationship
+                
+                # ✅ BLACKLIST: Only add to blacklist for OFFICER self-reassign (not Admin manual reassign)
+                if not is_admin_or_manager:
+                    # ✅ FIX: Create NEW list to ensure SQLAlchemy detects JSON mutation
+                    rejected_list = list(lead.rejected_by_officer_ids or [])
+                    if officer_id not in rejected_list:
+                        rejected_list.append(officer_id)
+                        lead.rejected_by_officer_ids = rejected_list
+                        # ✅ FIX: Explicitly flag as modified for JSON field mutation tracking
+                        from sqlalchemy.orm.attributes import flag_modified
+                        flag_modified(lead, "rejected_by_officer_ids")
+                        log.info(
+                            "Added officer to lead blacklist",
+                            lead_id=lead_id,
+                            officer_id=officer_id,
+                            blacklist=rejected_list,
+                        )
+                
                 # Update assignment_status to reassign_pending
                 StatusHelper.set_assignment_status(lead, AssignmentStatus.REASSIGN_PENDING)
                 log_method = "officer_reassign"
@@ -1949,22 +2245,26 @@ async def process_officer_action(
                 lead_id=lead_id,
             )
 
-        # Dispatch Celery task SAU KHI transaction thành công (nếu cần)
-        if trigger_reassignment:
-            try:
-                process_automatic_lead_assignment_task.delay(lead.id)
-                log.info("Re-assignment task dispatched for lead", lead_id=lead.id)
-            except Exception as e:
-                log.error(
-                    "Failed to dispatch Celery re-assignment task after officer action",
-                    lead_id=lead.id,
-                    error=str(e),
-                    exc_info=True,
-                )
-                # Không rollback transaction vì hành động chính đã thành công
+        # ✅ FIX: Return callback to dispatch Celery AFTER db.commit() in router
+        # This fixes race condition where Celery reads stale blacklist
+        lead_id_for_callback = lead.id  # Capture for closure
+        
+        async def post_commit_callback():
+            if trigger_reassignment:
+                try:
+                    process_automatic_lead_assignment_task.delay(lead_id_for_callback)
+                    log.info("Re-assignment task dispatched for lead", lead_id=lead_id_for_callback)
+                except Exception as e:
+                    log.error(
+                        "Failed to dispatch Celery re-assignment task after officer action",
+                        lead_id=lead_id_for_callback,
+                        error=str(e),
+                        exc_info=True,
+                    )
 
-        # Trả về lead đã được tải đầy đủ
-        return await get_lead_by_id(db, lead_id)
+        # Trả về lead đã được tải đầy đủ + callback
+        result = await get_lead_by_id(db, lead_id)
+        return result, post_commit_callback
 
     except (
         PermissionDeniedError,
@@ -1976,7 +2276,7 @@ async def process_officer_action(
         log.warning(
             "Officer action failed validation or resource not found",
             lead_id=lead_id,
-            officer_id=getattr(officer, "id", None),  # Lấy ID an toàn
+            officer_id=officer_id,  # ✅ FIX: Use captured variable
             action=action,
             detail=getattr(e, "detail", str(e)),
         )
@@ -1987,7 +2287,7 @@ async def process_officer_action(
         log.error(
             "Failed to process officer action",
             lead_id=lead_id,
-            officer_id=getattr(officer, "id", None),
+            officer_id=officer_id,  # ✅ FIX: Use captured variable
             action=action,
             error=str(e),
             exc_info=True,
@@ -2017,16 +2317,12 @@ async def revert_last_status(
             if not lead:
                 raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found.")
 
+            # ✅ SPRINT 5: Use Repository for status history lookup
+            from app.repositories import LeadRepository
+            lead_repo = LeadRepository(db)
+            
             # Tìm bản ghi lịch sử gần nhất
-            last_history_entry = await db.scalar(
-                select(models.LeadStatusHistory)
-                .where(models.LeadStatusHistory.lead_id == lead_id)
-                .order_by(
-                    models.LeadStatusHistory.changed_at.desc(),
-                    models.LeadStatusHistory.id.desc(),
-                )  # Sắp xếp cả theo ID
-                .limit(1)
-            )
+            last_history_entry = await lead_repo.get_last_status_history_entry(lead_id)
 
             if not last_history_entry:
                 raise BadRequest(
@@ -2260,11 +2556,24 @@ async def import_leads_from_file_content(
     initial_stage_id = initial_status_obj.stage_id
     initial_legacy_status = initial_status_obj.legacy_status or "new"
 
-    # Get existing emails to check for duplicates efficiently
+    # Get existing emails to check for duplicates efficiently (case-insensitive)
     existing_emails_in_db = set()
     async for email_tuple in await db.stream(select(models.Lead.email)):
-        existing_emails_in_db.add(email_tuple[0])
+        if email_tuple[0]:  # Only add non-null emails
+            existing_emails_in_db.add(email_tuple[0].lower())
     emails_in_current_file = set()
+
+    # ✅ FIX: Batch check for existing phones
+    repo = LeadRepository(db)
+    all_phones_in_file = set()
+    if 'phone' in df.columns:
+        # Extract phones, handling potential non-string types
+        raw_phones = df['phone'].dropna().astype(str).tolist()
+        # Basic cleaning (remove .0 if float conversion)
+        all_phones_in_file = {p.split(".")[0].strip() for p in raw_phones if p.strip()}
+    
+    existing_phones_in_db = await repo.check_batch_phone_conflict(list(all_phones_in_file))
+    phones_in_current_file = set()
 
     # --- 4. Process each row ---
     for index, row in df.iterrows():
@@ -2286,6 +2595,22 @@ async def import_leads_from_file_content(
             )
 
             cleaned_data["source"] = str(row_data.get("source", "")).strip()
+            
+            # ✅ Extract optional fields for Scoring
+            cleaned_data["education_level"] = str(row_data.get("education_level", "")).strip() or None
+            
+            gpa_val = row_data.get("gpa")
+            if pd.notna(gpa_val):
+                 try:
+                     cleaned_data["gpa"] = float(gpa_val)
+                 except (ValueError, TypeError):
+                     # Log but don't fail row just for GPA
+                     cleaned_data["gpa"] = None
+            else:
+                cleaned_data["gpa"] = None
+                
+            cleaned_data["location"] = str(row_data.get("location", "")).strip() or None
+
 
             # Convert 'unit_id' to int (or use default if provided)
             if default_unit_id:
@@ -2321,19 +2646,39 @@ async def import_leads_from_file_content(
 
             lead_in = schemas.LeadCreate(**cleaned_data)
 
-            # Check email duplication
-            if (
-                lead_in.email in existing_emails_in_db
-                or lead_in.email in emails_in_current_file
+            # Check email duplication (case-insensitive)
+            email_lower = lead_in.email.lower() if lead_in.email else None
+            if email_lower and (
+                email_lower in existing_emails_in_db
+                or email_lower in emails_in_current_file
             ):
                 raise ValueError(
-                    f"Email '{lead_in.email}' already exists in the database or this file."
+                    f"Email '{lead_in.email}' đã tồn tại trong cơ sở dữ liệu hoặc file này."
                 )
 
-            emails_in_current_file.add(lead_in.email)
+            if email_lower:
+                emails_in_current_file.add(email_lower)
+
+            # ✅ Phone Validation
+            phone_val = cleaned_data.get("phone")
+            if phone_val:
+                if phone_val in existing_phones_in_db or phone_val in phones_in_current_file:
+                     raise ValueError(f"Số điện thoại '{phone_val}' đã tồn tại trong hệ thống hoặc file này.")
+                phones_in_current_file.add(phone_val)
+
+            # ✅ Calculate Lead Score
+            score = await calculate_lead_score(
+                db,
+                lead_education_level=cleaned_data.get("education_level"),
+                lead_gpa=cleaned_data.get("gpa"),
+                lead_source=cleaned_data.get("source"),
+                lead_location=cleaned_data.get("location"),
+                unit_id=cleaned_data.get("unit_id"),
+            )
 
             # Prepare dict for bulk insert
             lead_dict = lead_in.model_dump()
+            lead_dict["lead_score"] = score
             lead_dict["status"] = initial_legacy_status  # Use legacy_status from DB
             lead_dict["consultation_status_id"] = initial_status_id
             lead_dict["pipeline_stage_id"] = initial_stage_id
@@ -2473,7 +2818,7 @@ async def bulk_assign_leads(
     officer = await db.get(models.User, officer_id)
     if not officer:
         raise ResourceNotFoundError(f"Officer with id {officer_id} not found")
-    if officer.role != "officer":
+    if officer.role != UserRole.OFFICER:
         raise PermissionDeniedError(f"User {officer_id} is not an officer")
     if officer.status != "active":
         raise BadRequest(f"Officer {officer_id} is not active")

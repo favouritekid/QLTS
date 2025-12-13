@@ -16,10 +16,8 @@ from .user import User
 
 
 class ConsultationBase(BaseModel):
-    method: str
-    # ✅ SỬA: Thêm strip_whitespace
-    notes: str = Field(..., strip_whitespace=True)
-    outcome: Optional[str] = None
+    method: Optional[str] = "phone"  # Default to phone
+    notes: Optional[str] = Field(None, strip_whitespace=True)
     duration_minutes: Optional[int] = None
 
 
@@ -36,7 +34,6 @@ class ConsultationUpdate(BaseModel):
     """
     method: Optional[str] = None
     notes: Optional[str] = Field(None, strip_whitespace=True)
-    outcome: Optional[str] = None
     duration_minutes: Optional[int] = None
     status_id: Optional[str] = None
     scheduled_at: Optional[datetime] = None
@@ -109,8 +106,59 @@ class LeadBase(BaseModel):
     @classmethod
     def empty_string_to_none(cls, v):
         """Convert empty string to None so EmailStr validation passes."""
-        if v == "":
+        if v == "" or (isinstance(v, str) and v.strip() == ""):
             return None
+        return v
+
+    @field_validator("phone", "phone2", mode="before")
+    @classmethod
+    def normalize_and_validate_phone(cls, v, info):
+        """
+        Normalize and validate Vietnam phone numbers.
+        
+        - Normalizes +84/84 prefix to 0
+        - Validates against Vietnam phone regex: ^0(3|5|7|8|9|2)\\d{8,9}$
+        - Allows None/empty for phone2 (optional field)
+        """
+        from app.utils.phone_helpers import normalize_vietnam_phone, validate_vietnam_phone
+        
+        # Allow None for optional fields (phone2)
+        if v is None:
+            return None
+        
+        # Allow empty string for phone2, convert to None
+        if isinstance(v, str) and v.strip() == "":
+            if info.field_name == "phone2":
+                return None
+            # phone is required, empty string will fail min_length validation
+            return v
+        
+        # Normalize the phone number
+        normalized = normalize_vietnam_phone(v)
+        if normalized is None:
+            return v  # Let min_length validation handle it
+        
+        # Validate against Vietnam format
+        if not validate_vietnam_phone(normalized, normalize=False):
+            raise ValueError(
+                f"Số điện thoại không hợp lệ. Vui lòng nhập số điện thoại Việt Nam "
+                f"(VD: 0901234567, +84901234567)"
+            )
+        
+        return normalized
+
+    @field_validator("phone2", mode="after")
+    @classmethod
+    def phone2_must_differ_from_phone(cls, v, info):
+        """Ensure phone2 is different from phone."""
+        if v is None:
+            return v
+        
+        # Access phone from data (already validated)
+        phone = info.data.get("phone")
+        if phone and v == phone:
+            raise ValueError("Số điện thoại phụ phải khác số điện thoại chính")
+        
         return v
 
 
@@ -132,7 +180,15 @@ class LeadCreate(LeadBase):
     - None (default): Use automatic distribution/assignment (Celery task)
     - Integer: Directly assign to specified officer (skip auto-assignment)
     """
+    education_level: Optional[str] = None
+    gpa: Optional[float] = None
+    location: Optional[str] = None
     assigned_officer_id: Optional[int] = None  # None = auto-assign, Integer = direct assign
+    # Fit Score fields (Officer input)
+    birth_year: Optional[int] = Field(None, ge=1900, le=2100)
+    location_proximity: int = Field(0, ge=0, le=2, description="0=Xa, 1=Lân cận, 2=Gần")
+    occupation_relevance: int = Field(0, ge=0, le=2, description="0=Không liên quan, 1=Gián tiếp, 2=Trực tiếp")
+    academic_performance: int = Field(0, ge=0, le=3, description="0=Yếu, 1=TB, 2=Khá, 3=Giỏi")
 
 
 class LeadUpdate(BaseModel):
@@ -149,14 +205,50 @@ class LeadUpdate(BaseModel):
     location: Optional[str] = None
     officer_rating: Optional[int] = None
     officer_summary: Optional[str] = None
+    # Fit Score fields
+    birth_year: Optional[int] = Field(None, ge=1900, le=2100)
+    location_proximity: Optional[int] = Field(None, ge=0, le=2)
+    occupation_relevance: Optional[int] = Field(None, ge=0, le=2)
+    academic_performance: Optional[int] = Field(None, ge=0, le=3)
 
     @field_validator("email", mode="before")
     @classmethod
     def empty_string_to_none(cls, v):
         """Convert empty string to None so EmailStr validation passes."""
-        if v == "":
+        if v == "" or (isinstance(v, str) and v.strip() == ""):
             return None
         return v
+
+    @field_validator("phone", "phone2", mode="before")
+    @classmethod
+    def normalize_and_validate_phone(cls, v, info):
+        """
+        Normalize and validate Vietnam phone numbers on update.
+        All fields optional on update, so None is always allowed.
+        """
+        from app.utils.phone_helpers import normalize_vietnam_phone, validate_vietnam_phone
+        
+        # Allow None for all fields on update
+        if v is None:
+            return None
+        
+        # Allow empty string, convert to None
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        
+        # Normalize the phone number
+        normalized = normalize_vietnam_phone(v)
+        if normalized is None:
+            return None
+        
+        # Validate against Vietnam format
+        if not validate_vietnam_phone(normalized, normalize=False):
+            raise ValueError(
+                f"Số điện thoại không hợp lệ. Vui lòng nhập số điện thoại Việt Nam "
+                f"(VD: 0901234567, +84901234567)"
+            )
+        
+        return normalized
 
 
 class Lead(LeadBase):
@@ -172,6 +264,15 @@ class Lead(LeadBase):
     consultation_status_id: Optional[str] = None
     pipeline_stage_id: Optional[str] = None
     next_activity_at: Optional[datetime] = None  # Quick Disposition: bubble-up sorting
+    # Fit Score fields
+    birth_year: Optional[int] = None
+    location_proximity: int = 0
+    occupation_relevance: int = 0
+    academic_performance: int = 0
+    # Education fields (were missing from response)
+    education_level: Optional[str] = None
+    gpa: Optional[float] = None
+    location: Optional[str] = None
 
     offering: Optional[ProgramOffering] = None
     # THAY ĐỔI Ở ĐÂY: Sử dụng OrganizationUnitShallow
@@ -191,6 +292,17 @@ class LeadsPage(BaseModel):
 
 
 class BulkAssignLeadsSchema(BaseModel):
+    lead_ids: List[int] = Field(..., min_length=1)
+
+
+class BulkUpdateStageSchema(BaseModel):
+    """Schema for bulk updating leads pipeline stage."""
+    lead_ids: List[int] = Field(..., min_length=1)
+    pipeline_stage_id: str = Field(..., min_length=1)
+
+
+class BulkDeleteSchema(BaseModel):
+    """Schema for bulk deleting leads."""
     lead_ids: List[int] = Field(..., min_length=1)
 
 

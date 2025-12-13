@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, joinedload
 
 from .. import models
+from ..core.constants import UserRole
 from ..utils.exceptions import (
     ResourceNotFoundError,
     BadRequest,
@@ -63,7 +64,7 @@ def _check_admin_or_unit_access(
     Raises:
         PermissionDeniedError: If user doesn't have access
     """
-    if current_user.role == "admin":
+    if current_user.role == UserRole.ADMIN:
         return  # Admin has full access
 
     if profile.lead.unit_id != current_user.unit_id:
@@ -151,24 +152,19 @@ async def create_profile(
         PermissionDeniedError: User doesn't have access to this lead
         BadRequest: Lead already has profile, or offering_id is null, or no admission_rules
     """
+    # ✅ SPRINT 6: Use Repository for lead lookup
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
+    
     # Step 1: Get Lead with eager loading (prevent N+1)
-    stmt = (
-        select(models.Lead)
-        .where(models.Lead.id == lead_id)
-        .options(
-            joinedload(models.Lead.offering),  # Load ProgramOffering
-            selectinload(models.Lead.admission_profile),  # Check existing profile
-        )
-    )
-    result = await db.execute(stmt)
-    lead = result.scalar_one_or_none()
+    lead = await admission_repo.get_lead_with_offering(lead_id)
 
     if not lead:
         log.warning("Lead not found", lead_id=lead_id, user_id=current_user.id)
         raise ResourceNotFoundError(f"Lead with ID {lead_id} not found")
 
     # Step 2: IDOR Check
-    if current_user.role != "admin":
+    if current_user.role != UserRole.ADMIN:
         if lead.unit_id != current_user.unit_id:
             log.warning(
                 "IDOR attempt: User tried to create profile for lead in different unit",
@@ -242,16 +238,8 @@ async def create_profile(
     db.add(new_profile)
     await db.flush()  # Get ID without committing (router commits)
 
-    # Reload with relationships for response
-    stmt_reload = (
-        select(models.AdmissionProfile)
-        .where(models.AdmissionProfile.id == new_profile.id)
-        .options(
-            joinedload(models.AdmissionProfile.lead),
-        )
-    )
-    result_reload = await db.execute(stmt_reload)
-    new_profile = result_reload.scalar_one()
+    # ✅ SPRINT 6: Reload with relationships for response
+    new_profile = await admission_repo.reload_profile_with_lead(new_profile.id)
 
     log.info(
         "Admission profile created",
@@ -288,16 +276,11 @@ async def get_profile(
         ResourceNotFoundError: Profile not found
         PermissionDeniedError: User doesn't have access
     """
-    stmt = (
-        select(models.AdmissionProfile)
-        .where(models.AdmissionProfile.id == profile_id)
-        .options(
-            joinedload(models.AdmissionProfile.lead),  # Always load for IDOR check
-            selectinload(models.AdmissionProfile.student),
-        )
-    )
-    result = await db.execute(stmt)
-    profile = result.scalar_one_or_none()
+    # ✅ SPRINT 6: Use Repository for profile retrieval
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
+    
+    profile = await admission_repo.get_profile_by_id_with_lead(profile_id)
 
     if not profile:
         log.warning("Admission profile not found", profile_id=profile_id)
@@ -496,13 +479,14 @@ async def submit_and_evaluate(
     if not profile.citizen_id:
         errors.append("Số CCCD/CMND chưa được nhập (citizen_id is null)")
     else:
+        # ✅ SPRINT 6: Use Repository for validation
+        from app.repositories import AdmissionRepository
+        admission_repo = AdmissionRepository(db)
+        
         # Check in admission_profile table (other profiles)
-        stmt_profile = select(models.AdmissionProfile).where(
-            models.AdmissionProfile.citizen_id == profile.citizen_id,
-            models.AdmissionProfile.id != profile.id,  # Exclude current profile
+        duplicate_profile = await admission_repo.check_citizen_id_exists(
+            profile.citizen_id, exclude_profile_id=profile.id
         )
-        result_profile = await db.execute(stmt_profile)
-        duplicate_profile = result_profile.scalar_one_or_none()
 
         if duplicate_profile:
             errors.append(
@@ -511,15 +495,7 @@ async def submit_and_evaluate(
             )
 
         # Check in student table (already enrolled students)
-        # Note: Student table doesn't have citizen_id directly, but we can check
-        # via admission_profile_id relationship
-        stmt_student = (
-            select(models.Student)
-            .join(models.AdmissionProfile)
-            .where(models.AdmissionProfile.citizen_id == profile.citizen_id)
-        )
-        result_student = await db.execute(stmt_student)
-        existing_student = result_student.scalar_one_or_none()
+        existing_student = await admission_repo.check_citizen_id_enrolled(profile.citizen_id)
 
         if existing_student:
             errors.append(
@@ -645,13 +621,11 @@ async def enroll_student(
                     random_digits = random.randint(0, 9999)
                     candidate_code = f"SV{year}{random_digits:04d}"
 
-                    # Check uniqueness
-                    stmt_check = select(models.Student).where(
-                        models.Student.student_code == candidate_code
-                    )
-                    existing = (await db.execute(stmt_check)).scalar_one_or_none()
-
-                    if not existing:
+                    # ✅ SPRINT 6: Use Repository for uniqueness check
+                    from app.repositories import AdmissionRepository
+                    admission_repo_inner = AdmissionRepository(db)
+                    
+                    if not await admission_repo_inner.check_student_code_exists(candidate_code):
                         student_code = candidate_code
                         break
 

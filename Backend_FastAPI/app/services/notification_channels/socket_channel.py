@@ -59,7 +59,7 @@ class SocketChannel(BaseChannel):
 
                 if notif:
                     await sio.emit(
-                        'new_notification',
+                        'notification',  # Must match frontend: socket.on("notification", ...)
                         {
                             "id": notif.id,
                             "user_id": notif.user_id,

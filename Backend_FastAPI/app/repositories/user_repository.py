@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app import models
+from app.core.constants import UserRole
 from app.repositories.base import BaseRepository
 
 
@@ -129,6 +130,129 @@ class UserRepository(BaseRepository[models.User]):
         result = await self.db.execute(users_query)
         users = list(result.scalars().all())
 
+        return total_count, users
+
+    async def search_with_hierarchy(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+        role: Optional[str] = None,
+        status: Optional[str] = None,
+        unit_id: Optional[int] = None,
+        include_children: bool = False,
+        search: Optional[str] = None,
+        sort_by: str = "id",
+        order: str = "asc",
+    ) -> Tuple[int, List[models.User]]:
+        """
+        Get users with hierarchical unit filtering and full-text search.
+        
+        ✅ SPRINT 2: Added for user_service migration.
+        
+        This method supports:
+        - Hierarchical unit filter via recursive CTE
+        - Full-text search using search_vector (PostgreSQL ts_vector)
+        - Multi-value filters (comma-separated)
+        - Eager loading for N+1 prevention
+        
+        Args:
+            skip: Number of records to skip
+            limit: Maximum number of records to return
+            role: Filter by role (comma-separated for multi-select)
+            status: Filter by status (comma-separated for multi-select)
+            unit_id: Filter by organization unit
+            include_children: If True, include users from child units (uses CTE)
+            search: Full-text search term
+            sort_by: Column to sort by
+            order: Sort order (asc/desc)
+            
+        Returns:
+            Tuple of (total_count, user_list)
+        """
+        # Build base query with eager loading
+        query = select(self.model).options(
+            selectinload(models.User.unit),
+            selectinload(models.User.sessions),
+        )
+        
+        filters = []
+        
+        # =========================================================================
+        # HIERARCHICAL UNIT FILTER (CTE-based)
+        # =========================================================================
+        if unit_id is not None:
+            if include_children:
+                # Recursive CTE to get all descendant unit IDs
+                cte_query = text("""
+                    WITH RECURSIVE unit_hierarchy AS (
+                        SELECT id FROM organization_unit WHERE id = :unit_id
+                        UNION ALL
+                        SELECT u.id FROM organization_unit u
+                        JOIN unit_hierarchy uh ON u.parent_id = uh.id
+                    )
+                    SELECT id FROM unit_hierarchy
+                """)
+                
+                # Execute CTE to get list of unit IDs
+                hierarchy_result = await self.db.execute(cte_query, {"unit_id": unit_id})
+                all_unit_ids = [row[0] for row in hierarchy_result.fetchall()]
+                
+                if all_unit_ids:
+                    filters.append(models.User.unit_id.in_(all_unit_ids))
+            else:
+                # Simple exact match
+                filters.append(models.User.unit_id == unit_id)
+        
+        # =========================================================================
+        # ROLE & STATUS FILTERS (multi-value support)
+        # =========================================================================
+        if role:
+            values = [v.strip() for v in role.split(",") if v.strip()]
+            if values:
+                filters.append(models.User.role.in_(values))
+        
+        if status:
+            values = [v.strip() for v in status.split(",") if v.strip()]
+            if values:
+                filters.append(models.User.status.in_(values))
+        
+        # =========================================================================
+        # FULL-TEXT SEARCH (using search_vector with GIN index)
+        # =========================================================================
+        if search:
+            search_term = search.strip().replace(' ', ' & ')
+            filters.append(
+                models.User.search_vector.op('@@')(
+                    func.to_tsquery('simple', search_term)
+                )
+            )
+        
+        # Apply filters
+        if filters:
+            query = query.where(*filters)
+        
+        # Count query
+        count_query = select(func.count()).select_from(query.alias())
+        total_count_result = await self.db.execute(count_query)
+        total_count = total_count_result.scalar_one()
+        
+        if total_count == 0:
+            return 0, []
+        
+        # Apply sorting
+        sort_column = getattr(models.User, sort_by, models.User.id)
+        if order.lower() == "desc":
+            query = query.order_by(sort_column.desc())
+        else:
+            query = query.order_by(sort_column.asc())
+        
+        # Apply pagination
+        query = query.offset(skip).limit(limit)
+        
+        # Execute
+        result = await self.db.execute(query)
+        users = list(result.scalars().all())
+        
         return total_count, users
 
     async def get_by_username(self, username: str) -> Optional[models.User]:
@@ -262,7 +386,7 @@ class UserRepository(BaseRepository[models.User]):
         """
         result = await self.db.execute(
             select(models.User)
-            .where(models.User.role == "officer")
+            .where(models.User.role == UserRole.OFFICER)
             .where(models.User.availability_status == availability_status)
             .where(models.User.status == "active")
             .order_by(models.User.last_assigned_at.asc().nullsfirst())
@@ -287,7 +411,7 @@ class UserRepository(BaseRepository[models.User]):
         """
         query = (
             select(models.User)
-            .where(models.User.role == "officer")
+            .where(models.User.role == UserRole.OFFICER)
             .where(models.User.unit_id == unit_id)
         )
 
@@ -377,3 +501,144 @@ class UserRepository(BaseRepository[models.User]):
         await self.db.flush()
         await self.db.refresh(user)
         return user
+
+    # =========================================================================
+    # BULK METHODS (Sprint 4 Hotfix)
+    # =========================================================================
+
+    async def get_all(self) -> List[models.User]:
+        """
+        Get all users (for admin operations like casbin sync).
+        
+        ✅ SPRINT 4 HOTFIX: Added for sync_users_with_casbin refactoring.
+        
+        Returns:
+            List of all users
+        """
+        query = select(models.User)
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+    async def get_by_ids(self, user_ids: List[int]) -> List[models.User]:
+        """
+        Get users by list of IDs.
+        
+        ✅ SPRINT 4 HOTFIX: Added for sync_users_with_casbin refactoring.
+        
+        Args:
+            user_ids: List of user IDs
+            
+        Returns:
+            List of users matching the IDs
+        """
+        query = select(models.User).where(models.User.id.in_(user_ids))
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+    # =========================================================================
+    # SPRINT 5: User Service Migration Methods
+    # =========================================================================
+
+    async def get_active_assignment_by_user(
+        self,
+        user_id: int
+    ) -> Optional[models.UserUnitAssignment]:
+        """
+        Get the active unit assignment for a user.
+        
+        ✅ SPRINT 5: Added for user_service migration.
+        
+        Args:
+            user_id: User ID
+            
+        Returns:
+            Active UserUnitAssignment or None
+        """
+        query = select(models.UserUnitAssignment).where(
+            models.UserUnitAssignment.user_id == user_id,
+            models.UserUnitAssignment.is_active == True
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
+    async def get_user_for_delete(self, user_id: int) -> Optional[models.User]:
+        """
+        Get user with all relationships loaded for cascade delete.
+        
+        ✅ SPRINT 5: Added for user_service migration.
+        Without eager loading, SQLAlchemy lazy-loads during cascade delete,
+        which fails in async mode with "greenlet_spawn has not been called".
+        
+        Args:
+            user_id: User ID
+            
+        Returns:
+            User with sessions, unit_assignments, notification_preference loaded
+        """
+        query = (
+            select(models.User)
+            .where(models.User.id == user_id)
+            .options(
+                selectinload(models.User.sessions),
+                selectinload(models.User.unit_assignments),
+                selectinload(models.User.notification_preference),
+            )
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
+    async def get_users_by_ids_for_delete(
+        self,
+        user_ids: List[int]
+    ) -> List[models.User]:
+        """
+        Get users by IDs with relationships loaded for bulk delete.
+        
+        ✅ SPRINT 5: Added for user_service bulk actions migration.
+        
+        Args:
+            user_ids: List of user IDs
+            
+        Returns:
+            List of users with cascade-delete relationships loaded
+        """
+        query = (
+            select(models.User)
+            .where(models.User.id.in_(user_ids))
+            .options(
+                selectinload(models.User.sessions),
+                selectinload(models.User.unit_assignments),
+                selectinload(models.User.notification_preference),
+            )
+        )
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+    async def count_consultations_by_officers(
+        self,
+        officer_ids: List[int]
+    ) -> Dict[int, int]:
+        """
+        Count consultations grouped by officer ID.
+        
+        ✅ SPRINT 5: Added for user_service bulk delete validation.
+        
+        Args:
+            officer_ids: List of officer (user) IDs
+            
+        Returns:
+            Dict mapping officer_id to consultation count
+        """
+        from sqlalchemy import func as sql_func
+        
+        query = (
+            select(
+                models.Consultation.officer_id,
+                sql_func.count(models.Consultation.id)
+            )
+            .where(models.Consultation.officer_id.in_(officer_ids))
+            .group_by(models.Consultation.officer_id)
+        )
+        result = await self.db.execute(query)
+        return {row[0]: row[1] for row in result.all()}
+

@@ -1,17 +1,20 @@
 // src/components/leads/LeadInsightsTab.tsx
+/**
+ * LeadInsightsTab - Enhanced AI insights bar with visual gauges and helper tooltips
+ */
 "use client";
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { HelpCircle, TrendingUp, Users, Target, Clock, Star, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
-  TrendingUp,
-  AlertTriangle,
-  CheckCircle,
-  Target,
-  Activity,
-} from "lucide-react";
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import type { LeadInsights } from "@/types/lead.types";
 
 interface LeadInsightsTabProps {
@@ -19,191 +22,183 @@ interface LeadInsightsTabProps {
   insights?: LeadInsights;
 }
 
+// Helper descriptions for each metric
+const INSIGHT_HELPERS = {
+  overall: {
+    label: "Điểm tổng hợp",
+    icon: Sparkles,
+    description: "Đánh giá tổng thể dựa trên tất cả các chỉ số. Điểm cao = lead tiềm năng, ưu tiên chăm sóc.",
+    color: "text-violet-600",
+    bgColor: "bg-violet-100",
+    borderColor: "border-violet-200",
+  },
+  engagement: {
+    label: "Tương tác",
+    icon: Users,
+    description: "Mức độ tương tác của lead qua số lần tư vấn, phương thức liên hệ và kết quả các cuộc gọi.",
+    color: "text-blue-600",
+    bgColor: "bg-blue-100",
+    borderColor: "border-blue-200",
+  },
+  fit: {
+    label: "Phù hợp",
+    icon: Target,
+    description: "Độ phù hợp với chương trình dựa trên năm sinh, học vấn, vị trí địa lý và nghề nghiệp.",
+    color: "text-green-600",
+    bgColor: "bg-green-100",
+    borderColor: "border-green-200",
+  },
+  urgency: {
+    label: "Khẩn cấp",
+    icon: Clock,
+    description: "Mức độ cần liên hệ gấp. Tăng khi lead ở giai đoạn cao trong pipeline hoặc có deadline sắp tới.",
+    color: "text-orange-600",
+    bgColor: "bg-orange-100",
+    borderColor: "border-orange-200",
+  },
+};
+
+const getScoreStatus = (score: number) => {
+  if (score >= 70) return { label: "Xuất sắc", color: "text-green-600", bg: "bg-green-500" };
+  if (score >= 50) return { label: "Tốt", color: "text-blue-600", bg: "bg-blue-500" };
+  if (score >= 30) return { label: "Trung bình", color: "text-yellow-600", bg: "bg-yellow-500" };
+  return { label: "Thấp", color: "text-gray-500", bg: "bg-gray-400" };
+};
+
+interface MetricCardProps {
+  metricKey: keyof typeof INSIGHT_HELPERS;
+  value: number;
+  isMain?: boolean;
+}
+
+function MetricCard({ metricKey, value, isMain }: MetricCardProps) {
+  const config = INSIGHT_HELPERS[metricKey];
+  const status = getScoreStatus(value);
+  const Icon = config.icon;
+
+  return (
+    <div className={cn(
+      "rounded-lg border p-3 transition-all",
+      isMain 
+        ? "bg-gradient-to-br from-violet-50 to-purple-50 border-violet-200 shadow-sm" 
+        : "bg-white/50 hover:bg-white hover:shadow-sm",
+      config.borderColor
+    )}>
+      <div className="flex items-start justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <div className={cn("p-1.5 rounded-md", config.bgColor)}>
+            <Icon className={cn("h-4 w-4", config.color)} />
+          </div>
+          <span className={cn(
+            "font-medium",
+            isMain ? "text-base" : "text-sm"
+          )}>
+            {config.label}
+          </span>
+        </div>
+        <TooltipProvider delayDuration={200}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <HelpCircle className="h-4 w-4 text-muted-foreground/50 cursor-help hover:text-muted-foreground transition-colors" />
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="max-w-[280px] text-sm">
+              <p>{config.description}</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-baseline gap-2">
+          <span className={cn(
+            "font-bold tabular-nums",
+            isMain ? "text-3xl" : "text-2xl",
+            status.color
+          )}>
+            {value}
+          </span>
+          <span className="text-muted-foreground text-sm">/100</span>
+          {isMain && (
+            <Badge variant="secondary" className={cn("ml-auto text-xs", status.color)}>
+              {status.label}
+            </Badge>
+          )}
+        </div>
+        <Progress 
+          value={value} 
+          className={cn("h-2", isMain ? "h-2.5" : "h-1.5")}
+        />
+      </div>
+    </div>
+  );
+}
+
 export function LeadInsightsTab({ insights }: LeadInsightsTabProps) {
   if (!insights) {
     return (
-      <div className="grid gap-6 md:grid-cols-2">
+      <div className="grid grid-cols-4 gap-3">
         {[...Array(4)].map((_, i) => (
-          <Card key={i}>
-            <CardHeader>
-              <Skeleton className="h-6 w-32" />
-            </CardHeader>
-            <CardContent>
-              <Skeleton className="h-24 w-full" />
-            </CardContent>
-          </Card>
+          <div key={i} className="rounded-lg border p-3">
+            <Skeleton className="h-4 w-20 mb-3" />
+            <Skeleton className="h-8 w-16 mb-2" />
+            <Skeleton className="h-2 w-full" />
+          </div>
         ))}
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
-      {/* Conversion Probability */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <Target className="h-5 w-5" />
-                Conversion Probability
-              </CardTitle>
-              <CardDescription>
-                AI-predicted likelihood of conversion
-              </CardDescription>
-            </div>
-            <div className="text-3xl font-bold">
-              {Math.round(insights.conversion_probability * 100)}%
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <Progress value={insights.conversion_probability * 100} className="h-3" />
-          <p className="text-sm text-muted-foreground mt-2">
-            {insights.conversion_probability >= 0.7
-              ? "High probability - Prioritize follow-up"
-              : insights.conversion_probability >= 0.4
-                ? "Medium probability - Regular follow-up recommended"
-                : "Low probability - May need re-qualification"}
-          </p>
-        </CardContent>
-      </Card>
-
-      <div className="grid gap-6 md:grid-cols-2">
-        {/* Lead Score Breakdown */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <TrendingUp className="h-5 w-5" />
-              Lead Score Breakdown
-            </CardTitle>
-            <CardDescription>
-              Factors contributing to lead score
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {insights.lead_score_breakdown && Object.keys(insights.lead_score_breakdown).length > 0 ? (
-              Object.entries(insights.lead_score_breakdown).map(([key, value]) => (
-                <div key={key} className="space-y-1">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="capitalize">{key.replace(/_/g, " ")}</span>
-                    <span className="font-semibold">{value}/100</span>
-                  </div>
-                  <Progress value={value} className="h-2" />
-                </div>
-              ))
-            ) : (
-              <p className="text-muted-foreground text-sm">No score breakdown available</p>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Engagement Metrics */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Activity className="h-5 w-5" />
-              Engagement Metrics
-            </CardTitle>
-            <CardDescription>
-              Lead engagement statistics
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-muted-foreground">Email Opens</span>
-              <span className="font-semibold">
-                {insights.engagement_metrics.email_opens ?? 0}
-              </span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-muted-foreground">Email Clicks</span>
-              <span className="font-semibold">
-                {insights.engagement_metrics.email_clicks ?? 0}
-              </span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-muted-foreground">Website Visits</span>
-              <span className="font-semibold">
-                {insights.engagement_metrics.website_visits ?? 0}
-              </span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-muted-foreground">Form Submissions</span>
-              <span className="font-semibold">
-                {insights.engagement_metrics.form_submissions ?? 0}
-              </span>
-            </div>
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-muted-foreground">Last Activity</span>
-              <span className="font-semibold">
-                {insights.engagement_metrics.last_activity_days ?? 0} days ago
-              </span>
-            </div>
-          </CardContent>
-        </Card>
+    <div className="space-y-3">
+      {/* Main metric + secondary metrics grid */}
+      <div className="grid grid-cols-4 gap-3">
+        <MetricCard 
+          metricKey="overall" 
+          value={insights.overall_score} 
+          isMain 
+        />
+        <MetricCard 
+          metricKey="engagement" 
+          value={insights.engagement_score} 
+        />
+        <MetricCard 
+          metricKey="fit" 
+          value={insights.fit_score} 
+        />
+        <MetricCard 
+          metricKey="urgency" 
+          value={insights.urgency_score} 
+        />
       </div>
 
-      {/* Recommended Actions */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <CheckCircle className="h-5 w-5" />
-            Recommended Actions
-          </CardTitle>
-          <CardDescription>
-            AI-suggested next steps
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {insights.recommended_actions.length === 0 ? (
-            <p className="text-muted-foreground">No recommendations at this time</p>
-          ) : (
-            <ul className="space-y-3">
-              {insights.recommended_actions.map((action, index) => (
-                <li key={index} className="flex items-start gap-3">
-                  <div className="flex-shrink-0 w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center">
-                    <span className="text-xs font-semibold text-primary">
-                      {index + 1}
-                    </span>
-                  </div>
-                  <div className="flex-1">
-                    <h4 className="font-medium">{action.action}</h4>
-                    <p className="text-sm text-muted-foreground">{action.reason}</p>
-                    <Badge variant="outline" className="mt-1 capitalize">
-                      Priority: {action.priority}
-                    </Badge>
-                  </div>
-                </li>
-              ))}
-            </ul>
+      {/* Officer feedback if available */}
+      {(insights.officer_rating || insights.officer_summary) && (
+        <div className="flex items-center gap-4 p-2 bg-amber-50/50 rounded-lg border border-amber-200/50 text-sm">
+          <div className="flex items-center gap-1.5">
+            <Star className="h-4 w-4 text-amber-500" />
+            <span className="text-muted-foreground">Đánh giá TV:</span>
+            {insights.officer_rating && (
+              <div className="flex items-center gap-0.5">
+                {[...Array(5)].map((_, i) => (
+                  <span 
+                    key={i}
+                    className={cn(
+                      "text-sm",
+                      i < insights.officer_rating! ? "text-amber-400" : "text-gray-300"
+                    )}
+                  >
+                    ★
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+          {insights.officer_summary && (
+            <p className="text-muted-foreground truncate flex-1" title={insights.officer_summary}>
+              "{insights.officer_summary}"
+            </p>
           )}
-        </CardContent>
-      </Card>
-
-      {/* Risk Factors */}
-      {insights.risk_factors.length > 0 && (
-        <Card className="border-yellow-200 bg-yellow-50">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-yellow-900">
-              <AlertTriangle className="h-5 w-5" />
-              Risk Factors
-            </CardTitle>
-            <CardDescription className="text-yellow-700">
-              Potential concerns to address
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ul className="space-y-2">
-              {insights.risk_factors.map((risk, index) => (
-                <li key={index} className="flex items-start gap-2 text-yellow-900">
-                  <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
-                  <span className="text-sm">{risk}</span>
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
+        </div>
       )}
     </div>
   );

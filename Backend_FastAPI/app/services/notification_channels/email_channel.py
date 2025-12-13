@@ -31,11 +31,12 @@ class EmailChannel(BaseChannel):
         """
         Send notifications via email.
 
-        Uses generic notification email template.
+        Uses EmailService singleton to send notification emails.
         """
-        from app.services.email_service import send_email
+        from app.services.email_service import email_service
         from app.models import User
-        from app.database import SessionLocal
+        from app.database import AsyncSessionLocal
+        from sqlalchemy import select
 
         sent_count = 0
         failed_ids = []
@@ -48,66 +49,71 @@ class EmailChannel(BaseChannel):
                 error_message="No notifications to send"
             )
 
-        # Get users with their emails
-        db = SessionLocal()
-        try:
-            users = db.query(User).filter(User.id.in_(recipient_ids)).all()
-            user_dict = {user.id: user for user in users}
-
-            # Send email to each recipient
-            for user_id in recipient_ids:
-                user = user_dict.get(user_id)
-                if not user or not user.email:
-                    log.warning(
-                        "User not found or no email",
-                        user_id=user_id
-                    )
-                    failed_ids.append(user_id)
-                    continue
-
-                # Find notification for this user
-                notif = next(
-                    (n for n in notifications if n.user_id == user_id),
-                    None
+        # Get users with their emails using async session
+        async with AsyncSessionLocal() as db:
+            try:
+                result = await db.execute(
+                    select(User).where(User.id.in_(recipient_ids))
                 )
+                users = result.scalars().all()
+                user_dict = {user.id: user for user in users}
 
-                if not notif:
-                    failed_ids.append(user_id)
-                    continue
+                # Send email to each recipient
+                for user_id in recipient_ids:
+                    user = user_dict.get(user_id)
+                    if not user or not user.email:
+                        log.warning(
+                            "User not found or no email",
+                            user_id=user_id
+                        )
+                        failed_ids.append(user_id)
+                        continue
 
-                try:
-                    await send_email(
-                        to_email=user.email,
-                        subject=notif.title,
-                        template_name="notification_generic.html",
-                        context={
-                            "user_name": user.full_name or user.username,
-                            "title": notif.title,
-                            "message": notif.message,
-                            "link": notif.link,
-                            "notification_type": notif.type,
-                            **context
-                        }
-                    )
-                    sent_count += 1
-                    log.debug(
-                        "Email notification sent",
-                        user_id=user_id,
-                        email=user.email,
-                        notif_id=notif.id
+                    # Find notification for this user
+                    notif = next(
+                        (n for n in notifications if n.user_id == user_id),
+                        None
                     )
 
-                except Exception as e:
-                    log.error(
-                        "Email send failed",
-                        user_id=user_id,
-                        email=user.email,
-                        error=str(e)
-                    )
-                    failed_ids.append(user_id)
+                    if not notif:
+                        failed_ids.append(user_id)
+                        continue
 
-        finally:
-            db.close()
+                    try:
+                        # Use the singleton email_service's send_notification_email method
+                        success = email_service.send_notification_email(
+                            user_email=user.email,
+                            user_name=user.full_name or user.username,
+                            notification=notif
+                        )
+                        if success:
+                            sent_count += 1
+                            log.debug(
+                                "Email notification sent",
+                                user_id=user_id,
+                                email=user.email,
+                                notif_id=notif.id
+                            )
+                        else:
+                            failed_ids.append(user_id)
+
+                    except Exception as e:
+                        log.error(
+                            "Email send failed",
+                            user_id=user_id,
+                            email=user.email,
+                            error=str(e)
+                        )
+                        failed_ids.append(user_id)
+
+            except Exception as e:
+                log.error("Failed to fetch users for email channel", error=str(e))
+                return ChannelResult(
+                    success=False,
+                    sent_count=0,
+                    failed_ids=recipient_ids,
+                    error_message=str(e)
+                )
 
         return ChannelResult(
             success=sent_count > 0,

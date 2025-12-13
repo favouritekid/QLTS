@@ -1,25 +1,37 @@
 // src/components/leads/QuickConsultationSection.tsx
 "use client";
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useRef, useEffect } from "react";
 import { format, addMinutes, addHours, addDays, set } from "date-fns";
 import { vi } from "date-fns/locale";
 import {
   Loader2,
-  PhoneOff,
-  ThumbsUp,
-  XCircle,
   Clock,
   CalendarClock,
+  ArrowRight,
+  HelpCircle,
+  PhoneForwarded,
+  BookmarkCheck,
+  NotebookPen,
+  Phone,
+  MessageSquare,
+  Mail,
+  Video,
+  User,
+  MapPin, // Icon for Current Location
+  CheckCircle2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { DateTimePicker } from "@/components/common/form";
 import { cn } from "@/lib/utils";
 import { useAllowedNextStatuses } from "@/hooks/usePipeline";
 import { useAddConsultation, useLead } from "@/hooks/useLeads";
-import type { ConsultationStatus, ConsultationCreate } from "@/types/lead.types";
+import type { ConsultationStatus, ConsultationCreate, ConsultationMethod } from "@/types/lead.types";
 
 interface QuickConsultationSectionProps {
   leadId: number;
@@ -28,6 +40,15 @@ interface QuickConsultationSectionProps {
 
 // Schedule option type
 type ScheduleOption = "none" | "30m" | "1h" | "tomorrow" | "custom";
+
+// Method options configuration
+const methodOptions: { value: ConsultationMethod; label: string; icon: React.ElementType }[] = [
+  { value: "phone", label: "Gọi điện", icon: Phone },
+  { value: "email", label: "Email", icon: Mail },
+  { value: "video_call", label: "Video", icon: Video },
+  { value: "sms", label: "SMS", icon: MessageSquare },
+  { value: "in_person", label: "Gặp mặt", icon: User },
+];
 
 // Get scheduled datetime based on option
 const getScheduledDateTime = (option: ScheduleOption, customDate?: Date): string | null => {
@@ -51,13 +72,39 @@ const getScheduledDateTime = (option: ScheduleOption, customDate?: Date): string
   }
 };
 
+// Get preview text for schedule option
+const getSchedulePreviewText = (option: ScheduleOption, customDate?: Date): string => {
+  const now = new Date();
+  switch (option) {
+    case "30m":
+      return format(addMinutes(now, 30), "'Gọi lại lúc' HH:mm", { locale: vi });
+    case "1h":
+      return format(addHours(now, 1), "'Gọi lại lúc' HH:mm", { locale: vi });
+    case "tomorrow":
+      return "Gọi lại lúc 09:00 ngày mai";
+    case "custom":
+      return customDate
+        ? format(customDate, "'Gọi lại lúc' HH:mm, EEEE dd/MM", { locale: vi })
+        : "Chọn thời gian...";
+    default:
+      return "";
+  }
+};
+
+
+
 export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultationSectionProps) {
   // Get lead data to determine current consultation status
   const { data: lead } = useLead(leadId);
   const currentStatusId = lead?.consultation_status_id;
 
   // Get allowed next statuses based on state machine
-  const { data: statuses = [], isLoading: statusesLoading, error, isError } = useAllowedNextStatuses(currentStatusId);
+  const {
+    data: statuses = [],
+    isLoading: statusesLoading,
+    error,
+    isError,
+  } = useAllowedNextStatuses(currentStatusId);
   const addConsultation = useAddConsultation();
 
   // Form state
@@ -66,41 +113,159 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
   const [customDateTime, setCustomDateTime] = useState<Date | undefined>(undefined);
   const [savingStatusId, setSavingStatusId] = useState<string | null>(null);
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
+  const [method, setMethod] = useState<ConsultationMethod>("phone");
 
-  // Group statuses by outcome_type and universal flag
+  // ✅ Drag-to-scroll using callback refs
+  // Callback refs are called when element mounts, guaranteeing element exists
+  const resultHasDraggedRef = useRef(false);
+  const universalHasDraggedRef = useRef(false);
+  
+  const setupDragToScroll = (element: HTMLDivElement | null, hasDraggedRef: React.MutableRefObject<boolean>) => {
+    if (!element) return;
+    
+    const isDragging = { current: false };
+    const startX = { current: 0 };
+    const scrollLeftStart = { current: 0 };
+    
+    // Wheel scroll handler
+    const handleWheel = (e: WheelEvent) => {
+      if (e.deltaY === 0) return;
+      if (element.scrollWidth <= element.clientWidth) return;
+
+      const { scrollLeft: sl, scrollWidth, clientWidth } = element;
+      const maxScrollLeft = scrollWidth - clientWidth;
+
+      if (e.deltaY > 0 && sl >= maxScrollLeft - 1) return;
+      if (e.deltaY < 0 && sl <= 1) return;
+
+      e.preventDefault();
+      element.scrollLeft += e.deltaY;
+    };
+
+    const handleMouseDown = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      hasDraggedRef.current = false;
+      isDragging.current = true;
+      startX.current = e.pageX - element.offsetLeft;
+      scrollLeftStart.current = element.scrollLeft;
+      element.style.cursor = "grabbing";
+      element.style.userSelect = "none";
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isDragging.current) return;
+      e.preventDefault();
+      const x = e.pageX - element.offsetLeft;
+      const walk = (x - startX.current) * 1.5;
+      if (Math.abs(x - startX.current) > 5) hasDraggedRef.current = true;
+      element.scrollLeft = scrollLeftStart.current - walk;
+    };
+
+    const handleMouseUp = () => {
+      if (!isDragging.current) return;
+      isDragging.current = false;
+      element.style.cursor = "grab";
+      element.style.removeProperty("user-select");
+    };
+
+    const handleMouseLeave = () => {
+      if (isDragging.current) {
+        isDragging.current = false;
+        element.style.cursor = "grab";
+        element.style.removeProperty("user-select");
+      }
+    };
+
+    element.style.cursor = "grab";
+    element.addEventListener("wheel", handleWheel, { passive: false });
+    element.addEventListener("mousedown", handleMouseDown);
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    element.addEventListener("mouseleave", handleMouseLeave);
+  };
+  
+  // Callback refs that setup listeners when elements mount
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const universalScrollRef = useRef<HTMLDivElement | null>(null);
+  
+  // Setup when component mounts
+  useEffect(() => {
+    if (scrollContainerRef.current) {
+      setupDragToScroll(scrollContainerRef.current, resultHasDraggedRef);
+    }
+    if (universalScrollRef.current) {
+      setupDragToScroll(universalScrollRef.current, universalHasDraggedRef);
+    }
+  }, [statuses]); // Re-run when statuses change (containers might re-render)
+
+  // ✅ REFACTORED GROUPING LOGIC (Previous -> Same -> Next)
   const groupedStatuses = useMemo(() => {
-    const universal: ConsultationStatus[] = []; // ✅ NEW - Universal/retry statuses
-    const neutral: ConsultationStatus[] = [];
-    const positive: ConsultationStatus[] = [];
-    const negative: ConsultationStatus[] = [];
+    // 1. Universal (Toàn cục - Row 1)
+    const universal: ConsultationStatus[] = [];
+    
+    // 2. Result Groups (Kết quả - Row 2)
+    const previousStage: ConsultationStatus[] = [];
+    const sameStage: ConsultationStatus[] = [];
+    const nextStage: ConsultationStatus[] = [];
 
-    statuses.forEach((status) => {
-      // ✅ NEW: Universal statuses in separate group
-      if (status.is_universal) {
-        universal.push(status);
+    // Find current status to determine current stage order
+    // We try to find it in the fetched statuses first (since backend includes current status now)
+    const currentStatusObj = statuses.find(s => s.id === currentStatusId);
+    const currentStageOrder = currentStatusObj?.stage?.order ?? -1;
+    const currentStageId = currentStatusObj?.stage_id;
+
+    console.log("QuickConsultationSection - Grouping Debug:", {
+      currentStatusId,
+      currentStageOrder,
+      totalStatuses: statuses.length
+    });
+
+    const displayStatuses = statuses.filter(s => {
+      if (s.is_universal) {
+        universal.push(s);
+        return false; // Move to universal array
+      }
+      return true;
+    });
+
+    displayStatuses.forEach((status) => {
+      // Logic: Previous vs Same vs Next
+      // We rely on stage.order. If stage info is missing, fallback to 'next' or 'same'?
+      // Since we updated schema, status.stage should be available.
+      const statusStageOrder = status.stage?.order ?? -1;
+
+      // Grouping logic
+      if (statusStageOrder < currentStageOrder && statusStageOrder !== -1 && currentStageOrder !== -1) {
+        // PREVIOUS STAGE (Revert)
+        previousStage.push(status);
+      } else if (statusStageOrder === currentStageOrder || status.stage_id === currentStageId) {
+        // SAME STAGE (Sibling / Current)
+        sameStage.push(status);
       } else {
-        // Existing grouping logic for non-universal statuses
-        switch (status.outcome_type) {
-          case "neutral":
-            neutral.push(status);
-            break;
-          case "positive":
-            positive.push(status);
-            break;
-          case "negative":
-            negative.push(status);
-            break;
-          default:
-            neutral.push(status);
-        }
+        // NEXT STAGE (Progress)
+        nextStage.push(status);
       }
     });
 
-    return { universal, neutral, positive, negative };
-  }, [statuses]);
+    // Sort Previous desc (closest to current first? or asc?) -> Let's do Ascending order
+    previousStage.sort((a, b) => (a.stage?.order ?? 0) - (b.stage?.order ?? 0));
+    
+    // Sort Next asc
+    nextStage.sort((a, b) => (a.stage?.order ?? 0) - (b.stage?.order ?? 0));
+
+    // Sort Same Stage: Current status first, then others by name
+    sameStage.sort((a, b) => {
+      if (a.id === currentStatusId) return -1;
+      if (b.id === currentStatusId) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    return { universal, previousStage, sameStage, nextStage };
+  }, [statuses, currentStatusId]);
 
   // Handle status badge click - save immediately
   const handleStatusClick = async (status: ConsultationStatus) => {
+
     // Determine scheduled_at based on option
     let scheduledAt: string | null = null;
 
@@ -113,7 +278,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
 
     const payload: ConsultationCreate = {
       status_id: status.id,
-      method: "phone",
+      method: method,
       notes: notes.trim() || `Ghi nhận: ${status.name}`,
       scheduled_at: scheduledAt,
     };
@@ -139,7 +304,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
   if (statusesLoading) {
     return (
       <div className="flex items-center justify-center p-4">
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <Loader2 className="text-muted-foreground h-5 w-5 animate-spin" />
       </div>
     );
   }
@@ -147,9 +312,9 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
   // Error state
   if (isError) {
     return (
-      <div className="p-4 text-sm text-red-600 bg-red-50 rounded-md">
+      <div className="rounded-md bg-red-50 p-4 text-sm text-red-600">
         <p className="font-medium">Không thể tải trạng thái</p>
-        <p className="text-xs mt-1">{error?.message || "Lỗi không xác định"}</p>
+        <p className="mt-1 text-xs">{error?.message || "Lỗi không xác định"}</p>
       </div>
     );
   }
@@ -157,27 +322,55 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
   // Empty state
   if (statuses.length === 0) {
     return (
-      <div className="p-4 text-sm text-muted-foreground bg-muted/50 rounded-md">
+      <div className="text-muted-foreground bg-muted/50 rounded-md p-4 text-sm">
         <p>Không có trạng thái nào được cấu hình.</p>
-        <p className="text-xs mt-1">Vui lòng liên hệ Admin để thiết lập.</p>
+        <p className="mt-1 text-xs">Vui lòng liên hệ Admin để thiết lập.</p>
       </div>
     );
   }
 
-  const scheduleOptions: { value: ScheduleOption; label: string; icon?: React.ReactNode }[] = [
-    { value: "none", label: "Không" },
-    { value: "30m", label: "30p" },
-    { value: "1h", label: "1h" },
-    { value: "tomorrow", label: "Ngày mai" },
-    { value: "custom", label: "Tùy chọn", icon: <CalendarClock className="h-3 w-3" /> },
-  ];
-
   return (
     <div className="space-y-3">
-      {/* Notes Input - Always visible */}
+      {/* Method Selector */}
       <div className="space-y-1.5">
-        <Label htmlFor="quick-notes" className="text-xs text-muted-foreground">
-          Ghi chú nhanh (tùy chọn)
+        <Label className="text-muted-foreground flex items-center gap-1 text-xs">
+          <Phone className="h-3 w-3" />
+          Phương thức
+        </Label>
+        <ToggleGroup
+          type="single"
+          value={method}
+          onValueChange={(value) => value && setMethod(value as ConsultationMethod)}
+          className="flex justify-start gap-1"
+        >
+          {methodOptions.map((opt) => {
+            const Icon = opt.icon;
+            return (
+              <ToggleGroupItem
+                key={opt.value}
+                value={opt.value}
+                size="sm"
+                className={cn(
+                  "h-8 gap-1.5 px-2.5 text-xs",
+                  "data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
+                )}
+              >
+                <Icon className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">{opt.label}</span>
+              </ToggleGroupItem>
+            );
+          })}
+        </ToggleGroup>
+      </div>
+
+      {/* Notes Input */}
+      <div className="space-y-1.5">
+        <Label
+          htmlFor="quick-notes"
+          className="text-muted-foreground flex items-center gap-1 text-xs"
+        >
+          <NotebookPen className="h-3 w-3" />
+          Nội dung tư vấn (tùy chọn)
         </Label>
         <Textarea
           id="quick-notes"
@@ -185,42 +378,68 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           rows={2}
-          className="text-sm resize-none"
+          className="resize-none text-sm"
         />
       </div>
 
-      {/* Schedule Section */}
+      {/* Schedule Section with ToggleGroup */}
       <div className="space-y-2">
-        <Label className="text-xs text-muted-foreground flex items-center gap-1.5">
+        <Label className="text-muted-foreground flex items-center gap-1.5 text-xs">
           <Clock className="h-3 w-3" />
           Hẹn gọi lại
         </Label>
-        <div className="flex flex-wrap gap-1.5">
-          {scheduleOptions.map((option) => (
-            <Button
-              key={option.value}
-              type="button"
-              variant={scheduleOption === option.value ? "default" : "outline"}
-              size="sm"
-              className={cn(
-                "h-7 text-xs px-2.5",
-                scheduleOption === option.value
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-background hover:bg-muted"
-              )}
-              onClick={() => {
-                setScheduleOption(option.value);
-                // Tự động mở DateTimePicker khi chọn "Tùy chọn"
-                if (option.value === "custom") {
-                  setIsDatePickerOpen(true);
-                }
-              }}
-            >
-              {option.icon && <span className="mr-1">{option.icon}</span>}
-              {option.label}
-            </Button>
-          ))}
-        </div>
+
+        <ToggleGroup
+          type="single"
+          value={scheduleOption}
+          onValueChange={(value) => {
+            if (value) {
+              setScheduleOption(value as ScheduleOption);
+              // Tự động mở DateTimePicker khi chọn "Tùy chọn"
+              if (value === "custom") {
+                setIsDatePickerOpen(true);
+              }
+            }
+          }}
+          className="flex flex-wrap justify-start gap-1"
+        >
+          <ToggleGroupItem
+            value="none"
+            size="sm"
+            className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground h-7 px-2.5 text-xs"
+          >
+            Không
+          </ToggleGroupItem>
+          <ToggleGroupItem
+            value="30m"
+            size="sm"
+            className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground h-7 px-2.5 text-xs"
+          >
+            30p
+          </ToggleGroupItem>
+          <ToggleGroupItem
+            value="1h"
+            size="sm"
+            className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground h-7 px-2.5 text-xs"
+          >
+            1h
+          </ToggleGroupItem>
+          <ToggleGroupItem
+            value="tomorrow"
+            size="sm"
+            className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground h-7 px-2.5 text-xs"
+          >
+            Ngày mai
+          </ToggleGroupItem>
+          <ToggleGroupItem
+            value="custom"
+            size="sm"
+            className="data-[state=on]:bg-primary data-[state=on]:text-primary-foreground h-7 px-2.5 text-xs"
+          >
+            <CalendarClock className="mr-1 h-3 w-3" />
+            Tùy chọn
+          </ToggleGroupItem>
+        </ToggleGroup>
 
         {/* Custom DateTime Picker */}
         {scheduleOption === "custom" && (
@@ -238,20 +457,12 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
           </div>
         )}
 
-        {/* Schedule Preview */}
+        {/* Enhanced Schedule Preview */}
         {scheduleOption !== "none" && (
-          <div className="text-xs text-muted-foreground flex items-center gap-1.5 pt-1">
-            <CalendarClock className="h-3 w-3 text-blue-500" />
-            <span>
-              {scheduleOption === "custom" && customDateTime
-                ? `Hẹn: ${format(customDateTime, "HH:mm dd/MM", { locale: vi })}`
-                : scheduleOption === "30m"
-                  ? `Hẹn: ${format(addMinutes(new Date(), 30), "HH:mm", { locale: vi })}`
-                  : scheduleOption === "1h"
-                    ? `Hẹn: ${format(addHours(new Date(), 1), "HH:mm", { locale: vi })}`
-                    : scheduleOption === "tomorrow"
-                      ? `Hẹn: 09:00 ngày mai`
-                      : ""}
+          <div className="flex items-center gap-2 rounded-md border border-blue-100 bg-blue-50 px-3 py-2">
+            <CalendarClock className="h-4 w-4 flex-shrink-0 text-blue-600" />
+            <span className="text-sm font-medium text-blue-700">
+              {getSchedulePreviewText(scheduleOption, customDateTime)}
             </span>
           </div>
         )}
@@ -259,39 +470,48 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
 
       {/* Divider */}
       <div className="border-t pt-3">
-        <Label className="text-xs text-muted-foreground mb-3 block">
-          Chọn kết quả tư vấn (click để lưu)
-        </Label>
-
-        {/* ✅ NEW: Universal Statuses - Retry/Transient (không thay đổi trạng thái lead) */}
+        {/* ROW 1: Universal Statuses (Trạng thái liên hệ) */}
         {groupedStatuses.universal.length > 0 && (
-          <div className="space-y-2 mb-4 pb-4 border-b">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <PhoneOff className="h-3.5 w-3.5" />
-              <span className="font-medium">Kết quả cuộc gọi</span>
-              <span className="text-[10px] ml-auto text-amber-600 font-medium">
-                (không thay đổi trạng thái)
-              </span>
+          <div className="mb-4">
+            <div className="text-muted-foreground mb-2 flex items-center gap-2 text-xs">
+              <PhoneForwarded className="h-3 w-3" />
+              <span className="font-medium">Trạng thái liên hệ</span>
+              <Badge
+                variant="secondary"
+                className="ml-1 h-4 bg-amber-100 px-1.5 text-[10px] text-amber-700"
+              >
+                không đổi trạng thái
+              </Badge>
             </div>
-            <div className="flex flex-wrap gap-1.5">
+            {/* ✅ Horizontal scroll container with drag-to-scroll */}
+            <div
+              ref={universalScrollRef}
+              className="flex flex-nowrap items-center gap-2.5 cursor-grab overflow-x-auto overflow-y-hidden overscroll-x-contain [-ms-overflow-style:none] [scrollbar-width:none] active:cursor-grabbing [&::-webkit-scrollbar]:hidden"
+            >
               {groupedStatuses.universal.map((status) => (
                 <Button
                   key={status.id}
                   variant="ghost"
                   size="sm"
                   className={cn(
-                    "h-7 text-xs px-2.5",
-                    "bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200",
+                    "h-7 flex-shrink-0 px-2.5 text-xs",
+                    "border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100",
                     "transition-all hover:scale-[1.02]"
                   )}
-                  onClick={() => handleStatusClick(status)}
+                  onClick={() => {
+                    if (universalHasDraggedRef.current) {
+                      universalHasDraggedRef.current = false;
+                      return;
+                    }
+                    handleStatusClick(status);
+                  }}
                   disabled={addConsultation.isPending}
                 >
                   {savingStatusId === status.id ? (
-                    <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
+                    <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
                   ) : (
                     <span
-                      className="w-1.5 h-1.5 rounded-full mr-1.5 flex-shrink-0"
+                      className="mr-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full"
                       style={{ backgroundColor: status.color_code }}
                     />
                   )}
@@ -302,113 +522,185 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
           </div>
         )}
 
-        {/* Neutral Group - Retry/Callback */}
-        {groupedStatuses.neutral.length > 0 && (
-          <div className="space-y-2 mb-4">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <PhoneOff className="h-3.5 w-3.5" />
-              <span className="font-medium">Kết nối thất bại / Gọi lại</span>
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {groupedStatuses.neutral.map((status) => (
-                <Button
-                  key={status.id}
-                  variant="ghost"
-                  size="sm"
-                  className={cn(
-                    "h-7 text-xs px-2.5",
-                    "bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200",
-                    "transition-all hover:scale-[1.02]"
-                  )}
-                  onClick={() => handleStatusClick(status)}
-                  disabled={addConsultation.isPending}
-                >
-                  {savingStatusId === status.id ? (
-                    <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
-                  ) : (
-                    <span
-                      className="w-1.5 h-1.5 rounded-full mr-1.5 flex-shrink-0"
-                      style={{ backgroundColor: status.color_code }}
-                    />
-                  )}
-                  {status.name}
-                </Button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Positive Group - Progress/Success */}
-        {groupedStatuses.positive.length > 0 && (
-          <div className="space-y-2 mb-3">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <ThumbsUp className="h-3.5 w-3.5" />
-              <span className="font-medium">Tích cực / Tiến triển</span>
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {groupedStatuses.positive.map((status) => (
-                <Button
-                  key={status.id}
-                  variant="outline"
-                  size="sm"
-                  className={cn(
-                    "h-7 text-xs px-2.5",
-                    "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200",
-                    "font-medium transition-all hover:scale-[1.02]"
-                  )}
-                  onClick={() => handleStatusClick(status)}
-                  disabled={addConsultation.isPending}
-                >
-                  {savingStatusId === status.id ? (
-                    <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
-                  ) : (
-                    <span
-                      className="w-1.5 h-1.5 rounded-full mr-1.5 flex-shrink-0"
-                      style={{ backgroundColor: status.color_code }}
-                    />
-                  )}
-                  {status.name}
-                </Button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Negative Group - Stop/Remove */}
-        {groupedStatuses.negative.length > 0 && (
+        {/* ROW 2: Result Statuses (Kết quả liên hệ) - Sorted by Stage Progression */}
+        {(groupedStatuses.previousStage.length > 0 || groupedStatuses.sameStage.length > 0 || groupedStatuses.nextStage.length > 0) && (
           <div className="space-y-2">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <XCircle className="h-3.5 w-3.5" />
-              <span className="font-medium">Dừng / Loại bỏ</span>
+            {/* Header with help tooltip */}
+            <div className="flex items-center gap-1">
+              <BookmarkCheck className="text-muted-foreground h-3 w-3 text-xs" />
+              <Label className="text-muted-foreground text-xs">Kết quả liên hệ ({lead?.pipeline_stage?.name})</Label>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <HelpCircle className="text-muted-foreground/60 h-3.5 w-3.5 cursor-help" />
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-[200px] text-xs">
+                    <p>Cuộn chuột hoặc kéo để xem thêm. Click vào trạng thái để lưu ngay.</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
-            <div className="flex flex-wrap gap-1.5">
-              {groupedStatuses.negative.map((status) => (
-                <Button
-                  key={status.id}
-                  variant="ghost"
-                  size="sm"
-                  className={cn(
-                    "h-7 text-xs px-2.5",
-                    "bg-red-50 hover:bg-red-100 text-red-600 border border-red-200",
-                    "transition-all hover:scale-[1.02]"
+
+            {/* Scrollable Container with wheel scroll */}
+            <div className="relative">
+              {/* Horizontal scroll container - hidden scrollbar, uses wheel scroll */}
+              <div
+                ref={scrollContainerRef}
+                className="flex flex-nowrap items-center gap-2.5 cursor-grab overflow-x-auto overflow-y-hidden overscroll-x-contain [-ms-overflow-style:none] [scrollbar-width:none] active:cursor-grabbing [&::-webkit-scrollbar]:hidden"
+              >
+                  {/* GROUP 1: PREVIOUS STAGE (Revert) */}
+                  {groupedStatuses.previousStage.length > 0 && (
+                    <>
+                      {groupedStatuses.previousStage.map((status) => (
+                        <Button
+                          key={status.id}
+                          variant="ghost"
+                          size="sm"
+                          className={cn(
+                            "h-7 flex-shrink-0 px-2.5 text-xs font-normal",
+                            // Previous Stage: Slate (neutral/revert)
+                            "border border-slate-300 bg-slate-100 text-slate-600 hover:bg-slate-200",
+                            "transition-all hover:scale-[1.02]"
+                          )}
+                          onClick={() => {
+                            if (resultHasDraggedRef.current) {
+                              resultHasDraggedRef.current = false;
+                              return;
+                            }
+                            handleStatusClick(status);
+                          }}
+                          disabled={addConsultation.isPending}
+                        >
+                          {savingStatusId === status.id ? (
+                            <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                          ) : (
+                            <span
+                              className="mr-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full"
+                              style={{ backgroundColor: status.color_code }}
+                            />
+                          )}
+                          {status.name}
+                        </Button>
+                      ))}
+
+                      <ArrowRight className="text-muted-foreground/30 mx-1 h-3 w-3 flex-shrink-0" />
+                    </>
                   )}
-                  onClick={() => handleStatusClick(status)}
-                  disabled={addConsultation.isPending}
-                >
-                  {savingStatusId === status.id ? (
-                    <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
-                  ) : (
-                    <span
-                      className="w-1.5 h-1.5 rounded-full mr-1.5 flex-shrink-0"
-                      style={{ backgroundColor: status.color_code }}
-                    />
+
+                  {/* GROUP 2: SAME STAGE (Current & Siblings) */}
+                  {groupedStatuses.sameStage.length > 0 && (
+                    <>
+                      {groupedStatuses.sameStage.map((status) => {
+                        return (
+                          <Button
+                            key={status.id}
+                            variant="ghost"
+                            size="sm"
+                            className={cn(
+                              "h-7 flex-shrink-0 px-2.5 text-xs font-normal",
+                              // Same Stage: Blue (current focus)
+                              status.id === currentStatusId
+                                ? "border-2 border-blue-500 bg-blue-100 font-medium text-blue-800 hover:bg-blue-150"
+                                : "border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100",
+                              "transition-all hover:scale-[1.02]"
+                            )}
+                            onClick={() => {
+                              if (resultHasDraggedRef.current) {
+                                resultHasDraggedRef.current = false;
+                                return;
+                              }
+                              handleStatusClick(status);
+                            }}
+                            disabled={addConsultation.isPending}
+                          >
+                            {savingStatusId === status.id ? (
+                              <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                            ) : (
+                              <span
+                                className="mr-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full"
+                                style={{ backgroundColor: status.color_code }}
+                              />
+                            )}
+                            {status.name}
+                          </Button>
+                        );
+                      })}
+                    </>
                   )}
-                  {status.name}
-                </Button>
-              ))}
+
+                  {/* ARROW SEPARATOR */}
+                  {groupedStatuses.sameStage.length > 0 && groupedStatuses.nextStage.length > 0 && (
+                    <ArrowRight className="text-muted-foreground/50 mx-1 h-4 w-4 flex-shrink-0" />
+                  )}
+
+                  {/* GROUP 3: NEXT STAGE (Progress) */}
+                  {groupedStatuses.nextStage.length > 0 && (
+                    <>
+                      {groupedStatuses.nextStage.map((status) => (
+                        <Button
+                          key={status.id}
+                          variant="ghost"
+                          size="sm"
+                          className={cn(
+                            "h-7 flex-shrink-0 px-2.5 text-xs font-normal",
+                            // Next Stage: Emerald (progress/forward)
+                            "border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
+                            "transition-all hover:scale-[1.02]"
+                          )}
+                          onClick={() => {
+                            if (resultHasDraggedRef.current) {
+                              resultHasDraggedRef.current = false;
+                              return;
+                            }
+                            handleStatusClick(status);
+                          }}
+                          disabled={addConsultation.isPending}
+                        >
+                          {savingStatusId === status.id ? (
+                            <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                          ) : (
+                            <span
+                              className="mr-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full"
+                              style={{ backgroundColor: status.color_code }}
+                            />
+                          )}
+                          {status.name}
+                        </Button>
+                      ))}
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Dynamic Gradient Progress Bar */}
+              {(() => {
+                 // Calculate colors for gradient
+                 // Fallbacks: Slate-200 (Gray), Primary (Blue/Brand), Emerald-200 (Green)
+                 const prevColor = groupedStatuses.previousStage.length > 0 
+                    ? groupedStatuses.previousStage[groupedStatuses.previousStage.length - 1].color_code 
+                    : "#e2e8f0";
+                 
+                 const currColor = groupedStatuses.sameStage.find(s => s.id === currentStatusId)?.color_code 
+                    || groupedStatuses.sameStage[0]?.color_code 
+                    || "#3b82f6";
+                 
+                 const nextColor = groupedStatuses.nextStage.length > 0 
+                    ? groupedStatuses.nextStage[0].color_code 
+                    : "#a7f3d0";
+
+                 return (
+                   <div 
+                     className="mt-2 h-1 rounded-full opacity-80"
+                     style={{
+                       background: `linear-gradient(to right, ${prevColor}, ${currColor}, ${nextColor})`
+                     }}
+                   />
+                 );
+              })()}
             </div>
-          </div>
+
         )}
+
       </div>
     </div>
   );

@@ -2,19 +2,20 @@
 "use client";
 
 /**
- * ✅ PHASE 1 - WEEK 1: Client Component for Interactive Features
+ * ✅ REFACTORED: Client Component for Interactive Features
  *
  * This component handles all client-side interactivity:
- * - State management (pagination, filters, selection)
+ * - Filter state management via useLeadsFilter hook (Option D)
  * - Mutations (create, update, delete, import, export)
  * - Dialogs and user interactions
+ * - Bulk actions with dialogs (Option B)
  *
  * Server Component (parent) fetches initial data and passes it here.
  * React Query uses initialData for instant render, then revalidates.
  */
 
-import { useState, useMemo, useCallback, useEffect } from "react";
-import { Plus, Download, Upload, Command } from "lucide-react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { Upload, Command } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -28,51 +29,40 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  ResizablePanelGroup,
-  ResizablePanel,
-  ResizableHandle,
-} from "@/components/ui/resizable";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 
-import {
-  useLeads,
-  useDeleteLead,
-  useExportLeads,
-  useImportLeads,
-} from "@/hooks/useLeads";
+import { useLeads, useDeleteLead, useExportLeads, useImportLeads } from "@/hooks/useLeads";
+import { useLeadsFilter } from "@/hooks/useLeadsFilter";
 import { LeadDialog } from "@/components/leads/LeadDialog";
 import { AssignLeadDialog } from "@/components/leads/AssignLeadDialog";
-import { LeadCard } from "@/components/leads/LeadCard";
-import {
-  LeadStats,
-  LeadFilters,
-  LeadDetailPanel,
+import { 
+  LeadStats, 
+  LeadDetailPanel, 
+  LeadFilterBar, 
+  LeadsTable,
+  BulkStageDialog,
+  BulkDeleteDialog,
 } from "@/components/leads/command-center";
-import type { Lead, LeadStatus, LeadsPage } from "@/types/lead.types";
+import type { Lead, LeadsPage } from "@/types/lead.types";
 import { toast } from "sonner";
+
+// =============================================================================
+// TYPES
+// =============================================================================
 
 interface LeadsClientProps {
   initialData: LeadsPage;
 }
 
+// =============================================================================
+// MAIN COMPONENT
+// =============================================================================
+
 export function LeadsClient({ initialData }: LeadsClientProps) {
-  // =====================================================================
-  // STATE MANAGEMENT
-  // =====================================================================
+  // ✅ Option D: Use extracted filter hook
+  const { state: filterState, handlers: filterHandlers, apiFilters } = useLeadsFilter();
 
-  // Pagination
-  const [page, setPage] = useState(1);
-  const [pageSize] = useState(50);
-
-  // Filters
-  const [search, setSearch] = useState("");
-  const [statusFilters, setStatusFilters] = useState<LeadStatus[]>([]);
-  const [sourceFilter, setSourceFilter] = useState("all");
-  const [scoreRange, setScoreRange] = useState<[number, number]>([0, 100]);
-  const [offeringFilter, setOfferingFilter] = useState("all");
-
-  // Selection & Dialogs
+  // Selection & Dialog states
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
   const [leadDialogOpen, setLeadDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<"create" | "edit">("create");
@@ -80,55 +70,66 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);
   const [leadToDelete, setLeadToDelete] = useState<Lead | null>(null);
 
-  // =====================================================================
+  // ✅ Option B: Bulk action dialogs state
+  const [bulkStageDialogOpen, setBulkStageDialogOpen] = useState(false);
+  const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
+  const [selectedLeadsForBulk, setSelectedLeadsForBulk] = useState<Lead[]>([]);
+  const [resetSelectionKey, setResetSelectionKey] = useState(0);
+
+  // Ref to auto-scroll detail panel when selecting a new lead
+  const detailPanelRef = useRef<HTMLDivElement>(null);
+
+  // ===========================================================================
   // API CALLS
-  // =====================================================================
+  // ===========================================================================
 
-  // Build filters for API
-  const apiFilters = useMemo(() => {
-    const params: Record<string, unknown> = {
-      page,
-      page_size: pageSize,
-    };
-
-    if (search) params.search = search;
-    if (statusFilters.length > 0) params.status = statusFilters.join(",");
-    if (sourceFilter !== "all") params.source = sourceFilter;
-    if (offeringFilter !== "all") params.offering_id = parseInt(offeringFilter);
-
-    return params;
-  }, [page, pageSize, search, statusFilters, sourceFilter, offeringFilter]);
-
-  // ✅ Fetch data with initialData from Server Component
-  const { data: leadsPage, isLoading, isError, error } = useLeads(apiFilters, {
-    initialData: page === 1 && !search && statusFilters.length === 0 ? initialData : undefined,
+  const {
+    data: leadsPage,
+    isLoading,
+    isError,
+    error,
+  } = useLeads(apiFilters, {
+    initialData:
+      filterState.page === 1 &&
+      !filterState.search &&
+      filterState.statusFilters.length === 0 &&
+      filterState.offeringFilters.length === 0 &&
+      filterState.sourceFilters.length === 0 &&
+      filterState.stageFilters.length === 0 &&
+      filterState.officerFilters.length === 0 &&
+      !filterState.dateFrom &&
+      !filterState.dateTo
+        ? initialData
+        : undefined,
   });
 
   const deleteMutation = useDeleteLead();
   const exportMutation = useExportLeads();
   const importMutation = useImportLeads();
 
-  // Filter leads by score range (client-side for better UX)
+  // Filter leads by score range (client-side)
   const filteredLeads = useMemo(() => {
     if (!leadsPage?.leads) return [];
     return leadsPage.leads.filter(
-      (lead) => lead.lead_score >= scoreRange[0] && lead.lead_score <= scoreRange[1]
+      (lead) => 
+        lead.lead_score >= filterState.scoreRange[0] && 
+        lead.lead_score <= filterState.scoreRange[1]
     );
-  }, [leadsPage, scoreRange]);
+  }, [leadsPage, filterState.scoreRange]);
 
-  // ✅ AUTO-CLEAR: Clear selectedLeadId if lead is deleted/no longer exists
+  // Auto-clear selectedLeadId if lead is deleted/no longer exists
   useEffect(() => {
     if (selectedLeadId) {
-      const leadStillExists = filteredLeads.some(lead => lead.id === selectedLeadId);
+      const leadStillExists = filteredLeads.some((lead) => lead.id === selectedLeadId);
       if (!leadStillExists) {
-        setSelectedLeadId(null);
+        queueMicrotask(() => setSelectedLeadId(null));
       }
     }
   }, [filteredLeads, selectedLeadId]);
 
-  // =====================================================================
+  // ===========================================================================
   // HANDLERS
-  // =====================================================================
+  // ===========================================================================
 
   const handleLeadSelect = useCallback((lead: Lead) => {
     setSelectedLeadId(lead.id);
@@ -172,216 +173,172 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
     }
   };
 
-  const resetFilters = useCallback(() => {
-    setSearch("");
-    setStatusFilters([]);
-    setSourceFilter("all");
-    setScoreRange([0, 100]);
-    setOfferingFilter("all");
-    setPage(1);
+  // ✅ Option B: Bulk action handlers with dialogs
+  const handleBulkAssign = useCallback((leads: Lead[]) => {
+    if (leads.length > 0) {
+      setSelectedLead(leads[0]);
+      setAssignDialogOpen(true);
+      toast.info(`Gán ${leads.length} lead cho cán bộ`);
+    }
   }, []);
 
-  const handleSearchChange = useCallback((value: string) => {
-    setSearch(value);
-    setPage(1);
+  const handleBulkChangeStage = useCallback((leads: Lead[]) => {
+    setSelectedLeadsForBulk(leads);
+    setBulkStageDialogOpen(true);
   }, []);
 
-  const handleStatusChange = useCallback((statuses: LeadStatus[]) => {
-    setStatusFilters(statuses);
-    setPage(1);
+  const handleBulkExport = useCallback((leads: Lead[]) => {
+    exportMutation.mutate({ format: "csv", filters: apiFilters });
+    toast.success(`Xuất ${leads.length} lead đã chọn`);
+  }, [exportMutation, apiFilters]);
+
+  const handleBulkDelete = useCallback((leads: Lead[]) => {
+    setSelectedLeadsForBulk(leads);
+    setBulkDeleteDialogOpen(true);
   }, []);
 
-  const handleSourceChange = useCallback((source: string) => {
-    setSourceFilter(source);
-    setPage(1);
-  }, []);
+  // Auto-scroll detail panel to top when selecting a new lead
+  useEffect(() => {
+    if (selectedLeadId && detailPanelRef.current) {
+      detailPanelRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [selectedLeadId]);
 
-  const handleOfferingChange = useCallback((offering: string) => {
-    setOfferingFilter(offering);
-    setPage(1);
-  }, []);
-
-  // =====================================================================
+  // ===========================================================================
   // RENDER
-  // =====================================================================
+  // ===========================================================================
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Header */}
-      <div className="shrink-0 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="container py-4 space-y-4">
-          {/* Title & Actions */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-primary/10">
-                <Command className="h-5 w-5 text-primary" />
-              </div>
-              <div>
-                <h1 className="text-2xl font-bold tracking-tight">Trung Tâm Quản Lý Lead</h1>
-                <p className="text-sm text-muted-foreground">
-                  Quản lý và theo dõi tất cả lead của bạn
-                </p>
-              </div>
+    <div className="flex h-full flex-col overflow-hidden">
+      {/* Header - Compact */}
+      <div className="bg-background/95 supports-[backdrop-filter]:bg-background/60 shrink-0 border-b backdrop-blur">
+        <div className="flex items-center justify-between px-4 py-3">
+          <div className="flex items-center gap-3">
+            <div className="bg-primary/10 rounded-lg p-2">
+              <Command className="text-primary h-5 w-5" />
             </div>
-            <div className="flex items-center gap-2">
-              <input
-                type="file"
-                accept=".csv,.xlsx"
-                onChange={handleImport}
-                className="hidden"
-                id="import-file"
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => document.getElementById("import-file")?.click()}
-                disabled={importMutation.isPending}
-              >
-                <Upload className="mr-2 h-4 w-4" />
-                Nhập
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleExport}
-                disabled={exportMutation.isPending}
-              >
-                <Download className="mr-2 h-4 w-4" />
-                Xuất
-              </Button>
-              <Button
-                size="sm"
-                onClick={() => {
-                  setSelectedLead(null);
-                  setDialogMode("create");
-                  setLeadDialogOpen(true);
-                }}
-              >
-                <Plus className="mr-2 h-4 w-4" />
-                Lead Mới
-              </Button>
+            <div>
+              <h1 className="text-xl font-bold tracking-tight">Trung Tâm Quản Lý Lead</h1>
+              <p className="text-muted-foreground text-xs">
+                {leadsPage?.total_count?.toLocaleString() || 0} lead
+              </p>
             </div>
           </div>
-
-          {/* Stats Cards */}
-          <LeadStats
-            leads={leadsPage?.leads || []}
-            totalCount={leadsPage?.total_count || 0}
-            isLoading={isLoading}
+          {/* Hidden file input for import */}
+          <input
+            type="file"
+            accept=".csv,.xlsx"
+            onChange={handleImport}
+            className="hidden"
+            id="import-file"
           />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => document.getElementById("import-file")?.click()}
+            disabled={importMutation.isPending}
+            className="h-8"
+          >
+            <Upload className="mr-1.5 h-3.5 w-3.5" />
+            Nhập
+          </Button>
         </div>
       </div>
 
-      {/* Main Content - 3 Pane Resizable Layout */}
-      <ResizablePanelGroup
-        direction="horizontal"
-        className="flex-1"
-      >
-        {/* Pane 1: Left Sidebar - Filters (18%) */}
-        <ResizablePanel defaultSize={18} minSize={12} maxSize={25}>
-          <div className="h-full overflow-hidden border-r">
-            <LeadFilters
-              search={search}
-              onSearchChange={handleSearchChange}
-              statusFilters={statusFilters}
-              onStatusChange={handleStatusChange}
-              sourceFilter={sourceFilter}
-              onSourceChange={handleSourceChange}
-              scoreRange={scoreRange}
-              onScoreRangeChange={setScoreRange}
-              offeringFilter={offeringFilter}
-              onOfferingChange={handleOfferingChange}
-              onReset={resetFilters}
+      {/* Stats Cards */}
+      <div className="shrink-0 border-b px-4 py-2">
+        <LeadStats
+          leads={leadsPage?.leads || []}
+          totalCount={leadsPage?.total_count || 0}
+          isLoading={isLoading}
+        />
+      </div>
+
+      {/* Filter Bar */}
+      <LeadFilterBar
+        search={filterState.search}
+        onSearchChange={filterHandlers.handleSearchChange}
+        statusFilters={filterState.statusFilters}
+        onStatusChange={filterHandlers.handleStatusChange}
+        sourceFilters={filterState.sourceFilters}
+        onSourceChange={filterHandlers.handleSourceChange}
+        offeringFilters={filterState.offeringFilters}
+        onOfferingChange={filterHandlers.handleOfferingChange}
+        stageFilters={filterState.stageFilters}
+        onStageChange={filterHandlers.handleStageChange}
+        officerFilters={filterState.officerFilters}
+        onOfficerChange={filterHandlers.handleOfficerChange}
+        scoreRange={filterState.scoreRange}
+        onScoreRangeChange={filterHandlers.handleScoreRangeChange}
+        dateFrom={filterState.dateFrom}
+        dateTo={filterState.dateTo}
+        dateField={filterState.dateField}
+        onDateFromChange={filterHandlers.handleDateFromChange}
+        onDateToChange={filterHandlers.handleDateToChange}
+        onDateFieldChange={filterHandlers.handleDateFieldChange}
+        onReset={filterHandlers.resetFilters}
+        onExport={handleExport}
+        onAddLead={() => {
+          setSelectedLead(null);
+          setDialogMode("create");
+          setLeadDialogOpen(true);
+        }}
+        totalCount={leadsPage?.total_count || 0}
+      />
+
+      {/* Main Content - Split View with Independent Scroll */}
+      <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1">
+        {/* Left: Data Table (65%) */}
+        <ResizablePanel defaultSize={65} minSize={45} maxSize={80}>
+          <div className="flex h-full flex-col overflow-y-auto">
+            {isLoading ? (
+              <div className="space-y-2 p-4">
+                {Array.from({ length: 10 }).map((_, i) => (
+                  <Skeleton key={i} className="h-12 w-full" />
+                ))}
+              </div>
+            ) : isError ? (
+              <div className="flex h-40 items-center justify-center">
+                <div className="text-center">
+                  <p className="text-sm font-medium text-red-600">Lỗi tải lead</p>
+                  <p className="text-muted-foreground mt-1 text-xs">
+                    {error?.message || "Lỗi không xác định"}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <LeadsTable
+                leads={filteredLeads}
+                selectedLeadId={selectedLeadId}
+                onSelectLead={handleLeadSelect}
+                onEditLead={handleEdit}
+                onDeleteLead={handleDelete}
+                page={filterState.page}
+                pageSize={filterState.pageSize}
+                totalCount={leadsPage?.total_count || 0}
+                onPageChange={filterHandlers.setPage}
+                onBulkAssign={handleBulkAssign}
+                onBulkChangeStage={handleBulkChangeStage}
+                onBulkExport={handleBulkExport}
+                onBulkDelete={handleBulkDelete}
+                resetSelectionKey={resetSelectionKey}
+              />
+            )}
+          </div>
+        </ResizablePanel>
+
+        <ResizableHandle withHandle />
+
+        {/* Right: Detail Panel (35%) - Independent Scroll */}
+        <ResizablePanel defaultSize={35} minSize={25} maxSize={50}>
+          <div ref={detailPanelRef} className="h-full overflow-y-auto">
+            <LeadDetailPanel
+              leadId={selectedLeadId}
+              onEdit={handleEdit}
+              onDelete={handleDelete}
+              onAssign={handleAssign}
             />
           </div>
-        </ResizablePanel>
-
-        <ResizableHandle withHandle />
-
-        {/* Pane 2: Center - Lead List (32%) */}
-        <ResizablePanel defaultSize={32} minSize={20} maxSize={45}>
-          <div className="h-full flex flex-col overflow-hidden">
-            {/* List Header */}
-            <div className="shrink-0 px-4 py-2 border-b bg-muted/30 flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">
-                {filteredLeads.length} / {leadsPage?.total_count || 0} lead
-              </span>
-              {/* Pagination */}
-              <div className="flex items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setPage(Math.max(1, page - 1))}
-                  disabled={page === 1}
-                  className="h-7 px-2 text-xs"
-                >
-                  Trước
-                </Button>
-                <span className="text-xs text-muted-foreground px-1">
-                  {page}
-                </span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setPage(page + 1)}
-                  disabled={filteredLeads.length < pageSize}
-                  className="h-7 px-2 text-xs"
-                >
-                  Sau
-                </Button>
-              </div>
-            </div>
-
-            {/* Lead List */}
-            <ScrollArea className="flex-1">
-              <div className="p-2 space-y-2">
-                {isLoading ? (
-                  [...Array(10)].map((_, i) => (
-                    <Skeleton key={i} className="h-20 w-full rounded-lg" />
-                  ))
-                ) : isError ? (
-                  <div className="flex items-center justify-center h-40">
-                    <div className="text-center">
-                      <p className="text-red-600 font-medium text-sm">Lỗi tải lead</p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {error?.message || "Lỗi không xác định"}
-                      </p>
-                    </div>
-                  </div>
-                ) : filteredLeads.length === 0 ? (
-                  <div className="flex items-center justify-center h-40">
-                    <div className="text-center">
-                      <p className="font-medium text-sm">Không tìm thấy lead</p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Thử điều chỉnh bộ lọc
-                      </p>
-                    </div>
-                  </div>
-                ) : (
-                  filteredLeads.map((lead) => (
-                    <LeadCard
-                      key={lead.id}
-                      lead={lead}
-                      isSelected={selectedLeadId === lead.id}
-                      onSelect={handleLeadSelect}
-                    />
-                  ))
-                )}
-              </div>
-            </ScrollArea>
-          </div>
-        </ResizablePanel>
-
-        <ResizableHandle withHandle />
-
-        {/* Pane 3: Right - Lead Details (50%) */}
-        <ResizablePanel defaultSize={50} minSize={35}>
-          <LeadDetailPanel
-            leadId={selectedLeadId}
-            onEdit={handleEdit}
-            onDelete={handleDelete}
-            onAssign={handleAssign}
-          />
         </ResizablePanel>
       </ResizablePanelGroup>
 
@@ -399,26 +356,46 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
         lead={selectedLead}
       />
 
+      {/* Single Lead Delete */}
       <AlertDialog open={!!leadToDelete} onOpenChange={() => setLeadToDelete(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Xoá Lead</AlertDialogTitle>
             <AlertDialogDescription>
-              Bạn có chắc muốn xoá "{leadToDelete?.full_name}"?
-              Không thể hoàn tác thao tác này.
+              Bạn có chắc muốn xoá &ldquo;{leadToDelete?.full_name}&rdquo;? Không thể hoàn tác thao
+              tác này.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Hủy</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={confirmDelete}
-              className="bg-red-600 hover:bg-red-700"
-            >
+            <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700">
               Xoá
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* ✅ Option B: Bulk Stage Change Dialog */}
+      <BulkStageDialog
+        open={bulkStageDialogOpen}
+        onOpenChange={setBulkStageDialogOpen}
+        leads={selectedLeadsForBulk}
+        onSuccess={() => {
+          setSelectedLeadsForBulk([]);
+          setResetSelectionKey(prev => prev + 1);
+        }}
+      />
+
+      {/* ✅ Option B: Bulk Delete Dialog */}
+      <BulkDeleteDialog
+        open={bulkDeleteDialogOpen}
+        onOpenChange={setBulkDeleteDialogOpen}
+        leads={selectedLeadsForBulk}
+        onSuccess={() => {
+          setSelectedLeadsForBulk([]);
+          setResetSelectionKey(prev => prev + 1);
+        }}
+      />
     </div>
   );
 }

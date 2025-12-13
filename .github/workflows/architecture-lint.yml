@@ -1,0 +1,65 @@
+# Architecture Linting CI Workflow
+# =================================
+# Runs Semgrep to enforce architectural patterns on every PR
+
+name: Architecture Lint
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'Backend_FastAPI/app/**/*.py'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'Backend_FastAPI/app/**/*.py'
+
+jobs:
+  semgrep:
+    name: Architecture Lint
+    runs-on: ubuntu-latest
+    
+    defaults:
+      run:
+        working-directory: Backend_FastAPI
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Semgrep
+        run: pip install semgrep
+
+      - name: Run Architecture Rules
+        run: |
+          echo "🏛️ Running Architecture Lint..."
+          semgrep --config .semgrep/rules/ app/ --json > semgrep-results.json || true
+          
+          # Count errors and warnings
+          ERRORS=$(cat semgrep-results.json | python -c "import json,sys; d=json.load(sys.stdin); print(sum(1 for r in d.get('results',[]) if r.get('extra',{}).get('severity')=='ERROR'))")
+          WARNINGS=$(cat semgrep-results.json | python -c "import json,sys; d=json.load(sys.stdin); print(sum(1 for r in d.get('results',[]) if r.get('extra',{}).get('severity')=='WARNING'))")
+          
+          echo "📊 Results: $ERRORS errors, $WARNINGS warnings"
+          
+          # Show human-readable output
+          semgrep --config .semgrep/rules/ app/ --severity ERROR --severity WARNING
+          
+          # Fail on errors
+          if [ "$ERRORS" -gt "0" ]; then
+            echo "❌ Architecture violations found! Please fix $ERRORS error(s)."
+            exit 1
+          fi
+          
+          echo "✅ Architecture lint passed!"
+
+      - name: Upload Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-results
+          path: Backend_FastAPI/semgrep-results.json

@@ -156,6 +156,53 @@ export async function bulkAssignLeads(
   return response.data
 }
 
+/**
+ * Bulk update leads pipeline stage
+ * Admin only endpoint
+ *
+ * @throws {AxiosError} 403 if not admin
+ *
+ * @example
+ * ```ts
+ * await leadsApi.bulkUpdateLeadsStage({
+ *   lead_ids: [1, 2, 3],
+ *   pipeline_stage_id: 'stage_2'
+ * })
+ * ```
+ */
+export async function bulkUpdateLeadsStage(
+  data: { lead_ids: number[]; pipeline_stage_id: string }
+): Promise<{ message: string; updated_count: number }> {
+  const response = await api.post<{ message: string; updated_count: number }>(
+    '/api/leads/bulk-update-stage',
+    data
+  )
+  return response.data
+}
+
+/**
+ * Bulk delete leads
+ * Admin only endpoint
+ *
+ * @throws {AxiosError} 403 if not admin
+ *
+ * @example
+ * ```ts
+ * await leadsApi.bulkDeleteLeads({
+ *   lead_ids: [1, 2, 3]
+ * })
+ * ```
+ */
+export async function bulkDeleteLeads(
+  data: { lead_ids: number[] }
+): Promise<{ message: string; deleted_count: number }> {
+  const response = await api.post<{ message: string; deleted_count: number }>(
+    '/api/leads/bulk-delete',
+    data
+  )
+  return response.data
+}
+
 // ============================================
 // LEAD ACTIONS
 // ============================================
@@ -409,6 +456,8 @@ export const leadsApi = {
   // Assignment
   assignLead,
   bulkAssignLeads,
+  bulkUpdateLeadsStage,
+  bulkDeleteLeads,
 
   // Actions
   performLeadAction,

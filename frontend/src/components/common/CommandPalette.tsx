@@ -198,7 +198,7 @@ export function CommandPalette() {
           <CommandEmpty className="py-8 text-center">
             <div className="text-muted-foreground space-y-2 animate-in fade-in-0 zoom-in-95 duration-500">
               <div className="text-4xl">🔍</div>
-              <p className="text-sm font-medium">Không tìm thấy kết quả cho "{query}"</p>
+              <p className="text-sm font-medium">Không tìm thấy kết quả cho &ldquo;{query}&rdquo;</p>
               <p className="text-xs">Thử tìm kiếm trang hoặc tính năng</p>
             </div>
           </CommandEmpty>

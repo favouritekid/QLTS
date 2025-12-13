@@ -78,10 +78,11 @@ async def get_all_pipeline_stages(db: AsyncSession) -> List[dict]:
 
         log.debug("Cache miss (after acquiring distributed lock), querying DB")
 
-        # 3. Cache Miss: Query DB
-        query = select(models.PipelineStage).order_by(models.PipelineStage.order)
-        result = await db.execute(query)
-        stages_models = result.scalars().all()
+        # ✅ SPRINT 4 REFACTORED: Use PipelineRepository for data access
+        from app.repositories import PipelineRepository
+        
+        repo = PipelineRepository(db)
+        stages_models = await repo.get_all_stages_ordered()
 
         # 4. Chuyển đổi models sang list[dict] (include CRM fields)
         stages_data = [
@@ -148,10 +149,11 @@ async def get_all_consultation_statuses(
 
         log.debug("Cache miss (after acquiring distributed lock), querying DB")
 
-        # 3. Cache Miss: Query DB
-        query = select(models.ConsultationStatus)
-        result = await db.execute(query)
-        statuses_models = result.scalars().all()
+        # ✅ SPRINT 4 REFACTORED: Use PipelineRepository for data access
+        from app.repositories import PipelineRepository
+        
+        repo = PipelineRepository(db)
+        statuses_models = await repo.get_all_statuses()
 
         # 4. Chuyển đổi models sang list[dict] (include CRM fields)
         statuses_data = [
@@ -249,24 +251,18 @@ async def create_pipeline_stage(
                 f"Pipeline Stage ID '{stage_in.id}' already exists."
             )
 
+        # ✅ SPRINT 5: Use Repository for validation
+        from app.repositories import PipelineRepository
+        repo = PipelineRepository(db)
+
         # 2. Kiểm tra 'name' đã tồn tại
-        existing_name = await db.scalar(
-            select(models.PipelineStage).where(
-                models.PipelineStage.name == stage_in.name
-            )
-        )
-        if existing_name:
+        if await repo.check_stage_name_exists(stage_in.name):
             raise DuplicateResourceError(
                 f"Pipeline Stage name '{stage_in.name}' already exists."
             )
 
         # 3. Kiểm tra 'order' đã tồn tại
-        existing_order = await db.scalar(
-            select(models.PipelineStage).where(
-                models.PipelineStage.order == stage_in.order
-            )
-        )
-        if existing_order:
+        if await repo.check_stage_order_exists(stage_in.order):
             raise DuplicateResourceError(
                 f"Pipeline Stage order '{stage_in.order}' already exists."
             )
@@ -333,26 +329,20 @@ async def update_pipeline_stage(
         db_stage = await _get_stage_by_id(db, stage_id)
         update_data = stage_in.model_dump(exclude_unset=True)
 
+        # ✅ SPRINT 5: Use Repository for validation
+        from app.repositories import PipelineRepository
+        repo = PipelineRepository(db)
+
         # 1. Kiểm tra 'name' (nếu thay đổi)
         if "name" in update_data and update_data["name"] != db_stage.name:
-            existing_name = await db.scalar(
-                select(models.PipelineStage).where(
-                    models.PipelineStage.name == update_data["name"]
-                )
-            )
-            if existing_name:
+            if await repo.check_stage_name_exists(update_data["name"], exclude_id=stage_id):
                 raise DuplicateResourceError(
                     f"Pipeline Stage name '{update_data['name']}' already in use."
                 )
 
         # 2. Kiểm tra 'order' (nếu thay đổi)
         if "order" in update_data and update_data["order"] != db_stage.order:
-            existing_order = await db.scalar(
-                select(models.PipelineStage).where(
-                    models.PipelineStage.order == update_data["order"]
-                )
-            )
-            if existing_order:
+            if await repo.check_stage_order_exists(update_data["order"], exclude_id=stage_id):
                 raise DuplicateResourceError(
                     f"Pipeline Stage order '{update_data['order']}' already in use."
                 )
@@ -426,12 +416,12 @@ async def delete_pipeline_stage(
             "order": db_stage.order,
         }
 
+        # ✅ SPRINT 5: Use Repository for validation
+        from app.repositories import PipelineRepository
+        repo = PipelineRepository(db)
+
         # 1. KIỂM TRA RÀNG BUỘC (QUAN TRỌNG)
-        child_status_count = await db.scalar(
-            select(func.count(models.ConsultationStatus.id)).where(
-                models.ConsultationStatus.stage_id == stage_id
-            )
-        )
+        child_status_count = await repo.count_statuses_by_stage(stage_id)
         if child_status_count > 0:
             raise DuplicateResourceError(
                 f"Cannot delete stage '{stage_id}'. It has {child_status_count} consultation statuses linked to it."
@@ -505,13 +495,12 @@ async def create_consultation_status(
                 f"Consultation Status ID '{status_in.id}' already exists."
             )
 
+        # ✅ SPRINT 5: Use Repository for validation
+        from app.repositories import PipelineRepository
+        repo = PipelineRepository(db)
+
         # 2. Kiểm tra 'name' đã tồn tại
-        existing_name = await db.scalar(
-            select(models.ConsultationStatus).where(
-                models.ConsultationStatus.name == status_in.name
-            )
-        )
-        if existing_name:
+        if await repo.check_status_name_exists(status_in.name):
             raise DuplicateResourceError(
                 f"Consultation Status name '{status_in.name}' already exists."
             )
@@ -658,14 +647,13 @@ async def update_consultation_status(
                 converted_value=update_data["outcome_type"]
             )
 
+        # ✅ SPRINT 5: Use Repository for validation
+        from app.repositories import PipelineRepository
+        repo = PipelineRepository(db)
+
         # 1. Kiểm tra 'name' (nếu thay đổi)
         if "name" in update_data and update_data["name"] != db_status.name:
-            existing_name = await db.scalar(
-                select(models.ConsultationStatus).where(
-                    models.ConsultationStatus.name == update_data["name"]
-                )
-            )
-            if existing_name:
+            if await repo.check_status_name_exists(update_data["name"], exclude_id=status_id):
                 raise DuplicateResourceError(
                     f"Consultation Status name '{update_data['name']}' already in use."
                 )
@@ -764,23 +752,19 @@ async def delete_consultation_status(
             "stage_id": db_status.stage_id,
         }
 
+        # ✅ SPRINT 5: Use Repository for validation
+        from app.repositories import PipelineRepository
+        repo = PipelineRepository(db)
+
         # 1. KIỂM TRA RÀNG BUỘC (QUAN TRỌNG)
-        lead_count = await db.scalar(
-            select(func.count(models.Lead.id)).where(
-                models.Lead.consultation_status_id == status_id
-            )
-        )
+        lead_count = await repo.count_leads_by_status(status_id)
         if lead_count > 0:
             raise DuplicateResourceError(
                 f"Cannot delete status '{status_id}'. It is currently used by {lead_count} leads."
             )
 
         # (Tùy chọn) Kiểm tra xem có consultation nào đang dùng ID này không
-        consultation_count = await db.scalar(
-            select(func.count(models.Consultation.id)).where(
-                models.Consultation.consultation_status_id == status_id
-            )
-        )
+        consultation_count = await repo.count_consultations_by_status(status_id)
         if consultation_count > 0:
             raise DuplicateResourceError(
                 f"Cannot delete status '{status_id}'. It is linked to {consultation_count} consultation history records."
@@ -833,18 +817,15 @@ async def delete_consultation_status(
 
 
 async def get_all_allowed_transitions(db: AsyncSession) -> List[models.AllowedTransition]:
-    """Lấy tất cả các allowed transitions với thông tin statuses."""
-    query = (
-        select(models.AllowedTransition)
-        .options(
-            # Eager load related statuses
-            selectinload(models.AllowedTransition.from_status),
-            selectinload(models.AllowedTransition.to_status),
-        )
-        .order_by(models.AllowedTransition.from_status_id)
-    )
-    result = await db.execute(query)
-    return list(result.scalars().all())
+    """
+    Lấy tất cả các allowed transitions với thông tin statuses.
+    
+    ✅ SPRINT 4 REFACTORED: Now uses PipelineRepository for data access.
+    """
+    from app.repositories import PipelineRepository
+    
+    repo = PipelineRepository(db)
+    return await repo.get_all_transitions_with_statuses()
 
 
 async def create_allowed_transition(
@@ -872,14 +853,12 @@ async def create_allowed_transition(
                 "Cannot create transition from a status to itself."
             )
 
+        # ✅ SPRINT 5: Use Repository for validation (already imported above)
+        from app.repositories import PipelineRepository
+        repo = PipelineRepository(db)
+
         # 3. Kiểm tra transition đã tồn tại chưa
-        existing = await db.scalar(
-            select(models.AllowedTransition).where(
-                models.AllowedTransition.from_status_id == transition_in.from_status_id,
-                models.AllowedTransition.to_status_id == transition_in.to_status_id,
-            )
-        )
-        if existing:
+        if await repo.check_transition_exists(transition_in.from_status_id, transition_in.to_status_id):
             raise DuplicateResourceError(
                 f"Transition from '{transition_in.from_status_id}' to '{transition_in.to_status_id}' already exists."
             )
@@ -891,18 +870,11 @@ async def create_allowed_transition(
         # ✅ TRANSACTION FIX: Flush instead of commit
         await db.flush()
 
-        # ✅ FIX: Thay thế db.refresh bằng query có selectinload
-        # Điều này nạp trước các quan hệ (from_status, to_status) để tránh lỗi MissingGreenlet
-        query = (
-            select(models.AllowedTransition)
-            .options(
-                selectinload(models.AllowedTransition.from_status),
-                selectinload(models.AllowedTransition.to_status),
-            )
-            .where(models.AllowedTransition.id == db_transition.id)
-        )
-        result = await db.execute(query)
-        db_transition = result.scalar_one()
+        # ✅ SPRINT 4 REFACTORED: Use Repository for reload with relationships
+        from app.repositories import PipelineRepository
+        
+        repo = PipelineRepository(db)
+        db_transition = await repo.get_transition_by_id_with_statuses(db_transition.id)
 
         # Store names for callback
         from_name = db_transition.from_status.name if db_transition.from_status else "N/A"
@@ -955,17 +927,11 @@ async def delete_allowed_transition(
         Tuple of (None, post_commit_callback)
     """
     try:
-        # Load with relationships for socket event
-        query = (
-            select(models.AllowedTransition)
-            .options(
-                selectinload(models.AllowedTransition.from_status),
-                selectinload(models.AllowedTransition.to_status),
-            )
-            .where(models.AllowedTransition.id == transition_id)
-        )
-        result = await db.execute(query)
-        db_transition = result.scalar_one_or_none()
+        # ✅ SPRINT 4 REFACTORED: Use Repository for loading with relationships
+        from app.repositories import PipelineRepository
+        
+        repo = PipelineRepository(db)
+        db_transition = await repo.get_transition_by_id_with_statuses(transition_id)
 
         if not db_transition:
             raise ResourceNotFoundError(
@@ -1059,18 +1025,11 @@ async def validate_status_transition(
         )
         # Continue to check allowed_transitions as fallback
 
-    # TODO: Performance Opt - Có thể cache danh sách allowed_transitions vào Redis
-    # Hiện tại query DB trực tiếp để đảm bảo tính đúng đắn (Consistency)
-    query = select(models.AllowedTransition).where(
-        and_(
-            models.AllowedTransition.from_status_id == from_status_id,
-            models.AllowedTransition.to_status_id == to_status_id
-        )
-    )
-    result = await db.execute(query)
-    transition = result.scalar_one_or_none()
-
-    return transition is not None
+    # ✅ SPRINT 4 REFACTORED: Use Repository for transition check
+    from app.repositories import PipelineRepository
+    
+    repo = PipelineRepository(db)
+    return await repo.check_transition_exists(from_status_id, to_status_id)
 
 
 async def get_allowed_next_statuses(
@@ -1080,85 +1039,85 @@ async def get_allowed_next_statuses(
     """
     Lấy danh sách các trạng thái được phép chuyển đến từ trạng thái hiện tại.
 
-    Sử dụng bảng allowed_transitions để xác định workflow hợp lệ.
-    ✅ LUÔN bao gồm universal statuses (is_universal=True) bất kể workflow.
-    Nếu current_status_id là None (lead mới), trả về tất cả statuses.
+    Logic mới (User Request):
+    1.  **Current Status**: Luôn bao gồm trạng thái hiện tại.
+    2.  **Siblings**: Tự động bao gồm TẤT CẢ trạng thái trong cùng Stage hiện tại.
+    3.  **Allowed Transitions**: Các trạng thái Next Stage được cấu hình rõ ràng.
+    4.  **Universal**: Các trạng thái toàn cục (luôn có sẵn).
 
     Args:
         db: AsyncSession
         current_status_id: ID của trạng thái hiện tại (có thể None)
 
     Returns:
-        Danh sách ConsultationStatus được phép chuyển đến
+        Danh sách ConsultationStatus hợp lệ
     """
+    # ✅ SPRINT 4 REFACTORED: Use Repository for all status queries
+    from app.repositories import PipelineRepository
+
+    repo = PipelineRepository(db)
+
     # Nếu chưa có status (lead mới), trả về tất cả statuses
     if not current_status_id:
-        query = (
-            select(models.ConsultationStatus)
-            .options(selectinload(models.ConsultationStatus.stage))
-            .order_by(
-                models.ConsultationStatus.is_universal.desc(),  # Universal first
-                models.ConsultationStatus.stage_id,
-                models.ConsultationStatus.name
-            )
-        )
-        result = await db.execute(query)
-        return list(result.scalars().all())
+        return await repo.get_all_statuses_with_stage()
 
-    # Query các transitions được phép từ status hiện tại
-    query = (
-        select(models.ConsultationStatus)
-        .join(
-            models.AllowedTransition,
-            models.ConsultationStatus.id == models.AllowedTransition.to_status_id
-        )
-        .where(models.AllowedTransition.from_status_id == current_status_id)
-        .options(selectinload(models.ConsultationStatus.stage))
-        .order_by(models.ConsultationStatus.name)
-    )
-
-    result = await db.execute(query)
-    allowed_statuses = list(result.scalars().all())
-
-    # ✅ NEW: Luôn thêm universal statuses (có thể dùng ở mọi stage)
-    universal_query = (
-        select(models.ConsultationStatus)
-        .where(models.ConsultationStatus.is_universal == True)
-        .options(selectinload(models.ConsultationStatus.stage))
-        .order_by(models.ConsultationStatus.name)
-    )
-    universal_result = await db.execute(universal_query)
-    universal_statuses = list(universal_result.scalars().all())
-
-    # Lấy current status để kiểm tra
+    # 1. Lấy thông tin Current Status để biết Stage hiện tại
     current_status = await _get_status_by_id(db, current_status_id)
+    current_stage_id = current_status.stage_id if current_status else None
 
-    # ✅ IMPROVED: Merge với ordering rõ ràng
-    # Thứ tự: Current (if not universal) → Universal → Allowed (sorted)
-    final_statuses = []
-    allowed_ids = {s.id for s in allowed_statuses}
-    universal_ids = {s.id for s in universal_statuses}
+    # 2. Lấy danh sách Allowed Transitions (Cấu hình)
+    allowed_transition_statuses = await repo.get_allowed_next_statuses_from(current_status_id)
 
-    # 1. Current status first (nếu không phải universal và không trong allowed)
-    if current_status and not current_status.is_universal and current_status.id not in allowed_ids:
-        final_statuses.append(current_status)
+    # 3. Lấy danh sách Universal
+    universal_statuses = await repo.get_universal_statuses_with_stage()
 
-    # 2. Universal statuses (already sorted by name)
-    # Tránh duplicate với allowed list
-    for universal_status in universal_statuses:
-        if universal_status.id not in allowed_ids:
-            final_statuses.append(universal_status)
+    # 4. ✅ NEW: Lấy danh sách Siblings (Cùng Stage)
+    sibling_statuses = []
+    if current_stage_id:
+        sibling_statuses = await repo.get_statuses_for_stage(current_stage_id)
 
-    # 3. Allowed statuses (sorted by stage_id, then name for better UX)
-    sorted_allowed = sorted(allowed_statuses, key=lambda s: (s.stage_id, s.name))
-    final_statuses.extend(sorted_allowed)
+    # 5. Merge và Deduplicate
+    # Sử dụng dict để loại bỏ trùng lặp (key = id)
+    final_statuses_map = {}
 
-    log.debug(
-        "get_allowed_next_statuses",
-        current_status=current_status_id,
-        total_allowed=len(final_statuses),
-        universal_count=len(universal_statuses),
-        explicit_transitions=len(allowed_statuses),
-    )
+    # a. Thêm Current Status trước (để đảm bảo có mặt)
+    if current_status:
+        final_statuses_map[current_status.id] = current_status
 
-    return final_statuses
+    # b. Thêm Siblings (Ưu tiên hiển thị cùng nhóm hiện tại)
+    for s in sibling_statuses:
+        # Nếu sibling là universal, nó sẽ được xử lý ở bước d (để gom nhóm Universal riêng nếu cần)
+        # Nhưng ở đây ta cứ thêm vào, frontend sẽ lọc display.
+        # Lưu ý: Sibling đè Current nếu trùng (không sao, cùng object)
+        final_statuses_map[s.id] = s
+
+    # c. Thêm Allowed Transitions (Next Stage)
+    for s in allowed_transition_statuses:
+        final_statuses_map[s.id] = s
+
+    # d. Thêm Universal
+    for s in universal_statuses:
+        final_statuses_map[s.id] = s
+
+    # 6. Convert về List và Sắp xếp
+    final_list = list(final_statuses_map.values())
+
+    # Helper để sort:
+    # Order:
+    # 1. Current Stage (Siblings) include Current Status
+    # 2. Next Stages (Allowed Transitions)
+    # 3. Others (Universal outside of above logic?) - Universal thường display riêng dòng 1 Frontend.
+
+    # Tuy nhiên, hàm này trả về 1 list phẳng. Frontend sẽ group.
+    # Ta sort sơ bộ để debug dễ hơn: Stage Order -> Status Name
+    def sort_key(s):
+        stage_order = s.stage.order if s.stage else 999
+        return (stage_order, s.name)
+
+    # Cần load relationship stage cho các status (dùng repo đã load hoặc lazy load)
+    # Các hàm repo get_statuses_for_stage chưa chắc đã load stage?
+    # Kiểm tra lại repo: get_statuses_for_stage dùng select đơn giản.
+    # Để an toàn cho sort, ta nên tin tưởng frontend sort hoặc đảm bảo stage loaded.
+    # Ở đây ta trả về list, Frontend sẽ dùng field stage_id hoặc stage object để group.
+
+    return final_list

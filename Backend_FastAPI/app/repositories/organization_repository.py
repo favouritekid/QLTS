@@ -34,6 +34,111 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
         """
         super().__init__(db, models.OrganizationUnit)
 
+    # =========================================================================
+    # DETAIL VIEW METHODS (Sprint 3)
+    # =========================================================================
+
+    async def get_by_id_full(
+        self,
+        unit_id: int
+    ) -> Optional[models.OrganizationUnit]:
+        """
+        Get organization unit by ID with ALL relationships loaded.
+        
+        ✅ SPRINT 3: Added for organization_service migration.
+        
+        Includes:
+        - Parent unit
+        - Child units
+        - Major programs with offerings and academic info
+        
+        Args:
+            unit_id: Unit ID to fetch
+            
+        Returns:
+            OrganizationUnit with all relations or None if not found
+        """
+        query = (
+            select(self.model)
+            .options(
+                selectinload(models.OrganizationUnit.parent),
+                selectinload(models.OrganizationUnit.children),
+                selectinload(models.OrganizationUnit.major_programs).selectinload(
+                    models.MajorProgram.offerings
+                ).selectinload(
+                    models.ProgramOffering.academic_info_history
+                ),
+            )
+            .where(self.model.id == unit_id)
+        )
+        
+        result = await self.db.execute(query)
+        return result.scalars().unique().first()
+
+    async def get_major_program_by_id_full(
+        self,
+        program_id: int
+    ) -> Optional[models.MajorProgram]:
+        """
+        Get major program by ID with full relationship loading.
+        
+        ✅ SPRINT 3: Added for organization_service migration.
+        
+        Includes:
+        - Offerings with academic info history
+        - Parent unit
+        
+        Args:
+            program_id: MajorProgram ID to fetch
+            
+        Returns:
+            MajorProgram with all relations or None if not found
+        """
+        query = (
+            select(models.MajorProgram)
+            .options(
+                selectinload(models.MajorProgram.offerings).selectinload(
+                    models.ProgramOffering.academic_info_history
+                ),
+                selectinload(models.MajorProgram.unit)
+            )
+            .where(models.MajorProgram.id == program_id)
+        )
+        
+        result = await self.db.execute(query)
+        return result.scalars().unique().first()
+
+    async def get_offering_by_id_full(
+        self,
+        offering_id: int
+    ) -> Optional[models.ProgramOffering]:
+        """
+        Get program offering by ID with full relationship loading.
+        
+        ✅ SPRINT 3: Added for organization_service migration.
+        
+        Includes:
+        - Academic info history
+        - Parent program
+        
+        Args:
+            offering_id: ProgramOffering ID to fetch
+            
+        Returns:
+            ProgramOffering with all relations or None if not found
+        """
+        query = (
+            select(models.ProgramOffering)
+            .options(
+                selectinload(models.ProgramOffering.academic_info_history),
+                selectinload(models.ProgramOffering.program)
+            )
+            .where(models.ProgramOffering.id == offering_id)
+        )
+        
+        result = await self.db.execute(query)
+        return result.scalars().unique().first()
+
     async def get_filtered(
         self,
         skip: int = 0,
@@ -364,3 +469,362 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
             descendant.is_active = False
 
         await self.db.flush()
+
+    # =========================================================================
+    # VALIDATION HELPERS (Sprint 3 - Continued)
+    # =========================================================================
+
+    async def check_duplicate_name(
+        self,
+        name: str,
+        parent_id: Optional[int],
+        exclude_id: Optional[int] = None
+    ) -> Optional[models.OrganizationUnit]:
+        """
+        Check for duplicate unit name within the same parent.
+        Only checks active units.
+        
+        Args:
+            name: Unit name to check
+            parent_id: Parent unit ID (None for root)
+            exclude_id: Unit ID to exclude (for updates)
+            
+        Returns:
+            Existing unit if duplicate found, None otherwise
+        """
+        query = select(self.model).where(
+            self.model.name == name.strip(),
+            self.model.parent_id == parent_id,
+            self.model.is_active == True
+        )
+        
+        if exclude_id is not None:
+            query = query.where(self.model.id != exclude_id)
+        
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
+    async def check_duplicate_program_code(
+        self,
+        code: str,
+        exclude_id: Optional[int] = None
+    ) -> Optional[models.MajorProgram]:
+        """
+        Check for duplicate MajorProgram code.
+        
+        Args:
+            code: Program code to check
+            exclude_id: Program ID to exclude (for updates)
+            
+        Returns:
+            Existing program if duplicate found, None otherwise
+        """
+        query = select(models.MajorProgram).where(
+            models.MajorProgram.code == code
+        )
+        
+        if exclude_id is not None:
+            query = query.where(models.MajorProgram.id != exclude_id)
+        
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
+    async def get_user_counts_by_unit(self) -> dict:
+        """
+        Get active user counts grouped by unit_id.
+        
+        Returns:
+            Dict mapping unit_id -> user_count
+        """
+        query = (
+            select(
+                models.User.unit_id,
+                func.count(models.User.id).label("user_count")
+            )
+            .where(
+                models.User.unit_id.isnot(None),
+                models.User.status == "active"
+            )
+            .group_by(models.User.unit_id)
+        )
+        
+        result = await self.db.execute(query)
+        return {row.unit_id: row.user_count for row in result.all()}
+
+    async def check_duplicate_offering(
+        self,
+        program_id: int,
+        offering_type: str,
+        exclude_id: Optional[int] = None
+    ) -> Optional[models.ProgramOffering]:
+        """
+        Check for duplicate ProgramOffering (same program + offering_type).
+        
+        Args:
+            program_id: Parent program ID
+            offering_type: Offering type to check
+            exclude_id: Offering ID to exclude (for updates)
+            
+        Returns:
+            Existing offering if duplicate found, None otherwise
+        """
+        query = select(models.ProgramOffering).where(
+            models.ProgramOffering.program_id == program_id,
+            models.ProgramOffering.offering_type == offering_type
+        )
+        
+        if exclude_id is not None:
+            query = query.where(models.ProgramOffering.id != exclude_id)
+        
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
+    # =========================================================================
+    # ACADEMIC INFO METHODS (Sprint 3 - Final)
+    # =========================================================================
+
+    async def get_academic_info_by_offering_and_year(
+        self,
+        offering_id: int,
+        academic_year: int
+    ) -> Optional[models.OfferingAcademicInfo]:
+        """Get academic info for a specific offering and year."""
+        query = select(models.OfferingAcademicInfo).where(
+            models.OfferingAcademicInfo.offering_id == offering_id,
+            models.OfferingAcademicInfo.academic_year == academic_year
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
+    async def get_current_academic_info(
+        self,
+        offering_id: int,
+        current_year: int
+    ) -> Optional[models.OfferingAcademicInfo]:
+        """Get current year's published academic info for an offering."""
+        query = select(models.OfferingAcademicInfo).where(
+            models.OfferingAcademicInfo.offering_id == offering_id,
+            models.OfferingAcademicInfo.academic_year == current_year,
+            models.OfferingAcademicInfo.is_published == True
+        ).limit(1)
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
+    async def get_academic_info_history(
+        self,
+        offering_id: int,
+        published_only: bool = False
+    ) -> List[models.OfferingAcademicInfo]:
+        """Get all academic info history for an offering, ordered by year (newest first)."""
+        query = select(models.OfferingAcademicInfo).where(
+            models.OfferingAcademicInfo.offering_id == offering_id
+        )
+        
+        if published_only:
+            query = query.where(models.OfferingAcademicInfo.is_published == True)
+        
+        query = query.order_by(models.OfferingAcademicInfo.academic_year.desc())
+        
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+    # =========================================================================
+    # TREE & VALIDATION METHODS (Sprint 3 - Final Batch)
+    # =========================================================================
+
+    async def get_tree_with_programs(
+        self,
+        depth: int = 9
+    ) -> List[models.OrganizationUnit]:
+        """
+        Get organization tree with programs and offerings loaded.
+        
+        Args:
+            depth: Maximum depth for recursive loading
+            
+        Returns:
+            List of root organization units with all descendants
+        """
+        from ..services.organization_service import create_recursive_unit_loader
+        
+        recursive_loader = create_recursive_unit_loader(depth=depth)
+        
+        query = (
+            select(self.model)
+            .where(
+                self.model.is_active == True,
+                self.model.parent_id == None
+            )
+            .options(
+                selectinload(models.OrganizationUnit.major_programs).selectinload(
+                    models.MajorProgram.offerings
+                ),
+                recursive_loader,
+                selectinload(models.OrganizationUnit.parent)
+            )
+            .order_by(self.model.name)
+        )
+        
+        result = await self.db.execute(query)
+        return list(result.scalars().unique().all())
+
+    async def check_cycle_in_hierarchy(
+        self,
+        unit_id: int,
+        new_parent_id: int
+    ) -> bool:
+        """
+        Check if setting new_parent_id would create a cycle.
+        Uses recursive CTE to traverse up from new_parent_id.
+        
+        Returns:
+            True if cycle detected, False otherwise
+        """
+        from sqlalchemy import text
+        
+        ancestor_cte_sql = text("""
+            WITH RECURSIVE ancestor_chain AS (
+                SELECT id, parent_id, 1 as depth
+                FROM organization_unit
+                WHERE id = :new_parent_id
+                UNION ALL
+                SELECT u.id, u.parent_id, ac.depth + 1
+                FROM organization_unit u
+                JOIN ancestor_chain ac ON u.id = ac.parent_id
+                WHERE ac.depth < 100
+            )
+            SELECT id FROM ancestor_chain WHERE id = :unit_id LIMIT 1;
+        """)
+        
+        result = await self.db.execute(
+            ancestor_cte_sql,
+            {"new_parent_id": new_parent_id, "unit_id": unit_id}
+        )
+        return result.scalar_one_or_none() is not None
+
+    async def count_active_children(self, unit_id: int) -> int:
+        """Count active child units."""
+        query = select(func.count(self.model.id)).where(
+            self.model.parent_id == unit_id,
+            self.model.is_active == True
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one() or 0
+
+    async def count_active_programs(self, unit_id: int) -> int:
+        """Count active major programs for a unit."""
+        query = select(func.count(models.MajorProgram.id)).where(
+            models.MajorProgram.unit_id == unit_id,
+            models.MajorProgram.is_active == True
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one() or 0
+
+    async def count_assigned_users(self, unit_id: int) -> int:
+        """Count users assigned to a unit."""
+        query = select(func.count(models.User.id)).where(
+            models.User.unit_id == unit_id,
+            models.User.status == "active"
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one() or 0
+
+    # =========================================================================
+    # TREE AGGREGATION & SEARCH (Sprint 3 - Final)
+    # =========================================================================
+
+    async def get_tree_for_aggregation(
+        self,
+        include_inactive: bool = False
+    ) -> List[models.OrganizationUnit]:
+        """
+        Get organization tree for aggregation (no academic info history).
+        
+        Used by get_tree_with_aggregation for efficient tree building.
+        Academic info is loaded separately for the specific year.
+        """
+        query = (
+            select(self.model)
+            .options(
+                selectinload(models.OrganizationUnit.major_programs).selectinload(
+                    models.MajorProgram.offerings
+                ),
+                selectinload(models.OrganizationUnit.children)
+            )
+            .order_by(self.model.name)
+        )
+        
+        if not include_inactive:
+            query = query.where(self.model.is_active == True)
+        
+        result = await self.db.execute(query)
+        return list(result.scalars().unique().all())
+
+    async def get_academic_info_for_year(
+        self,
+        academic_year: int
+    ) -> List[models.OfferingAcademicInfo]:
+        """Get all published academic info for a specific year."""
+        query = (
+            select(models.OfferingAcademicInfo)
+            .where(
+                models.OfferingAcademicInfo.academic_year == academic_year,
+                models.OfferingAcademicInfo.is_published == True
+            )
+        )
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+    async def get_descendant_unit_ids(self, unit_id: int) -> List[int]:
+        """
+        Get all descendant unit IDs using recursive CTE.
+        Includes the starting unit_id.
+        """
+        from sqlalchemy import text
+        
+        sql = text("""
+            WITH RECURSIVE unit_hierarchy AS (
+               SELECT id FROM organization_unit WHERE id = :unit_id
+               UNION ALL
+               SELECT u.id FROM organization_unit u
+               JOIN unit_hierarchy uh ON u.parent_id = uh.id
+            )
+            SELECT id FROM unit_hierarchy;
+        """)
+        
+        result = await self.db.execute(sql, {"unit_id": unit_id})
+        return [row[0] for row in result]
+
+    async def search_programs_in_hierarchy(
+        self,
+        unit_ids: List[int],
+        search_term: Optional[str] = None,
+        limit: int = 20
+    ) -> List[models.MajorProgram]:
+        """
+        Search for active programs in the given unit IDs.
+        
+        Args:
+            unit_ids: List of unit IDs to search in
+            search_term: Optional search term for name filtering
+            limit: Maximum results to return
+            
+        Returns:
+            List of matching MajorProgram objects
+        """
+        if not unit_ids:
+            return []
+        
+        query = select(models.MajorProgram).filter(
+            models.MajorProgram.unit_id.in_(unit_ids),
+            models.MajorProgram.is_active == True
+        )
+        
+        if search_term:
+            safe_pattern = f"%{search_term.strip()}%"
+            query = query.filter(models.MajorProgram.name.ilike(safe_pattern))
+        
+        query = query.order_by(models.MajorProgram.name).limit(limit)
+        
+        result = await self.db.execute(query)
+        return list(result.scalars().all())

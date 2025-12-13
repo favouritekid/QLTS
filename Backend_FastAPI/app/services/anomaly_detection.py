@@ -19,12 +19,13 @@ log = structlog.get_logger(__name__)
 class AnomalyDetector:
     """
     Detects suspicious login patterns and anomalies.
+    
+    Configuration now comes from settings (see config.py).
+    These can be overridden via environment variables:
+      ANOMALY_MAX_FAILED_LOGINS_PER_HOUR, ANOMALY_MAX_SESSIONS_PER_USER,
+      ANOMALY_SUSPICIOUS_COUNTRY_CHANGE_HOURS, ANOMALY_UNUSUAL_LOGIN_START_HOUR,
+      ANOMALY_UNUSUAL_LOGIN_END_HOUR
     """
-
-    # Thresholds for anomaly detection
-    MAX_FAILED_LOGINS_PER_HOUR = 5
-    MAX_SESSIONS_PER_USER = 10
-    SUSPICIOUS_COUNTRY_CHANGE_HOURS = 2  # Hours between logins from different countries
 
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -141,7 +142,7 @@ class AnomalyDetector:
 
         # Get most recent session (within last N hours)
         time_threshold = datetime.now(timezone.utc) - timedelta(
-            hours=self.SUSPICIOUS_COUNTRY_CHANGE_HOURS
+            hours=settings.ANOMALY_SUSPICIOUS_COUNTRY_CHANGE_HOURS
         )
 
         result = await self.db.execute(
@@ -194,7 +195,7 @@ class AnomalyDetector:
         )
         session_count = result.scalar()
 
-        is_excessive = session_count >= self.MAX_SESSIONS_PER_USER
+        is_excessive = session_count >= settings.ANOMALY_MAX_SESSIONS_PER_USER
 
         if is_excessive:
             log.warning(
@@ -243,7 +244,7 @@ class AnomalyDetector:
             hour = login_time.hour
 
         # Consider 2 AM - 6 AM (local time) as unusual (this is very simplified)
-        is_unusual = 2 <= hour < 6
+        is_unusual = settings.ANOMALY_UNUSUAL_LOGIN_START_HOUR <= hour < settings.ANOMALY_UNUSUAL_LOGIN_END_HOUR
 
         if is_unusual:
             log.info(

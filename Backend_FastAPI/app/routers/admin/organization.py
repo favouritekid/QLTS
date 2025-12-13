@@ -12,6 +12,8 @@ Dependencies: organization_service (from PHASE 1)
 
 Complexity: MEDIUM (hierarchical CRUD, 3-tier architecture)
 """
+from typing import Any, Dict
+
 from app.core.rate_limits import limiter, RateLimits  # ✅ Rate limiting
 
 import structlog
@@ -25,7 +27,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models, schemas
 from app.core import deps
+from app.core.events import SystemEvents
 from app.services import organization_service
+from app.services.notification_dispatcher import dispatch
 from app.utils.exceptions import BadRequest
 
 log = structlog.get_logger(__name__)
@@ -35,6 +39,26 @@ router = APIRouter(tags=["Admin - Organization"])
 
 # Permission dependency
 PermissionDep = Depends(deps.check_permission)
+
+
+# ============================================================================
+# NOTIFICATION HELPER (DRY - Reduces router boilerplate)
+# ============================================================================
+
+async def _dispatch_org_notification(
+    db: AsyncSession,
+    event: SystemEvents,
+    payload: Dict[str, Any],
+) -> None:
+    """
+    Helper to dispatch organization notifications.
+    Wraps dispatch call with error handling to prevent notification failures
+    from affecting the main CRUD operation.
+    """
+    try:
+        await dispatch(db=db, event=event, payload=payload, auto_commit=True)
+    except Exception as e:
+        log.warning(f"Failed to dispatch {event.value} notification: {e}")
 
 
 # ============================================================================
@@ -58,6 +82,16 @@ async def create_new_organization_unit(
     unit, post_commit = await organization_service.create_organization_unit(db, unit_in)
     await db.commit()
     await post_commit()
+    
+    # ✅ Dispatch notification (fire-and-forget)
+    await _dispatch_org_notification(db, SystemEvents.UNIT_CREATED, {
+        "unit_id": unit.id,
+        "unit_name": unit.name,
+        "unit_type": unit.type,
+        "parent_id": unit.parent_id,
+        "actor_id": current_admin.id,
+    })
+    
     return unit
 
 
@@ -120,6 +154,16 @@ async def update_existing_organization_unit(
     updated_unit, post_commit = await organization_service.update_organization_unit(db, unit.id, unit_in)
     await db.commit()
     await post_commit()
+    
+    # ✅ Dispatch notification (fire-and-forget)
+    await _dispatch_org_notification(db, SystemEvents.UNIT_UPDATED, {
+        "unit_id": updated_unit.id,
+        "unit_name": updated_unit.name,
+        "unit_type": updated_unit.type,
+        "parent_id": updated_unit.parent_id,
+        "actor_id": current_admin.id,
+    })
+    
     return updated_unit
 
 
@@ -158,6 +202,16 @@ async def delete_existing_organization_unit(
     _, post_commit = await organization_service.delete_organization_unit(db, unit.id)
     await db.commit()
     await post_commit()
+    
+    # ✅ Dispatch notification (fire-and-forget)
+    await _dispatch_org_notification(db, SystemEvents.UNIT_DELETED, {
+        "unit_id": unit.id,
+        "unit_name": unit.name,
+        "unit_type": unit.type,
+        "parent_id": unit.parent_id,
+        "actor_id": current_admin.id,
+    })
+    
     return None
 
 
@@ -182,6 +236,15 @@ async def create_new_program(
     program, post_commit = await organization_service.create_major_program(db, program_in)
     await db.commit()
     await post_commit()
+    
+    # ✅ Dispatch notification (fire-and-forget)
+    await _dispatch_org_notification(db, SystemEvents.PROGRAM_CREATED, {
+        "program_id": program.id,
+        "program_name": program.name,
+        "program_code": program.code,
+        "actor_id": current_admin.id,
+    })
+    
     return program
 
 
@@ -216,6 +279,15 @@ async def update_existing_program(
     program, post_commit = await organization_service.update_major_program(db, program_id, program_in)
     await db.commit()
     await post_commit()
+    
+    # ✅ Dispatch notification (fire-and-forget)
+    await _dispatch_org_notification(db, SystemEvents.PROGRAM_UPDATED, {
+        "program_id": program.id,
+        "program_name": program.name,
+        "program_code": program.code,
+        "actor_id": current_admin.id,
+    })
+    
     return program
 
 
@@ -231,9 +303,19 @@ async def delete_existing_program(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Xóa chương trình đào tạo (soft delete)."""
+    program = await organization_service.get_major_program_by_id(db, program_id)  # Get info before delete
     _, post_commit = await organization_service.delete_major_program(db, program_id)
     await db.commit()
     await post_commit()
+    
+    # ✅ Dispatch notification (fire-and-forget)
+    await _dispatch_org_notification(db, SystemEvents.PROGRAM_DELETED, {
+        "program_id": program_id,
+        "program_name": program.name,
+        "program_code": program.code,
+        "actor_id": current_admin.id,
+    })
+    
     return None
 
 
@@ -263,6 +345,15 @@ async def create_new_offering(
     offering, post_commit = await organization_service.create_program_offering(db, offering_in)
     await db.commit()
     await post_commit()
+    
+    # ✅ Dispatch notification (fire-and-forget)
+    await _dispatch_org_notification(db, SystemEvents.OFFERING_CREATED, {
+        "offering_id": offering.id,
+        "offering_name": offering.name,
+        "program_id": offering.program_id,
+        "actor_id": current_admin.id,
+    })
+    
     return offering
 
 
@@ -304,6 +395,14 @@ async def update_existing_offering(
 
     # Execute post-commit callback
     await post_commit()
+    
+    # ✅ Dispatch notification (fire-and-forget)
+    await _dispatch_org_notification(db, SystemEvents.OFFERING_UPDATED, {
+        "offering_id": offering.id,
+        "offering_name": offering.name,
+        "program_id": offering.program_id,
+        "actor_id": current_admin.id,
+    })
 
     return offering
 
@@ -320,9 +419,20 @@ async def delete_existing_offering(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Xóa loại hình đào tạo (soft delete)."""
+    # Get offering info before delete
+    offering = await organization_service.get_program_offering_by_id(db, offering_id)
     _, post_commit = await organization_service.delete_program_offering(db, offering_id)
     await db.commit()
     await post_commit()
+    
+    # ✅ Dispatch notification (fire-and-forget)
+    await _dispatch_org_notification(db, SystemEvents.OFFERING_DELETED, {
+        "offering_id": offering_id,
+        "offering_name": offering.name,
+        "program_id": offering.program_id,
+        "actor_id": current_admin.id,
+    })
+    
     return None
 
 

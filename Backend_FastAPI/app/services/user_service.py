@@ -241,13 +241,12 @@ async def _create_or_update_user_assignment(
         user.current_assignment_id = None
         return None
 
+    # ✅ SPRINT 5: Use Repository for active assignment lookup
+    from app.repositories import UserRepository
+    user_repo = UserRepository(db)
+    
     # 1. Find and deactivate old active assignment (if exists)
-    old_assignment_query = select(models.UserUnitAssignment).where(
-        models.UserUnitAssignment.user_id == user.id,
-        models.UserUnitAssignment.is_active == True
-    )
-    result = await db.execute(old_assignment_query)
-    old_assignment = result.scalar_one_or_none()
+    old_assignment = await user_repo.get_active_assignment_by_user(user.id)
 
     if old_assignment:
         log.debug(
@@ -509,112 +508,39 @@ async def get_users(
     """
     Get users with filtering, sorting, and pagination.
 
-    ✅ PERFORMANCE FIX: Uses eager loading (selectinload) to prevent N+1 queries
-    when accessing user relationships like unit, sessions, etc.
-
-    This is critical for performance when displaying user lists in admin panel,
-    especially when showing related data like unit names.
+    ✅ SPRINT 2 REFACTORED: Now uses UserRepository for data access.
+    
+    Supports:
+    - Hierarchical unit filter (with include_children)
+    - Full-text search (using search_vector)
+    - Multi-value filters (role, status)
+    - Eager loading for N+1 prevention
     """
-    # ✅ Eager load relationships to prevent N+1 queries
-    query = select(models.User).options(
-        selectinload(models.User.unit),  # Load organization unit (for unit.name)
-        selectinload(models.User.sessions),  # Load sessions (if needed)
-    )
-
-    allowed_filters = {
-        "role": models.User.role,
-        "status": models.User.status,
-    }
-
-    # =========================================================================
-    # ✅ HIERARCHICAL UNIT FILTER: Support include_children parameter
-    # =========================================================================
-    # Check if we should include users from child units
-    include_children = str(params.get("include_children", "")).lower() == "true"
-
+    from app.repositories import UserRepository
+    
+    repo = UserRepository(db)
+    
+    # Extract params
+    unit_id = None
     if "unit_id" in params and params["unit_id"]:
         try:
             unit_id = int(params["unit_id"])
-
-            if include_children:
-                # ✅ Recursive CTE to get all descendant unit IDs
-                # This allows filtering users from parent unit + all children
-                cte_query = text("""
-                    WITH RECURSIVE unit_hierarchy AS (
-                        -- Base case: the selected unit
-                        SELECT id FROM organization_unit WHERE id = :unit_id
-                        UNION ALL
-                        -- Recursive case: child units
-                        SELECT u.id FROM organization_unit u
-                        JOIN unit_hierarchy uh ON u.parent_id = uh.id
-                    )
-                    SELECT id FROM unit_hierarchy
-                """)
-
-                # Execute CTE to get list of unit IDs
-                hierarchy_result = await db.execute(cte_query, {"unit_id": unit_id})
-                all_unit_ids = [row[0] for row in hierarchy_result.fetchall()]
-
-                if all_unit_ids:
-                    query = query.filter(models.User.unit_id.in_(all_unit_ids))
-                    log.debug(
-                        "Hierarchical unit filter applied",
-                        parent_unit_id=unit_id,
-                        total_units=len(all_unit_ids)
-                    )
-            else:
-                # Simple exact match (for leaf units or when include_children=false)
-                query = query.filter(models.User.unit_id == unit_id)
-
         except ValueError:
             log.warning(f"Invalid unit_id value: {params['unit_id']}")
-
-    # =========================================================================
-    # ✅ SECURITY FIX: Search DoS Prevention (CVSS 7.5 HIGH)
-    # Old code used ILIKE '%term%' which caused full table scan (500ms per query)
-    # New code uses PostgreSQL Full-Text Search with GIN index (2ms per query)
-    # See migration: p1q2r3s4t5u6_add_user_search_indexes.py
-    # =========================================================================
-    for key, value in params.items():
-        # Skip unit_id - already handled above
-        if key in ["unit_id", "include_children"]:
-            continue
-
-        if key in allowed_filters and value:
-            values_to_filter = [v.strip() for v in value.split(",")]
-            query = query.filter(allowed_filters[key].in_(values_to_filter))
-        elif key == "search" and value:
-            # ✅ NEW: Use full-text search with search_vector column
-            # Convert spaces to AND operator for multi-word search
-            # Example: "john doe" → "john & doe" (both words must match)
-            search_term = value.strip().replace(' ', ' & ')
-
-            # Use PostgreSQL's @@ operator for full-text search
-            # This uses the GIN index on search_vector column (250x faster)
-            query = query.filter(
-                models.User.search_vector.op('@@')(
-                    func.to_tsquery('simple', search_term)
-                )
-            )
-
-    count_query = select(func.count()).select_from(query.alias())
-    total_count_result = await db.execute(count_query)
-    total_count = total_count_result.scalar_one()
-
-    sort = params.get("sort", "id")
-    order = params.get("order", "asc")
-    if hasattr(models.User, sort):
-        sort_column = getattr(models.User, sort)
-        if order.lower() == "desc":
-            query = query.order_by(sort_column.desc())
-        else:
-            query = query.order_by(sort_column.asc())
-
-    paged_query = query.offset(skip).limit(limit)
-    users_result = await db.execute(paged_query)
-    users = users_result.scalars().all()
-
-    return total_count, users
+    
+    include_children = str(params.get("include_children", "")).lower() == "true"
+    
+    return await repo.search_with_hierarchy(
+        skip=skip,
+        limit=limit,
+        role=params.get("role"),
+        status=params.get("status"),
+        unit_id=unit_id,
+        include_children=include_children,
+        search=params.get("search"),
+        sort_by=params.get("sort", "id"),
+        order=params.get("order", "asc"),
+    )
 
 
 # --- Hàm Cập nhật User ---
@@ -889,20 +815,14 @@ async def delete_user(db: AsyncSession, user_id: int) -> Tuple[None, Callable]:
         Tuple of (None, post_commit_callback)
     """
     try:
+        # ✅ SPRINT 5: Use Repository for eager loading
+        from app.repositories import UserRepository
+        user_repo = UserRepository(db)
+        
         # ✅ FIX MissingGreenlet: Eager load cascade-delete relationships
         # Without this, SQLAlchemy tries to lazy-load during cascade delete,
         # which fails in async mode with "greenlet_spawn has not been called"
-        stmt = (
-            select(models.User)
-            .where(models.User.id == user_id)
-            .options(
-                selectinload(models.User.sessions),
-                selectinload(models.User.unit_assignments),
-                selectinload(models.User.notification_preference),
-            )
-        )
-        result = await db.execute(stmt)
-        user_to_delete = result.scalar_one_or_none()
+        user_to_delete = await user_repo.get_user_for_delete(user_id)
 
         if not user_to_delete:
             raise ResourceNotFoundError(detail=f"User with id {user_id} not found.")
@@ -1325,39 +1245,30 @@ async def perform_bulk_action(
             )
             raise BadRequest(detail=f"Unsupported bulk action: {action}.")
 
+        # ✅ SPRINT 5: Use Repository for user loading
+        from app.repositories import UserRepository
+        user_repo = UserRepository(db)
+        
         # ✅ FIX MissingGreenlet: Eager load cascade-delete relationships for delete action
-        # Without this, SQLAlchemy tries to lazy-load during cascade delete
-        query = select(models.User).where(models.User.id.in_(user_ids))
         if action == "delete":
-            query = query.options(
-                selectinload(models.User.sessions),
-                selectinload(models.User.unit_assignments),
-                selectinload(models.User.notification_preference),
-            )
-        users_to_process_result = await db.execute(query)
-        users_to_process = users_to_process_result.scalars().all()
+            users_to_process = await user_repo.get_users_by_ids_for_delete(user_ids)
+        else:
+            users_to_process = await user_repo.get_by_ids(user_ids)
 
         if not users_to_process:
             log.info(
                 "Bulk action: No users found matching provided IDs.",
                 user_ids=user_ids,
                 admin_id=admin_user.id,
-            )  # ✅ SỬA LỖI: Xóa `await`
+            )  # ✅ SỬa LỖI: Xóa `await`
             return "No users found for the provided IDs. 0 users affected."
 
         processed_count = 0
         message = ""
         if action == "delete":
-            # Check for FK constraints before deleting
-            from sqlalchemy import func as sql_func
-
+            # ✅ SPRINT 5: Use Repository for consultation check
             # Check if any users have consultations (cannot delete)
-            consultation_check = await db.execute(
-                select(models.Consultation.officer_id, sql_func.count(models.Consultation.id))
-                .where(models.Consultation.officer_id.in_(user_ids))
-                .group_by(models.Consultation.officer_id)
-            )
-            users_with_consultations = {row[0]: row[1] for row in consultation_check.all()}
+            users_with_consultations = await user_repo.count_consultations_by_officers(user_ids)
 
             if users_with_consultations:
                 user_list = ", ".join(f"User ID {uid} ({count} consultations)"
@@ -1633,15 +1544,16 @@ async def sync_users_to_casbin(
         This function does NOT commit the transaction. The caller is responsible
         for calling db.commit() after this function returns.
     """
+    # ✅ SPRINT 4 HOTFIX: Use Repository for data access
+    from app.repositories import UserRepository
+    
+    repo = UserRepository(db)
+    
     # Query users to sync (specific IDs or all)
     if user_ids:
-        result = await db.execute(
-            select(models.User).where(models.User.id.in_(user_ids))
-        )
+        users = await repo.get_by_ids(user_ids)
     else:
-        result = await db.execute(select(models.User))
-
-    users = result.scalars().all()
+        users = await repo.get_all()
 
     synced_count = 0
     failed_users = []

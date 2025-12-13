@@ -3,6 +3,8 @@ from typing import List, Optional
 
 import casbin
 import structlog
+
+from .constants import UserRole
 from fastapi import Cookie, Depends, Header, Path, Request
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError
@@ -318,9 +320,9 @@ async def get_lead_for_user(
         lead = await lead_service.get_lead_by_id_shallow(db, lead_id)
     except ResourceNotFoundError:
         raise
-    if current_user.role in ["admin", "manager"]:
+    if current_user.role in [UserRole.ADMIN, UserRole.MANAGER]:
         return lead
-    if current_user.role == "officer" and lead.assigned_officer_id == current_user.id:
+    if current_user.role == UserRole.OFFICER and lead.assigned_officer_id == current_user.id:
         return lead
     raise PermissionDeniedError(
         detail="You do not have permission to access this lead."
@@ -403,7 +405,7 @@ async def get_application_for_user(
     lead = application.lead
 
     # ADMIN: Full access to all applications
-    if current_user.role == "admin":
+    if current_user.role == UserRole.ADMIN:
         log.debug(
             "Admin accessing application",
             application_id=application_id,
@@ -412,7 +414,7 @@ async def get_application_for_user(
         return application
 
     # MANAGER: Access to applications for leads in their managed units
-    if current_user.role == "manager":
+    if current_user.role == UserRole.MANAGER:
         managed_units = await get_user_managed_units(db, current_user.id)
         if lead.unit_id in managed_units:
             log.debug(
@@ -437,7 +439,7 @@ async def get_application_for_user(
             )
 
     # OFFICER: Access to applications for their assigned leads only
-    if current_user.role == "officer":
+    if current_user.role == UserRole.OFFICER:
         if lead.assigned_officer_id == current_user.id:
             log.debug(
                 "Officer accessing application for assigned lead",
@@ -501,7 +503,7 @@ async def get_user_managed_units(
     # Query for active manager assignments
     stmt = select(UserUnitAssignment.unit_id).where(
         UserUnitAssignment.user_id == user_id,
-        UserUnitAssignment.role == "manager",
+        UserUnitAssignment.role == UserRole.MANAGER,
         UserUnitAssignment.is_active == True
     )
 
@@ -571,7 +573,7 @@ async def get_distribution_rule_for_user(
         raise
 
     # Admin has full access
-    if current_user.role == "admin":
+    if current_user.role == UserRole.ADMIN:
         log.debug(
             "Admin accessing distribution rule",
             rule_id=rule_id,
@@ -580,7 +582,7 @@ async def get_distribution_rule_for_user(
         return rule
 
     # Manager: check if rule belongs to their managed units
-    if current_user.role == "manager":
+    if current_user.role == UserRole.MANAGER:
         managed_units = await get_user_managed_units(db, current_user.id)
 
         if rule.unit_id in managed_units:
@@ -685,7 +687,7 @@ async def get_organizational_unit_for_user(
         raise
 
     # Admin has full access
-    if current_user.role == "admin":
+    if current_user.role == UserRole.ADMIN:
         log.debug(
             "Admin accessing organizational unit",
             unit_id=unit_id,
@@ -694,7 +696,7 @@ async def get_organizational_unit_for_user(
         return unit
 
     # Manager: check if unit is in their managed units
-    if current_user.role == "manager":
+    if current_user.role == UserRole.MANAGER:
         managed_units = await get_user_managed_units(db, current_user.id)
 
         if unit_id in managed_units:
@@ -718,7 +720,7 @@ async def get_organizational_unit_for_user(
             )
 
     # Officer: allow read-only if enabled and user belongs to this unit
-    if current_user.role == "officer" and allow_read_only:
+    if current_user.role == UserRole.OFFICER and allow_read_only:
         if current_user.unit_id == unit_id:
             log.debug(
                 "Officer viewing own organizational unit (read-only)",
@@ -812,7 +814,7 @@ async def verify_user_management_permission(
         raise ResourceNotFoundError(detail=f"User {target_user_id} not found")
 
     # Admin has full access
-    if current_user.role == "admin":
+    if current_user.role == UserRole.ADMIN:
         log.debug(
             "Admin managing user",
             target_user_id=target_user_id,
@@ -821,7 +823,7 @@ async def verify_user_management_permission(
         return target_user
 
     # Manager: check if target user is in their managed units
-    if current_user.role == "manager":
+    if current_user.role == UserRole.MANAGER:
         managed_units = await get_user_managed_units(db, current_user.id)
 
         # Check if target user belongs to any managed unit

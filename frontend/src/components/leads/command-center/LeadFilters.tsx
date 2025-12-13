@@ -22,20 +22,37 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { LeadStatus } from "@/types/lead.types";
-import { SmartOfferingSelector } from "@/components/common/selectors";
+import { MultiOfferingSelector } from "@/components/common/selectors";
 import { LEAD_STATUS_OPTIONS, LEAD_SOURCE_OPTIONS } from "@/constants";
+import { usePipelineStages } from "@/hooks/usePipeline";
+import { useAdminUsersList } from "@/hooks/useAdminUsers";
+import { STAGE_COLORS } from "@/types/pipeline.types";
+import { useAuth } from "@/hooks/useAuth";
 
 interface LeadFiltersProps {
   search: string;
   onSearchChange: (value: string) => void;
   statusFilters: LeadStatus[];
   onStatusChange: (statuses: LeadStatus[]) => void;
-  sourceFilter: string;
-  onSourceChange: (source: string) => void;
+  // Multi-select arrays
+  sourceFilters: string[];
+  onSourceChange: (sources: string[]) => void;
   scoreRange: [number, number];
   onScoreRangeChange: (range: [number, number]) => void;
-  offeringFilter: string;
-  onOfferingChange: (offeringId: string) => void;
+  offeringFilters: string[];
+  onOfferingChange: (offeringIds: string[]) => void;
+  stageFilters: string[];
+  onStageChange: (stageIds: string[]) => void;
+  // === OFFICER FILTER (admin/manager only) ===
+  officerFilters: string[];
+  onOfficerChange: (officerIds: string[]) => void;
+  // === DATE RANGE FILTER ===
+  dateFrom: string;
+  dateTo: string;
+  dateField: "created_at" | "updated_at";
+  onDateFromChange: (date: string) => void;
+  onDateToChange: (date: string) => void;
+  onDateFieldChange: (field: "created_at" | "updated_at") => void;
   onReset: () => void;
 }
 
@@ -47,14 +64,47 @@ export const LeadFilters = React.memo(function LeadFilters({
   onSearchChange,
   statusFilters,
   onStatusChange,
-  sourceFilter,
+  // Multi-select
+  sourceFilters,
   onSourceChange,
   scoreRange,
   onScoreRangeChange,
-  offeringFilter,
+  offeringFilters,
   onOfferingChange,
+  stageFilters,
+  onStageChange,
+  // === OFFICER FILTER ===
+  officerFilters,
+  onOfficerChange,
+  // === DATE RANGE FILTER ===
+  dateFrom,
+  dateTo,
+  dateField,
+  onDateFromChange,
+  onDateToChange,
+  onDateFieldChange,
   onReset,
 }: LeadFiltersProps) {
+  // Fetch pipeline stages
+  const { data: pipelineStages = [] } = usePipelineStages();
+  const { user } = useAuth();
+
+  // Hydration-safe role checks - only render role-dependent UI after mount
+  const [isMounted, setIsMounted] = React.useState(false);
+  React.useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
+  // Role checks only work after hydration to prevent server/client mismatch
+  const isAdmin = isMounted && user?.role === "admin";
+  const isManager = isMounted && user?.role === "manager";
+  const canFilterByOfficer = isAdmin || isManager;
+
+  // Fetch officers list (always fetch, conditionally render UI)
+  // We fetch all active users and filter by role on the client
+  const { data: usersData } = useAdminUsersList({ page: 1, page_size: 100, status: "active" });
+  const officers = usersData?.users?.filter((u) => u.role === "officer" || u.role === "manager") || [];
+
   const handleStatusToggle = (status: LeadStatus) => {
     if (statusFilters.includes(status)) {
       onStatusChange(statusFilters.filter((s) => s !== status));
@@ -63,28 +113,52 @@ export const LeadFilters = React.memo(function LeadFilters({
     }
   };
 
+  // Multi-select toggle helpers
+  const handleSourceToggle = (source: string) => {
+    if (sourceFilters.includes(source)) {
+      onSourceChange(sourceFilters.filter((s) => s !== source));
+    } else {
+      onSourceChange([...sourceFilters, source]);
+    }
+  };
+
+  const handleStageToggle = (stageId: string) => {
+    if (stageFilters.includes(stageId)) {
+      onStageChange(stageFilters.filter((s) => s !== stageId));
+    } else {
+      onStageChange([...stageFilters, stageId]);
+    }
+  };
+
+  const handleOfficerToggle = (officerId: string) => {
+    if (officerFilters.includes(officerId)) {
+      onOfficerChange(officerFilters.filter((o) => o !== officerId));
+    } else {
+      onOfficerChange([...officerFilters, officerId]);
+    }
+  };
+
   const hasActiveFilters =
     search ||
     statusFilters.length > 0 ||
-    sourceFilter !== "all" ||
+    sourceFilters.length > 0 ||
     scoreRange[0] > 0 ||
     scoreRange[1] < 100 ||
-    offeringFilter !== "all";
+    offeringFilters.length > 0 ||
+    stageFilters.length > 0 ||
+    officerFilters.length > 0 ||
+    dateFrom ||
+    dateTo;
 
   return (
-    <div className="h-full bg-card">
-      <div className="h-full overflow-y-auto p-4 space-y-4">
+    <div className="bg-card h-full">
+      <div className="h-full space-y-4 overflow-y-auto p-4">
         {/* Tiêu đề */}
         <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-sm">Bộ lọc</h3>
+          <h3 className="text-sm font-semibold">Bộ lọc</h3>
           {hasActiveFilters && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onReset}
-              className="h-7 px-2 text-xs"
-            >
-              <RotateCcw className="h-3 w-3 mr-1" />
+            <Button variant="ghost" size="sm" onClick={onReset} className="h-7 px-2 text-xs">
+              <RotateCcw className="mr-1 h-3 w-3" />
               Đặt lại
             </Button>
           )}
@@ -92,17 +166,17 @@ export const LeadFilters = React.memo(function LeadFilters({
 
         {/* Tìm kiếm */}
         <div className="relative">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Search className="text-muted-foreground absolute top-2.5 left-2.5 h-4 w-4" />
           <Input
             placeholder="Tìm kiếm tên, số điện thoại, email..."
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
-            className="pl-8 pr-8"
+            className="pr-8 pl-8"
           />
           {search && (
             <button
               onClick={() => onSearchChange("")}
-              className="absolute right-2.5 top-2.5 text-muted-foreground hover:text-foreground"
+              className="text-muted-foreground hover:text-foreground absolute top-2.5 right-2.5"
             >
               <X className="h-4 w-4" />
             </button>
@@ -110,31 +184,99 @@ export const LeadFilters = React.memo(function LeadFilters({
         </div>
 
         {/* Bộ lọc */}
-        <Accordion type="multiple" defaultValue={["status", "source"]} className="space-y-2">
-          {/* Bộ lọc trạng thái */}
-          <AccordionItem value="status" className="border rounded-lg px-3">
-            <AccordionTrigger className="text-sm font-medium py-3 hover:no-underline">
-              Vòng đời Lead
-              {statusFilters.length > 0 && (
-                <span className="ml-auto mr-2 text-xs bg-primary text-primary-foreground px-1.5 py-0.5 rounded-full">
-                  {statusFilters.length}
+        <Accordion type="multiple" defaultValue={["pipeline_stage"]} className="space-y-2">
+          {/* Bộ lọc trạng thái - Chỉ hiển thị cho Admin */}
+          {isAdmin && (
+            <AccordionItem value="status" className="rounded-lg border px-3">
+              <AccordionTrigger className="py-3 text-sm font-medium hover:no-underline">
+                Vòng đời Lead
+                {statusFilters.length > 0 && (
+                  <span className="bg-primary text-primary-foreground mr-2 ml-auto rounded-full px-1.5 py-0.5 text-xs">
+                    {statusFilters.length}
+                  </span>
+                )}
+              </AccordionTrigger>
+              <AccordionContent className="pb-3">
+                <div className="space-y-2">
+                  {LEAD_STATUS_OPTIONS.map((option) => (
+                    <div key={option.value} className="flex items-center space-x-2">
+                      <Checkbox
+                        id={`status-${option.value}`}
+                        checked={statusFilters.includes(option.value)}
+                        onCheckedChange={() => handleStatusToggle(option.value)}
+                      />
+                      <Label
+                        htmlFor={`status-${option.value}`}
+                        className="flex cursor-pointer items-center gap-2 text-sm font-normal"
+                      >
+                        <span className={`h-2 w-2 rounded-full ${option.color}`} />
+                        {option.label}
+                      </Label>
+                    </div>
+                  ))}
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+          )}
+
+          {/* Bộ lọc Pipeline Stage - Multi-select */}
+          <AccordionItem value="pipeline_stage" className="rounded-lg border px-3">
+            <AccordionTrigger className="py-3 text-sm font-medium hover:no-underline">
+              Giai đoạn Pipeline
+              {stageFilters.length > 0 && (
+                <span className="bg-primary text-primary-foreground mr-2 ml-auto rounded-full px-1.5 py-0.5 text-xs">
+                  {stageFilters.length}
                 </span>
               )}
             </AccordionTrigger>
             <AccordionContent className="pb-3">
               <div className="space-y-2">
-                {LEAD_STATUS_OPTIONS.map((option) => (
-                  <div key={option.value} className="flex items-center space-x-2">
+                {pipelineStages.map((stage) => (
+                  <div key={stage.id} className="flex items-center space-x-2">
                     <Checkbox
-                      id={`status-${option.value}`}
-                      checked={statusFilters.includes(option.value)}
-                      onCheckedChange={() => handleStatusToggle(option.value)}
+                      id={`stage-${stage.id}`}
+                      checked={stageFilters.includes(stage.id)}
+                      onCheckedChange={() => handleStageToggle(stage.id)}
                     />
                     <Label
-                      htmlFor={`status-${option.value}`}
-                      className="text-sm font-normal cursor-pointer flex items-center gap-2"
+                      htmlFor={`stage-${stage.id}`}
+                      className="flex cursor-pointer items-center gap-2 text-sm font-normal"
                     >
-                      <span className={`w-2 h-2 rounded-full ${option.color}`} />
+                      <span
+                        className="h-2.5 w-2.5 rounded-full"
+                        style={{ backgroundColor: STAGE_COLORS[stage.id] || "#6B7280" }}
+                      />
+                      {stage.name}
+                    </Label>
+                  </div>
+                ))}
+              </div>
+            </AccordionContent>
+          </AccordionItem>
+
+          {/* Bộ lọc nguồn - Multi-select */}
+          <AccordionItem value="source" className="rounded-lg border px-3">
+            <AccordionTrigger className="py-3 text-sm font-medium hover:no-underline">
+              Nguồn
+              {sourceFilters.length > 0 && (
+                <span className="bg-primary text-primary-foreground mr-2 ml-auto rounded-full px-1.5 py-0.5 text-xs">
+                  {sourceFilters.length}
+                </span>
+              )}
+            </AccordionTrigger>
+            <AccordionContent className="pb-3">
+              <div className="space-y-2">
+                {LEAD_SOURCE_OPTIONS.map((option) => (
+                  <div key={option.value} className="flex items-center space-x-2">
+                    <Checkbox
+                      id={`source-${option.value}`}
+                      checked={sourceFilters.includes(option.value)}
+                      onCheckedChange={() => handleSourceToggle(option.value)}
+                    />
+                    <Label
+                      htmlFor={`source-${option.value}`}
+                      className="cursor-pointer text-sm font-normal"
+                    >
                       {option.label}
                     </Label>
                   </div>
@@ -143,34 +285,12 @@ export const LeadFilters = React.memo(function LeadFilters({
             </AccordionContent>
           </AccordionItem>
 
-          {/* Bộ lọc nguồn */}
-          <AccordionItem value="source" className="border rounded-lg px-3">
-            <AccordionTrigger className="text-sm font-medium py-3 hover:no-underline">
-              Nguồn
-            </AccordionTrigger>
-            <AccordionContent className="pb-3">
-              <Select value={sourceFilter} onValueChange={onSourceChange}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Tất cả nguồn" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Tất cả nguồn</SelectItem>
-                  {LEAD_SOURCE_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </AccordionContent>
-          </AccordionItem>
-
           {/* Bộ lọc điểm Lead */}
-          <AccordionItem value="score" className="border rounded-lg px-3">
-            <AccordionTrigger className="text-sm font-medium py-3 hover:no-underline">
+          <AccordionItem value="score" className="rounded-lg border px-3">
+            <AccordionTrigger className="py-3 text-sm font-medium hover:no-underline">
               Điểm Lead
             </AccordionTrigger>
-            <AccordionContent className="pb-3 pt-2">
+            <AccordionContent className="pt-2 pb-3">
               <div className="space-y-4">
                 <Slider
                   value={scoreRange}
@@ -180,7 +300,7 @@ export const LeadFilters = React.memo(function LeadFilters({
                   step={5}
                   className="w-full"
                 />
-                <div className="flex justify-between text-xs text-muted-foreground">
+                <div className="text-muted-foreground flex justify-between text-xs">
                   <span>{scoreRange[0]}</span>
                   <span>{scoreRange[1]}</span>
                 </div>
@@ -188,20 +308,106 @@ export const LeadFilters = React.memo(function LeadFilters({
             </AccordionContent>
           </AccordionItem>
 
-          {/* Bộ lọc chương trình */}
-          <AccordionItem value="offering" className="border rounded-lg px-3">
-            <AccordionTrigger className="text-sm font-medium py-3 hover:no-underline">
+          {/* Bộ lọc chương trình - Multi-select */}
+          <AccordionItem value="offering" className="rounded-lg border px-3">
+            <AccordionTrigger className="py-3 text-sm font-medium hover:no-underline">
               Chương trình
+              {offeringFilters.length > 0 && (
+                <span className="bg-primary text-primary-foreground mr-2 ml-auto rounded-full px-1.5 py-0.5 text-xs">
+                  {offeringFilters.length}
+                </span>
+              )}
             </AccordionTrigger>
             <AccordionContent className="pb-3">
-              <SmartOfferingSelector
-                value={offeringFilter === "all" ? undefined : offeringFilter}
-                onChange={(val) => onOfferingChange(val || "all")}
-                placeholder="Chọn chương trình..."
-                allowAll
-                allLabel="Tất cả chương trình"
-                variant="combobox"
+              <MultiOfferingSelector
+                values={offeringFilters}
+                onChange={onOfferingChange}
               />
+            </AccordionContent>
+          </AccordionItem>
+
+          {/* Bộ lọc cán bộ phụ trách - Multi-select, chỉ cho Admin/Manager */}
+          {(isAdmin || isManager) && (
+            <AccordionItem value="officer" className="rounded-lg border px-3">
+              <AccordionTrigger className="py-3 text-sm font-medium hover:no-underline">
+                Cán bộ phụ trách
+                {officerFilters.length > 0 && (
+                  <span className="bg-primary text-primary-foreground mr-2 ml-auto rounded-full px-1.5 py-0.5 text-xs">
+                    {officerFilters.length}
+                  </span>
+                )}
+              </AccordionTrigger>
+              <AccordionContent className="pb-3">
+                <div className="max-h-48 space-y-2 overflow-y-auto">
+                  {officers.map((officer) => (
+                    <div key={officer.id} className="flex items-center space-x-2">
+                      <Checkbox
+                        id={`officer-${officer.id}`}
+                        checked={officerFilters.includes(officer.id.toString())}
+                        onCheckedChange={() => handleOfficerToggle(officer.id.toString())}
+                      />
+                      <Label
+                        htmlFor={`officer-${officer.id}`}
+                        className="cursor-pointer text-sm font-normal"
+                      >
+                        {officer.full_name}
+                      </Label>
+                    </div>
+                  ))}
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+          )}
+
+          {/* Bộ lọc ngày tạo/cập nhật */}
+          <AccordionItem value="date" className="rounded-lg border px-3">
+            <AccordionTrigger className="py-3 text-sm font-medium hover:no-underline">
+              <div className="flex items-center gap-2">Khoảng thời gian</div>
+              {(dateFrom || dateTo) && (
+                <span className="bg-primary text-primary-foreground mr-2 ml-auto rounded-full px-1.5 py-0.5 text-xs">
+                  1
+                </span>
+              )}
+            </AccordionTrigger>
+            <AccordionContent className="space-y-3 pb-3">
+              {/* Date field selector */}
+              <div className="space-y-1.5">
+                <Label className="text-muted-foreground text-xs">Lọc theo</Label>
+                <Select
+                  value={dateField}
+                  onValueChange={(val) => onDateFieldChange(val as "created_at" | "updated_at")}
+                >
+                  <SelectTrigger className="h-8 w-full text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="created_at">Ngày tạo</SelectItem>
+                    <SelectItem value="updated_at">Ngày cập nhật</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Date from */}
+              <div className="space-y-1.5">
+                <Label className="text-muted-foreground text-xs">Từ ngày</Label>
+                <Input
+                  type="date"
+                  value={dateFrom}
+                  onChange={(e) => onDateFromChange(e.target.value)}
+                  className="h-8 text-sm"
+                />
+              </div>
+
+              {/* Date to */}
+              <div className="space-y-1.5">
+                <Label className="text-muted-foreground text-xs">Đến ngày</Label>
+                <Input
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => onDateToChange(e.target.value)}
+                  className="h-8 text-sm"
+                />
+              </div>
             </AccordionContent>
           </AccordionItem>
         </Accordion>

@@ -43,6 +43,35 @@ ALLOWED_ACADEMIC_UNIT_TYPES = {
 
 
 # =============================================================================
+# HELPER FUNCTIONS (Module Level - exportable)
+# =============================================================================
+
+def create_recursive_unit_loader(depth: int):
+    """
+    Create recursive loader for organization units with programs.
+    
+    ✅ SPRINT 4 HOTFIX: Moved to module level for OrganizationRepository import.
+    
+    Args:
+        depth: Maximum depth for recursive loading
+        
+    Returns:
+        SQLAlchemy selectinload option for recursive children loading
+    """
+    if depth <= 0:
+        return selectinload(models.OrganizationUnit.major_programs).selectinload(
+            models.MajorProgram.offerings
+        )  # Base case: just load programs
+
+    return selectinload(models.OrganizationUnit.children).options(
+        selectinload(models.OrganizationUnit.major_programs).selectinload(
+            models.MajorProgram.offerings
+        ),
+        create_recursive_unit_loader(depth - 1)
+    )
+
+
+# =============================================================================
 # JSON ENCODER FOR DECIMAL
 # =============================================================================
 
@@ -128,21 +157,16 @@ async def check_duplicate_unit_name(
     """
     Check for duplicate unit name within the same parent.
 
+    ✅ SPRINT 3 REFACTORED: Now uses OrganizationRepository for data access.
+    
     IMPORTANT: Only checks active units (is_active=True) to avoid
     the "Zombie Data Problem" where soft-deleted units prevent
     creating new units with the same name.
     """
-    query = select(models.OrganizationUnit).where(
-        models.OrganizationUnit.name == name.strip(),
-        models.OrganizationUnit.parent_id == parent_id,
-        models.OrganizationUnit.is_active == True  # ✅ FIX: Only check active units
-    )
-
-    if exclude_unit_id is not None:
-        query = query.where(models.OrganizationUnit.id != exclude_unit_id)
-
-    result = await db.execute(query)
-    existing = result.scalar_one_or_none()
+    from app.repositories import OrganizationRepository
+    
+    repo = OrganizationRepository(db)
+    existing = await repo.check_duplicate_name(name, parent_id, exclude_unit_id)
 
     if existing:
         parent_name = "cấp gốc" if parent_id is None else f"đơn vị cha #{parent_id}"
@@ -154,26 +178,16 @@ async def check_duplicate_unit_name(
 async def _get_user_counts_by_unit(db: AsyncSession) -> dict:
     """
     Get user counts grouped by unit_id.
+    
+    ✅ SPRINT 3 REFACTORED: Now uses OrganizationRepository for data access.
 
     Returns:
         Dict mapping unit_id -> user_count
     """
-    from sqlalchemy import func
-
-    query = (
-        select(
-            models.User.unit_id,
-            func.count(models.User.id).label("user_count")
-        )
-        .where(
-            models.User.unit_id.isnot(None),
-            models.User.status == "active"
-        )
-        .group_by(models.User.unit_id)
-    )
-
-    result = await db.execute(query)
-    return {row.unit_id: row.user_count for row in result.all()}
+    from app.repositories import OrganizationRepository
+    
+    repo = OrganizationRepository(db)
+    return await repo.get_user_counts_by_unit()
 
 
 def _add_user_counts_to_tree(units_data: List[dict], user_counts: dict) -> List[dict]:
@@ -238,45 +252,14 @@ async def get_all_organization_units(db: AsyncSession) -> List[dict]:
 
         log.debug("Querying database for organization tree")
 
-        # ✅ FIX: Performance optimization - don't load academic_info_history
-        # This function returns the basic tree structure. Academic info should be
-        # loaded on-demand when user clicks on a specific program/offering.
-        # Loading all history for all offerings can result in 30,000+ records.
-        def create_recursive_unit_loader(depth: int):
-            """Create recursive loader for organization units"""
-            if depth <= 0:
-                return selectinload(models.OrganizationUnit.major_programs).selectinload(
-                    models.MajorProgram.offerings
-                )  # Removed: academic_info_history loading
+        # ✅ SPRINT 4 HOTFIX: Use module-level create_recursive_unit_loader
+        # (moved to module level for OrganizationRepository import)
 
-            return selectinload(models.OrganizationUnit.children).options(
-                selectinload(models.OrganizationUnit.major_programs).selectinload(
-                    models.MajorProgram.offerings
-                ),  # Removed: academic_info_history loading
-                create_recursive_unit_loader(depth - 1)
-            )
-
-        # Query root units with full hierarchy (up to 9 levels deep)
-        recursive_loader = create_recursive_unit_loader(depth=9)
-
-        query = (
-            select(models.OrganizationUnit)
-            .where(
-                models.OrganizationUnit.is_active == True,
-                models.OrganizationUnit.parent_id == None  # Only root units
-            )
-            .options(
-                selectinload(models.OrganizationUnit.major_programs).selectinload(
-                    models.MajorProgram.offerings
-                ),  # Removed: academic_info_history loading
-                recursive_loader,
-                selectinload(models.OrganizationUnit.parent)
-            )
-            .order_by(models.OrganizationUnit.name)
-        )
-
-        result = await db.execute(query)
-        root_units = result.scalars().unique().all()
+        # ✅ SPRINT 3 REFACTORED: Use Repository for tree loading
+        from app.repositories import OrganizationRepository
+        
+        repo = OrganizationRepository(db)
+        root_units = await repo.get_tree_with_programs(depth=9)
 
         # Get user counts per unit
         user_counts = await _get_user_counts_by_unit(db)
@@ -313,23 +296,16 @@ async def get_organization_unit_by_id(
     db: AsyncSession,
     unit_id: int
 ) -> models.OrganizationUnit:
-    """Get organization unit by ID with all relationships loaded."""
-    query = (
-        select(models.OrganizationUnit)
-        .options(
-            selectinload(models.OrganizationUnit.parent),
-            selectinload(models.OrganizationUnit.children),
-            selectinload(models.OrganizationUnit.major_programs).selectinload(
-                models.MajorProgram.offerings
-            ).selectinload(
-                models.ProgramOffering.academic_info_history
-            ),
-        )
-        .where(models.OrganizationUnit.id == unit_id)
-    )
-    result = await db.execute(query)
-    unit = result.scalars().unique().one_or_none()
-
+    """
+    Get organization unit by ID with all relationships loaded.
+    
+    ✅ SPRINT 3 REFACTORED: Now uses OrganizationRepository for data access.
+    """
+    from app.repositories import OrganizationRepository
+    
+    repo = OrganizationRepository(db)
+    unit = await repo.get_by_id_full(unit_id)
+    
     if not unit:
         raise ResourceNotFoundError(
             detail=f"Organization Unit with id {unit_id} not found."
@@ -420,31 +396,11 @@ async def check_circular_dependency(
             detail="Một đơn vị không thể là đơn vị cha của chính nó."
         )
 
-    # ✅ PERFORMANCE FIX: Use Recursive CTE to fetch ALL ancestors in ONE query
-    # This replaces the O(depth) while loop with O(1) database query
-    ancestor_cte_sql = text("""
-        WITH RECURSIVE ancestor_chain AS (
-            -- Base case: start from the proposed new parent
-            SELECT id, parent_id, 1 as depth
-            FROM organization_unit
-            WHERE id = :new_parent_id
-
-            UNION ALL
-
-            -- Recursive case: traverse up the parent chain
-            SELECT u.id, u.parent_id, ac.depth + 1
-            FROM organization_unit u
-            JOIN ancestor_chain ac ON u.id = ac.parent_id
-            WHERE ac.depth < 100  -- Safety limit to prevent infinite loops
-        )
-        SELECT id FROM ancestor_chain WHERE id = :unit_id LIMIT 1;
-    """)
-
-    result = await db.execute(
-        ancestor_cte_sql,
-        {"new_parent_id": new_parent_id, "unit_id": unit_id}
-    )
-    found_cycle = result.scalar_one_or_none()
+    # ✅ SPRINT 3 REFACTORED: Use Repository for cycle detection
+    from app.repositories import OrganizationRepository
+    
+    repo = OrganizationRepository(db)
+    found_cycle = await repo.check_cycle_in_hierarchy(unit_id, new_parent_id)
 
     if found_cycle:
         raise DuplicateResourceError(
@@ -541,37 +497,24 @@ async def delete_organization_unit(db: AsyncSession, unit_id: int) -> Tuple[None
         db_unit = await get_organization_unit_by_id(db, unit_id)
         unit_name = db_unit.name
 
-        # Check for active children
-        active_children_query = select(models.OrganizationUnit).where(
-            models.OrganizationUnit.parent_id == unit_id,
-            models.OrganizationUnit.is_active == True
-        )
-        active_children_result = await db.execute(active_children_query)
-        active_children = active_children_result.scalars().all()
-
-        # Check for active major programs
-        active_programs_query = select(models.MajorProgram).where(
-            models.MajorProgram.unit_id == unit_id,
-            models.MajorProgram.is_active == True
-        )
-        active_programs_result = await db.execute(active_programs_query)
-        active_programs = active_programs_result.scalars().all()
-
-        # Check for assigned users (prevent orphaned users)
-        assigned_users_query = select(models.User).where(
-            models.User.unit_id == unit_id
-        )
-        assigned_users_result = await db.execute(assigned_users_query)
-        assigned_users = assigned_users_result.scalars().all()
+        # ✅ SPRINT 3 REFACTORED: Use Repository for validation checks
+        from app.repositories import OrganizationRepository
+        
+        repo = OrganizationRepository(db)
+        
+        # Check counts via repository
+        active_children_count = await repo.count_active_children(unit_id)
+        active_programs_count = await repo.count_active_programs(unit_id)
+        assigned_users_count = await repo.count_assigned_users(unit_id)
 
         # Build error message based on what's blocking deletion
         blocking_reasons = []
-        if active_children:
-            blocking_reasons.append(f"{len(active_children)} đơn vị con đang hoạt động")
-        if active_programs:
-            blocking_reasons.append(f"{len(active_programs)} chương trình đào tạo đang hoạt động")
-        if assigned_users:
-            blocking_reasons.append(f"{len(assigned_users)} người dùng đang thuộc đơn vị này")
+        if active_children_count > 0:
+            blocking_reasons.append(f"{active_children_count} đơn vị con đang hoạt động")
+        if active_programs_count > 0:
+            blocking_reasons.append(f"{active_programs_count} chương trình đào tạo đang hoạt động")
+        if assigned_users_count > 0:
+            blocking_reasons.append(f"{assigned_users_count} người dùng đang thuộc đơn vị này")
 
         if blocking_reasons:
             reasons_str = ", ".join(blocking_reasons)
@@ -615,20 +558,16 @@ async def get_major_program_by_id(
     db: AsyncSession,
     program_id: int
 ) -> models.MajorProgram:
-    """Get major program by ID with all offerings and academic info loaded."""
-    query = (
-        select(models.MajorProgram)
-        .options(
-            selectinload(models.MajorProgram.offerings).selectinload(
-                models.ProgramOffering.academic_info_history
-            ),
-            selectinload(models.MajorProgram.unit)
-        )
-        .where(models.MajorProgram.id == program_id)
-    )
-    result = await db.execute(query)
-    program = result.scalars().unique().one_or_none()
-
+    """
+    Get major program by ID with all offerings and academic info loaded.
+    
+    ✅ SPRINT 3 REFACTORED: Now uses OrganizationRepository for data access.
+    """
+    from app.repositories import OrganizationRepository
+    
+    repo = OrganizationRepository(db)
+    program = await repo.get_major_program_by_id_full(program_id)
+    
     if not program:
         raise ResourceNotFoundError(
             detail=f"MajorProgram with id {program_id} not found."
@@ -643,19 +582,22 @@ async def create_major_program(
     """
     Create a new major program.
 
+    ✅ SPRINT 3 REFACTORED: Uses OrganizationRepository for duplicate check.
+    
     IMPORTANT: This function does NOT commit the transaction.
     Router must call db.commit() and then execute the returned callback.
 
     Returns:
         Tuple of (major_program, post_commit_callback)
     """
+    from app.repositories import OrganizationRepository
+    
     try:
-        # Check duplicate code
-        existing_query = select(models.MajorProgram).where(
-            models.MajorProgram.code == program_in.code
-        )
-        existing = await db.execute(existing_query)
-        if existing.scalar_one_or_none():
+        repo = OrganizationRepository(db)
+        
+        # Check duplicate code via repository
+        existing = await repo.check_duplicate_program_code(program_in.code)
+        if existing:
             raise DuplicateResourceError(
                 detail=f"Major program with code '{program_in.code}' already exists."
             )
@@ -832,18 +774,16 @@ async def get_program_offering_by_id(
     db: AsyncSession,
     offering_id: int
 ) -> models.ProgramOffering:
-    """Get program offering by ID with academic info loaded."""
-    query = (
-        select(models.ProgramOffering)
-        .options(
-            selectinload(models.ProgramOffering.academic_info_history),
-            selectinload(models.ProgramOffering.program)
-        )
-        .where(models.ProgramOffering.id == offering_id)
-    )
-    result = await db.execute(query)
-    offering = result.scalars().unique().one_or_none()
-
+    """
+    Get program offering by ID with academic info loaded.
+    
+    ✅ SPRINT 3 REFACTORED: Now uses OrganizationRepository for data access.
+    """
+    from app.repositories import OrganizationRepository
+    
+    repo = OrganizationRepository(db)
+    offering = await repo.get_offering_by_id_full(offering_id)
+    
     if not offering:
         raise ResourceNotFoundError(
             detail=f"ProgramOffering with id {offering_id} not found."
@@ -858,13 +798,19 @@ async def create_program_offering(
     """
     Create a new program offering.
 
+    ✅ SPRINT 3 REFACTORED: Uses OrganizationRepository for duplicate check.
+    
     IMPORTANT: This function does NOT commit the transaction.
     Router must call db.commit() and then execute the returned callback.
 
     Returns:
         Tuple of (program_offering, post_commit_callback)
     """
+    from app.repositories import OrganizationRepository
+    
     try:
+        repo = OrganizationRepository(db)
+        
         # Verify program exists
         program = await db.get(models.MajorProgram, offering_in.program_id)
         if not program:
@@ -872,13 +818,12 @@ async def create_program_offering(
                 detail=f"Major program with id {offering_in.program_id} not found."
             )
 
-        # Check duplicate (program_id, offering_type)
-        existing_query = select(models.ProgramOffering).where(
-            models.ProgramOffering.program_id == offering_in.program_id,
-            models.ProgramOffering.offering_type == offering_in.offering_type
+        # Check duplicate (program_id, offering_type) via repository
+        existing = await repo.check_duplicate_offering(
+            offering_in.program_id, 
+            offering_in.offering_type
         )
-        existing = await db.execute(existing_query)
-        if existing.scalar_one_or_none():
+        if existing:
             raise DuplicateResourceError(
                 detail=f"Offering '{offering_in.offering_type}' already exists for this program."
             )
@@ -936,14 +881,17 @@ async def update_program_offering(
         db_offering = await get_program_offering_by_id(db, offering_id)
         update_data = offering_in.model_dump(exclude_unset=True)
 
-        # Check duplicate if offering_type is being changed
+        # ✅ SPRINT 3 REFACTORED: Use Repository for duplicate check
         if "offering_type" in update_data and update_data["offering_type"] != db_offering.offering_type:
-            existing_query = select(models.ProgramOffering).where(
-                models.ProgramOffering.program_id == db_offering.program_id,
-                models.ProgramOffering.offering_type == update_data["offering_type"]
+            from app.repositories import OrganizationRepository
+            
+            repo = OrganizationRepository(db)
+            existing = await repo.check_duplicate_offering(
+                db_offering.program_id,
+                update_data["offering_type"],
+                exclude_id=offering_id
             )
-            existing = await db.execute(existing_query)
-            if existing.scalar_one_or_none():
+            if existing:
                 raise DuplicateResourceError(
                     detail=f"Offering '{update_data['offering_type']}' already exists for this program."
                 )
@@ -1045,28 +993,31 @@ async def get_academic_info_by_offering_and_year(
     offering_id: int,
     academic_year: int
 ) -> Optional[models.OfferingAcademicInfo]:
-    """Get academic info for a specific offering and year."""
-    query = select(models.OfferingAcademicInfo).where(
-        models.OfferingAcademicInfo.offering_id == offering_id,
-        models.OfferingAcademicInfo.academic_year == academic_year
-    )
-    result = await db.execute(query)
-    return result.scalar_one_or_none()
+    """
+    Get academic info for a specific offering and year.
+    
+    ✅ SPRINT 3 REFACTORED: Now uses OrganizationRepository for data access.
+    """
+    from app.repositories import OrganizationRepository
+    
+    repo = OrganizationRepository(db)
+    return await repo.get_academic_info_by_offering_and_year(offering_id, academic_year)
 
 
 async def get_current_academic_info(
     db: AsyncSession,
     offering_id: int
 ) -> Optional[models.OfferingAcademicInfo]:
-    """Get current year's published academic info for an offering."""
+    """
+    Get current year's published academic info for an offering.
+    
+    ✅ SPRINT 3 REFACTORED: Now uses OrganizationRepository for data access.
+    """
+    from app.repositories import OrganizationRepository
+    
+    repo = OrganizationRepository(db)
     current_year = datetime.now().year
-    query = select(models.OfferingAcademicInfo).where(
-        models.OfferingAcademicInfo.offering_id == offering_id,
-        models.OfferingAcademicInfo.academic_year == current_year,
-        models.OfferingAcademicInfo.is_published == True
-    ).limit(1)
-    result = await db.execute(query)
-    return result.scalar_one_or_none()
+    return await repo.get_current_academic_info(offering_id, current_year)
 
 
 async def get_academic_info_history(
@@ -1077,6 +1028,8 @@ async def get_academic_info_history(
     """
     Get all academic info history for an offering, ordered by year (newest first).
 
+    ✅ SPRINT 3 REFACTORED: Now uses OrganizationRepository for data access.
+    
     Args:
         db: Database session
         offering_id: ID of the program offering
@@ -1085,17 +1038,10 @@ async def get_academic_info_history(
     Returns:
         List of academic info records ordered by academic_year descending
     """
-    query = select(models.OfferingAcademicInfo).where(
-        models.OfferingAcademicInfo.offering_id == offering_id
-    )
-
-    if published_only:
-        query = query.where(models.OfferingAcademicInfo.is_published == True)
-
-    query = query.order_by(models.OfferingAcademicInfo.academic_year.desc())
-
-    result = await db.execute(query)
-    return list(result.scalars().all())
+    from app.repositories import OrganizationRepository
+    
+    repo = OrganizationRepository(db)
+    return await repo.get_academic_info_history(offering_id, published_only)
 
 
 async def create_academic_info(
@@ -1419,34 +1365,16 @@ async def get_organization_tree_with_aggregation(
     # Instead of loading ALL academic_info_history (which could be 30,000+ records),
     # we query only the academic info for the specified year separately.
 
+    # ✅ SPRINT 3 REFACTORED: Use Repository for data access
+    from app.repositories import OrganizationRepository
+    
+    repo = OrganizationRepository(db)
+    
     # Step 1: Query all units with programs and offerings (without academic info history)
-    query = (
-        select(models.OrganizationUnit)
-        .options(
-            selectinload(models.OrganizationUnit.major_programs).selectinload(
-                models.MajorProgram.offerings
-            ),  # Removed: academic_info_history loading
-            selectinload(models.OrganizationUnit.children)
-        )
-        .order_by(models.OrganizationUnit.name)
-    )
-
-    if not include_inactive:
-        query = query.where(models.OrganizationUnit.is_active == True)
-
-    result = await db.execute(query)
-    all_units = result.scalars().unique().all()
+    all_units = await repo.get_tree_for_aggregation(include_inactive)
 
     # Step 2: Query academic info for ONLY the specified year (much more efficient)
-    academic_info_query = (
-        select(models.OfferingAcademicInfo)
-        .where(
-            models.OfferingAcademicInfo.academic_year == academic_year,
-            models.OfferingAcademicInfo.is_published == True
-        )
-    )
-    academic_info_result = await db.execute(academic_info_query)
-    all_academic_info = academic_info_result.scalars().all()
+    all_academic_info = await repo.get_academic_info_for_year(academic_year)
 
     # Build lookup dict: offering_id -> academic_info
     academic_info_by_offering = {
@@ -1589,34 +1517,25 @@ async def get_programs_by_unit_tree(
     unit_id: int,
     search_term: Optional[str] = None
 ) -> List[models.MajorProgram]:
-    """Get all programs belonging to a unit and all its descendants."""
+    """
+    Get all programs belonging to a unit and all its descendants.
+    
+    ✅ SPRINT 3 REFACTORED: Now uses OrganizationRepository for data access.
+    """
     if not unit_id:
         return []
 
+    # ✅ Use Repository for CTE query and program search
+    from app.repositories import OrganizationRepository
+    
+    repo = OrganizationRepository(db)
+    
     # Get all related unit IDs using recursive CTE
-    sql = text(
-        """
-        WITH RECURSIVE unit_hierarchy AS (
-           SELECT id FROM organization_unit WHERE id = :unit_id
-           UNION ALL
-           SELECT u.id FROM organization_unit u
-           JOIN unit_hierarchy uh ON u.parent_id = uh.id
-        )
-        SELECT id FROM unit_hierarchy;
-    """
-    )
-    result = await db.execute(sql, {"unit_id": unit_id})
-    all_related_unit_ids = [row[0] for row in result]
+    all_related_unit_ids = await repo.get_descendant_unit_ids(unit_id)
 
     # Query programs in these units
-    query = select(models.MajorProgram).filter(
-        models.MajorProgram.unit_id.in_(all_related_unit_ids),
-        models.MajorProgram.is_active == True
+    return await repo.search_programs_in_hierarchy(
+        unit_ids=all_related_unit_ids,
+        search_term=search_term,
+        limit=20
     )
-
-    if search_term:
-        safe_pattern = f"%{search_term.strip()}%"
-        query = query.filter(models.MajorProgram.name.ilike(safe_pattern))
-
-    programs_result = await db.execute(query.order_by(models.MajorProgram.name).limit(20))
-    return programs_result.scalars().all()

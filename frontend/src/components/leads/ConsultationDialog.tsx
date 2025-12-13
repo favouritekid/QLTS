@@ -46,7 +46,7 @@ const consultationSchema = z.object({
   scheduled_at: z.date().optional().nullable(),
   status_id: z.string().optional(),
   notes: z.string().max(1000, "Ghi chú không được quá 1000 ký tự").optional(),
-  method: z.enum(["phone", "email", "in_person", "online", "video_call"]).optional(),
+  method: z.enum(["phone", "email", "in_person", "sms", "video_call"]).optional(),
   duration_minutes: z.number().min(0).max(480).optional(),
 });
 
@@ -237,7 +237,7 @@ export function ConsultationDialog({
                         <SelectItem value="email">Email</SelectItem>
                         <SelectItem value="in_person">Gặp trực tiếp</SelectItem>
                         <SelectItem value="video_call">Video call</SelectItem>
-                        <SelectItem value="online">Online</SelectItem>
+                        <SelectItem value="sms">SMS</SelectItem>
                       </SelectContent>
                     </Select>
                     <FormMessage />

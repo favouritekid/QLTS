@@ -35,18 +35,139 @@ class LeadRepository(BaseRepository[models.Lead]):
         """
         super().__init__(db, models.Lead)
 
+    # =========================================================================
+    # DETAIL VIEW METHODS (get_by_id with eager loading)
+    # =========================================================================
+
+    async def get_by_id_full(
+        self,
+        lead_id: int,
+        include_deleted: bool = False
+    ) -> Optional[models.Lead]:
+        """
+        Get lead with ALL relationships for Detail/Timeline/Insights view.
+        
+        This is the "deep" loading strategy that includes:
+        - All direct relationships (offering, unit, officer, etc.)
+        - Nested relationships (unit.parent, unit.children, unit.major_programs)
+        - Collection relationships (consultations, assignment_logs)
+        - Nested collection relationships (consultations.officer, consultations.status)
+        
+        Use this for:
+        - Lead Detail Page
+        - Timeline View
+        - Insights Dashboard
+        
+        Args:
+            lead_id: Lead ID to fetch
+            include_deleted: If True, include soft-deleted leads
+            
+        Returns:
+            Lead with all relations loaded, or None if not found
+        """
+        from sqlalchemy.orm import joinedload
+        
+        query = (
+            select(self.model)
+            .options(
+                # Direct 1-1 relationships
+                selectinload(models.Lead.offering).options(
+                    selectinload(models.ProgramOffering.program)
+                ),
+                selectinload(models.Lead.unit).options(
+                    selectinload(models.OrganizationUnit.parent),
+                    selectinload(models.OrganizationUnit.children),
+                    selectinload(models.OrganizationUnit.major_programs),
+                ),
+                selectinload(models.Lead.assigned_officer),
+                selectinload(models.Lead.pipeline_stage),
+                selectinload(models.Lead.consultation_status).selectinload(models.ConsultationStatus.stage),
+                selectinload(models.Lead.application).options(
+                    selectinload(models.Application.officer)
+                ),
+                # Collection relationships for timeline/insights
+                selectinload(models.Lead.consultations).options(
+                    joinedload(models.Consultation.officer),
+                    joinedload(models.Consultation.consultation_status).joinedload(models.ConsultationStatus.stage),
+                ),
+                selectinload(models.Lead.assignment_logs).options(
+                    joinedload(models.AssignmentLog.officer)
+                ),
+            )
+            .where(self.model.id == lead_id)
+        )
+        
+        if not include_deleted:
+            query = query.where(self.model.deleted_at.is_(None))
+        
+        result = await self.db.execute(query)
+        return result.scalars().first()
+
+    async def get_by_id_shallow(
+        self,
+        lead_id: int,
+        include_deleted: bool = False
+    ) -> Optional[models.Lead]:
+        """
+        Get lead with minimal relationships for quick operations.
+        
+        This is the "shallow" loading strategy that includes only:
+        - Direct 1-1 relationships needed for display
+        - NO collection relationships (consultations, logs)
+        
+        Use this for:
+        - Quick lead lookup before update
+        - List item display
+        - Permission checks
+        
+        Args:
+            lead_id: Lead ID to fetch
+            include_deleted: If True, include soft-deleted leads
+            
+        Returns:
+            Lead with minimal relations loaded, or None if not found
+        """
+        query = (
+            select(self.model)
+            .options(
+                selectinload(models.Lead.offering).options(
+                    selectinload(models.ProgramOffering.program)
+                ),
+                selectinload(models.Lead.unit),
+                selectinload(models.Lead.assigned_officer),
+                selectinload(models.Lead.pipeline_stage),
+                selectinload(models.Lead.consultation_status).selectinload(models.ConsultationStatus.stage),
+                selectinload(models.Lead.application).options(
+                    selectinload(models.Application.officer)
+                ),
+            )
+            .where(self.model.id == lead_id)
+        )
+        
+        if not include_deleted:
+            query = query.where(self.model.deleted_at.is_(None))
+        
+        result = await self.db.execute(query)
+        return result.scalars().first()
+
     async def get_filtered(
         self,
         skip: int = 0,
         limit: int = 10,
         status: Optional[str] = None,
-        assigned_officer_id: Optional[int] = None,
+        assigned_officer_id: Optional[str] = None,  # Comma-separated IDs for multi-select
         unit_id: Optional[int] = None,
-        offering_id: Optional[int] = None,
+        offering_id: Optional[str] = None,  # Comma-separated IDs for multi-select
         source: Optional[str] = None,
         search: Optional[str] = None,
         sort_by: str = "created_at",
         order: str = "desc",
+        # === PIPELINE STAGE FILTER ===
+        pipeline_stage_id: Optional[str] = None,  # Comma-separated IDs for multi-select
+        # === DATE RANGE FILTER ===
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        date_field: str = "created_at",
     ) -> Tuple[int, List[models.Lead]]:
         """
         Get filtered list of leads with pagination and eager loading.
@@ -56,17 +177,21 @@ class LeadRepository(BaseRepository[models.Lead]):
         - Today's activities appear second
         - Future/no activities appear last
 
+        Multi-select filters:
+        - status, source, offering_id, pipeline_stage_id, assigned_officer_id accept comma-separated values
+
         Args:
             skip: Number of records to skip
             limit: Maximum number of records to return
             status: Comma-separated status filter
-            assigned_officer_id: Filter by assigned officer
+            assigned_officer_id: Comma-separated officer IDs (e.g. "1,2,3")
             unit_id: Filter by organization unit
-            offering_id: Filter by program offering
+            offering_id: Comma-separated offering IDs (e.g. "1,2,3")
             source: Comma-separated source filter
             search: Search term for name/email/phone
             sort_by: Column to sort by (default: created_at)
             order: Sort order (asc/desc)
+            pipeline_stage_id: Comma-separated stage IDs (e.g. "stg01,stg02")
 
         Returns:
             Tuple of (total_count, lead_list)
@@ -86,14 +211,26 @@ class LeadRepository(BaseRepository[models.Lead]):
             if statuses:
                 filters.append(models.Lead.status.in_(statuses))
 
-        if assigned_officer_id is not None:
-            filters.append(models.Lead.assigned_officer_id == assigned_officer_id)
+        # Multi-select: assigned_officer_id
+        if assigned_officer_id:
+            officer_ids = [int(s.strip()) for s in assigned_officer_id.split(",") if s.strip().isdigit()]
+            if officer_ids:
+                if len(officer_ids) == 1:
+                    filters.append(models.Lead.assigned_officer_id == officer_ids[0])
+                else:
+                    filters.append(models.Lead.assigned_officer_id.in_(officer_ids))
 
         if unit_id is not None:
             filters.append(models.Lead.unit_id == unit_id)
 
-        if offering_id is not None:
-            filters.append(models.Lead.offering_id == offering_id)
+        # Multi-select: offering_id
+        if offering_id:
+            offer_ids = [int(s.strip()) for s in offering_id.split(",") if s.strip().isdigit()]
+            if offer_ids:
+                if len(offer_ids) == 1:
+                    filters.append(models.Lead.offering_id == offer_ids[0])
+                else:
+                    filters.append(models.Lead.offering_id.in_(offer_ids))
 
         if source:
             sources = [s.strip() for s in source.split(",") if s.strip()]
@@ -109,6 +246,29 @@ class LeadRepository(BaseRepository[models.Lead]):
                 models.Lead.phone.ilike(search_term),
             )
             filters.append(search_conditions)
+
+        # Multi-select: pipeline_stage_id
+        if pipeline_stage_id:
+            stage_ids = [s.strip() for s in pipeline_stage_id.split(",") if s.strip()]
+            if stage_ids:
+                if len(stage_ids) == 1:
+                    filters.append(models.Lead.pipeline_stage_id == stage_ids[0])
+                else:
+                    filters.append(models.Lead.pipeline_stage_id.in_(stage_ids))
+
+        # === DATE RANGE FILTER ===
+        # Filter by date_from and/or date_to on specified date_field (created_at or updated_at)
+        if date_from or date_to:
+            # Validate date_field - only allow created_at or updated_at
+            if date_field not in ("created_at", "updated_at"):
+                date_field = "created_at"  # Default fallback
+            
+            date_column = getattr(models.Lead, date_field)
+            
+            if date_from:
+                filters.append(date_column >= date_from)
+            if date_to:
+                filters.append(date_column <= date_to)
 
         # Apply filters to both queries
         if filters:
@@ -160,7 +320,7 @@ class LeadRepository(BaseRepository[models.Lead]):
                 ),
                 selectinload(models.Lead.assigned_officer),
                 selectinload(models.Lead.unit),
-                selectinload(models.Lead.consultation_status),
+                selectinload(models.Lead.consultation_status).selectinload(models.ConsultationStatus.stage),
                 selectinload(models.Lead.pipeline_stage),
                 # ✅ FIX: Add missing eager load for application to prevent MissingGreenlet error
                 selectinload(models.Lead.application),
@@ -199,7 +359,7 @@ class LeadRepository(BaseRepository[models.Lead]):
 
     async def get_by_email(self, email: str) -> Optional[models.Lead]:
         """
-        Get lead by email address.
+        Get lead by email address (case-insensitive).
 
         Args:
             email: Email to search
@@ -209,7 +369,7 @@ class LeadRepository(BaseRepository[models.Lead]):
         """
         result = await self.db.execute(
             select(models.Lead)
-            .where(models.Lead.email == email)
+            .where(func.lower(models.Lead.email) == email.lower())
             .where(models.Lead.deleted_at.is_(None))
         )
         return result.scalars().first()
@@ -349,3 +509,250 @@ class LeadRepository(BaseRepository[models.Lead]):
 
         result = await self.db.execute(query)
         return {row.status: row.count for row in result}
+
+    # =========================================================================
+    # SPRINT 5: Additional Methods for lead_service Migration
+    # =========================================================================
+
+    async def get_scoring_config_by_unit(
+        self,
+        unit_id: int
+    ) -> Optional[models.LeadScoringConfig]:
+        """
+        Get lead scoring config for a unit.
+        
+        ✅ SPRINT 5: Added for lead_service migration.
+        
+        Args:
+            unit_id: Organization unit ID
+            
+        Returns:
+            LeadScoringConfig or None
+        """
+        query = select(models.LeadScoringConfig).where(
+            models.LeadScoringConfig.unit_id == unit_id
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
+    async def get_last_status_history_entry(
+        self,
+        lead_id: int
+    ) -> Optional[models.LeadStatusHistory]:
+        """
+        Get the most recent status history entry for a lead.
+        
+        ✅ SPRINT 5: Added for lead_service revert_lead_status migration.
+        
+        Args:
+            lead_id: Lead ID
+            
+        Returns:
+            Most recent LeadStatusHistory or None
+        """
+        query = (
+            select(models.LeadStatusHistory)
+            .where(models.LeadStatusHistory.lead_id == lead_id)
+            .order_by(
+                models.LeadStatusHistory.changed_at.desc(),
+                models.LeadStatusHistory.id.desc(),
+            )
+            .limit(1)
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
+    async def check_phone_conflict(
+        self,
+        phone: Optional[str],
+        phone2: Optional[str],
+        exclude_id: Optional[int] = None
+    ) -> Optional[models.Lead]:
+        """
+        Check if any OTHER lead uses these phone numbers (Global check).
+        
+        Checks if:
+        - lead.phone == new_phone OR
+        - lead.phone == new_phone2 OR
+        - lead.phone2 == new_phone OR
+        - lead.phone2 == new_phone2
+        
+        Args:
+            phone: Primary phone to check
+            phone2: Secondary phone to check
+            exclude_id: Lead ID to exclude from check (for updates)
+            
+        Returns:
+            Conflicting Lead (with assigned_officer loaded) or None
+        """
+        # Skip if no phones provided
+        if not phone and not phone2:
+            return None
+            
+        conditions = []
+        if phone:
+            conditions.append(models.Lead.phone == phone)
+            conditions.append(models.Lead.phone2 == phone)
+        if phone2:
+            conditions.append(models.Lead.phone == phone2)
+            conditions.append(models.Lead.phone2 == phone2)
+            
+        if not conditions:
+            return None
+            
+        query = (
+            select(models.Lead)
+            .options(selectinload(models.Lead.assigned_officer))
+            .where(
+                or_(*conditions),
+                models.Lead.deleted_at.is_(None)
+            )
+        )
+        
+        if exclude_id is not None:
+            query = query.where(models.Lead.id != exclude_id)
+            
+        result = await self.db.execute(query)
+        return result.scalars().first()
+
+    async def check_batch_phone_conflict(self, phones: list[str]) -> set[str]:
+        """
+        Check which phones in the provided list already exist in DB.
+        Checks both phone and phone2 columns.
+        
+        Args:
+            phones: List of phone numbers to check
+            
+        Returns:
+            Set of phone numbers that already exist
+        """
+        if not phones:
+            return set()
+            
+        # Filter out empty strings and duplicates from input
+        valid_phones = {p for p in phones if p}
+        if not valid_phones:
+            return set()
+            
+        query = (
+            select(models.Lead.phone, models.Lead.phone2)
+            .where(
+                models.Lead.deleted_at.is_(None),
+                or_(
+                    models.Lead.phone.in_(valid_phones),
+                    models.Lead.phone2.in_(valid_phones)
+                )
+            )
+        )
+        
+        result = await self.db.execute(query)
+        rows = result.all()
+        
+        existing_phones = set()
+        for row in rows:
+            p1, p2 = row
+            if p1 in valid_phones:
+                existing_phones.add(p1)
+            if p2 in valid_phones:
+                existing_phones.add(p2)
+                
+        return existing_phones
+
+    # =========================================================================
+    # CONSULTATION METHODS (for response serialization)
+    # =========================================================================
+
+    async def get_consultation_with_status_stage(
+        self,
+        consultation_id: int
+    ) -> Optional[models.Consultation]:
+        """
+        Get consultation with eager loaded relationships for API response.
+        
+        Loads:
+        - officer: User who created the consultation
+        - consultation_status.stage: Nested stage for ConsultationStatus schema
+        
+        ✅ Architecture compliant: Service calls Repository for all queries.
+        
+        Args:
+            consultation_id: Consultation ID
+            
+        Returns:
+            Consultation with relationships loaded, or None if not found
+        """
+        query = (
+            select(models.Consultation)
+            .options(
+                selectinload(models.Consultation.officer),
+                selectinload(models.Consultation.consultation_status).selectinload(models.ConsultationStatus.stage),
+            )
+            .where(models.Consultation.id == consultation_id)
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
+    # =========================================================================
+    # ✅ REASSIGN FEATURE: New methods for architecture compliance
+    # =========================================================================
+
+    async def get_by_id_for_update(
+        self,
+        lead_id: int
+    ) -> Optional[models.Lead]:
+        """
+        Get lead by ID with row-level lock (FOR UPDATE).
+        
+        ✅ ARCHITECTURE COMPLIANT: Replaces direct query in process_officer_action.
+        
+        Used when modifying lead state in transactions where you need
+        to prevent concurrent modifications.
+        
+        Args:
+            lead_id: Lead ID
+            
+        Returns:
+            Lead with lock acquired, or None if not found
+        """
+        query = (
+            select(models.Lead)
+            .where(models.Lead.id == lead_id)
+            .with_for_update()
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
+    async def count_reassignments_in_period(
+        self,
+        officer_id: int,
+        days: int = 7
+    ) -> int:
+        """
+        Count number of reassignments by an officer within the given period.
+        
+        ✅ ARCHITECTURE COMPLIANT: Replaces direct query in check_reassign_quota.
+        
+        Used for enforcing weekly reassign quota for officers.
+        
+        Args:
+            officer_id: Officer ID to count reassignments for
+            days: Number of days to look back (default 7 = weekly)
+            
+        Returns:
+            Number of reassignments in the period
+        """
+        from datetime import datetime, timedelta, timezone
+        
+        period_start = datetime.now(timezone.utc) - timedelta(days=days)
+        
+        query = (
+            select(func.count(models.AssignmentLog.id))
+            .where(
+                models.AssignmentLog.officer_id == officer_id,
+                models.AssignmentLog.method == "officer_reassign",
+                models.AssignmentLog.timestamp >= period_start,
+            )
+        )
+        result = await self.db.execute(query)
+        return result.scalar() or 0
+

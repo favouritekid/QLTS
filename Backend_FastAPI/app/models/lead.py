@@ -1,10 +1,53 @@
 # app/models/lead.py
+import enum
 from datetime import datetime, timezone
 
 from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from .base import Base
+
+
+class ConsultationMethodEnum(str, enum.Enum):
+    """Method of consultation contact."""
+    phone = "phone"
+    email = "email"
+    sms = "sms"
+    video_call = "video_call"
+    in_person = "in_person"
+
+
+class LeadStatusEnum(str, enum.Enum):
+    """Lead lifecycle status."""
+    new = "new"
+    assigned = "assigned"
+    contacted = "contacted"
+    qualified = "qualified"
+    unqualified = "unqualified"
+    converted = "converted"
+    rejected = "rejected"
+
+
+class LeadSourceEnum(str, enum.Enum):
+    """Source where the lead came from."""
+    website = "website"
+    referral = "referral"
+    social_media = "social_media"
+    walk_in = "walk_in"
+    email = "email"
+    phone = "phone"
+    event = "event"
+    other = "other"
+
+
+class EducationLevelEnum(str, enum.Enum):
+    """Education level of the lead."""
+    high_school = "high_school"
+    diploma = "diploma"
+    bachelor = "bachelor"
+    master = "master"
+    phd = "phd"
+    other = "other"
 
 
 class Lead(Base):
@@ -33,6 +76,26 @@ class Lead(Base):
     location = Column(String(255), nullable=True)
     officer_rating = Column(Integer, nullable=True)
     officer_summary = Column(Text, nullable=True)
+    # Fit Score fields
+    birth_year = Column(Integer, nullable=True, comment="Năm sinh (VD: 2000)")
+    location_proximity = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="Officer đánh giá: 0=Xa, 1=Lân cận, 2=Gần"
+    )
+    occupation_relevance = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="Officer đánh giá: 0=Không liên quan, 1=Gián tiếp, 2=Trực tiếp"
+    )
+    academic_performance = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="Học lực: 0=Yếu/Chưa xác định, 1=Trung bình, 2=Khá, 3=Giỏi"
+    )
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,
@@ -60,6 +123,13 @@ class Lead(Base):
     )
     pipeline_stage_id = Column(
         String(50), ForeignKey("pipeline_stage.id"), nullable=True, index=True
+    )
+    # Blacklist: Officers who have reassigned this lead (cannot receive it again)
+    rejected_by_officer_ids = Column(
+        JSON,
+        nullable=True,
+        default=list,
+        comment="List of officer IDs who reassigned this lead - prevents reassignment back to them"
     )
 
     pipeline_stage = relationship("PipelineStage", back_populates="leads")
@@ -117,7 +187,6 @@ class Consultation(Base):
     reminder_sent = Column(Boolean, default=False, nullable=False, index=True)
     method = Column(String(50))
     notes = Column(Text)
-    outcome = Column(String(50))
     duration_minutes = Column(Integer, nullable=True)
     officer_id = Column(Integer, ForeignKey("user.id"), nullable=False, index=True)  # ✅ FIX: Added index
     consultation_status_id = Column(
