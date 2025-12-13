@@ -70,7 +70,7 @@ interface ReassignQuota {
 // HOOKS
 // ============================================================================
 
-function useReassignQuota() {
+function useReassignQuota(enabled: boolean = true) {
   return useQuery<ReassignQuota>({
     queryKey: ["reassign-quota"],
     queryFn: async () => {
@@ -78,6 +78,7 @@ function useReassignQuota() {
       return response.data;
     },
     staleTime: 1000 * 60, // 1 minute
+    enabled, // Only fetch when enabled (for officers only)
   });
 }
 
@@ -97,7 +98,7 @@ export function ReassignLeadDialog({
   const [selectedReason, setSelectedReason] = useState<string>("");
   const [customReason, setCustomReason] = useState("");
   
-  const { data: quota, isLoading: quotaLoading } = useReassignQuota();
+  const { data: quota, isLoading: quotaLoading } = useReassignQuota(!isAdmin);
   const performAction = usePerformLeadAction();
   
   const reasons = isAdmin ? ADMIN_REASONS : OFFICER_REASONS;

@@ -443,10 +443,12 @@ async def perform_lead_action(
     db: AsyncSession = Depends(database.get_db),
 ):
     """Xử lý hành động (reject/reassign) của Officer (Đã xác thực 2 lớp)."""
-    result = await lead_service.process_officer_action(
+    result, callback = await lead_service.process_officer_action(
         db, lead.id, current_user, action_data.action, action_data.reason
     )
     await db.commit()
+    # ✅ FIX: Call callback AFTER commit to ensure Celery sees committed data
+    await callback()
     return result
 
 

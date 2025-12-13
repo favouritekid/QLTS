@@ -2052,7 +2052,7 @@ async def update_consultation(
 # REASSIGN QUOTA CHECK
 # ============================================================================
 
-REASSIGN_QUOTA_LIMIT = 3  # Max reassigns per week
+REASSIGN_QUOTA_LIMIT = 5  # Max reassigns per week
 REASSIGN_QUOTA_PERIOD_DAYS = 7  # Reset quota every 7 days
 
 
@@ -2060,25 +2060,19 @@ async def check_reassign_quota(db: AsyncSession, officer_id: int) -> dict:
     """
     Check if officer has remaining reassign quota.
     
+    ✅ ARCHITECTURE COMPLIANT: Uses LeadRepository for data access.
+    
     Returns:
         dict: {"allowed": bool, "used": int, "limit": int, "remaining": int}
     """
-    from datetime import timedelta
+    from app.repositories.lead_repository import LeadRepository
     
-    # Calculate start of current week (7 days ago)
-    week_start = datetime.now(timezone.utc) - timedelta(days=REASSIGN_QUOTA_PERIOD_DAYS)
-    
-    # Count reassigns in current period
-    count_query = (
-        select(func.count(models.AssignmentLog.id))
-        .where(
-            models.AssignmentLog.officer_id == officer_id,
-            models.AssignmentLog.method == "officer_reassign",
-            models.AssignmentLog.timestamp >= week_start,
-        )
+    # ✅ FIX: Use repository instead of direct query
+    repo = LeadRepository(db)
+    used_count = await repo.count_reassignments_in_period(
+        officer_id=officer_id,
+        days=REASSIGN_QUOTA_PERIOD_DAYS
     )
-    result = await db.execute(count_query)
-    used_count = result.scalar() or 0
     
     remaining = max(0, REASSIGN_QUOTA_LIMIT - used_count)
     
@@ -2107,33 +2101,35 @@ async def process_officer_action(
     # Di chuyển import vào đây để phá vỡ circular import
     from ..celery_utils import process_automatic_lead_assignment_task
 
-    # ✅ QUOTA CHECK: Verify officer hasn't exceeded reassign limit
-    if action == "reassign":
-        quota = await check_reassign_quota(db, officer.id)
+    # ✅ FIX: Capture values early to avoid lazy loading issues
+    officer_id = officer.id
+    is_admin_or_manager = officer.role in ("admin", "manager")
+    
+    # ✅ QUOTA CHECK: Only apply to Officers, not Admin/Manager
+    if action == "reassign" and not is_admin_or_manager:
+        quota = await check_reassign_quota(db, officer_id)
         if not quota["allowed"]:
             raise BadRequest(
                 detail=f"Bạn đã hết lượt phân công lại trong tuần này ({quota['used']}/{quota['limit']}). Vui lòng liên hệ quản lý."
             )
         log.info(
             "Officer reassign quota check passed",
-            officer_id=officer.id,
+            officer_id=officer_id,
             remaining=quota["remaining"],
         )
-
+    
     trigger_reassignment = False  # Biến cờ để dispatch task sau commit
     try:
         async with db.begin_nested():
-            # Lấy Lead (có thể không cần full eager loading ở đây)
-            lead_query = (
-                select(models.Lead).where(models.Lead.id == lead_id).with_for_update()
-            )
-            lead_result = await db.execute(lead_query)
-            lead = lead_result.scalar_one_or_none()
+            # ✅ ARCHITECTURE COMPLIANT: Use LeadRepository instead of direct query
+            from app.repositories.lead_repository import LeadRepository
+            repo = LeadRepository(db)
+            lead = await repo.get_by_id_for_update(lead_id)
             if not lead:
                 raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found.")
 
-            # Kiểm tra quyền: Officer phải được gán
-            if lead.assigned_officer_id != officer.id:
+            # ✅ FIX: Admin/Manager can reassign ANY lead, Officers can only reassign their own
+            if not is_admin_or_manager and lead.assigned_officer_id != officer_id:
                 raise PermissionDeniedError(detail="You are not assigned to this lead.")
 
             log_method = ""  # Method cho AssignmentLog
@@ -2150,20 +2146,27 @@ async def process_officer_action(
                 new_state["consultation_status_id"] = lead.consultation_status_id
                 new_state["pipeline_stage_id"] = lead.pipeline_stage_id
                 new_state["status"] = lead.status  # Keep status synced from consultation
+                # ✅ FIX: Must set BOTH the FK column AND the relationship
+                lead.assigned_officer_id = None  # FK column
                 lead.assigned_at = None
-                lead.assigned_officer = None  # Set cả relationship thành None
+                lead.assigned_officer = None  # Relationship
                 
-                # ✅ BLACKLIST: Add officer to rejected list (prevents lead from returning)
-                rejected_list = lead.rejected_by_officer_ids or []
-                if officer.id not in rejected_list:
-                    rejected_list.append(officer.id)
-                    lead.rejected_by_officer_ids = rejected_list
-                    log.info(
-                        "Added officer to lead blacklist",
-                        lead_id=lead_id,
-                        officer_id=officer.id,
-                        blacklist=rejected_list,
-                    )
+                # ✅ BLACKLIST: Only add to blacklist for OFFICER self-reassign (not Admin manual reassign)
+                if not is_admin_or_manager:
+                    # ✅ FIX: Create NEW list to ensure SQLAlchemy detects JSON mutation
+                    rejected_list = list(lead.rejected_by_officer_ids or [])
+                    if officer_id not in rejected_list:
+                        rejected_list.append(officer_id)
+                        lead.rejected_by_officer_ids = rejected_list
+                        # ✅ FIX: Explicitly flag as modified for JSON field mutation tracking
+                        from sqlalchemy.orm.attributes import flag_modified
+                        flag_modified(lead, "rejected_by_officer_ids")
+                        log.info(
+                            "Added officer to lead blacklist",
+                            lead_id=lead_id,
+                            officer_id=officer_id,
+                            blacklist=rejected_list,
+                        )
                 
                 # Update assignment_status to reassign_pending
                 StatusHelper.set_assignment_status(lead, AssignmentStatus.REASSIGN_PENDING)
@@ -2242,22 +2245,26 @@ async def process_officer_action(
                 lead_id=lead_id,
             )
 
-        # Dispatch Celery task SAU KHI transaction thành công (nếu cần)
-        if trigger_reassignment:
-            try:
-                process_automatic_lead_assignment_task.delay(lead.id)
-                log.info("Re-assignment task dispatched for lead", lead_id=lead.id)
-            except Exception as e:
-                log.error(
-                    "Failed to dispatch Celery re-assignment task after officer action",
-                    lead_id=lead.id,
-                    error=str(e),
-                    exc_info=True,
-                )
-                # Không rollback transaction vì hành động chính đã thành công
+        # ✅ FIX: Return callback to dispatch Celery AFTER db.commit() in router
+        # This fixes race condition where Celery reads stale blacklist
+        lead_id_for_callback = lead.id  # Capture for closure
+        
+        async def post_commit_callback():
+            if trigger_reassignment:
+                try:
+                    process_automatic_lead_assignment_task.delay(lead_id_for_callback)
+                    log.info("Re-assignment task dispatched for lead", lead_id=lead_id_for_callback)
+                except Exception as e:
+                    log.error(
+                        "Failed to dispatch Celery re-assignment task after officer action",
+                        lead_id=lead_id_for_callback,
+                        error=str(e),
+                        exc_info=True,
+                    )
 
-        # Trả về lead đã được tải đầy đủ
-        return await get_lead_by_id(db, lead_id)
+        # Trả về lead đã được tải đầy đủ + callback
+        result = await get_lead_by_id(db, lead_id)
+        return result, post_commit_callback
 
     except (
         PermissionDeniedError,
@@ -2269,7 +2276,7 @@ async def process_officer_action(
         log.warning(
             "Officer action failed validation or resource not found",
             lead_id=lead_id,
-            officer_id=getattr(officer, "id", None),  # Lấy ID an toàn
+            officer_id=officer_id,  # ✅ FIX: Use captured variable
             action=action,
             detail=getattr(e, "detail", str(e)),
         )
@@ -2280,7 +2287,7 @@ async def process_officer_action(
         log.error(
             "Failed to process officer action",
             lead_id=lead_id,
-            officer_id=getattr(officer, "id", None),
+            officer_id=officer_id,  # ✅ FIX: Use captured variable
             action=action,
             error=str(e),
             exc_info=True,

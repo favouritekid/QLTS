@@ -266,7 +266,7 @@ async def automatically_assign_lead(
                     lead_id=lead.id,  # Lead ID chắc chắn đã có
                     officer_id=chosen_one.id,
                     method="automatic",
-                    reason="Assigned by system (utilization routing)",
+                    reason="Hệ thống phân công tự động",
                     timestamp=now_utc,
                 )
 
@@ -301,6 +301,8 @@ async def automatically_assign_lead(
                 "lead_phone": lead.phone or "",
                 "offering_name": offering_name,
                 "actor_name": "System (Auto Assignment)",  # ✅ Added for template
+                "is_automatic": True,  # ✅ NEW: For frontend to show "Tự động" badge
+                "assignment_method": "automatic",  # ✅ NEW: Match AssignmentLog.method
             }
 
             # Dispatch notification (saves to DB + commits + sends via Socket.IO/Email)

@@ -166,12 +166,20 @@ export function NotificationDropdown() {
                       <p className="text-muted-foreground text-xs leading-snug">
                         {notification.message}
                       </p>
-                      <p className="text-muted-foreground text-xs mt-1">
-                        {formatDistanceToNow(
-                          new Date(notification.created_at),
-                          { addSuffix: true }
+                      <div className="flex items-center gap-2 mt-1">
+                        <p className="text-muted-foreground text-xs">
+                          {formatDistanceToNow(
+                            new Date(notification.created_at),
+                            { addSuffix: true }
+                          )}
+                        </p>
+                        {/* ✅ Show "Tự động" badge for automatic assignments */}
+                        {(notification.data as Record<string, unknown>)?.is_automatic && (
+                          <Badge variant="outline" className="text-[10px] h-4 px-1.5 bg-blue-50 text-blue-600 border-blue-200">
+                            Tự động
+                          </Badge>
                         )}
-                      </p>
+                      </div>
                     </div>
                   </div>
                 );

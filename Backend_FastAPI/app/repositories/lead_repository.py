@@ -692,3 +692,67 @@ class LeadRepository(BaseRepository[models.Lead]):
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
+    # =========================================================================
+    # ✅ REASSIGN FEATURE: New methods for architecture compliance
+    # =========================================================================
+
+    async def get_by_id_for_update(
+        self,
+        lead_id: int
+    ) -> Optional[models.Lead]:
+        """
+        Get lead by ID with row-level lock (FOR UPDATE).
+        
+        ✅ ARCHITECTURE COMPLIANT: Replaces direct query in process_officer_action.
+        
+        Used when modifying lead state in transactions where you need
+        to prevent concurrent modifications.
+        
+        Args:
+            lead_id: Lead ID
+            
+        Returns:
+            Lead with lock acquired, or None if not found
+        """
+        query = (
+            select(models.Lead)
+            .where(models.Lead.id == lead_id)
+            .with_for_update()
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
+    async def count_reassignments_in_period(
+        self,
+        officer_id: int,
+        days: int = 7
+    ) -> int:
+        """
+        Count number of reassignments by an officer within the given period.
+        
+        ✅ ARCHITECTURE COMPLIANT: Replaces direct query in check_reassign_quota.
+        
+        Used for enforcing weekly reassign quota for officers.
+        
+        Args:
+            officer_id: Officer ID to count reassignments for
+            days: Number of days to look back (default 7 = weekly)
+            
+        Returns:
+            Number of reassignments in the period
+        """
+        from datetime import datetime, timedelta, timezone
+        
+        period_start = datetime.now(timezone.utc) - timedelta(days=days)
+        
+        query = (
+            select(func.count(models.AssignmentLog.id))
+            .where(
+                models.AssignmentLog.officer_id == officer_id,
+                models.AssignmentLog.method == "officer_reassign",
+                models.AssignmentLog.timestamp >= period_start,
+            )
+        )
+        result = await self.db.execute(query)
+        return result.scalar() or 0
+
