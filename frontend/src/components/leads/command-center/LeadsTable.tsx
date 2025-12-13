@@ -64,6 +64,7 @@ import { LEAD_SOURCE_OPTIONS } from "@/constants";
 import { STAGE_COLORS } from "@/types/pipeline.types";
 import { TableToolbar, type DensityMode } from "./TableToolbar";
 import { BulkActionsBar } from "./BulkActionsBar";
+import { CopyableCell } from "@/components/common/CopyableCell";
 
 // =============================================================================
 // TYPES
@@ -229,13 +230,15 @@ export function LeadsTable({
         size: 180,
       }),
 
-      // Phone column
+      // Phone column - with copy to clipboard
       columnHelper.accessor("phone", {
         header: "SĐT",
         cell: ({ row }) => (
-          <div className="text-muted-foreground font-mono text-sm text-right tabular-nums">
-            {row.original.phone || "—"}
-          </div>
+          <CopyableCell
+            value={row.original.phone}
+            label="số điện thoại"
+            className="text-muted-foreground font-mono text-sm tabular-nums"
+          />
         ),
         size: 120,
       }),

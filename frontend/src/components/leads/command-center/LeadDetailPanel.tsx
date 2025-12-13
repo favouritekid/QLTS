@@ -36,6 +36,7 @@ import { useLead } from "@/hooks/useLeads";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { QuickConsultationSection } from "@/components/leads/QuickConsultationSection";
 import { ReassignLeadDialog } from "@/components/leads/ReassignLeadDialog";
+import { CopyableCell } from "@/components/common/CopyableCell";
 import { STAGE_COLORS } from "@/types/pipeline.types";
 import type { Lead } from "@/types/lead.types";
 
@@ -254,15 +255,23 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
               <CardTitle className="text-sm font-medium">Thông tin liên hệ</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2.5 px-4 pt-0 pb-4">
-              {/* Phone with Call Button */}
+              {/* Phone with Copy + Call */}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3 text-sm">
                   <Phone className="text-muted-foreground h-4 w-4 shrink-0" />
-                  <span className="truncate">{lead.phone}</span>
+                  <CopyableCell
+                    value={lead.phone}
+                    label="số điện thoại"
+                    className="font-mono"
+                  />
                   {lead.phone2 && (
                     <>
                       <span className="text-muted-foreground">/</span>
-                      <span className="truncate">{lead.phone2}</span>
+                      <CopyableCell
+                        value={lead.phone2}
+                        label="số điện thoại phụ"
+                        className="font-mono"
+                      />
                     </>
                   )}
                 </div>
@@ -277,16 +286,23 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                 </Button>
               </div>
 
-              {/* Email */}
+              {/* Email with Copy */}
               {lead.email && (
                 <div className="flex items-center gap-3 text-sm">
                   <Mail className="text-muted-foreground h-4 w-4 shrink-0" />
-                  <a
-                    href={`mailto:${lead.email}`}
-                    className="truncate text-blue-600 hover:underline"
-                  >
-                    {lead.email}
-                  </a>
+                  <CopyableCell
+                    value={lead.email}
+                    label="email"
+                    displayValue={
+                      <a
+                        href={`mailto:${lead.email}`}
+                        className="text-blue-600 hover:underline"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {lead.email}
+                      </a>
+                    }
+                  />
                 </div>
               )}
 

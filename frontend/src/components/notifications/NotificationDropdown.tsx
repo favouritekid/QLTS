@@ -174,7 +174,7 @@ export function NotificationDropdown() {
                           )}
                         </p>
                         {/* ✅ Show "Tự động" badge for automatic assignments */}
-                        {(notification.data as Record<string, unknown>)?.is_automatic && (
+                        {Boolean((notification.data as Record<string, unknown>)?.is_automatic) && (
                           <Badge variant="outline" className="text-[10px] h-4 px-1.5 bg-blue-50 text-blue-600 border-blue-200">
                             Tự động
                           </Badge>
