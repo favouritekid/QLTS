@@ -3,7 +3,7 @@
  * TableToolbar - Toolbar for table controls
  * 
  * Features:
- * - Compact/Normal view toggle
+ * - 3-level density toggle (Condensed/Regular/Relaxed)
  * - Column visibility dropdown
  * - ✅ Option C: Keyboard shortcuts help
  */
@@ -12,9 +12,10 @@
 
 import React from "react";
 import {
-  AlignJustify,
-  List,
   Columns,
+  Minus,
+  Equal,
+  Menu,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -39,9 +40,11 @@ import { KeyboardShortcutsHelp } from "./KeyboardShortcutsHelp";
 // TYPES
 // =============================================================================
 
+export type DensityMode = 'condensed' | 'regular' | 'relaxed';
+
 interface TableToolbarProps {
-  isCompact: boolean;
-  onCompactChange: (compact: boolean) => void;
+  densityMode: DensityMode;
+  onDensityChange: (mode: DensityMode) => void;
   columnVisibility: VisibilityState;
   onColumnVisibilityChange: (columnId: string, isVisible: boolean) => void;
 }
@@ -58,13 +61,19 @@ const COLUMNS_CONFIG = [
   { id: "created_at", label: "Ngày tạo" },
 ];
 
+const DENSITY_OPTIONS: { value: DensityMode; label: string; icon: React.ElementType }[] = [
+  { value: 'condensed', label: 'Thu gọn', icon: Minus },
+  { value: 'regular', label: 'Thường', icon: Equal },
+  { value: 'relaxed', label: 'Thoáng', icon: Menu },
+];
+
 // =============================================================================
 // MAIN COMPONENT
 // =============================================================================
 
 export function TableToolbar({
-  isCompact,
-  onCompactChange,
+  densityMode,
+  onDensityChange,
   columnVisibility,
   onColumnVisibilityChange,
 }: TableToolbarProps) {
@@ -76,29 +85,31 @@ export function TableToolbar({
   return (
     <div className="flex items-center gap-2">
       <TooltipProvider delayDuration={300}>
-        {/* Compact View Toggle */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => onCompactChange(!isCompact)}
-              className={cn(
-                "h-8 w-8 p-0",
-                isCompact && "bg-muted"
-              )}
-            >
-              {isCompact ? (
-                <List className="h-4 w-4" />
-              ) : (
-                <AlignJustify className="h-4 w-4" />
-              )}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>
-            {isCompact ? "Chế độ thường" : "Chế độ thu gọn"}
-          </TooltipContent>
-        </Tooltip>
+        {/* Density Toggle - Segmented Control */}
+        <div className="flex items-center rounded-md border bg-muted/50 p-0.5">
+          {DENSITY_OPTIONS.map((option) => {
+            const Icon = option.icon;
+            const isActive = densityMode === option.value;
+            return (
+              <Tooltip key={option.value}>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => onDensityChange(option.value)}
+                    className={cn(
+                      "h-7 w-7 flex items-center justify-center rounded-sm transition-all",
+                      isActive 
+                        ? "bg-background shadow-sm text-foreground" 
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>{option.label}</TooltipContent>
+              </Tooltip>
+            );
+          })}
+        </div>
 
         {/* Column Visibility */}
         <DropdownMenu>
@@ -147,3 +158,4 @@ export function TableToolbar({
 }
 
 export default TableToolbar;
+

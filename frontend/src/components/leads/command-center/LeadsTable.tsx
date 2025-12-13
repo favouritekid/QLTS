@@ -36,6 +36,7 @@ import {
   ArrowDown,
   MoreHorizontal,
   ChevronLeft,
+  SearchX,
   ChevronRight,
   GripVertical,
 } from "lucide-react";
@@ -61,7 +62,7 @@ import { cn } from "@/lib/utils";
 import type { Lead } from "@/types/lead.types";
 import { LEAD_SOURCE_OPTIONS } from "@/constants";
 import { STAGE_COLORS } from "@/types/pipeline.types";
-import { TableToolbar } from "./TableToolbar";
+import { TableToolbar, type DensityMode } from "./TableToolbar";
 import { BulkActionsBar } from "./BulkActionsBar";
 
 // =============================================================================
@@ -96,7 +97,14 @@ interface LeadsTableProps {
 // =============================================================================
 
 const COLUMN_VISIBILITY_STORAGE_KEY = "leads_table_columns";
-const COMPACT_MODE_STORAGE_KEY = "leads_table_compact";
+const DENSITY_MODE_STORAGE_KEY = "leads_table_density";
+
+// Density configuration
+const DENSITY_CONFIG: Record<DensityMode, { rowHeight: number; cellPadding: string; headerHeight: string }> = {
+  condensed: { rowHeight: 36, cellPadding: 'py-1', headerHeight: 'h-8' },
+  regular: { rowHeight: 48, cellPadding: 'py-2', headerHeight: 'h-10' },
+  relaxed: { rowHeight: 60, cellPadding: 'py-3', headerHeight: 'h-12' },
+};
 
 const columnHelper = createColumnHelper<Lead>();
 
@@ -132,9 +140,10 @@ export function LeadsTable({
   const [focusedRowIndex, setFocusedRowIndex] = React.useState<number>(-1);
   
   // Load persisted states
-  const [isCompact, setIsCompact] = React.useState(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem(COMPACT_MODE_STORAGE_KEY) === "true";
+  const [densityMode, setDensityMode] = React.useState<DensityMode>(() => {
+    if (typeof window === "undefined") return 'regular';
+    const saved = localStorage.getItem(DENSITY_MODE_STORAGE_KEY);
+    return (saved as DensityMode) || 'regular';
   });
   
   const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>(() => {
@@ -148,11 +157,12 @@ export function LeadsTable({
   });
 
   const totalPages = Math.ceil(totalCount / pageSize);
+  const densityConfig = DENSITY_CONFIG[densityMode];
 
-  // Persist compact mode
+  // Persist density mode
   useEffect(() => {
-    localStorage.setItem(COMPACT_MODE_STORAGE_KEY, String(isCompact));
-  }, [isCompact]);
+    localStorage.setItem(DENSITY_MODE_STORAGE_KEY, densityMode);
+  }, [densityMode]);
 
   // Persist column visibility
   useEffect(() => {
@@ -223,7 +233,7 @@ export function LeadsTable({
       columnHelper.accessor("phone", {
         header: "SĐT",
         cell: ({ row }) => (
-          <div className="text-muted-foreground font-mono text-sm">
+          <div className="text-muted-foreground font-mono text-sm text-right tabular-nums">
             {row.original.phone || "—"}
           </div>
         ),
@@ -312,7 +322,7 @@ export function LeadsTable({
           else if (score >= 50) colorClass = "text-blue-600 font-medium";
           else if (score >= 30) colorClass = "text-yellow-600";
           return (
-            <div className={cn("text-sm text-center", colorClass)}>
+            <div className={cn("text-sm text-right tabular-nums pr-2", colorClass)}>
               {score}
             </div>
           );
@@ -413,7 +423,7 @@ export function LeadsTable({
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => tableScrollRef.current,
-    estimateSize: () => (isCompact ? 36 : 52), // Estimated row height based on compact mode
+    estimateSize: () => densityConfig.rowHeight, // Dynamic row height based on density mode
     overscan: 5, // Render 5 extra rows above/below viewport
   });
   const virtualRows = rowVirtualizer.getVirtualItems();
@@ -515,8 +525,8 @@ export function LeadsTable({
           )}
         </span>
         <TableToolbar
-          isCompact={isCompact}
-          onCompactChange={setIsCompact}
+          densityMode={densityMode}
+          onDensityChange={setDensityMode}
           columnVisibility={columnVisibility}
           onColumnVisibilityChange={(columnId, isVisible) => {
             setColumnVisibility((prev) => ({
@@ -541,8 +551,8 @@ export function LeadsTable({
                     key={header.id}
                     style={{ width: header.getSize() }}
                     className={cn(
-                      "relative h-10 whitespace-nowrap",
-                      isCompact && "h-8"
+                      "relative whitespace-nowrap",
+                      densityConfig.headerHeight
                     )}
                   >
                     {header.isPlaceholder
@@ -568,9 +578,13 @@ export function LeadsTable({
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={columns.length} className="h-32 text-center">
-                  <div className="text-muted-foreground">
-                    Không có lead nào phù hợp với bộ lọc
+                <TableCell colSpan={columns.length} className="h-48 text-center">
+                  <div className="flex flex-col items-center justify-center gap-3">
+                    <SearchX className="h-12 w-12 text-muted-foreground/40" />
+                    <div>
+                      <p className="font-medium text-foreground">Không tìm thấy lead</p>
+                      <p className="text-muted-foreground text-sm">Thử điều chỉnh bộ lọc hoặc tìm kiếm</p>
+                    </div>
                   </div>
                 </TableCell>
               </TableRow>
@@ -594,6 +608,8 @@ export function LeadsTable({
                       className={cn(
                         "cursor-pointer transition-all duration-150",
                         "hover:bg-muted/50",
+                        // Zebra stripes for better readability
+                        virtualRow.index % 2 === 1 && !isSelected && "bg-muted/20",
                         isSelected && "bg-primary/5 border-l-primary border-l-2",
                         isFocused && !isSelected && "ring-primary/50 ring-1 ring-inset"
                       )}
@@ -603,9 +619,7 @@ export function LeadsTable({
                         <TableCell
                           key={cell.id}
                           style={{ width: cell.column.getSize() }}
-                          className={cn(
-                            isCompact ? "py-1" : "py-3"
-                          )}
+                          className={densityConfig.cellPadding}
                         >
                           {flexRender(cell.column.columnDef.cell, cell.getContext())}
                         </TableCell>
