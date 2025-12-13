@@ -10,6 +10,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   Edit,
   Trash2,
   UserPlus,
@@ -148,68 +154,94 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
           </Avatar>
           <div className="min-w-0 flex-1 space-y-1">
             <h2 className="truncate text-lg font-semibold">{lead.full_name}</h2>
-            <div className="flex flex-wrap items-center gap-2">
-              {lead.pipeline_stage &&
-                (() => {
-                  const stageColor =
-                    lead.pipeline_stage.color_code || STAGE_COLORS[lead.pipeline_stage.id];
-                  return (
-                    <Badge
-                      variant="outline"
-                      className={cn("border-0 font-medium", stageColor && "text-white")}
-                      style={{
-                        backgroundColor: stageColor || undefined,
-                      }}
-                    >
-                      {lead.pipeline_stage.name}
-                    </Badge>
-                  );
-                })()}
-              <Badge variant="secondary">
-                <Calendar className="mr-1.5 h-3 w-3" />
-                {new Date(lead.created_at).toLocaleDateString("vi-VN")}
-              </Badge>
-            </div>
+            {lead.pipeline_stage &&
+              (() => {
+                const stageColor =
+                  lead.pipeline_stage.color_code || STAGE_COLORS[lead.pipeline_stage.id];
+                return (
+                  <Badge
+                    variant="outline"
+                    className={cn("border-0 font-medium", stageColor && "text-white")}
+                    style={{
+                      backgroundColor: stageColor || undefined,
+                    }}
+                  >
+                    {lead.pipeline_stage.name}
+                  </Badge>
+                );
+              })()}
           </div>
 
-          {/* Các nút hành động */}
-          <div className="flex shrink-0 gap-2">
-            <Button variant="outline" size="sm" asChild className="h-8">
-              <Link href={`/leads/${lead.id}`}>
-                <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
-                Xem đầy đủ
-              </Link>
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => onEdit(lead)} className="h-8">
-              <Edit className="mr-1.5 h-3.5 w-3.5" />
-              Sửa
-            </Button>
-            {!lead.assigned_officer && (
-              <Button variant="outline" size="sm" onClick={() => onAssign(lead)} className="h-8">
-                <UserPlus className="mr-1.5 h-3.5 w-3.5" />
-                Gán
-              </Button>
-            )}
-            {lead.assigned_officer && (
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={() => setReassignOpen(true)} 
-                className="h-8"
-              >
-                <RefreshCcw className="mr-1.5 h-3.5 w-3.5" />
-                Phân công lại
-              </Button>
-            )}
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={() => onDelete(lead)}
-              className="h-8 px-2"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
-          </div>
+          {/* Action Buttons with Tooltips */}
+          <TooltipProvider delayDuration={200}>
+            <div className="flex shrink-0 items-center gap-1">
+              {/* Link: Xem đầy đủ */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon" asChild className="h-8 w-8">
+                    <Link href={`/leads/${lead.id}`}>
+                      <ExternalLink className="h-4 w-4" />
+                    </Link>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Xem đầy đủ</TooltipContent>
+              </Tooltip>
+
+              {/* Action: Sửa */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="icon" onClick={() => onEdit(lead)} className="h-8 w-8">
+                    <Edit className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Chỉnh sửa lead</TooltipContent>
+              </Tooltip>
+
+              {/* Action: Gán (chỉ hiển thị khi chưa được gán) */}
+              {!lead.assigned_officer && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="icon" onClick={() => onAssign(lead)} className="h-8 w-8">
+                      <UserPlus className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Gán cho cán bộ</TooltipContent>
+                </Tooltip>
+              )}
+
+              {/* Action: Phân công lại (chỉ hiển thị khi đã được gán) */}
+              {lead.assigned_officer && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button 
+                      variant="ghost" 
+                      size="icon"
+                      onClick={() => setReassignOpen(true)} 
+                      className="h-8 w-8"
+                    >
+                      <RefreshCcw className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Yêu cầu phân công lại</TooltipContent>
+                </Tooltip>
+              )}
+
+              {/* Destructive Action: Xóa */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => onDelete(lead)}
+                    className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent className="bg-destructive text-destructive-foreground">Xóa lead</TooltipContent>
+              </Tooltip>
+            </div>
+          </TooltipProvider>
         </div>
       </div>
 

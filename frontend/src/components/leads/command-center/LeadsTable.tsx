@@ -607,11 +607,14 @@ export function LeadsTable({
                       onClick={() => handleRowClick(row.original, virtualRow.index)}
                       className={cn(
                         "cursor-pointer transition-all duration-150",
+                        "border-b border-border/50", // Consistent row dividers
                         "hover:bg-muted/50",
                         // Zebra stripes for better readability
-                        virtualRow.index % 2 === 1 && !isSelected && "bg-muted/20",
-                        isSelected && "bg-primary/5 border-l-primary border-l-2",
-                        isFocused && !isSelected && "ring-primary/50 ring-1 ring-inset"
+                        virtualRow.index % 2 === 1 && !isSelected && !isFocused && "bg-muted/40",
+                        // Selected row - prominent background and left border
+                        isSelected && "bg-primary/10 border-l-primary border-l-3 hover:bg-primary/15",
+                        // Focused row (keyboard nav) - visible highlight
+                        isFocused && !isSelected && "bg-blue-50 dark:bg-blue-950/30 border-l-blue-500 border-l-2"
                       )}
                       style={{ height: virtualRow.size }}
                     >

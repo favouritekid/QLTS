@@ -187,7 +187,7 @@ export function ReassignLeadDialog({
               onValueChange={setSelectedReason}
               disabled={quotaExceeded}
             >
-              <SelectTrigger>
+              <SelectTrigger id="reason">
                 <SelectValue placeholder="Chọn lý do..." />
               </SelectTrigger>
               <SelectContent>
