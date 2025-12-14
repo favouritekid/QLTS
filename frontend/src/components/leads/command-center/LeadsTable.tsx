@@ -16,6 +16,7 @@
 "use client";
 
 import React, { useMemo, useCallback, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   useReactTable,
@@ -136,6 +137,7 @@ export function LeadsTable({
   onSearchFocus,
   resetSelectionKey,
 }: LeadsTableProps) {
+  const router = useRouter();
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
@@ -639,6 +641,7 @@ export function LeadsTable({
                       data-index={virtualRow.index}
                       data-state={isSelected ? "selected" : undefined}
                       onClick={() => handleRowClick(row.original, virtualRow.index)}
+                      onDoubleClick={() => router.push(`/leads/${row.original.id}`)}
                       className={cn(
                         "cursor-pointer transition-all duration-150",
                         "border-b border-border/50", // Consistent row dividers
