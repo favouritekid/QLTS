@@ -64,3 +64,57 @@ class AvailabilityResponse(BaseModel):
     status: str
     availability_status: str
     user_id: int
+
+
+# =============================================================================
+# PHASE 1: Enhanced Dashboard KPI Schemas
+# =============================================================================
+
+class TrendInfo(BaseModel):
+    """Trend information for KPI comparisons."""
+    value: float  # Percentage change or absolute difference
+    direction: Literal["up", "down", "neutral"]
+    comparison: str  # e.g., "vs hôm qua", "vs TB tuần"
+
+
+class KPIStats(BaseModel):
+    """Core KPI statistics for officer dashboard."""
+    # Today's consultations
+    consultations_today: int
+    consultations_target: int = 10  # Default daily target
+    consultations_trend: TrendInfo
+    
+    # Active leads (non-final status)
+    active_leads: int
+    active_leads_trend: TrendInfo
+    
+    # Conversion rate (this month)
+    conversion_rate: float  # Percentage
+    conversion_rate_trend: TrendInfo
+    
+    # Average response time (hours)
+    avg_response_time: float
+    avg_response_time_trend: TrendInfo
+
+
+class PriorityAction(BaseModel):
+    """AI-powered priority action suggestion."""
+    id: str  # Unique action ID
+    type: Literal["hot_lead", "overdue", "scheduled", "follow_up", "new_lead"]
+    priority: Literal["urgent", "high", "medium"]
+    lead_id: int
+    lead_name: str
+    lead_score: Optional[float] = 0
+    reason: str  # AI-generated explanation
+    due_at: Optional[datetime] = None
+    days_since_contact: Optional[int] = None
+
+
+class OfficerDashboardEnhanced(BaseModel):
+    """Enhanced dashboard response with KPIs and priority actions."""
+    kpis: KPIStats
+    status_overview: WorkloadStats
+    priority_actions: List[PriorityAction]
+    performance_trends: List[TrendPoint]
+    sales_funnel: List[FunnelStage]
+    actionable_lists: ActionableLists

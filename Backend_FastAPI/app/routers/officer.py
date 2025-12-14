@@ -63,3 +63,34 @@ async def update_availability(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# PHASE 1: Enhanced Dashboard with KPIs
+# =============================================================================
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/dashboard",
+    response_model=schemas.OfficerDashboardEnhanced,
+    summary="Get enhanced officer dashboard with KPIs and priority actions"
+)
+async def get_enhanced_dashboard(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[models.User, PermissionDep]
+):
+    """
+    Enhanced officer dashboard with:
+    - KPI cards (consultations, active leads, conversion rate, response time)
+    - Trend comparisons (vs yesterday, vs last week, vs last month)
+    - AI-powered priority actions
+    - Performance trends and pipeline funnel
+    """
+    try:
+        stats = await officer_service.get_enhanced_dashboard_stats(
+            db=db, officer_id=current_user.id
+        )
+        return stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
