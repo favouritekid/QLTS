@@ -115,6 +115,110 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
   const [method, setMethod] = useState<ConsultationMethod>("phone");
 
+  // ✅ DELAYED COMMIT STATE
+  const COUNTDOWN_SECONDS = 3;
+  const [pendingStatus, setPendingStatus] = useState<ConsultationStatus | null>(null);
+  const [countdown, setCountdown] = useState(COUNTDOWN_SECONDS);
+  const countdownRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (countdownRef.current) {
+        clearInterval(countdownRef.current);
+      }
+    };
+  }, []);
+
+  // Countdown logic - when countdown reaches 0, commit the save
+  useEffect(() => {
+    if (pendingStatus && countdown === 0) {
+      commitSave(pendingStatus);
+    }
+  }, [countdown, pendingStatus]);
+
+  // Start countdown when pending status is set
+  const startCountdown = (status: ConsultationStatus) => {
+    // Clear any existing timer
+    if (countdownRef.current) {
+      clearInterval(countdownRef.current);
+    }
+    
+    setPendingStatus(status);
+    setCountdown(COUNTDOWN_SECONDS);
+    
+    countdownRef.current = setInterval(() => {
+      setCountdown((prev) => {
+        if (prev <= 1) {
+          if (countdownRef.current) {
+            clearInterval(countdownRef.current);
+          }
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  // Cancel pending save
+  const cancelPending = () => {
+    if (countdownRef.current) {
+      clearInterval(countdownRef.current);
+    }
+    setPendingStatus(null);
+    setCountdown(COUNTDOWN_SECONDS);
+  };
+
+  // Commit the save immediately
+  const commitSave = async (status: ConsultationStatus) => {
+    if (countdownRef.current) {
+      clearInterval(countdownRef.current);
+    }
+    
+    // Determine scheduled_at based on option
+    let scheduledAt: string | null = null;
+    if (scheduleOption === "custom" && customDateTime) {
+      scheduledAt = customDateTime.toISOString();
+    } else {
+      scheduledAt = getScheduledDateTime(scheduleOption);
+    }
+
+    const payload: ConsultationCreate = {
+      status_id: status.id,
+      method: method,
+      notes: notes.trim() || `Ghi nhận: ${status.name}`,
+      scheduled_at: scheduledAt,
+    };
+
+    try {
+      setSavingStatusId(status.id);
+      setPendingStatus(null);
+      setCountdown(COUNTDOWN_SECONDS);
+      
+      await addConsultation.mutateAsync({ leadId, data: payload });
+
+      // Reset form on success
+      setNotes("");
+      setScheduleOption("none");
+      setCustomDateTime(undefined);
+
+      onSuccess?.();
+    } catch {
+      // Error is handled by the mutation
+    } finally {
+      setSavingStatusId(null);
+    }
+  };
+
+  // Handle status badge click - start delayed commit
+  const handleStatusClick = (status: ConsultationStatus) => {
+    // If clicking the same pending status, do nothing
+    if (pendingStatus?.id === status.id) return;
+    
+    // If there's a different pending status, switch to new one
+    startCountdown(status);
+  };
+
   // ✅ Drag-to-scroll using callback refs
   // Callback refs are called when element mounts, guaranteeing element exists
   const resultHasDraggedRef = useRef(false);
@@ -262,43 +366,6 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
 
     return { universal, previousStage, sameStage, nextStage };
   }, [statuses, currentStatusId]);
-
-  // Handle status badge click - save immediately
-  const handleStatusClick = async (status: ConsultationStatus) => {
-
-    // Determine scheduled_at based on option
-    let scheduledAt: string | null = null;
-
-    if (scheduleOption === "custom" && customDateTime) {
-      // DateTimePicker already includes time in customDateTime
-      scheduledAt = customDateTime.toISOString();
-    } else {
-      scheduledAt = getScheduledDateTime(scheduleOption);
-    }
-
-    const payload: ConsultationCreate = {
-      status_id: status.id,
-      method: method,
-      notes: notes.trim() || `Ghi nhận: ${status.name}`,
-      scheduled_at: scheduledAt,
-    };
-
-    try {
-      setSavingStatusId(status.id);
-      await addConsultation.mutateAsync({ leadId, data: payload });
-
-      // Reset form on success
-      setNotes("");
-      setScheduleOption("none");
-      setCustomDateTime(undefined);
-
-      onSuccess?.();
-    } catch {
-      // Error is handled by the mutation
-    } finally {
-      setSavingStatusId(null);
-    }
-  };
 
   // Loading state
   if (statusesLoading) {
@@ -496,7 +563,9 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                   className={cn(
                     "h-7 flex-shrink-0 px-2.5 text-xs",
                     "border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100",
-                    "transition-all hover:scale-[1.02]"
+                    "transition-all hover:scale-[1.02]",
+                    // Pending highlight
+                    pendingStatus?.id === status.id && "ring-2 ring-blue-500 ring-offset-1 scale-105"
                   )}
                   onClick={() => {
                     if (universalHasDraggedRef.current) {
@@ -560,7 +629,9 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                             "h-7 flex-shrink-0 px-2.5 text-xs font-normal",
                             // Previous Stage: Slate (neutral/revert)
                             "border border-slate-300 bg-slate-100 text-slate-600 hover:bg-slate-200",
-                            "transition-all hover:scale-[1.02]"
+                            "transition-all hover:scale-[1.02]",
+                            // Pending highlight
+                            pendingStatus?.id === status.id && "ring-2 ring-blue-500 ring-offset-1 scale-105"
                           )}
                           onClick={() => {
                             if (resultHasDraggedRef.current) {
@@ -602,7 +673,9 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                               status.id === currentStatusId
                                 ? "border-2 border-blue-500 bg-blue-100 font-medium text-blue-800 hover:bg-blue-150"
                                 : "border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100",
-                              "transition-all hover:scale-[1.02]"
+                              "transition-all hover:scale-[1.02]",
+                              // Pending highlight
+                              pendingStatus?.id === status.id && "ring-2 ring-blue-500 ring-offset-1 scale-105"
                             )}
                             onClick={() => {
                               if (resultHasDraggedRef.current) {
@@ -645,7 +718,9 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                             "h-7 flex-shrink-0 px-2.5 text-xs font-normal",
                             // Next Stage: Emerald (progress/forward)
                             "border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
-                            "transition-all hover:scale-[1.02]"
+                            "transition-all hover:scale-[1.02]",
+                            // Pending highlight
+                            pendingStatus?.id === status.id && "ring-2 ring-blue-500 ring-offset-1 scale-105"
                           )}
                           onClick={() => {
                             if (resultHasDraggedRef.current) {
@@ -697,6 +772,63 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                    />
                  );
               })()}
+
+              {/* ✅ INLINE DELAYED COMMIT CONFIRMATION BAR */}
+              {pendingStatus && (
+                <div className="mt-3 overflow-hidden rounded-lg border border-blue-200 bg-blue-50">
+                  {/* Progress bar (shrinks from right to left) */}
+                  <div 
+                    className="h-1 bg-blue-500 transition-all duration-1000 ease-linear"
+                    style={{ width: `${(countdown / 3) * 100}%` }}
+                  />
+                  
+                  {/* Content */}
+                  <div className="flex items-center justify-between gap-2 px-3 py-2">
+                    {/* Left: Status info */}
+                    <div className="flex items-center gap-2 min-w-0">
+                      <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-blue-600" />
+                      <span className="text-sm text-blue-700 truncate">
+                        Sẽ lưu: <strong>{pendingStatus.name}</strong>
+                      </span>
+                    </div>
+                    
+                    {/* Right: Actions + Timer */}
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {/* Undo button */}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-xs text-gray-600 hover:text-gray-800 hover:bg-gray-100"
+                        onClick={cancelPending}
+                      >
+                        Hoàn tác
+                      </Button>
+                      
+                      {/* Save now button */}
+                      <Button
+                        type="button"
+                        variant="default"
+                        size="sm"
+                        className="h-7 px-3 text-xs bg-blue-600 hover:bg-blue-700"
+                        onClick={() => commitSave(pendingStatus)}
+                        disabled={addConsultation.isPending}
+                      >
+                        {addConsultation.isPending ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          "Lưu ngay"
+                        )}
+                      </Button>
+                      
+                      {/* Countdown timer */}
+                      <span className="text-xs font-medium text-blue-600 w-4 text-center">
+                        {countdown}s
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
         )}
