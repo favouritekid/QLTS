@@ -13,11 +13,10 @@ import { api } from "@/lib/api/client";
 import { useToast } from "@/components/ui/use-toast";
 
 interface StatusOverview {
-  workload: number;
+  current_workload: number;  // Backend returns current_workload, not workload
   max_capacity: number;
   utilization: number;
   availability_status: "available" | "busy" | "offline";
-  last_assigned_at: string | null;
 }
 
 interface WorkloadCardProps {
@@ -77,7 +76,7 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
     mutation.mutate(newStatus);
   };
 
-  const utilizationPercentage = statusOverview.utilization;
+  const utilizationPercentage = statusOverview.utilization ?? 0;
   const utilizationColor =
     utilizationPercentage >= 90
       ? "text-red-600"
@@ -120,9 +119,9 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
         <CardHeader className="pb-2">
           <CardDescription>Current Workload</CardDescription>
           <CardTitle className="text-4xl">
-            {statusOverview.workload}
+            {statusOverview.current_workload ?? 0}
             <span className="text-lg text-muted-foreground ml-2">
-              / {statusOverview.max_capacity}
+              / {statusOverview.max_capacity ?? 0}
             </span>
           </CardTitle>
         </CardHeader>
@@ -165,7 +164,7 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
         <CardHeader className="pb-2">
           <CardDescription>Remaining Capacity</CardDescription>
           <CardTitle className="text-4xl">
-            {statusOverview.max_capacity - statusOverview.workload}
+            {(statusOverview.max_capacity ?? 0) - (statusOverview.current_workload ?? 0)}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -175,24 +174,17 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
         </CardContent>
       </Card>
 
-      {/* Last Assigned Card */}
+      {/* Placeholder Card for future stats */}
       <Card>
         <CardHeader className="pb-2">
-          <CardDescription>Last Assignment</CardDescription>
+          <CardDescription>Status</CardDescription>
           <CardTitle className="text-lg">
-            {statusOverview.last_assigned_at
-              ? new Date(statusOverview.last_assigned_at).toLocaleDateString("en-US", {
-                  month: "short",
-                  day: "numeric",
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })
-              : "Never"}
+            Active
           </CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-xs text-muted-foreground">
-            {getRelativeTime(statusOverview.last_assigned_at)}
+            Currently accepting leads
           </p>
         </CardContent>
       </Card>
