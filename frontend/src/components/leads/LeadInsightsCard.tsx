@@ -3,7 +3,7 @@
  * ✅ Combined Lead Insights + Action Suggestions Card
  * 
  * Modern visualization with:
- * - Score indicators with progress rings/bars
+ * - Score indicators with progress bars
  * - Action suggestions integrated
  * - Officer rating
  */
@@ -21,6 +21,7 @@ import {
   Flame,
   Activity,
   Star,
+  Layers,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -79,8 +80,8 @@ function ScoreIndicator({
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between">
-        <span className="text-xs text-muted-foreground flex items-center gap-1.5">
-          {Icon && <Icon className="h-3 w-3" />}
+        <span className="text-sm text-muted-foreground flex items-center gap-2">
+          {Icon && <Icon className="h-4 w-4" />}
           {label}
         </span>
         <span className={cn(
@@ -186,17 +187,17 @@ export function LeadInsightsCard({
         </div>
 
         {/* Stats Rows */}
-        <div className="space-y-2 text-sm">
+        <div className="space-y-2.5 text-sm">
           <div className="flex items-center justify-between">
-            <span className="text-muted-foreground flex items-center gap-1.5">
-              <MessageSquare className="h-3.5 w-3.5" />
+            <span className="text-muted-foreground flex items-center gap-2">
+              <MessageSquare className="h-4 w-4" />
               Số lần tư vấn
             </span>
             <span className="font-medium">{lead.consultation_count}</span>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-muted-foreground flex items-center gap-1.5">
-              <Activity className="h-3.5 w-3.5" />
+            <span className="text-muted-foreground flex items-center gap-2">
+              <Layers className="h-4 w-4" />
               Số ngày trong giai đoạn
             </span>
             <span className="font-medium">
@@ -204,8 +205,8 @@ export function LeadInsightsCard({
             </span>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-muted-foreground flex items-center gap-1.5">
-              <Clock className="h-3.5 w-3.5" />
+            <span className="text-muted-foreground flex items-center gap-2">
+              <Clock className="h-4 w-4" />
               Tư vấn lần cuối
             </span>
             <span className="font-medium">{lastConsultation}</span>
@@ -214,31 +215,30 @@ export function LeadInsightsCard({
 
         {/* Action Suggestions */}
         {suggestions.length > 0 && (
-          <div className="space-y-2 pt-2 border-t">
+          <div className="space-y-2 pt-3 border-t">
             {suggestions.map((suggestion, index) => (
               <div
                 key={index}
                 className={cn(
-                  "flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-sm",
-                  suggestion.priority === "urgent" && "bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-300",
-                  suggestion.priority === "high" && "bg-orange-50 dark:bg-orange-950/30 text-orange-700 dark:text-orange-300",
-                  suggestion.priority === "medium" && "bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300",
+                  "flex items-center justify-between gap-2 rounded-lg px-3 py-2.5 text-sm border",
+                  suggestion.priority === "urgent" && "bg-red-100 border-red-200 text-red-800 dark:bg-red-900/50 dark:border-red-700 dark:text-red-100",
+                  suggestion.priority === "high" && "bg-orange-100 border-orange-200 text-orange-800 dark:bg-orange-900/50 dark:border-orange-700 dark:text-orange-100",
+                  suggestion.priority === "medium" && "bg-amber-100 border-amber-200 text-amber-800 dark:bg-amber-900/50 dark:border-amber-700 dark:text-amber-100",
                 )}
               >
                 <div className="flex items-center gap-2">
-                  {suggestion.priority === "urgent" && <Phone className="h-4 w-4" />}
-                  {suggestion.priority === "high" && <AlertTriangle className="h-4 w-4" />}
-                  {suggestion.priority === "medium" && <CheckCircle className="h-4 w-4" />}
-                  <span>{suggestion.message}</span>
+                  {suggestion.priority === "urgent" && <Phone className="h-4 w-4 shrink-0" />}
+                  {suggestion.priority === "high" && <AlertTriangle className="h-4 w-4 shrink-0" />}
+                  {suggestion.priority === "medium" && <CheckCircle className="h-4 w-4 shrink-0" />}
+                  <span className="font-medium">{suggestion.message}</span>
                 </div>
                 {suggestion.actionLabel && suggestion.onAction && (
                   <Button
                     size="sm"
-                    variant="ghost"
                     className={cn(
-                      "h-7 px-2 text-xs font-medium",
-                      suggestion.priority === "urgent" && "text-red-700 hover:bg-red-100 dark:hover:bg-red-900",
-                      suggestion.priority === "high" && "text-orange-700 hover:bg-orange-100 dark:hover:bg-orange-900",
+                      "h-7 px-3 text-xs font-semibold shrink-0",
+                      suggestion.priority === "urgent" && "bg-red-600 text-white hover:bg-red-700",
+                      suggestion.priority === "high" && "bg-orange-600 text-white hover:bg-orange-700",
                     )}
                     onClick={suggestion.onAction}
                   >
@@ -251,10 +251,10 @@ export function LeadInsightsCard({
         )}
 
         {/* Officer Rating */}
-        <div className="pt-2 border-t">
+        <div className="pt-3 border-t">
           <div className="flex items-center gap-2 mb-2">
-            <Star className="h-3.5 w-3.5 text-muted-foreground" />
-            <span className="text-xs text-muted-foreground">Đánh giá của bạn</span>
+            <Star className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm text-muted-foreground">Đánh giá của bạn</span>
           </div>
           <OfficerRatingInput
             key={`rating-${lead.id}`}
