@@ -111,6 +111,10 @@ interface LeadsTableProps {
 
 const COLUMN_VISIBILITY_STORAGE_KEY = "leads_table_columns";
 const DENSITY_MODE_STORAGE_KEY = "leads_table_density";
+const SORTING_STORAGE_KEY = "leads_table_sorting";
+
+// Default sort: urgency_score DESC (most urgent leads first)
+const DEFAULT_SORTING: SortingState = [{ id: "cached_urgency_score", desc: true }];
 
 // Density configuration
 const DENSITY_CONFIG: Record<DensityMode, { rowHeight: number; cellPadding: string; headerHeight: string }> = {
@@ -154,7 +158,17 @@ export function LeadsTable({
   const router = useRouter();
   const queryClient = useQueryClient();
   const tableContainerRef = useRef<HTMLDivElement>(null);
-  const [sorting, setSorting] = React.useState<SortingState>([]);
+  
+  // ✅ Sorting state with localStorage persistence and default urgency sort
+  const [sorting, setSorting] = React.useState<SortingState>(() => {
+    if (typeof window === "undefined") return DEFAULT_SORTING;
+    try {
+      const saved = localStorage.getItem(SORTING_STORAGE_KEY);
+      return saved ? JSON.parse(saved) : DEFAULT_SORTING;
+    } catch {
+      return DEFAULT_SORTING;
+    }
+  });
   const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
   const [columnResizeMode] = React.useState<ColumnResizeMode>("onChange");
   const [focusedRowIndex, setFocusedRowIndex] = React.useState<number>(-1);
@@ -188,6 +202,11 @@ export function LeadsTable({
   useEffect(() => {
     localStorage.setItem(COLUMN_VISIBILITY_STORAGE_KEY, JSON.stringify(columnVisibility));
   }, [columnVisibility]);
+
+  // ✅ Persist sorting preference
+  useEffect(() => {
+    localStorage.setItem(SORTING_STORAGE_KEY, JSON.stringify(sorting));
+  }, [sorting]);
 
   // Reset row selection when resetSelectionKey changes (after bulk actions)
   useEffect(() => {
@@ -338,9 +357,24 @@ export function LeadsTable({
         size: 140,
       }),
 
-      // Lead Score column
+      // Lead Score column - ✅ Now sortable
       columnHelper.accessor("lead_score", {
-        header: "Điểm",
+        header: ({ column }) => (
+          <Button
+            variant="ghost"
+            className="-ml-3 h-8 font-medium"
+            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+          >
+            Điểm
+            {column.getIsSorted() === "asc" ? (
+              <ArrowUp className="ml-1 h-3.5 w-3.5" />
+            ) : column.getIsSorted() === "desc" ? (
+              <ArrowDown className="ml-1 h-3.5 w-3.5" />
+            ) : (
+              <ArrowUpDown className="ml-1 h-3.5 w-3.5 opacity-50" />
+            )}
+          </Button>
+        ),
         cell: ({ row }) => {
           const score = row.original.lead_score ?? 0;
           // Color coding based on score ranges
@@ -354,7 +388,7 @@ export function LeadsTable({
             </div>
           );
         },
-        size: 60,
+        size: 80,
       }),
 
       // Created at column - with Activity Indicator
