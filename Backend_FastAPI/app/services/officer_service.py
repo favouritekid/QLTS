@@ -173,6 +173,7 @@ async def get_officer_dashboard_stats(
     # A. High Score Leads (Top 5 điểm cao chưa chốt)
     high_score_query = (
         select(models.Lead)
+        .options(selectinload(models.Lead.pipeline_stage))  # Eager load for stage_name
         .join(models.ConsultationStatus, models.Lead.consultation_status_id == models.ConsultationStatus.id, isouter=True)
         .where(
             models.Lead.assigned_officer_id == officer_id,
@@ -191,6 +192,7 @@ async def get_officer_dashboard_stats(
     stale_date = datetime.now(timezone.utc) - timedelta(days=3)
     stale_query = (
         select(models.Lead)
+        .options(selectinload(models.Lead.pipeline_stage))  # Eager load for stage_name
         .join(models.ConsultationStatus, models.Lead.consultation_status_id == models.ConsultationStatus.id, isouter=True)
         .where(
             models.Lead.assigned_officer_id == officer_id,
@@ -209,6 +211,19 @@ async def get_officer_dashboard_stats(
     # Placeholder: Trả về rỗng nếu chưa có bảng Consultation/Task
     upcoming = []
 
+    # Convert Lead objects to LeadPreview format
+    def lead_to_preview(lead: models.Lead) -> dict:
+        """Convert Lead model to LeadPreview schema format."""
+        return {
+            "id": lead.id,
+            "name": lead.full_name or "",  # Map full_name to name
+            "email": lead.email,
+            "phone": lead.phone,
+            "lead_score": lead.lead_score or 0,
+            "updated_at": lead.updated_at,
+            "stage_name": lead.pipeline_stage.name if lead.pipeline_stage else None,
+        }
+
     return {
         "status_overview": {
             "current_workload": current_workload,
@@ -219,8 +234,8 @@ async def get_officer_dashboard_stats(
         "performance_trends": performance_trends,
         "sales_funnel": sales_funnel,
         "actionable_lists": {
-            "high_score": high_score_leads,
-            "stale": stale_leads,
+            "high_score": [lead_to_preview(lead) for lead in high_score_leads],
+            "stale": [lead_to_preview(lead) for lead in stale_leads],
             "upcoming": upcoming
         }
     }
