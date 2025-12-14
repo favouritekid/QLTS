@@ -33,15 +33,26 @@ export function useAppNavigation(): UseAppNavigationReturn {
   /**
    * Checks if a navigation item is accessible to the current user
    * @param roles - Array of allowed roles (empty array = all roles)
+   * @param excludeRoles - Array of roles that should NOT see this item
    * @returns true if user can access this item
    */
   const hasAccess = useCallback(
-    (roles?: string[]): boolean => {
-      // No roles specified = accessible to all
-      if (!roles || roles.length === 0) return true;
-
+    (roles?: string[], excludeRoles?: string[]): boolean => {
       // No user logged in = no access to role-restricted items
-      if (!user?.role) return false;
+      if (!user?.role) {
+        // If no roles specified, allow access (public item)
+        return !roles || roles.length === 0;
+      }
+
+      // Check excludeRoles first (blacklist takes priority)
+      if (excludeRoles && excludeRoles.length > 0) {
+        if (excludeRoles.includes(user.role)) {
+          return false;
+        }
+      }
+
+      // No roles specified = accessible to all (unless excluded above)
+      if (!roles || roles.length === 0) return true;
 
       // Check if user's role is in the allowed roles
       return roles.includes(user.role);
@@ -58,7 +69,7 @@ export function useAppNavigation(): UseAppNavigationReturn {
     (items: NavItem[]): NavItem[] => {
       const filter = (itemsToFilter: NavItem[]): NavItem[] => {
         return itemsToFilter
-          .filter((item) => hasAccess(item.roles))
+          .filter((item) => hasAccess(item.roles, item.excludeRoles))
           .map((item) => {
             // If item has children, filter them recursively
             if (item.children && item.children.length > 0) {

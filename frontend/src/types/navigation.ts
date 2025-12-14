@@ -49,6 +49,7 @@ export interface NavItem {
   href: string;
   icon?: LucideIcon;
   roles?: string[]; // Empty array or undefined = accessible to all roles
+  excludeRoles?: string[]; // Roles that should NOT see this item (blacklist)
   matchPath?: string[]; // Additional paths that should activate this item
   excludePaths?: string[]; // Paths to exclude from parent active state checking
   children?: NavItem[];

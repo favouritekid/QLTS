@@ -80,7 +80,8 @@ export const navigationConfig: NavigationConfig = {
           label: "Dashboard",
           href: "/dashboard",
           icon: LayoutDashboard,
-          roles: [], // Accessible to all roles
+          roles: [], // Accessible to all roles EXCEPT officers
+          excludeRoles: ["officer"], // Officers have their own dashboard
         },
         {
           label: "Officer Dashboard",
