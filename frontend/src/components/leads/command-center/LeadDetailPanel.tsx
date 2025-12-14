@@ -2,6 +2,7 @@
 "use client";
 
 import React, { useRef, useEffect, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -146,7 +147,15 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <AnimatePresence mode="wait">
+      <motion.div
+        key={leadId}
+        initial={{ opacity: 0, x: 20 }}
+        animate={{ opacity: 1, x: 0 }}
+        exit={{ opacity: 0, x: -20 }}
+        transition={{ duration: 0.15, ease: "easeOut" }}
+        className="flex h-full flex-col"
+      >
       {/* Header */}
       <div className="bg-background shrink-0 border-b p-4">
         <div className="flex items-start gap-4">
@@ -457,7 +466,8 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
         onOpenChange={setReassignOpen}
         lead={lead}
       />
-    </div>
+      </motion.div>
+    </AnimatePresence>
   );
 }
 

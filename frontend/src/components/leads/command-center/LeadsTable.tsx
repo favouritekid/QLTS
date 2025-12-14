@@ -660,12 +660,17 @@ export function LeadsTable({
                         "hover:bg-muted/50",
                         // Zebra stripes for better readability
                         virtualRow.index % 2 === 1 && !isSelected && !isFocused && "bg-muted/40",
-                        // Selected row - prominent background and left border
-                        isSelected && "bg-primary/10 border-l-primary border-l-3 hover:bg-primary/15",
+                        // ✅ Phase 2: Enhanced selected row - prominent background, left border, and subtle shadow
+                        isSelected && "bg-primary/10 border-l-primary border-l-3 hover:bg-primary/15 shadow-sm",
                         // Focused row (keyboard nav) - visible highlight
                         isFocused && !isSelected && "bg-blue-50 dark:bg-blue-950/30 border-l-blue-500 border-l-2"
                       )}
-                      style={{ height: virtualRow.size }}
+                      style={{ 
+                        height: virtualRow.size,
+                        // ✅ Phase 2: Subtle scale on selection for visual pop
+                        transform: isSelected ? 'scaleX(1.005)' : 'scaleX(1)',
+                        transformOrigin: 'left center',
+                      }}
                     >
                       {row.getVisibleCells().map((cell) => (
                         <TableCell
