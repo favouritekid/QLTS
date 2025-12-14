@@ -217,10 +217,18 @@ export function getBreadcrumbs(pathname: string): RouteConfig[] {
   }
 
   // Build breadcrumbs from path segments
+  // Skip first segment if it's "dashboard" since we already added it above
   let currentPath = "";
-  for (let i = 0; i < segments.length; i++) {
+  const startIndex = segments[0] === "dashboard" ? 1 : 0;
+  
+  for (let i = startIndex; i < segments.length; i++) {
     const segment = segments[i];
-    currentPath += `/${segment}`;
+    currentPath = i === 0 ? `/${segment}` : `${currentPath}/${segment}`;
+    
+    // For dashboard subpaths, build the full path correctly
+    if (segments[0] === "dashboard" && i >= 1) {
+      currentPath = `/dashboard/${segments.slice(1, i + 1).join("/")}`;
+    }
 
     // Try to find label from navigation config first
     let label = findLabelInNavigation(currentPath);
