@@ -24,7 +24,6 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import { OfficerRatingInput } from "@/components/leads/OfficerRatingInput";
 import type { Lead } from "@/types/lead.types";
@@ -69,70 +68,35 @@ function ScoreIndicator({
     if (variant === "hot") return "bg-orange-500";
     if (variant === "urgent") {
       if (value >= 70) return "bg-red-500";
-      if (value >= 40) return "bg-amber-500";
+      if (value >= 40) return "bg-yellow-500";
       return "bg-green-500";
     }
     if (percentage >= 70) return "bg-emerald-500";
     if (percentage >= 40) return "bg-blue-500";
     return "bg-slate-400";
   };
-  
-  const getTextColor = () => {
-    if (variant === "hot" && value >= 50) return "text-orange-600 dark:text-orange-400";
-    if (variant === "urgent" && value >= 70) return "text-red-600 dark:text-red-400";
-    if (variant === "urgent" && value >= 40) return "text-amber-600 dark:text-amber-400";
-    return "text-foreground";
-  };
 
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-foreground flex items-center gap-1.5">
-          {Icon && <Icon className="h-4 w-4 text-muted-foreground" />}
+        <span className="text-xs text-muted-foreground flex items-center gap-1.5">
+          {Icon && <Icon className="h-3 w-3" />}
           {label}
         </span>
-        <span className={cn("text-base font-bold tabular-nums", getTextColor())}>
+        <span className={cn(
+          "text-sm font-bold tabular-nums",
+          variant === "hot" && value >= 70 && "text-orange-600",
+          variant === "urgent" && value >= 70 && "text-red-600",
+        )}>
           {value}
         </span>
       </div>
-      <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+      <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
         <div 
           className={cn("h-full rounded-full transition-all duration-500", getColor())}
           style={{ width: `${percentage}%` }}
         />
       </div>
-    </div>
-  );
-}
-
-// =============================================================================
-// STAT BOX COMPONENT
-// =============================================================================
-
-function StatBox({ 
-  label, 
-  value, 
-  icon: Icon,
-  highlight = false,
-}: { 
-  label: string;
-  value: string | number;
-  icon?: React.ComponentType<{ className?: string }>;
-  highlight?: boolean;
-}) {
-  return (
-    <div className={cn(
-      "rounded-lg p-3 text-center border",
-      highlight ? "bg-primary/5 border-primary/20" : "bg-muted/30 border-transparent"
-    )}>
-      <div className="flex items-center justify-center gap-1.5 mb-1">
-        {Icon && <Icon className={cn("h-4 w-4", highlight ? "text-primary" : "text-muted-foreground")} />}
-        <span className="text-xs font-medium text-muted-foreground">{label}</span>
-      </div>
-      <p className={cn(
-        "text-xl font-bold text-foreground",
-        highlight && "text-primary"
-      )}>{value}</p>
     </div>
   );
 }
@@ -221,19 +185,31 @@ export function LeadInsightsCard({
           />
         </div>
 
-        {/* Stats Grid */}
-        <div className="grid grid-cols-2 gap-2">
-          <StatBox 
-            label="Số lần tư vấn" 
-            value={lead.consultation_count}
-            icon={MessageSquare}
-            highlight={lead.consultation_count > 0}
-          />
-          <StatBox 
-            label="Tư vấn cuối" 
-            value={lastConsultation}
-            icon={Clock}
-          />
+        {/* Stats Rows */}
+        <div className="space-y-2 text-sm">
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground flex items-center gap-1.5">
+              <MessageSquare className="h-3.5 w-3.5" />
+              Số lần tư vấn
+            </span>
+            <span className="font-medium">{lead.consultation_count}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground flex items-center gap-1.5">
+              <Activity className="h-3.5 w-3.5" />
+              Số ngày trong giai đoạn
+            </span>
+            <span className="font-medium">
+              {lead.days_in_stage ?? 0} ngày
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground flex items-center gap-1.5">
+              <Clock className="h-3.5 w-3.5" />
+              Tư vấn lần cuối
+            </span>
+            <span className="font-medium">{lastConsultation}</span>
+          </div>
         </div>
 
         {/* Action Suggestions */}
