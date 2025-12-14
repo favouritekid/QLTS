@@ -391,32 +391,41 @@ export function LeadsTable({
         size: 80,
       }),
 
-      // Created at column - with Activity Indicator
-      columnHelper.accessor("created_at", {
-        header: ({ column }) => (
-          <Button
-            variant="ghost"
-            className="-ml-3 h-8 font-medium"
-            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-          >
-            Hoạt động
-            {column.getIsSorted() === "asc" ? (
-              <ArrowUp className="ml-1 h-3.5 w-3.5" />
-            ) : column.getIsSorted() === "desc" ? (
-              <ArrowDown className="ml-1 h-3.5 w-3.5" />
-            ) : (
-              <ArrowUpDown className="ml-1 h-3.5 w-3.5 opacity-50" />
-            )}
-          </Button>
-        ),
-        cell: ({ row }) => (
-          <ActivityIndicator
-            date={row.original.last_consultation_at || row.original.created_at}
-            nextActivityAt={row.original.next_activity_at}
-          />
-        ),
-        size: 100,
-      }),
+      // Activity column - ✅ FIX: Sort by last_consultation_at || created_at (same as display)
+      columnHelper.accessor(
+        (row) => row.last_consultation_at || row.created_at,
+        {
+          id: "activity",
+          header: ({ column }) => (
+            <Button
+              variant="ghost"
+              className="-ml-3 h-8 font-medium"
+              onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+            >
+              Hoạt động
+              {column.getIsSorted() === "asc" ? (
+                <ArrowUp className="ml-1 h-3.5 w-3.5" />
+              ) : column.getIsSorted() === "desc" ? (
+                <ArrowDown className="ml-1 h-3.5 w-3.5" />
+              ) : (
+                <ArrowUpDown className="ml-1 h-3.5 w-3.5 opacity-50" />
+              )}
+            </Button>
+          ),
+          cell: ({ row }) => (
+            <ActivityIndicator
+              date={row.original.last_consultation_at || row.original.created_at}
+              nextActivityAt={row.original.next_activity_at}
+            />
+          ),
+          sortingFn: (rowA, rowB) => {
+            const dateA = new Date(rowA.original.last_consultation_at || rowA.original.created_at).getTime();
+            const dateB = new Date(rowB.original.last_consultation_at || rowB.original.created_at).getTime();
+            return dateA - dateB;
+          },
+          size: 100,
+        }
+      ),
 
       // Urgency Score column (Lead Insights Upgrade)
       columnHelper.accessor("cached_urgency_score", {
