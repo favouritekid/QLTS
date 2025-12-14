@@ -350,6 +350,15 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
                 onBulkExport={handleBulkExport}
                 onBulkDelete={handleBulkDelete}
                 resetSelectionKey={resetSelectionKey}
+                // ✅ Phase 3: Contextual empty state props
+                hasFilters={!!(filterState.statusFilters.length || filterState.sourceFilters.length || filterState.offeringFilters.length || filterState.stageFilters.length || filterState.officerFilters.length || filterState.dateFrom || filterState.dateTo)}
+                searchQuery={filterState.search}
+                onResetFilters={filterHandlers.resetFilters}
+                onCreateLead={() => {
+                  setSelectedLead(null);
+                  setDialogMode("create");
+                  setLeadDialogOpen(true);
+                }}
               />
             )}
           </div>

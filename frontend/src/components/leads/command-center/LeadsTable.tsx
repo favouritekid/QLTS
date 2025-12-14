@@ -71,6 +71,7 @@ import { BulkActionsBar } from "./BulkActionsBar";
 import { CopyableCell } from "@/components/common/CopyableCell";
 import { ActivityIndicator } from "@/components/common/ActivityIndicator";
 import { UrgencyBadge } from "@/components/common/UrgencyBadge";
+import { EmptyLeadsState } from "./EmptyLeadsState";
 
 // =============================================================================
 // TYPES
@@ -97,6 +98,11 @@ interface LeadsTableProps {
   onSearchFocus?: () => void;
   // Reset selection when this key changes (e.g., after bulk action)
   resetSelectionKey?: number;
+  // ✅ Phase 3: Contextual empty state props
+  hasFilters?: boolean;
+  searchQuery?: string;
+  onResetFilters?: () => void;
+  onCreateLead?: () => void;
 }
 
 // =============================================================================
@@ -139,6 +145,11 @@ export function LeadsTable({
   onBulkDelete,
   onSearchFocus,
   resetSelectionKey,
+  // ✅ Phase 3: Contextual empty state props
+  hasFilters = false,
+  searchQuery = "",
+  onResetFilters,
+  onCreateLead,
 }: LeadsTableProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -648,14 +659,15 @@ export function LeadsTable({
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={columns.length} className="h-48 text-center">
-                  <div className="flex flex-col items-center justify-center gap-3">
-                    <SearchX className="h-12 w-12 text-muted-foreground/40" />
-                    <div>
-                      <p className="font-medium text-foreground">Không tìm thấy lead</p>
-                      <p className="text-muted-foreground text-sm">Thử điều chỉnh bộ lọc hoặc tìm kiếm</p>
-                    </div>
-                  </div>
+                <TableCell colSpan={columns.length} className="h-64">
+                  {/* ✅ Phase 3: Contextual empty state */}
+                  <EmptyLeadsState
+                    hasFilters={hasFilters}
+                    searchQuery={searchQuery}
+                    totalCount={totalCount}
+                    onResetFilters={onResetFilters}
+                    onCreateLead={onCreateLead}
+                  />
                 </TableCell>
               </TableRow>
             ) : (
