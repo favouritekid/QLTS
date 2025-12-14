@@ -321,7 +321,7 @@ async def get_enhanced_dashboard_stats(
         select(func.count(models.Consultation.id))
         .where(
             models.Consultation.officer_id == officer_id,
-            func.date(models.Consultation.created_at) == today
+            func.date(models.Consultation.consultation_date) == today
         )
     )
     consultations_today = (await db.execute(consultations_today_query)).scalar() or 0
@@ -331,7 +331,7 @@ async def get_enhanced_dashboard_stats(
         select(func.count(models.Consultation.id))
         .where(
             models.Consultation.officer_id == officer_id,
-            func.date(models.Consultation.created_at) == yesterday
+            func.date(models.Consultation.consultation_date) == yesterday
         )
     )
     consultations_yesterday = (await db.execute(consultations_yesterday_query)).scalar() or 0
@@ -341,7 +341,7 @@ async def get_enhanced_dashboard_stats(
         select(func.count(models.Consultation.id))
         .where(
             models.Consultation.officer_id == officer_id,
-            func.date(models.Consultation.created_at) >= week_ago
+            func.date(models.Consultation.consultation_date) >= week_ago
         )
     )
     consultations_week = (await db.execute(consultations_week_query)).scalar() or 0
