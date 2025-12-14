@@ -3,7 +3,7 @@
  * ✅ Phase 3: AI-Powered Action Suggestions
  * 
  * Shows smart action suggestions based on lead insights and status.
- * Helps officers prioritize actions for each lead.
+ * Styled to match LeadDetailPanel's Card-based design.
  */
 
 "use client";
@@ -17,9 +17,11 @@ import {
   MessageSquare,
   UserPlus,
   TrendingUp,
+  Lightbulb,
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { Lead, LeadInsights } from "@/types/lead.types";
 
@@ -45,21 +47,39 @@ interface LeadActionSuggestionsProps {
 }
 
 // =============================================================================
-// PRIORITY COLORS
+// PRIORITY STYLES - Matching existing theme
 // =============================================================================
 
-const PRIORITY_STYLES: Record<Suggestion["priority"], string> = {
-  urgent: "border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950",
-  high: "border-orange-200 bg-orange-50 dark:border-orange-900 dark:bg-orange-950",
-  medium: "border-yellow-200 bg-yellow-50 dark:border-yellow-900 dark:bg-yellow-950",
-  low: "border-blue-200 bg-blue-50 dark:border-blue-900 dark:bg-blue-950",
-};
-
-const PRIORITY_ICON_STYLES: Record<Suggestion["priority"], string> = {
-  urgent: "text-red-600 dark:text-red-400",
-  high: "text-orange-600 dark:text-orange-400",
-  medium: "text-yellow-600 dark:text-yellow-400",
-  low: "text-blue-600 dark:text-blue-400",
+const PRIORITY_STYLES: Record<Suggestion["priority"], { 
+  bg: string; 
+  border: string;
+  icon: string;
+  text: string;
+}> = {
+  urgent: { 
+    bg: "bg-red-50 dark:bg-red-950/30", 
+    border: "border-l-red-500",
+    icon: "text-red-500",
+    text: "text-red-700 dark:text-red-300",
+  },
+  high: { 
+    bg: "bg-orange-50 dark:bg-orange-950/30", 
+    border: "border-l-orange-500",
+    icon: "text-orange-500",
+    text: "text-orange-700 dark:text-orange-300",
+  },
+  medium: { 
+    bg: "bg-amber-50 dark:bg-amber-950/30", 
+    border: "border-l-amber-500",
+    icon: "text-amber-500",
+    text: "text-amber-700 dark:text-amber-300",
+  },
+  low: { 
+    bg: "bg-slate-100 dark:bg-slate-800/50", 
+    border: "border-l-slate-400",
+    icon: "text-slate-500",
+    text: "text-slate-600 dark:text-slate-300",
+  },
 };
 
 // =============================================================================
@@ -165,33 +185,48 @@ export function LeadActionSuggestions({
     return items.sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority]);
   }, [lead, insights, onContact, onSchedule]);
 
+  // Don't render if no suggestions
   if (suggestions.length === 0) {
     return null;
   }
 
   return (
-    <div className={cn("space-y-2", className)}>
-      <h4 className="text-sm font-medium text-muted-foreground">Gợi ý hành động</h4>
-      <div className="space-y-2">
+    <Card className={className}>
+      <CardHeader className="px-4 py-3">
+        <CardTitle className="flex items-center gap-2 text-sm font-medium">
+          <Lightbulb className="h-4 w-4 text-amber-500" />
+          Gợi ý hành động
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="px-4 pt-0 pb-4 space-y-2">
         {suggestions.slice(0, 3).map((suggestion, index) => {
           const Icon = suggestion.icon;
+          const styles = PRIORITY_STYLES[suggestion.priority];
+          
           return (
             <div
               key={index}
               className={cn(
-                "flex items-start gap-3 rounded-lg border p-3",
-                PRIORITY_STYLES[suggestion.priority]
+                "flex items-center gap-3 rounded-md px-3 py-2 border-l-3",
+                styles.bg,
+                styles.border,
               )}
             >
-              <Icon className={cn("h-4 w-4 mt-0.5 shrink-0", PRIORITY_ICON_STYLES[suggestion.priority])} />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm">{suggestion.message}</p>
-              </div>
+              <Icon className={cn("h-4 w-4 shrink-0", styles.icon)} />
+              <span className={cn("flex-1 text-sm", styles.text)}>
+                {suggestion.message}
+              </span>
               {suggestion.actionLabel && suggestion.onAction && (
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="shrink-0 h-7 px-2 text-xs"
+                  className={cn(
+                    "shrink-0 h-7 px-2 text-xs font-medium",
+                    suggestion.priority === "urgent" && "text-red-600 hover:text-red-700 hover:bg-red-100",
+                    suggestion.priority === "high" && "text-orange-600 hover:text-orange-700 hover:bg-orange-100",
+                    suggestion.priority === "medium" && "text-amber-600 hover:text-amber-700 hover:bg-amber-100",
+                    suggestion.priority === "low" && "text-slate-600 hover:text-slate-700 hover:bg-slate-200",
+                  )}
                   onClick={suggestion.onAction}
                 >
                   {suggestion.actionLabel}
@@ -200,8 +235,8 @@ export function LeadActionSuggestions({
             </div>
           );
         })}
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 }
 
