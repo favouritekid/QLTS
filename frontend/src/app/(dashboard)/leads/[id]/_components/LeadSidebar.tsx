@@ -33,6 +33,7 @@ import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { STAGE_COLORS } from "@/types/pipeline.types";
 import { LEAD_SOURCE_OPTIONS } from "@/constants";
+import { CopyableCell } from "@/components/common/CopyableCell";
 import type { Lead, TimelineItem } from "@/types/lead.types";
 
 interface LeadSidebarProps {
@@ -212,23 +213,54 @@ export function LeadSidebar({ lead, timeline, onAssign, hideHeader }: LeadSideba
       <div className="px-4 py-3 space-y-0.5">
         <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Liên hệ</h4>
         
-        <InfoRow 
-          icon={Phone} 
-          label="SĐT chính" 
-          value={lead.phone}
-          action={
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 px-2 text-xs text-blue-600 hover:bg-blue-50"
-              onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
-            >
-              Gọi
-            </Button>
-          }
-        />
-        <InfoRow icon={Phone} label="SĐT phụ" value={lead.phone2} />
-        <InfoRow icon={Mail} label="Email" value={lead.email} isLink href={`mailto:${lead.email}`} />
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3 text-sm">
+            <Phone className="text-muted-foreground h-4 w-4 shrink-0" />
+            <CopyableCell
+              value={lead.phone}
+              label="số điện thoại"
+              className="font-mono text-sm"
+            />
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-xs text-blue-600 hover:bg-blue-50"
+            onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
+          >
+            Gọi
+          </Button>
+        </div>
+        
+        {lead.phone2 && (
+          <div className="flex items-center gap-3 text-sm">
+            <Phone className="text-muted-foreground h-4 w-4 shrink-0" />
+            <CopyableCell
+              value={lead.phone2}
+              label="số điện thoại phụ"
+              className="font-mono text-sm text-muted-foreground"
+            />
+          </div>
+        )}
+        
+        {lead.email && (
+          <div className="flex items-center gap-3 text-sm">
+            <Mail className="text-muted-foreground h-4 w-4 shrink-0" />
+            <CopyableCell
+              value={lead.email}
+              label="email"
+              displayValue={
+                <a
+                  href={`mailto:${lead.email}`}
+                  className="text-blue-600 hover:underline truncate"
+                >
+                  {lead.email}
+                </a>
+              }
+            />
+          </div>
+        )}
+        
         <InfoRow icon={MapPin} label="Địa chỉ" value={lead.location} />
       </div>
 
