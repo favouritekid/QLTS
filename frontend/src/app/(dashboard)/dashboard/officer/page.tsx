@@ -10,7 +10,7 @@ import { WorkloadCard } from "@/components/officer/WorkloadCard";
 import { PerformanceChart } from "@/components/officer/PerformanceChart";
 import { FunnelChart } from "@/components/officer/FunnelChart";
 import { ActionableLists } from "@/components/officer/ActionableLists";
-import { KPICardsGrid } from "@/components/officer/dashboard";
+import { KPICardsGrid, PriorityActionsPanel } from "@/components/officer/dashboard";
 import { api } from "@/lib/api/client";
 import { socket } from "@/lib/socket/client";
 
@@ -289,8 +289,11 @@ export default function OfficerDashboardPage() {
       {/* ✅ PHASE 1: KPI Cards */}
       <KPICardsGrid kpis={stats.kpis} />
 
-      {/* Workload Overview (4 mini cards) */}
-      <WorkloadCard statusOverview={stats.status_overview} />
+      {/* ✅ PHASE 2: Priority Actions + Workload - 2-column layout */}
+      <div className="grid gap-6 md:grid-cols-2">
+        <PriorityActionsPanel actions={stats.priority_actions} />
+        <WorkloadCard statusOverview={stats.status_overview} />
+      </div>
 
       {/* Performance and Funnel Charts */}
       <div className="grid gap-6 md:grid-cols-2">

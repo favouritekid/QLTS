@@ -5,3 +5,5 @@
 
 export { KPICard } from "./KPICard";
 export { KPICardsGrid } from "./KPICardsGrid";
+export { PriorityActionCard, type PriorityAction } from "./PriorityActionCard";
+export { PriorityActionsPanel } from "./PriorityActionsPanel";
