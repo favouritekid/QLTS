@@ -93,65 +93,46 @@ async def _calculate_engagement_score(db: AsyncSession, lead_id: int) -> int:
 
 
 def _calculate_fit_score(lead: models.Lead) -> int:
-    # ... (Hàm này giữ nguyên, không thay đổi) ...
-    score = 0
-    points_config = settings.LEAD_SCORING_FIT_POINTS
-    score += points_config["source"].get(lead.source, 0)
-    if lead.gpa:
-        for threshold, points in sorted(
-            points_config["gpa_thresholds"].items(), reverse=True
-        ):
-            if lead.gpa >= threshold:
-                score += points
-                break
-    if lead.education_level:
-        score += points_config["education_level"].get(lead.education_level, 0)
-    if lead.location:
-        score += points_config["location"].get(lead.location, 0)
-    return max(0, min(score, points_config["max_score"]))
+    """
+    Fit Score = lead_score + Officer Rating bonus
+
+    Công thức minh bạch cho Officers:
+    - Base: lead_score (0-100) - đã tính từ education, GPA, source, location
+    - Bonus: officer_rating × 4 (1-5 stars → +4 to +20 điểm)
+
+    Ví dụ:
+    - lead_score=50, officer_rating=5 → 50 + 20 = 70
+    - lead_score=60, officer_rating=None → 60
+    - lead_score=90, officer_rating=3 → min(90+12, 100) = 100
+
+    Max: 100
+    """
+    base_score = lead.lead_score or 0
+
+    officer_bonus = 0
+    if lead.officer_rating:
+        try:
+            officer_bonus = int(lead.officer_rating) * 4  # 1-5 → +4 to +20
+        except (ValueError, TypeError):
+            officer_bonus = 0
+
+    return min(base_score + officer_bonus, 100)
 
 
-def _calculate_urgency_score(lead: models.Lead, timeline: List[dict]) -> int:
-    # ... (Hàm này giữ nguyên, không thay đổi) ...
-    score = 0
-    points_config = settings.LEAD_SCORING_URGENCY_POINTS
-    if hasattr(lead, "pipeline_stage") and lead.pipeline_stage:
-        score += lead.pipeline_stage.order * points_config["stage_order_multiplier"]
-    else:
-        initial_stage_order = 1
-        score += initial_stage_order * points_config["stage_order_multiplier"]
+def _get_urgency_score(lead: models.Lead) -> int:
+    """
+    Urgency Score = cached_urgency_score từ Lead model
 
-    stage_changes = []
-    sorted_timeline = sorted(timeline, key=lambda x: x["timestamp"])
+    Công thức minh bạch cho Officers (đã tính trong lead_cache_service):
+    - Task quá hạn (is_overdue): +30
+    - Hoạt động tiếp theo trong 24h: +20
+    - Giai đoạn pipeline: stage_order × 5
+    - Ngày không hoạt động: +2/ngày (max +20)
 
-    for item in sorted_timeline:
-        consultation_status = None
-        if item["type"] == "consultation":
-            if hasattr(item["data"], "consultation_status"):
-                consultation_status = item["data"].consultation_status
-
-        if consultation_status:
-            stage_id = consultation_status.stage_id
-            if not stage_changes or stage_changes[-1]["stage_id"] != stage_id:
-                stage_changes.append(
-                    {"stage_id": stage_id, "timestamp": item["timestamp"]}
-                )
-
-    for i in range(1, len(stage_changes)):
-        ts_i = stage_changes[i]["timestamp"]
-        ts_prev = stage_changes[i - 1]["timestamp"]
-        if ts_i.tzinfo is None:
-            ts_i = ts_i.replace(tzinfo=timezone.utc)
-        if ts_prev.tzinfo is None:
-            ts_prev = ts_prev.replace(tzinfo=timezone.utc)
-
-        time_diff_days = (ts_i - ts_prev).days
-        if time_diff_days <= 3:
-            score += points_config["fast_conversion_bonus"]
-        elif time_diff_days > 14:
-            score -= abs(points_config["slow_conversion_penalty"])
-
-    return max(0, min(score, points_config["max_score"]))
+    Sử dụng cached value để đảm bảo đồng bộ với Lead model.
+    Max: 100
+    """
+    return lead.cached_urgency_score or 0
 
 
 async def get_lead_insights(
@@ -188,9 +169,9 @@ async def get_lead_insights(
     # 1. Gọi hàm async mới (chạy song song)
     engagement_score_task = _calculate_engagement_score(db, lead.id)
 
-    # 2. Các hàm sync cũ (vẫn cần 'lead' object)
+    # 2. Các hàm sync (không cần timeline cho urgency nữa - dùng cached)
     fit_score = _calculate_fit_score(lead)
-    urgency_score = _calculate_urgency_score(lead, timeline)
+    urgency_score = _get_urgency_score(lead)
 
     # 3. Lấy kết quả
     engagement_score = await engagement_score_task

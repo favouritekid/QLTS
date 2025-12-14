@@ -6,6 +6,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from celery import Celery
+from celery.schedules import crontab
 from celery.signals import worker_process_init, worker_process_shutdown
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -738,9 +739,107 @@ celery_app.conf.beat_schedule = {
         "task": "check_consultation_reminders_task",
         "schedule": 60.0,  # Every 60 seconds
     },
+    # ✅ LEAD INSIGHTS UPGRADE: Nightly cache recalculation
+    "recalculate-lead-caches-nightly": {
+        "task": "recalculate_lead_caches_task",
+        "schedule": crontab(hour=0, minute=5),  # Runs at 00:05 daily
+    },
 }
 
 # Use configured timezone for consistency with local time
 # Can be set via TIMEZONE environment variable (default: Asia/Ho_Chi_Minh)
 celery_app.conf.timezone = settings.TIMEZONE
 celery_app.conf.enable_utc = False
+
+
+# ==================================================================
+# === Lead Insights Upgrade: Nightly Cache Recalculation ===
+# ==================================================================
+
+@celery_app.task(
+    name="recalculate_lead_caches_task",
+    bind=True,
+    autoretry_for=(Exception,),
+    max_retries=2,
+    default_retry_delay=300,  # 5 minutes between retries
+)
+def recalculate_lead_caches_task(self):
+    """
+    Celery Beat nightly task to recalculate lead insight caches.
+    
+    Runs at 00:05 daily to update:
+    - is_overdue (time-sensitive, needs daily recalc)
+    - cached_urgency_score (depends on is_overdue)
+    
+    This ensures accuracy for leads that weren't recently touched
+    but may have become overdue overnight.
+    """
+    task_log = logging.getLogger("recalculate_lead_caches_task")
+    task_log.info("Starting nightly lead cache recalculation...")
+
+    async def _run_recalculation() -> dict:
+        from sqlalchemy import select, func
+        from . import models
+        from .services.lead_cache_service import update_lead_cache
+
+        # Create engine INSIDE async context
+        engine = _create_task_async_engine()
+        session_maker = _create_task_session_maker(engine)
+
+        result = {"total": 0, "updated": 0, "errors": 0}
+
+        try:
+            async with session_maker() as session:
+                # Get count of active leads
+                count_result = await session.execute(
+                    select(func.count(models.Lead.id))
+                    .where(models.Lead.deleted_at.is_(None))
+                )
+                result["total"] = count_result.scalar() or 0
+                
+                if result["total"] == 0:
+                    task_log.info("No leads to recalculate")
+                    return result
+                
+                # Get all lead IDs
+                ids_result = await session.execute(
+                    select(models.Lead.id)
+                    .where(models.Lead.deleted_at.is_(None))
+                    .order_by(models.Lead.id)
+                )
+                lead_ids = [row[0] for row in ids_result.all()]
+                
+                # Process in batches
+                batch_size = 100
+                for i in range(0, len(lead_ids), batch_size):
+                    batch = lead_ids[i:i + batch_size]
+                    
+                    for lead_id in batch:
+                        try:
+                            await update_lead_cache(session, lead_id)
+                            result["updated"] += 1
+                        except Exception as e:
+                            task_log.warning(f"Error updating lead {lead_id}: {e}")
+                            result["errors"] += 1
+                    
+                    # Commit after each batch
+                    await session.commit()
+                    
+                    progress = min(i + batch_size, len(lead_ids))
+                    task_log.info(f"Progress: {progress}/{result['total']}")
+
+        finally:
+            await engine.dispose()
+
+        return result
+
+    try:
+        result = asyncio.run(_run_recalculation())
+        task_log.info(
+            f"Nightly recalculation completed: total={result['total']}, "
+            f"updated={result['updated']}, errors={result['errors']}"
+        )
+        return result
+    except Exception as e:
+        task_log.error(f"Nightly recalculation failed: {e}", exc_info=True)
+        raise e

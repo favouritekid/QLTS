@@ -85,6 +85,17 @@ export interface Lead {
   occupation_relevance: number; // 0=Không, 1=Gián tiếp, 2=Trực tiếp
   academic_performance: number; // 0=Yếu, 1=TB, 2=Khá, 3=Giỏi
 
+  // =========================================================================
+  // CACHED METRICS (Lead Insights Upgrade)
+  // Auto-updated by LeadCacheService after consultation changes
+  // =========================================================================
+  last_consultation_at?: string | null; // ISO datetime - Ngày tư vấn cuối
+  consultation_count: number; // Số lần tư vấn
+  cached_urgency_score: number; // Điểm khẩn cấp 0-100
+  is_hot_lead: boolean; // lead_score >= 70
+  is_overdue: boolean; // Chưa liên hệ theo lịch hẹn (next_activity_at đã qua)
+  // =========================================================================
+
   // Foreign Keys
   offering_id?: number | null;
   unit_id: number;

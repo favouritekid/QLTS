@@ -293,16 +293,16 @@ export function LeadSidebar({ lead, timeline, onAssign, hideHeader }: LeadSideba
           <div className="bg-background rounded-md p-2 border">
             <div className="flex items-center gap-1 text-muted-foreground mb-0.5">
               <Clock className="h-3 w-3" />
-              <span className="text-[10px]">Thời gian</span>
+              <span className="text-[10px]">Trong pipeline</span>
             </div>
             <div className="font-semibold text-sm">{daysInPipeline} ngày</div>
           </div>
           <div className="bg-background rounded-md p-2 border">
             <div className="flex items-center gap-1 text-muted-foreground mb-0.5">
               <History className="h-3 w-3" />
-              <span className="text-[10px]">Hoạt động</span>
+              <span className="text-[10px]">Số lần tư vấn</span>
             </div>
-            <div className="font-semibold text-sm">{timeline?.length || 0}</div>
+            <div className="font-semibold text-sm">{lead.consultation_count}</div>
           </div>
         </div>
 

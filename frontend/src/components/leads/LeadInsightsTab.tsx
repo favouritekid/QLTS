@@ -4,7 +4,7 @@
  */
 "use client";
 
-import { HelpCircle, TrendingUp, Users, Target, Clock, Star, Sparkles } from "lucide-react";
+import { HelpCircle, Users, Target, Clock, Star, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -15,27 +15,30 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import type { LeadInsights } from "@/types/lead.types";
+import { InsightsHelperDrawer } from "@/components/leads/InsightsHelperDrawer";
+import type { LeadInsights, Lead } from "@/types/lead.types";
 
 interface LeadInsightsTabProps {
   leadId: number;
   insights?: LeadInsights;
+  /** Optional Lead object to use cached_urgency_score */
+  lead?: Lead;
 }
 
-// Helper descriptions for each metric
+// Helper tooltips - ngắn gọn để xem nhanh
 const INSIGHT_HELPERS = {
   overall: {
     label: "Điểm tổng hợp",
     icon: Sparkles,
-    description: "Đánh giá tổng thể dựa trên tất cả các chỉ số. Điểm cao = lead tiềm năng, ưu tiên chăm sóc.",
+    tooltip: "Điểm cao = lead tiềm năng, ưu tiên chăm sóc",
     color: "text-violet-600",
     bgColor: "bg-violet-100",
     borderColor: "border-violet-200",
   },
   engagement: {
-    label: "Tương tác",
+    label: "Mức độ tương tác",
     icon: Users,
-    description: "Mức độ tương tác của lead qua số lần tư vấn, phương thức liên hệ và kết quả các cuộc gọi.",
+    tooltip: "Điểm cao = lead đã được tư vấn nhiều, phản hồi tốt",
     color: "text-blue-600",
     bgColor: "bg-blue-100",
     borderColor: "border-blue-200",
@@ -43,7 +46,7 @@ const INSIGHT_HELPERS = {
   fit: {
     label: "Phù hợp",
     icon: Target,
-    description: "Độ phù hợp với chương trình dựa trên năm sinh, học vấn, vị trí địa lý và nghề nghiệp.",
+    tooltip: "Điểm cao = phù hợp với chương trình",
     color: "text-green-600",
     bgColor: "bg-green-100",
     borderColor: "border-green-200",
@@ -51,7 +54,7 @@ const INSIGHT_HELPERS = {
   urgency: {
     label: "Khẩn cấp",
     icon: Clock,
-    description: "Mức độ cần liên hệ gấp. Tăng khi lead ở giai đoạn cao trong pipeline hoặc có deadline sắp tới.",
+    tooltip: "Điểm cao = cần liên hệ ngay!",
     color: "text-orange-600",
     bgColor: "bg-orange-100",
     borderColor: "border-orange-200",
@@ -65,6 +68,14 @@ const getScoreStatus = (score: number) => {
   return { label: "Thấp", color: "text-gray-500", bg: "bg-gray-400" };
 };
 
+// Urgency có logic màu ngược lại: cao = cảnh báo đỏ, thấp = an toàn xanh
+const getUrgencyStatus = (score: number) => {
+  if (score >= 70) return { label: "Rất gấp!", color: "text-red-600", bg: "bg-red-500" };
+  if (score >= 50) return { label: "Cần sớm", color: "text-orange-600", bg: "bg-orange-500" };
+  if (score >= 30) return { label: "Bình thường", color: "text-yellow-600", bg: "bg-yellow-500" };
+  return { label: "Không gấp", color: "text-green-600", bg: "bg-green-500" };
+};
+
 interface MetricCardProps {
   metricKey: keyof typeof INSIGHT_HELPERS;
   value: number;
@@ -73,7 +84,8 @@ interface MetricCardProps {
 
 function MetricCard({ metricKey, value, isMain }: MetricCardProps) {
   const config = INSIGHT_HELPERS[metricKey];
-  const status = getScoreStatus(value);
+  // Urgency dùng logic màu ngược (cao = đỏ cảnh báo)
+  const status = metricKey === "urgency" ? getUrgencyStatus(value) : getScoreStatus(value);
   const Icon = config.icon;
 
   return (
@@ -101,8 +113,8 @@ function MetricCard({ metricKey, value, isMain }: MetricCardProps) {
             <TooltipTrigger asChild>
               <HelpCircle className="h-4 w-4 text-muted-foreground/50 cursor-help hover:text-muted-foreground transition-colors" />
             </TooltipTrigger>
-            <TooltipContent side="bottom" className="max-w-[280px] text-sm">
-              <p>{config.description}</p>
+            <TooltipContent side="bottom" className="max-w-[200px] text-xs">
+              <p>{config.tooltip}</p>
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
@@ -133,7 +145,7 @@ function MetricCard({ metricKey, value, isMain }: MetricCardProps) {
   );
 }
 
-export function LeadInsightsTab({ insights }: LeadInsightsTabProps) {
+export function LeadInsightsTab({ insights, lead }: LeadInsightsTabProps) {
   if (!insights) {
     return (
       <div className="grid grid-cols-4 gap-3">
@@ -148,10 +160,13 @@ export function LeadInsightsTab({ insights }: LeadInsightsTabProps) {
     );
   }
 
+  // Use cached_urgency_score from Lead if available, otherwise fall back to API
+  const urgencyScore = lead?.cached_urgency_score ?? insights.urgency_score;
+
   return (
     <div className="space-y-3">
       {/* Main metric + secondary metrics grid */}
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <MetricCard 
           metricKey="overall" 
           value={insights.overall_score} 
@@ -167,8 +182,13 @@ export function LeadInsightsTab({ insights }: LeadInsightsTabProps) {
         />
         <MetricCard 
           metricKey="urgency" 
-          value={insights.urgency_score} 
+          value={urgencyScore} 
         />
+      </div>
+
+      {/* Helper drawer trigger */}
+      <div className="flex justify-end">
+        <InsightsHelperDrawer />
       </div>
 
       {/* Officer feedback if available */}
@@ -195,7 +215,7 @@ export function LeadInsightsTab({ insights }: LeadInsightsTabProps) {
           </div>
           {insights.officer_summary && (
             <p className="text-muted-foreground truncate flex-1" title={insights.officer_summary}>
-              "{insights.officer_summary}"
+              &ldquo;{insights.officer_summary}&rdquo;
             </p>
           )}
         </div>

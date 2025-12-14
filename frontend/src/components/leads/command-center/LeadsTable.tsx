@@ -65,6 +65,8 @@ import { STAGE_COLORS } from "@/types/pipeline.types";
 import { TableToolbar, type DensityMode } from "./TableToolbar";
 import { BulkActionsBar } from "./BulkActionsBar";
 import { CopyableCell } from "@/components/common/CopyableCell";
+import { ActivityIndicator } from "@/components/common/ActivityIndicator";
+import { UrgencyBadge } from "@/components/common/UrgencyBadge";
 
 // =============================================================================
 // TYPES
@@ -176,6 +178,11 @@ export function LeadsTable({
       setRowSelection({});
     }
   }, [resetSelectionKey]);
+
+  // Reset focused row when leads data changes (after create/update/delete)
+  useEffect(() => {
+    setFocusedRowIndex(-1);
+  }, [leads]);
 
   // Column definitions
   const columns = useMemo(
@@ -333,7 +340,7 @@ export function LeadsTable({
         size: 60,
       }),
 
-      // Created at column - MEDIUM font
+      // Created at column - with Activity Indicator
       columnHelper.accessor("created_at", {
         header: ({ column }) => (
           <Button
@@ -341,7 +348,7 @@ export function LeadsTable({
             className="-ml-3 h-8 font-medium"
             onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
           >
-            Ngày tạo
+            Hoạt động
             {column.getIsSorted() === "asc" ? (
               <ArrowUp className="ml-1 h-3.5 w-3.5" />
             ) : column.getIsSorted() === "desc" ? (
@@ -351,16 +358,37 @@ export function LeadsTable({
             )}
           </Button>
         ),
-        cell: ({ row }) => {
-          const date = row.original.created_at;
-          if (!date) return "—";
-          return (
-            <div className="text-muted-foreground text-sm">
-              {format(new Date(date), "dd/MM/yyyy", { locale: vi })}
-            </div>
-          );
-        },
+        cell: ({ row }) => (
+          <ActivityIndicator
+            date={row.original.last_consultation_at || row.original.created_at}
+            nextActivityAt={row.original.next_activity_at}
+          />
+        ),
         size: 100,
+      }),
+
+      // Urgency Score column (Lead Insights Upgrade)
+      columnHelper.accessor("cached_urgency_score", {
+        header: ({ column }) => (
+          <Button
+            variant="ghost"
+            className="-ml-3 h-8 font-medium"
+            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+          >
+            Khẩn cấp
+            {column.getIsSorted() === "asc" ? (
+              <ArrowUp className="ml-1 h-3.5 w-3.5" />
+            ) : column.getIsSorted() === "desc" ? (
+              <ArrowDown className="ml-1 h-3.5 w-3.5" />
+            ) : (
+              <ArrowUpDown className="ml-1 h-3.5 w-3.5 opacity-50" />
+            )}
+          </Button>
+        ),
+        cell: ({ row }) => (
+          <UrgencyBadge score={row.original.cached_urgency_score} showLabel={false} />
+        ),
+        size: 80,
       }),
 
       // Actions column
@@ -411,7 +439,10 @@ export function LeadsTable({
     enableRowSelection: true,
     enableColumnResizing: true,
     columnResizeMode,
-    onSortingChange: setSorting,
+    onSortingChange: (updater) => {
+      setSorting(updater);
+      setFocusedRowIndex(-1); // Reset focus when sorting changes
+    },
     onRowSelectionChange: setRowSelection,
     onColumnVisibilityChange: setColumnVisibility,
     getCoreRowModel: getCoreRowModel(),
