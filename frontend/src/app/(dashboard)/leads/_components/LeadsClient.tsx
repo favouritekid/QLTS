@@ -15,6 +15,8 @@
  */
 
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { motion } from "framer-motion";
+import { useQueryClient } from "@tanstack/react-query";
 import { Upload, Command } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -31,7 +33,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 
-import { useLeads, useDeleteLead, useExportLeads, useImportLeads } from "@/hooks/useLeads";
+import { useLeads, useDeleteLead, useExportLeads, useImportLeads, leadsKeys } from "@/hooks/useLeads";
+import { leadsApi } from "@/lib/api/leads";
 import { useLeadsFilter } from "@/hooks/useLeadsFilter";
 import { LeadDialog } from "@/components/leads/LeadDialog";
 import { AssignLeadDialog } from "@/components/leads/AssignLeadDialog";
@@ -61,6 +64,9 @@ interface LeadsClientProps {
 export function LeadsClient({ initialData }: LeadsClientProps) {
   // ✅ Option D: Use extracted filter hook
   const { state: filterState, handlers: filterHandlers, apiFilters } = useLeadsFilter();
+  
+  // ✅ Phase 1: Query client for prefetching
+  const queryClient = useQueryClient();
 
   // Selection & Dialog states
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
@@ -126,6 +132,20 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
       }
     }
   }, [filteredLeads, selectedLeadId]);
+
+  // ✅ Phase 1: Prefetch next page for instant pagination
+  useEffect(() => {
+    if (leadsPage) {
+      const totalPages = Math.ceil((leadsPage.total_count || 0) / filterState.pageSize);
+      if (filterState.page < totalPages) {
+        queryClient.prefetchQuery({
+          queryKey: leadsKeys.list({ ...apiFilters, page: filterState.page + 1 }),
+          queryFn: () => leadsApi.getLeads({ ...apiFilters, page: filterState.page + 1 }),
+          staleTime: 1000 * 30, // 30 seconds
+        });
+      }
+    }
+  }, [filterState.page, filterState.pageSize, leadsPage?.total_count, apiFilters, queryClient]);
 
   // ===========================================================================
   // HANDLERS
@@ -292,9 +312,17 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
         <ResizablePanel defaultSize={65} minSize={45} maxSize={80}>
           <div className="flex h-full flex-col overflow-y-auto">
             {isLoading ? (
+              // ✅ Phase 1: Staggered skeleton animation for better perceived performance
               <div className="space-y-2 p-4">
                 {Array.from({ length: 10 }).map((_, i) => (
-                  <Skeleton key={i} className="h-12 w-full" />
+                  <motion.div
+                    key={i}
+                    initial={{ opacity: 0, x: -10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: i * 0.05, duration: 0.2 }}
+                  >
+                    <Skeleton className="h-12 w-full" />
+                  </motion.div>
                 ))}
               </div>
             ) : isError ? (

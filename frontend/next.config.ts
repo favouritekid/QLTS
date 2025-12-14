@@ -4,6 +4,10 @@ const nextConfig: NextConfig = {
   /* config options here */
   reactCompiler: true,
 
+  // ✅ Phase 1: Enable Partial Pre-Rendering for faster initial loads
+  // Note: cacheComponents has been promoted from experimental in Next.js 16
+  cacheComponents: true,
+
   // Allow cross-origin requests from devices on local network during development
   // This enables testing from mobile devices when dev server runs on desktop
   // Note: Next.js requires both with/without port for proper matching

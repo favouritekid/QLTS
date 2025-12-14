@@ -16,6 +16,9 @@
 "use client";
 
 import React, { useMemo, useCallback, useEffect, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { leadsKeys } from "@/hooks/useLeads";
+import { leadsApi } from "@/lib/api/leads";
 import { useRouter } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -138,6 +141,7 @@ export function LeadsTable({
   resetSelectionKey,
 }: LeadsTableProps) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
@@ -642,6 +646,14 @@ export function LeadsTable({
                       data-state={isSelected ? "selected" : undefined}
                       onClick={() => handleRowClick(row.original, virtualRow.index)}
                       onDoubleClick={() => router.push(`/leads/${row.original.id}`)}
+                      // ✅ Phase 1: Prefetch lead detail on hover for instant panel load
+                      onMouseEnter={() => {
+                        queryClient.prefetchQuery({
+                          queryKey: leadsKeys.detail(row.original.id),
+                          queryFn: () => leadsApi.getLead(row.original.id),
+                          staleTime: 1000 * 30, // 30 seconds
+                        });
+                      }}
                       className={cn(
                         "cursor-pointer transition-all duration-150",
                         "border-b border-border/50", // Consistent row dividers
