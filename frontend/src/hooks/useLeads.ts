@@ -91,7 +91,7 @@ export function useLead(
     },
     enabled: enabled && !!id,
     initialData: options?.initialData,
-    staleTime: 1000 * 10, // 10 seconds - shorter to ensure data is fresh after updates
+    staleTime: 0, // Always refetch when invalidated to ensure sync between panels
     gcTime: 1000 * 60 * 5, // 5 minutes in cache
   });
 }
@@ -130,7 +130,7 @@ export function useLeadInsights(leadId: number) {
       return await leadsApi.getLeadInsights(leadId);
     },
     enabled: !!leadId,
-    staleTime: 1000 * 60 * 5, // 5 minutes (insights don't change frequently)
+    staleTime: 1000 * 30, // 30 seconds - reduced for better responsiveness after lead updates
     gcTime: 1000 * 60 * 10, // 10 minutes in cache
   });
 }
@@ -265,7 +265,7 @@ export function useUpdateLead() {
       
       // Invalidate other related queries
       queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(updatedLead.id) });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.insights(updatedLead.id) });
+      await queryClient.refetchQueries({ queryKey: leadsKeys.insights(updatedLead.id) });
       queryClient.invalidateQueries({ queryKey: ["pipeline"] });
     },
   });

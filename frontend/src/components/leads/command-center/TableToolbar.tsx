@@ -58,7 +58,7 @@ const COLUMNS_CONFIG = [
   { id: "consultation_status", label: "Trạng thái TĐ" },
   { id: "assigned_officer", label: "Cán bộ" },
   { id: "lead_score", label: "Điểm" },
-  { id: "created_at", label: "Ngày tạo" },
+  { id: "created_at", label: "Hoạt động" },
 ];
 
 const DENSITY_OPTIONS: { value: DensityMode; label: string; icon: React.ElementType }[] = [

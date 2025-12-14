@@ -1166,6 +1166,11 @@ async def update_lead(
                 reason=f"Lead details updated by {updated_by.role}",
             )
 
+            # ✅ LEAD INSIGHTS UPGRADE: Update cached metrics
+            # Especially important when lead_score changes (affects is_hot_lead)
+            from app.services import lead_cache_service
+            await lead_cache_service.update_lead_cache(db, lead_id, db_lead)
+
             log.info("Lead updated successfully within transaction", lead_id=lead_id)
             # Transaction sẽ commit khi ra khỏi `async with db.begin_nested()`
 
@@ -1392,18 +1397,21 @@ async def add_consultation(
             # Flush để lấy ID cho consultation mới (cần cho refresh)
             await db.flush([new_consultation])
 
+            # ✅ LEAD INSIGHTS UPGRADE: Update cached metrics
+            # Runs sync within transaction for consistency
+            from app.services import lead_cache_service
+            await lead_cache_service.update_lead_cache(db, lead_id, lead)
+
             # ✅ ARCHITECTURE FIX: Use Repository instead of direct query
             # Service must not query Model directly (Rule E: Repository Pattern)
             repo = LeadRepository(db)
             new_consultation = await repo.get_consultation_with_status_stage(new_consultation.id)
 
             # ✅ Quick Disposition: Cập nhật next_activity_at dựa trên tất cả consultations
+            # NOTE: update_lead_cache already updates next_activity_at
             if data.scheduled_at:
-                # ✅ FIX: Flush pending changes so query sees new consultation
-                await db.flush()
-                await update_lead_next_activity(db, lead_id)
                 log.info(
-                    "Updated lead.next_activity_at after adding consultation",
+                    "Consultation scheduled_at set",
                     lead_id=lead_id,
                     consultation_scheduled_at=data.scheduled_at.isoformat() if data.scheduled_at else None,
                 )
@@ -1765,8 +1773,11 @@ async def delete_consultation(
             # ✅ Quick Disposition: Cập nhật next_activity_at sau khi xóa consultation
             # FIX: Flush to ensure deletion is visible to query
             await db.flush()
-            await update_lead_next_activity(db, lead_id)
-            log.info("Updated lead.next_activity_at after deleting consultation", lead_id=lead_id, deleted_consultation_id=consultation_id)
+            
+            # ✅ LEAD INSIGHTS UPGRADE: Update cached metrics
+            from app.services import lead_cache_service
+            await lead_cache_service.update_lead_cache(db, lead_id, lead)
+            log.info("Updated lead cache after deleting consultation", lead_id=lead_id, deleted_consultation_id=consultation_id)
 
             # Store values for use after transaction
             _lead_id = lead_id
@@ -1988,9 +1999,10 @@ async def update_consultation(
             repo = LeadRepository(db)
             consultation = await repo.get_consultation_with_status_stage(consultation.id)
 
-            # ✅ Quick Disposition: Cập nhật next_activity_at nếu scheduled_at thay đổi
-            if "scheduled_at" in update_data:
-                await update_lead_next_activity(db, lead_id)
+            # ✅ LEAD INSIGHTS UPGRADE: Update cached metrics
+            # Runs on ANY consultation update (status change, scheduled_at change, etc.)
+            from app.services import lead_cache_service
+            await lead_cache_service.update_lead_cache(db, lead_id, lead)
 
             # Store values for use after transaction
             _lead_id = lead_id

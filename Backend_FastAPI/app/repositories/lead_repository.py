@@ -381,10 +381,13 @@ class LeadRepository(BaseRepository[models.Lead]):
         """
         Update lead's next_activity_at field.
 
-        Finds earliest scheduled consultation that:
-        - Hasn't sent reminder yet
-        - Is in the future
-        - Belongs to this lead
+        ✅ FIXED: Finds earliest PENDING consultation regardless of time.
+        Task quá hạn vẫn là next activity (nhưng overdue).
+        
+        Logic mới:
+        - Tìm consultation có scheduled_at AND status chưa hoàn thành
+        - KHÔNG filter theo time (>= now)
+        - KHÔNG dùng reminder_sent
 
         Args:
             lead_id: Lead ID to update
@@ -395,7 +398,8 @@ class LeadRepository(BaseRepository[models.Lead]):
         if not lead:
             return
 
-        now = datetime.now(timezone.utc)
+        # Các status được coi là "pending" (chưa hoàn thành)
+        PENDING_STATUS_IDS = ["sts01", "sts03"]  # Lên lịch, Cần theo dõi
 
         result = await self.db.execute(
             select(func.min(models.Consultation.scheduled_at))
@@ -403,8 +407,7 @@ class LeadRepository(BaseRepository[models.Lead]):
                 and_(
                     models.Consultation.lead_id == lead_id,
                     models.Consultation.scheduled_at.isnot(None),
-                    models.Consultation.scheduled_at >= now,
-                    models.Consultation.reminder_sent == False,
+                    models.Consultation.consultation_status_id.in_(PENDING_STATUS_IDS),
                 )
             )
         )
@@ -509,6 +512,56 @@ class LeadRepository(BaseRepository[models.Lead]):
 
         result = await self.db.execute(query)
         return {row.status: row.count for row in result}
+
+    # =========================================================================
+    # LEAD INSIGHTS CACHE: Aggregation methods for cache update
+    # =========================================================================
+
+    async def get_consultation_aggregates(
+        self,
+        lead_id: int
+    ) -> dict:
+        """
+        Get consultation aggregates for cache update.
+        
+        ✅ ARCHITECTURE COMPLIANT: Repository handles all queries.
+        Called by LeadCacheService to update cached fields.
+        
+        Args:
+            lead_id: Lead ID
+            
+        Returns:
+            Dict with: last_consultation_at, consultation_count, 
+                       pending_next_activity (earliest pending task)
+        """
+        # Query 1: Get consultation stats
+        stats_query = select(
+            func.max(models.Consultation.consultation_date).label("last_consultation_at"),
+            func.count(models.Consultation.id).label("consultation_count"),
+        ).where(models.Consultation.lead_id == lead_id)
+        
+        stats_result = await self.db.execute(stats_query)
+        stats = stats_result.one()
+        
+        # Query 2: Get earliest pending activity (not completed)
+        PENDING_STATUS_IDS = ["sts01", "sts03"]  # Lên lịch, Cần theo dõi
+        
+        pending_query = select(
+            func.min(models.Consultation.scheduled_at)
+        ).where(
+            models.Consultation.lead_id == lead_id,
+            models.Consultation.scheduled_at.isnot(None),
+            models.Consultation.consultation_status_id.in_(PENDING_STATUS_IDS),
+        )
+        
+        pending_result = await self.db.execute(pending_query)
+        pending_next_activity = pending_result.scalar_one_or_none()
+        
+        return {
+            "last_consultation_at": stats.last_consultation_at,
+            "consultation_count": stats.consultation_count or 0,
+            "pending_next_activity": pending_next_activity,
+        }
 
     # =========================================================================
     # SPRINT 5: Additional Methods for lead_service Migration

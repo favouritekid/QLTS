@@ -173,7 +173,7 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
         <div className="flex-1 overflow-y-auto">
           <div className="p-6 space-y-4">
             {/* AI Insights - Compact Bar */}
-            <LeadInsightsTab leadId={leadId} insights={insights} />
+            <LeadInsightsTab leadId={leadId} insights={insights} lead={lead} />
 
             {/* 2-column: Timeline (left) + Quick Consultation (right) */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

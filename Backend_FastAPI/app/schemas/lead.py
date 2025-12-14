@@ -273,6 +273,20 @@ class Lead(LeadBase):
     education_level: Optional[str] = None
     gpa: Optional[float] = None
     location: Optional[str] = None
+    
+    # =========================================================================
+    # CACHED METRICS (Lead Insights Upgrade)
+    # Auto-updated by LeadCacheService after consultation changes
+    # =========================================================================
+    last_consultation_at: Optional[datetime] = None
+    consultation_count: int = 0
+    cached_urgency_score: int = 50
+    is_hot_lead: bool = False
+    is_overdue: bool = False
+    # Officer input fields (from LeadUpdate)
+    officer_rating: Optional[int] = None
+    officer_summary: Optional[str] = None
+    # =========================================================================
 
     offering: Optional[ProgramOffering] = None
     # THAY ĐỔI Ở ĐÂY: Sử dụng OrganizationUnitShallow

@@ -112,6 +112,46 @@ class Lead(Base):
     deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
     # Quick Disposition: Next activity timestamp for bubble-up sorting
     next_activity_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    
+    # =========================================================================
+    # CACHED METRICS (Lead Insights Upgrade)
+    # Updated by LeadCacheService after consultation changes
+    # =========================================================================
+    last_consultation_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+        comment="Ngày tư vấn cuối cùng (auto-updated)"
+    )
+    consultation_count = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="Số lần tư vấn (auto-updated)"
+    )
+    cached_urgency_score = Column(
+        Integer,
+        nullable=False,
+        default=50,
+        index=True,
+        comment="Điểm khẩn cấp 0-100 (auto-calculated)"
+    )
+    is_hot_lead = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        index=True,
+        comment="Lead score >= 70"
+    )
+    is_overdue = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        index=True,
+        comment="next_activity_at đã quá hạn"
+    )
+    # =========================================================================
+    
     # NEW 3-TIER ARCHITECTURE: Link to ProgramOffering instead of Major
     offering_id = Column(Integer, ForeignKey("program_offering.id", ondelete="SET NULL"), nullable=True, index=True)
     unit_id = Column(Integer, ForeignKey("organization_unit.id"), nullable=False, index=True)  # ✅ FIX: Added index
