@@ -38,10 +38,8 @@ import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { QuickConsultationSection } from "@/components/leads/QuickConsultationSection";
 import { ReassignLeadDialog } from "@/components/leads/ReassignLeadDialog";
 import { CopyableCell } from "@/components/common/CopyableCell";
-import { UrgencyBadge } from "@/components/common/UrgencyBadge";
 import { STAGE_COLORS } from "@/types/pipeline.types";
-import { OfficerRatingInput } from "@/components/leads/OfficerRatingInput";
-import { LeadActionSuggestions } from "@/components/leads/LeadActionSuggestions";
+import { LeadInsightsCard } from "@/components/leads/LeadInsightsCard";
 import type { Lead } from "@/types/lead.types";
 
 interface LeadDetailPanelProps {
@@ -368,73 +366,8 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
             </CardContent>
           </Card>
 
-          {/* Lead Insights Card */}
-          <Card>
-            <CardHeader className="px-4 py-3">
-              <CardTitle className="text-sm font-medium">Lead Insights</CardTitle>
-            </CardHeader>
-            <CardContent className="px-4 pt-0 pb-4">
-              <div className="grid grid-cols-2 gap-3">
-                {/* Urgency Score */}
-                <div className="flex flex-col gap-1">
-                  <span className="text-muted-foreground text-xs">Khẩn cấp</span>
-                  <UrgencyBadge score={lead.cached_urgency_score} />
-                </div>
-
-                {/* Lead Score */}
-                <div className="flex flex-col gap-1">
-                  <span className="text-muted-foreground text-xs">Điểm Lead</span>
-                  <span className={cn(
-                    "text-sm font-semibold",
-                    lead.lead_score >= 70 ? "text-red-600" :
-                    lead.lead_score >= 50 ? "text-orange-600" :
-                    lead.lead_score >= 30 ? "text-yellow-600" : "text-gray-600"
-                  )}>
-                    {lead.lead_score}
-                    {lead.is_hot_lead && <span className="ml-1">🔥</span>}
-                  </span>
-                </div>
-
-                {/* Consultation Count */}
-                <div className="flex flex-col gap-1">
-                  <span className="text-muted-foreground text-xs">Số lần tư vấn</span>
-                  <span className="text-sm font-medium">{lead.consultation_count}</span>
-                </div>
-
-                {/* Last Consultation */}
-                <div className="flex flex-col gap-1">
-                  <span className="text-muted-foreground text-xs">Tư vấn cuối</span>
-                  <span className="text-sm">
-                    {lead.last_consultation_at
-                      ? new Date(lead.last_consultation_at).toLocaleDateString("vi-VN")
-                      : "Chưa có"}
-                  </span>
-                </div>
-
-                {/* Overdue Status */}
-                {lead.is_overdue && (
-                  <div className="col-span-2 flex items-center gap-2 text-red-600 text-xs">
-                    <span>⚠️ Chưa liên hệ theo lịch hẹn</span>
-                  </div>
-                )}
-
-                {/* Officer Rating */}
-                <div className="col-span-2 flex flex-col gap-1 pt-2 border-t">
-                  <span className="text-muted-foreground text-xs">Đánh giá của bạn</span>
-                  <OfficerRatingInput
-                    key={`rating-${lead.id}`}
-                    leadId={lead.id}
-                    currentRating={lead.officer_rating ?? null}
-                    currentLeadScore={lead.lead_score}
-                    compact
-                  />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* ✅ Phase 3: Lead Action Suggestions */}
-          <LeadActionSuggestions
+          {/* ✅ Combined Lead Insights + Action Suggestions */}
+          <LeadInsightsCard
             lead={lead}
             onContact={() => window.open(`tel:${lead.phone}`, "_blank")}
           />
