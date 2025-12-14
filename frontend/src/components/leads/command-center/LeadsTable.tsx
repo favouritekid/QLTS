@@ -501,22 +501,37 @@ export function LeadsTable({
         }
       }
 
-      // If focus is on table
-      if (!tableContainerRef.current?.contains(document.activeElement)) {
+      // Skip if typing in input/textarea
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") {
         return;
       }
 
+      // If focus is on table or no specific focus (for global shortcuts)
+      const isTableFocused = tableContainerRef.current?.contains(document.activeElement);
+      
       const rows = table.getRowModel().rows;
       if (rows.length === 0) return;
 
       switch (e.key) {
+        // ✅ Phase 3: Vim-style navigation
+        case "j":
         case "ArrowDown":
           e.preventDefault();
-          setFocusedRowIndex((prev) => Math.min(prev + 1, rows.length - 1));
+          if (focusedRowIndex === -1) {
+            setFocusedRowIndex(0);
+          } else {
+            setFocusedRowIndex((prev) => Math.min(prev + 1, rows.length - 1));
+          }
           break;
+        case "k":
         case "ArrowUp":
           e.preventDefault();
-          setFocusedRowIndex((prev) => Math.max(prev - 1, 0));
+          if (focusedRowIndex === -1) {
+            setFocusedRowIndex(rows.length - 1);
+          } else {
+            setFocusedRowIndex((prev) => Math.max(prev - 1, 0));
+          }
           break;
         case "Enter":
           e.preventDefault();
@@ -525,9 +540,18 @@ export function LeadsTable({
           }
           break;
         case " ":
+          if (isTableFocused) {
+            e.preventDefault();
+            if (focusedRowIndex >= 0 && focusedRowIndex < rows.length) {
+              rows[focusedRowIndex].toggleSelected();
+            }
+          }
+          break;
+        // ✅ Phase 3: 'e' to edit focused lead
+        case "e":
           e.preventDefault();
           if (focusedRowIndex >= 0 && focusedRowIndex < rows.length) {
-            rows[focusedRowIndex].toggleSelected();
+            onEditLead(rows[focusedRowIndex].original);
           }
           break;
         case "Escape":
@@ -540,7 +564,7 @@ export function LeadsTable({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [table, focusedRowIndex, onSelectLead, onSearchFocus, handleClearSelection]);
+  }, [table, focusedRowIndex, onSelectLead, onEditLead, onSearchFocus, handleClearSelection]);
 
   // Loading skeleton
   if (isLoading) {
@@ -582,7 +606,13 @@ export function LeadsTable({
         ref={tableScrollRef}
         className="flex-1 overflow-x-auto overflow-y-auto"
       >
-        <Table className="w-full">
+        {/* ✅ Phase 3: ARIA improvements for accessibility */}
+        <Table 
+          className="w-full"
+          role="grid"
+          aria-label="Danh sách lead"
+          aria-rowcount={totalCount}
+        >
           <TableHeader className="bg-muted/50 sticky top-0 z-10">
             {table.getHeaderGroups().map((headerGroup) => (
               <TableRow key={headerGroup.id}>
@@ -644,6 +674,11 @@ export function LeadsTable({
                       key={row.id}
                       data-index={virtualRow.index}
                       data-state={isSelected ? "selected" : undefined}
+                      // ✅ Phase 3: ARIA attributes for accessibility
+                      role="row"
+                      aria-rowindex={(page - 1) * pageSize + virtualRow.index + 1}
+                      aria-selected={isSelected}
+                      tabIndex={isFocused ? 0 : -1}
                       onClick={() => handleRowClick(row.original, virtualRow.index)}
                       onDoubleClick={() => router.push(`/leads/${row.original.id}`)}
                       // ✅ Phase 1: Prefetch lead detail on hover for instant panel load

@@ -37,9 +37,12 @@ interface KeyboardShortcut {
 // =============================================================================
 
 const SHORTCUTS: KeyboardShortcut[] = [
-  { keys: ["↑", "↓"], description: "Di chuyển giữa các row" },
-  { keys: ["Enter"], description: "Xem chi tiết lead đang focus" },
+  // ✅ Phase 3: Vim-style navigation added
+  { keys: ["j", "↓"], description: "Di chuyển xuống" },
+  { keys: ["k", "↑"], description: "Di chuyển lên" },
+  { keys: ["Enter"], description: "Xem chi tiết lead" },
   { keys: ["Space"], description: "Chọn/bỏ chọn checkbox" },
+  { keys: ["e"], description: "Sửa lead đang focus" },
   { keys: ["/"], description: "Focus ô tìm kiếm" },
   { keys: ["Escape"], description: "Bỏ chọn tất cả" },
   { keys: ["?"], description: "Hiển thị phím tắt" },

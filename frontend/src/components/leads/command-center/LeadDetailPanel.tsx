@@ -41,6 +41,7 @@ import { CopyableCell } from "@/components/common/CopyableCell";
 import { UrgencyBadge } from "@/components/common/UrgencyBadge";
 import { STAGE_COLORS } from "@/types/pipeline.types";
 import { OfficerRatingInput } from "@/components/leads/OfficerRatingInput";
+import { LeadActionSuggestions } from "@/components/leads/LeadActionSuggestions";
 import type { Lead } from "@/types/lead.types";
 
 interface LeadDetailPanelProps {
@@ -431,6 +432,12 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
               </div>
             </CardContent>
           </Card>
+
+          {/* ✅ Phase 3: Lead Action Suggestions */}
+          <LeadActionSuggestions
+            lead={lead}
+            onContact={() => window.open(`tel:${lead.phone}`, "_blank")}
+          />
 
           {/* Ghi nhận tư vấn nhanh */}
           <Card className="border-slate-200 bg-slate-50">
