@@ -779,3 +779,73 @@ async def get_team_stats(
         "total_officers": len(active_officers),
         "period_days": days,
     }
+
+
+async def get_upcoming_activities(
+    db: AsyncSession,
+    officer_id: int,
+    month: int,
+    year: int
+) -> Dict[str, Any]:
+    """
+    Lấy các hoạt động sắp tới (leads có next_activity_at) cho officer.
+    Trả về danh sách activities và các ngày có activities.
+    
+    Args:
+        db: Database session
+        officer_id: Officer user ID
+        month: Month (1-12)
+        year: Year (e.g., 2025)
+        
+    Returns:
+        Dict with activities list and dates with activities
+    """
+    # Tính start/end của tháng
+    start_of_month = datetime(year, month, 1, tzinfo=timezone.utc)
+    if month == 12:
+        end_of_month = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        end_of_month = datetime(year, month + 1, 1, tzinfo=timezone.utc)
+    
+    # Query leads có next_activity_at trong tháng này
+    query = (
+        select(models.Lead)
+        .where(
+            models.Lead.assigned_officer_id == officer_id,
+            models.Lead.next_activity_at.isnot(None),
+            models.Lead.next_activity_at >= start_of_month,
+            models.Lead.next_activity_at < end_of_month,
+            models.Lead.deleted_at.is_(None),  # Exclude soft-deleted
+        )
+        .order_by(models.Lead.next_activity_at.asc())
+    )
+    
+    result = await db.execute(query)
+    leads = result.scalars().all()
+    
+    # Build activities list and dates with activities
+    activities = []
+    dates_with_activities = set()
+    
+    for lead in leads:
+        activity_date = lead.next_activity_at
+        if activity_date:
+            # Add to dates set (just the day number)
+            dates_with_activities.add(activity_date.day)
+            
+            # Add to activities list
+            activities.append({
+                "id": lead.id,
+                "lead_id": lead.id,
+                "lead_name": lead.full_name,
+                "time": activity_date.strftime("%H:%M"),
+                "date": activity_date.strftime("%Y-%m-%d"),
+                "day": activity_date.day,
+            })
+    
+    return {
+        "activities": activities,
+        "dates_with_activities": list(dates_with_activities),
+        "month": month,
+        "year": year,
+    }

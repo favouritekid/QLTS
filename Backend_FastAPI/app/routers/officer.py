@@ -151,3 +151,43 @@ async def get_team_stats(
         return stats
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# Today's Schedule Widget - Upcoming Activities
+# =============================================================================
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/upcoming-activities",
+    summary="Get upcoming activities for calendar widget"
+)
+async def get_upcoming_activities(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[models.User, PermissionDep],
+    month: int = None,
+    year: int = None
+):
+    """
+    Get leads with scheduled follow-ups (next_activity_at) for the given month.
+    Returns activities list and dates with activities for calendar highlighting.
+    """
+    from datetime import datetime
+    
+    # Default to current month if not specified
+    if month is None or year is None:
+        now = datetime.now()
+        month = month or now.month
+        year = year or now.year
+    
+    try:
+        result = await officer_service.get_upcoming_activities(
+            db=db,
+            officer_id=current_user.id,
+            month=month,
+            year=year
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

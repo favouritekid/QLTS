@@ -2,38 +2,47 @@
 /**
  * Today's Schedule Widget
  * Shows mini calendar and list of scheduled activities
+ * Data from next_activity_at field in Lead model
  */
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { 
   ChevronLeft, 
   ChevronRight, 
   MoreHorizontal,
-  Phone,
-  Video,
-  UserCheck,
-  Clock
+  User,
+  Calendar
 } from "lucide-react";
+import { api } from "@/lib/api/client";
 
 // =============================================================================
 // TYPES
 // =============================================================================
 
-interface ScheduleItem {
+interface ScheduleActivity {
   id: number;
+  lead_id: number;
+  lead_name: string;
   time: string;
-  title: string;
-  type: "meeting" | "call" | "follow_up" | "review";
-  leadId?: number;
+  date: string;
+  day: number;
+}
+
+interface UpcomingActivitiesResponse {
+  activities: ScheduleActivity[];
+  dates_with_activities: number[];
+  month: number;
+  year: number;
 }
 
 interface TodayScheduleProps {
-  activities?: ScheduleItem[];
   className?: string;
 }
 
@@ -41,21 +50,7 @@ interface TodayScheduleProps {
 // CONSTANTS
 // =============================================================================
 
-const WEEKDAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
-
-const ACTIVITY_ICONS: Record<string, React.ElementType> = {
-  meeting: UserCheck,
-  call: Phone,
-  follow_up: Clock,
-  review: Video,
-};
-
-const ACTIVITY_COLORS: Record<string, string> = {
-  meeting: "bg-blue-500",
-  call: "bg-green-500",
-  follow_up: "bg-amber-500",
-  review: "bg-purple-500",
-};
+const WEEKDAYS = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
 
 // =============================================================================
 // HELPER FUNCTIONS
@@ -76,14 +71,16 @@ function getFirstDayOfMonth(year: number, month: number) {
 function MiniCalendar({ 
   selectedDate, 
   onDateSelect,
-  activeDates = []
+  viewDate,
+  onViewDateChange,
+  datesWithActivities = []
 }: { 
   selectedDate: Date;
   onDateSelect: (date: Date) => void;
-  activeDates?: number[]; // Days that have activities
+  viewDate: Date;
+  onViewDateChange: (date: Date) => void;
+  datesWithActivities?: number[];
 }) {
-  const [viewDate, setViewDate] = useState(new Date());
-  
   const year = viewDate.getFullYear();
   const month = viewDate.getMonth();
   const today = new Date();
@@ -93,12 +90,12 @@ function MiniCalendar({
   
   // Previous month navigation
   const goToPrevMonth = () => {
-    setViewDate(new Date(year, month - 1, 1));
+    onViewDateChange(new Date(year, month - 1, 1));
   };
   
   // Next month navigation
   const goToNextMonth = () => {
-    setViewDate(new Date(year, month + 1, 1));
+    onViewDateChange(new Date(year, month + 1, 1));
   };
   
   // Generate calendar days
@@ -132,6 +129,10 @@ function MiniCalendar({
       month === selectedDate.getMonth() &&
       year === selectedDate.getFullYear()
     );
+  };
+  
+  const hasActivity = (day: number) => {
+    return datesWithActivities.includes(day);
   };
   
   return (
@@ -180,13 +181,13 @@ function MiniCalendar({
               "hover:bg-muted focus:outline-none focus:ring-2 focus:ring-primary/20",
               isToday(day!) && !isSelected(day!) && "bg-primary/10 text-primary font-semibold",
               isSelected(day!) && "bg-primary text-primary-foreground font-semibold",
-              activeDates.includes(day!) && !isSelected(day!) && "font-semibold"
+              hasActivity(day!) && !isSelected(day!) && "font-semibold"
             )}
           >
             {day}
-            {/* Activity indicator dot */}
-            {day && activeDates.includes(day) && !isSelected(day) && (
-              <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 bg-primary rounded-full" />
+            {/* Red dot indicator for days with activities */}
+            {day && hasActivity(day) && (
+              <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-red-500 rounded-full" />
             )}
           </button>
         ))}
@@ -199,37 +200,64 @@ function MiniCalendar({
 // MAIN COMPONENT
 // =============================================================================
 
-export function TodaySchedule({ activities = [], className }: TodayScheduleProps) {
+export function TodaySchedule({ className }: TodayScheduleProps) {
   const router = useRouter();
   const [selectedDate, setSelectedDate] = useState(new Date());
+  const [viewDate, setViewDate] = useState(new Date());
   
-  // Mock data for demo - replace with real data
-  const mockActivities: ScheduleItem[] = activities.length > 0 ? activities : [
-    { id: 1, time: "09:00 AM", title: "Team Meeting", type: "meeting" },
-    { id: 2, time: "11:00 AM", title: "Client Call (Online)", type: "call", leadId: 123 },
-    { id: 3, time: "02:00 PM", title: "Follow-up", type: "follow_up", leadId: 456 },
-    { id: 4, time: "04:30 PM", title: "Internal Review", type: "review" },
-  ];
+  // Fetch upcoming activities for current view month
+  const { data, isLoading } = useQuery<UpcomingActivitiesResponse>({
+    queryKey: ["officer", "upcoming-activities", viewDate.getMonth() + 1, viewDate.getFullYear()],
+    queryFn: async () => {
+      const response = await api.get("/api/officer/upcoming-activities", {
+        params: {
+          month: viewDate.getMonth() + 1, // JS months are 0-indexed
+          year: viewDate.getFullYear(),
+        }
+      });
+      return response.data;
+    },
+    staleTime: 1000 * 60 * 5, // 5 minutes
+  });
   
-  // Get days with activities (for calendar highlight)
-  const activeDates = useMemo(() => {
-    const today = new Date();
-    // Demo: mark today and a few other days
-    return [today.getDate(), today.getDate() + 2, today.getDate() + 5];
-  }, []);
+  // Filter activities for selected date
+  const selectedDateActivities = useMemo(() => {
+    if (!data?.activities) return [];
+    
+    const selectedDay = selectedDate.getDate();
+    const selectedMonth = selectedDate.getMonth() + 1;
+    const selectedYear = selectedDate.getFullYear();
+    
+    return data.activities.filter(activity => {
+      const activityDate = new Date(activity.date);
+      return (
+        activityDate.getDate() === selectedDay &&
+        activityDate.getMonth() + 1 === selectedMonth &&
+        activityDate.getFullYear() === selectedYear
+      );
+    });
+  }, [data?.activities, selectedDate]);
   
-  const handleActivityClick = (activity: ScheduleItem) => {
-    if (activity.leadId) {
-      router.push(`/leads/${activity.leadId}`);
-    }
+  // Get dates with activities for calendar highlighting
+  const datesWithActivities = data?.dates_with_activities || [];
+  
+  const handleActivityClick = (activity: ScheduleActivity) => {
+    router.push(`/leads/${activity.lead_id}`);
   };
+  
+  // Format selected date for header
+  const formattedSelectedDate = selectedDate.toLocaleDateString("vi-VN", {
+    weekday: "long",
+    day: "numeric",
+    month: "long"
+  });
   
   return (
     <Card className={cn("border bg-card", className)}>
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
           <CardTitle className="text-sm font-medium">
-            Today's Schedule
+            Lịch hẹn
           </CardTitle>
           <Button variant="ghost" size="icon" className="h-6 w-6">
             <MoreHorizontal className="h-4 w-4" />
@@ -238,55 +266,60 @@ export function TodaySchedule({ activities = [], className }: TodayScheduleProps
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Mini Calendar */}
-        <MiniCalendar 
-          selectedDate={selectedDate}
-          onDateSelect={setSelectedDate}
-          activeDates={activeDates}
-        />
+        {isLoading ? (
+          <Skeleton className="h-48 w-full" />
+        ) : (
+          <MiniCalendar 
+            selectedDate={selectedDate}
+            onDateSelect={setSelectedDate}
+            viewDate={viewDate}
+            onViewDateChange={setViewDate}
+            datesWithActivities={datesWithActivities}
+          />
+        )}
         
-        {/* Divider */}
-        <div className="border-t" />
+        {/* Divider with selected date */}
+        <div className="border-t pt-3">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
+            <Calendar className="h-4 w-4" />
+            <span className="capitalize">{formattedSelectedDate}</span>
+          </div>
+        </div>
         
-        {/* Activities List */}
+        {/* Activities List for Selected Date */}
         <div className="space-y-2">
-          {mockActivities.map((activity) => {
-            const Icon = ACTIVITY_ICONS[activity.type] || Clock;
-            const bgColor = ACTIVITY_COLORS[activity.type] || "bg-gray-500";
-            
-            return (
+          {isLoading ? (
+            <>
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+            </>
+          ) : selectedDateActivities.length > 0 ? (
+            selectedDateActivities.map((activity) => (
               <button
                 key={activity.id}
                 onClick={() => handleActivityClick(activity)}
                 className={cn(
                   "w-full flex items-center gap-3 p-2 rounded-lg text-left",
-                  "hover:bg-muted/50 transition-colors",
-                  activity.leadId && "cursor-pointer"
+                  "hover:bg-muted/50 transition-colors cursor-pointer"
                 )}
               >
-                {/* Color indicator */}
-                <div className={cn("w-1 h-8 rounded-full", bgColor)} />
+                {/* Time */}
+                <span className="text-sm font-medium text-primary min-w-[50px]">
+                  {activity.time}
+                </span>
                 
-                {/* Content */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground font-medium">
-                      {activity.time}
-                    </span>
-                    <span className="text-sm truncate">
-                      {activity.title}
-                    </span>
-                  </div>
+                {/* Lead name */}
+                <div className="flex items-center gap-2 flex-1 min-w-0">
+                  <User className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                  <span className="text-sm truncate">
+                    {activity.lead_name}
+                  </span>
                 </div>
-                
-                {/* Icon */}
-                <Icon className="h-4 w-4 text-muted-foreground flex-shrink-0" />
               </button>
-            );
-          })}
-          
-          {mockActivities.length === 0 && (
+            ))
+          ) : (
             <div className="text-center py-4 text-sm text-muted-foreground">
-              Không có lịch hẹn hôm nay
+              Không có lịch hẹn
             </div>
           )}
         </div>
