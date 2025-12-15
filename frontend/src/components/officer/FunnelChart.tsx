@@ -1,13 +1,17 @@
 // src/components/officer/FunnelChart.tsx
+/**
+ * Pipeline Funnel Chart - Monochromatic Blue Design
+ * Clean, professional visualization following shadcn standards
+ */
 "use client";
 
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import { TrendingDown, ArrowRight } from "lucide-react";
+import { TrendingDown, ChevronRight } from "lucide-react";
 
 interface FunnelStage {
-  stage_id: string;    // e.g. "stg05"
+  stage_id: string;
   stage_name: string;
   stage_order: number;
   lead_count: number;
@@ -17,16 +21,12 @@ interface FunnelChartProps {
   funnel: FunnelStage[];
 }
 
-// Color palette for funnel stages - gradient from cool to warm
-const STAGE_COLORS = [
-  { bg: "bg-blue-500", text: "text-blue-500", hover: "hover:bg-blue-600" },
-  { bg: "bg-cyan-500", text: "text-cyan-500", hover: "hover:bg-cyan-600" },
-  { bg: "bg-teal-500", text: "text-teal-500", hover: "hover:bg-teal-600" },
-  { bg: "bg-green-500", text: "text-green-500", hover: "hover:bg-green-600" },
-  { bg: "bg-amber-500", text: "text-amber-500", hover: "hover:bg-amber-600" },
-  { bg: "bg-orange-500", text: "text-orange-500", hover: "hover:bg-orange-600" },
-  { bg: "bg-red-500", text: "text-red-500", hover: "hover:bg-red-600" },
-];
+// Monochromatic blue gradient - dark to light
+const getBlueShade = (index: number, total: number) => {
+  // HSL: 221 83% X% - varying lightness from 45% to 75%
+  const lightness = 45 + (index / Math.max(total - 1, 1)) * 30;
+  return `hsl(221 83% ${lightness}%)`;
+};
 
 export function FunnelChart({ funnel }: FunnelChartProps) {
   const router = useRouter();
@@ -34,12 +34,12 @@ export function FunnelChart({ funnel }: FunnelChartProps) {
   // Sort by stage order
   const sortedFunnel = [...funnel].sort((a, b) => a.stage_order - b.stage_order);
 
-  // Calculate totals and rates
+  // Calculate totals
   const totalLeads = sortedFunnel[0]?.lead_count || 0;
   const convertedLeads = sortedFunnel[sortedFunnel.length - 1]?.lead_count || 0;
   const overallConversion = totalLeads > 0 ? (convertedLeads / totalLeads) * 100 : 0;
 
-  // Calculate step conversion rates
+  // Calculate step conversion rates  
   const stageConversions = sortedFunnel.map((stage, index) => {
     if (index === 0) return 100;
     const prevCount = sortedFunnel[index - 1].lead_count;
@@ -52,15 +52,15 @@ export function FunnelChart({ funnel }: FunnelChartProps) {
   };
 
   return (
-    <Card>
+    <Card className="border bg-card">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
           <div>
-            <CardTitle className="text-base font-medium">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
               Pipeline Funnel
             </CardTitle>
-            <CardDescription className="text-xs">
-              Phân bố leads theo giai đoạn • Click để xem chi tiết
+            <CardDescription className="text-xs mt-0.5">
+              Phân bố leads theo giai đoạn
             </CardDescription>
           </div>
           <div className="flex items-center gap-1.5 text-sm">
@@ -70,20 +70,20 @@ export function FunnelChart({ funnel }: FunnelChartProps) {
           </div>
         </div>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="space-y-2">
         {sortedFunnel.map((stage, index) => {
           const percentage = totalLeads > 0 ? (stage.lead_count / totalLeads) * 100 : 0;
-          const color = STAGE_COLORS[index % STAGE_COLORS.length];
           const stepConversion = stageConversions[index];
           const showConversion = index > 0 && sortedFunnel[index - 1].lead_count > 0;
+          const bgColor = getBlueShade(index, sortedFunnel.length);
           
           return (
             <div key={stage.stage_name}>
-              {/* Step Conversion Arrow (between stages) */}
+              {/* Step Conversion (between stages) */}
               {showConversion && (
-                <div className="flex items-center justify-center my-1.5 text-xs text-muted-foreground">
-                  <ArrowRight className="h-3 w-3 mr-1" />
-                  <span>{stepConversion.toFixed(0)}% chuyển đổi</span>
+                <div className="flex items-center justify-center py-1 text-xs text-muted-foreground">
+                  <ChevronRight className="h-3 w-3 rotate-90 mr-1" />
+                  <span>{stepConversion.toFixed(0)}%</span>
                 </div>
               )}
               
@@ -95,47 +95,34 @@ export function FunnelChart({ funnel }: FunnelChartProps) {
                 tabIndex={0}
                 onKeyDown={(e) => e.key === "Enter" && handleStageClick(stage.stage_id)}
               >
-                <div className="flex items-center justify-between mb-1.5">
-                  <div className="flex items-center gap-2">
-                    <div className={cn("h-2.5 w-2.5 rounded-sm", color.bg)} />
-                    <span className="text-sm font-medium group-hover:text-primary transition-colors">
-                      {stage.stage_name}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-3 text-sm">
-                    <span className="font-semibold">{stage.lead_count}</span>
-                    <span className="text-muted-foreground w-12 text-right">
-                      {percentage.toFixed(0)}%
-                    </span>
-                  </div>
-                </div>
-                
-                {/* Funnel-style Progress Bar */}
-                <div className="relative h-8 bg-muted/50 rounded-lg overflow-hidden group-hover:bg-muted/70 transition-colors">
+                {/* Bar Container */}
+                <div className="relative h-10 bg-muted/40 rounded overflow-hidden hover:bg-muted/60 transition-colors">
+                  {/* Colored Bar */}
                   <div 
-                    className={cn(
-                      "absolute left-0 top-0 h-full rounded-lg transition-all duration-300",
-                      color.bg,
-                      "opacity-80 group-hover:opacity-100"
-                    )}
+                    className="absolute left-0 top-0 h-full rounded transition-all duration-300 group-hover:brightness-110"
                     style={{ 
-                      width: `${percentage}%`,
-                      minWidth: stage.lead_count > 0 ? "2%" : "0%"
+                      width: `${Math.max(percentage, 2)}%`,
+                      backgroundColor: bgColor,
                     }}
                   />
-                  {/* Center content in bar */}
-                  {stage.lead_count > 0 && percentage > 15 && (
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <span className="text-xs font-medium text-white drop-shadow-sm">
-                        {stage.lead_count} leads
+                  
+                  {/* Content Overlay */}
+                  <div className="absolute inset-0 flex items-center justify-between px-3">
+                    <span className={cn(
+                      "text-sm font-medium z-10",
+                      percentage > 40 ? "text-white" : "text-foreground"
+                    )}>
+                      {stage.stage_name}
+                    </span>
+                    <div className={cn(
+                      "flex items-center gap-2 text-sm z-10",
+                      percentage > 60 ? "text-white" : "text-foreground"
+                    )}>
+                      <span className="font-semibold">{stage.lead_count}</span>
+                      <span className="text-xs opacity-70">
+                        ({percentage.toFixed(0)}%)
                       </span>
                     </div>
-                  )}
-                  {/* Hover hint */}
-                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                    <span className="text-xs font-medium text-white bg-black/50 px-2 py-0.5 rounded">
-                      Xem leads →
-                    </span>
                   </div>
                 </div>
               </div>
@@ -144,10 +131,10 @@ export function FunnelChart({ funnel }: FunnelChartProps) {
         })}
         
         {/* Summary Footer */}
-        <div className="pt-3 mt-3 border-t flex items-center justify-between text-xs text-muted-foreground">
+        <div className="pt-3 mt-2 border-t flex items-center justify-between text-xs text-muted-foreground">
           <span>Tổng: {totalLeads} leads</span>
           <span>
-            Chuyển đổi: {convertedLeads} ({overallConversion.toFixed(1)}%)
+            Hoàn thành: {convertedLeads} ({overallConversion.toFixed(1)}%)
           </span>
         </div>
       </CardContent>

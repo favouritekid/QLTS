@@ -1,8 +1,7 @@
 // src/components/officer/dashboard/KPICardsGrid.tsx
 /**
  * KPI Cards Grid for Officer Dashboard
- * Displays 4 key metrics: Consultations, Active Leads, Conversion Rate, Response Time
- * Each card is clickable and navigates to leads page
+ * Clean 4-column layout with consistent white cards
  */
 
 "use client";
@@ -48,7 +47,6 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
         subtitle="Mục tiêu hàng ngày"
         trend={kpis.consultations_trend}
         icon={Phone}
-        color="blue"
         onClick={goToLeads}
       />
 
@@ -59,7 +57,6 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
         subtitle="Chưa hoàn thành"
         trend={kpis.active_leads_trend}
         icon={Users}
-        color="green"
         onClick={goToLeads}
       />
 
@@ -70,7 +67,6 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
         subtitle="Tháng này"
         trend={kpis.conversion_rate_trend}
         icon={TrendingUp}
-        color="orange"
         onClick={goToLeads}
       />
 
@@ -81,7 +77,6 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
         subtitle="Trung bình"
         trend={kpis.avg_response_time_trend}
         icon={Clock}
-        color="purple"
         onClick={goToLeads}
       />
     </div>

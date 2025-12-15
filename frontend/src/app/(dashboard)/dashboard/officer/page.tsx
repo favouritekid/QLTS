@@ -9,7 +9,6 @@ import { AlertCircle } from "lucide-react";
 import { WorkloadCard } from "@/components/officer/WorkloadCard";
 import { PerformanceChart } from "@/components/officer/PerformanceChart";
 import { FunnelChart } from "@/components/officer/FunnelChart";
-import { ActionableLists } from "@/components/officer/ActionableLists";
 import { 
   KPICardsGrid, 
   PriorityActionsPanel, 
@@ -276,33 +275,6 @@ export default function OfficerDashboardPage() {
     lead_count: s.count,
   }));
 
-  // Transform ActionableLists (API) to component format
-  const actionableLists = {
-    high_score: stats.actionable_lists.high_score.map((lead) => ({
-      id: lead.id,
-      full_name: lead.name, // API uses 'name', component expects 'full_name'
-      email: lead.email || "",
-      lead_score: lead.lead_score,
-      status: lead.stage_name || "",
-      created_at: lead.updated_at,
-    })),
-    stale: stats.actionable_lists.stale.map((lead) => ({
-      id: lead.id,
-      full_name: lead.name,
-      email: lead.email || "",
-      last_updated: lead.updated_at,
-      days_stale: 3, // Calculate from updated_at if needed
-    })),
-    upcoming: stats.actionable_lists.upcoming.map((c) => ({
-      id: c.id,
-      lead_id: c.lead_id,
-      lead_name: c.lead_name,
-      consultation_date: c.scheduled_at,
-      method: c.status,
-      notes: null,
-    })),
-  };
-
   // Availability toggle handler
   const handleToggleAvailability = async (available: boolean) => {
     try {
@@ -355,7 +327,7 @@ export default function OfficerDashboardPage() {
 
   return (
     <div className="container mx-auto p-6 space-y-6">
-      {/* ✅ PHASE 5: Smart Header */}
+      {/* Header */}
       <SmartHeader
         consultationsToday={stats.kpis.consultations_today}
         dailyTarget={stats.kpis.consultations_target}
@@ -364,35 +336,41 @@ export default function OfficerDashboardPage() {
         onQuickAction={handleQuickAction}
       />
 
-      {/* ✅ PHASE 1: KPI Cards */}
+      {/* KPI Cards Row */}
       <KPICardsGrid kpis={stats.kpis} />
 
-      {/* ✅ PHASE 2: Priority Actions + Workload - 2-column layout */}
-      <div className="grid gap-6 md:grid-cols-2">
-        <PriorityActionsPanel actions={stats.priority_actions} />
-        <WorkloadCard statusOverview={stats.status_overview} />
-      </div>
+      {/* Main Content: Bento Grid 75/25 */}
+      <div className="grid gap-6 lg:grid-cols-[1fr_350px]">
+        {/* Left Column - Main Content (75%) */}
+        <div className="space-y-6">
+          {/* Charts Row */}
+          <div className="grid gap-6 md:grid-cols-2">
+            <PerformanceChart 
+              trends={performanceTrends} 
+              teamAverage={teamStats?.team_avg_consultations}
+            />
+            <FunnelChart funnel={salesFunnel} />
+          </div>
 
-      {/* ✅ PHASE 6: Performance and Funnel Charts with Team Average */}
-      <div className="grid gap-6 md:grid-cols-2">
-        <PerformanceChart 
-          trends={performanceTrends} 
-          teamAverage={teamStats?.team_avg_consultations}
-        />
-        <FunnelChart funnel={salesFunnel} />
-      </div>
+          {/* My Leads Table */}
+          <MyLeadsQuickAccess
+            leads={myLeadsPreview}
+            totalCount={stats.kpis.active_leads}
+          />
+        </div>
 
-      {/* ✅ PHASE 4: Leaderboard + Actionable Lists - 2-column layout */}
-      <div className="grid gap-6 md:grid-cols-2">
-        <WeeklyLeaderboard />
-        <ActionableLists lists={actionableLists} />
-      </div>
+        {/* Right Column - Action Center (25%) */}
+        <div className="space-y-6">
+          {/* Workload Overview */}
+          <WorkloadCard statusOverview={stats.status_overview} />
 
-      {/* ✅ PHASE 5: My Leads Quick Access */}
-      <MyLeadsQuickAccess
-        leads={myLeadsPreview}
-        totalCount={stats.kpis.active_leads}
-      />
+          {/* Priority Actions */}
+          <PriorityActionsPanel actions={stats.priority_actions} />
+
+          {/* Leaderboard (compact) */}
+          <WeeklyLeaderboard />
+        </div>
+      </div>
     </div>
   );
 }
