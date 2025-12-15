@@ -10,7 +10,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Trophy, Medal, Crown, User } from "lucide-react";
+import { Trophy, Medal, Crown, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api/client";
 
@@ -21,6 +21,7 @@ interface LeaderboardEntry {
   full_name: string;
   consultations: number;
   is_current_user: boolean;
+  rank_change?: number | null; // +2 = up 2 spots, -1 = down 1, null = new
 }
 
 interface WeeklyLeaderboardData {
@@ -46,6 +47,36 @@ const getRankIcon = (rank: number) => {
     default:
       return <span className="text-xs font-medium text-muted-foreground w-4 text-center">{rank}</span>;
   }
+};
+
+// ✅ PHASE 6: Rank trend indicator
+const getRankTrendIndicator = (rankChange: number | null | undefined) => {
+  if (rankChange === null || rankChange === undefined) {
+    return (
+      <span className="text-[10px] text-blue-500 font-medium">MỚI</span>
+    );
+  }
+  if (rankChange > 0) {
+    return (
+      <div className="flex items-center text-green-600 dark:text-green-400">
+        <TrendingUp className="h-3 w-3" />
+        <span className="text-[10px] font-medium ml-0.5">+{rankChange}</span>
+      </div>
+    );
+  }
+  if (rankChange < 0) {
+    return (
+      <div className="flex items-center text-red-500 dark:text-red-400">
+        <TrendingDown className="h-3 w-3" />
+        <span className="text-[10px] font-medium ml-0.5">{rankChange}</span>
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center text-muted-foreground">
+      <Minus className="h-3 w-3" />
+    </div>
+  );
 };
 
 const getRankBg = (rank: number, isCurrentUser: boolean) => {
@@ -152,6 +183,11 @@ export function WeeklyLeaderboard() {
                         </Badge>
                       )}
                     </div>
+                  </div>
+                  
+                  {/* ✅ PHASE 6: Rank Trend Indicator */}
+                  <div className="flex items-center">
+                    {getRankTrendIndicator(entry.rank_change)}
                   </div>
                   
                   {/* Stats */}

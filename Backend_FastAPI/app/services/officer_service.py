@@ -590,11 +590,14 @@ async def get_weekly_leaderboard(
     Get weekly leaderboard for gamification.
     Shows top officers by consultations and conversions this week.
     Includes current officer's rank even if not in top N.
+    PHASE 6: Now includes rank change vs previous week.
     """
     today = datetime.now(timezone.utc).date()
     week_start = today - timedelta(days=today.weekday())  # Monday
+    prev_week_start = week_start - timedelta(days=7)
+    prev_week_end = week_start - timedelta(days=1)
     
-    # Get all officers' stats for this week
+    # Get all officers' stats for THIS week
     leaderboard_query = (
         select(
             models.User.id,
@@ -614,12 +617,37 @@ async def get_weekly_leaderboard(
     result = await db.execute(leaderboard_query)
     all_officers = result.fetchall()
     
+    # Get PREVIOUS week ranks for comparison
+    prev_week_query = (
+        select(
+            models.User.id,
+            func.count(models.Consultation.id).label("consultations"),
+        )
+        .join(models.Consultation, models.Consultation.officer_id == models.User.id)
+        .where(
+            models.User.role == "officer",
+            func.date(models.Consultation.consultation_date) >= prev_week_start,
+            func.date(models.Consultation.consultation_date) <= prev_week_end
+        )
+        .group_by(models.User.id)
+        .order_by(func.count(models.Consultation.id).desc())
+    )
+    prev_result = await db.execute(prev_week_query)
+    prev_officers = prev_result.fetchall()
+    
+    # Build previous week rank lookup
+    prev_ranks = {officer.id: rank for rank, officer in enumerate(prev_officers, 1)}
+    
     # Build leaderboard with ranks
     leaderboard = []
     current_user_rank = None
     current_user_stats = None
     
     for rank, officer in enumerate(all_officers, 1):
+        prev_rank = prev_ranks.get(officer.id)
+        # Calculate rank change: positive = improved, negative = dropped
+        rank_change = (prev_rank - rank) if prev_rank else None
+        
         entry = {
             "rank": rank,
             "user_id": officer.id,
@@ -627,6 +655,7 @@ async def get_weekly_leaderboard(
             "full_name": officer.full_name or officer.username,
             "consultations": officer.consultations,
             "is_current_user": officer.id == officer_id,
+            "rank_change": rank_change,  # +2 = up 2 spots, -1 = down 1 spot, None = new
         }
         
         if officer.id == officer_id:
@@ -644,6 +673,7 @@ async def get_weekly_leaderboard(
     if current_user_rank is None:
         user = await db.get(models.User, officer_id)
         if user:
+            prev_rank = prev_ranks.get(officer_id)
             leaderboard.append({
                 "rank": len(all_officers) + 1,
                 "user_id": officer_id,
@@ -651,6 +681,7 @@ async def get_weekly_leaderboard(
                 "full_name": user.full_name or user.username,
                 "consultations": 0,
                 "is_current_user": True,
+                "rank_change": (prev_rank - (len(all_officers) + 1)) if prev_rank else None,
             })
             current_user_rank = len(all_officers) + 1
     
@@ -659,4 +690,92 @@ async def get_weekly_leaderboard(
         "total_officers": len(all_officers) + (1 if current_user_rank is None else 0),
         "current_user_rank": current_user_rank or (len(all_officers) + 1),
         "leaderboard": leaderboard,
+    }
+
+
+async def get_team_stats(
+    db: AsyncSession,
+    officer_id: int,
+    days: int = 30
+) -> Dict[str, Any]:
+    """
+    Get team average statistics for performance comparison.
+    
+    Returns:
+        - team_avg_consultations: Average daily consultations across all officers
+        - team_avg_conversions: Average daily conversions across all officers
+        - officer_rank_percentile: Current officer's rank percentile
+    """
+    today = datetime.now(timezone.utc).date()
+    start_date = today - timedelta(days=days - 1)
+    
+    # Get all active officers
+    active_officers_query = (
+        select(models.User.id)
+        .where(
+            models.User.role == "officer",
+            models.User.is_active == True,
+        )
+    )
+    active_officers = (await db.execute(active_officers_query)).scalars().all()
+    
+    if len(active_officers) == 0:
+        return {
+            "team_avg_consultations": 0,
+            "team_avg_conversions": 0,
+            "officer_rank_percentile": 0,
+            "total_officers": 0,
+        }
+    
+    # Get total consultations per officer in the period
+    consultations_query = (
+        select(
+            models.Consultation.officer_id,
+            func.count(models.Consultation.id).label("count")
+        )
+        .where(
+            models.Consultation.officer_id.in_(active_officers),
+            func.date(models.Consultation.consultation_date) >= start_date,
+        )
+        .group_by(models.Consultation.officer_id)
+    )
+    consultations_res = (await db.execute(consultations_query)).all()
+    
+    # Calculate team total and average
+    officer_consultations = {row[0]: row[1] for row in consultations_res}
+    total_consultations = sum(officer_consultations.values())
+    team_avg = round(total_consultations / len(active_officers) / days, 1) if active_officers else 0
+    
+    # Get current officer's consultations
+    current_officer_count = officer_consultations.get(officer_id, 0)
+    
+    # Calculate rank percentile
+    officers_with_fewer = sum(1 for count in officer_consultations.values() if count < current_officer_count)
+    rank_percentile = round((officers_with_fewer / len(active_officers)) * 100) if active_officers else 0
+    
+    # Get conversion stats (leads with final positive status)
+    conversions_query = (
+        select(
+            models.Lead.assigned_officer_id,
+            func.count(models.Lead.id).label("count")
+        )
+        .join(models.ConsultationStatus)
+        .where(
+            models.Lead.assigned_officer_id.in_(active_officers),
+            models.ConsultationStatus.is_final_status == True,
+            func.date(models.Lead.updated_at) >= start_date,
+        )
+        .group_by(models.Lead.assigned_officer_id)
+    )
+    conversions_res = (await db.execute(conversions_query)).all()
+    
+    total_conversions = sum(row[1] for row in conversions_res)
+    team_avg_conversions = round(total_conversions / len(active_officers) / days, 2) if active_officers else 0
+    
+    return {
+        "team_avg_consultations": team_avg,
+        "team_avg_conversions": team_avg_conversions,
+        "officer_rank_percentile": rank_percentile,
+        "total_officers": len(active_officers),
+        "period_days": days,
     }

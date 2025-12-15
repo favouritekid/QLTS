@@ -130,6 +130,19 @@ async function fetchEnhancedDashboard(): Promise<EnhancedOfficerStats> {
   return response.data;
 }
 
+interface TeamStats {
+  team_avg_consultations: number;
+  team_avg_conversions: number;
+  officer_rank_percentile: number;
+  total_officers: number;
+  period_days: number;
+}
+
+async function fetchTeamStats(): Promise<TeamStats> {
+  const response = await api.get("/api/officer/team-stats");
+  return response.data;
+}
+
 // =============================================================================
 // COMPONENT
 // =============================================================================
@@ -148,6 +161,13 @@ export default function OfficerDashboardPage() {
     queryFn: fetchEnhancedDashboard,
     refetchInterval: 60000, // Refresh every 60 seconds
     staleTime: 30000, // Consider data stale after 30 seconds
+  });
+
+  // ✅ PHASE 6: Fetch team stats for performance comparison
+  const { data: teamStats } = useQuery({
+    queryKey: ["officer", "team-stats"],
+    queryFn: fetchTeamStats,
+    staleTime: 300000, // 5 minutes - less frequent updates
   });
 
   // === REAL-TIME SOCKET.IO INTEGRATION ===
@@ -353,9 +373,12 @@ export default function OfficerDashboardPage() {
         <WorkloadCard statusOverview={stats.status_overview} />
       </div>
 
-      {/* Performance and Funnel Charts */}
+      {/* ✅ PHASE 6: Performance and Funnel Charts with Team Average */}
       <div className="grid gap-6 md:grid-cols-2">
-        <PerformanceChart trends={performanceTrends} />
+        <PerformanceChart 
+          trends={performanceTrends} 
+          teamAverage={teamStats?.team_avg_consultations}
+        />
         <FunnelChart funnel={salesFunnel} />
       </div>
 

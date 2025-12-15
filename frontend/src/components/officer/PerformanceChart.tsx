@@ -1,10 +1,12 @@
 // src/components/officer/PerformanceChart.tsx
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { cn } from "@/lib/utils";
+import type { DateRange } from "react-day-picker";
 import {
   LineChart,
   Line,
@@ -27,12 +29,14 @@ interface PerformanceTrend {
 interface PerformanceChartProps {
   trends: PerformanceTrend[];
   dailyGoal?: number; // Optional daily consultations goal
+  teamAverage?: number; // Optional team average for comparison
 }
 
-type TimeRange = "7D" | "30D" | "90D";
+type TimeRange = "7D" | "30D" | "90D" | "custom";
 
-export function PerformanceChart({ trends, dailyGoal = 5 }: PerformanceChartProps) {
+export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: PerformanceChartProps) {
   const [timeRange, setTimeRange] = useState<TimeRange>("7D");
+  const [customDateRange, setCustomDateRange] = useState<DateRange | undefined>(undefined);
 
   // Filter data based on time range
   const getDaysForRange = (range: TimeRange): number => {
@@ -44,7 +48,21 @@ export function PerformanceChart({ trends, dailyGoal = 5 }: PerformanceChartProp
     }
   };
 
-  const filteredTrends = trends.slice(-getDaysForRange(timeRange));
+  // Filter trends by custom date range or preset
+  const filteredTrends = useMemo(() => {
+    if (timeRange === "custom" && customDateRange?.from && customDateRange?.to) {
+      const fromDate = new Date(customDateRange.from);
+      const toDate = new Date(customDateRange.to);
+      fromDate.setHours(0, 0, 0, 0);
+      toDate.setHours(23, 59, 59, 999);
+      
+      return trends.filter((t) => {
+        const date = new Date(t.date);
+        return date >= fromDate && date <= toDate;
+      });
+    }
+    return trends.slice(-getDaysForRange(timeRange));
+  }, [trends, timeRange, customDateRange]);
 
   // Format data for Recharts
   const chartData = filteredTrends.map((trend) => ({
@@ -55,6 +73,7 @@ export function PerformanceChart({ trends, dailyGoal = 5 }: PerformanceChartProp
     "Leads Assigned": trend.leads_assigned,
     "Consultations": trend.consultations,
     "Converted": trend.converted,
+    ...(teamAverage !== undefined && { "Team Average": teamAverage }),
   }));
 
   // Calculate totals
@@ -72,36 +91,69 @@ export function PerformanceChart({ trends, dailyGoal = 5 }: PerformanceChartProp
     ? Math.round(totals.consultations / filteredTrends.length) 
     : 0;
 
+  // Handle preset button click
+  const handlePresetClick = (range: TimeRange) => {
+    setTimeRange(range);
+    if (range !== "custom") {
+      setCustomDateRange(undefined);
+    }
+  };
+
+  // Handle custom date range change
+  const handleCustomDateChange = (range: DateRange | undefined) => {
+    setCustomDateRange(range);
+    if (range?.from && range?.to) {
+      setTimeRange("custom");
+    }
+  };
+
+  // Get description text
+  const getDescription = () => {
+    if (timeRange === "custom" && customDateRange?.from && customDateRange?.to) {
+      const days = Math.ceil((customDateRange.to.getTime() - customDateRange.from.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+      return `${days} ngày: ${totals.leads} leads • ${totals.consultations} tư vấn • ${totals.converted} chuyển đổi`;
+    }
+    return `${getDaysForRange(timeRange)} ngày: ${totals.leads} leads • ${totals.consultations} tư vấn • ${totals.converted} chuyển đổi`;
+  };
+
   return (
     <Card>
       <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
             <CardTitle className="text-base font-medium">
               Xu hướng hiệu suất
             </CardTitle>
             <CardDescription className="text-xs mt-1">
-              {getDaysForRange(timeRange)} ngày: {totals.leads} leads • {totals.consultations} tư vấn • {totals.converted} chuyển đổi
+              {getDescription()}
             </CardDescription>
           </div>
           {/* Time Range Selector */}
-          <div className="flex items-center gap-1 bg-muted rounded-lg p-1">
-            {(["7D", "30D", "90D"] as TimeRange[]).map((range) => (
-              <Button
-                key={range}
-                variant="ghost"
-                size="sm"
-                onClick={() => setTimeRange(range)}
-                className={cn(
-                  "h-7 px-2.5 text-xs font-medium",
-                  timeRange === range 
-                    ? "bg-background shadow-sm" 
-                    : "hover:bg-background/50"
-                )}
-              >
-                {range}
-              </Button>
-            ))}
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 bg-muted rounded-lg p-1">
+              {(["7D", "30D", "90D"] as TimeRange[]).map((range) => (
+                <Button
+                  key={range}
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handlePresetClick(range)}
+                  className={cn(
+                    "h-7 px-2.5 text-xs font-medium",
+                    timeRange === range 
+                      ? "bg-background shadow-sm" 
+                      : "hover:bg-background/50"
+                  )}
+                >
+                  {range}
+                </Button>
+              ))}
+            </div>
+            {/* Custom Date Range Picker */}
+            <DateRangePicker
+              dateRange={customDateRange}
+              onDateRangeChange={handleCustomDateChange}
+              placeholder="Tùy chỉnh"
+            />
           </div>
         </div>
       </CardHeader>
@@ -157,6 +209,21 @@ export function PerformanceChart({ trends, dailyGoal = 5 }: PerformanceChartProp
               strokeOpacity={0.5}
             />
 
+            {/* Team Average Line (if provided) */}
+            {teamAverage !== undefined && (
+              <ReferenceLine 
+                y={teamAverage} 
+                stroke="hsl(var(--chart-5))" 
+                strokeDasharray="8 4"
+                label={{ 
+                  value: `TB team: ${teamAverage}`, 
+                  fill: "hsl(var(--chart-5))",
+                  fontSize: 10,
+                  position: "insideBottomRight"
+                }}
+              />
+            )}
+
             <Line
               type="monotone"
               dataKey="Leads Assigned"
@@ -185,7 +252,7 @@ export function PerformanceChart({ trends, dailyGoal = 5 }: PerformanceChartProp
         </ResponsiveContainer>
         
         {/* Summary Stats */}
-        <div className="flex items-center justify-center gap-6 mt-4 pt-4 border-t text-xs text-muted-foreground">
+        <div className="flex items-center justify-center gap-6 mt-4 pt-4 border-t text-xs text-muted-foreground flex-wrap">
           <div className="flex items-center gap-1.5">
             <div className="h-2 w-2 rounded-full bg-primary" />
             <span>TB leads/ngày: {filteredTrends.length > 0 ? Math.round(totals.leads / filteredTrends.length) : 0}</span>
@@ -198,6 +265,12 @@ export function PerformanceChart({ trends, dailyGoal = 5 }: PerformanceChartProp
             <div className="h-2 w-2 rounded-full" style={{ background: "hsl(var(--chart-3))" }} />
             <span>Tỉ lệ: {totals.consultations > 0 ? Math.round((totals.converted / totals.consultations) * 100) : 0}%</span>
           </div>
+          {teamAverage !== undefined && (
+            <div className="flex items-center gap-1.5">
+              <div className="h-2 w-2 rounded-full" style={{ background: "hsl(var(--chart-5))" }} />
+              <span>TB team: {teamAverage}</span>
+            </div>
+          )}
         </div>
       </CardContent>
     </Card>

@@ -133,6 +133,7 @@ class LeaderboardEntry(BaseModel):
     full_name: str
     consultations: int
     is_current_user: bool = False
+    rank_change: Optional[int] = None  # +2 = up 2 spots, -1 = down 1, None = new
 
 
 class WeeklyLeaderboard(BaseModel):
@@ -141,3 +142,16 @@ class WeeklyLeaderboard(BaseModel):
     total_officers: int
     current_user_rank: int
     leaderboard: List[LeaderboardEntry]
+
+
+# =============================================================================
+# PHASE 6: Team Stats for Performance Comparison
+# =============================================================================
+
+class TeamStats(BaseModel):
+    """Team average statistics for performance comparison."""
+    team_avg_consultations: float  # Daily average across all officers
+    team_avg_conversions: float  # Daily average conversions
+    officer_rank_percentile: int  # Current officer's percentile rank (0-100)
+    total_officers: int
+    period_days: int = 30

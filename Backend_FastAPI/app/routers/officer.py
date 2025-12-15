@@ -122,3 +122,32 @@ async def get_leaderboard(
         return leaderboard
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# PHASE 6: Team Stats for Performance Comparison
+# =============================================================================
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/team-stats",
+    response_model=schemas.TeamStats,
+    summary="Get team average stats for performance comparison"
+)
+async def get_team_stats(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[models.User, PermissionDep],
+    days: int = 30
+):
+    """
+    Get team average statistics for performance comparison.
+    Shows team averages for consultations and conversions.
+    """
+    try:
+        stats = await officer_service.get_team_stats(
+            db=db, officer_id=current_user.id, days=days
+        )
+        return stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
