@@ -3,9 +3,12 @@
  * Custom hook for generating breadcrumb navigation
  * Automatically creates breadcrumbs from current pathname
  * Labels are resolved from navigation config
+ * 
+ * ENHANCED: Supports role-based dashboard routing for officers
  */
 import { useMemo } from "react";
 import { navigationConfig } from "@/lib/config/navigation";
+import { useAuth } from "@/hooks/useAuth";
 import type { NavItem } from "@/types/navigation";
 
 /**
@@ -78,6 +81,7 @@ function segmentToLabel(segment: string): string {
     policies: "Policies",
     config: "Config",
     monitoring: "Monitoring",
+    officer: "Officer Dashboard",
   };
 
   if (specialCases[segment]) {
@@ -103,28 +107,47 @@ function segmentToLabel(segment: string): string {
  * // ]
  */
 export function useBreadcrumbs(pathname: string, maxItems?: number): BreadcrumbItem[] {
+  const { user } = useAuth();
+  
+  // Determine dashboard path based on user role
+  const dashboardPath = user?.role === "officer" ? "/dashboard/officer" : "/dashboard";
+  const dashboardLabel = user?.role === "officer" ? "Officer Dashboard" : "Dashboard";
+
   return useMemo(() => {
     // Skip breadcrumbs for root paths
-    if (!pathname || pathname === "/" || pathname === "/dashboard") {
+    if (!pathname || pathname === "/") {
+      return [];
+    }
+
+    // Skip if already on the appropriate dashboard
+    if (pathname === dashboardPath) {
       return [];
     }
 
     const segments = pathname.split("/").filter(Boolean);
     const breadcrumbs: BreadcrumbItem[] = [];
 
-    // Always start with Dashboard (unless we're already on dashboard)
-    if (pathname !== "/dashboard") {
-      breadcrumbs.push({
-        label: "Dashboard",
-        href: "/dashboard",
-      });
-    }
+    // Always start with Dashboard (role-based)
+    breadcrumbs.push({
+      label: dashboardLabel,
+      href: dashboardPath,
+    });
 
     // Build breadcrumbs from path segments
     let currentPath = "";
     for (let i = 0; i < segments.length; i++) {
       const segment = segments[i];
       currentPath += `/${segment}`;
+
+      // Skip adding "dashboard" segment if it's the first one (already added above)
+      if (i === 0 && segment === "dashboard") {
+        continue;
+      }
+
+      // Skip adding "officer" if it's part of /dashboard/officer and user is officer
+      if (user?.role === "officer" && currentPath === "/dashboard/officer") {
+        continue;
+      }
 
       // Try to find label from navigation config first
       let label = findLabelInNavigation(currentPath);
@@ -151,5 +174,5 @@ export function useBreadcrumbs(pathname: string, maxItems?: number): BreadcrumbI
     }
 
     return breadcrumbs;
-  }, [pathname, maxItems]);
+  }, [pathname, maxItems, dashboardPath, dashboardLabel, user?.role]);
 }

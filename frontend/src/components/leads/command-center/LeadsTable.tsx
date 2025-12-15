@@ -16,6 +16,9 @@
 "use client";
 
 import React, { useMemo, useCallback, useEffect, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { leadsKeys } from "@/hooks/useLeads";
+import { leadsApi } from "@/lib/api/leads";
 import { useRouter } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -68,6 +71,7 @@ import { BulkActionsBar } from "./BulkActionsBar";
 import { CopyableCell } from "@/components/common/CopyableCell";
 import { ActivityIndicator } from "@/components/common/ActivityIndicator";
 import { UrgencyBadge } from "@/components/common/UrgencyBadge";
+import { EmptyLeadsState } from "./EmptyLeadsState";
 
 // =============================================================================
 // TYPES
@@ -94,6 +98,11 @@ interface LeadsTableProps {
   onSearchFocus?: () => void;
   // Reset selection when this key changes (e.g., after bulk action)
   resetSelectionKey?: number;
+  // ✅ Phase 3: Contextual empty state props
+  hasFilters?: boolean;
+  searchQuery?: string;
+  onResetFilters?: () => void;
+  onCreateLead?: () => void;
 }
 
 // =============================================================================
@@ -102,6 +111,10 @@ interface LeadsTableProps {
 
 const COLUMN_VISIBILITY_STORAGE_KEY = "leads_table_columns";
 const DENSITY_MODE_STORAGE_KEY = "leads_table_density";
+const SORTING_STORAGE_KEY = "leads_table_sorting";
+
+// Default sort: urgency_score DESC (most urgent leads first)
+const DEFAULT_SORTING: SortingState = [{ id: "cached_urgency_score", desc: true }];
 
 // Density configuration
 const DENSITY_CONFIG: Record<DensityMode, { rowHeight: number; cellPadding: string; headerHeight: string }> = {
@@ -136,10 +149,26 @@ export function LeadsTable({
   onBulkDelete,
   onSearchFocus,
   resetSelectionKey,
+  // ✅ Phase 3: Contextual empty state props
+  hasFilters = false,
+  searchQuery = "",
+  onResetFilters,
+  onCreateLead,
 }: LeadsTableProps) {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const tableContainerRef = useRef<HTMLDivElement>(null);
-  const [sorting, setSorting] = React.useState<SortingState>([]);
+  
+  // ✅ Sorting state with localStorage persistence and default urgency sort
+  const [sorting, setSorting] = React.useState<SortingState>(() => {
+    if (typeof window === "undefined") return DEFAULT_SORTING;
+    try {
+      const saved = localStorage.getItem(SORTING_STORAGE_KEY);
+      return saved ? JSON.parse(saved) : DEFAULT_SORTING;
+    } catch {
+      return DEFAULT_SORTING;
+    }
+  });
   const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
   const [columnResizeMode] = React.useState<ColumnResizeMode>("onChange");
   const [focusedRowIndex, setFocusedRowIndex] = React.useState<number>(-1);
@@ -173,6 +202,11 @@ export function LeadsTable({
   useEffect(() => {
     localStorage.setItem(COLUMN_VISIBILITY_STORAGE_KEY, JSON.stringify(columnVisibility));
   }, [columnVisibility]);
+
+  // ✅ Persist sorting preference
+  useEffect(() => {
+    localStorage.setItem(SORTING_STORAGE_KEY, JSON.stringify(sorting));
+  }, [sorting]);
 
   // Reset row selection when resetSelectionKey changes (after bulk actions)
   useEffect(() => {
@@ -323,9 +357,24 @@ export function LeadsTable({
         size: 140,
       }),
 
-      // Lead Score column
+      // Lead Score column - ✅ Now sortable
       columnHelper.accessor("lead_score", {
-        header: "Điểm",
+        header: ({ column }) => (
+          <Button
+            variant="ghost"
+            className="-ml-3 h-8 font-medium"
+            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+          >
+            Điểm
+            {column.getIsSorted() === "asc" ? (
+              <ArrowUp className="ml-1 h-3.5 w-3.5" />
+            ) : column.getIsSorted() === "desc" ? (
+              <ArrowDown className="ml-1 h-3.5 w-3.5" />
+            ) : (
+              <ArrowUpDown className="ml-1 h-3.5 w-3.5 opacity-50" />
+            )}
+          </Button>
+        ),
         cell: ({ row }) => {
           const score = row.original.lead_score ?? 0;
           // Color coding based on score ranges
@@ -339,35 +388,44 @@ export function LeadsTable({
             </div>
           );
         },
-        size: 60,
+        size: 80,
       }),
 
-      // Created at column - with Activity Indicator
-      columnHelper.accessor("created_at", {
-        header: ({ column }) => (
-          <Button
-            variant="ghost"
-            className="-ml-3 h-8 font-medium"
-            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-          >
-            Hoạt động
-            {column.getIsSorted() === "asc" ? (
-              <ArrowUp className="ml-1 h-3.5 w-3.5" />
-            ) : column.getIsSorted() === "desc" ? (
-              <ArrowDown className="ml-1 h-3.5 w-3.5" />
-            ) : (
-              <ArrowUpDown className="ml-1 h-3.5 w-3.5 opacity-50" />
-            )}
-          </Button>
-        ),
-        cell: ({ row }) => (
-          <ActivityIndicator
-            date={row.original.last_consultation_at || row.original.created_at}
-            nextActivityAt={row.original.next_activity_at}
-          />
-        ),
-        size: 100,
-      }),
+      // Activity column - ✅ FIX: Sort by last_consultation_at || created_at (same as display)
+      columnHelper.accessor(
+        (row) => row.last_consultation_at || row.created_at,
+        {
+          id: "activity",
+          header: ({ column }) => (
+            <Button
+              variant="ghost"
+              className="-ml-3 h-8 font-medium"
+              onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+            >
+              Hoạt động
+              {column.getIsSorted() === "asc" ? (
+                <ArrowUp className="ml-1 h-3.5 w-3.5" />
+              ) : column.getIsSorted() === "desc" ? (
+                <ArrowDown className="ml-1 h-3.5 w-3.5" />
+              ) : (
+                <ArrowUpDown className="ml-1 h-3.5 w-3.5 opacity-50" />
+              )}
+            </Button>
+          ),
+          cell: ({ row }) => (
+            <ActivityIndicator
+              date={row.original.last_consultation_at || row.original.created_at}
+              nextActivityAt={row.original.next_activity_at}
+            />
+          ),
+          sortingFn: (rowA, rowB) => {
+            const dateA = new Date(rowA.original.last_consultation_at || rowA.original.created_at).getTime();
+            const dateB = new Date(rowB.original.last_consultation_at || rowB.original.created_at).getTime();
+            return dateA - dateB;
+          },
+          size: 100,
+        }
+      ),
 
       // Urgency Score column (Lead Insights Upgrade)
       columnHelper.accessor("cached_urgency_score", {
@@ -497,22 +555,37 @@ export function LeadsTable({
         }
       }
 
-      // If focus is on table
-      if (!tableContainerRef.current?.contains(document.activeElement)) {
+      // Skip if typing in input/textarea
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") {
         return;
       }
 
+      // If focus is on table or no specific focus (for global shortcuts)
+      const isTableFocused = tableContainerRef.current?.contains(document.activeElement);
+      
       const rows = table.getRowModel().rows;
       if (rows.length === 0) return;
 
       switch (e.key) {
+        // ✅ Phase 3: Vim-style navigation
+        case "j":
         case "ArrowDown":
           e.preventDefault();
-          setFocusedRowIndex((prev) => Math.min(prev + 1, rows.length - 1));
+          if (focusedRowIndex === -1) {
+            setFocusedRowIndex(0);
+          } else {
+            setFocusedRowIndex((prev) => Math.min(prev + 1, rows.length - 1));
+          }
           break;
+        case "k":
         case "ArrowUp":
           e.preventDefault();
-          setFocusedRowIndex((prev) => Math.max(prev - 1, 0));
+          if (focusedRowIndex === -1) {
+            setFocusedRowIndex(rows.length - 1);
+          } else {
+            setFocusedRowIndex((prev) => Math.max(prev - 1, 0));
+          }
           break;
         case "Enter":
           e.preventDefault();
@@ -521,9 +594,18 @@ export function LeadsTable({
           }
           break;
         case " ":
+          if (isTableFocused) {
+            e.preventDefault();
+            if (focusedRowIndex >= 0 && focusedRowIndex < rows.length) {
+              rows[focusedRowIndex].toggleSelected();
+            }
+          }
+          break;
+        // ✅ Phase 3: 'e' to edit focused lead
+        case "e":
           e.preventDefault();
           if (focusedRowIndex >= 0 && focusedRowIndex < rows.length) {
-            rows[focusedRowIndex].toggleSelected();
+            onEditLead(rows[focusedRowIndex].original);
           }
           break;
         case "Escape":
@@ -536,7 +618,7 @@ export function LeadsTable({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [table, focusedRowIndex, onSelectLead, onSearchFocus, handleClearSelection]);
+  }, [table, focusedRowIndex, onSelectLead, onEditLead, onSearchFocus, handleClearSelection]);
 
   // Loading skeleton
   if (isLoading) {
@@ -578,7 +660,13 @@ export function LeadsTable({
         ref={tableScrollRef}
         className="flex-1 overflow-x-auto overflow-y-auto"
       >
-        <Table className="w-full">
+        {/* ✅ Phase 3: ARIA improvements for accessibility */}
+        <Table 
+          className="w-full"
+          role="grid"
+          aria-label="Danh sách lead"
+          aria-rowcount={totalCount}
+        >
           <TableHeader className="bg-muted/50 sticky top-0 z-10">
             {table.getHeaderGroups().map((headerGroup) => (
               <TableRow key={headerGroup.id}>
@@ -614,14 +702,15 @@ export function LeadsTable({
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={columns.length} className="h-48 text-center">
-                  <div className="flex flex-col items-center justify-center gap-3">
-                    <SearchX className="h-12 w-12 text-muted-foreground/40" />
-                    <div>
-                      <p className="font-medium text-foreground">Không tìm thấy lead</p>
-                      <p className="text-muted-foreground text-sm">Thử điều chỉnh bộ lọc hoặc tìm kiếm</p>
-                    </div>
-                  </div>
+                <TableCell colSpan={columns.length} className="h-64">
+                  {/* ✅ Phase 3: Contextual empty state */}
+                  <EmptyLeadsState
+                    hasFilters={hasFilters}
+                    searchQuery={searchQuery}
+                    totalCount={totalCount}
+                    onResetFilters={onResetFilters}
+                    onCreateLead={onCreateLead}
+                  />
                 </TableCell>
               </TableRow>
             ) : (
@@ -640,20 +729,38 @@ export function LeadsTable({
                       key={row.id}
                       data-index={virtualRow.index}
                       data-state={isSelected ? "selected" : undefined}
+                      // ✅ Phase 3: ARIA attributes for accessibility
+                      role="row"
+                      aria-rowindex={(page - 1) * pageSize + virtualRow.index + 1}
+                      aria-selected={isSelected}
+                      tabIndex={isFocused ? 0 : -1}
                       onClick={() => handleRowClick(row.original, virtualRow.index)}
                       onDoubleClick={() => router.push(`/leads/${row.original.id}`)}
+                      // ✅ Phase 1: Prefetch lead detail on hover for instant panel load
+                      onMouseEnter={() => {
+                        queryClient.prefetchQuery({
+                          queryKey: leadsKeys.detail(row.original.id),
+                          queryFn: () => leadsApi.getLead(row.original.id),
+                          staleTime: 1000 * 30, // 30 seconds
+                        });
+                      }}
                       className={cn(
                         "cursor-pointer transition-all duration-150",
                         "border-b border-border/50", // Consistent row dividers
                         "hover:bg-muted/50",
                         // Zebra stripes for better readability
                         virtualRow.index % 2 === 1 && !isSelected && !isFocused && "bg-muted/40",
-                        // Selected row - prominent background and left border
-                        isSelected && "bg-primary/10 border-l-primary border-l-3 hover:bg-primary/15",
+                        // ✅ Phase 2: Enhanced selected row - prominent background, left border, and subtle shadow
+                        isSelected && "bg-primary/10 border-l-primary border-l-3 hover:bg-primary/15 shadow-sm",
                         // Focused row (keyboard nav) - visible highlight
                         isFocused && !isSelected && "bg-blue-50 dark:bg-blue-950/30 border-l-blue-500 border-l-2"
                       )}
-                      style={{ height: virtualRow.size }}
+                      style={{ 
+                        height: virtualRow.size,
+                        // ✅ Phase 2: Subtle scale on selection for visual pop
+                        transform: isSelected ? 'scaleX(1.005)' : 'scaleX(1)',
+                        transformOrigin: 'left center',
+                      }}
                     >
                       {row.getVisibleCells().map((cell) => (
                         <TableCell

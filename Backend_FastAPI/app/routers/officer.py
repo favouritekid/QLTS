@@ -63,3 +63,131 @@ async def update_availability(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# PHASE 1: Enhanced Dashboard with KPIs
+# =============================================================================
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/dashboard",
+    response_model=schemas.OfficerDashboardEnhanced,
+    summary="Get enhanced officer dashboard with KPIs and priority actions"
+)
+async def get_enhanced_dashboard(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[models.User, PermissionDep]
+):
+    """
+    Enhanced officer dashboard with:
+    - KPI cards (consultations, active leads, conversion rate, response time)
+    - Trend comparisons (vs yesterday, vs last week, vs last month)
+    - AI-powered priority actions
+    - Performance trends and pipeline funnel
+    """
+    try:
+        stats = await officer_service.get_enhanced_dashboard_stats(
+            db=db, officer_id=current_user.id
+        )
+        return stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# PHASE 4: Leaderboard
+# =============================================================================
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/leaderboard",
+    response_model=schemas.WeeklyLeaderboard,
+    summary="Get weekly leaderboard for gamification"
+)
+async def get_leaderboard(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[models.User, PermissionDep]
+):
+    """
+    Weekly leaderboard showing top officers by consultations.
+    Includes current user's rank even if not in top 5.
+    """
+    try:
+        leaderboard = await officer_service.get_weekly_leaderboard(
+            db=db, officer_id=current_user.id
+        )
+        return leaderboard
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# PHASE 6: Team Stats for Performance Comparison
+# =============================================================================
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/team-stats",
+    response_model=schemas.TeamStats,
+    summary="Get team average stats for performance comparison"
+)
+async def get_team_stats(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[models.User, PermissionDep],
+    days: int = 30
+):
+    """
+    Get team average statistics for performance comparison.
+    Shows team averages for consultations and conversions.
+    """
+    try:
+        stats = await officer_service.get_team_stats(
+            db=db, officer_id=current_user.id, days=days
+        )
+        return stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# Today's Schedule Widget - Upcoming Activities
+# =============================================================================
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/upcoming-activities",
+    summary="Get upcoming activities for calendar widget"
+)
+async def get_upcoming_activities(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[models.User, PermissionDep],
+    month: int = None,
+    year: int = None
+):
+    """
+    Get leads with scheduled follow-ups (next_activity_at) for the given month.
+    Returns activities list and dates with activities for calendar highlighting.
+    """
+    from datetime import datetime
+    
+    # Default to current month if not specified
+    if month is None or year is None:
+        now = datetime.now()
+        month = month or now.month
+        year = year or now.year
+    
+    try:
+        result = await officer_service.get_upcoming_activities(
+            db=db,
+            officer_id=current_user.id,
+            month=month,
+            year=year
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

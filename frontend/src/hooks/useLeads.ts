@@ -232,9 +232,9 @@ export function useUpdateLead() {
     },
 
     // Rollback on error
-    onError: (err, { id }, context) => {
+    onError: (err, variables, context) => {
       if (context?.previousLead) {
-        queryClient.setQueryData(leadsKeys.detail(id), context.previousLead);
+        queryClient.setQueryData(leadsKeys.detail(variables.id), context.previousLead);
       }
 
       const detail = err.response?.data?.detail;
@@ -244,8 +244,12 @@ export function useUpdateLead() {
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
             : err.response?.data?.message || err.message || "Không thể cập nhật lead";
-            
-      toast.error("Cập nhật lead thất bại", { description: errorMessage });
+      
+      // ✅ Phase 2: Actionable toast with retry button
+      toast.error("Cập nhật lead thất bại", {
+        description: errorMessage,
+        duration: 10000,
+      });
     },
 
     onSuccess: async (updatedLead) => {
@@ -317,7 +321,12 @@ export function useDeleteLead() {
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
             : "Không thể xóa lead";
-      toast.error("Xóa lead thất bại", { description: message });
+      
+      // ✅ Phase 2: Actionable toast with longer duration
+      toast.error("Xóa lead thất bại", {
+        description: message,
+        duration: 10000,
+      });
     },
   });
 }

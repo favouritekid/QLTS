@@ -127,20 +127,32 @@ export function proxy(request: NextRequest) {
   }
 
   // ========================================
-  // STEP 5: Redirect authenticated users from public pages
+  // STEP 5: Officer Dashboard Redirect
+  // ========================================
+  // Officers should use /dashboard/officer, not /dashboard
+  
+  if (pathname === "/dashboard" && payload.role === "officer") {
+    console.log(`[Proxy] 🔄 Redirecting officer to /dashboard/officer`);
+    return NextResponse.redirect(new URL("/dashboard/officer", request.url));
+  }
+
+  // ========================================
+  // STEP 6: Redirect authenticated users from public pages
   // ========================================
 
   // If user is logged in and tries to access login page, redirect to dashboard
   if (pathname === "/login" || pathname === "/register") {
-    console.log(`[Proxy] Redirecting authenticated user from ${pathname} to /dashboard`);
-    return NextResponse.redirect(new URL("/dashboard", request.url));
+    // Role-based redirect after login
+    const defaultDashboard = payload.role === "officer" ? "/dashboard/officer" : "/dashboard";
+    console.log(`[Proxy] Redirecting authenticated user from ${pathname} to ${defaultDashboard}`);
+    return NextResponse.redirect(new URL(defaultDashboard, request.url));
   }
 
   // ========================================
-  // STEP 6: Allow access
+  // STEP 7: Allow access
   // ========================================
 
-  console.log(`[Proxy] ✅ Access granted: ${pathname} (user: ${payload.sub})`);
+  console.log(`[Proxy] ✅ Access granted: ${pathname} (user: ${payload.sub}, role: ${payload.role})`);
   return NextResponse.next();
 }
 

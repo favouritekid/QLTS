@@ -255,7 +255,18 @@ from .officer import (
     WorkloadStats,
     TrendPoint,
     FunnelStage,
-    UpcomingConsultation
+    UpcomingConsultation,
+    # Phase 1: Enhanced Dashboard
+    TrendInfo,
+    KPIStats,
+    PriorityAction,
+    OfficerDashboardEnhanced,
+    LeadPreview,
+    # Phase 4: Leaderboard
+    LeaderboardEntry,
+    WeeklyLeaderboard,
+    # Phase 6: Team Stats
+    TeamStats,
 )
 
 # --- Từ tuition_discount_policy.py ---
