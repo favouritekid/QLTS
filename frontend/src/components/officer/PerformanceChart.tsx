@@ -160,7 +160,7 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
       <CardContent>
         <ResponsiveContainer width="100%" height={300}>
           <LineChart data={chartData}>
-            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
             <XAxis
               dataKey="date"
               className="text-xs"
@@ -191,11 +191,11 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
             {/* Goal Line */}
             <ReferenceLine 
               y={dailyGoal} 
-              stroke="hsl(var(--chart-4))" 
+              stroke="#f59e0b" 
               strokeDasharray="5 5"
               label={{ 
                 value: `Mục tiêu: ${dailyGoal}`, 
-                fill: "hsl(var(--chart-4))",
+                fill: "#f59e0b",
                 fontSize: 10,
                 position: "insideTopRight"
               }}
@@ -213,11 +213,11 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
             {teamAverage !== undefined && (
               <ReferenceLine 
                 y={teamAverage} 
-                stroke="hsl(var(--chart-5))" 
+                stroke="#8b5cf6" 
                 strokeDasharray="8 4"
                 label={{ 
                   value: `TB team: ${teamAverage}`, 
-                  fill: "hsl(var(--chart-5))",
+                  fill: "#8b5cf6",
                   fontSize: 10,
                   position: "insideBottomRight"
                 }}
@@ -226,27 +226,27 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
 
             <Line
               type="monotone"
-              dataKey="Leads Assigned"
-              stroke="hsl(var(--primary))"
-              strokeWidth={2}
-              dot={{ r: 3 }}
-              activeDot={{ r: 5 }}
-            />
-            <Line
-              type="monotone"
               dataKey="Consultations"
-              stroke="hsl(var(--chart-2))"
+              stroke="#3b82f6"
               strokeWidth={2}
-              dot={{ r: 3 }}
-              activeDot={{ r: 5 }}
+              dot={{ r: 4, fill: "#3b82f6" }}
+              activeDot={{ r: 6 }}
             />
             <Line
               type="monotone"
               dataKey="Converted"
-              stroke="hsl(var(--chart-3))"
+              stroke="#10b981"
               strokeWidth={2}
-              dot={{ r: 3 }}
-              activeDot={{ r: 5 }}
+              dot={{ r: 4, fill: "#10b981" }}
+              activeDot={{ r: 6 }}
+            />
+            <Line
+              type="monotone"
+              dataKey="Leads Assigned"
+              stroke="#6366f1"
+              strokeWidth={2}
+              dot={{ r: 4, fill: "#6366f1" }}
+              activeDot={{ r: 6 }}
             />
           </LineChart>
         </ResponsiveContainer>
@@ -254,20 +254,20 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
         {/* Summary Stats */}
         <div className="flex items-center justify-center gap-6 mt-4 pt-4 border-t text-xs text-muted-foreground flex-wrap">
           <div className="flex items-center gap-1.5">
-            <div className="h-2 w-2 rounded-full bg-primary" />
+            <div className="h-2 w-2 rounded-full" style={{ background: "#6366f1" }} />
             <span>TB leads/ngày: {filteredTrends.length > 0 ? Math.round(totals.leads / filteredTrends.length) : 0}</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <div className="h-2 w-2 rounded-full" style={{ background: "hsl(var(--chart-2))" }} />
+            <div className="h-2 w-2 rounded-full" style={{ background: "#3b82f6" }} />
             <span>TB tư vấn/ngày: {avgConsultations}</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <div className="h-2 w-2 rounded-full" style={{ background: "hsl(var(--chart-3))" }} />
+            <div className="h-2 w-2 rounded-full" style={{ background: "#10b981" }} />
             <span>Tỉ lệ: {totals.consultations > 0 ? Math.round((totals.converted / totals.consultations) * 100) : 0}%</span>
           </div>
           {teamAverage !== undefined && (
             <div className="flex items-center gap-1.5">
-              <div className="h-2 w-2 rounded-full" style={{ background: "hsl(var(--chart-5))" }} />
+              <div className="h-2 w-2 rounded-full" style={{ background: "#8b5cf6" }} />
               <span>TB team: {teamAverage}</span>
             </div>
           )}

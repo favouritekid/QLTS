@@ -96,7 +96,7 @@ export function FunnelChart({ funnel }: FunnelChartProps) {
                 onKeyDown={(e) => e.key === "Enter" && handleStageClick(stage.stage_id)}
               >
                 {/* Bar Container */}
-                <div className="relative h-10 bg-muted/40 rounded overflow-hidden hover:bg-muted/60 transition-colors">
+                <div className="relative h-10 bg-muted/40 rounded overflow-hidden hover:bg-muted/60 transition-all hover:ring-2 hover:ring-primary/20">
                   {/* Colored Bar */}
                   <div 
                     className="absolute left-0 top-0 h-full rounded transition-all duration-300 group-hover:brightness-110"
@@ -108,12 +108,18 @@ export function FunnelChart({ funnel }: FunnelChartProps) {
                   
                   {/* Content Overlay */}
                   <div className="absolute inset-0 flex items-center justify-between px-3">
-                    <span className={cn(
-                      "text-sm font-medium z-10",
-                      percentage > 40 ? "text-white" : "text-foreground"
-                    )}>
-                      {stage.stage_name}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className={cn(
+                        "text-sm font-medium z-10",
+                        percentage > 40 ? "text-white" : "text-foreground"
+                      )}>
+                        {stage.stage_name}
+                      </span>
+                      <ChevronRight className={cn(
+                        "h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity",
+                        percentage > 40 ? "text-white" : "text-muted-foreground"
+                      )} />
+                    </div>
                     <div className={cn(
                       "flex items-center gap-2 text-sm z-10",
                       percentage > 60 ? "text-white" : "text-foreground"
