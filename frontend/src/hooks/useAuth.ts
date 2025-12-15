@@ -72,9 +72,11 @@ export function useAuth(options?: UseAuthOptions) {
 
       toast.success("Login successful!");
 
-      // Redirect
+      // ✅ PHASE 7: Role-based redirect
+      // Officers go to /dashboard/officer, others go to /dashboard
       const redirect = new URLSearchParams(window.location.search).get("redirect");
-      router.push(redirect || "/dashboard");
+      const defaultPath = user.role === "officer" ? "/dashboard/officer" : "/dashboard";
+      router.push(redirect || defaultPath);
     },
     // <<< KẾT THÚC SỬA onSuccess >>>
     onError: (error) => {
