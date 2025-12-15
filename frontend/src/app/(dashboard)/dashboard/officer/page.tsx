@@ -9,6 +9,7 @@ import { AlertCircle } from "lucide-react";
 import { WorkloadCard } from "@/components/officer/WorkloadCard";
 import { PerformanceChart } from "@/components/officer/PerformanceChart";
 import { FunnelChart } from "@/components/officer/FunnelChart";
+import { TodaySchedule } from "@/components/officer/TodaySchedule";
 import { 
   KPICardsGrid, 
   PriorityActionsPanel, 
@@ -363,6 +364,9 @@ export default function OfficerDashboardPage() {
         <div className="space-y-6">
           {/* Workload Overview */}
           <WorkloadCard statusOverview={stats.status_overview} />
+
+          {/* Today's Schedule */}
+          <TodaySchedule />
 
           {/* Priority Actions */}
           <PriorityActionsPanel actions={stats.priority_actions} />
