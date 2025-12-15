@@ -222,20 +222,18 @@ export function TodaySchedule({ className }: TodayScheduleProps) {
   });
   
   // Filter activities for selected date
+  // Fix: Compare date strings directly to avoid timezone shift issues
+  // When new Date("2024-12-15") is created, it's interpreted as UTC midnight,
+  // which shifts to a different day in local timezone (e.g., UTC+7)
   const selectedDateActivities = useMemo(() => {
     if (!data?.activities) return [];
     
-    const selectedDay = selectedDate.getDate();
-    const selectedMonth = selectedDate.getMonth() + 1;
-    const selectedYear = selectedDate.getFullYear();
+    // Format selected date as YYYY-MM-DD string for comparison
+    const selectedDateStr = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`;
     
     return data.activities.filter(activity => {
-      const activityDate = new Date(activity.date);
-      return (
-        activityDate.getDate() === selectedDay &&
-        activityDate.getMonth() + 1 === selectedMonth &&
-        activityDate.getFullYear() === selectedYear
-      );
+      // activity.date is already a YYYY-MM-DD string from the API
+      return activity.date === selectedDateStr;
     });
   }, [data?.activities, selectedDate]);
   

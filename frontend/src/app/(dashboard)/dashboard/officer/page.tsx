@@ -14,8 +14,7 @@ import {
   KPICardsGrid, 
   PriorityActionsPanel, 
   WeeklyLeaderboard, 
-  SmartHeader,
-  MyLeadsQuickAccess 
+  SmartHeader
 } from "@/components/officer/dashboard";
 import { api } from "@/lib/api/client";
 import { socket } from "@/lib/socket/client";
@@ -307,30 +306,7 @@ export default function OfficerDashboardPage() {
     }
   };
 
-  // Fix: Add null checks for actionable_lists arrays
-  // Transform leads for MyLeadsQuickAccess
-  const myLeadsPreview = [
-    ...(stats.actionable_lists?.high_score ?? []).map(lead => ({
-      id: lead.id,
-      name: lead.name,
-      lead_score: lead.lead_score,
-      stage_name: lead.stage_name,
-      last_contact_at: lead.updated_at,
-      is_hot: lead.lead_score >= 70,
-      is_overdue: false,
-      is_new: false,
-    })),
-    ...(stats.actionable_lists?.stale ?? []).map(lead => ({
-      id: lead.id,
-      name: lead.name,
-      lead_score: lead.lead_score,
-      stage_name: lead.stage_name,
-      last_contact_at: lead.updated_at,
-      is_hot: false,
-      is_overdue: true,
-      is_new: false,
-    })),
-  ];
+
 
   return (
     <div className="container mx-auto p-6 space-y-6">
@@ -358,12 +334,6 @@ export default function OfficerDashboardPage() {
             />
             <FunnelChart funnel={salesFunnel} />
           </div>
-
-          {/* My Leads Table */}
-          <MyLeadsQuickAccess
-            leads={myLeadsPreview}
-            totalCount={stats.kpis.active_leads}
-          />
         </div>
 
         {/* Right Column - Action Center (25%) */}

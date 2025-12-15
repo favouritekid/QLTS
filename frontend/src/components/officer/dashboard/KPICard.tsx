@@ -25,6 +25,8 @@ interface KPICardProps {
   trend?: TrendInfo;
   icon: LucideIcon;
   onClick?: () => void;
+  /** If true, inverts trend colors (down = green, up = red). Useful for metrics like response time where lower is better. */
+  inverseTrend?: boolean;
 }
 
 export function KPICard({
@@ -34,6 +36,7 @@ export function KPICard({
   trend,
   icon: Icon,
   onClick,
+  inverseTrend = false,
 }: KPICardProps) {
   const TrendIcon =
     trend?.direction === "up"
@@ -42,12 +45,18 @@ export function KPICard({
       ? TrendingDown
       : Minus;
 
-  const trendColor =
-    trend?.direction === "up"
-      ? "text-green-600 dark:text-green-400"
-      : trend?.direction === "down"
-      ? "text-red-600 dark:text-red-400"
-      : "text-muted-foreground";
+  // For inverseTrend (e.g., response time), down = green (improvement), up = red (worsening)
+  const trendColor = inverseTrend
+    ? (trend?.direction === "down"
+        ? "text-green-600 dark:text-green-400"
+        : trend?.direction === "up"
+        ? "text-red-600 dark:text-red-400"
+        : "text-muted-foreground")
+    : (trend?.direction === "up"
+        ? "text-green-600 dark:text-green-400"
+        : trend?.direction === "down"
+        ? "text-red-600 dark:text-red-400"
+        : "text-muted-foreground");
 
   return (
     <Card

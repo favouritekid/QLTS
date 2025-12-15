@@ -64,7 +64,8 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
   };
 
   const utilizationPercentage = statusOverview.utilization ?? 0;
-  const remainingCapacity = (statusOverview.max_capacity ?? 0) - (statusOverview.current_workload ?? 0);
+  // Fix: Clamp remaining capacity to 0 to avoid showing negative values
+  const remainingCapacity = Math.max(0, (statusOverview.max_capacity ?? 0) - (statusOverview.current_workload ?? 0));
 
   // Donut chart values
   const circumference = 2 * Math.PI * 40;

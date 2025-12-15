@@ -78,6 +78,7 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
         trend={kpis.avg_response_time_trend}
         icon={Clock}
         onClick={goToLeads}
+        inverseTrend={true}
       />
     </div>
   );

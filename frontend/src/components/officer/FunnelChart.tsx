@@ -132,9 +132,9 @@ export function FunnelChart({ funnel }: FunnelChartProps) {
         
         {/* Summary Footer */}
         <div className="pt-4 mt-4 border-t flex items-center justify-between text-xs text-muted-foreground">
-          <span>Đầu vào: {totalLeads} leads</span>
+          <span>Tổng leads: {totalLeads}</span>
           <span className="font-medium text-foreground">
-            Chuyển đổi: {convertedLeads} ({overallConversion.toFixed(1)}%)
+            Hoàn thành: {convertedLeads} ({overallConversion.toFixed(1)}%)
           </span>
         </div>
       </CardContent>

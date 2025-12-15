@@ -143,30 +143,44 @@ async def get_officer_dashboard_stats(
 
     performance_trends = list(trends_map.values())
 
-    # 4. SALES FUNNEL (Phễu bán hàng)
-    # Đếm số lượng Lead theo từng Stage (Pipeline Stage)
-    funnel_query = (
-        select(
-            models.PipelineStage.id,
-            models.PipelineStage.name,
-            func.count(models.Lead.id),
-            models.PipelineStage.order
-        )
-        .select_from(models.Lead)
-        .join(models.PipelineStage, models.Lead.pipeline_stage_id == models.PipelineStage.id)
+    # 4. SALES FUNNEL (Phễu bán hàng) - TRUE CONVERSION FUNNEL
+    # Fix: Use cumulative counting - count leads that have REACHED or PASSED each stage
+    # This shows the true funnel conversion where each stage shows "how many leads 
+    # have at least reached this stage"
+    
+    # First, get total leads assigned to this officer (baseline = 100%)
+    total_leads_query = (
+        select(func.count(models.Lead.id))
         .where(models.Lead.assigned_officer_id == officer_id)
-        .group_by(models.PipelineStage.id, models.PipelineStage.name, models.PipelineStage.order)
+    )
+    total_leads = (await db.execute(total_leads_query)).scalar() or 0
+    
+    # Get all pipeline stages ordered
+    stages_query = (
+        select(models.PipelineStage)
         .order_by(models.PipelineStage.order.asc())
     )
-    funnel_res = (await db.execute(funnel_query)).all()
+    all_stages = (await db.execute(stages_query)).scalars().all()
     
-    # Format màu sắc cho đẹp (Chart 1 -> 5)
+    # For each stage, count leads at that stage OR any later stage
+    # This means "leads that have progressed at least to this stage"
     sales_funnel = []
-    for idx, row in enumerate(funnel_res):
+    for idx, stage in enumerate(all_stages):
+        # Count leads at this stage or any stage with higher order
+        cumulative_count_query = (
+            select(func.count(models.Lead.id))
+            .join(models.PipelineStage, models.Lead.pipeline_stage_id == models.PipelineStage.id)
+            .where(
+                models.Lead.assigned_officer_id == officer_id,
+                models.PipelineStage.order >= stage.order
+            )
+        )
+        cumulative_count = (await db.execute(cumulative_count_query)).scalar() or 0
+        
         sales_funnel.append({
-            "stage_id": row[0],    # e.g. "stg05"
-            "stage": row[1],       # e.g. "Đã chốt deal"
-            "count": row[2],
+            "stage_id": stage.id,        # e.g. "stg05"
+            "stage": stage.name,         # e.g. "Đã chốt deal"
+            "count": cumulative_count,   # Cumulative count (leads at this stage or beyond)
             "fill": f"var(--chart-{idx % 5 + 1})"
         })
 
