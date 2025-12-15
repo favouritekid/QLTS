@@ -88,7 +88,7 @@ export function ActionableLists({ lists }: ActionableListsProps) {
                         })}
                       </p>
                     </div>
-                    <Link href={`/dashboard/leads/${lead.id}`}>
+                    <Link href={`/leads/${lead.id}`}>
                       <Button size="sm" variant="ghost">
                         <ArrowRight className="h-4 w-4" />
                       </Button>
@@ -135,7 +135,7 @@ export function ActionableLists({ lists }: ActionableListsProps) {
                         {lead.days_stale} days stale
                       </Badge>
                     </div>
-                    <Link href={`/dashboard/leads/${lead.id}`}>
+                    <Link href={`/leads/${lead.id}`}>
                       <Button size="sm" variant="ghost">
                         <ArrowRight className="h-4 w-4" />
                       </Button>
@@ -190,7 +190,7 @@ export function ActionableLists({ lists }: ActionableListsProps) {
                         </p>
                       )}
                     </div>
-                    <Link href={`/dashboard/leads/${consult.lead_id}`}>
+                    <Link href={`/leads/${consult.lead_id}`}>
                       <Button size="sm" variant="ghost">
                         <ArrowRight className="h-4 w-4" />
                       </Button>

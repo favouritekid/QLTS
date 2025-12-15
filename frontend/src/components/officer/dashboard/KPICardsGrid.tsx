@@ -2,7 +2,7 @@
 /**
  * KPI Cards Grid for Officer Dashboard
  * Displays 4 key metrics: Consultations, Active Leads, Conversion Rate, Response Time
- * Each card is clickable and navigates to filtered leads view
+ * Each card is clickable and navigates to leads page
  */
 
 "use client";
@@ -36,9 +36,12 @@ interface KPICardsGridProps {
 export function KPICardsGrid({ kpis }: KPICardsGridProps) {
   const router = useRouter();
 
+  // Navigate to leads page
+  const goToLeads = () => router.push("/leads");
+
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-      {/* Consultations Today → Filter by today's consultations */}
+      {/* Consultations Today */}
       <KPICard
         title="Tư vấn hôm nay"
         value={`${kpis.consultations_today}/${kpis.consultations_target}`}
@@ -46,10 +49,10 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
         trend={kpis.consultations_trend}
         icon={Phone}
         color="blue"
-        onClick={() => router.push("/leads?dateField=last_consultation_at&dateFrom=today")}
+        onClick={goToLeads}
       />
 
-      {/* Active Leads → All leads page */}
+      {/* Active Leads */}
       <KPICard
         title="Leads đang xử lý"
         value={kpis.active_leads}
@@ -57,10 +60,10 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
         trend={kpis.active_leads_trend}
         icon={Users}
         color="green"
-        onClick={() => router.push("/leads")}
+        onClick={goToLeads}
       />
 
-      {/* Conversion Rate → Filter by converted stage */}
+      {/* Conversion Rate */}
       <KPICard
         title="Tỉ lệ chuyển đổi"
         value={`${kpis.conversion_rate}%`}
@@ -68,10 +71,10 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
         trend={kpis.conversion_rate_trend}
         icon={TrendingUp}
         color="orange"
-        onClick={() => router.push("/leads?stage=converted")}
+        onClick={goToLeads}
       />
 
-      {/* Average Response Time → Sort by response time */}
+      {/* Average Response Time */}
       <KPICard
         title="Thời gian phản hồi"
         value={`${kpis.avg_response_time}h`}
@@ -79,7 +82,7 @@ export function KPICardsGrid({ kpis }: KPICardsGridProps) {
         trend={kpis.avg_response_time_trend}
         icon={Clock}
         color="purple"
-        onClick={() => router.push("/leads?sort=created_at&order=desc")}
+        onClick={goToLeads}
       />
     </div>
   );
