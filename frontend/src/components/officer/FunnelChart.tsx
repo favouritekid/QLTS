@@ -77,14 +77,8 @@ export function FunnelChart({ funnel }: FunnelChartProps) {
             const stepConversion = stageConversions[index];
             const bgColor = getBlueShade(index, sortedFunnel.length);
             
-            // Calculate funnel width - starts at 100%, narrows based on percentage
-            const widthPercent = Math.max(
-              20, // minimum 20%
-              ((sortedFunnel.length - index) / sortedFunnel.length) * 80 + 20
-            );
-            
-            // Calculate actual data-driven width within the funnel segment
-            const dataWidth = Math.max(percentage, 5);
+            // Width proportional to actual percentage (min 25%, max 100%)
+            const widthPercent = Math.max(25, Math.min(100, percentage + 15));
 
             return (
               <div key={stage.stage_name} className="w-full flex flex-col items-center">
