@@ -118,3 +118,25 @@ class OfficerDashboardEnhanced(BaseModel):
     performance_trends: List[TrendPoint]
     sales_funnel: List[FunnelStage]
     actionable_lists: ActionableLists
+
+
+# =============================================================================
+# PHASE 4: Leaderboard Schemas
+# =============================================================================
+
+class LeaderboardEntry(BaseModel):
+    """Single entry in the leaderboard."""
+    rank: int
+    user_id: int
+    username: str
+    full_name: str
+    consultations: int
+    is_current_user: bool = False
+
+
+class WeeklyLeaderboard(BaseModel):
+    """Weekly leaderboard response."""
+    week_start: str  # ISO date string
+    total_officers: int
+    current_user_rank: int
+    leaderboard: List[LeaderboardEntry]

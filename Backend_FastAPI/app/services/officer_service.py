@@ -575,3 +575,86 @@ async def _calculate_priority_actions(
         del action["_score"]
     
     return actions[:limit]
+
+
+# =============================================================================
+# PHASE 4: Leaderboard & Gamification
+# =============================================================================
+
+async def get_weekly_leaderboard(
+    db: AsyncSession, officer_id: int, limit: int = 5
+) -> Dict[str, Any]:
+    """
+    Get weekly leaderboard for gamification.
+    Shows top officers by consultations and conversions this week.
+    Includes current officer's rank even if not in top N.
+    """
+    today = datetime.now(timezone.utc).date()
+    week_start = today - timedelta(days=today.weekday())  # Monday
+    
+    # Get all officers' stats for this week
+    leaderboard_query = (
+        select(
+            models.User.id,
+            models.User.username,
+            models.User.full_name,
+            func.count(models.Consultation.id).label("consultations"),
+        )
+        .join(models.Consultation, models.Consultation.officer_id == models.User.id)
+        .where(
+            models.User.role == "officer",
+            func.date(models.Consultation.consultation_date) >= week_start
+        )
+        .group_by(models.User.id, models.User.username, models.User.full_name)
+        .order_by(func.count(models.Consultation.id).desc())
+    )
+    
+    result = await db.execute(leaderboard_query)
+    all_officers = result.fetchall()
+    
+    # Build leaderboard with ranks
+    leaderboard = []
+    current_user_rank = None
+    current_user_stats = None
+    
+    for rank, officer in enumerate(all_officers, 1):
+        entry = {
+            "rank": rank,
+            "user_id": officer.id,
+            "username": officer.username,
+            "full_name": officer.full_name or officer.username,
+            "consultations": officer.consultations,
+            "is_current_user": officer.id == officer_id,
+        }
+        
+        if officer.id == officer_id:
+            current_user_rank = rank
+            current_user_stats = entry
+        
+        if rank <= limit:
+            leaderboard.append(entry)
+    
+    # If current user not in top N, add them at the end
+    if current_user_rank and current_user_rank > limit and current_user_stats:
+        leaderboard.append(current_user_stats)
+    
+    # If current user has no consultations this week, add with 0
+    if current_user_rank is None:
+        user = await db.get(models.User, officer_id)
+        if user:
+            leaderboard.append({
+                "rank": len(all_officers) + 1,
+                "user_id": officer_id,
+                "username": user.username,
+                "full_name": user.full_name or user.username,
+                "consultations": 0,
+                "is_current_user": True,
+            })
+            current_user_rank = len(all_officers) + 1
+    
+    return {
+        "week_start": week_start.isoformat(),
+        "total_officers": len(all_officers) + (1 if current_user_rank is None else 0),
+        "current_user_rank": current_user_rank or (len(all_officers) + 1),
+        "leaderboard": leaderboard,
+    }

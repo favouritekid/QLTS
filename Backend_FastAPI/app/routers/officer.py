@@ -94,3 +94,31 @@ async def get_enhanced_dashboard(
         return stats
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# PHASE 4: Leaderboard
+# =============================================================================
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/leaderboard",
+    response_model=schemas.WeeklyLeaderboard,
+    summary="Get weekly leaderboard for gamification"
+)
+async def get_leaderboard(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[models.User, PermissionDep]
+):
+    """
+    Weekly leaderboard showing top officers by consultations.
+    Includes current user's rank even if not in top 5.
+    """
+    try:
+        leaderboard = await officer_service.get_weekly_leaderboard(
+            db=db, officer_id=current_user.id
+        )
+        return leaderboard
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

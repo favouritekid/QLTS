@@ -10,7 +10,7 @@ import { WorkloadCard } from "@/components/officer/WorkloadCard";
 import { PerformanceChart } from "@/components/officer/PerformanceChart";
 import { FunnelChart } from "@/components/officer/FunnelChart";
 import { ActionableLists } from "@/components/officer/ActionableLists";
-import { KPICardsGrid, PriorityActionsPanel } from "@/components/officer/dashboard";
+import { KPICardsGrid, PriorityActionsPanel, WeeklyLeaderboard } from "@/components/officer/dashboard";
 import { api } from "@/lib/api/client";
 import { socket } from "@/lib/socket/client";
 
@@ -301,8 +301,11 @@ export default function OfficerDashboardPage() {
         <FunnelChart funnel={salesFunnel} />
       </div>
 
-      {/* Actionable Lists */}
-      <ActionableLists lists={actionableLists} />
+      {/* ✅ PHASE 4: Leaderboard + Actionable Lists - 2-column layout */}
+      <div className="grid gap-6 md:grid-cols-2">
+        <WeeklyLeaderboard />
+        <ActionableLists lists={actionableLists} />
+      </div>
     </div>
   );
 }

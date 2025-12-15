@@ -262,6 +262,9 @@ from .officer import (
     PriorityAction,
     OfficerDashboardEnhanced,
     LeadPreview,
+    # Phase 4: Leaderboard
+    LeaderboardEntry,
+    WeeklyLeaderboard,
 )
 
 # --- Từ tuition_discount_policy.py ---
