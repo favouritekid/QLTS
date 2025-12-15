@@ -190,6 +190,64 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
   );
 
   // ==========================================================================
+  // EXTERNAL URL CHANGE DETECTION (e.g., navigation from dashboard)
+  // ==========================================================================
+  
+  // This ref tracks if the URL change was caused by this hook (internal) or external navigation
+  const isInternalUrlChange = useRef(false);
+  
+  // Sync URL params INTO state when URL changes from external navigation  
+  // (e.g., clicking funnel stage from dashboard)
+  useEffect(() => {
+    // Skip if this URL change was caused by our own state update
+    if (isInternalUrlChange.current) {
+      isInternalUrlChange.current = false;
+      return;
+    }
+    
+    // Only sync if URL has filter params (external navigation)
+    if (!hasUrlFilterParams(searchParams)) {
+      return;
+    }
+    
+    const urlFilters = parseSearchParams(searchParams);
+    
+    // Only update state if it differs from current URL params
+    // This avoids infinite loops
+    if (JSON.stringify(urlFilters.stageFilters) !== JSON.stringify(stageFilters)) {
+      setStageFilters(urlFilters.stageFilters);
+    }
+    if (JSON.stringify(urlFilters.statusFilters) !== JSON.stringify(statusFilters)) {
+      setStatusFilters(urlFilters.statusFilters);
+    }
+    if (JSON.stringify(urlFilters.sourceFilters) !== JSON.stringify(sourceFilters)) {
+      setSourceFilters(urlFilters.sourceFilters);
+    }
+    if (JSON.stringify(urlFilters.offeringFilters) !== JSON.stringify(offeringFilters)) {
+      setOfferingFilters(urlFilters.offeringFilters);
+    }
+    if (JSON.stringify(urlFilters.officerFilters) !== JSON.stringify(officerFilters)) {
+      setOfficerFilters(urlFilters.officerFilters);
+    }
+    if (urlFilters.search !== search) {
+      setSearch(urlFilters.search);
+    }
+    if (urlFilters.page !== page) {
+      setPage(urlFilters.page);
+    }
+    if (urlFilters.dateFrom !== dateFrom) {
+      setDateFrom(urlFilters.dateFrom);
+    }
+    if (urlFilters.dateTo !== dateTo) {
+      setDateTo(urlFilters.dateTo);
+    }
+    if (urlFilters.dateField !== dateField) {
+      setDateField(urlFilters.dateField);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]); // Only trigger on searchParams change
+
+  // ==========================================================================
   // URL SYNC
   // ==========================================================================
   
@@ -215,6 +273,8 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
     const queryString = params.toString();
     const newUrl = queryString ? `${pathname}?${queryString}` : pathname;
 
+    // Mark this URL change as internal to prevent sync effect from re-syncing
+    isInternalUrlChange.current = true;
     router.replace(newUrl, { scroll: false });
   }, [
     page, search, statusFilters, sourceFilters, offeringFilters,
