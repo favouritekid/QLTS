@@ -1,7 +1,7 @@
 // src/components/officer/FunnelChart.tsx
 /**
- * Pipeline Funnel Chart - Monochromatic Blue Design
- * Clean, professional visualization following shadcn standards
+ * Pipeline Funnel Chart - Visual Funnel Shape
+ * Displays leads distribution with actual funnel visualization
  */
 "use client";
 
@@ -23,7 +23,6 @@ interface FunnelChartProps {
 
 // Monochromatic blue gradient - dark to light
 const getBlueShade = (index: number, total: number) => {
-  // HSL: 221 83% X% - varying lightness from 45% to 75%
   const lightness = 45 + (index / Math.max(total - 1, 1)) * 30;
   return `hsl(221 83% ${lightness}%)`;
 };
@@ -60,87 +59,88 @@ export function FunnelChart({ funnel }: FunnelChartProps) {
               Pipeline Funnel
             </CardTitle>
             <CardDescription className="text-xs mt-0.5">
-              Phân bố leads theo giai đoạn
+              Click từng giai đoạn để xem leads
             </CardDescription>
           </div>
           <div className="flex items-center gap-1.5 text-sm">
             <TrendingDown className="h-4 w-4 text-muted-foreground" />
             <span className="font-semibold">{overallConversion.toFixed(1)}%</span>
-            <span className="text-muted-foreground text-xs">tổng</span>
+            <span className="text-muted-foreground text-xs">chuyển đổi</span>
           </div>
         </div>
       </CardHeader>
-      <CardContent className="space-y-2">
-        {sortedFunnel.map((stage, index) => {
-          const percentage = totalLeads > 0 ? (stage.lead_count / totalLeads) * 100 : 0;
-          const stepConversion = stageConversions[index];
-          const showConversion = index > 0 && sortedFunnel[index - 1].lead_count > 0;
-          const bgColor = getBlueShade(index, sortedFunnel.length);
-          
-          return (
-            <div key={stage.stage_name}>
-              {/* Step Conversion (between stages) */}
-              {showConversion && (
-                <div className="flex items-center justify-center py-1 text-xs text-muted-foreground">
-                  <ChevronRight className="h-3 w-3 rotate-90 mr-1" />
-                  <span>{stepConversion.toFixed(0)}%</span>
-                </div>
-              )}
-              
-              {/* Stage Bar - Clickable */}
-              <div 
-                className="group relative cursor-pointer"
-                onClick={() => handleStageClick(stage.stage_id)}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => e.key === "Enter" && handleStageClick(stage.stage_id)}
-              >
-                {/* Bar Container */}
-                <div className="relative h-10 bg-muted/40 rounded overflow-hidden hover:bg-muted/60 transition-all hover:ring-2 hover:ring-primary/20">
-                  {/* Colored Bar */}
+      <CardContent>
+        {/* Funnel Container */}
+        <div className="flex flex-col items-center gap-1">
+          {sortedFunnel.map((stage, index) => {
+            const percentage = totalLeads > 0 ? (stage.lead_count / totalLeads) * 100 : 0;
+            const stepConversion = stageConversions[index];
+            const bgColor = getBlueShade(index, sortedFunnel.length);
+            
+            // Calculate funnel width - starts at 100%, narrows based on percentage
+            const widthPercent = Math.max(
+              20, // minimum 20%
+              ((sortedFunnel.length - index) / sortedFunnel.length) * 80 + 20
+            );
+            
+            // Calculate actual data-driven width within the funnel segment
+            const dataWidth = Math.max(percentage, 5);
+
+            return (
+              <div key={stage.stage_name} className="w-full flex flex-col items-center">
+                {/* Conversion indicator between stages */}
+                {index > 0 && sortedFunnel[index - 1].lead_count > 0 && (
+                  <div className="text-[10px] text-muted-foreground py-0.5">
+                    ↓ {stepConversion.toFixed(0)}%
+                  </div>
+                )}
+                
+                {/* Funnel Stage - Trapezoid shape */}
+                <div 
+                  className="relative group cursor-pointer transition-all duration-200 hover:scale-[1.02]"
+                  style={{ width: `${widthPercent}%` }}
+                  onClick={() => handleStageClick(stage.stage_id)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => e.key === "Enter" && handleStageClick(stage.stage_id)}
+                >
+                  {/* Trapezoid shape using clip-path */}
                   <div 
-                    className="absolute left-0 top-0 h-full rounded transition-all duration-300 group-hover:brightness-110"
-                    style={{ 
-                      width: `${Math.max(percentage, 2)}%`,
+                    className="relative h-12 rounded-sm overflow-hidden transition-all hover:ring-2 hover:ring-primary/30"
+                    style={{
                       backgroundColor: bgColor,
+                      clipPath: index < sortedFunnel.length - 1 
+                        ? 'polygon(3% 0%, 97% 0%, 100% 100%, 0% 100%)'
+                        : 'polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%)',
                     }}
-                  />
-                  
-                  {/* Content Overlay */}
-                  <div className="absolute inset-0 flex items-center justify-between px-3">
-                    <div className="flex items-center gap-2">
-                      <span className={cn(
-                        "text-sm font-medium z-10",
-                        percentage > 40 ? "text-white" : "text-foreground"
-                      )}>
-                        {stage.stage_name}
-                      </span>
-                      <ChevronRight className={cn(
-                        "h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity",
-                        percentage > 40 ? "text-white" : "text-muted-foreground"
-                      )} />
-                    </div>
-                    <div className={cn(
-                      "flex items-center gap-2 text-sm z-10",
-                      percentage > 60 ? "text-white" : "text-foreground"
-                    )}>
-                      <span className="font-semibold">{stage.lead_count}</span>
-                      <span className="text-xs opacity-70">
-                        ({percentage.toFixed(0)}%)
-                      </span>
+                  >
+                    {/* Content */}
+                    <div className="absolute inset-0 flex items-center justify-between px-4">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-white truncate max-w-[120px]">
+                          {stage.stage_name}
+                        </span>
+                        <ChevronRight className="h-4 w-4 text-white/70 opacity-0 group-hover:opacity-100 transition-opacity" />
+                      </div>
+                      <div className="flex items-center gap-2 text-white">
+                        <span className="text-lg font-bold">{stage.lead_count}</span>
+                        <span className="text-xs opacity-70">
+                          ({percentage.toFixed(0)}%)
+                        </span>
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
         
         {/* Summary Footer */}
-        <div className="pt-3 mt-2 border-t flex items-center justify-between text-xs text-muted-foreground">
-          <span>Tổng: {totalLeads} leads</span>
-          <span>
-            Hoàn thành: {convertedLeads} ({overallConversion.toFixed(1)}%)
+        <div className="pt-4 mt-4 border-t flex items-center justify-between text-xs text-muted-foreground">
+          <span>Đầu vào: {totalLeads} leads</span>
+          <span className="font-medium text-foreground">
+            Chuyển đổi: {convertedLeads} ({overallConversion.toFixed(1)}%)
           </span>
         </div>
       </CardContent>
