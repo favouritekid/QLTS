@@ -1,8 +1,8 @@
 // src/components/officer/FunnelChart.tsx
 "use client";
 
+import { useRouter } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import { TrendingDown, ArrowRight } from "lucide-react";
 
@@ -18,16 +18,18 @@ interface FunnelChartProps {
 
 // Color palette for funnel stages - gradient from cool to warm
 const STAGE_COLORS = [
-  { bg: "bg-blue-500", text: "text-blue-500" },
-  { bg: "bg-cyan-500", text: "text-cyan-500" },
-  { bg: "bg-teal-500", text: "text-teal-500" },
-  { bg: "bg-green-500", text: "text-green-500" },
-  { bg: "bg-amber-500", text: "text-amber-500" },
-  { bg: "bg-orange-500", text: "text-orange-500" },
-  { bg: "bg-red-500", text: "text-red-500" },
+  { bg: "bg-blue-500", text: "text-blue-500", hover: "hover:bg-blue-600" },
+  { bg: "bg-cyan-500", text: "text-cyan-500", hover: "hover:bg-cyan-600" },
+  { bg: "bg-teal-500", text: "text-teal-500", hover: "hover:bg-teal-600" },
+  { bg: "bg-green-500", text: "text-green-500", hover: "hover:bg-green-600" },
+  { bg: "bg-amber-500", text: "text-amber-500", hover: "hover:bg-amber-600" },
+  { bg: "bg-orange-500", text: "text-orange-500", hover: "hover:bg-orange-600" },
+  { bg: "bg-red-500", text: "text-red-500", hover: "hover:bg-red-600" },
 ];
 
 export function FunnelChart({ funnel }: FunnelChartProps) {
+  const router = useRouter();
+
   // Sort by stage order
   const sortedFunnel = [...funnel].sort((a, b) => a.stage_order - b.stage_order);
 
@@ -43,6 +45,12 @@ export function FunnelChart({ funnel }: FunnelChartProps) {
     return prevCount > 0 ? (stage.lead_count / prevCount) * 100 : 0;
   });
 
+  // Navigate to leads filtered by stage
+  const handleStageClick = (stageName: string) => {
+    const stageParam = encodeURIComponent(stageName);
+    router.push(`/leads?stage=${stageParam}`);
+  };
+
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -52,7 +60,7 @@ export function FunnelChart({ funnel }: FunnelChartProps) {
               Pipeline Funnel
             </CardTitle>
             <CardDescription className="text-xs">
-              Phân bố leads theo giai đoạn
+              Phân bố leads theo giai đoạn • Click để xem chi tiết
             </CardDescription>
           </div>
           <div className="flex items-center gap-1.5 text-sm">
@@ -79,12 +87,20 @@ export function FunnelChart({ funnel }: FunnelChartProps) {
                 </div>
               )}
               
-              {/* Stage Bar */}
-              <div className="group relative">
+              {/* Stage Bar - Clickable */}
+              <div 
+                className="group relative cursor-pointer"
+                onClick={() => handleStageClick(stage.stage_name)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => e.key === "Enter" && handleStageClick(stage.stage_name)}
+              >
                 <div className="flex items-center justify-between mb-1.5">
                   <div className="flex items-center gap-2">
                     <div className={cn("h-2.5 w-2.5 rounded-sm", color.bg)} />
-                    <span className="text-sm font-medium">{stage.stage_name}</span>
+                    <span className="text-sm font-medium group-hover:text-primary transition-colors">
+                      {stage.stage_name}
+                    </span>
                   </div>
                   <div className="flex items-center gap-3 text-sm">
                     <span className="font-semibold">{stage.lead_count}</span>
@@ -95,12 +111,12 @@ export function FunnelChart({ funnel }: FunnelChartProps) {
                 </div>
                 
                 {/* Funnel-style Progress Bar */}
-                <div className="relative h-8 bg-muted/50 rounded-lg overflow-hidden">
+                <div className="relative h-8 bg-muted/50 rounded-lg overflow-hidden group-hover:bg-muted/70 transition-colors">
                   <div 
                     className={cn(
-                      "absolute left-0 top-0 h-full rounded-lg transition-all duration-500",
+                      "absolute left-0 top-0 h-full rounded-lg transition-all duration-300",
                       color.bg,
-                      "opacity-80"
+                      "opacity-80 group-hover:opacity-100"
                     )}
                     style={{ 
                       width: `${percentage}%`,
@@ -115,6 +131,12 @@ export function FunnelChart({ funnel }: FunnelChartProps) {
                       </span>
                     </div>
                   )}
+                  {/* Hover hint */}
+                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                    <span className="text-xs font-medium text-white bg-black/50 px-2 py-0.5 rounded">
+                      Xem leads →
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
