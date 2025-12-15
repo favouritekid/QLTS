@@ -147,6 +147,7 @@ async def get_officer_dashboard_stats(
     # Đếm số lượng Lead theo từng Stage (Pipeline Stage)
     funnel_query = (
         select(
+            models.PipelineStage.id,
             models.PipelineStage.name,
             func.count(models.Lead.id),
             models.PipelineStage.order
@@ -163,8 +164,9 @@ async def get_officer_dashboard_stats(
     sales_funnel = []
     for idx, row in enumerate(funnel_res):
         sales_funnel.append({
-            "stage": row[0],
-            "count": row[1],
+            "stage_id": row[0],    # e.g. "stg05"
+            "stage": row[1],       # e.g. "Đã chốt deal"
+            "count": row[2],
             "fill": f"var(--chart-{idx % 5 + 1})"
         })
 

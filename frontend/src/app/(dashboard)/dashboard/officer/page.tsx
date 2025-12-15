@@ -82,6 +82,7 @@ interface TrendPoint {
 }
 
 interface FunnelStage {
+  stage_id: string;
   stage: string;
   count: number;
   fill: string;
@@ -249,6 +250,7 @@ export default function OfficerDashboardPage() {
 
   // Transform FunnelStage[] (API) to FunnelStage[] (component)
   const salesFunnel = stats.sales_funnel.map((s, index) => ({
+    stage_id: s.stage_id,
     stage_name: s.stage,
     stage_order: index,
     lead_count: s.count,

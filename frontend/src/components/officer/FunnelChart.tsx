@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { TrendingDown, ArrowRight } from "lucide-react";
 
 interface FunnelStage {
+  stage_id: string;    // e.g. "stg05"
   stage_name: string;
   stage_order: number;
   lead_count: number;
@@ -46,9 +47,8 @@ export function FunnelChart({ funnel }: FunnelChartProps) {
   });
 
   // Navigate to leads filtered by stage
-  const handleStageClick = (stageName: string) => {
-    const stageParam = encodeURIComponent(stageName);
-    router.push(`/leads?stage=${stageParam}`);
+  const handleStageClick = (stageId: string) => {
+    router.push(`/leads?stage=${stageId}`);
   };
 
   return (
@@ -90,10 +90,10 @@ export function FunnelChart({ funnel }: FunnelChartProps) {
               {/* Stage Bar - Clickable */}
               <div 
                 className="group relative cursor-pointer"
-                onClick={() => handleStageClick(stage.stage_name)}
+                onClick={() => handleStageClick(stage.stage_id)}
                 role="button"
                 tabIndex={0}
-                onKeyDown={(e) => e.key === "Enter" && handleStageClick(stage.stage_name)}
+                onKeyDown={(e) => e.key === "Enter" && handleStageClick(stage.stage_id)}
               >
                 <div className="flex items-center justify-between mb-1.5">
                   <div className="flex items-center gap-2">

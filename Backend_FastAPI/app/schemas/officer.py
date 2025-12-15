@@ -18,7 +18,8 @@ class TrendPoint(BaseModel):
     converted: int
 
 class FunnelStage(BaseModel):
-    stage: str
+    stage_id: str  # e.g. "stg05"
+    stage: str     # e.g. "Đã chốt deal"
     count: int
     fill: str 
 
