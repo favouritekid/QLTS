@@ -178,7 +178,8 @@ export function MyLeadsQuickAccess({
                     <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
                       {lead.stage_name && <span>{lead.stage_name}</span>}
                       {lead.stage_name && lead.last_contact_at && <span>•</span>}
-                      {lead.last_contact_at && (
+                      {/* Fix: Validate date before formatting to prevent runtime errors */}
+                      {lead.last_contact_at && !isNaN(new Date(lead.last_contact_at).getTime()) && (
                         <span>
                           {formatDistanceToNow(new Date(lead.last_contact_at), {
                             addSuffix: true,
@@ -232,10 +233,13 @@ export function MyLeadsQuickAccess({
           </ScrollArea>
         )}
 
-        {/* Footer */}
+        {/* Footer - Fix: Show accurate count based on filtered results */}
         {filteredLeads.length > 0 && (
           <div className="mt-3 pt-3 border-t text-xs text-muted-foreground text-center">
-            Hiển thị {Math.min(filteredLeads.length, 10)} / {totalCount} leads
+            Hiển thị {Math.min(filteredLeads.length, 10)} / {leads.length} leads
+            {leads.length < totalCount && (
+              <span className="text-muted-foreground/70"> (tổng: {totalCount})</span>
+            )}
           </div>
         )}
       </CardContent>

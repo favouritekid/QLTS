@@ -259,27 +259,32 @@ export default function OfficerDashboardPage() {
 
   // === DATA TRANSFORMERS ===
   // Transform API response to match existing component interfaces
-  
+
+  // Fix: Add null checks for performance_trends array
   // Transform TrendPoint[] to PerformanceTrend[] for PerformanceChart
-  const performanceTrends = stats.performance_trends.map((t) => ({
+  const performanceTrends = (stats.performance_trends ?? []).map((t) => ({
     date: t.date,
     leads_assigned: t.assigned,
     consultations: t.consultations,
     converted: t.converted,
   }));
 
+  // Fix: Add null check for sales_funnel array
   // Transform FunnelStage[] (API) to FunnelStage[] (component)
-  const salesFunnel = stats.sales_funnel.map((s, index) => ({
+  const salesFunnel = (stats.sales_funnel ?? []).map((s, index) => ({
     stage_id: s.stage_id,
     stage_name: s.stage,
     stage_order: index,
     lead_count: s.count,
   }));
 
+  // Fix: Use POST method to match WorkloadCard.tsx API call
   // Availability toggle handler
   const handleToggleAvailability = async (available: boolean) => {
     try {
-      await api.put("/api/officer/availability", { available });
+      await api.post("/api/officer/availability", {
+        availability_status: available ? "available" : "busy"
+      });
       refetch();
       toast.success(available ? "Đã bật trạng thái sẵn sàng" : "Đã tắt trạng thái sẵn sàng");
     } catch {
@@ -302,9 +307,10 @@ export default function OfficerDashboardPage() {
     }
   };
 
+  // Fix: Add null checks for actionable_lists arrays
   // Transform leads for MyLeadsQuickAccess
   const myLeadsPreview = [
-    ...stats.actionable_lists.high_score.map(lead => ({
+    ...(stats.actionable_lists?.high_score ?? []).map(lead => ({
       id: lead.id,
       name: lead.name,
       lead_score: lead.lead_score,
@@ -314,7 +320,7 @@ export default function OfficerDashboardPage() {
       is_overdue: false,
       is_new: false,
     })),
-    ...stats.actionable_lists.stale.map(lead => ({
+    ...(stats.actionable_lists?.stale ?? []).map(lead => ({
       id: lead.id,
       name: lead.name,
       lead_score: lead.lead_score,

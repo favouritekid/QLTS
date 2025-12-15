@@ -89,8 +89,9 @@ export function KPICard({
           <div className={cn("flex items-center gap-1.5 mt-3", trendColor)}>
             <TrendIcon className="h-4 w-4" />
             <span className="text-sm font-medium">
-              {trend.direction !== "neutral" && (trend.direction === "up" ? "+" : "")}
-              {trend.value}%
+              {/* Fix: Use absolute value and only show sign based on direction */}
+              {trend.direction === "up" ? "+" : trend.direction === "down" ? "-" : ""}
+              {Math.abs(trend.value)}%
             </span>
             <span className="text-xs text-muted-foreground">
               {trend.comparison}

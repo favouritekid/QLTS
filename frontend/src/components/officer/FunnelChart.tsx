@@ -82,10 +82,10 @@ export function FunnelChart({ funnel }: FunnelChartProps) {
 
             return (
               <div key={stage.stage_name} className="w-full flex flex-col items-center">
-                {/* Conversion indicator between stages */}
-                {index > 0 && sortedFunnel[index - 1].lead_count > 0 && (
+                {/* Conversion indicator between stages - Fix: Show N/A when previous stage has 0 leads */}
+                {index > 0 && (
                   <div className="text-[10px] text-muted-foreground py-0.5">
-                    ↓ {stepConversion.toFixed(0)}%
+                    ↓ {sortedFunnel[index - 1].lead_count > 0 ? `${stepConversion.toFixed(0)}%` : "N/A"}
                   </div>
                 )}
                 

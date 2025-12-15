@@ -52,16 +52,21 @@ export function SmartHeader({
   onQuickAction,
 }: SmartHeaderProps) {
   const { user } = useAuth();
-  const progressPercent = Math.min((consultationsToday / dailyTarget) * 100, 100);
-  const isGoalMet = consultationsToday >= dailyTarget;
-  const remaining = dailyTarget - consultationsToday;
+  // Fix: Handle division by zero when dailyTarget is 0
+  const progressPercent = dailyTarget > 0
+    ? Math.min((consultationsToday / dailyTarget) * 100, 100)
+    : 0;
+  const isGoalMet = dailyTarget > 0 && consultationsToday >= dailyTarget;
+  // Fix: Ensure remaining is not negative
+  const remaining = Math.max(0, dailyTarget - consultationsToday);
 
   return (
     <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
       {/* Left: Greeting + Date */}
       <div>
         <h1 className="text-2xl font-semibold flex items-center gap-2">
-          {getGreeting()}, {user?.full_name || user?.username}!
+          {/* Fix: Add fallback for empty user name */}
+          {getGreeting()}, {user?.full_name || user?.username || "Officer"}!
           {isGoalMet && <Sparkles className="h-5 w-5 text-amber-500" />}
         </h1>
         <p className="text-sm text-muted-foreground mt-0.5">
