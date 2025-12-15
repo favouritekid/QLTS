@@ -1,8 +1,8 @@
 // src/app/(dashboard)/dashboard/officer/page.tsx
 "use client";
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertCircle } from "lucide-react";
@@ -10,9 +10,16 @@ import { WorkloadCard } from "@/components/officer/WorkloadCard";
 import { PerformanceChart } from "@/components/officer/PerformanceChart";
 import { FunnelChart } from "@/components/officer/FunnelChart";
 import { ActionableLists } from "@/components/officer/ActionableLists";
-import { KPICardsGrid, PriorityActionsPanel, WeeklyLeaderboard } from "@/components/officer/dashboard";
+import { 
+  KPICardsGrid, 
+  PriorityActionsPanel, 
+  WeeklyLeaderboard, 
+  SmartHeader,
+  MyLeadsQuickAccess 
+} from "@/components/officer/dashboard";
 import { api } from "@/lib/api/client";
 import { socket } from "@/lib/socket/client";
+import { toast } from "sonner";
 
 /**
  * Officer Command Center - Enhanced Dashboard for officers
@@ -274,17 +281,66 @@ export default function OfficerDashboardPage() {
     })),
   };
 
+  // Availability toggle handler
+  const handleToggleAvailability = async (available: boolean) => {
+    try {
+      await api.put("/api/officer/availability", { available });
+      refetch();
+      toast.success(available ? "Đã bật trạng thái sẵn sàng" : "Đã tắt trạng thái sẵn sàng");
+    } catch {
+      toast.error("Không thể cập nhật trạng thái");
+    }
+  };
+
+  // Quick action handler
+  const handleQuickAction = (action: "new_lead" | "log_call" | "schedule") => {
+    switch (action) {
+      case "new_lead":
+        window.location.href = "/leads?action=create";
+        break;
+      case "log_call":
+        toast.info("Tính năng đang phát triển");
+        break;
+      case "schedule":
+        toast.info("Tính năng đang phát triển");
+        break;
+    }
+  };
+
+  // Transform leads for MyLeadsQuickAccess
+  const myLeadsPreview = [
+    ...stats.actionable_lists.high_score.map(lead => ({
+      id: lead.id,
+      name: lead.name,
+      lead_score: lead.lead_score,
+      stage_name: lead.stage_name,
+      last_contact_at: lead.updated_at,
+      is_hot: lead.lead_score >= 70,
+      is_overdue: false,
+      is_new: false,
+    })),
+    ...stats.actionable_lists.stale.map(lead => ({
+      id: lead.id,
+      name: lead.name,
+      lead_score: lead.lead_score,
+      stage_name: lead.stage_name,
+      last_contact_at: lead.updated_at,
+      is_hot: false,
+      is_overdue: true,
+      is_new: false,
+    })),
+  ];
+
   return (
     <div className="container mx-auto p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Officer Dashboard</h1>
-          <p className="text-muted-foreground">
-            Theo dõi hiệu suất và quản lý leads của bạn
-          </p>
-        </div>
-      </div>
+      {/* ✅ PHASE 5: Smart Header */}
+      <SmartHeader
+        consultationsToday={stats.kpis.consultations_today}
+        dailyTarget={stats.kpis.consultations_target}
+        isAvailable={stats.status_overview.availability_status === "available"}
+        onToggleAvailability={handleToggleAvailability}
+        onQuickAction={handleQuickAction}
+      />
 
       {/* ✅ PHASE 1: KPI Cards */}
       <KPICardsGrid kpis={stats.kpis} />
@@ -306,6 +362,12 @@ export default function OfficerDashboardPage() {
         <WeeklyLeaderboard />
         <ActionableLists lists={actionableLists} />
       </div>
+
+      {/* ✅ PHASE 5: My Leads Quick Access */}
+      <MyLeadsQuickAccess
+        leads={myLeadsPreview}
+        totalCount={stats.kpis.active_leads}
+      />
     </div>
   );
 }

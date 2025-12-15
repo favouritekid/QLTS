@@ -8,3 +8,5 @@ export { KPICardsGrid } from "./KPICardsGrid";
 export { PriorityActionCard, type PriorityAction } from "./PriorityActionCard";
 export { PriorityActionsPanel } from "./PriorityActionsPanel";
 export { WeeklyLeaderboard } from "./WeeklyLeaderboard";
+export { SmartHeader } from "./SmartHeader";
+export { MyLeadsQuickAccess } from "./MyLeadsQuickAccess";
