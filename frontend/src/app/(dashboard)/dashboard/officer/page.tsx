@@ -87,6 +87,7 @@ interface FunnelStage {
   lead_count: number;
   is_final_stage?: boolean;
   fill?: string;
+  conversion_rate?: number | null;  // Historical conversion % (30 days)
 }
 
 interface LeadPreview {
@@ -278,6 +279,7 @@ export default function OfficerDashboardPage() {
     stage_order: s.stage_order,
     lead_count: s.lead_count,
     is_final_stage: s.is_final_stage,
+    conversion_rate: s.conversion_rate,  // Historical conversion % (30 days)
   }));
 
   // Fix: Use POST method to match WorkloadCard.tsx API call

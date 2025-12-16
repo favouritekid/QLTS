@@ -35,6 +35,7 @@ interface FunnelStage {
   stage_order: number;
   lead_count: number;
   is_final_stage?: boolean;
+  conversion_rate?: number | null;  // Historical conversion % (30 days)
 }
 
 interface FunnelChartProps {
@@ -120,25 +121,40 @@ export function FunnelChart({ funnel, previousPeriodConversion }: FunnelChartPro
   const overallConversion = totalLeads > 0 ? (enrolledCount / totalLeads) * 100 : 0;
 
   // Calculate metrics for each stage
+  // Use backend-calculated conversion_rate (from lead_status_history) when available
   const stageMetrics = coreStages.map((stage, index) => {
     const percentFromTotal = totalLeads > 0 ? (stage.lead_count / totalLeads) * 100 : 0;
     
+    // Use historical conversion rate from backend if available
+    // Otherwise fall back to simple count comparison (less accurate)
+    const historicalConversion = stage.conversion_rate;
+    
     if (index === 0) {
       return { 
-        conversion: 100, 
+        conversion: historicalConversion ?? 100,  // First stage: use historical or 100%
         dropOff: 0, 
         dropOffPercent: 0,
         percentFromTotal,
-        prevCount: stage.lead_count
+        prevCount: stage.lead_count,
+        hasHistoricalData: historicalConversion !== null && historicalConversion !== undefined
       };
     }
     
     const prevCount = coreStages[index - 1].lead_count;
-    const conversion = prevCount > 0 ? (stage.lead_count / prevCount) * 100 : 0;
+    // Prefer historical conversion from backend, fallback to count-based
+    const fallbackConversion = prevCount > 0 ? (stage.lead_count / prevCount) * 100 : 0;
+    const conversion = historicalConversion ?? fallbackConversion;
     const dropOff = Math.max(0, prevCount - stage.lead_count);
     const dropOffPercent = prevCount > 0 ? (dropOff / prevCount) * 100 : 0;
     
-    return { conversion, dropOff, dropOffPercent, percentFromTotal, prevCount };
+    return { 
+      conversion, 
+      dropOff, 
+      dropOffPercent, 
+      percentFromTotal, 
+      prevCount,
+      hasHistoricalData: historicalConversion !== null && historicalConversion !== undefined
+    };
   });
 
   // Find bottleneck (lowest conversion excluding first stage)

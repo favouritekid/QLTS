@@ -23,7 +23,8 @@ class FunnelStage(BaseModel):
     stage_order: int                   # For frontend sorting
     lead_count: int                    # Actual count at this stage
     is_final_stage: bool = False       # For separating outcomes
-    fill: Optional[str] = None 
+    fill: Optional[str] = None
+    conversion_rate: Optional[float] = None  # Historical conversion % (30 days) 
 
 class LeadPreview(BaseModel):
     id: int

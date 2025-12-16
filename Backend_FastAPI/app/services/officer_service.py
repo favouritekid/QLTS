@@ -188,8 +188,67 @@ async def get_officer_dashboard_stats(
             "stage_order": stage.order,        # For frontend sorting
             "lead_count": stage_count,         # Actual count at this stage
             "is_final_stage": stage.is_final_stage,  # For separating outcomes
-            "fill": f"var(--chart-{idx % 5 + 1})"
+            "fill": f"var(--chart-{idx % 5 + 1})",
+            "conversion_rate": None  # Will be calculated below
         })
+
+    # 4.1 HISTORICAL CONVERSION RATES (from lead_status_history)
+    # Calculate actual transition rates between stages over the past 30 days
+    thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+    
+    # Query: count transitions from each stage to next stages
+    transition_query = (
+        select(
+            models.LeadStatusHistory.old_pipeline_stage_id,
+            models.LeadStatusHistory.new_pipeline_stage_id,
+            func.count().label("transition_count")
+        )
+        .join(models.Lead, models.LeadStatusHistory.lead_id == models.Lead.id)
+        .where(
+            models.Lead.assigned_officer_id == officer_id,
+            models.LeadStatusHistory.changed_at >= thirty_days_ago,
+            models.LeadStatusHistory.old_pipeline_stage_id.isnot(None),
+            models.LeadStatusHistory.new_pipeline_stage_id.isnot(None),
+            models.LeadStatusHistory.old_pipeline_stage_id != models.LeadStatusHistory.new_pipeline_stage_id
+        )
+        .group_by(
+            models.LeadStatusHistory.old_pipeline_stage_id,
+            models.LeadStatusHistory.new_pipeline_stage_id
+        )
+    )
+    transition_result = await db.execute(transition_query)
+    transitions = transition_result.fetchall()
+    
+    # Build transition map: {from_stage: {to_stage: count, ...}}
+    transition_map: Dict[str, Dict[str, int]] = {}
+    for row in transitions:
+        from_stage, to_stage, count = row
+        if from_stage not in transition_map:
+            transition_map[from_stage] = {}
+        transition_map[from_stage][to_stage] = count
+    
+    # Calculate conversion rate for each stage (to next stage)
+    # Conversion = leads that moved to HIGHER stage / total leads that left this stage
+    for i, funnel_stage in enumerate(sales_funnel):
+        stage_id = funnel_stage["stage_id"]
+        stage_order = funnel_stage["stage_order"]
+        
+        if stage_id in transition_map:
+            transitions_from = transition_map[stage_id]
+            total_out = sum(transitions_from.values())
+            
+            # Count transitions to higher stages (progression)
+            progressive_count = 0
+            for to_stage_id, count in transitions_from.items():
+                # Find to_stage order
+                for s in all_stages:
+                    if s.id == to_stage_id and s.order > stage_order:
+                        progressive_count += count
+                        break
+            
+            if total_out > 0:
+                conversion_rate = round((progressive_count / total_out) * 100, 1)
+                sales_funnel[i]["conversion_rate"] = conversion_rate
 
     # 5. ACTIONABLE LISTS (Danh sách cần xử lý)
     
