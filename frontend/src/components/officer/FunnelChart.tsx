@@ -44,21 +44,24 @@ interface FunnelChartProps {
   previousPeriodConversion?: number;
 }
 
-// Industrial color palette - muted, professional
-const FUNNEL_COLORS = {
-  primary: "hsl(221 83% 53%)",      // Primary blue
-  primaryMuted: "hsl(221 70% 60%)", // Lighter blue
-  success: "hsl(142 71% 45%)",      // Green
-  warning: "hsl(38 92% 50%)",       // Amber
-  danger: "hsl(0 84% 60%)",         // Red  
-  neutral: "hsl(215 16% 47%)",      // Gray
+// Gradient palette - smooth transition from purple to cyan
+const FUNNEL_GRADIENT = {
+  startHue: 260,   // Purple
+  endHue: 200,     // Cyan/Blue
+  saturation: 70,
+  lightness: 55,
 };
 
-// Get stage background color (subtle gradient based on position)
+// Get stage background color (smooth gradient based on position)
 const getStageColor = (index: number, total: number, isFinal: boolean) => {
-  if (isFinal) return "hsl(215 20% 65%)"; // Muted gray for final stages
-  const lightness = 50 + (index / Math.max(total - 1, 1)) * 15;
-  return `hsl(221 75% ${lightness}%)`;
+  if (isFinal) return "hsl(220 15% 50%)"; // Muted gray for final stages
+  
+  // Interpolate hue from purple to cyan
+  const { startHue, endHue, saturation, lightness } = FUNNEL_GRADIENT;
+  const progress = total > 1 ? index / (total - 1) : 0;
+  const hue = startHue + (endHue - startHue) * progress;
+  
+  return `hsl(${hue} ${saturation}% ${lightness}%)`;
 };
 
 // Get conversion rate status and color
@@ -120,12 +123,18 @@ export function FunnelChart({ funnel, previousPeriodConversion }: FunnelChartPro
   // This is correct for ACTUAL count approach (not cumulative)
   const totalLeads = sortedFunnel.reduce((sum, s) => sum + s.lead_count, 0);
   
-  // Calculate overall conversion (to positive outcomes like enrolled)
+  // Calculate overall conversion (completed outcomes / total leads)
+  // This shows what percentage of leads have completed the funnel
   const enrolledStage = outcomeStages.find(s => 
     s.stage_id === "stg06" || s.stage_id === "enrolled"
   );
+  const failedStages = outcomeStages.filter(s => 
+    s.stage_id === "stg07" || s.stage_id === "lost" || s.stage_id === "not_enrolled"
+  );
   const enrolledCount = enrolledStage?.lead_count || 0;
-  const overallConversion = totalLeads > 0 ? (enrolledCount / totalLeads) * 100 : 0;
+  const failedCount = failedStages.reduce((sum, s) => sum + s.lead_count, 0);
+  const completedCount = enrolledCount + failedCount;
+  const overallConversion = totalLeads > 0 ? (completedCount / totalLeads) * 100 : 0;
 
   // Calculate metrics for each stage
   // Use backend-calculated conversion_rate (from lead_status_history) when available
@@ -237,15 +246,19 @@ export function FunnelChart({ funnel, previousPeriodConversion }: FunnelChartPro
 
         <CardContent className="space-y-6">
           {/* === CORE FUNNEL FLOW === */}
-          <div className="space-y-0">
+          <div className="space-y-1">
             {coreStages.map((stage, index) => {
               const metrics = stageMetrics[index];
               const isBottleneck = index === bottleneckIndex && metrics.conversion !== null && metrics.conversion < 50;
               const conversionStatus = getConversionStatus(metrics.conversion);
               const stageColor = getStageColor(index, coreStages.length, false);
               
-              // Width based on percentage (min 30%, max 100%)
-              const widthPercent = Math.max(30, Math.min(100, metrics.percentFromTotal + 10));
+              // Width based on cumulative conversion (first stage = 100%, then proportionally smaller)
+              // This creates the classic funnel trapezoid shape
+              const cumulativePercent = index === 0 
+                ? 100 
+                : Math.max(35, 100 - (index * 12)); // Each stage ~12% narrower
+              const widthPercent = cumulativePercent;
 
               return (
                 <div key={stage.stage_id} className="flex flex-col items-center">
@@ -255,10 +268,8 @@ export function FunnelChart({ funnel, previousPeriodConversion }: FunnelChartPro
                       <TooltipTrigger asChild>
                         <div 
                           className={cn(
-                            "flex items-center gap-2 py-1.5 px-3 my-1 rounded border cursor-help transition-colors",
-                            conversionStatus.color,
-                            conversionStatus.borderColor,
-                            isBottleneck && "ring-1 ring-red-400"
+                            "flex items-center gap-2 py-1 px-2 my-0.5 cursor-help transition-colors",
+                            isBottleneck && "ring-1 ring-red-400 rounded"
                           )}
                         >
                           <ArrowDown className={cn("h-3 w-3", conversionStatus.textColor)} />
@@ -299,50 +310,64 @@ export function FunnelChart({ funnel, previousPeriodConversion }: FunnelChartPro
                     </Tooltip>
                   )}
 
-                  {/* Stage Bar */}
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        className={cn(
-                          "relative group transition-all duration-150 hover:scale-[1.01]",
-                          isBottleneck && "ring-2 ring-red-400/50 ring-offset-1 rounded"
-                        )}
-                        style={{ width: `${widthPercent}%` }}
-                        onClick={() => handleStageClick(stage.stage_id)}
-                      >
-                        <div 
+                  {/* Stage Row: Label | Bar | Conversion */}
+                  <div className="flex items-center w-full gap-3">
+                    {/* Left: Stage name (outside bar) */}
+                    <div className="w-28 shrink-0 text-right">
+                      <span className="text-sm font-medium text-foreground truncate">
+                        {stage.stage_name}
+                      </span>
+                    </div>
+
+                    {/* Center: Bar */}
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
                           className={cn(
-                            "relative h-12 overflow-hidden transition-all",
-                            "hover:brightness-105"
+                            "relative group transition-all duration-200 hover:scale-[1.01] flex-1",
+                            isBottleneck && "ring-2 ring-red-400/50 ring-offset-1 rounded"
                           )}
-                          style={{
-                            backgroundColor: stageColor,
-                            clipPath: index < coreStages.length - 1 
-                              ? 'polygon(2% 0%, 98% 0%, 100% 100%, 0% 100%)'
-                              : 'polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%)',
-                          }}
+                          style={{ maxWidth: `${widthPercent}%` }}
+                          onClick={() => handleStageClick(stage.stage_id)}
                         >
-                          <div className="absolute inset-0 flex items-center justify-between px-4">
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm font-medium text-white truncate">
-                                {stage.stage_name}
+                          <div 
+                            className={cn(
+                              "relative h-12 overflow-hidden transition-all",
+                              "hover:brightness-110 hover:shadow-lg"
+                            )}
+                            style={{
+                              backgroundColor: stageColor,
+                              clipPath: 'polygon(0% 0%, 100% 0%, 98% 100%, 2% 100%)',
+                              borderRadius: '2px',
+                            }}
+                          >
+                            {/* Content inside bar */}
+                            <div className="absolute inset-0 flex items-center justify-center px-4">
+                              {/* Center: Percentage */}
+                              <span className="text-lg font-bold text-white tabular-nums drop-shadow-sm">
+                                {metrics.percentFromTotal.toFixed(1)}%
                               </span>
-                              <ChevronRight className="h-4 w-4 text-white/60 opacity-0 group-hover:opacity-100 transition-opacity" />
-                            </div>
-                            <div className="flex items-baseline gap-2 text-white">
-                              <span className="text-lg font-bold tabular-nums">{stage.lead_count}</span>
-                              <span className="text-xs opacity-70">({metrics.percentFromTotal.toFixed(0)}%)</span>
                             </div>
                           </div>
-                        </div>
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="right">
-                      <p className="text-xs">
-                        Click để xem {stage.lead_count} leads ở giai đoạn này
-                      </p>
-                    </TooltipContent>
-                  </Tooltip>
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">
+                        <p className="text-xs">
+                          Click để xem {stage.lead_count} leads ở giai đoạn này
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+
+                    {/* Right: Lead count + Conversion */}
+                    <div className="w-20 shrink-0 text-right">
+                      <span className={cn(
+                        "text-sm font-bold tabular-nums",
+                        conversionStatus.textColor
+                      )}>
+                        {stage.lead_count}
+                      </span>
+                    </div>
+                  </div>
                 </div>
               );
             })}
