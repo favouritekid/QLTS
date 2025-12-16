@@ -1,0 +1,25 @@
+"id","name","degree_level","code","is_active","unit_id","is_heavy"
+8,"Công nghệ thông tin","Cao đẳng","6480201",True,5,False
+9,"Điều dưỡng","Cao đẳng","6720301",True,6,True
+10,"Dược","Cao đẳng","6720201",True,6,False
+11,"Y sỹ đa khoa","Trung cấp","5720101",True,6,True
+12,"Quản lý và kinh doanh du lịch","Trung cấp","5340421",True,5,False
+13,"Công nghệ thông tin (Ứng dụng phần mềm)","Trung cấp","5480202",True,5,False
+14,"Quản trị văn phòng","Cao đẳng","6340403",True,5,False
+15,"Tiếng Anh","Cao đẳng","6220206",True,5,False
+16,"Hướng dẫn du lịch","Cao đẳng","6810103",True,5,False
+17,"Công nghệ Ô tô","Cao đẳng","6510216",True,5,True
+18,"Chăn nuôi - Thú y","Cao đẳng","6620120",True,5,True
+19,"Công nghệ ô tô","Trung cấp","5510216",True,5,True
+20,"Chăn nuôi - Thú y","Trung cấp","5620120",True,5,True
+21,"Kỹ thuật chế biến món ăn","Trung cấp","5810207",True,5,True
+22,"Y sỹ đa khoa","Cao đẳng","6720101",True,6,True
+23,"Kế toán","Cao đẳng","6340301",True,5,False
+24,"Kế toán","Trung cấp","5340301",True,5,False
+25,"Quản trị kinh doanh","Cao đẳng","6340404",True,5,False
+26,"Kinh doanh vận tải đường bộ","Trung cấp","5340407",True,5,False
+27,"Hàn điện","Sơ cấp","HANDIEN",True,5,False
+28,"Điện dân dụng","Sơ cấp","DIENDANDUNG",True,5,False
+29,"Xây dựng dân dụng","Sơ cấp","XAYDUNGDANDUNG",True,5,False
+30,"Kỹ thuật nấu ăn","Sơ cấp","KYTHUATNAUAN",True,5,False
+31,"Y học cổ truyền","Cao đẳng","6720102",True,6,False

@@ -62,13 +62,20 @@ const getStageColor = (index: number, total: number, isFinal: boolean) => {
 };
 
 // Get conversion rate status and color
-const getConversionStatus = (rate: number): { 
+const getConversionStatus = (rate: number | null): { 
   color: string; 
   textColor: string;
   borderColor: string;
-  status: "good" | "warning" | "critical";
+  status: "good" | "warning" | "critical" | "neutral";
   label: string;
 } => {
+  if (rate === null) return {
+    color: "bg-muted/30",
+    textColor: "text-muted-foreground",
+    borderColor: "border-muted",
+    status: "neutral",
+    label: "Chưa có dữ liệu"
+  };
   if (rate >= 70) return { 
     color: "bg-emerald-50 dark:bg-emerald-950/20",
     textColor: "text-emerald-700 dark:text-emerald-400",
@@ -126,24 +133,24 @@ export function FunnelChart({ funnel, previousPeriodConversion }: FunnelChartPro
     const percentFromTotal = totalLeads > 0 ? (stage.lead_count / totalLeads) * 100 : 0;
     
     // Use historical conversion rate from backend if available
-    // Otherwise fall back to simple count comparison (less accurate)
+    // If no historical data, conversion is null (display as N/A)
     const historicalConversion = stage.conversion_rate;
+    const hasHistoricalData = historicalConversion !== null && historicalConversion !== undefined;
     
     if (index === 0) {
       return { 
-        conversion: historicalConversion ?? 100,  // First stage: use historical or 100%
+        conversion: hasHistoricalData ? historicalConversion : null,  // First stage
         dropOff: 0, 
         dropOffPercent: 0,
         percentFromTotal,
         prevCount: stage.lead_count,
-        hasHistoricalData: historicalConversion !== null && historicalConversion !== undefined
+        hasHistoricalData
       };
     }
     
     const prevCount = coreStages[index - 1].lead_count;
-    // Prefer historical conversion from backend, fallback to count-based
-    const fallbackConversion = prevCount > 0 ? (stage.lead_count / prevCount) * 100 : 0;
-    const conversion = historicalConversion ?? fallbackConversion;
+    // Only use historical conversion - don't fallback to count-based (meaningless with actual counts)
+    const conversion = hasHistoricalData ? historicalConversion : null;
     const dropOff = Math.max(0, prevCount - stage.lead_count);
     const dropOffPercent = prevCount > 0 ? (dropOff / prevCount) * 100 : 0;
     
@@ -153,15 +160,17 @@ export function FunnelChart({ funnel, previousPeriodConversion }: FunnelChartPro
       dropOffPercent, 
       percentFromTotal, 
       prevCount,
-      hasHistoricalData: historicalConversion !== null && historicalConversion !== undefined
+      hasHistoricalData
     };
   });
 
-  // Find bottleneck (lowest conversion excluding first stage)
+  // Find bottleneck (lowest conversion excluding first stage, only for stages with data)
   const bottleneckIndex = stageMetrics.reduce((minIdx, metric, idx) => {
-    if (idx === 0) return minIdx;
+    if (idx === 0 || metric.conversion === null) return minIdx;
     if (minIdx === -1) return idx;
-    return metric.conversion < stageMetrics[minIdx].conversion ? idx : minIdx;
+    const minConversion = stageMetrics[minIdx].conversion;
+    if (minConversion === null) return idx;
+    return metric.conversion < minConversion ? idx : minIdx;
   }, -1);
 
   // Comparison with previous period
@@ -231,7 +240,7 @@ export function FunnelChart({ funnel, previousPeriodConversion }: FunnelChartPro
           <div className="space-y-0">
             {coreStages.map((stage, index) => {
               const metrics = stageMetrics[index];
-              const isBottleneck = index === bottleneckIndex && metrics.conversion < 50;
+              const isBottleneck = index === bottleneckIndex && metrics.conversion !== null && metrics.conversion < 50;
               const conversionStatus = getConversionStatus(metrics.conversion);
               const stageColor = getStageColor(index, coreStages.length, false);
               
@@ -254,7 +263,7 @@ export function FunnelChart({ funnel, previousPeriodConversion }: FunnelChartPro
                         >
                           <ArrowDown className={cn("h-3 w-3", conversionStatus.textColor)} />
                           <span className={cn("text-xs font-semibold tabular-nums", conversionStatus.textColor)}>
-                            {metrics.prevCount > 0 ? `${metrics.conversion.toFixed(0)}%` : "N/A"}
+                            {metrics.conversion !== null ? `${metrics.conversion.toFixed(0)}%` : "N/A"}
                           </span>
                           {metrics.dropOff > 0 && (
                             <span className="text-xs text-muted-foreground tabular-nums">

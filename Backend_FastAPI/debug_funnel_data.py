@@ -55,6 +55,14 @@ class ConsultationStatus(Base):
     is_final_status = Column(Boolean)
     outcome_type = Column(String)
 
+class LeadStatusHistory(Base):
+    __tablename__ = "lead_status_history"
+    id = Column(Integer, primary_key=True)
+    lead_id = Column(Integer, ForeignKey("lead.id"))
+    old_pipeline_stage_id = Column(String)
+    new_pipeline_stage_id = Column(String)
+    changed_at = Column(DateTime(timezone=True))
+
 
 async def debug_funnel_data(officer_id: int):
     """Debug funnel data for a specific officer."""
@@ -184,9 +192,59 @@ async def debug_funnel_data(officer_id: int):
         else:
             print(f"  ✅ KHỚP!")
         
-        # 9. Summary
+        # 9. Historical Conversion Rates (from lead_status_history)
+        from datetime import timedelta, timezone as tz
+        thirty_days_ago = datetime.now(tz.utc) - timedelta(days=30)
+        
+        print(f"\n📊 HISTORICAL CONVERSION (30 ngày qua):")
+        print("-" * 60)
+        
+        transition_query = (
+            select(
+                LeadStatusHistory.old_pipeline_stage_id,
+                LeadStatusHistory.new_pipeline_stage_id,
+                func.count().label("count")
+            )
+            .join(Lead, LeadStatusHistory.lead_id == Lead.id)
+            .where(
+                Lead.assigned_officer_id == officer_id,
+                LeadStatusHistory.changed_at >= thirty_days_ago,
+                LeadStatusHistory.old_pipeline_stage_id.isnot(None),
+                LeadStatusHistory.new_pipeline_stage_id.isnot(None),
+                LeadStatusHistory.old_pipeline_stage_id != LeadStatusHistory.new_pipeline_stage_id
+            )
+            .group_by(
+                LeadStatusHistory.old_pipeline_stage_id,
+                LeadStatusHistory.new_pipeline_stage_id
+            )
+            .order_by(LeadStatusHistory.old_pipeline_stage_id)
+        )
+        transitions = (await db.execute(transition_query)).fetchall()
+        
+        if transitions:
+            # Build stage order map
+            stage_order = {s.id: s.order for s in all_stages}
+            
+            # Group by from_stage
+            from_stage_data = {}
+            for old_stage, new_stage, count in transitions:
+                if old_stage not in from_stage_data:
+                    from_stage_data[old_stage] = {"total": 0, "progressive": 0}
+                from_stage_data[old_stage]["total"] += count
+                if stage_order.get(new_stage, 0) > stage_order.get(old_stage, 0):
+                    from_stage_data[old_stage]["progressive"] += count
+            
+            for stage in all_stages:
+                if stage.id in from_stage_data:
+                    data = from_stage_data[stage.id]
+                    conv_rate = (data["progressive"] / data["total"] * 100) if data["total"] > 0 else 0
+                    print(f"  {stage.name}: {data['progressive']}/{data['total']} tiến lên stage cao hơn = {conv_rate:.1f}%")
+        else:
+            print("  (Chưa có dữ liệu chuyển đổi trong 30 ngày qua)")
+        
+        # 10. Summary
         print(f"\n{'='*60}")
-        print("� TÓM TẮT:")
+        print("📋 TÓM TẮT:")
         print("-" * 60)
         print(f"  Total leads (bao gồm deleted): {total_all}")
         print(f"  Active leads (hiển thị trên funnel): {total_leads}")
