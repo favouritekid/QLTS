@@ -18,10 +18,12 @@ class TrendPoint(BaseModel):
     converted: int
 
 class FunnelStage(BaseModel):
-    stage_id: str  # e.g. "stg05"
-    stage: str     # e.g. "Đã chốt deal"
-    count: int
-    fill: str 
+    stage_id: str                      # e.g. "stg05"
+    stage_name: str                    # e.g. "Đã nộp học phí"
+    stage_order: int                   # For frontend sorting
+    lead_count: int                    # Actual count at this stage
+    is_final_stage: bool = False       # For separating outcomes
+    fill: Optional[str] = None 
 
 class LeadPreview(BaseModel):
     id: int

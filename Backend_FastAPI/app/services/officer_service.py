@@ -28,6 +28,7 @@ async def get_officer_dashboard_stats(
     # 2. TÍNH TOÁN WORKLOAD & CAPACITY
     # Logic: Chỉ đếm những Lead mà status của nó CÓ is_final_status = False (hoặc NULL)
     # Điều này đồng bộ với logic phân phối trong assignment_service
+    # Also exclude soft-deleted leads
     workload_query = (
         select(func.count(models.Lead.id))
         .join(
@@ -37,6 +38,7 @@ async def get_officer_dashboard_stats(
         )
         .where(
             models.Lead.assigned_officer_id == officer_id,
+            models.Lead.deleted_at.is_(None),  # Exclude soft-deleted leads
             or_(
                 models.ConsultationStatus.is_final_status == False,
                 models.ConsultationStatus.is_final_status.is_(None),
@@ -143,15 +145,18 @@ async def get_officer_dashboard_stats(
 
     performance_trends = list(trends_map.values())
 
-    # 4. SALES FUNNEL (Phễu bán hàng) - TRUE CONVERSION FUNNEL
-    # Fix: Use cumulative counting - count leads that have REACHED or PASSED each stage
-    # This shows the true funnel conversion where each stage shows "how many leads 
-    # have at least reached this stage"
+    # 4. SALES FUNNEL (Phễu bán hàng) - ACTUAL DISTRIBUTION
+    # Changed from cumulative to actual count per stage
+    # This reflects the true current distribution of leads across pipeline stages
     
     # First, get total leads assigned to this officer (baseline = 100%)
+    # Exclude soft-deleted leads (deleted_at IS NULL)
     total_leads_query = (
         select(func.count(models.Lead.id))
-        .where(models.Lead.assigned_officer_id == officer_id)
+        .where(
+            models.Lead.assigned_officer_id == officer_id,
+            models.Lead.deleted_at.is_(None)  # Exclude soft-deleted leads
+        )
     )
     total_leads = (await db.execute(total_leads_query)).scalar() or 0
     
@@ -162,25 +167,27 @@ async def get_officer_dashboard_stats(
     )
     all_stages = (await db.execute(stages_query)).scalars().all()
     
-    # For each stage, count leads at that stage OR any later stage
-    # This means "leads that have progressed at least to this stage"
+    # For each stage, count leads CURRENTLY AT that stage
     sales_funnel = []
     for idx, stage in enumerate(all_stages):
-        # Count leads at this stage or any stage with higher order
-        cumulative_count_query = (
+        # Count leads at THIS specific stage (not cumulative)
+        # Exclude soft-deleted leads
+        stage_count_query = (
             select(func.count(models.Lead.id))
-            .join(models.PipelineStage, models.Lead.pipeline_stage_id == models.PipelineStage.id)
             .where(
                 models.Lead.assigned_officer_id == officer_id,
-                models.PipelineStage.order >= stage.order
+                models.Lead.pipeline_stage_id == stage.id,
+                models.Lead.deleted_at.is_(None)  # Exclude soft-deleted leads
             )
         )
-        cumulative_count = (await db.execute(cumulative_count_query)).scalar() or 0
+        stage_count = (await db.execute(stage_count_query)).scalar() or 0
         
         sales_funnel.append({
-            "stage_id": stage.id,        # e.g. "stg05"
-            "stage": stage.name,         # e.g. "Đã chốt deal"
-            "count": cumulative_count,   # Cumulative count (leads at this stage or beyond)
+            "stage_id": stage.id,              # e.g. "stg05"
+            "stage_name": stage.name,          # e.g. "Đã nộp học phí"
+            "stage_order": stage.order,        # For frontend sorting
+            "lead_count": stage_count,         # Actual count at this stage
+            "is_final_stage": stage.is_final_stage,  # For separating outcomes
             "fill": f"var(--chart-{idx % 5 + 1})"
         })
 
@@ -723,12 +730,12 @@ async def get_team_stats(
     today = datetime.now(timezone.utc).date()
     start_date = today - timedelta(days=days - 1)
     
-    # Get all active officers
+    # Get all active officers (status = 'active', not is_active)
     active_officers_query = (
         select(models.User.id)
         .where(
             models.User.role == "officer",
-            models.User.is_active == True,
+            models.User.status == "active",  # Fixed: use status instead of is_active
         )
     )
     active_officers = (await db.execute(active_officers_query)).scalars().all()

@@ -82,9 +82,11 @@ interface TrendPoint {
 
 interface FunnelStage {
   stage_id: string;
-  stage: string;
-  count: number;
-  fill: string;
+  stage_name: string;
+  stage_order: number;
+  lead_count: number;
+  is_final_stage?: boolean;
+  fill?: string;
 }
 
 interface LeadPreview {
@@ -269,12 +271,13 @@ export default function OfficerDashboardPage() {
   }));
 
   // Fix: Add null check for sales_funnel array
-  // Transform FunnelStage[] (API) to FunnelStage[] (component)
-  const salesFunnel = (stats.sales_funnel ?? []).map((s, index) => ({
+  // No transformation needed - API now returns correct format
+  const salesFunnel = (stats.sales_funnel ?? []).map((s) => ({
     stage_id: s.stage_id,
-    stage_name: s.stage,
-    stage_order: index,
-    lead_count: s.count,
+    stage_name: s.stage_name,
+    stage_order: s.stage_order,
+    lead_count: s.lead_count,
+    is_final_stage: s.is_final_stage,
   }));
 
   // Fix: Use POST method to match WorkloadCard.tsx API call
