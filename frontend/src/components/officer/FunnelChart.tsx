@@ -392,22 +392,58 @@ export function FunnelChart({ funnel, previousPeriodConversion, config }: Funnel
                           )}
                         </div>
                       </TooltipTrigger>
-                      <TooltipContent side="right" className="max-w-[240px]">
+                      <TooltipContent side="right" className="max-w-[280px]">
                         <div className="text-xs space-y-1.5">
-                          <p className="font-medium">
+                          <p className="font-medium border-b border-white/20 pb-1">
                             {coreStages[index - 1].stage_name} → {stage.stage_name}
                           </p>
-                          <div className="text-muted-foreground space-y-0.5">
-                            <p>Chuyển đổi: {stage.lead_count}/{metrics.prevCount} leads</p>
+                          
+                          {/* Historical Conversion Rate */}
+                          <div className="space-y-0.5">
+                            <p className="text-white/90">
+                              <span className="font-medium text-white">Tỷ lệ chuyển đổi (30 ngày):</span>
+                              {" "}
+                              {metrics.conversion !== null 
+                                ? <span className={cn("font-bold", 
+                                    metrics.conversion >= 70 ? "text-emerald-300" :
+                                    metrics.conversion >= 50 ? "text-amber-300" : "text-red-300"
+                                  )}>{metrics.conversion.toFixed(0)}%</span>
+                                : <span className="text-white/50">Chưa có dữ liệu</span>
+                              }
+                            </p>
+                            <p className="text-white/50 text-[10px] italic">
+                              % leads đã tiến từ "{coreStages[index - 1].stage_name}" lên stage tiếp theo
+                            </p>
+                          </div>
+                          
+                          {/* Current Distribution */}
+                          <div className="space-y-0.5 pt-1 border-t border-white/20">
+                            <p className="text-white/90">
+                              <span className="font-medium text-white">Phân bố hiện tại:</span>
+                            </p>
+                            <p className="text-white/70 pl-2">
+                              • "{coreStages[index - 1].stage_name}": {metrics.prevCount} leads
+                            </p>
+                            <p className="text-white/70 pl-2">
+                              • "{stage.stage_name}": {stage.lead_count} leads
+                            </p>
                             {metrics.dropOff > 0 && (
-                              <p className="text-amber-600">Drop-off: {metrics.dropOff} leads ({metrics.dropOffPercent.toFixed(0)}%)</p>
+                              <p className="text-amber-300 pl-2">
+                                • Chênh lệch: -{metrics.dropOff} leads ({metrics.dropOffPercent.toFixed(0)}%)
+                              </p>
                             )}
                           </div>
-                          <p className={cn("font-medium pt-1 border-t", conversionStatus.textColor)}>
-                            Trạng thái: {conversionStatus.label}
+                          
+                          {/* Status */}
+                          <p className={cn("font-medium pt-1 border-t border-white/20", 
+                            metrics.conversion !== null && metrics.conversion >= 70 ? "text-emerald-300" :
+                            metrics.conversion !== null && metrics.conversion >= 50 ? "text-amber-300" : "text-red-300"
+                          )}>
+                            Đánh giá: {conversionStatus.label}
                           </p>
+                          
                           {isBottleneck && (
-                            <p className="text-red-600 font-medium">
+                            <p className="text-red-300 font-medium bg-red-500/30 p-1.5 rounded">
                               ⚠️ Điểm nghẽn chính - cần review quy trình
                             </p>
                           )}
