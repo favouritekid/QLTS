@@ -232,15 +232,17 @@ async def get_officer_dashboard_stats(
     thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
     
     # Query: count transitions from each stage to next stages
+    # FIX: Use changed_by_user_id from history table instead of Lead.assigned_officer_id
+    # This ensures we count transitions made BY this officer, not just current assignments
+    # (Leads may have been reassigned since the transition was made)
     transition_query = (
         select(
             models.LeadStatusHistory.old_pipeline_stage_id,
             models.LeadStatusHistory.new_pipeline_stage_id,
             func.count().label("transition_count")
         )
-        .join(models.Lead, models.LeadStatusHistory.lead_id == models.Lead.id)
         .where(
-            models.Lead.assigned_officer_id == officer_id,
+            models.LeadStatusHistory.changed_by_user_id == officer_id,
             models.LeadStatusHistory.changed_at >= thirty_days_ago,
             models.LeadStatusHistory.old_pipeline_stage_id.isnot(None),
             models.LeadStatusHistory.new_pipeline_stage_id.isnot(None),
@@ -263,7 +265,9 @@ async def get_officer_dashboard_stats(
         transition_map[from_stage][to_stage] = count
     
     # Calculate conversion rate for each stage (to next stage)
-    # Conversion = leads that moved to HIGHER stage / total leads that left this stage
+    # Conversion = leads that moved to HIGHER non-final stage / total leads that left this stage
+    # FIX: Exclude transitions to FINAL stages (stg06, stg07) from progressive count
+    # because stg07 (lost) has higher order but is NOT a progression
     for i, funnel_stage in enumerate(sales_funnel):
         stage_id = funnel_stage["stage_id"]
         stage_order = funnel_stage["stage_order"]
@@ -272,13 +276,17 @@ async def get_officer_dashboard_stats(
             transitions_from = transition_map[stage_id]
             total_out = sum(transitions_from.values())
             
-            # Count transitions to higher stages (progression)
+            # Count transitions to higher NON-FINAL stages (true progression)
             progressive_count = 0
             for to_stage_id, count in transitions_from.items():
-                # Find to_stage order
+                # Find to_stage and check if it's a progression
                 for s in all_stages:
-                    if s.id == to_stage_id and s.order > stage_order:
-                        progressive_count += count
+                    if s.id == to_stage_id:
+                        # Only count as progressive if:
+                        # 1. Higher order AND
+                        # 2. NOT a final stage (final stages like stg06/stg07 are outcomes, not progression)
+                        if s.order > stage_order and not s.is_final_stage:
+                            progressive_count += count
                         break
             
             if total_out > 0:

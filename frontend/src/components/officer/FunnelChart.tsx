@@ -8,6 +8,9 @@
  * - Separate "Core Flow" stages from "Outcome" stages
  * - Color-coded conversion indicators
  * - Actionable insights through tooltips
+ * - Configurable stage IDs via props
+ * - Seamless funnel geometry (each stage's bottom matches next stage's top)
+ * - Improved bottleneck detection (impact = dropOff × severity)
  */
 "use client";
 
@@ -16,7 +19,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { 
-  ChevronRight, 
   AlertTriangle, 
   Users, 
   ArrowDown, 
@@ -28,6 +30,10 @@ import {
   TrendingDown,
   Minus
 } from "lucide-react";
+
+// ============================================================================
+// INTERFACES
+// ============================================================================
 
 interface OutcomeBreakdown {
   positive: number;
@@ -45,11 +51,31 @@ interface FunnelStage {
   outcome_breakdown?: OutcomeBreakdown;  // positive/negative/neutral counts
 }
 
+// Funnel configuration interface - allows customization via props
+interface FunnelConfig {
+  positiveStageIds: string[];  // Stage IDs considered as positive outcome
+  negativeStageIds: string[];  // Stage IDs considered as negative outcome
+  bottleneckThreshold: number; // Conversion rate below this triggers bottleneck warning  
+}
+
+// Default configuration
+const DEFAULT_CONFIG: FunnelConfig = {
+  positiveStageIds: ["stg06", "enrolled"],
+  negativeStageIds: ["stg07", "lost", "not_enrolled"],
+  bottleneckThreshold: 50,
+};
+
 interface FunnelChartProps {
   funnel: FunnelStage[];
   /** Comparison data from previous period */
   previousPeriodConversion?: number;
+  /** Optional configuration to override defaults */
+  config?: Partial<FunnelConfig>;
 }
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
 
 // Gradient palette - smooth transition from purple to cyan
 const FUNNEL_GRADIENT = {
@@ -69,6 +95,39 @@ const getStageColor = (index: number, total: number, isFinal: boolean) => {
   const hue = startHue + (endHue - startHue) * progress;
   
   return `hsl(${hue} ${saturation}% ${lightness}%)`;
+};
+
+// Determine text color based on background lightness for contrast
+const getContrastTextColor = (stageColor: string): string => {
+  // Parse HSL and check lightness
+  const match = stageColor.match(/hsl\((\d+)\s+(\d+)%\s+(\d+)%\)/);
+  if (match) {
+    const lightness = parseInt(match[3]);
+    return lightness > 60 ? 'text-gray-800' : 'text-white';
+  }
+  return 'text-white'; // Default fallback
+};
+
+// Helper to calculate seamless funnel clip-path
+// Makes each stage's bottom match the next stage's top
+const getFunnelShape = (index: number, totalStages: number) => {
+  const MAX_WIDTH = 100; // Starting width (100%)
+  const MIN_WIDTH = 40;  // Final bottom width (40%)
+  
+  // Calculate step reduction to distribute evenly from 100% to 40%
+  const stepReduction = (MAX_WIDTH - MIN_WIDTH) / totalStages;
+
+  // Calculate top and bottom width for current stage
+  const topWidth = MAX_WIDTH - (index * stepReduction);
+  const bottomWidth = MAX_WIDTH - ((index + 1) * stepReduction);
+
+  // Calculate inset from both sides
+  const insetTop = (100 - topWidth) / 2;
+  const insetBottom = (100 - bottomWidth) / 2;
+
+  return {
+    clipPath: `polygon(${insetTop}% 0%, ${100 - insetTop}% 0%, ${100 - insetBottom}% 100%, ${insetBottom}% 100%)`,
+  };
 };
 
 // Get conversion rate status and color
@@ -109,24 +168,46 @@ const getConversionStatus = (rate: number | null): {
   };
 };
 
-// Outcome stage IDs (final stages)
-const OUTCOME_STAGE_IDS = ["stg06", "stg07", "enrolled", "lost", "not_enrolled"];
+// ============================================================================
+// MAIN COMPONENT
+// ============================================================================
 
-export function FunnelChart({ funnel, previousPeriodConversion }: FunnelChartProps) {
+export function FunnelChart({ funnel, previousPeriodConversion, config }: FunnelChartProps) {
   const router = useRouter();
+  
+  // Merge user config with defaults
+  const mergedConfig: FunnelConfig = {
+    ...DEFAULT_CONFIG,
+    ...config,
+  };
 
-  // Debug: Check if outcome_breakdown is received
-  console.log('[FunnelChart] First stage outcome_breakdown:', funnel[0]?.outcome_breakdown);
+  // Get all outcome stage IDs (both positive and negative)
+  const outcomeStageIds = [
+    ...mergedConfig.positiveStageIds,
+    ...mergedConfig.negativeStageIds,
+  ];
+
+  // =========== EMPTY STATE HANDLING ===========
+  if (!funnel || funnel.length === 0) {
+    return (
+      <Card className="border bg-card min-h-[300px] flex items-center justify-center">
+        <div className="text-center text-muted-foreground">
+          <Target className="h-12 w-12 mx-auto mb-3 opacity-30" />
+          <p className="text-sm">Chưa có dữ liệu Pipeline</p>
+        </div>
+      </Card>
+    );
+  }
 
   // Sort by stage order
   const sortedFunnel = [...funnel].sort((a, b) => a.stage_order - b.stage_order);
 
-  // Separate core flow stages from outcome stages
+  // Separate core flow stages from outcome stages (using configurable IDs)
   const coreStages = sortedFunnel.filter(s => 
-    !s.is_final_stage && !OUTCOME_STAGE_IDS.includes(s.stage_id)
+    !s.is_final_stage && !outcomeStageIds.includes(s.stage_id)
   );
   const outcomeStages = sortedFunnel.filter(s => 
-    s.is_final_stage || OUTCOME_STAGE_IDS.includes(s.stage_id)
+    s.is_final_stage || outcomeStageIds.includes(s.stage_id)
   );
 
   // Calculate total leads by summing all stages (core + outcome)
@@ -139,12 +220,12 @@ export function FunnelChart({ funnel, previousPeriodConversion }: FunnelChartPro
   );
   
   // Calculate overall conversion (completed outcomes / total leads)
-  // This shows what percentage of leads have completed the funnel
+  // Using configurable positive stage IDs
   const enrolledStage = outcomeStages.find(s => 
-    s.stage_id === "stg06" || s.stage_id === "enrolled"
+    mergedConfig.positiveStageIds.includes(s.stage_id)
   );
   const failedStages = outcomeStages.filter(s => 
-    s.stage_id === "stg07" || s.stage_id === "lost" || s.stage_id === "not_enrolled"
+    mergedConfig.negativeStageIds.includes(s.stage_id)
   );
   const enrolledCount = enrolledStage?.lead_count || 0;
   const failedCount = failedStages.reduce((sum, s) => sum + s.lead_count, 0);
@@ -152,18 +233,16 @@ export function FunnelChart({ funnel, previousPeriodConversion }: FunnelChartPro
   const overallConversion = totalLeads > 0 ? (completedCount / totalLeads) * 100 : 0;
 
   // Calculate metrics for each stage
-  // Use backend-calculated conversion_rate (from lead_status_history) when available
   const stageMetrics = coreStages.map((stage, index) => {
     const percentFromTotal = totalLeads > 0 ? (stage.lead_count / totalLeads) * 100 : 0;
     
     // Use historical conversion rate from backend if available
-    // If no historical data, conversion is null (display as N/A)
     const historicalConversion = stage.conversion_rate;
     const hasHistoricalData = historicalConversion !== null && historicalConversion !== undefined;
     
     if (index === 0) {
       return { 
-        conversion: hasHistoricalData ? historicalConversion : null,  // First stage
+        conversion: hasHistoricalData ? historicalConversion : null,
         dropOff: 0, 
         dropOffPercent: 0,
         percentFromTotal,
@@ -173,7 +252,6 @@ export function FunnelChart({ funnel, previousPeriodConversion }: FunnelChartPro
     }
     
     const prevCount = coreStages[index - 1].lead_count;
-    // Only use historical conversion - don't fallback to count-based (meaningless with actual counts)
     const conversion = hasHistoricalData ? historicalConversion : null;
     const dropOff = Math.max(0, prevCount - stage.lead_count);
     const dropOffPercent = prevCount > 0 ? (dropOff / prevCount) * 100 : 0;
@@ -188,14 +266,30 @@ export function FunnelChart({ funnel, previousPeriodConversion }: FunnelChartPro
     };
   });
 
-  // Find bottleneck (lowest conversion excluding first stage, only for stages with data)
-  const bottleneckIndex = stageMetrics.reduce((minIdx, metric, idx) => {
-    if (idx === 0 || metric.conversion === null) return minIdx;
-    if (minIdx === -1) return idx;
-    const minConversion = stageMetrics[minIdx].conversion;
-    if (minConversion === null) return idx;
-    return metric.conversion < minConversion ? idx : minIdx;
-  }, -1);
+  // =========== IMPROVED BOTTLENECK DETECTION ===========
+  // Find bottleneck using both conversion rate AND volume impact
+  // Priority: Stages where high volume is lost (dropOff * severity)
+  const findBottleneck = (metrics: typeof stageMetrics, threshold: number) => {
+    let maxImpact = -1;
+    let bottleneckIdx = -1;
+    
+    metrics.forEach((metric, idx) => {
+      if (idx === 0 || metric.conversion === null) return;
+      if (metric.conversion >= threshold) return; // Skip healthy stages
+      
+      // Impact = volume lost * severity (inverse of conversion rate)
+      const severity = (100 - metric.conversion) / 100;
+      const impact = metric.dropOff * severity;
+      
+      if (impact > maxImpact) {
+        maxImpact = impact;
+        bottleneckIdx = idx;
+      }
+    });
+    
+    return bottleneckIdx;
+  };
+  const bottleneckIndex = findBottleneck(stageMetrics, mergedConfig.bottleneckThreshold);
 
   // Comparison with previous period
   const conversionTrend = previousPeriodConversion !== undefined
@@ -261,19 +355,16 @@ export function FunnelChart({ funnel, previousPeriodConversion }: FunnelChartPro
 
         <CardContent className="space-y-6">
           {/* === CORE FUNNEL FLOW === */}
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             {coreStages.map((stage, index) => {
               const metrics = stageMetrics[index];
-              const isBottleneck = index === bottleneckIndex && metrics.conversion !== null && metrics.conversion < 50;
+              const isBottleneck = index === bottleneckIndex && metrics.conversion !== null && metrics.conversion < mergedConfig.bottleneckThreshold;
               const conversionStatus = getConversionStatus(metrics.conversion);
               const stageColor = getStageColor(index, coreStages.length, false);
+              const textColorClass = getContrastTextColor(stageColor);
               
-              // Width based on cumulative conversion (first stage = 100%, then proportionally smaller)
-              // This creates the classic funnel trapezoid shape
-              const cumulativePercent = index === 0 
-                ? 100 
-                : Math.max(35, 100 - (index * 12)); // Each stage ~12% narrower
-              const widthPercent = cumulativePercent;
+              // Get seamless funnel shape
+              const shapeStyle = getFunnelShape(index, coreStages.length);
 
               return (
                 <div key={stage.stage_id} className="flex flex-col items-center">
@@ -325,44 +416,42 @@ export function FunnelChart({ funnel, previousPeriodConversion }: FunnelChartPro
                     </Tooltip>
                   )}
 
-                  {/* Stage Row: Label | Bar | Conversion */}
+                  {/* Stage Row: Label | Bar | Count */}
                   <div className="flex items-center w-full gap-3">
-                    {/* Left: Stage name (outside bar) */}
+                    {/* Left: Stage name */}
                     <div className="w-28 shrink-0 text-right">
                       <span className="text-sm font-medium text-foreground truncate">
                         {stage.stage_name}
                       </span>
                     </div>
 
-                    {/* Center: Bar */}
+                    {/* Center: Seamless Funnel Bar */}
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button
                           className={cn(
-                            "relative group transition-all duration-200 hover:scale-[1.01] flex-1",
-                            isBottleneck && "ring-2 ring-red-400/50 ring-offset-1 rounded"
+                            "relative group transition-all duration-200 hover:brightness-110 h-14 w-full flex-1",
+                            isBottleneck && "ring-2 ring-red-400/50 ring-offset-1"
                           )}
-                          style={{ maxWidth: `${widthPercent}%` }}
                           onClick={() => handleStageClick(stage.stage_id)}
                         >
+                          {/* Background layer with clip-path */}
                           <div 
-                            className={cn(
-                              "relative h-12 overflow-hidden transition-all",
-                              "hover:brightness-110 hover:shadow-lg"
-                            )}
+                            className="absolute inset-0 shadow-sm transition-all hover:shadow-lg"
                             style={{
                               backgroundColor: stageColor,
-                              clipPath: 'polygon(0% 0%, 100% 0%, 98% 100%, 2% 100%)',
-                              borderRadius: '2px',
+                              clipPath: shapeStyle.clipPath,
                             }}
-                          >
-                            {/* Content inside bar */}
-                            <div className="absolute inset-0 flex items-center justify-center px-4">
-                              {/* Center: Percentage */}
-                              <span className="text-lg font-bold text-white tabular-nums drop-shadow-sm">
-                                {metrics.percentFromTotal.toFixed(1)}%
-                              </span>
-                            </div>
+                          />
+                          
+                          {/* Content layer */}
+                          <div className="relative z-10 flex items-center justify-center h-full">
+                            <span className={cn(
+                              "text-lg font-bold tabular-nums drop-shadow-md",
+                              textColorClass
+                            )}>
+                              {metrics.percentFromTotal.toFixed(1)}%
+                            </span>
                           </div>
                         </button>
                       </TooltipTrigger>
@@ -406,8 +495,8 @@ export function FunnelChart({ funnel, previousPeriodConversion }: FunnelChartPro
               </h4>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 {outcomeStages.map(stage => {
-                  const isPositive = stage.stage_id === "stg06" || stage.stage_id === "enrolled";
-                  const isNegative = stage.stage_id === "stg07" || stage.stage_id === "lost" || stage.stage_id === "not_enrolled";
+                  const isPositive = mergedConfig.positiveStageIds.includes(stage.stage_id);
+                  const isNegative = mergedConfig.negativeStageIds.includes(stage.stage_id);
                   const percent = totalLeads > 0 ? (stage.lead_count / totalLeads) * 100 : 0;
                   
                   return (
