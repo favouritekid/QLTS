@@ -66,7 +66,7 @@ async def update_availability(
 
 
 # =============================================================================
-# PHASE 1: Enhanced Dashboard with KPIs
+# PHASE 1: Enhanced Dashboard with KPIs (+ Date Range Filter)
 # =============================================================================
 
 @limiter.limit(RateLimits.DATA_READ)
@@ -78,7 +78,9 @@ async def update_availability(
 async def get_enhanced_dashboard(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, PermissionDep]
+    current_user: Annotated[models.User, PermissionDep],
+    start_date: str = None,  # ISO format YYYY-MM-DD
+    end_date: str = None,    # ISO format YYYY-MM-DD
 ):
     """
     Enhanced officer dashboard with:
@@ -86,14 +88,22 @@ async def get_enhanced_dashboard(
     - Trend comparisons (vs yesterday, vs last week, vs last month)
     - AI-powered priority actions
     - Performance trends and pipeline funnel
+    
+    Optional date range filter:
+    - start_date: Start date in YYYY-MM-DD format
+    - end_date: End date in YYYY-MM-DD format
     """
     try:
         stats = await officer_service.get_enhanced_dashboard_stats(
-            db=db, officer_id=current_user.id
+            db=db, 
+            officer_id=current_user.id,
+            start_date=start_date,
+            end_date=end_date,
         )
         return stats
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 # =============================================================================

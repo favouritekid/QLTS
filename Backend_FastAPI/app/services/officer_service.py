@@ -421,27 +421,204 @@ async def update_officer_availability(
 
 
 # =============================================================================
-# PHASE 1: Enhanced Dashboard with KPIs
+# HELPER: Sales Funnel with Date Range Filter
 # =============================================================================
 
+async def _get_sales_funnel_in_range(
+    db: AsyncSession,
+    officer_id: int,
+    filter_start: date,
+    filter_end: date
+) -> List[Dict[str, Any]]:
+    """
+    Get sales funnel data filtered by date range.
+    Only counts leads created within the date range.
+    """
+    # Query pipeline stages ordered (no is_active, all stages are active)
+    stages_query = (
+        select(models.PipelineStage)
+        .order_by(models.PipelineStage.order)
+    )
+    stages_result = await db.execute(stages_query)
+    all_stages = stages_result.scalars().all()
+    
+    sales_funnel = []
+    for idx, stage in enumerate(all_stages):
+        # Count leads in this stage created within date range
+        count_query = (
+            select(func.count(models.Lead.id))
+            .where(
+                models.Lead.assigned_officer_id == officer_id,
+                models.Lead.pipeline_stage_id == stage.id,
+                func.date(models.Lead.created_at) >= filter_start,
+                func.date(models.Lead.created_at) <= filter_end,
+            )
+        )
+        lead_count = (await db.execute(count_query)).scalar() or 0
+        
+        # Outcome breakdown for final stages (within date range)
+        positive_count = 0
+        negative_count = 0
+        neutral_count = 0
+        
+        if stage.is_final_stage:
+            # Get outcome distribution
+            outcome_query = (
+                select(
+                    models.ConsultationStatus.outcome_type,
+                    func.count(models.Lead.id)
+                )
+                .join(models.ConsultationStatus, models.Lead.consultation_status_id == models.ConsultationStatus.id)
+                .where(
+                    models.Lead.assigned_officer_id == officer_id,
+                    models.Lead.pipeline_stage_id == stage.id,
+                    func.date(models.Lead.created_at) >= filter_start,
+                    func.date(models.Lead.created_at) <= filter_end,
+                )
+                .group_by(models.ConsultationStatus.outcome_type)
+            )
+            outcome_result = await db.execute(outcome_query)
+            for row in outcome_result:
+                if row[0] == "positive":
+                    positive_count = row[1]
+                elif row[0] == "negative":
+                    negative_count = row[1]
+                else:
+                    neutral_count = row[1]
+        
+        sales_funnel.append({
+            "stage_id": stage.id,
+            "stage_name": stage.name,
+            "stage_order": stage.order,
+            "lead_count": lead_count,
+            "is_final_stage": stage.is_final_stage,
+            "fill": f"var(--chart-{idx % 5 + 1})",
+            "conversion_rate": None,
+            "outcome_breakdown": {
+                "positive": positive_count,
+                "negative": negative_count,
+                "neutral": neutral_count,
+            }
+        })
+    
+    # Calculate conversion rates from transition history (within date range)
+    transition_query = (
+        select(
+            models.LeadStatusHistory.old_pipeline_stage_id,
+            models.LeadStatusHistory.new_pipeline_stage_id,
+            func.count().label("transition_count")
+        )
+        .where(
+            models.LeadStatusHistory.changed_by_user_id == officer_id,
+            func.date(models.LeadStatusHistory.changed_at) >= filter_start,
+            func.date(models.LeadStatusHistory.changed_at) <= filter_end,
+            models.LeadStatusHistory.old_pipeline_stage_id.isnot(None),
+            models.LeadStatusHistory.new_pipeline_stage_id.isnot(None),
+            models.LeadStatusHistory.old_pipeline_stage_id != models.LeadStatusHistory.new_pipeline_stage_id
+        )
+        .group_by(
+            models.LeadStatusHistory.old_pipeline_stage_id,
+            models.LeadStatusHistory.new_pipeline_stage_id
+        )
+    )
+    transition_result = await db.execute(transition_query)
+    transitions = transition_result.fetchall()
+    
+    transition_map: Dict[str, Dict[str, int]] = {}
+    for row in transitions:
+        from_stage, to_stage, count = row
+        if from_stage not in transition_map:
+            transition_map[from_stage] = {}
+        transition_map[from_stage][to_stage] = count
+    
+    for i, funnel_stage in enumerate(sales_funnel):
+        stage_id = funnel_stage["stage_id"]
+        stage_order = funnel_stage["stage_order"]
+        
+        if stage_id in transition_map:
+            transitions_from = transition_map[stage_id]
+            total_out = sum(transitions_from.values())
+            
+            progressive_count = 0
+            for to_stage_id, count in transitions_from.items():
+                for s in all_stages:
+                    if s.id == to_stage_id:
+                        if s.order > stage_order and not s.is_final_stage:
+                            progressive_count += count
+                        break
+            
+            if total_out > 0:
+                conversion_rate = round((progressive_count / total_out) * 100, 1)
+                sales_funnel[i]["conversion_rate"] = conversion_rate
+    
+    return sales_funnel
+
+
+# =============================================================================
+# PHASE 1: Enhanced Dashboard with KPIs (+ Date Range Filter)
+# =============================================================================
+
+
 async def get_enhanced_dashboard_stats(
-    db: AsyncSession, officer_id: int
+    db: AsyncSession, 
+    officer_id: int,
+    start_date: str = None,  # ISO format YYYY-MM-DD
+    end_date: str = None,    # ISO format YYYY-MM-DD
 ) -> Dict[str, Any]:
     """
     Enhanced dashboard with KPIs, priority actions, and trends.
     Builds on get_officer_dashboard_stats with additional metrics.
+    
+    Args:
+        db: Database session
+        officer_id: Officer user ID
+        start_date: Optional start date filter (YYYY-MM-DD)
+        end_date: Optional end date filter (YYYY-MM-DD)
     """
+    # Parse date range if provided
+    today = datetime.now(timezone.utc).date()
+    if start_date and end_date:
+        try:
+            filter_start = date.fromisoformat(start_date)
+            filter_end = date.fromisoformat(end_date)
+            log.info(
+                "Dashboard with date filter",
+                officer_id=officer_id,
+                start_date=start_date,
+                end_date=end_date
+            )
+        except ValueError:
+            filter_start = today - timedelta(days=6)
+            filter_end = today
+    else:
+        # Default: last 7 days
+        filter_start = today - timedelta(days=6)
+        filter_end = today
+    
     # Get base stats first
     base_stats = await get_officer_dashboard_stats(db, officer_id)
     
-    today = datetime.now(timezone.utc).date()
     yesterday = today - timedelta(days=1)
     week_ago = today - timedelta(days=7)
     month_start = today.replace(day=1)
     last_month_start = (month_start - timedelta(days=1)).replace(day=1)
     
-    # === 1. CONSULTATIONS TODAY ===
-    # Count consultations (from Consultation model if exists, or use assignment logs)
+    # Calculate days in filter range for averages
+    filter_days = (filter_end - filter_start).days + 1
+    
+    # === 1. CONSULTATIONS IN DATE RANGE ===
+    # Count consultations within the selected date range
+    consultations_range_query = (
+        select(func.count(models.Consultation.id))
+        .where(
+            models.Consultation.officer_id == officer_id,
+            func.date(models.Consultation.consultation_date) >= filter_start,
+            func.date(models.Consultation.consultation_date) <= filter_end
+        )
+    )
+    consultations_in_range = (await db.execute(consultations_range_query)).scalar() or 0
+    
+    # Today's consultations (always show today regardless of filter)
     consultations_today_query = (
         select(func.count(models.Consultation.id))
         .where(
@@ -451,28 +628,10 @@ async def get_enhanced_dashboard_stats(
     )
     consultations_today = (await db.execute(consultations_today_query)).scalar() or 0
     
-    # Yesterday's consultations for trend
-    consultations_yesterday_query = (
-        select(func.count(models.Consultation.id))
-        .where(
-            models.Consultation.officer_id == officer_id,
-            func.date(models.Consultation.consultation_date) == yesterday
-        )
-    )
-    consultations_yesterday = (await db.execute(consultations_yesterday_query)).scalar() or 0
+    # Calculate daily average for the selected period
+    consultations_avg = consultations_in_range / filter_days if filter_days > 0 else 0
     
-    # Weekly average
-    consultations_week_query = (
-        select(func.count(models.Consultation.id))
-        .where(
-            models.Consultation.officer_id == officer_id,
-            func.date(models.Consultation.consultation_date) >= week_ago
-        )
-    )
-    consultations_week = (await db.execute(consultations_week_query)).scalar() or 0
-    consultations_avg = consultations_week / 7 if consultations_week > 0 else 0
-    
-    # Calculate trend
+    # Compare today vs average in selected period
     if consultations_avg > 0:
         trend_pct = ((consultations_today - consultations_avg) / consultations_avg) * 100
         trend_direction = "up" if trend_pct > 0 else "down" if trend_pct < 0 else "neutral"
@@ -483,14 +642,12 @@ async def get_enhanced_dashboard_stats(
     consultations_trend = {
         "value": abs(round(trend_pct, 1)),
         "direction": trend_direction,
-        "comparison": "vs TB tuần"
+        "comparison": f"vs TB {filter_days} ngày"
     }
     
-    # === 2. ACTIVE LEADS ===
-    active_leads = base_stats["status_overview"]["current_workload"]
-    
-    # Yesterday's active leads (approximation)
-    leads_yesterday_query = (
+    # === 2. ACTIVE LEADS (in date range) ===
+    # Count leads created within the date range that are still active
+    active_leads_range_query = (
         select(func.count(models.Lead.id))
         .join(
             models.ConsultationStatus,
@@ -499,89 +656,144 @@ async def get_enhanced_dashboard_stats(
         )
         .where(
             models.Lead.assigned_officer_id == officer_id,
-            models.Lead.created_at < datetime.combine(today, datetime.min.time()).replace(tzinfo=timezone.utc),
+            func.date(models.Lead.created_at) >= filter_start,
+            func.date(models.Lead.created_at) <= filter_end,
             or_(
                 models.ConsultationStatus.is_final_status == False,
                 models.ConsultationStatus.is_final_status.is_(None)
             )
         )
     )
-    # Simplify - just show difference from average
+    active_leads = (await db.execute(active_leads_range_query)).scalar() or 0
+    
     active_leads_trend = {
         "value": 0,
         "direction": "neutral",
-        "comparison": "vs hôm qua"
+        "comparison": f"trong {filter_days} ngày"
     }
     
-    # === 3. CONVERSION RATE ===
-    # Leads CREATED this month AND converted (same cohort)
-    converted_this_month_query = (
+    # === 3. CONVERSION RATE (in date range) ===
+    # Leads CREATED in date range AND converted (cohort analysis)
+    converted_range_query = (
         select(func.count(models.Lead.id))
         .join(models.ConsultationStatus)
         .where(
             models.Lead.assigned_officer_id == officer_id,
             models.ConsultationStatus.is_final_status == True,
             models.ConsultationStatus.outcome_type == "positive",
-            func.date(models.Lead.created_at) >= month_start,  # FIX: use created_at
+            func.date(models.Lead.created_at) >= filter_start,
+            func.date(models.Lead.created_at) <= filter_end,
         )
     )
-    converted_this_month = (await db.execute(converted_this_month_query)).scalar() or 0
+    converted_in_range = (await db.execute(converted_range_query)).scalar() or 0
     
-    total_leads_this_month_query = (
+    total_leads_range_query = (
         select(func.count(models.Lead.id))
         .where(
             models.Lead.assigned_officer_id == officer_id,
-            func.date(models.Lead.created_at) >= month_start
+            func.date(models.Lead.created_at) >= filter_start,
+            func.date(models.Lead.created_at) <= filter_end,
         )
     )
-    total_this_month = (await db.execute(total_leads_this_month_query)).scalar() or 1
+    total_in_range = (await db.execute(total_leads_range_query)).scalar() or 1
     
-    conversion_rate = round((converted_this_month / total_this_month) * 100, 1)
+    conversion_rate = round((converted_in_range / total_in_range) * 100, 1)
     
-    # Last month: Leads CREATED last month AND converted (same cohort)
-    converted_last_month_query = (
+    # Compare with previous period of same length
+    prev_filter_end = filter_start - timedelta(days=1)
+    prev_filter_start = prev_filter_end - timedelta(days=filter_days - 1)
+    
+    converted_prev_query = (
         select(func.count(models.Lead.id))
         .join(models.ConsultationStatus)
         .where(
             models.Lead.assigned_officer_id == officer_id,
             models.ConsultationStatus.is_final_status == True,
             models.ConsultationStatus.outcome_type == "positive",
-            func.date(models.Lead.created_at) >= last_month_start,  # FIX: use created_at
-            func.date(models.Lead.created_at) < month_start
+            func.date(models.Lead.created_at) >= prev_filter_start,
+            func.date(models.Lead.created_at) <= prev_filter_end,
         )
     )
-    converted_last_month = (await db.execute(converted_last_month_query)).scalar() or 0
+    converted_prev = (await db.execute(converted_prev_query)).scalar() or 0
     
-    total_last_month_query = (
+    total_prev_query = (
         select(func.count(models.Lead.id))
         .where(
             models.Lead.assigned_officer_id == officer_id,
-            func.date(models.Lead.created_at) >= last_month_start,
-            func.date(models.Lead.created_at) < month_start
+            func.date(models.Lead.created_at) >= prev_filter_start,
+            func.date(models.Lead.created_at) <= prev_filter_end,
         )
     )
-    total_last_month = (await db.execute(total_last_month_query)).scalar() or 1
-    last_month_rate = (converted_last_month / total_last_month) * 100
+    total_prev = (await db.execute(total_prev_query)).scalar() or 1
+    prev_rate = (converted_prev / total_prev) * 100
     
-    conversion_diff = conversion_rate - last_month_rate
+    conversion_diff = conversion_rate - prev_rate
     conversion_trend = {
         "value": abs(round(conversion_diff, 1)),
         "direction": "up" if conversion_diff > 0 else "down" if conversion_diff < 0 else "neutral",
-        "comparison": "vs tháng trước"
+        "comparison": f"vs {filter_days} ngày trước"
     }
     
     # === 4. AVERAGE RESPONSE TIME ===
-    # Time from lead created to first consultation
-    # Simplified: Calculate from last 30 days of data
-    avg_response_time = 2.5  # Placeholder - would need Consultation timestamps
+    avg_response_time = 2.5  # Placeholder
     avg_response_trend = {
         "value": 15,
-        "direction": "down",  # Lower is better
+        "direction": "down",
         "comparison": "vs TB"
     }
     
     # === 5. PRIORITY ACTIONS ===
     priority_actions = await _calculate_priority_actions(db, officer_id)
+    
+    # === 6. PERFORMANCE TRENDS (within date range) ===
+    # Generate trend data for each day in the date range
+    performance_trends = []
+    current_date = filter_start
+    while current_date <= filter_end:
+        # Consultations for this day
+        day_consults_query = (
+            select(func.count(models.Consultation.id))
+            .where(
+                models.Consultation.officer_id == officer_id,
+                func.date(models.Consultation.consultation_date) == current_date
+            )
+        )
+        day_consults = (await db.execute(day_consults_query)).scalar() or 0
+        
+        # Leads assigned on this day
+        day_assigned_query = (
+            select(func.count(models.AssignmentLog.id))
+            .where(
+                models.AssignmentLog.officer_id == officer_id,
+                func.date(models.AssignmentLog.timestamp) == current_date
+            )
+        )
+        day_assigned = (await db.execute(day_assigned_query)).scalar() or 0
+        
+        # Leads converted on this day (status changed to final positive)
+        day_converted_query = (
+            select(func.count(models.LeadStatusHistory.id))
+            .join(models.Lead, models.LeadStatusHistory.lead_id == models.Lead.id)
+            .join(models.PipelineStage, models.LeadStatusHistory.new_pipeline_stage_id == models.PipelineStage.id)
+            .where(
+                models.LeadStatusHistory.changed_by_user_id == officer_id,
+                func.date(models.LeadStatusHistory.changed_at) == current_date,
+                models.PipelineStage.is_final_stage == True
+            )
+        )
+        day_converted = (await db.execute(day_converted_query)).scalar() or 0
+        
+        performance_trends.append({
+            "date": current_date.isoformat(),
+            "assigned": day_assigned,
+            "consultations": day_consults,
+            "converted": day_converted
+        })
+        current_date += timedelta(days=1)
+    
+    # === 7. SALES FUNNEL (within date range) ===
+    # Get funnel stages with leads created in date range
+    sales_funnel = await _get_sales_funnel_in_range(db, officer_id, filter_start, filter_end)
     
     # Build enhanced response
     return {
@@ -598,8 +810,8 @@ async def get_enhanced_dashboard_stats(
         },
         "status_overview": base_stats["status_overview"],
         "priority_actions": priority_actions,
-        "performance_trends": base_stats["performance_trends"],
-        "sales_funnel": base_stats["sales_funnel"],
+        "performance_trends": performance_trends,
+        "sales_funnel": sales_funnel,
         "actionable_lists": base_stats["actionable_lists"],
     }
 

@@ -1,8 +1,6 @@
 // src/app/(dashboard)/dashboard/officer/page.tsx
 "use client";
 
-import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertCircle } from "lucide-react";
@@ -16,199 +14,29 @@ import {
   WeeklyLeaderboard, 
   SmartHeader
 } from "@/components/officer/dashboard";
+import { DashboardDateProvider } from "@/contexts/DashboardDateContext";
+import { useDashboardStats } from "@/hooks/useDashboardStats";
 import { api } from "@/lib/api/client";
-import { socket } from "@/lib/socket/client";
 import { toast } from "sonner";
 
 /**
  * Officer Command Center - Enhanced Dashboard for officers
  *
  * Features:
- * - KPI Cards with trends (Phase 1)
- * - Priority Actions (Phase 2)
+ * - Date Range Filter for all dashboard data
+ * - KPI Cards with trends
+ * - Priority Actions
  * - Real-time stats with Socket.IO updates
- * - Performance trends (7 days)
+ * - Performance trends
  * - Sales funnel visualization
- * - Actionable lead lists
- * - Availability toggle
  */
 
 // =============================================================================
-// TYPES
+// INNER CONTENT (must be inside DashboardDateProvider to use useDashboardDate)
 // =============================================================================
 
-interface TrendInfo {
-  value: number;
-  direction: "up" | "down" | "neutral";
-  comparison: string;
-}
-
-interface KPIStats {
-  consultations_today: number;
-  consultations_target: number;
-  consultations_trend: TrendInfo;
-  active_leads: number;
-  active_leads_trend: TrendInfo;
-  conversion_rate: number;
-  conversion_rate_trend: TrendInfo;
-  avg_response_time: number;
-  avg_response_time_trend: TrendInfo;
-}
-
-interface StatusOverview {
-  current_workload: number;
-  max_capacity: number;
-  utilization: number;
-  availability_status: "available" | "busy" | "offline";
-}
-
-interface PriorityAction {
-  id: string;
-  type: "hot_lead" | "overdue" | "scheduled" | "follow_up" | "new_lead";
-  priority: "urgent" | "high" | "medium";
-  lead_id: number;
-  lead_name: string;
-  lead_score: number;
-  reason: string;
-  days_since_contact?: number;
-}
-
-interface TrendPoint {
-  date: string;
-  assigned: number;
-  consultations: number;
-  converted: number;
-}
-
-interface FunnelStage {
-  stage_id: string;
-  stage_name: string;
-  stage_order: number;
-  lead_count: number;
-  is_final_stage?: boolean;
-  fill?: string;
-  conversion_rate?: number | null;  // Historical conversion % (30 days)
-  outcome_breakdown?: {
-    positive: number;
-    negative: number;
-    neutral: number;
-  };
-}
-
-interface LeadPreview {
-  id: number;
-  name: string;
-  email?: string;
-  phone?: string;
-  lead_score: number;
-  updated_at: string;
-  stage_name?: string;
-}
-
-interface UpcomingConsultation {
-  id: number;
-  lead_id: number;
-  lead_name: string;
-  scheduled_at: string;
-  status: string;
-}
-
-interface ActionableLists {
-  high_score: LeadPreview[];
-  stale: LeadPreview[];
-  upcoming: UpcomingConsultation[];
-}
-
-interface EnhancedOfficerStats {
-  kpis: KPIStats;
-  status_overview: StatusOverview;
-  priority_actions: PriorityAction[];
-  performance_trends: TrendPoint[];
-  sales_funnel: FunnelStage[];
-  actionable_lists: ActionableLists;
-}
-
-// =============================================================================
-// API
-// =============================================================================
-
-async function fetchEnhancedDashboard(): Promise<EnhancedOfficerStats> {
-  const response = await api.get("/api/officer/dashboard");
-  return response.data;
-}
-
-interface TeamStats {
-  team_avg_consultations: number;
-  team_avg_conversions: number;
-  officer_rank_percentile: number;
-  total_officers: number;
-  period_days: number;
-}
-
-async function fetchTeamStats(): Promise<TeamStats> {
-  const response = await api.get("/api/officer/team-stats");
-  return response.data;
-}
-
-// =============================================================================
-// COMPONENT
-// =============================================================================
-
-export default function OfficerDashboardPage() {
-  const queryClient = useQueryClient();
-
-  // Fetch enhanced officer stats
-  const {
-    data: stats,
-    isLoading,
-    error,
-    refetch
-  } = useQuery({
-    queryKey: ["officer", "dashboard"],
-    queryFn: fetchEnhancedDashboard,
-    refetchInterval: 60000, // Refresh every 60 seconds
-    staleTime: 30000, // Consider data stale after 30 seconds
-  });
-
-  // ✅ PHASE 6: Fetch team stats for performance comparison
-  const { data: teamStats } = useQuery({
-    queryKey: ["officer", "team-stats"],
-    queryFn: fetchTeamStats,
-    staleTime: 300000, // 5 minutes - less frequent updates
-  });
-
-  // === REAL-TIME SOCKET.IO INTEGRATION ===
-  useEffect(() => {
-    if (!socket.connected) {
-      socket.connect();
-    }
-
-    // Listen for data update events
-    const handleDataUpdate = (...args: unknown[]) => {
-      const data = args[0] as { resource: string };
-      // Invalidate queries when leads or consultations are updated
-      if (data.resource === "lead" || data.resource === "consultation") {
-        queryClient.invalidateQueries({ queryKey: ["officer", "dashboard"] });
-        console.log("Officer dashboard invalidated due to:", data.resource);
-      }
-    };
-
-    // Listen for lead assignment/status events that affect officer workload
-    const handleLeadChange = () => {
-      queryClient.invalidateQueries({ queryKey: ["officer", "dashboard"] });
-      console.log("Officer dashboard invalidated due to lead change");
-    };
-
-    socket.on("data_updated", handleDataUpdate);
-    socket.on("lead_assigned", handleLeadChange);
-    socket.on("lead_status_changed", handleLeadChange);
-
-    return () => {
-      socket.off("data_updated", handleDataUpdate);
-      socket.off("lead_assigned", handleLeadChange);
-      socket.off("lead_status_changed", handleLeadChange);
-    };
-  }, [queryClient]);
+function DashboardContent() {
+  const { stats, teamStats, isLoading, error, refetch } = useDashboardStats();
 
   // === LOADING STATE ===
   if (isLoading) {
@@ -216,19 +44,13 @@ export default function OfficerDashboardPage() {
       <div className="container mx-auto p-6 space-y-6">
         <div className="flex items-center justify-between">
           <Skeleton className="h-10 w-64" />
+          <Skeleton className="h-10 w-80" />
         </div>
 
         {/* KPI Cards Skeleton */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {[1, 2, 3, 4].map((i) => (
             <Skeleton key={i} className="h-32" />
-          ))}
-        </div>
-
-        {/* Workload Skeleton */}
-        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-          {[1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} className="h-28" />
           ))}
         </div>
 
@@ -265,10 +87,6 @@ export default function OfficerDashboardPage() {
   }
 
   // === DATA TRANSFORMERS ===
-  // Transform API response to match existing component interfaces
-
-  // Fix: Add null checks for performance_trends array
-  // Transform TrendPoint[] to PerformanceTrend[] for PerformanceChart
   const performanceTrends = (stats.performance_trends ?? []).map((t) => ({
     date: t.date,
     leads_assigned: t.assigned,
@@ -276,31 +94,15 @@ export default function OfficerDashboardPage() {
     converted: t.converted,
   }));
 
-  // Fix: Add null check for sales_funnel array
-  // Include outcome_breakdown for drop-off analysis
   const salesFunnel = (stats.sales_funnel ?? []).map((s) => ({
     stage_id: s.stage_id,
     stage_name: s.stage_name,
     stage_order: s.stage_order,
     lead_count: s.lead_count,
     is_final_stage: s.is_final_stage,
-    conversion_rate: s.conversion_rate,  // Historical conversion % (30 days)
-    outcome_breakdown: s.outcome_breakdown,  // positive/negative/neutral counts
+    conversion_rate: s.conversion_rate,
+    outcome_breakdown: s.outcome_breakdown,
   }));
-
-  // Fix: Use POST method to match WorkloadCard.tsx API call
-  // Availability toggle handler
-  const handleToggleAvailability = async (available: boolean) => {
-    try {
-      await api.post("/api/officer/availability", {
-        availability_status: available ? "available" : "busy"
-      });
-      refetch();
-      toast.success(available ? "Đã bật trạng thái sẵn sàng" : "Đã tắt trạng thái sẵn sàng");
-    } catch {
-      toast.error("Không thể cập nhật trạng thái");
-    }
-  };
 
   // Quick action handler
   const handleQuickAction = (action: "new_lead" | "log_call" | "schedule") => {
@@ -317,16 +119,15 @@ export default function OfficerDashboardPage() {
     }
   };
 
-
+  // Calculate if daily goal is met for sparkle icon
+  const isGoalMet = stats.kpis.consultations_target > 0 && 
+    stats.kpis.consultations_today >= stats.kpis.consultations_target;
 
   return (
     <div className="container mx-auto p-6 space-y-6">
-      {/* Header */}
+      {/* Header with Date Range Filter */}
       <SmartHeader
-        consultationsToday={stats.kpis.consultations_today}
-        dailyTarget={stats.kpis.consultations_target}
-        isAvailable={stats.status_overview.availability_status === "available"}
-        onToggleAvailability={handleToggleAvailability}
+        isGoalMet={isGoalMet}
         onQuickAction={handleQuickAction}
       />
 
@@ -335,9 +136,8 @@ export default function OfficerDashboardPage() {
 
       {/* Main Content: Bento Grid 75/25 */}
       <div className="grid gap-6 lg:grid-cols-[1fr_350px]">
-        {/* Left Column - Main Content (75%) */}
+        {/* Left Column - Charts */}
         <div className="space-y-6">
-          {/* Charts Row */}
           <div className="grid gap-6 md:grid-cols-2">
             <PerformanceChart 
               trends={performanceTrends} 
@@ -347,21 +147,26 @@ export default function OfficerDashboardPage() {
           </div>
         </div>
 
-        {/* Right Column - Action Center (25%) */}
+        {/* Right Column - Action Center */}
         <div className="space-y-6">
-          {/* Workload Overview */}
           <WorkloadCard statusOverview={stats.status_overview} />
-
-          {/* Today's Schedule */}
           <TodaySchedule />
-
-          {/* Priority Actions */}
           <PriorityActionsPanel actions={stats.priority_actions} />
-
-          {/* Leaderboard (compact) */}
           <WeeklyLeaderboard />
         </div>
       </div>
     </div>
+  );
+}
+
+// =============================================================================
+// PAGE EXPORT (wraps content with DashboardDateProvider)
+// =============================================================================
+
+export default function OfficerDashboardPage() {
+  return (
+    <DashboardDateProvider defaultPreset="7d">
+      <DashboardContent />
+    </DashboardDateProvider>
   );
 }
