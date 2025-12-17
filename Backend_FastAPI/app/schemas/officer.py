@@ -17,6 +17,11 @@ class TrendPoint(BaseModel):
     consultations: int
     converted: int
 
+class OutcomeBreakdown(BaseModel):
+    positive: int = 0
+    negative: int = 0
+    neutral: int = 0
+
 class FunnelStage(BaseModel):
     stage_id: str                      # e.g. "stg05"
     stage_name: str                    # e.g. "Đã nộp học phí"
@@ -24,7 +29,8 @@ class FunnelStage(BaseModel):
     lead_count: int                    # Actual count at this stage
     is_final_stage: bool = False       # For separating outcomes
     fill: Optional[str] = None
-    conversion_rate: Optional[float] = None  # Historical conversion % (30 days) 
+    conversion_rate: Optional[float] = None  # Historical conversion % (30 days)
+    outcome_breakdown: Optional[OutcomeBreakdown] = None  # positive/negative/neutral counts 
 
 class LeadPreview(BaseModel):
     id: int

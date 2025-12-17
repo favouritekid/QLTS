@@ -27,21 +27,21 @@ async def get_officer_dashboard_stats(
 
     # 2. TÍNH TOÁN WORKLOAD & CAPACITY
     # Logic: Chỉ đếm những Lead mà status của nó CÓ is_final_status = False (hoặc NULL)
-    # Điều này đồng bộ với logic phân phối trong assignment_service
-    # Also exclude soft-deleted leads
+    # Đồng bộ logic với funnel: dùng pipeline_stage.is_final_stage
+    # thay vì consultation_status.is_final_status
     workload_query = (
         select(func.count(models.Lead.id))
         .join(
-            models.ConsultationStatus,
-            models.Lead.consultation_status_id == models.ConsultationStatus.id,
-            isouter=True,  # LEFT JOIN để lấy cả Lead chưa có status
+            models.PipelineStage,
+            models.Lead.pipeline_stage_id == models.PipelineStage.id,
+            isouter=True,  # LEFT JOIN để lấy cả Lead chưa có stage
         )
         .where(
             models.Lead.assigned_officer_id == officer_id,
             models.Lead.deleted_at.is_(None),  # Exclude soft-deleted leads
             or_(
-                models.ConsultationStatus.is_final_status == False,
-                models.ConsultationStatus.is_final_status.is_(None),
+                models.PipelineStage.is_final_stage == False,
+                models.PipelineStage.is_final_stage.is_(None),
             ),
         )
     )
@@ -168,7 +168,10 @@ async def get_officer_dashboard_stats(
     all_stages = (await db.execute(stages_query)).scalars().all()
     
     # For each stage, count leads CURRENTLY AT that stage
+    # Also calculate outcome breakdown based on latest consultation's outcome_type
     sales_funnel = []
+    total_dropoff = 0  # Total leads with negative outcome
+    
     for idx, stage in enumerate(all_stages):
         # Count leads at THIS specific stage (not cumulative)
         # Exclude soft-deleted leads
@@ -182,6 +185,33 @@ async def get_officer_dashboard_stats(
         )
         stage_count = (await db.execute(stage_count_query)).scalar() or 0
         
+        # Count leads by outcome_type of their latest consultation
+        # Subquery to get latest consultation for each lead
+        from sqlalchemy import case, literal_column
+        
+        # Get outcome breakdown for leads at this stage
+        outcome_query = (
+            select(
+                models.ConsultationStatus.outcome_type,
+                func.count(models.Lead.id).label("count")
+            )
+            .join(models.ConsultationStatus, models.Lead.consultation_status_id == models.ConsultationStatus.id)
+            .where(
+                models.Lead.assigned_officer_id == officer_id,
+                models.Lead.pipeline_stage_id == stage.id,
+                models.Lead.deleted_at.is_(None)
+            )
+            .group_by(models.ConsultationStatus.outcome_type)
+        )
+        outcome_result = await db.execute(outcome_query)
+        outcome_counts = {row[0]: row[1] for row in outcome_result.fetchall()}
+        
+        positive_count = outcome_counts.get("positive", 0)
+        negative_count = outcome_counts.get("negative", 0)
+        neutral_count = outcome_counts.get("neutral", 0)
+        
+        total_dropoff += negative_count
+        
         sales_funnel.append({
             "stage_id": stage.id,              # e.g. "stg05"
             "stage_name": stage.name,          # e.g. "Đã nộp học phí"
@@ -189,7 +219,12 @@ async def get_officer_dashboard_stats(
             "lead_count": stage_count,         # Actual count at this stage
             "is_final_stage": stage.is_final_stage,  # For separating outcomes
             "fill": f"var(--chart-{idx % 5 + 1})",
-            "conversion_rate": None  # Will be calculated below
+            "conversion_rate": None,  # Will be calculated below
+            "outcome_breakdown": {
+                "positive": positive_count,
+                "negative": negative_count,
+                "neutral": neutral_count,
+            }
         })
 
     # 4.1 HISTORICAL CONVERSION RATES (from lead_status_history)
@@ -471,7 +506,7 @@ async def get_enhanced_dashboard_stats(
     }
     
     # === 3. CONVERSION RATE ===
-    # Leads converted this month / total leads assigned this month
+    # Leads CREATED this month AND converted (same cohort)
     converted_this_month_query = (
         select(func.count(models.Lead.id))
         .join(models.ConsultationStatus)
@@ -479,7 +514,7 @@ async def get_enhanced_dashboard_stats(
             models.Lead.assigned_officer_id == officer_id,
             models.ConsultationStatus.is_final_status == True,
             models.ConsultationStatus.outcome_type == "positive",
-            func.date(models.Lead.updated_at) >= month_start
+            func.date(models.Lead.created_at) >= month_start,  # FIX: use created_at
         )
     )
     converted_this_month = (await db.execute(converted_this_month_query)).scalar() or 0
@@ -495,7 +530,7 @@ async def get_enhanced_dashboard_stats(
     
     conversion_rate = round((converted_this_month / total_this_month) * 100, 1)
     
-    # Last month conversion for comparison
+    # Last month: Leads CREATED last month AND converted (same cohort)
     converted_last_month_query = (
         select(func.count(models.Lead.id))
         .join(models.ConsultationStatus)
@@ -503,8 +538,8 @@ async def get_enhanced_dashboard_stats(
             models.Lead.assigned_officer_id == officer_id,
             models.ConsultationStatus.is_final_status == True,
             models.ConsultationStatus.outcome_type == "positive",
-            func.date(models.Lead.updated_at) >= last_month_start,
-            func.date(models.Lead.updated_at) < month_start
+            func.date(models.Lead.created_at) >= last_month_start,  # FIX: use created_at
+            func.date(models.Lead.created_at) < month_start
         )
     )
     converted_last_month = (await db.execute(converted_last_month_query)).scalar() or 0

@@ -29,6 +29,12 @@ import {
   Minus
 } from "lucide-react";
 
+interface OutcomeBreakdown {
+  positive: number;
+  negative: number;
+  neutral: number;
+}
+
 interface FunnelStage {
   stage_id: string;
   stage_name: string;
@@ -36,6 +42,7 @@ interface FunnelStage {
   lead_count: number;
   is_final_stage?: boolean;
   conversion_rate?: number | null;  // Historical conversion % (30 days)
+  outcome_breakdown?: OutcomeBreakdown;  // positive/negative/neutral counts
 }
 
 interface FunnelChartProps {
@@ -108,6 +115,9 @@ const OUTCOME_STAGE_IDS = ["stg06", "stg07", "enrolled", "lost", "not_enrolled"]
 export function FunnelChart({ funnel, previousPeriodConversion }: FunnelChartProps) {
   const router = useRouter();
 
+  // Debug: Check if outcome_breakdown is received
+  console.log('[FunnelChart] First stage outcome_breakdown:', funnel[0]?.outcome_breakdown);
+
   // Sort by stage order
   const sortedFunnel = [...funnel].sort((a, b) => a.stage_order - b.stage_order);
 
@@ -122,6 +132,11 @@ export function FunnelChart({ funnel, previousPeriodConversion }: FunnelChartPro
   // Calculate total leads by summing all stages (core + outcome)
   // This is correct for ACTUAL count approach (not cumulative)
   const totalLeads = sortedFunnel.reduce((sum, s) => sum + s.lead_count, 0);
+  
+  // Calculate total drop-off (leads with negative outcome across all stages)
+  const totalDropoff = sortedFunnel.reduce((sum, s) => 
+    sum + (s.outcome_breakdown?.negative || 0), 0
+  );
   
   // Calculate overall conversion (completed outcomes / total leads)
   // This shows what percentage of leads have completed the funnel
@@ -351,21 +366,31 @@ export function FunnelChart({ funnel, previousPeriodConversion }: FunnelChartPro
                           </div>
                         </button>
                       </TooltipTrigger>
-                      <TooltipContent side="top">
-                        <p className="text-xs">
-                          Click để xem {stage.lead_count} leads ở giai đoạn này
-                        </p>
+                      <TooltipContent side="top" className="max-w-[200px]">
+                        <div className="text-xs space-y-1">
+                          <p className="font-medium">{stage.stage_name}: {stage.lead_count} leads</p>
+                          {stage.outcome_breakdown && (
+                            <div className="flex gap-3 text-muted-foreground">
+                              <span className="text-emerald-600">+{stage.outcome_breakdown.positive}</span>
+                              <span className="text-red-500">−{stage.outcome_breakdown.negative}</span>
+                              <span>○{stage.outcome_breakdown.neutral}</span>
+                            </div>
+                          )}
+                          <p className="text-muted-foreground pt-1 border-t">Click để xem danh sách</p>
+                        </div>
                       </TooltipContent>
                     </Tooltip>
 
-                    {/* Right: Lead count + Conversion */}
-                    <div className="w-20 shrink-0 text-right">
-                      <span className={cn(
-                        "text-sm font-bold tabular-nums",
-                        conversionStatus.textColor
-                      )}>
+                    {/* Right: Lead count with outcome breakdown */}
+                    <div className="w-24 shrink-0 flex items-center justify-end gap-1.5">
+                      <span className="text-sm font-bold tabular-nums text-foreground">
                         {stage.lead_count}
                       </span>
+                      {stage.outcome_breakdown && stage.outcome_breakdown.negative > 0 && (
+                        <span className="text-xs text-red-500 font-medium">
+                          −{stage.outcome_breakdown.negative}
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -435,11 +460,11 @@ export function FunnelChart({ funnel, previousPeriodConversion }: FunnelChartPro
               <Users className="h-3.5 w-3.5" />
               <span>Tổng đầu vào: <strong className="text-foreground">{totalLeads}</strong></span>
             </div>
-            {totalLeads > enrolledCount && (
-              <div className="flex items-center gap-1.5 text-amber-600">
+            {totalDropoff > 0 && (
+              <div className="flex items-center gap-1.5 text-red-600">
                 <AlertTriangle className="h-3 w-3" />
                 <span>
-                  Drop-off tổng: {totalLeads - enrolledCount} ({((totalLeads - enrolledCount) / Math.max(totalLeads, 1) * 100).toFixed(0)}%)
+                  Drop-off: {totalDropoff} ({(totalDropoff / Math.max(totalLeads, 1) * 100).toFixed(0)}%)
                 </span>
               </div>
             )}

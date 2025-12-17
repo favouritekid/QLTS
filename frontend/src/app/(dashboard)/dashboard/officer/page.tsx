@@ -88,6 +88,11 @@ interface FunnelStage {
   is_final_stage?: boolean;
   fill?: string;
   conversion_rate?: number | null;  // Historical conversion % (30 days)
+  outcome_breakdown?: {
+    positive: number;
+    negative: number;
+    neutral: number;
+  };
 }
 
 interface LeadPreview {
@@ -272,7 +277,7 @@ export default function OfficerDashboardPage() {
   }));
 
   // Fix: Add null check for sales_funnel array
-  // No transformation needed - API now returns correct format
+  // Include outcome_breakdown for drop-off analysis
   const salesFunnel = (stats.sales_funnel ?? []).map((s) => ({
     stage_id: s.stage_id,
     stage_name: s.stage_name,
@@ -280,6 +285,7 @@ export default function OfficerDashboardPage() {
     lead_count: s.lead_count,
     is_final_stage: s.is_final_stage,
     conversion_rate: s.conversion_rate,  // Historical conversion % (30 days)
+    outcome_breakdown: s.outcome_breakdown,  // positive/negative/neutral counts
   }));
 
   // Fix: Use POST method to match WorkloadCard.tsx API call
