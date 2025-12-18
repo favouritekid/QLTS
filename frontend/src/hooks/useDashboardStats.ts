@@ -103,6 +103,24 @@ export interface EnhancedOfficerStats {
   performance_trends: TrendPoint[];
   sales_funnel: FunnelStage[];
   actionable_lists: ActionableLists;
+  // Phase 6: Annual progress (rolling targets)
+  annual_progress?: AnnualProgressInfo | null;
+}
+
+// Phase 6: Annual Progress Info
+export interface AnnualProgressInfo {
+  kpi_code: string;
+  fiscal_year: number;
+  annual_target: number;
+  achieved_ytd: number;
+  remaining: number;
+  progress_pct: number;
+  months_left: number;
+  monthly_target: number;
+  status: "in_progress" | "completed" | "at_risk" | "overdue";
+  on_track: boolean;
+  surplus?: number | null;
+  last_sync_at?: string | null;
 }
 
 export interface TeamStats {

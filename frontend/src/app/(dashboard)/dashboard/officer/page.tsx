@@ -13,7 +13,9 @@ import {
   KPICardsGrid, 
   PriorityActionsPanel, 
   WeeklyLeaderboard, 
-  SmartHeader
+  SmartHeader,
+  RecommendationsPanel,
+  AnnualProgressCard
 } from "@/components/officer/dashboard";
 import { DashboardDateProvider } from "@/contexts/DashboardDateContext";
 import { useDashboardStats, type DashboardScope } from "@/hooks/useDashboardStats";
@@ -144,7 +146,7 @@ function DashboardContent() {
 
       {/* Main Content: Bento Grid 75/25 */}
       <div className="grid gap-6 lg:grid-cols-[1fr_350px]">
-        {/* Left Column - Charts */}
+        {/* Left Column - Charts + Recommendations */}
         <div className="space-y-6">
           <div className="grid gap-6 md:grid-cols-2">
             <PerformanceChart 
@@ -153,10 +155,14 @@ function DashboardContent() {
             />
             <FunnelChart funnel={salesFunnel} />
           </div>
+          {/* Phase 7: Recommendations Panel */}
+          <RecommendationsPanel />
         </div>
 
         {/* Right Column - Action Center */}
         <div className="space-y-6">
+          {/* Phase 6: Annual Progress */}
+          <AnnualProgressCard progress={stats.annual_progress} />
           <WorkloadCard statusOverview={stats.status_overview} />
           <TodaySchedule />
           <PriorityActionsPanel actions={stats.priority_actions} />

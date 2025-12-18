@@ -265,8 +265,9 @@ from .officer import (
     # Phase 4: Leaderboard
     LeaderboardEntry,
     WeeklyLeaderboard,
-    # Phase 6: Team Stats
+    # Phase 6: Team Stats + Annual Progress
     TeamStats,
+    AnnualProgressInfo,
 )
 
 # --- Từ tuition_discount_policy.py ---

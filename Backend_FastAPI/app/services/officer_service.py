@@ -799,6 +799,12 @@ async def get_enhanced_dashboard_stats(
     # Get funnel stages with leads created in date range
     sales_funnel = await _get_sales_funnel_in_range(db, officer_id, filter_start, filter_end)
     
+    # === 8. ANNUAL PROGRESS (Phase 6: Rolling Targets) ===
+    # Get annual target progress for enrollments KPI
+    annual_progress = await kpi_service.get_annual_target_progress(
+        db, officer_id, kpi_code="enrollments"
+    )
+    
     # Build enhanced response
     return {
         "kpis": {
@@ -819,6 +825,7 @@ async def get_enhanced_dashboard_stats(
         "performance_trends": performance_trends,
         "sales_funnel": sales_funnel,
         "actionable_lists": base_stats["actionable_lists"],
+        "annual_progress": annual_progress,  # Phase 6: Rolling targets
     }
 
 
