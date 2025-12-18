@@ -3,12 +3,11 @@ from datetime import datetime, timezone
 from typing import List
 
 import structlog
-from sqlalchemy import select  # <-- THÊM select
-from sqlalchemy import case, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models, schemas
 from ..config import settings
+from ..repositories import InsightsRepository
 
 log = structlog.get_logger(__name__)
 
@@ -16,79 +15,37 @@ log = structlog.get_logger(__name__)
 async def _calculate_engagement_score(db: AsyncSession, lead_id: int) -> int:
     """
     Tính điểm tương tác.
-    ✅ FIXED: Sử dụng consultation_status_id thay vì outcome (không tồn tại trong model).
+    
+    REFACTORED: Uses InsightsRepository for data access.
     """
-    score = 0
+    repo = InsightsRepository(db)
     points_config = settings.LEAD_SCORING_ENGAGEMENT_POINTS
     now = datetime.now(timezone.utc)
-
-    # Định nghĩa các trường hợp (case) cho điểm dựa trên consultation_status_id
-    # Status IDs: sts01=Lên lịch, sts02=Đã liên hệ, sts03=Cần theo dõi, sts04=Thành công, sts05=Thất bại
-    status_score_case = case(
-        (
-            models.Consultation.consultation_status_id == "sts04",  # Thành công
-            points_config["outcome"].get("successful", 10),
-        ),
-        (
-            models.Consultation.consultation_status_id.in_(["sts02", "sts03"]),  # Đã liên hệ / Cần theo dõi
-            points_config["outcome"].get("follow-up", 5),
-        ),
-        (
-            models.Consultation.consultation_status_id == "sts05",  # Thất bại
-            points_config["outcome"].get("failed", -5),
-        ),
-        else_=0,
-    )
-
-    method_score_case = case(
-        (models.Consultation.method == "meeting", points_config["method"].get("meeting", 15)),
-        (models.Consultation.method == "call", points_config["method"].get("call", 5)),
-        (models.Consultation.method == "email", points_config["method"].get("email", 2)),
-        else_=0,
-    )
-
-    # Handle NULL duration_minutes with COALESCE
-    duration_score_calc = func.coalesce(
-        (models.Consultation.duration_minutes // 10) * points_config["duration_bonus_per_10_min"],
-        0
-    )
-
-    # Truy vấn tổng hợp
-    stmt = select(
-        func.count(models.Consultation.id).label("total_count"),
-        func.sum(status_score_case).label("total_status_score"),
-        func.sum(method_score_case).label("total_method_score"),
-        func.sum(duration_score_calc).label("total_duration_score"),
-        func.max(models.Consultation.consultation_date).label("last_consultation_date"),
-    ).where(
-        models.Consultation.lead_id == lead_id,
-        models.Consultation.consultation_date <= now,
-    )
-
-    # Thực thi truy vấn (chỉ trả về 1 hàng)
-    result = await db.execute(stmt)
-    agg_data = result.one_or_none()
-
-    if not agg_data or agg_data.total_count == 0:
+    
+    # Get aggregated data from repository
+    data = await repo.get_engagement_score_data(lead_id)
+    
+    if data is None:
         return 0
-
-    # Logic tính toán
-    score += agg_data.total_count * points_config["consultation_count_multiplier"]
-    score += agg_data.total_status_score or 0
-    score += agg_data.total_method_score or 0
-    score += agg_data.total_duration_score or 0
-
-    # Tính phạt dựa trên ngày không liên hệ
-    last_consultation_date = agg_data.last_consultation_date
-    if last_consultation_date:
-        if last_consultation_date.tzinfo is None:
-            last_consultation_date = last_consultation_date.replace(tzinfo=timezone.utc)
-
-        days_since_last_contact = (now - last_consultation_date).days
+    
+    # Calculate score
+    score = 0
+    score += data.total_count * points_config["consultation_count_multiplier"]
+    score += data.total_status_score
+    score += data.total_method_score
+    score += data.total_duration_score
+    
+    # Inactivity penalty
+    if data.last_consultation_date:
+        last_date = data.last_consultation_date
+        if last_date.tzinfo is None:
+            last_date = last_date.replace(tzinfo=timezone.utc)
+        
+        days_since_last_contact = (now - last_date).days
         if days_since_last_contact > 3:
             penalty = abs(points_config["inactivity_penalty_per_day"])
             score -= (days_since_last_contact - 3) * penalty
-
+    
     return max(0, min(score, points_config["max_score"]))
 
 

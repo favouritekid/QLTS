@@ -47,75 +47,29 @@ async def get_kpi_target(
     """
     Get KPI target value with inheritance.
     
+    REFACTORED: Uses KpiRepository for data access.
+    
     Priority order:
     1. Officer-specific (if officer_id provided)
     2. Unit-level (if unit_id provided)
     3. Global default (unit_id IS NULL, officer_id IS NULL)
     4. Hardcoded default (if no config exists)
-    
-    Args:
-        db: Database session
-        kpi_code: KPI identifier (e.g., 'consultations_daily')
-        officer_id: Optional officer ID for officer-specific target
-        unit_id: Optional unit ID for unit-level target
-        period_type: Period type ('daily', 'monthly', etc.)
-    
-    Returns:
-        Target value as integer
     """
-    # 1. Try officer-specific
-    if officer_id:
-        result = await db.execute(
-            select(models.KpiConfig.target_value)
-            .where(
-                models.KpiConfig.officer_id == officer_id,
-                models.KpiConfig.kpi_code == kpi_code,
-                models.KpiConfig.period_type == period_type,
-                models.KpiConfig.is_active == True,
-            )
-        )
-        target = result.scalar_one_or_none()
-        if target is not None:
-            log.debug("KPI target found", level="officer", officer_id=officer_id, kpi_code=kpi_code, value=target)
-            return target
-
-    # 2. Try unit-level
-    if unit_id:
-        result = await db.execute(
-            select(models.KpiConfig.target_value)
-            .where(
-                models.KpiConfig.unit_id == unit_id,
-                models.KpiConfig.officer_id.is_(None),
-                models.KpiConfig.kpi_code == kpi_code,
-                models.KpiConfig.period_type == period_type,
-                models.KpiConfig.is_active == True,
-            )
-        )
-        target = result.scalar_one_or_none()
-        if target is not None:
-            log.debug("KPI target found", level="unit", unit_id=unit_id, kpi_code=kpi_code, value=target)
-            return target
-
-    # 3. Try global default
-    result = await db.execute(
-        select(models.KpiConfig.target_value)
-        .where(
-            models.KpiConfig.unit_id.is_(None),
-            models.KpiConfig.officer_id.is_(None),
-            models.KpiConfig.kpi_code == kpi_code,
-            models.KpiConfig.period_type == period_type,
-            models.KpiConfig.is_active == True,
-        )
-    )
-    target = result.scalar_one_or_none()
-    if target is not None:
-        log.debug("KPI target found", level="global", kpi_code=kpi_code, value=target)
-        return target
-
-    # 4. Fallback to hardcoded default
+    from ..repositories import KpiRepository
+    
+    repo = KpiRepository(db)
     default = DEFAULT_KPIS.get(kpi_code, 0)
-    log.debug("KPI target using hardcoded default", kpi_code=kpi_code, value=default)
-    return default
+    
+    target = await repo.get_kpi_target_with_inheritance(
+        kpi_code=kpi_code,
+        officer_id=officer_id,
+        unit_id=unit_id,
+        period_type=period_type,
+        default=default
+    )
+    
+    log.debug("KPI target resolved", kpi_code=kpi_code, value=target)
+    return target
 
 
 async def get_all_kpi_targets(
