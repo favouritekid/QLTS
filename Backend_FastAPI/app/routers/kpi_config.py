@@ -10,7 +10,7 @@ CRUD endpoints for managing KPI configurations:
 
 Admin-only access.
 
-REFACTORED: Uses KpiRepository for data access.
+ARCHITECTURE: Pattern A (Router → Service → Repository)
 """
 from typing import Annotated, List, Optional
 from datetime import datetime
@@ -23,7 +23,7 @@ from app.database import get_db
 from app.core import deps
 from app import models
 from app.models.config import KpiConfig, KpiTarget
-from app.repositories import KpiRepository
+from app.services import kpi_config_service
 
 router = APIRouter(prefix="/api/admin/kpi-config", tags=["Admin - KPI Configuration"])
 
@@ -93,7 +93,7 @@ class KpiTargetResponse(KpiTargetBase):
 
 
 # =============================================================================
-# KPI CONFIG ENDPOINTS
+# KPI CONFIG ENDPOINTS (Pattern A: Router → Service → Repository)
 # =============================================================================
 
 @router.get(
@@ -108,16 +108,13 @@ async def list_kpi_configs(
     unit_id: Optional[int] = None,
     is_active: bool = True,
 ):
-    """
-    List KPI configurations with optional filters.
-    Admin only.
-    """
+    """List KPI configurations with optional filters. Admin only."""
     if current_user.role not in ("admin", "manager"):
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    repo = KpiRepository(db)
-    return await repo.list_configs(kpi_code=kpi_code, unit_id=unit_id, is_active=is_active)
-
+    return await kpi_config_service.list_kpi_configs(
+        db, kpi_code=kpi_code, unit_id=unit_id, is_active=is_active
+    )
 
 
 @router.post(
@@ -131,45 +128,26 @@ async def create_kpi_config(
     current_user: Annotated[models.User, PermissionDep],
     data: KpiConfigCreate,
 ):
-    """
-    Create a new KPI configuration.
-    
-    Scope is determined by unit_id and officer_id:
-    - Both None = Global default
-    - unit_id only = Unit-level
-    - officer_id = Officer-specific
-    """
+    """Create a new KPI configuration. Admin only."""
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    # Check for existing active config with same scope
-    repo = KpiRepository(db)
-    existing = await repo.check_duplicate_exists(
-        kpi_code=data.kpi_code,
-        period_type=data.period_type,
-        unit_id=data.unit_id,
-        officer_id=data.officer_id,
-    )
-    
-    if existing:
-        raise HTTPException(
-            status_code=400,
-            detail="Active config already exists for this scope. Update or deactivate it first."
+    try:
+        config, callback = await kpi_config_service.create_kpi_config(
+            db,
+            kpi_code=data.kpi_code,
+            target_value=data.target_value,
+            period_type=data.period_type,
+            unit_id=data.unit_id,
+            officer_id=data.officer_id,
+            created_by=current_user,
         )
-    
-    config = KpiConfig(
-        kpi_code=data.kpi_code,
-        target_value=data.target_value,
-        period_type=data.period_type,
-        unit_id=data.unit_id,
-        officer_id=data.officer_id,
-        is_active=True,
-    )
-    db.add(config)
-    await db.commit()
-    await db.refresh(config)
-    
-    return config
+        await db.commit()
+        await db.refresh(config)
+        await callback()
+        return config
+    except kpi_config_service.DuplicateConfigError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.put(
@@ -183,23 +161,24 @@ async def update_kpi_config(
     current_user: Annotated[models.User, PermissionDep],
     data: KpiConfigUpdate,
 ):
-    """Update an existing KPI configuration."""
+    """Update an existing KPI configuration. Admin only."""
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    config = await db.get(KpiConfig, config_id)
-    if not config:
+    try:
+        config, callback = await kpi_config_service.update_kpi_config(
+            db,
+            config_id=config_id,
+            target_value=data.target_value,
+            is_active=data.is_active,
+            updated_by=current_user,
+        )
+        await db.commit()
+        await db.refresh(config)
+        await callback()
+        return config
+    except kpi_config_service.ConfigNotFoundError:
         raise HTTPException(status_code=404, detail="Config not found")
-    
-    if data.target_value is not None:
-        config.target_value = data.target_value
-    if data.is_active is not None:
-        config.is_active = data.is_active
-    
-    await db.commit()
-    await db.refresh(config)
-    
-    return config
 
 
 @router.delete(
@@ -212,20 +191,22 @@ async def delete_kpi_config(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[models.User, PermissionDep],
 ):
-    """Delete a KPI configuration (soft delete by setting is_active=False)."""
+    """Delete a KPI configuration (soft delete). Admin only."""
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    config = await db.get(KpiConfig, config_id)
-    if not config:
+    try:
+        config, callback = await kpi_config_service.delete_kpi_config(
+            db, config_id=config_id, deleted_by=current_user
+        )
+        await db.commit()
+        await callback()
+    except kpi_config_service.ConfigNotFoundError:
         raise HTTPException(status_code=404, detail="Config not found")
-    
-    config.is_active = False
-    await db.commit()
 
 
 # =============================================================================
-# KPI TARGET ENDPOINTS (Annual)
+# KPI TARGET ENDPOINTS (Annual) - Pattern A
 # =============================================================================
 
 @router.get(
@@ -239,12 +220,13 @@ async def list_kpi_targets(
     fiscal_year: Optional[int] = None,
     kpi_code: Optional[str] = None,
 ):
-    """List annual KPI targets."""
+    """List annual KPI targets. Admin/Manager only."""
     if current_user.role not in ("admin", "manager"):
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    repo = KpiRepository(db)
-    return await repo.list_targets(fiscal_year=fiscal_year, kpi_code=kpi_code)
+    return await kpi_config_service.list_kpi_targets(
+        db, fiscal_year=fiscal_year, kpi_code=kpi_code
+    )
 
 
 @router.post(
@@ -258,21 +240,22 @@ async def create_kpi_target(
     current_user: Annotated[models.User, PermissionDep],
     data: KpiTargetCreate,
 ):
-    """Create an annual KPI target for tracking YTD progress."""
+    """Create an annual KPI target for tracking YTD progress. Admin only."""
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    target = KpiTarget(
+    target, callback = await kpi_config_service.create_kpi_target(
+        db,
         kpi_code=data.kpi_code,
         annual_target=data.annual_target,
         fiscal_year=data.fiscal_year,
         unit_id=data.unit_id,
         officer_id=data.officer_id,
-        is_active=True,
-        achieved_ytd=0,
+        created_by=current_user,
     )
-    db.add(target)
     await db.commit()
     await db.refresh(target)
+    await callback()
     
     return target
+
