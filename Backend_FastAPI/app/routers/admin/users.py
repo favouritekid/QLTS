@@ -43,7 +43,7 @@ from fastapi import (
 )
 from fastapi.responses import StreamingResponse
 from pydantic import EmailStr
-from sqlalchemy import select
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models, schemas
@@ -246,54 +246,14 @@ async def list_users(
     - When selecting a **parent unit** with `include_children=true`:
       Shows users from parent AND all descendant units
     """
-    query = select(models.User).options(
-        selectinload(models.User.unit)
+    return await user_service.list_users(
+        db=db,
+        unit_id=unit_id,
+        include_children=include_children,
+        is_active=is_active,
+        skip=skip,
+        limit=limit,
     )
-
-    # Apply unit filter (with optional hierarchical filtering)
-    if unit_id is not None:
-        if include_children:
-            # ✅ PERFORMANCE FIX: Use Recursive CTE to get all descendant unit IDs in ONE query
-            from sqlalchemy import text
-
-            descendant_cte_sql = text("""
-                WITH RECURSIVE unit_hierarchy AS (
-                    -- Base case: the selected unit
-                    SELECT id FROM organization_unit WHERE id = :unit_id
-
-                    UNION ALL
-
-                    -- Recursive case: all children
-                    SELECT u.id FROM organization_unit u
-                    JOIN unit_hierarchy uh ON u.parent_id = uh.id
-                    WHERE u.is_active = true
-                )
-                SELECT id FROM unit_hierarchy;
-            """)
-
-            result_units = await db.execute(descendant_cte_sql, {"unit_id": unit_id})
-            all_unit_ids = [row[0] for row in result_units]
-
-            # Filter users by all descendant unit IDs
-            if all_unit_ids:
-                query = query.where(models.User.unit_id.in_(all_unit_ids))
-            else:
-                # No units found - return empty result
-                query = query.where(models.User.unit_id == unit_id)
-        else:
-            # Simple filter - exact unit match only
-            query = query.where(models.User.unit_id == unit_id)
-
-    if is_active is not None:
-        query = query.where(models.User.is_active == is_active)
-
-    # Apply pagination
-    query = query.offset(skip).limit(limit).order_by(models.User.id)
-
-    result = await db.execute(query)
-    users = result.scalars().unique().all()
-
-    return users
 
 
 # =============================================================================
@@ -501,9 +461,8 @@ async def get_sync_status(
     """
     enforcer = request.app.state.enforcer
 
-    # Get all users
-    result = await db.execute(select(models.User))
-    users = result.scalars().all()
+    # Get all users via service
+    users = await user_service.get_all_users(db)
 
     mismatched_users = []
     synced_count = 0

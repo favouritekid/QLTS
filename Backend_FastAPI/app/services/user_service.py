@@ -543,6 +543,47 @@ async def get_users(
     )
 
 
+async def get_all_users(db: AsyncSession) -> List[models.User]:
+    """
+    Get all users (for admin sync status).
+    Wraps UserRepository.get_all()
+    """
+    from app.repositories import UserRepository
+    repo = UserRepository(db)
+    return await repo.get_all()
+
+
+async def list_users(
+    db: AsyncSession,
+    unit_id: Optional[int] = None,
+    include_children: bool = False,
+    is_active: Optional[int] = None,  # Note: Router might pass bool, but Repo uses str/None
+    skip: int = 0,
+    limit: int = 100,
+) -> List[models.User]:
+    """
+    Get list of users with hierarchical filtering (Router-friendly wrapper).
+    Returns just the list of users (ignoring total count).
+    """
+    from app.repositories import UserRepository
+    repo = UserRepository(db)
+
+    # Convert is_active bool to status string if needed, or pass strict params
+    # Repo search_with_hierarchy takes 'status' string (active/inactive)
+    status_filter = None
+    if is_active is not None:
+        status_filter = "active" if is_active else "inactive"
+
+    _, users = await repo.search_with_hierarchy(
+        skip=skip,
+        limit=limit,
+        unit_id=unit_id,
+        include_children=include_children,
+        status=status_filter,
+    )
+    return users
+
+
 # --- Hàm Cập nhật User ---
 
 
