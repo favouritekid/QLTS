@@ -205,7 +205,6 @@ async def create_offering_academic_info(
         created_by_user_id=current_user.id
     )
 
-# Thêm vào cuối file hoặc gần các API Offerings
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("/program-offerings", response_model=List[schemas.ProgramOffering])
 async def get_all_program_offerings(
@@ -220,21 +219,9 @@ async def get_all_program_offerings(
     Lấy danh sách tất cả loại hình đào tạo (Flat list).
     Dùng cho các Dropdown chọn Offering.
     """
-    from sqlalchemy import select
-    from sqlalchemy.orm import selectinload
-    from .. import models
-
-    query = select(models.ProgramOffering).options(
-        selectinload(models.ProgramOffering.program)  # Eager load program for name display
+    return await organization_service.get_all_program_offerings(
+        db, is_active=is_active, skip=skip, limit=limit
     )
-
-    if is_active is not None:
-        query = query.where(models.ProgramOffering.is_active == is_active)
-
-    query = query.order_by(models.ProgramOffering.offering_type).offset(skip).limit(limit)
-
-    result = await db.execute(query)
-    return result.scalars().all()
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.patch("/academic-info/{academic_info_id}", response_model=schemas.OfferingAcademicInfo)
