@@ -322,3 +322,214 @@ async def sync_officer_ytd(
     )
     
     return synced
+
+
+# =============================================================================
+# KPI CONFIG CRUD (Admin Operations) - Pattern A
+# =============================================================================
+
+# Custom Exceptions
+class DuplicateConfigError(Exception):
+    """Raised when attempting to create a duplicate KPI config."""
+    pass
+
+
+class ConfigNotFoundError(Exception):
+    """Raised when KPI config is not found."""
+    pass
+
+
+class TargetNotFoundError(Exception):
+    """Raised when KPI target is not found."""
+    pass
+
+
+# Type alias for callback
+from typing import Callable, Awaitable, Tuple
+Callback = Callable[[], Awaitable[None]]
+
+
+async def list_kpi_configs(
+    db: AsyncSession,
+    kpi_code: Optional[str] = None,
+    unit_id: Optional[int] = None,
+    is_active: bool = True,
+) -> List[models.KpiConfig]:
+    """List KPI configurations with filters."""
+    from ..repositories import KpiRepository
+    repo = KpiRepository(db)
+    return await repo.list_configs(kpi_code=kpi_code, unit_id=unit_id, is_active=is_active)
+
+
+async def create_kpi_config(
+    db: AsyncSession,
+    kpi_code: str,
+    target_value: int,
+    period_type: str = "daily",
+    unit_id: Optional[int] = None,
+    officer_id: Optional[int] = None,
+    created_by: Optional[models.User] = None,
+) -> Tuple[models.KpiConfig, Callback]:
+    """
+    Create a new KPI configuration.
+    
+    Pattern A: Returns (result, callback) for transaction control.
+    
+    Raises:
+        DuplicateConfigError: If active config already exists for this scope
+    """
+    from ..repositories import KpiRepository
+    repo = KpiRepository(db)
+    
+    # Check for duplicates
+    existing = await repo.check_duplicate_exists(
+        kpi_code=kpi_code,
+        period_type=period_type,
+        unit_id=unit_id,
+        officer_id=officer_id,
+    )
+    
+    if existing:
+        raise DuplicateConfigError(
+            f"Active config already exists for {kpi_code} with this scope"
+        )
+    
+    # Create config
+    config = models.KpiConfig(
+        kpi_code=kpi_code,
+        target_value=target_value,
+        period_type=period_type,
+        unit_id=unit_id,
+        officer_id=officer_id,
+        is_active=True,
+    )
+    db.add(config)
+    
+    async def callback():
+        log.info(
+            "KPI config created",
+            config_id=config.id,
+            kpi_code=kpi_code,
+            created_by=created_by.id if created_by else None,
+        )
+    
+    return config, callback
+
+
+async def update_kpi_config(
+    db: AsyncSession,
+    config_id: int,
+    target_value: Optional[int] = None,
+    is_active: Optional[bool] = None,
+    updated_by: Optional[models.User] = None,
+) -> Tuple[models.KpiConfig, Callback]:
+    """
+    Update an existing KPI configuration.
+    
+    Pattern A: Returns (result, callback) for transaction control.
+    
+    Raises:
+        ConfigNotFoundError: If config not found
+    """
+    config = await db.get(models.KpiConfig, config_id)
+    if not config:
+        raise ConfigNotFoundError(f"Config {config_id} not found")
+    
+    changes = []
+    if target_value is not None and config.target_value != target_value:
+        old_value = config.target_value
+        config.target_value = target_value
+        changes.append(f"target_value: {old_value} → {target_value}")
+    
+    if is_active is not None and config.is_active != is_active:
+        config.is_active = is_active
+        changes.append(f"is_active: {is_active}")
+    
+    async def callback():
+        if changes:
+            log.info(
+                "KPI config updated",
+                config_id=config_id,
+                changes=changes,
+                updated_by=updated_by.id if updated_by else None,
+            )
+    
+    return config, callback
+
+
+async def delete_kpi_config(
+    db: AsyncSession,
+    config_id: int,
+    deleted_by: Optional[models.User] = None,
+) -> Tuple[models.KpiConfig, Callback]:
+    """
+    Soft delete a KPI configuration (set is_active=False).
+    
+    Pattern A: Returns (result, callback) for transaction control.
+    
+    Raises:
+        ConfigNotFoundError: If config not found
+    """
+    config = await db.get(models.KpiConfig, config_id)
+    if not config:
+        raise ConfigNotFoundError(f"Config {config_id} not found")
+    
+    config.is_active = False
+    
+    async def callback():
+        log.info(
+            "KPI config deleted",
+            config_id=config_id,
+            deleted_by=deleted_by.id if deleted_by else None,
+        )
+    
+    return config, callback
+
+
+async def list_kpi_targets(
+    db: AsyncSession,
+    fiscal_year: Optional[int] = None,
+    kpi_code: Optional[str] = None,
+) -> List[models.KpiTarget]:
+    """List annual KPI targets with filters."""
+    from ..repositories import KpiRepository
+    repo = KpiRepository(db)
+    return await repo.list_targets(fiscal_year=fiscal_year, kpi_code=kpi_code)
+
+
+async def create_kpi_target(
+    db: AsyncSession,
+    kpi_code: str,
+    annual_target: int,
+    fiscal_year: int,
+    unit_id: Optional[int] = None,
+    officer_id: Optional[int] = None,
+    created_by: Optional[models.User] = None,
+) -> Tuple[models.KpiTarget, Callback]:
+    """
+    Create an annual KPI target.
+    
+    Pattern A: Returns (result, callback) for transaction control.
+    """
+    target = models.KpiTarget(
+        kpi_code=kpi_code,
+        annual_target=annual_target,
+        fiscal_year=fiscal_year,
+        unit_id=unit_id,
+        officer_id=officer_id,
+        is_active=True,
+        achieved_ytd=0,
+    )
+    db.add(target)
+    
+    async def callback():
+        log.info(
+            "KPI target created",
+            target_id=target.id,
+            kpi_code=kpi_code,
+            fiscal_year=fiscal_year,
+            created_by=created_by.id if created_by else None,
+        )
+    
+    return target, callback
+

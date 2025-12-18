@@ -23,7 +23,7 @@ from app.database import get_db
 from app.core import deps
 from app import models
 from app.models.config import KpiConfig, KpiTarget
-from app.services import kpi_config_service
+from app.services import kpi_service
 
 router = APIRouter(prefix="/api/admin/kpi-config", tags=["Admin - KPI Configuration"])
 
@@ -112,7 +112,7 @@ async def list_kpi_configs(
     if current_user.role not in ("admin", "manager"):
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    return await kpi_config_service.list_kpi_configs(
+    return await kpi_service.list_kpi_configs(
         db, kpi_code=kpi_code, unit_id=unit_id, is_active=is_active
     )
 
@@ -133,7 +133,7 @@ async def create_kpi_config(
         raise HTTPException(status_code=403, detail="Admin access required")
     
     try:
-        config, callback = await kpi_config_service.create_kpi_config(
+        config, callback = await kpi_service.create_kpi_config(
             db,
             kpi_code=data.kpi_code,
             target_value=data.target_value,
@@ -146,7 +146,7 @@ async def create_kpi_config(
         await db.refresh(config)
         await callback()
         return config
-    except kpi_config_service.DuplicateConfigError as e:
+    except kpi_service.DuplicateConfigError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -166,7 +166,7 @@ async def update_kpi_config(
         raise HTTPException(status_code=403, detail="Admin access required")
     
     try:
-        config, callback = await kpi_config_service.update_kpi_config(
+        config, callback = await kpi_service.update_kpi_config(
             db,
             config_id=config_id,
             target_value=data.target_value,
@@ -177,7 +177,7 @@ async def update_kpi_config(
         await db.refresh(config)
         await callback()
         return config
-    except kpi_config_service.ConfigNotFoundError:
+    except kpi_service.ConfigNotFoundError:
         raise HTTPException(status_code=404, detail="Config not found")
 
 
@@ -196,12 +196,12 @@ async def delete_kpi_config(
         raise HTTPException(status_code=403, detail="Admin access required")
     
     try:
-        config, callback = await kpi_config_service.delete_kpi_config(
+        config, callback = await kpi_service.delete_kpi_config(
             db, config_id=config_id, deleted_by=current_user
         )
         await db.commit()
         await callback()
-    except kpi_config_service.ConfigNotFoundError:
+    except kpi_service.ConfigNotFoundError:
         raise HTTPException(status_code=404, detail="Config not found")
 
 
@@ -224,7 +224,7 @@ async def list_kpi_targets(
     if current_user.role not in ("admin", "manager"):
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    return await kpi_config_service.list_kpi_targets(
+    return await kpi_service.list_kpi_targets(
         db, fiscal_year=fiscal_year, kpi_code=kpi_code
     )
 
@@ -244,7 +244,7 @@ async def create_kpi_target(
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    target, callback = await kpi_config_service.create_kpi_target(
+    target, callback = await kpi_service.create_kpi_target(
         db,
         kpi_code=data.kpi_code,
         annual_target=data.annual_target,
