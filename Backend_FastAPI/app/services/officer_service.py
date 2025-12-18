@@ -187,59 +187,38 @@ async def _get_sales_funnel_in_range(
 ) -> List[Dict[str, Any]]:
     """
     Get sales funnel data filtered by date range.
-    Only counts leads created within the date range.
+    
+    REFACTORED: Uses OfficerRepository with batch queries.
     """
-    # Query pipeline stages ordered (no is_active, all stages are active)
-    stages_query = (
-        select(models.PipelineStage)
-        .order_by(models.PipelineStage.order)
+    repo = OfficerRepository(db)
+    
+    # Get all stages and batch counts (optimized)
+    all_stages = await repo.get_all_pipeline_stages()
+    stage_counts = await repo.get_funnel_stage_counts_batch(
+        officer_id, start_date=filter_start, end_date=filter_end
     )
-    stages_result = await db.execute(stages_query)
-    all_stages = stages_result.scalars().all()
+    transition_rates = await repo.get_stage_transition_rates(officer_id, days=30)
     
     sales_funnel = []
     for idx, stage in enumerate(all_stages):
-        # Count leads in this stage created within date range
-        count_query = (
-            select(func.count(models.Lead.id))
-            .where(
-                models.Lead.assigned_officer_id == officer_id,
-                models.Lead.pipeline_stage_id == stage.id,
-                func.date(models.Lead.created_at) >= filter_start,
-                func.date(models.Lead.created_at) <= filter_end,
-            )
-        )
-        lead_count = (await db.execute(count_query)).scalar() or 0
+        stage_data = stage_counts.get(stage.id, {})
+        lead_count = stage_data.get("count", 0)
+        positive_count = stage_data.get("positive", 0)
+        negative_count = stage_data.get("negative", 0)
+        neutral_count = stage_data.get("neutral", 0)
         
-        # Outcome breakdown for final stages (within date range)
-        positive_count = 0
-        negative_count = 0
-        neutral_count = 0
-        
-        if stage.is_final_stage:
-            # Get outcome distribution
-            outcome_query = (
-                select(
-                    models.ConsultationStatus.outcome_type,
-                    func.count(models.Lead.id)
+        # Calculate conversion rate from transitions
+        conversion_rate = None
+        if stage.id in transition_rates:
+            transitions_from = transition_rates[stage.id]
+            total_out = sum(transitions_from.values())
+            if total_out > 0:
+                progressive = sum(
+                    count for to_id, count in transitions_from.items()
+                    if any(s.id == to_id and s.order > stage.order and not s.is_final_stage 
+                           for s in all_stages)
                 )
-                .join(models.ConsultationStatus, models.Lead.consultation_status_id == models.ConsultationStatus.id)
-                .where(
-                    models.Lead.assigned_officer_id == officer_id,
-                    models.Lead.pipeline_stage_id == stage.id,
-                    func.date(models.Lead.created_at) >= filter_start,
-                    func.date(models.Lead.created_at) <= filter_end,
-                )
-                .group_by(models.ConsultationStatus.outcome_type)
-            )
-            outcome_result = await db.execute(outcome_query)
-            for row in outcome_result:
-                if row[0] == "positive":
-                    positive_count = row[1]
-                elif row[0] == "negative":
-                    negative_count = row[1]
-                else:
-                    neutral_count = row[1]
+                conversion_rate = round((progressive / total_out) * 100, 1)
         
         sales_funnel.append({
             "stage_id": stage.id,
@@ -248,63 +227,13 @@ async def _get_sales_funnel_in_range(
             "lead_count": lead_count,
             "is_final_stage": stage.is_final_stage,
             "fill": f"var(--chart-{idx % 5 + 1})",
-            "conversion_rate": None,
+            "conversion_rate": conversion_rate,
             "outcome_breakdown": {
                 "positive": positive_count,
                 "negative": negative_count,
                 "neutral": neutral_count,
             }
         })
-    
-    # Calculate conversion rates from transition history (within date range)
-    transition_query = (
-        select(
-            models.LeadStatusHistory.old_pipeline_stage_id,
-            models.LeadStatusHistory.new_pipeline_stage_id,
-            func.count().label("transition_count")
-        )
-        .where(
-            models.LeadStatusHistory.changed_by_user_id == officer_id,
-            func.date(models.LeadStatusHistory.changed_at) >= filter_start,
-            func.date(models.LeadStatusHistory.changed_at) <= filter_end,
-            models.LeadStatusHistory.old_pipeline_stage_id.isnot(None),
-            models.LeadStatusHistory.new_pipeline_stage_id.isnot(None),
-            models.LeadStatusHistory.old_pipeline_stage_id != models.LeadStatusHistory.new_pipeline_stage_id
-        )
-        .group_by(
-            models.LeadStatusHistory.old_pipeline_stage_id,
-            models.LeadStatusHistory.new_pipeline_stage_id
-        )
-    )
-    transition_result = await db.execute(transition_query)
-    transitions = transition_result.fetchall()
-    
-    transition_map: Dict[str, Dict[str, int]] = {}
-    for row in transitions:
-        from_stage, to_stage, count = row
-        if from_stage not in transition_map:
-            transition_map[from_stage] = {}
-        transition_map[from_stage][to_stage] = count
-    
-    for i, funnel_stage in enumerate(sales_funnel):
-        stage_id = funnel_stage["stage_id"]
-        stage_order = funnel_stage["stage_order"]
-        
-        if stage_id in transition_map:
-            transitions_from = transition_map[stage_id]
-            total_out = sum(transitions_from.values())
-            
-            progressive_count = 0
-            for to_stage_id, count in transitions_from.items():
-                for s in all_stages:
-                    if s.id == to_stage_id:
-                        if s.order > stage_order and not s.is_final_stage:
-                            progressive_count += count
-                        break
-            
-            if total_out > 0:
-                conversion_rate = round((progressive_count / total_out) * 100, 1)
-                sales_funnel[i]["conversion_rate"] = conversion_rate
     
     return sales_funnel
 
@@ -503,51 +432,14 @@ async def get_enhanced_dashboard_stats(
     # === 5. PRIORITY ACTIONS ===
     priority_actions = await _calculate_priority_actions(db, officer_id)
     
-    # === 6. PERFORMANCE TRENDS (within date range) ===
-    # Generate trend data for each day in the date range
-    performance_trends = []
-    current_date = filter_start
-    while current_date <= filter_end:
-        # Consultations for this day
-        day_consults_query = (
-            select(func.count(models.Consultation.id))
-            .where(
-                models.Consultation.officer_id == officer_id,
-                func.date(models.Consultation.consultation_date) == current_date
-            )
-        )
-        day_consults = (await db.execute(day_consults_query)).scalar() or 0
-        
-        # Leads assigned on this day
-        day_assigned_query = (
-            select(func.count(models.AssignmentLog.id))
-            .where(
-                models.AssignmentLog.officer_id == officer_id,
-                func.date(models.AssignmentLog.timestamp) == current_date
-            )
-        )
-        day_assigned = (await db.execute(day_assigned_query)).scalar() or 0
-        
-        # Leads converted on this day (status changed to final positive)
-        day_converted_query = (
-            select(func.count(models.LeadStatusHistory.id))
-            .join(models.Lead, models.LeadStatusHistory.lead_id == models.Lead.id)
-            .join(models.PipelineStage, models.LeadStatusHistory.new_pipeline_stage_id == models.PipelineStage.id)
-            .where(
-                models.LeadStatusHistory.changed_by_user_id == officer_id,
-                func.date(models.LeadStatusHistory.changed_at) == current_date,
-                models.PipelineStage.is_final_stage == True
-            )
-        )
-        day_converted = (await db.execute(day_converted_query)).scalar() or 0
-        
-        performance_trends.append({
-            "date": current_date.isoformat(),
-            "assigned": day_assigned,
-            "consultations": day_consults,
-            "converted": day_converted
-        })
-        current_date += timedelta(days=1)
+    # === 6. PERFORMANCE TRENDS (within date range) - OPTIMIZED ===
+    # Use batch query instead of N+1 day loop
+    repo = OfficerRepository(db)
+    trends_data = await repo.get_performance_trends_batch(officer_id, filter_start, filter_end)
+    performance_trends = [
+        {"date": tp.date, "assigned": tp.assigned, "consultations": tp.consultations, "converted": tp.converted}
+        for tp in trends_data.values()
+    ]
     
     # === 7. SALES FUNNEL (within date range) ===
     # Get funnel stages with leads created in date range
