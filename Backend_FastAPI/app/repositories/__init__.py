@@ -12,6 +12,7 @@ from app.repositories.base import BaseRepository
 from app.repositories.admission_repository import AdmissionRepository
 from app.repositories.application_repository import ApplicationRepository
 from app.repositories.lead_repository import LeadRepository
+from app.repositories.officer_repository import OfficerRepository
 from app.repositories.organization_repository import OrganizationRepository
 from app.repositories.pipeline_repository import PipelineRepository
 from app.repositories.user_repository import UserRepository
@@ -21,9 +22,8 @@ __all__ = [
     "AdmissionRepository",
     "ApplicationRepository",
     "LeadRepository",
+    "OfficerRepository",
     "OrganizationRepository",
     "PipelineRepository",
     "UserRepository",
 ]
-
-
