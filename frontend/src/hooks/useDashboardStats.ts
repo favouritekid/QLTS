@@ -117,10 +117,24 @@ export interface TeamStats {
 // API FUNCTIONS
 // =============================================================================
 
-async function fetchDashboard(startDate: string, endDate: string): Promise<EnhancedOfficerStats> {
+export type DashboardScope = "personal" | "team" | "organization";
+
+export interface DashboardFilters {
+  scope?: DashboardScope;
+  officerId?: number;
+  unitId?: number;
+  startDate?: string;
+  endDate?: string;
+}
+
+async function fetchDashboard(filters: DashboardFilters): Promise<EnhancedOfficerStats> {
   const params = new URLSearchParams();
-  if (startDate) params.append("start_date", startDate);
-  if (endDate) params.append("end_date", endDate);
+  
+  if (filters.startDate) params.append("start_date", filters.startDate);
+  if (filters.endDate) params.append("end_date", filters.endDate);
+  if (filters.scope) params.append("scope", filters.scope);
+  if (filters.officerId) params.append("officer_id", filters.officerId.toString());
+  if (filters.unitId) params.append("unit_id", filters.unitId.toString());
   
   const url = `/api/officer/dashboard${params.toString() ? `?${params.toString()}` : ""}`;
   const response = await api.get(url);
@@ -136,14 +150,33 @@ async function fetchTeamStats(): Promise<TeamStats> {
 // HOOKS
 // =============================================================================
 
-export function useDashboardStats() {
+export interface UseDashboardStatsOptions {
+  scope?: DashboardScope;
+  officerId?: number;
+  unitId?: number;
+}
+
+export function useDashboardStats(options?: UseDashboardStatsOptions) {
   const queryClient = useQueryClient();
   const { startDate, endDate } = useDashboardDate();
+  
+  const scope = options?.scope ?? "personal";
+  const officerId = options?.officerId;
+  const unitId = options?.unitId;
 
-  // Fetch dashboard stats with date range
+  // Build cache key that includes all filters
+  const cacheKey = ["officer", "dashboard", startDate, endDate, scope, officerId, unitId];
+
+  // Fetch dashboard stats with date range and filters
   const dashboardQuery = useQuery({
-    queryKey: ["officer", "dashboard", startDate, endDate],
-    queryFn: () => fetchDashboard(startDate, endDate),
+    queryKey: cacheKey,
+    queryFn: () => fetchDashboard({
+      startDate,
+      endDate,
+      scope,
+      officerId,
+      unitId,
+    }),
     refetchInterval: 60000,
     staleTime: 30000,
   });

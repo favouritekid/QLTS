@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload, joinedload, aliased
 from .. import models, schemas
 from ..core.events import SystemEvents
 from .notification_dispatcher import dispatch
+from . import kpi_service
 
 log = structlog.get_logger(__name__)
 
@@ -598,6 +599,9 @@ async def get_enhanced_dashboard_stats(
     # Get base stats first
     base_stats = await get_officer_dashboard_stats(db, officer_id)
     
+    # Fetch user to get unit_id for KPI inheritance
+    user = await db.get(models.User, officer_id)
+    
     yesterday = today - timedelta(days=1)
     week_ago = today - timedelta(days=7)
     month_start = today.replace(day=1)
@@ -799,7 +803,9 @@ async def get_enhanced_dashboard_stats(
     return {
         "kpis": {
             "consultations_today": consultations_today,
-            "consultations_target": 10,
+            "consultations_target": await kpi_service.get_kpi_target(
+                db, "consultations_daily", officer_id, user.unit_id, "daily"
+            ),
             "consultations_trend": consultations_trend,
             "active_leads": active_leads,
             "active_leads_trend": active_leads_trend,
@@ -813,6 +819,312 @@ async def get_enhanced_dashboard_stats(
         "performance_trends": performance_trends,
         "sales_funnel": sales_funnel,
         "actionable_lists": base_stats["actionable_lists"],
+    }
+
+
+# =============================================================================
+# PHASE 2: Aggregated Dashboard for Manager/Admin
+# =============================================================================
+
+async def get_aggregated_dashboard_stats(
+    db: AsyncSession,
+    scope: str,  # "team" or "organization"
+    requesting_user: models.User,
+    officer_id: int = None,  # Optional: drill down to specific officer
+    unit_id: int = None,     # Optional: filter by unit (admin only)
+    start_date: str = None,
+    end_date: str = None,
+) -> Dict[str, Any]:
+    """
+    Get aggregated dashboard stats for multiple officers.
+    
+    For team scope: Aggregates data from officers in same unit as requester
+    For organization scope: Aggregates data from all officers (or filtered by unit)
+    
+    If officer_id is provided, returns that officer's personal dashboard instead.
+    """
+    from datetime import date as date_type
+    
+    # If drilling down to specific officer, return their personal dashboard
+    if officer_id is not None:
+        return await get_enhanced_dashboard_stats(
+            db=db,
+            officer_id=officer_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    
+    # Parse date range
+    today = datetime.now(timezone.utc).date()
+    if start_date and end_date:
+        try:
+            filter_start = date_type.fromisoformat(start_date)
+            filter_end = date_type.fromisoformat(end_date)
+        except ValueError:
+            filter_start = today - timedelta(days=6)
+            filter_end = today
+    else:
+        filter_start = today - timedelta(days=6)
+        filter_end = today
+    
+    filter_days = (filter_end - filter_start).days + 1
+    
+    # ==========================================================================
+    # Determine which officers to include
+    # ==========================================================================
+    if scope == "team":
+        # Team scope: Officers in same unit as requester
+        target_unit_id = requesting_user.unit_id
+        officers_query = (
+            select(models.User.id)
+            .where(
+                models.User.unit_id == target_unit_id,
+                models.User.role == "officer",
+                models.User.status == "active",
+            )
+        )
+    else:  # organization
+        # Organization scope: All officers (or filtered by unit)
+        if unit_id:
+            officers_query = (
+                select(models.User.id)
+                .where(
+                    models.User.unit_id == unit_id,
+                    models.User.role == "officer",
+                    models.User.status == "active",
+                )
+            )
+        else:
+            officers_query = (
+                select(models.User.id)
+                .where(
+                    models.User.role == "officer",
+                    models.User.status == "active",
+                )
+            )
+    
+    result = await db.execute(officers_query)
+    officer_ids = [row[0] for row in result.fetchall()]
+    officer_count = len(officer_ids)
+    
+    if officer_count == 0:
+        # No officers found, return empty stats
+        return _empty_aggregated_stats(scope, filter_days)
+    
+    log.info(
+        "Aggregating dashboard for scope",
+        scope=scope,
+        officer_count=officer_count,
+        unit_id=unit_id,
+        date_range=f"{filter_start} to {filter_end}",
+    )
+    
+    # ==========================================================================
+    # Aggregated KPIs
+    # ==========================================================================
+    
+    # Total consultations in date range
+    total_consultations_query = (
+        select(func.count(models.Consultation.id))
+        .where(
+            models.Consultation.officer_id.in_(officer_ids),
+            func.date(models.Consultation.consultation_date) >= filter_start,
+            func.date(models.Consultation.consultation_date) <= filter_end,
+        )
+    )
+    total_consultations = (await db.execute(total_consultations_query)).scalar() or 0
+    avg_consultations_per_day = round(total_consultations / filter_days, 1) if filter_days > 0 else 0
+    
+    # Today's consultations
+    today_consultations_query = (
+        select(func.count(models.Consultation.id))
+        .where(
+            models.Consultation.officer_id.in_(officer_ids),
+            func.date(models.Consultation.consultation_date) == today,
+        )
+    )
+    today_consultations = (await db.execute(today_consultations_query)).scalar() or 0
+    
+    # Active leads (non-final status)
+    active_leads_query = (
+        select(func.count(models.Lead.id))
+        .join(
+            models.ConsultationStatus,
+            models.Lead.consultation_status_id == models.ConsultationStatus.id,
+            isouter=True
+        )
+        .where(
+            models.Lead.assigned_officer_id.in_(officer_ids),
+            models.Lead.deleted_at.is_(None),
+            or_(
+                models.ConsultationStatus.is_final_status == False,
+                models.ConsultationStatus.is_final_status.is_(None)
+            )
+        )
+    )
+    total_active_leads = (await db.execute(active_leads_query)).scalar() or 0
+    
+    # Conversion rate (leads created in range that converted)
+    converted_query = (
+        select(func.count(models.Lead.id))
+        .join(models.ConsultationStatus)
+        .where(
+            models.Lead.assigned_officer_id.in_(officer_ids),
+            models.ConsultationStatus.is_final_status == True,
+            models.ConsultationStatus.outcome_type == "positive",
+            func.date(models.Lead.created_at) >= filter_start,
+            func.date(models.Lead.created_at) <= filter_end,
+        )
+    )
+    converted_count = (await db.execute(converted_query)).scalar() or 0
+    
+    total_leads_query = (
+        select(func.count(models.Lead.id))
+        .where(
+            models.Lead.assigned_officer_id.in_(officer_ids),
+            func.date(models.Lead.created_at) >= filter_start,
+            func.date(models.Lead.created_at) <= filter_end,
+        )
+    )
+    total_leads = (await db.execute(total_leads_query)).scalar() or 1
+    conversion_rate = round((converted_count / total_leads) * 100, 1)
+    
+    # ==========================================================================
+    # Aggregated Funnel
+    # ==========================================================================
+    # Get pipeline stages (ordered by position)
+    stages_query = (
+        select(models.PipelineStage)
+        .order_by(models.PipelineStage.order)
+    )
+    stages_result = await db.execute(stages_query)
+    stages = stages_result.scalars().all()
+    
+    sales_funnel = []
+    for stage in stages:
+        stage_count_query = (
+            select(func.count(models.Lead.id))
+            .where(
+                models.Lead.assigned_officer_id.in_(officer_ids),
+                models.Lead.pipeline_stage_id == stage.id,
+                models.Lead.deleted_at.is_(None),
+            )
+        )
+        count = (await db.execute(stage_count_query)).scalar() or 0
+        # Must match FunnelStage schema
+        sales_funnel.append({
+            "stage_id": stage.id,
+            "stage_name": stage.name,
+            "stage_order": stage.order,
+            "lead_count": count,
+            "is_final_stage": stage.is_final_stage,
+        })
+    
+    # ==========================================================================
+    # Team Overview (top performers)
+    # ==========================================================================
+    team_overview = []
+    for oid in officer_ids[:10]:  # Limit to 10 for performance
+        officer = await db.get(models.User, oid)
+        if officer:
+            officer_consults_query = (
+                select(func.count(models.Consultation.id))
+                .where(
+                    models.Consultation.officer_id == oid,
+                    func.date(models.Consultation.consultation_date) >= filter_start,
+                    func.date(models.Consultation.consultation_date) <= filter_end,
+                )
+            )
+            officer_consults = (await db.execute(officer_consults_query)).scalar() or 0
+            team_overview.append({
+                "officer_id": oid,
+                "officer_name": officer.full_name or officer.username,
+                "consultations": officer_consults,
+            })
+    
+    # Sort by consultations desc
+    team_overview.sort(key=lambda x: x["consultations"], reverse=True)
+    
+    # ==========================================================================
+    # Build response
+    # ==========================================================================
+    return {
+        "kpis": {
+            "consultations_today": today_consultations,
+            "consultations_target": officer_count * 10,  # Aggregate target
+            "consultations_trend": {
+                "value": avg_consultations_per_day,
+                "direction": "neutral",
+                "comparison": f"TB/ngày trong {filter_days} ngày",
+            },
+            "active_leads": total_active_leads,
+            "active_leads_trend": {
+                "value": 0,
+                "direction": "neutral",
+                "comparison": f"{officer_count} officers",
+            },
+            "conversion_rate": conversion_rate,
+            "conversion_rate_trend": {
+                "value": 0,
+                "direction": "neutral",
+                "comparison": f"trong {filter_days} ngày",
+            },
+            "avg_response_time": 0,  # TODO: Calculate aggregate
+            "avg_response_time_trend": {
+                "value": 0,
+                "direction": "neutral",
+                "comparison": "",
+            },
+        },
+        # Must match WorkloadStats schema
+        "status_overview": {
+            "current_workload": total_active_leads,
+            "max_capacity": officer_count * 30,  # Aggregate capacity
+            "utilization": round((total_active_leads / (officer_count * 30)) * 100, 1) if officer_count > 0 else 0,
+            "availability_status": "available",
+        },
+        "priority_actions": [],  # Not applicable for aggregated view
+        "performance_trends": [],  # TODO: Add aggregated trends
+        "sales_funnel": sales_funnel,
+        # Must match ActionableLists schema
+        "actionable_lists": {
+            "high_score": [],
+            "stale": [],
+            "upcoming": [],
+        },
+    }
+
+
+def _empty_aggregated_stats(scope: str, filter_days: int) -> Dict[str, Any]:
+    """Return empty stats when no officers found."""
+    return {
+        "kpis": {
+            "consultations_today": 0,
+            "consultations_target": 0,
+            "consultations_trend": {"value": 0, "direction": "neutral", "comparison": ""},
+            "active_leads": 0,
+            "active_leads_trend": {"value": 0, "direction": "neutral", "comparison": ""},
+            "conversion_rate": 0,
+            "conversion_rate_trend": {"value": 0, "direction": "neutral", "comparison": ""},
+            "avg_response_time": 0,
+            "avg_response_time_trend": {"value": 0, "direction": "neutral", "comparison": ""},
+        },
+        # Must match WorkloadStats schema
+        "status_overview": {
+            "current_workload": 0,
+            "max_capacity": 0,
+            "utilization": 0,
+            "availability_status": "available",
+        },
+        "priority_actions": [],
+        "performance_trends": [],
+        "sales_funnel": [],
+        # Must match ActionableLists schema
+        "actionable_lists": {
+            "high_score": [],
+            "stale": [],
+            "upcoming": [],
+        },
     }
 
 

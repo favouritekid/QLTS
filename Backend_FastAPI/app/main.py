@@ -37,6 +37,7 @@ from .routers import (
     admissions,  # ✅ NEW: Admission Profile workflow (replacement for applications)
     applications,
     auth,
+    kpi_config,  # ✅ PHASE 5: KPI Configuration Admin
     leads,
     monitoring,
     notification_preferences,
@@ -541,6 +542,7 @@ fastapi_app.include_router(
     organization.router, prefix="/api", tags=["Organization"]
 )
 fastapi_app.include_router(officer.router, prefix="/api", tags=["Officer Dashboard"])
+fastapi_app.include_router(kpi_config.router)  # ✅ PHASE 5: KPI Configuration Admin
 fastapi_app.include_router(monitoring.router, prefix="/api", tags=["System Monitoring"])
 
 # ===============================================================

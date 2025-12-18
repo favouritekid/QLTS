@@ -1,6 +1,7 @@
 // src/app/(dashboard)/dashboard/officer/page.tsx
 "use client";
 
+import { useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertCircle } from "lucide-react";
@@ -15,7 +16,7 @@ import {
   SmartHeader
 } from "@/components/officer/dashboard";
 import { DashboardDateProvider } from "@/contexts/DashboardDateContext";
-import { useDashboardStats } from "@/hooks/useDashboardStats";
+import { useDashboardStats, type DashboardScope } from "@/hooks/useDashboardStats";
 import { api } from "@/lib/api/client";
 import { toast } from "sonner";
 
@@ -29,6 +30,7 @@ import { toast } from "sonner";
  * - Real-time stats with Socket.IO updates
  * - Performance trends
  * - Sales funnel visualization
+ * - Scope filter for manager/admin (Phase 3)
  */
 
 // =============================================================================
@@ -36,7 +38,11 @@ import { toast } from "sonner";
 // =============================================================================
 
 function DashboardContent() {
-  const { stats, teamStats, isLoading, error, refetch } = useDashboardStats();
+  // Scope state for manager/admin view switching
+  const [scope, setScope] = useState<DashboardScope>("personal");
+  
+  // Pass scope to useDashboardStats hook
+  const { stats, teamStats, isLoading, error, refetch } = useDashboardStats({ scope });
 
   // === LOADING STATE ===
   if (isLoading) {
@@ -125,10 +131,12 @@ function DashboardContent() {
 
   return (
     <div className="container mx-auto p-6 space-y-6">
-      {/* Header with Date Range Filter */}
+      {/* Header with Date Range Filter and Scope Filter */}
       <SmartHeader
         isGoalMet={isGoalMet}
         onQuickAction={handleQuickAction}
+        scope={scope}
+        onScopeChange={setScope}
       />
 
       {/* KPI Cards Row */}

@@ -27,6 +27,7 @@ from .celery_utils import (
     send_login_alert_email_task,
     send_password_reset_confirmation_email_task,
     send_password_reset_email_task,
+    sync_kpi_ytd_task,  # Phase 6: Rolling Targets
 )
 
 # Explicit __all__ for better IDE support and clarity
@@ -41,4 +42,7 @@ __all__ = [
     "broadcast_notification_task",
     # Scheduled tasks
     "check_consultation_reminders_task",
+    # KPI tasks (Phase 6)
+    "sync_kpi_ytd_task",
 ]
+

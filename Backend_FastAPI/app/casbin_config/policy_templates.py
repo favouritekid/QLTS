@@ -48,6 +48,14 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/pipeline/stages", "action": "GET"},
         {"subject": "{role}", "object": "/api/pipeline/all", "action": "GET"},
         {"subject": "{role}", "object": "/api/pipeline/allowed-next-statuses", "action": "GET"},
+        # Officer Dashboard access (Phase 4: Unified Dashboard)
+        {"subject": "{role}", "object": "/api/officer/stats", "action": "GET"},
+        {"subject": "{role}", "object": "/api/officer/dashboard", "action": "GET"},
+        {"subject": "{role}", "object": "/api/officer/leaderboard", "action": "GET"},
+        {"subject": "{role}", "object": "/api/officer/team-stats", "action": "GET"},
+        {"subject": "{role}", "object": "/api/officer/upcoming-activities", "action": "GET"},
+        {"subject": "{role}", "object": "/api/officer/availability", "action": "POST"},
+        {"subject": "{role}", "object": "/api/officer/recommendations", "action": "GET"},  # Phase 7
         # Profile access
         {"subject": "{role}", "object": "/api/profile", "action": "GET"},
         {"subject": "{role}", "object": "/api/profile", "action": "PUT"},
