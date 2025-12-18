@@ -9,12 +9,13 @@ CRUD endpoints for managing KPI configurations:
 - Delete config
 
 Admin-only access.
+
+REFACTORED: Uses KpiRepository for data access.
 """
 from typing import Annotated, List, Optional
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, Field
 
@@ -22,6 +23,7 @@ from app.database import get_db
 from app.core import deps
 from app import models
 from app.models.config import KpiConfig, KpiTarget
+from app.repositories import KpiRepository
 
 router = APIRouter(prefix="/api/admin/kpi-config", tags=["Admin - KPI Configuration"])
 
@@ -113,19 +115,9 @@ async def list_kpi_configs(
     if current_user.role not in ("admin", "manager"):
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    query = select(KpiConfig)
-    
-    if kpi_code:
-        query = query.where(KpiConfig.kpi_code == kpi_code)
-    if unit_id is not None:
-        query = query.where(KpiConfig.unit_id == unit_id)
-    if is_active is not None:
-        query = query.where(KpiConfig.is_active == is_active)
-    
-    query = query.order_by(KpiConfig.kpi_code, KpiConfig.unit_id, KpiConfig.officer_id)
-    
-    result = await db.execute(query)
-    return result.scalars().all()
+    repo = KpiRepository(db)
+    return await repo.list_configs(kpi_code=kpi_code, unit_id=unit_id, is_active=is_active)
+
 
 
 @router.post(
@@ -151,14 +143,13 @@ async def create_kpi_config(
         raise HTTPException(status_code=403, detail="Admin access required")
     
     # Check for existing active config with same scope
-    existing_query = select(KpiConfig).where(
-        KpiConfig.kpi_code == data.kpi_code,
-        KpiConfig.unit_id == data.unit_id,
-        KpiConfig.officer_id == data.officer_id,
-        KpiConfig.period_type == data.period_type,
-        KpiConfig.is_active == True,
+    repo = KpiRepository(db)
+    existing = await repo.check_duplicate_exists(
+        kpi_code=data.kpi_code,
+        period_type=data.period_type,
+        unit_id=data.unit_id,
+        officer_id=data.officer_id,
     )
-    existing = (await db.execute(existing_query)).scalar_one_or_none()
     
     if existing:
         raise HTTPException(
@@ -252,17 +243,8 @@ async def list_kpi_targets(
     if current_user.role not in ("admin", "manager"):
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    query = select(KpiTarget).where(KpiTarget.is_active == True)
-    
-    if fiscal_year:
-        query = query.where(KpiTarget.fiscal_year == fiscal_year)
-    if kpi_code:
-        query = query.where(KpiTarget.kpi_code == kpi_code)
-    
-    query = query.order_by(KpiTarget.fiscal_year.desc(), KpiTarget.kpi_code)
-    
-    result = await db.execute(query)
-    return result.scalars().all()
+    repo = KpiRepository(db)
+    return await repo.list_targets(fiscal_year=fiscal_year, kpi_code=kpi_code)
 
 
 @router.post(
