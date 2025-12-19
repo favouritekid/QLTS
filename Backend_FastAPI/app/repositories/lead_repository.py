@@ -711,6 +711,91 @@ class LeadRepository(BaseRepository[models.Lead]):
                 
         return existing_phones
 
+    async def check_email_conflict(
+        self,
+        email: str,
+        unit_id: int,
+        exclude_id: Optional[int] = None
+    ) -> Optional[models.Lead]:
+        """
+        Check if email exists in the same unit.
+        
+        Args:
+            email: Email to check
+            unit_id: Organization Unit ID
+            exclude_id: Lead ID to exclude (for updates)
+            
+        Returns:
+            Conflicting Lead or None
+        """
+        query = (
+            select(models.Lead)
+            .options(selectinload(models.Lead.assigned_officer))
+            .where(
+                func.lower(models.Lead.email) == email.lower(),
+                models.Lead.unit_id == unit_id,
+                models.Lead.deleted_at.is_(None)
+            )
+        )
+        
+        if exclude_id is not None:
+            query = query.where(models.Lead.id != exclude_id)
+            
+        result = await self.db.execute(query)
+        return result.scalars().first()
+
+    async def check_batch_email_conflict(self, emails: list[str]) -> set[str]:
+        """
+        Check which emails in the provided list already exist in DB (Global check for now).
+        Note: If uniqueness is enforced per-unit, this might need unit_id context.
+        However, for bulk import, usually we want to know if it exists globally or we accept 
+        unit_id in the file. 
+        Current logic in service was: `existing_emails_in_db` (Global stream).
+        
+        Args:
+            emails: List of emails to check
+            
+        Returns:
+            Set of emails that already exist
+        """
+        if not emails:
+            return set()
+            
+        valid_emails = {e.lower() for e in emails if e}
+        if not valid_emails:
+            return set()
+            
+        query = (
+            select(models.Lead.email)
+            .where(
+                models.Lead.deleted_at.is_(None),
+                func.lower(models.Lead.email).in_(valid_emails)
+            )
+        )
+        
+        result = await self.db.execute(query)
+        # Return lowercased emails for comparison
+        return {row[0].lower() for row in result.all() if row[0]}
+
+    async def bulk_insert_leads(self, leads_data: list[dict]) -> list[int]:
+        """
+        Bulk insert leads and return their IDs.
+        
+        Args:
+            leads_data: List of dictionaries matching Lead model fields
+            
+        Returns:
+            List of created Lead IDs
+        """
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        
+        if not leads_data:
+            return []
+            
+        stmt = pg_insert(models.Lead).values(leads_data).returning(models.Lead.id)
+        result = await self.db.execute(stmt)
+        return result.scalars().all()
+
     # =========================================================================
     # CONSULTATION METHODS (for response serialization)
     # =========================================================================
@@ -744,6 +829,58 @@ class LeadRepository(BaseRepository[models.Lead]):
         )
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
+
+    async def get_latest_consultation(
+        self,
+        lead_id: int
+    ) -> Optional[models.Consultation]:
+        """
+        Get the most recent consultation for a lead.
+        
+        Args:
+            lead_id: Lead ID
+            
+        Returns:
+            Most recent Consultation or None
+        """
+        query = (
+            select(models.Consultation)
+            .where(models.Consultation.lead_id == lead_id)
+            .order_by(
+                models.Consultation.consultation_date.desc(),
+                models.Consultation.id.desc(),
+            )
+            .limit(1)
+        )
+        result = await self.db.execute(query)
+        return result.scalars().first()
+
+    async def get_recent_consultations(
+        self,
+        lead_id: int,
+        limit: int = 5
+    ) -> List[models.Consultation]:
+        """
+        Get recent consultations for a lead.
+        
+        Args:
+            lead_id: Lead ID
+            limit: Number of records to return
+            
+        Returns:
+            List of Consultation objects
+        """
+        query = (
+            select(models.Consultation)
+            .where(models.Consultation.lead_id == lead_id)
+            .order_by(
+                models.Consultation.consultation_date.desc(),
+                models.Consultation.id.desc(),
+            )
+            .limit(limit)
+        )
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
 
     # =========================================================================
     # ✅ REASSIGN FEATURE: New methods for architecture compliance
