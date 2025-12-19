@@ -462,40 +462,30 @@ async def get_user_managed_units(
 ) -> List[int]:
     """
     Get list of unit IDs that a user manages.
-
+    
     Returns all organizational units where the user has an active manager assignment.
     This is used for ownership verification in IDOR prevention.
-
+    
+    ✅ REFACTORED: Uses UserRepository instead of direct SQL.
+    
     Args:
         db: Database session
         user_id: ID of the user to check
-
+        
     Returns:
         List of unit IDs where user is an active manager
-
-    Example:
-        >>> managed_units = await get_user_managed_units(db, user_id=5)
-        >>> # [10, 20, 30]  # User 5 manages units 10, 20, and 30
     """
-    from sqlalchemy import select
-    from ..models import UserUnitAssignment
-
-    # Query for active manager assignments
-    stmt = select(UserUnitAssignment.unit_id).where(
-        UserUnitAssignment.user_id == user_id,
-        UserUnitAssignment.role == UserRole.MANAGER,
-        UserUnitAssignment.is_active == True
-    )
-
-    result = await db.execute(stmt)
-    managed_unit_ids = [row[0] for row in result.all()]
-
+    from ..repositories import UserRepository
+    
+    repo = UserRepository(db)
+    managed_unit_ids = await repo.get_managed_unit_ids(user_id)
+    
     log.debug(
         "Fetched managed units",
         user_id=user_id,
         managed_units=managed_unit_ids
     )
-
+    
     return managed_unit_ids
 
 

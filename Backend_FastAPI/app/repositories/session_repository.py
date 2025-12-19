@@ -140,6 +140,30 @@ class SessionRepository(BaseRepository[UserSession]):
         )
         return result.scalar_one_or_none()
 
+    async def get_active_sessions_for_update(self, user_id: int) -> List[UserSession]:
+        """
+        Get all active sessions for a user with pessimistic lock.
+        
+        ✅ SPRINT 7: Added for user_service invalidate_all_sessions migration.
+        
+        Args:
+            user_id: User ID
+            
+        Returns:
+            List of locked active UserSession instances
+        """
+        result = await self.db.execute(
+            select(UserSession)
+            .where(
+                and_(
+                    UserSession.user_id == user_id,
+                    UserSession.revoked_at.is_(None),
+                )
+            )
+            .with_for_update()
+        )
+        return list(result.scalars().all())
+
     async def get_by_refresh_jti_and_user(
         self,
         jti: str,

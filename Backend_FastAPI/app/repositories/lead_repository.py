@@ -615,6 +615,26 @@ class LeadRepository(BaseRepository[models.Lead]):
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
+    async def unassign_leads_from_officers(self, officer_ids: List[int]) -> int:
+        """
+        Unassign leads from a list of officers (set assigned_officer_id = NULL).
+        
+        ✅ SPRINT 7: Added for user_service bulk delete migration.
+        
+        Args:
+            officer_ids: List of officer IDs to unassign leads from
+            
+        Returns:
+            Number of rows updated
+        """
+        stmt = (
+            models.Lead.__table__.update()
+            .where(models.Lead.assigned_officer_id.in_(officer_ids))
+            .values(assigned_officer_id=None)
+        )
+        result = await self.db.execute(stmt)
+        return result.rowcount
+
     async def check_phone_conflict(
         self,
         phone: Optional[str],
