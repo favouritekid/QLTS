@@ -541,13 +541,16 @@ async def perform_password_reset(
     session hijacking attacks. If an attacker had access to the account,
     all their sessions will be revoked.
     """
-    user = await user_service.reset_password(
+    user, post_commit_callback = await user_service.reset_password(
         db, token=reset_data.token, new_password=reset_data.new_password
     )
 
+    # ✅ FIX: Commit the password change to DB
+    await db.commit()
+    await post_commit_callback()
+
     # 🔐 SECURITY FIX: Invalidate all sessions after password reset
     # This prevents session hijacking if attacker had compromised account
-    # ✅ FIX-2: Throw exception if invalidate fails (don't silently fail)
     try:
         await user_service.invalidate_all_sessions(db, user)
         log.warning(
@@ -631,14 +634,18 @@ async def perform_change_password(
     If session invalidation fails, the request will fail with 500 to prevent
     security issues with dangling sessions.
     """
-    await user_service.change_password(
+    _, post_commit_callback = await user_service.change_password(
         db,
         user=current_user,
         old_password=password_data.old_password,
         new_password=password_data.new_password,
     )
 
-    # ✅ FIX-2: Throw exception if invalidate fails (don't silently fail)
+    # ✅ FIX: Commit the password change to DB
+    await db.commit()
+    await post_commit_callback()
+
+    # Invalidate all sessions after password change
     try:
         await user_service.invalidate_all_sessions(db, current_user)
         log.info(
@@ -646,7 +653,6 @@ async def perform_change_password(
             user_id=current_user.id,
         )
     except (CacheServiceError, UserServiceError) as e:
-        # ✅ PHASE 1: Catch custom exceptions from service layer
         log.critical(
             "Failed to invalidate sessions after password change - SECURITY RISK",
             user_id=current_user.id,
@@ -664,7 +670,6 @@ async def perform_change_password(
             error=str(e),
             exc_info=True,
         )
-        # ✅ NEW: Throw 500 to indicate failure
         raise HTTPException(
             status_code=500,
             detail="Password changed but failed to invalidate sessions. Please logout manually from all devices and contact support."

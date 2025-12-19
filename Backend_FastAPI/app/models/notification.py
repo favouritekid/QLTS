@@ -270,8 +270,9 @@ class NotificationAction(Base):
     id = Column(Integer, primary_key=True, index=True)
 
     # Reference to parent rule
+    # NOTE: index is defined in __table_args__ as ix_notification_action_rule_id
     rule_id = Column(Integer, ForeignKey("notification_rule.id", ondelete="CASCADE"),
-                    nullable=False, index=True,
+                    nullable=False,
                     comment="Foreign key to notification_rule")
 
     # Step number in workflow sequence

@@ -513,6 +513,31 @@ class OfficerRepository(BaseRepository[models.User]):
         )
         result = await self.db.execute(query)
         return list(result.scalars().all())
+
+    async def get_upcoming_activities(
+        self,
+        officer_id: int,
+        start_of_month: datetime,
+        end_of_month: datetime,
+    ) -> List[models.Lead]:
+        """
+        Get leads with next_activity_at within the given date range.
+        
+        Used for calendar/activity planning views.
+        """
+        query = (
+            select(models.Lead)
+            .where(
+                models.Lead.assigned_officer_id == officer_id,
+                models.Lead.next_activity_at.isnot(None),
+                models.Lead.next_activity_at >= start_of_month,
+                models.Lead.next_activity_at < end_of_month,
+                models.Lead.deleted_at.is_(None),
+            )
+            .order_by(models.Lead.next_activity_at.asc())
+        )
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
     
     # =========================================================================
     # Leaderboard
@@ -539,7 +564,7 @@ class OfficerRepository(BaseRepository[models.User]):
             .join(models.Consultation, models.Consultation.officer_id == models.User.id)
             .where(
                 models.User.role == "officer",
-                models.User.is_active == True,
+                models.User.status == "active",
                 func.date(models.Consultation.consultation_date) >= week_start,
                 func.date(models.Consultation.consultation_date) <= week_end,
             )
@@ -611,7 +636,7 @@ class OfficerRepository(BaseRepository[models.User]):
         # Build conditions
         conditions = [
             models.User.role == "officer",
-            models.User.is_active == True,
+            models.User.status == "active",
         ]
         if unit_id:
             conditions.append(models.User.unit_id == unit_id)
@@ -671,3 +696,237 @@ class OfficerRepository(BaseRepository[models.User]):
         total = (await self.db.execute(count_query)).scalar() or 0
         
         return total, officers
+
+    # =========================================================================
+    # Aggregated Dashboard (for Manager/Admin views)
+    # =========================================================================
+
+    async def get_active_officer_ids(
+        self,
+        scope: str = "organization",
+        unit_id: Optional[int] = None,
+    ) -> List[int]:
+        """
+        Get list of active officer IDs based on scope.
+
+        Args:
+            scope: "team" or "organization"
+            unit_id: Filter by unit ID (required for team scope)
+
+        Returns:
+            List of officer user IDs
+        """
+        conditions = [
+            models.User.role == "officer",
+            models.User.status == "active",
+        ]
+        
+        if unit_id:
+            conditions.append(models.User.unit_id == unit_id)
+        
+        query = select(models.User.id).where(*conditions)
+        result = await self.db.execute(query)
+        return [row[0] for row in result.fetchall()]
+
+    async def get_aggregated_kpis(
+        self,
+        officer_ids: List[int],
+        start_date: date,
+        end_date: date,
+    ) -> Dict[str, Any]:
+        """
+        Get aggregated KPIs for multiple officers.
+
+        OPTIMIZATION: Single batch query instead of N queries per officer.
+
+        Returns:
+            Dict with total_consultations, today_consultations, active_leads,
+            converted_count, total_leads
+        """
+        today = datetime.now(timezone.utc).date()
+        
+        # Query 1: Consultations (batch)
+        consult_query = (
+            select(
+                func.count(models.Consultation.id).label("range_count"),
+                func.count(
+                    case((func.date(models.Consultation.consultation_date) == today, 1))
+                ).label("today_count"),
+            )
+            .where(
+                models.Consultation.officer_id.in_(officer_ids),
+                func.date(models.Consultation.consultation_date) >= start_date,
+                func.date(models.Consultation.consultation_date) <= end_date,
+            )
+        )
+        consult_result = await self.db.execute(consult_query)
+        consult_row = consult_result.fetchone()
+        
+        # Query 2: Lead stats (batch with conditional counts)
+        lead_query = (
+            select(
+                func.count(models.Lead.id).label("total"),
+                func.count(
+                    case((
+                        or_(
+                            models.ConsultationStatus.is_final_status == False,
+                            models.ConsultationStatus.is_final_status.is_(None)
+                        ), 1
+                    ))
+                ).label("active"),
+                func.count(
+                    case((
+                        and_(
+                            models.ConsultationStatus.is_final_status == True,
+                            models.ConsultationStatus.outcome_type == "positive"
+                        ), 1
+                    ))
+                ).label("converted"),
+            )
+            .outerjoin(
+                models.ConsultationStatus,
+                models.Lead.consultation_status_id == models.ConsultationStatus.id
+            )
+            .where(
+                models.Lead.assigned_officer_id.in_(officer_ids),
+                func.date(models.Lead.created_at) >= start_date,
+                func.date(models.Lead.created_at) <= end_date,
+            )
+        )
+        lead_result = await self.db.execute(lead_query)
+        lead_row = lead_result.fetchone()
+        
+        return {
+            "total_consultations": consult_row.range_count or 0,
+            "today_consultations": consult_row.today_count or 0,
+            "active_leads": lead_row.active or 0,
+            "converted_count": lead_row.converted or 0,
+            "total_leads": lead_row.total or 0,
+        }
+
+    async def get_aggregated_funnel(
+        self,
+        officer_ids: List[int],
+    ) -> List[Dict[str, Any]]:
+        """
+        Get aggregated sales funnel for multiple officers.
+
+        OPTIMIZATION: Single GROUP BY query instead of N queries per stage.
+
+        Returns:
+            List of funnel stage dicts with counts
+        """
+        # Get all stages
+        stages = await self.get_all_pipeline_stages()
+        
+        # Batch query for all stage counts
+        count_query = (
+            select(
+                models.Lead.pipeline_stage_id,
+                func.count(models.Lead.id).label("count")
+            )
+            .where(
+                models.Lead.assigned_officer_id.in_(officer_ids),
+                models.Lead.deleted_at.is_(None),
+            )
+            .group_by(models.Lead.pipeline_stage_id)
+        )
+        count_result = await self.db.execute(count_query)
+        
+        # Build lookup
+        stage_counts = {row.pipeline_stage_id: row.count for row in count_result.fetchall()}
+        
+        # Build funnel
+        funnel = []
+        for stage in stages:
+            funnel.append({
+                "stage_id": stage.id,
+                "stage_name": stage.name,
+                "stage_order": stage.order,
+                "lead_count": stage_counts.get(stage.id, 0),
+                "is_final_stage": stage.is_final_stage,
+            })
+        
+        return funnel
+
+    async def get_team_overview(
+        self,
+        officer_ids: List[int],
+        start_date: date,
+        end_date: date,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get team overview with top performers.
+
+        OPTIMIZATION: Single JOIN query instead of N+1 loop.
+
+        Returns:
+            List of officer dicts with consultation counts
+        """
+        query = (
+            select(
+                models.User.id,
+                models.User.full_name,
+                models.User.username,
+                func.count(models.Consultation.id).label("consultations")
+            )
+            .outerjoin(
+                models.Consultation,
+                and_(
+                    models.Consultation.officer_id == models.User.id,
+                    func.date(models.Consultation.consultation_date) >= start_date,
+                    func.date(models.Consultation.consultation_date) <= end_date,
+                )
+            )
+            .where(models.User.id.in_(officer_ids))
+            .group_by(models.User.id, models.User.full_name, models.User.username)
+            .order_by(func.count(models.Consultation.id).desc())
+            .limit(limit)
+        )
+        
+        result = await self.db.execute(query)
+        
+        return [
+            {
+                "officer_id": row.id,
+                "officer_name": row.full_name or row.username,
+                "consultations": row.consultations or 0,
+            }
+            for row in result.fetchall()
+        ]
+
+    async def get_all_weekly_rankings(
+        self,
+        week_start: date,
+        week_end: date,
+    ) -> List[Tuple[int, str, str, int]]:
+        """
+        Get ALL officers ranked by consultations for the week.
+
+        Returns list of (user_id, username, full_name, consultation_count)
+        """
+        query = (
+            select(
+                models.User.id,
+                models.User.username,
+                models.User.full_name,
+                func.count(models.Consultation.id).label("consultations")
+            )
+            .outerjoin(
+                models.Consultation,
+                and_(
+                    models.Consultation.officer_id == models.User.id,
+                    func.date(models.Consultation.consultation_date) >= week_start,
+                    func.date(models.Consultation.consultation_date) <= week_end,
+                )
+            )
+            .where(
+                models.User.role == "officer",
+                models.User.status == "active",
+            )
+            .group_by(models.User.id, models.User.username, models.User.full_name)
+            .order_by(func.count(models.Consultation.id).desc())
+        )
+        result = await self.db.execute(query)
+        return result.fetchall()

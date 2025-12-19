@@ -264,10 +264,17 @@ class TestPipelineData:
 
 
 class TestOrgData:
-    """Dữ liệu mẫu cho Organization Units và Majors."""
+    """Dữ liệu mẫu cho Organization Units và MajorPrograms."""
 
     UNIT_1 = {"id": 1, "name": "Test Unit 1", "type": "Faculty"}
-    MAJOR_1 = {"id": 1, "name": "Test Major 1", "code": "TM1", "unit_id": UNIT_1["id"]}
+    # ✅ FIX: Updated to match MajorProgram schema (added degree_level)
+    MAJOR_1 = {
+        "id": 1,
+        "name": "Test Major 1",
+        "code": "TM1",
+        "degree_level": "Cao đẳng",  # Required field for MajorProgram
+        "unit_id": UNIT_1["id"]
+    }
 
 
 class TestLeadData:
