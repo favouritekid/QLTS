@@ -163,6 +163,31 @@ async def get_user_by_id(db: AsyncSession, user_id: int) -> models.User:
     return user
 
 
+async def get_user_for_refresh(
+    db: AsyncSession, username: str
+) -> Optional[models.User]:
+    """
+    Get user by username with pessimistic lock for refresh token flow.
+
+    ✅ PHASE 2: Added for auth module refactor.
+
+    Uses SELECT ... FOR UPDATE to prevent race conditions during token refresh.
+    This is called from the /refresh endpoint to atomically lock the user
+    record before issuing new tokens.
+
+    Args:
+        db: Database session
+        username: Username to search and lock
+
+    Returns:
+        Locked User instance or None if not found
+    """
+    from app.repositories import UserRepository
+
+    repo = UserRepository(db)
+    return await repo.get_by_username_for_update(username)
+
+
 # ← PHASE 2: Helper function to get highest priority role from Casbin
 async def get_highest_priority_role_from_casbin(
     enforcer: casbin.AsyncEnforcer,

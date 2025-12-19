@@ -15,7 +15,7 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from jose import JWTError, jwt
-from sqlalchemy import select
+# ✅ PHASE 2: Removed direct sqlalchemy import (Router → Service → Repository pattern)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, models, schemas, security
@@ -432,25 +432,22 @@ async def logout(
         )
 
     if refresh_jti:
+        # ✅ PHASE 2: Use session_service instead of direct SQL
         try:
-            from sqlalchemy import select
-
-            result = await db.execute(
-                select(models.UserSession).where(
-                    models.UserSession.refresh_jti == refresh_jti,
-                    models.UserSession.user_id == current_user.id,
-                )
+            revoked = await session_service.revoke_session_by_jti(
+                db=db,
+                refresh_jti=refresh_jti,
+                user_id=current_user.id
             )
-            session = result.scalar_one_or_none()
-            if session:
-                from datetime import datetime, timezone
-
-                session.revoked_at = datetime.now(timezone.utc)
-                db.add(session)
+            if revoked:
                 await db.commit()
                 log.info(
                     "Session revoked on logout",
-                    session_id=session.id,
+                    user_id=current_user.id,
+                )
+            else:
+                log.warning(
+                    "Session not found for revocation on logout",
                     user_id=current_user.id,
                 )
         except Exception as session_error:
@@ -483,21 +480,11 @@ async def check_session_status(
     authorization: Annotated[str | None, Header()] = None,
     db: AsyncSession = Depends(database.get_db),
 ):
-    # (Giữ nguyên logic - Giờ nó sẽ ổn vì get_current_user đã kiểm tra)
-    from datetime import datetime, timezone
-
-    from sqlalchemy import and_
-
-    result = await db.execute(
-        select(models.UserSession).where(
-            and_(
-                models.UserSession.user_id == current_user.id,
-                models.UserSession.revoked_at.is_(None),
-                models.UserSession.expires_at > datetime.now(timezone.utc),
-            )
-        )
+    # ✅ PHASE 2: Use session_service instead of direct SQL
+    active_sessions = await session_service.get_active_sessions(
+        db=db,
+        user_id=current_user.id
     )
-    active_sessions = result.scalars().all()
 
     # (Đoạn check `has_valid_session` này giờ có thể hơi thừa
     # vì `get_current_user` đã làm, nhưng giữ lại cũng không sao)
@@ -735,16 +722,10 @@ async def refresh_access_token(
         except Exception as e:
             log.error("Blacklist check failed", error=str(e), exc_info=True)
 
-        # (STEP 3: Pessimistic Lock - Giữ nguyên)
+        # (✅ PHASE 2: Use user_service with pessimistic lock instead of direct SQL)
         async with db.begin():
             try:
-                stmt = (
-                    select(models.User)
-                    .where(models.User.username == username)
-                    .with_for_update(nowait=False)
-                )
-                result = await db.execute(stmt)
-                user = result.scalar_one_or_none()
+                user = await user_service.get_user_for_refresh(db, username)
 
                 if not user:
                     log.warning("User not found during refresh", username=username)

@@ -642,3 +642,33 @@ class UserRepository(BaseRepository[models.User]):
         result = await self.db.execute(query)
         return {row[0]: row[1] for row in result.all()}
 
+    # =========================================================================
+    # PHASE 2: Auth Refactor - Pessimistic Lock Methods
+    # =========================================================================
+
+    async def get_by_username_for_update(
+        self,
+        username: str
+    ) -> Optional[models.User]:
+        """
+        Get user by username with pessimistic lock.
+
+        ✅ PHASE 2: Added for auth refactor - refresh token flow.
+
+        Uses SELECT ... FOR UPDATE to prevent concurrent modifications
+        during token refresh operations.
+
+        Args:
+            username: Username to search and lock
+
+        Returns:
+            Locked User instance or None if not found
+        """
+        result = await self.db.execute(
+            select(models.User)
+            .where(models.User.username == username)
+            .with_for_update(nowait=False)
+        )
+        return result.scalar_one_or_none()
+
+
