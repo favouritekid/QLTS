@@ -531,7 +531,25 @@ class UserRepository(BaseRepository[models.User]):
         Returns:
             List of users matching the IDs
         """
+        if not user_ids:
+            return []
         query = select(models.User).where(models.User.id.in_(user_ids))
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+    async def get_by_db_role(self, role: str) -> List[models.User]:
+        """
+        Get users by database role field.
+        
+        ✅ SPRINT 6: Added for admin/roles.py migration.
+        
+        Args:
+            role: Role name (e.g., 'admin', 'manager', 'officer', 'user')
+            
+        Returns:
+            List of users with this role
+        """
+        query = select(models.User).where(models.User.role == role)
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
