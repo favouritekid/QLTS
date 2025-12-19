@@ -1135,7 +1135,8 @@ async def invalidate_all_sessions(db: AsyncSession, user: models.User):
 
     try:
         # 1. Bắt đầu transaction và LẤY KHÓA
-        async with db.begin():
+        # ✅ FIX: Use begin_nested() (savepoint) if already in transaction
+        async with db.begin_nested():
             result = await db.execute(
                 select(models.UserSession)
                 .where(

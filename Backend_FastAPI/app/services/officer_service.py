@@ -2,9 +2,7 @@ import structlog
 from datetime import datetime, timedelta, timezone, date
 from typing import List, Dict, Any, Callable, Tuple
 
-from sqlalchemy import select, func, or_, desc, case, and_
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload, joinedload, aliased
 
 from .. import models, schemas
 from ..core.events import SystemEvents
@@ -279,11 +277,16 @@ async def get_enhanced_dashboard_stats(
         filter_start = today - timedelta(days=6)
         filter_end = today
     
-    # Get base stats first
+    # =========================================================================
+    # REFACTORED: Use OfficerRepository for KPI stats
+    # =========================================================================
+    repo = OfficerRepository(db)
+    
+    # Get base stats first (already uses Repository)
     base_stats = await get_officer_dashboard_stats(db, officer_id)
     
     # Fetch user to get unit_id for KPI inheritance
-    user = await db.get(models.User, officer_id)
+    user = await repo.get_officer_with_capacity(officer_id)
     
     yesterday = today - timedelta(days=1)
     week_ago = today - timedelta(days=7)
@@ -293,29 +296,16 @@ async def get_enhanced_dashboard_stats(
     # Calculate days in filter range for averages
     filter_days = (filter_end - filter_start).days + 1
     
-    # === 1. CONSULTATIONS IN DATE RANGE ===
-    # Count consultations within the selected date range
-    consultations_range_query = (
-        select(func.count(models.Consultation.id))
-        .where(
-            models.Consultation.officer_id == officer_id,
-            func.date(models.Consultation.consultation_date) >= filter_start,
-            func.date(models.Consultation.consultation_date) <= filter_end
-        )
-    )
-    consultations_in_range = (await db.execute(consultations_range_query)).scalar() or 0
+    # === Use Repository for KPI stats (was 5 separate queries) ===
+    kpi_data = await repo.get_kpi_stats(officer_id, filter_start, filter_end)
     
-    # Today's consultations (always show today regardless of filter)
-    consultations_today_query = (
-        select(func.count(models.Consultation.id))
-        .where(
-            models.Consultation.officer_id == officer_id,
-            func.date(models.Consultation.consultation_date) == today
-        )
-    )
-    consultations_today = (await db.execute(consultations_today_query)).scalar() or 0
+    consultations_in_range = kpi_data["consultations_in_range"]
+    consultations_today = kpi_data["consultations_today"]
+    active_leads = kpi_data["active_leads"]
+    converted_in_range = kpi_data["converted_count"]
+    total_in_range = kpi_data["total_leads"] or 1
     
-    # Calculate daily average for the selected period
+    # Calculate derived values
     consultations_avg = consultations_in_range / filter_days if filter_days > 0 else 0
     
     # Compare today vs average in selected period
@@ -332,57 +322,11 @@ async def get_enhanced_dashboard_stats(
         "comparison": f"vs TB {filter_days} ngày"
     }
     
-    # === 2. ACTIVE LEADS (in date range) ===
-    # Count leads created within the date range that are still active
-    active_leads_range_query = (
-        select(func.count(models.Lead.id))
-        .join(
-            models.ConsultationStatus,
-            models.Lead.consultation_status_id == models.ConsultationStatus.id,
-            isouter=True
-        )
-        .where(
-            models.Lead.assigned_officer_id == officer_id,
-            func.date(models.Lead.created_at) >= filter_start,
-            func.date(models.Lead.created_at) <= filter_end,
-            or_(
-                models.ConsultationStatus.is_final_status == False,
-                models.ConsultationStatus.is_final_status.is_(None)
-            )
-        )
-    )
-    active_leads = (await db.execute(active_leads_range_query)).scalar() or 0
-    
     active_leads_trend = {
         "value": 0,
         "direction": "neutral",
         "comparison": f"trong {filter_days} ngày"
     }
-    
-    # === 3. CONVERSION RATE (in date range) ===
-    # Leads CREATED in date range AND converted (cohort analysis)
-    converted_range_query = (
-        select(func.count(models.Lead.id))
-        .join(models.ConsultationStatus)
-        .where(
-            models.Lead.assigned_officer_id == officer_id,
-            models.ConsultationStatus.is_final_status == True,
-            models.ConsultationStatus.outcome_type == "positive",
-            func.date(models.Lead.created_at) >= filter_start,
-            func.date(models.Lead.created_at) <= filter_end,
-        )
-    )
-    converted_in_range = (await db.execute(converted_range_query)).scalar() or 0
-    
-    total_leads_range_query = (
-        select(func.count(models.Lead.id))
-        .where(
-            models.Lead.assigned_officer_id == officer_id,
-            func.date(models.Lead.created_at) >= filter_start,
-            func.date(models.Lead.created_at) <= filter_end,
-        )
-    )
-    total_in_range = (await db.execute(total_leads_range_query)).scalar() or 1
     
     conversion_rate = round((converted_in_range / total_in_range) * 100, 1)
     
@@ -390,28 +334,10 @@ async def get_enhanced_dashboard_stats(
     prev_filter_end = filter_start - timedelta(days=1)
     prev_filter_start = prev_filter_end - timedelta(days=filter_days - 1)
     
-    converted_prev_query = (
-        select(func.count(models.Lead.id))
-        .join(models.ConsultationStatus)
-        .where(
-            models.Lead.assigned_officer_id == officer_id,
-            models.ConsultationStatus.is_final_status == True,
-            models.ConsultationStatus.outcome_type == "positive",
-            func.date(models.Lead.created_at) >= prev_filter_start,
-            func.date(models.Lead.created_at) <= prev_filter_end,
-        )
-    )
-    converted_prev = (await db.execute(converted_prev_query)).scalar() or 0
-    
-    total_prev_query = (
-        select(func.count(models.Lead.id))
-        .where(
-            models.Lead.assigned_officer_id == officer_id,
-            func.date(models.Lead.created_at) >= prev_filter_start,
-            func.date(models.Lead.created_at) <= prev_filter_end,
-        )
-    )
-    total_prev = (await db.execute(total_prev_query)).scalar() or 1
+    # Get previous period KPIs using Repository
+    prev_kpi_data = await repo.get_kpi_stats(officer_id, prev_filter_start, prev_filter_end)
+    converted_prev = prev_kpi_data["converted_count"]
+    total_prev = prev_kpi_data["total_leads"] or 1
     prev_rate = (converted_prev / total_prev) * 100
     
     conversion_diff = conversion_rate - prev_rate
@@ -491,12 +417,17 @@ async def get_aggregated_dashboard_stats(
     """
     Get aggregated dashboard stats for multiple officers.
     
+    REFACTORED: Uses OfficerRepository batch queries.
+    - Reduced from 14+ queries to 4 optimized batch queries.
+    
     For team scope: Aggregates data from officers in same unit as requester
     For organization scope: Aggregates data from all officers (or filtered by unit)
     
     If officer_id is provided, returns that officer's personal dashboard instead.
     """
     from datetime import date as date_type
+    
+    repo = OfficerRepository(db)
     
     # If drilling down to specific officer, return their personal dashboard
     if officer_id is not None:
@@ -523,180 +454,49 @@ async def get_aggregated_dashboard_stats(
     filter_days = (filter_end - filter_start).days + 1
     
     # ==========================================================================
-    # Determine which officers to include
+    # Get officer IDs using Repository (was direct SQL)
     # ==========================================================================
-    if scope == "team":
-        # Team scope: Officers in same unit as requester
-        target_unit_id = requesting_user.unit_id
-        officers_query = (
-            select(models.User.id)
-            .where(
-                models.User.unit_id == target_unit_id,
-                models.User.role == "officer",
-                models.User.status == "active",
-            )
-        )
-    else:  # organization
-        # Organization scope: All officers (or filtered by unit)
-        if unit_id:
-            officers_query = (
-                select(models.User.id)
-                .where(
-                    models.User.unit_id == unit_id,
-                    models.User.role == "officer",
-                    models.User.status == "active",
-                )
-            )
-        else:
-            officers_query = (
-                select(models.User.id)
-                .where(
-                    models.User.role == "officer",
-                    models.User.status == "active",
-                )
-            )
-    
-    result = await db.execute(officers_query)
-    officer_ids = [row[0] for row in result.fetchall()]
+    target_unit_id = requesting_user.unit_id if scope == "team" else unit_id
+    officer_ids = await repo.get_active_officer_ids(
+        scope=scope,
+        unit_id=target_unit_id,
+    )
     officer_count = len(officer_ids)
     
     if officer_count == 0:
-        # No officers found, return empty stats
         return _empty_aggregated_stats(scope, filter_days)
     
     log.info(
         "Aggregating dashboard for scope",
         scope=scope,
         officer_count=officer_count,
-        unit_id=unit_id,
+        unit_id=target_unit_id,
         date_range=f"{filter_start} to {filter_end}",
     )
     
     # ==========================================================================
-    # Aggregated KPIs
+    # Aggregated KPIs using Repository (was 5 separate queries)
     # ==========================================================================
+    kpi_data = await repo.get_aggregated_kpis(officer_ids, filter_start, filter_end)
     
-    # Total consultations in date range
-    total_consultations_query = (
-        select(func.count(models.Consultation.id))
-        .where(
-            models.Consultation.officer_id.in_(officer_ids),
-            func.date(models.Consultation.consultation_date) >= filter_start,
-            func.date(models.Consultation.consultation_date) <= filter_end,
-        )
-    )
-    total_consultations = (await db.execute(total_consultations_query)).scalar() or 0
+    total_consultations = kpi_data["total_consultations"]
+    today_consultations = kpi_data["today_consultations"]
+    total_active_leads = kpi_data["active_leads"]
+    converted_count = kpi_data["converted_count"]
+    total_leads = kpi_data["total_leads"] or 1
+    
     avg_consultations_per_day = round(total_consultations / filter_days, 1) if filter_days > 0 else 0
-    
-    # Today's consultations
-    today_consultations_query = (
-        select(func.count(models.Consultation.id))
-        .where(
-            models.Consultation.officer_id.in_(officer_ids),
-            func.date(models.Consultation.consultation_date) == today,
-        )
-    )
-    today_consultations = (await db.execute(today_consultations_query)).scalar() or 0
-    
-    # Active leads (non-final status)
-    active_leads_query = (
-        select(func.count(models.Lead.id))
-        .join(
-            models.ConsultationStatus,
-            models.Lead.consultation_status_id == models.ConsultationStatus.id,
-            isouter=True
-        )
-        .where(
-            models.Lead.assigned_officer_id.in_(officer_ids),
-            models.Lead.deleted_at.is_(None),
-            or_(
-                models.ConsultationStatus.is_final_status == False,
-                models.ConsultationStatus.is_final_status.is_(None)
-            )
-        )
-    )
-    total_active_leads = (await db.execute(active_leads_query)).scalar() or 0
-    
-    # Conversion rate (leads created in range that converted)
-    converted_query = (
-        select(func.count(models.Lead.id))
-        .join(models.ConsultationStatus)
-        .where(
-            models.Lead.assigned_officer_id.in_(officer_ids),
-            models.ConsultationStatus.is_final_status == True,
-            models.ConsultationStatus.outcome_type == "positive",
-            func.date(models.Lead.created_at) >= filter_start,
-            func.date(models.Lead.created_at) <= filter_end,
-        )
-    )
-    converted_count = (await db.execute(converted_query)).scalar() or 0
-    
-    total_leads_query = (
-        select(func.count(models.Lead.id))
-        .where(
-            models.Lead.assigned_officer_id.in_(officer_ids),
-            func.date(models.Lead.created_at) >= filter_start,
-            func.date(models.Lead.created_at) <= filter_end,
-        )
-    )
-    total_leads = (await db.execute(total_leads_query)).scalar() or 1
     conversion_rate = round((converted_count / total_leads) * 100, 1)
     
     # ==========================================================================
-    # Aggregated Funnel
+    # Aggregated Funnel using Repository (was N+1 loop)
     # ==========================================================================
-    # Get pipeline stages (ordered by position)
-    stages_query = (
-        select(models.PipelineStage)
-        .order_by(models.PipelineStage.order)
-    )
-    stages_result = await db.execute(stages_query)
-    stages = stages_result.scalars().all()
-    
-    sales_funnel = []
-    for stage in stages:
-        stage_count_query = (
-            select(func.count(models.Lead.id))
-            .where(
-                models.Lead.assigned_officer_id.in_(officer_ids),
-                models.Lead.pipeline_stage_id == stage.id,
-                models.Lead.deleted_at.is_(None),
-            )
-        )
-        count = (await db.execute(stage_count_query)).scalar() or 0
-        # Must match FunnelStage schema
-        sales_funnel.append({
-            "stage_id": stage.id,
-            "stage_name": stage.name,
-            "stage_order": stage.order,
-            "lead_count": count,
-            "is_final_stage": stage.is_final_stage,
-        })
+    sales_funnel = await repo.get_aggregated_funnel(officer_ids)
     
     # ==========================================================================
-    # Team Overview (top performers)
+    # Team Overview using Repository (was N+1 loop)
     # ==========================================================================
-    team_overview = []
-    for oid in officer_ids[:10]:  # Limit to 10 for performance
-        officer = await db.get(models.User, oid)
-        if officer:
-            officer_consults_query = (
-                select(func.count(models.Consultation.id))
-                .where(
-                    models.Consultation.officer_id == oid,
-                    func.date(models.Consultation.consultation_date) >= filter_start,
-                    func.date(models.Consultation.consultation_date) <= filter_end,
-                )
-            )
-            officer_consults = (await db.execute(officer_consults_query)).scalar() or 0
-            team_overview.append({
-                "officer_id": oid,
-                "officer_name": officer.full_name or officer.username,
-                "consultations": officer_consults,
-            })
-    
-    # Sort by consultations desc
-    team_overview.sort(key=lambda x: x["consultations"], reverse=True)
+    team_overview = await repo.get_team_overview(officer_ids, filter_start, filter_end, limit=10)
     
     # ==========================================================================
     # Build response
@@ -745,6 +545,7 @@ async def get_aggregated_dashboard_stats(
             "stale": [],
             "upcoming": [],
         },
+        "team_overview": team_overview,  # Added for manager/admin view
     }
 
 
@@ -796,29 +597,9 @@ async def _calculate_priority_actions(
     today = datetime.now(timezone.utc)
     stale_threshold = today - timedelta(days=3)
     
-    # Get leads needing attention
-    leads_query = (
-        select(models.Lead)
-        .options(selectinload(models.Lead.pipeline_stage))
-        .join(
-            models.ConsultationStatus,
-            models.Lead.consultation_status_id == models.ConsultationStatus.id,
-            isouter=True
-        )
-        .where(
-            models.Lead.assigned_officer_id == officer_id,
-            or_(
-                models.ConsultationStatus.is_final_status == False,
-                models.ConsultationStatus.is_final_status.is_(None)
-            )
-        )
-        .order_by(
-            models.Lead.cached_urgency_score.desc().nulls_last(),
-            models.Lead.lead_score.desc().nulls_last()
-        )
-        .limit(20)  # Get more to filter/score
-    )
-    leads = (await db.execute(leads_query)).scalars().all()
+    # REFACTORED: Use Repository for leads query
+    repo = OfficerRepository(db)
+    leads = await repo.get_priority_leads_for_actions(officer_id, limit=20)
     
     actions = []
     for lead in leads:
@@ -888,52 +669,25 @@ async def get_weekly_leaderboard(
 ) -> Dict[str, Any]:
     """
     Get weekly leaderboard for gamification.
-    Shows top officers by consultations and conversions this week.
+    
+    REFACTORED: Uses OfficerRepository.get_all_weekly_rankings.
+    - Reduced from 2 queries to 1 batch query.
+    
+    Shows top officers by consultations this week.
     Includes current officer's rank even if not in top N.
     PHASE 6: Now includes rank change vs previous week.
     """
+    repo = OfficerRepository(db)
     today = datetime.now(timezone.utc).date()
     week_start = today - timedelta(days=today.weekday())  # Monday
     prev_week_start = week_start - timedelta(days=7)
     prev_week_end = week_start - timedelta(days=1)
     
-    # Get all officers' stats for THIS week
-    leaderboard_query = (
-        select(
-            models.User.id,
-            models.User.username,
-            models.User.full_name,
-            func.count(models.Consultation.id).label("consultations"),
-        )
-        .join(models.Consultation, models.Consultation.officer_id == models.User.id)
-        .where(
-            models.User.role == "officer",
-            func.date(models.Consultation.consultation_date) >= week_start
-        )
-        .group_by(models.User.id, models.User.username, models.User.full_name)
-        .order_by(func.count(models.Consultation.id).desc())
-    )
+    # Get all officers' stats for THIS week using Repository
+    all_officers = await repo.get_all_weekly_rankings(week_start, today)
     
-    result = await db.execute(leaderboard_query)
-    all_officers = result.fetchall()
-    
-    # Get PREVIOUS week ranks for comparison
-    prev_week_query = (
-        select(
-            models.User.id,
-            func.count(models.Consultation.id).label("consultations"),
-        )
-        .join(models.Consultation, models.Consultation.officer_id == models.User.id)
-        .where(
-            models.User.role == "officer",
-            func.date(models.Consultation.consultation_date) >= prev_week_start,
-            func.date(models.Consultation.consultation_date) <= prev_week_end
-        )
-        .group_by(models.User.id)
-        .order_by(func.count(models.Consultation.id).desc())
-    )
-    prev_result = await db.execute(prev_week_query)
-    prev_officers = prev_result.fetchall()
+    # Get PREVIOUS week ranks using Repository
+    prev_officers = await repo.get_all_weekly_rankings(prev_week_start, prev_week_end)
     
     # Build previous week rank lookup
     prev_ranks = {officer.id: rank for rank, officer in enumerate(prev_officers, 1)}
@@ -953,7 +707,7 @@ async def get_weekly_leaderboard(
             "user_id": officer.id,
             "username": officer.username,
             "full_name": officer.full_name or officer.username,
-            "consultations": officer.consultations,
+            "consultations": officer.consultations or 0,
             "is_current_user": officer.id == officer_id,
             "rank_change": rank_change,  # +2 = up 2 spots, -1 = down 1 spot, None = new
         }
@@ -971,7 +725,7 @@ async def get_weekly_leaderboard(
     
     # If current user has no consultations this week, add with 0
     if current_user_rank is None:
-        user = await db.get(models.User, officer_id)
+        user = await repo.get_officer_with_capacity(officer_id)
         if user:
             prev_rank = prev_ranks.get(officer_id)
             leaderboard.append({
@@ -1001,23 +755,20 @@ async def get_team_stats(
     """
     Get team average statistics for performance comparison.
     
+    REFACTORED: Uses OfficerRepository methods.
+    - Reduced from 3 queries to 2 repository calls.
+    
     Returns:
         - team_avg_consultations: Average daily consultations across all officers
         - team_avg_conversions: Average daily conversions across all officers
         - officer_rank_percentile: Current officer's rank percentile
     """
+    repo = OfficerRepository(db)
     today = datetime.now(timezone.utc).date()
     start_date = today - timedelta(days=days - 1)
     
-    # Get all active officers (status = 'active', not is_active)
-    active_officers_query = (
-        select(models.User.id)
-        .where(
-            models.User.role == "officer",
-            models.User.status == "active",  # Fixed: use status instead of is_active
-        )
-    )
-    active_officers = (await db.execute(active_officers_query)).scalars().all()
+    # Get all active officers using Repository
+    active_officers = await repo.get_active_officer_ids(scope="organization", unit_id=None)
     
     if len(active_officers) == 0:
         return {
@@ -1027,56 +778,31 @@ async def get_team_stats(
             "total_officers": 0,
         }
     
-    # Get total consultations per officer in the period
-    consultations_query = (
-        select(
-            models.Consultation.officer_id,
-            func.count(models.Consultation.id).label("count")
-        )
-        .where(
-            models.Consultation.officer_id.in_(active_officers),
-            func.date(models.Consultation.consultation_date) >= start_date,
-        )
-        .group_by(models.Consultation.officer_id)
-    )
-    consultations_res = (await db.execute(consultations_query)).all()
+    # Get team averages using Repository
+    team_data = await repo.get_team_averages(unit_id=None, days=days)
     
-    # Calculate team total and average
-    officer_consultations = {row[0]: row[1] for row in consultations_res}
-    total_consultations = sum(officer_consultations.values())
-    team_avg = round(total_consultations / len(active_officers) / days, 1) if active_officers else 0
+    # Get current officer's KPI for rank calculation
+    officer_kpi = await repo.get_kpi_stats(officer_id, start_date, today)
+    current_officer_count = officer_kpi["consultations_in_range"]
     
-    # Get current officer's consultations
-    current_officer_count = officer_consultations.get(officer_id, 0)
-    
-    # Calculate rank percentile
-    officers_with_fewer = sum(1 for count in officer_consultations.values() if count < current_officer_count)
-    rank_percentile = round((officers_with_fewer / len(active_officers)) * 100) if active_officers else 0
-    
-    # Get conversion stats (leads with final positive status)
-    conversions_query = (
-        select(
-            models.Lead.assigned_officer_id,
-            func.count(models.Lead.id).label("count")
-        )
-        .join(models.ConsultationStatus)
-        .where(
-            models.Lead.assigned_officer_id.in_(active_officers),
-            models.ConsultationStatus.is_final_status == True,
-            func.date(models.Lead.updated_at) >= start_date,
-        )
-        .group_by(models.Lead.assigned_officer_id)
-    )
-    conversions_res = (await db.execute(conversions_query)).all()
-    
-    total_conversions = sum(row[1] for row in conversions_res)
-    team_avg_conversions = round(total_conversions / len(active_officers) / days, 2) if active_officers else 0
+    # Calculate approximate rank percentile
+    # Using team average as reference point
+    team_avg = team_data["team_avg_consultations"]
+    if team_avg > 0:
+        # Rough percentile: if above average, higher percentile
+        daily_avg = current_officer_count / days if days > 0 else 0
+        if daily_avg >= team_avg:
+            rank_percentile = min(90, 50 + int((daily_avg / team_avg - 1) * 50))
+        else:
+            rank_percentile = max(10, int((daily_avg / team_avg) * 50))
+    else:
+        rank_percentile = 50
     
     return {
         "team_avg_consultations": team_avg,
-        "team_avg_conversions": team_avg_conversions,
+        "team_avg_conversions": team_data["team_avg_conversions"],
         "officer_rank_percentile": rank_percentile,
-        "total_officers": len(active_officers),
+        "total_officers": team_data["total_officers"],
         "period_days": days,
     }
 
@@ -1089,6 +815,9 @@ async def get_upcoming_activities(
 ) -> Dict[str, Any]:
     """
     Lấy các hoạt động sắp tới (leads có next_activity_at) cho officer.
+    
+    REFACTORED: Uses OfficerRepository.get_upcoming_activities.
+    
     Trả về danh sách activities và các ngày có activities.
     
     Args:
@@ -1100,6 +829,8 @@ async def get_upcoming_activities(
     Returns:
         Dict with activities list and dates with activities
     """
+    repo = OfficerRepository(db)
+    
     # Tính start/end của tháng
     start_of_month = datetime(year, month, 1, tzinfo=timezone.utc)
     if month == 12:
@@ -1107,21 +838,8 @@ async def get_upcoming_activities(
     else:
         end_of_month = datetime(year, month + 1, 1, tzinfo=timezone.utc)
     
-    # Query leads có next_activity_at trong tháng này
-    query = (
-        select(models.Lead)
-        .where(
-            models.Lead.assigned_officer_id == officer_id,
-            models.Lead.next_activity_at.isnot(None),
-            models.Lead.next_activity_at >= start_of_month,
-            models.Lead.next_activity_at < end_of_month,
-            models.Lead.deleted_at.is_(None),  # Exclude soft-deleted
-        )
-        .order_by(models.Lead.next_activity_at.asc())
-    )
-    
-    result = await db.execute(query)
-    leads = result.scalars().all()
+    # REFACTORED: Use Repository
+    leads = await repo.get_upcoming_activities(officer_id, start_of_month, end_of_month)
     
     # Build activities list and dates with activities
     activities = []
