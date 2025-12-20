@@ -721,8 +721,8 @@ async def refresh_access_token(
         except Exception as e:
             log.error("Blacklist check failed", error=str(e), exc_info=True)
 
-        # (✅ PHASE 2: Use user_service with pessimistic lock instead of direct SQL)
-        async with db.begin():
+        # ✅ FIX: Use begin_nested() (savepoint) to avoid conflict with implicit transaction
+        async with db.begin_nested():
             try:
                 user = await user_service.get_user_for_refresh(db, username)
 
