@@ -62,6 +62,14 @@ async def automatically_assign_lead(
                     f"[Lead ID: {lead_id}] Lead not found, skipping assignment."
                 )
                 return {"status": "skipped", "reason": "lead_not_found", "lead_id": lead_id}
+            
+            # ✅ FIX: Check if lead is deleted (soft delete)
+            elif lead.deleted_at is not None:
+                log.warning(
+                    f"[Lead ID: {lead_id}] Lead is soft-deleted, skipping assignment."
+                )
+                return {"status": "skipped", "reason": "lead_deleted", "lead_id": lead_id}
+            
             elif lead.assigned_officer_id:
                 log.info(
                     f"[Lead ID: {lead_id}] Lead already assigned to officer {lead.assigned_officer_id}, skipping."

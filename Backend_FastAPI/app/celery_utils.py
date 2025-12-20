@@ -349,15 +349,25 @@ def process_automatic_lead_assignment_task(self, lead_id: int):
     try:
         result = asyncio.run(_run_async_assignment())
         
-        # ✅ RETRY LOGIC: If assignment failed (capacity/no officers), retry task
+        # ✅ FIX: Only retry for transient failures (capacity), not permanent ones (no officers)
         if result.get("status") == "failed":
-            task_log.warning(
-                f"Assignment logic returned 'failed' for lead_id: {lead_id}. "
-                f"Reason: {result.get('reason')}. Retrying..."
-            )
-            # Raise retry with exponential backoff handled by decorator (if configured) or defaults
-            # Using verify_connection=False involves internal Celery logic, omitting for simplicity
-            raise self.retry(exc=Exception(f"Assignment Failed: {result.get('reason')}"))
+            reason = result.get("reason")
+            
+            if reason == "all_officers_at_capacity":
+                # ✅ RETRY: Officers might free up capacity soon
+                task_log.warning(
+                    f"Assignment failed for lead_id: {lead_id}. "
+                    f"Reason: {reason}. Retrying (officers may free up capacity)..."
+                )
+                raise self.retry(exc=Exception(f"Assignment Failed: {reason}"))
+            else:
+                # ❌ NO RETRY: no_officers_available requires admin action
+                task_log.warning(
+                    f"Assignment failed for lead_id: {lead_id}. "
+                    f"Reason: {reason}. NOT retrying (requires admin action)."
+                )
+                # Return without retry - task completes as "failed"
+                return result
 
         task_log.info(f"Task completed for lead_id: {lead_id}. Result: {result}")
         return result

@@ -600,6 +600,11 @@ async def create_lead(
                         raise PermissionDeniedError(
                             detail="Can only assign leads to users with 'officer' role"
                         )
+                    # ✅ FIX: Check officer is active (consistent with assign_lead_manually)
+                    if officer.status != "active":
+                        raise PermissionDeniedError(
+                            detail=f"Cannot assign to inactive officer (status: {officer.status})"
+                        )
                     direct_assignment_officer_id = create_data["assigned_officer_id"]
                     skip_auto_assignment = True
                     log.info(
@@ -894,11 +899,13 @@ async def update_lead(
             if not db_lead:
                 raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found")
 
-            # Check logic for officer assignment permissions (same as before)
-            if db_lead.assigned_officer_id != updated_by.id:
-                 # Check if admin/manager or assigned officer
-                 # Logic kept from existing code, just context is db_lead
-                 pass
+            # ✅ FIX: Implement proper permission check (was just pass before)
+            # Admin/Manager can update any lead, Officer can only update their assigned leads
+            if updated_by.role not in (UserRole.ADMIN, UserRole.MANAGER):
+                if db_lead.assigned_officer_id != updated_by.id:
+                    raise PermissionDeniedError(
+                        detail="You are not assigned to this lead."
+                    )
 
             # Lưu trạng thái cũ trước khi thay đổi
             old_state = _get_current_lead_state(db_lead)
@@ -1241,6 +1248,10 @@ async def add_consultation(
             if not lead:
                 raise ResourceNotFoundError(f"Lead with id {lead_id} not found")
             
+            # ✅ FIX: Check if lead is deleted
+            if lead.deleted_at is not None:
+                raise BadRequest(detail="Cannot add consultation to a deleted lead.")
+            
             # Note: Relations are not eagerly loaded here. If accessed, explicit refresh needed.
             
             # Lấy Officer
@@ -1248,9 +1259,11 @@ async def add_consultation(
             if not officer:
                 raise ResourceNotFoundError(f"Officer with id {officer_id} not found.")
 
-            # Kiểm tra quyền: Officer phải được gán cho Lead này
-            if lead.assigned_officer_id != officer_id:
-                raise PermissionDeniedError(detail="You are not assigned to this lead.")
+            # ✅ FIX: Kiểm tra quyền - Admin có thể thêm consultation cho bất kỳ lead
+            # Officer phải được gán cho Lead này
+            if officer.role != UserRole.ADMIN:
+                if lead.assigned_officer_id != officer_id:
+                    raise PermissionDeniedError(detail="You are not assigned to this lead.")
 
             # Lấy ConsultationStatus mới từ DB
             new_status = await db.get(models.ConsultationStatus, data.status_id)
@@ -1411,6 +1424,11 @@ async def assign_lead_manually(
         try:
             # Lấy Lead và Officer
             lead = await get_lead_by_id(db, lead_id)
+            
+            # ✅ FIX: Explicit deleted check (get_lead_by_id may not always exclude)
+            if lead.deleted_at is not None:
+                raise BadRequest(detail="Cannot assign a deleted lead.")
+            
             officer = await db.get(models.User, officer_id)
 
             # Kiểm tra Officer hợp lệ
@@ -1421,6 +1439,11 @@ async def assign_lead_manually(
             if officer.role != UserRole.OFFICER:
                 raise PermissionDeniedError(
                     detail=f"User with id {officer_id} is not an officer."
+                )
+            # ✅ FIX: Check officer is active
+            if officer.status != "active":
+                raise PermissionDeniedError(
+                    detail=f"Officer with id {officer_id} is not active (status: {officer.status})."
                 )
 
             # Lưu trạng thái cũ
@@ -1596,6 +1619,10 @@ async def delete_consultation(
             lead = await repo.get_by_id_for_update(lead_id)
             if not lead:
                 raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found.")
+            
+            # ✅ FIX: Check if lead is deleted
+            if lead.deleted_at is not None:
+                raise BadRequest(detail="Cannot modify consultations for a deleted lead.")
 
             # Lấy Consultation cần xóa
             consultation = await db.get(models.Consultation, consultation_id)
@@ -1610,8 +1637,8 @@ async def delete_consultation(
                 )
 
             # Kiểm tra quyền
-            if current_user.role == UserRole.ADMIN:
-                # Admin có quyền xóa bất kỳ consultation nào
+            if current_user.role in (UserRole.ADMIN, UserRole.MANAGER):
+                # ✅ FIX: Admin và Manager có quyền xóa bất kỳ consultation nào
                 pass
             elif current_user.role == UserRole.OFFICER:
                 # Officer chỉ được xóa consultation mới nhất
@@ -1803,6 +1830,10 @@ async def update_consultation(
             
             if not lead:
                 raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found.")
+            
+            # ✅ FIX: Check if lead is deleted (consistent with delete_consultation)
+            if lead.deleted_at is not None:
+                raise BadRequest(detail="Cannot modify consultations for a deleted lead.")
 
             # Lấy Consultation cần update
             consultation = await db.get(models.Consultation, consultation_id)
@@ -2069,6 +2100,10 @@ async def process_officer_action(
             lead = await repo.get_by_id_for_update(lead_id)
             if not lead:
                 raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found.")
+            
+            # ✅ FIX: Check if lead is deleted
+            if lead.deleted_at is not None:
+                raise BadRequest(detail="Cannot process action on a deleted lead.")
 
             # ✅ FIX: Admin/Manager can reassign ANY lead, Officers can only reassign their own
             if not is_admin_or_manager and lead.assigned_officer_id != officer_id:
@@ -2246,10 +2281,19 @@ async def revert_last_status(
     """
     (Admin only) Hoàn tác thay đổi trạng thái cuối cùng của Lead về trạng thái trước đó.
     """
+    # ✅ FIX: Check admin role at service layer
+    if admin_user.role != UserRole.ADMIN:
+        raise PermissionDeniedError(
+            detail="Only admin can revert lead status."
+        )
+    
     # (Pydantic/Form() nên xử lý .strip(), nhưng giữ ở đây để an toàn nếu gọi nội bộ)
     final_reason = reason.strip() if reason else "Admin reverted last status change"
     try:
         async with db.begin_nested():
+            # ✅ SPRINT 5: Import Repository FIRST before usage
+            from app.repositories import LeadRepository
+            
             # Lấy Lead (không cần eager load quá nhiều)
             # ✅ REFACTORED: Use LeadRepository for locking
             repo = LeadRepository(db)
@@ -2257,12 +2301,8 @@ async def revert_last_status(
             if not lead:
                 raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found.")
 
-            # ✅ SPRINT 5: Use Repository for status history lookup
-            from app.repositories import LeadRepository
-            lead_repo = LeadRepository(db)
-            
             # Tìm bản ghi lịch sử gần nhất
-            last_history_entry = await lead_repo.get_last_status_history_entry(lead_id)
+            last_history_entry = await repo.get_last_status_history_entry(lead_id)
 
             if not last_history_entry:
                 raise BadRequest(
@@ -2851,6 +2891,12 @@ async def delete_lead(
         >>> lead = await delete_lead(db, lead_id=123, deleted_by=admin_user)
         >>> print(lead.deleted_at)  # 2025-11-18 02:30:00+00:00
     """
+    # ✅ FIX: Enforce admin-only at service layer
+    if deleted_by.role != UserRole.ADMIN:
+        raise PermissionDeniedError(
+            detail="Only admin can delete leads."
+        )
+    
     try:
         async with db.begin_nested():
             # Fetch lead (exclude already deleted leads)
