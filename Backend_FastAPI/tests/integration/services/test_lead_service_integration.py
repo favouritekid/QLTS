@@ -1688,7 +1688,7 @@ class TestBulkAssignBugFixes:
         target_officer = models.User(
             username="target_officer",
             email="target@test.com",
-            hashed_password="dummy",
+            password_hash="dummy",
             full_name="Target Officer",
             role="officer",
             status="active",
@@ -1721,7 +1721,7 @@ class TestBulkAssignBugFixes:
         busy_officer = models.User(
             username="busy_officer",
             email="busy@test.com",
-            hashed_password="dummy",
+            password_hash="dummy",
             full_name="Busy Officer",
             role="officer",
             status="active",
@@ -1754,7 +1754,7 @@ class TestBulkAssignBugFixes:
         available_officer = models.User(
             username="available_officer",
             email="available@test.com",
-            hashed_password="dummy",
+            password_hash="dummy",
             full_name="Available Officer",
             role="officer",
             status="active",
