@@ -1,12 +1,16 @@
 # app/tasks/utils.py
 """
 Utility functions for Celery tasks.
-Provides shared infrastructure like database session management.
+Provides shared infrastructure like database session management,
+result validation, and standardized error handling.
 """
+import asyncio
 import logging
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from functools import wraps
+from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 
+from celery.exceptions import Retry
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -14,6 +18,10 @@ from ..config import settings
 
 log = logging.getLogger(__name__)
 
+
+# ============================================================================
+# Database Session Management
+# ============================================================================
 
 def _create_task_async_engine():
     """
@@ -65,3 +73,129 @@ async def task_db_session() -> AsyncGenerator[AsyncSession, None]:
     finally:
         await engine.dispose()
         log.debug("Task DB engine disposed")
+
+
+# ============================================================================
+# Result Validation
+# ============================================================================
+
+class TaskResultError(Exception):
+    """Raised when task result validation fails."""
+    def __init__(self, message: str, result: Optional[Dict] = None):
+        super().__init__(message)
+        self.result = result
+
+
+def validate_result(
+    result: Any,
+    required_keys: List[str],
+    task_name: str = "task"
+) -> Dict:
+    """
+    Validate that a task result has the expected structure.
+    
+    Args:
+        result: The result to validate
+        required_keys: List of keys that must be present
+        task_name: Name of the task for error messages
+        
+    Returns:
+        The validated result dict
+        
+    Raises:
+        TaskResultError: If validation fails
+    """
+    if result is None:
+        raise TaskResultError(f"{task_name}: Result is None")
+    
+    if not isinstance(result, dict):
+        raise TaskResultError(
+            f"{task_name}: Result is not a dict (got {type(result).__name__})",
+            result={"raw": str(result)}
+        )
+    
+    missing_keys = [key for key in required_keys if key not in result]
+    if missing_keys:
+        raise TaskResultError(
+            f"{task_name}: Missing required keys: {missing_keys}",
+            result=result
+        )
+    
+    return result
+
+
+def validate_status(result: Dict, task_name: str = "task") -> str:
+    """
+    Validate and return the status from a result dict.
+    
+    Args:
+        result: The result dict
+        task_name: Name of the task for error messages
+        
+    Returns:
+        The status string
+        
+    Raises:
+        TaskResultError: If status is missing or invalid
+    """
+    status = result.get("status")
+    if status is None:
+        raise TaskResultError(f"{task_name}: Missing 'status' in result", result=result)
+    
+    if not isinstance(status, str):
+        raise TaskResultError(
+            f"{task_name}: 'status' is not a string (got {type(status).__name__})",
+            result=result
+        )
+    
+    return status
+
+
+# ============================================================================
+# Standardized Error Handling
+# ============================================================================
+
+def run_async_task(
+    async_func: Callable,
+    task_name: str,
+    task_log: logging.Logger,
+    validate_keys: Optional[List[str]] = None
+) -> Dict:
+    """
+    Run an async function with standardized error handling and optional validation.
+    
+    Args:
+        async_func: The async function to run (should be a coroutine or async callable)
+        task_name: Name of the task for logging
+        task_log: Logger instance
+        validate_keys: Optional list of required keys to validate in result
+        
+    Returns:
+        The result dict from the async function
+        
+    Raises:
+        Retry: If Celery should retry the task
+        TaskResultError: If result validation fails
+        Exception: All other exceptions are logged and re-raised
+    """
+    try:
+        result = asyncio.run(async_func())
+        
+        # Validate result if keys provided
+        if validate_keys:
+            result = validate_result(result, validate_keys, task_name)
+        
+        return result
+        
+    except Retry:
+        # Let Celery handle retry - don't log as error
+        raise
+        
+    except TaskResultError as e:
+        task_log.error(f"{task_name}: Result validation failed: {e}")
+        raise
+        
+    except Exception as e:
+        task_log.error(f"{task_name}: Task failed unexpectedly", exc_info=True)
+        raise
+

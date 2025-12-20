@@ -4,13 +4,12 @@ Notification-related Celery tasks.
 
 Handles broadcasting notifications via Socket.IO/Email and consultation reminders.
 """
-import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
 from ..celery_app import celery_app
 from ..config import settings
-from .utils import task_db_session
+from .utils import task_db_session, run_async_task, validate_result
 
 
 # ============================================================================
@@ -32,9 +31,10 @@ def broadcast_notification_task(
     """
     Celery task to broadcast notifications via Socket.IO and Email.
 
-    Idempotent: Checks if already sent before sending.
+    Uses standardized error handling. Idempotent: checks if already sent.
     """
-    task_log = logging.getLogger("broadcast_notification_task")
+    task_name = "broadcast_notification_task"
+    task_log = logging.getLogger(task_name)
     task_log.info(
         f"Broadcast task started: {len(notification_ids)} notifications, "
         f"channels={channels}, event={event}"
@@ -50,7 +50,6 @@ def broadcast_notification_task(
         failed_count = 0
 
         async with task_db_session() as session:
-            # Fetch notifications
             result = await session.execute(
                 select(models.Notification)
                 .where(models.Notification.id.in_(notification_ids))
@@ -61,33 +60,27 @@ def broadcast_notification_task(
                 task_log.warning(f"No notifications found for IDs: {notification_ids}")
                 return {"sent": 0, "email": 0, "failed": 0}
 
-            # Process each notification
             for notification in notifications:
                 try:
-                    # Get user info for email
                     user = await session.get(models.User, notification.user_id)
                     if not user:
                         task_log.warning(f"User {notification.user_id} not found")
                         failed_count += 1
                         continue
 
-                    # Idempotency check
                     notification_data = notification.data or {}
                     if notification_data.get("_broadcast_sent"):
                         task_log.debug(f"Notification {notification.id} already broadcast")
                         continue
 
-                    # Browser/Socket.IO Channel
                     if "browser" in channels:
                         sent_count += await _emit_socket_notification(notification)
 
-                    # Email Channel
                     if "email" in channels:
                         email_count += await _send_email_notification(
                             session, user, notification, notification_data
                         )
 
-                    # Mark as broadcast (idempotency)
                     if notification.data is None:
                         notification.data = {}
                     notification.data["_broadcast_sent"] = True
@@ -101,16 +94,19 @@ def broadcast_notification_task(
 
         return {"sent": sent_count, "email": email_count, "failed": failed_count}
 
-    try:
-        result = asyncio.run(_run_broadcast())
-        task_log.info(
-            f"Broadcast task completed: sent={result['sent']}, "
-            f"email={result['email']}, failed={result['failed']}"
-        )
-        return result
-    except Exception as e:
-        task_log.error(f"Broadcast task failed: {e}", exc_info=True)
-        raise e
+    # Run with standardized error handling
+    result = run_async_task(
+        async_func=_run_broadcast,
+        task_name=task_name,
+        task_log=task_log,
+        validate_keys=["sent", "email", "failed"]
+    )
+
+    task_log.info(
+        f"Broadcast task completed: sent={result['sent']}, "
+        f"email={result['email']}, failed={result['failed']}"
+    )
+    return result
 
 
 async def _emit_socket_notification(notification) -> int:
@@ -134,7 +130,6 @@ async def _emit_socket_notification(notification) -> int:
             },
             room=room_name
         )
-        task_log.debug(f"Socket emit success for notification {notification.id}")
         return 1
     except Exception as e:
         task_log.error(f"Socket emit failed for notification {notification.id}: {e}")
@@ -149,7 +144,6 @@ async def _send_email_notification(session, user, notification, notification_dat
         from .. import models
         from ..services.email_service import EmailService
 
-        # Check user preference for email
         pref_result = await session.execute(
             select(models.NotificationPreference)
             .where(models.NotificationPreference.user_id == user.id)
@@ -167,13 +161,11 @@ async def _send_email_notification(session, user, notification, notification_dat
 
         if should_send_email and user.email:
             email_service = EmailService()
-            email_sent = email_service.send_notification_email(
+            if email_service.send_notification_email(
                 user.email,
                 user.full_name or user.username,
                 notification
-            )
-            if email_sent:
-                task_log.debug(f"Email sent for notification {notification.id}")
+            ):
                 return 1
     except Exception as e:
         task_log.error(f"Email failed for notification {notification.id}: {e}")
@@ -194,11 +186,12 @@ def check_consultation_reminders_task(self):
     """
     Celery Beat periodic task to check and send consultation reminders.
 
-    Runs every minute to find consultations scheduled within next 15 minutes.
+    Uses standardized error handling. Runs every minute.
     """
     import pytz
     
-    task_log = logging.getLogger("check_consultation_reminders_task")
+    task_name = "check_consultation_reminders_task"
+    task_log = logging.getLogger(task_name)
     task_log.info("Starting consultation reminder check...")
 
     async def _run_reminder_check() -> dict:
@@ -214,9 +207,6 @@ def check_consultation_reminders_task(self):
             now = datetime.now(timezone.utc).astimezone(app_tz)
             reminder_window = now + timedelta(minutes=15)
 
-            task_log.info(f"Checking consultations between {now.isoformat()} and {reminder_window.isoformat()}")
-
-            # Query consultations due within the reminder window
             query = (
                 select(Consultation, Lead)
                 .join(Lead, Consultation.lead_id == Lead.id)
@@ -234,11 +224,8 @@ def check_consultation_reminders_task(self):
             consultations_with_leads = db_result.all()
             result["checked"] = len(consultations_with_leads)
 
-            task_log.info(f"Found {result['checked']} consultations due within 15 minutes")
-
             for consultation, lead in consultations_with_leads:
                 try:
-                    # Calculate minutes until scheduled time
                     scheduled = consultation.scheduled_at
                     if scheduled.tzinfo is None:
                         scheduled = app_tz.localize(scheduled)
@@ -246,7 +233,6 @@ def check_consultation_reminders_task(self):
                     time_diff = scheduled - now
                     minutes_until = max(0, int(time_diff.total_seconds() / 60))
 
-                    # Dispatch reminder notification
                     await notification_dispatcher.dispatch(
                         db=session,
                         event=SystemEvents.CONSULTATION_REMINDER,
@@ -262,22 +248,13 @@ def check_consultation_reminders_task(self):
                         auto_commit=True,
                     )
 
-                    # Mark as sent
                     consultation.reminder_sent = True
                     result["sent"] += 1
                     await session.flush()
 
-                    # Update lead.next_activity_at
                     from ..services.lead_service import update_lead_next_activity
                     await update_lead_next_activity(session, lead.id)
-
-                    # Emit lead_updated event
                     await _emit_lead_updated(lead.id)
-
-                    task_log.info(
-                        f"Reminder sent for consultation #{consultation.id} "
-                        f"(Lead: {lead.full_name}, Officer: {consultation.officer_id})"
-                    )
 
                 except Exception as e:
                     task_log.error(f"Failed to send reminder for consultation #{consultation.id}: {e}")
@@ -287,21 +264,23 @@ def check_consultation_reminders_task(self):
 
         return result
 
-    try:
-        result = asyncio.run(_run_reminder_check())
-        task_log.info(
-            f"Reminder check completed: checked={result['checked']}, "
-            f"sent={result['sent']}, failed={result['failed']}"
-        )
-        return result
-    except Exception as e:
-        task_log.error(f"Reminder check task failed: {e}", exc_info=True)
-        raise e
+    # Run with standardized error handling
+    result = run_async_task(
+        async_func=_run_reminder_check,
+        task_name=task_name,
+        task_log=task_log,
+        validate_keys=["checked", "sent", "failed"]
+    )
+
+    task_log.info(
+        f"Reminder check completed: checked={result['checked']}, "
+        f"sent={result['sent']}, failed={result['failed']}"
+    )
+    return result
 
 
 async def _emit_lead_updated(lead_id: int):
     """Emit lead_updated event to refresh frontend."""
-    task_log = logging.getLogger("check_consultation_reminders_task")
     try:
         from ..socket_manager import sio
         await sio.emit("lead_updated", {
@@ -310,7 +289,8 @@ async def _emit_lead_updated(lead_id: int):
             "status_changed": False,
             "updated_by": "system",
             "updated_at": datetime.now(timezone.utc).isoformat(),
-            "message": "Lead appointment time updated after reminder sent"
         })
     except Exception as e:
-        task_log.warning(f"Failed to emit lead_updated: {e}")
+        logging.getLogger("check_consultation_reminders_task").warning(
+            f"Failed to emit lead_updated: {e}"
+        )
