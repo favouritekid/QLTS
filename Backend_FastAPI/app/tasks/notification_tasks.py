@@ -68,6 +68,11 @@ def broadcast_notification_task(
                         failed_count += 1
                         continue
 
+                    # ✅ FIX Bug #5: Skip notifications for inactive users
+                    if user.status != "active":
+                        task_log.debug(f"User {notification.user_id} is inactive, skipping")
+                        continue
+
                     notification_data = notification.data or {}
                     if notification_data.get("_broadcast_sent"):
                         task_log.debug(f"Notification {notification.id} already broadcast")
@@ -212,6 +217,7 @@ def check_consultation_reminders_task(self):
                 .join(Lead, Consultation.lead_id == Lead.id)
                 .where(
                     and_(
+                        Lead.deleted_at.is_(None),  # ✅ FIX Bug #4: Exclude deleted leads
                         Consultation.scheduled_at.isnot(None),
                         Consultation.scheduled_at > now,
                         Consultation.scheduled_at <= reminder_window,

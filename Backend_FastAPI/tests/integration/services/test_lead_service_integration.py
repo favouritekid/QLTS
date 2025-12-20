@@ -1666,3 +1666,128 @@ class TestRevertStatus:
         
         # Error should mention admin
         assert "admin" in str(exc.value.detail).lower()
+
+
+# =============================================================================
+# BUG FIX TESTS - Bulk Assign and Import Validation
+# =============================================================================
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+class TestBulkAssignBugFixes:
+    """Tests for bulk_assign_leads bug fixes."""
+    
+    async def test_bulk_assign_by_officer_raises_permission_error(
+        self, 
+        db: AsyncSession, 
+        seeded_lead: models.Lead,
+        officer_user: models.User
+    ):
+        """Test Bug #1: bulk_assign by officer raises PermissionDeniedError."""
+        # Create a different officer as target
+        target_officer = models.User(
+            username="target_officer",
+            email="target@test.com",
+            hashed_password="dummy",
+            full_name="Target Officer",
+            role="officer",
+            status="active",
+            availability_status="available",
+            unit_id=officer_user.unit_id
+        )
+        db.add(target_officer)
+        await db.commit()
+        await db.refresh(target_officer)
+        
+        # Act & Assert - Officer cannot bulk assign
+        with pytest.raises(PermissionDeniedError) as exc:
+            await lead_service.bulk_assign_leads(
+                db, 
+                lead_ids=[seeded_lead.id], 
+                officer_id=target_officer.id, 
+                assigner=officer_user  # Officer trying to assign
+            )
+        
+        assert "admin" in str(exc.value.detail).lower() or "manager" in str(exc.value.detail).lower()
+    
+    async def test_bulk_assign_to_unavailable_officer_raises_error(
+        self, 
+        db: AsyncSession, 
+        seeded_lead: models.Lead,
+        admin_user: models.User
+    ):
+        """Test Bug #2: bulk_assign to busy officer raises BadRequest."""
+        # Create a busy officer
+        busy_officer = models.User(
+            username="busy_officer",
+            email="busy@test.com",
+            hashed_password="dummy",
+            full_name="Busy Officer",
+            role="officer",
+            status="active",
+            availability_status="busy",  # Not available!
+            unit_id=seeded_lead.unit_id
+        )
+        db.add(busy_officer)
+        await db.commit()
+        await db.refresh(busy_officer)
+        
+        # Act & Assert
+        with pytest.raises(BadRequest) as exc:
+            await lead_service.bulk_assign_leads(
+                db, 
+                lead_ids=[seeded_lead.id], 
+                officer_id=busy_officer.id, 
+                assigner=admin_user
+            )
+        
+        assert "not available" in str(exc.value.detail).lower()
+    
+    async def test_bulk_assign_success_by_admin(
+        self, 
+        db: AsyncSession, 
+        seeded_lead: models.Lead,
+        admin_user: models.User
+    ):
+        """Test bulk_assign succeeds with admin and available officer."""
+        # Create available officer
+        available_officer = models.User(
+            username="available_officer",
+            email="available@test.com",
+            hashed_password="dummy",
+            full_name="Available Officer",
+            role="officer",
+            status="active",
+            availability_status="available",
+            unit_id=seeded_lead.unit_id
+        )
+        db.add(available_officer)
+        await db.commit()
+        await db.refresh(available_officer)
+        
+        # Create an unassigned lead
+        unassigned_lead = models.Lead(
+            full_name="Unassigned Test Lead",
+            phone="0999888777",
+            email="unassigned@test.com",
+            source="test",
+            unit_id=seeded_lead.unit_id,
+            status="new"
+        )
+        db.add(unassigned_lead)
+        await db.commit()
+        await db.refresh(unassigned_lead)
+        
+        # Act
+        result = await lead_service.bulk_assign_leads(
+            db, 
+            lead_ids=[unassigned_lead.id], 
+            officer_id=available_officer.id, 
+            assigner=admin_user
+        )
+        
+        # Assert
+        assert result["total"] == 1
+        assert result["successful"] == 1
+        assert result["failed"] == 0
+

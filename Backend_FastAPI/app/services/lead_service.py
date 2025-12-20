@@ -2462,6 +2462,16 @@ async def import_leads_from_file_content(
     import pandas as pd
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+    # ✅ FIX Bug #3: Validate auto_assign_officer_id if provided
+    if auto_assign_officer_id:
+        officer = await db.get(models.User, auto_assign_officer_id)
+        if not officer:
+            raise ResourceNotFoundError(f"Officer with id {auto_assign_officer_id} not found")
+        if officer.role != UserRole.OFFICER:
+            raise PermissionDeniedError(f"User {auto_assign_officer_id} is not an officer")
+        if officer.status != "active":
+            raise BadRequest(f"Officer {auto_assign_officer_id} is not active")
+
     # --- 1. Validate file extension ---
     file_extension = ""
     if filename:
@@ -2796,6 +2806,10 @@ async def bulk_assign_leads(
     - Logs state change in LeadStatusHistory
     - Continues on errors (doesn't fail fast)
     """
+    # ✅ FIX Bug #1: Validate assigner role (Admin/Manager only)
+    if assigner.role not in [UserRole.ADMIN, UserRole.MANAGER]:
+        raise PermissionDeniedError("Only Admin or Manager can bulk assign leads")
+
     # Validate officer
     officer = await db.get(models.User, officer_id)
     if not officer:
@@ -2804,6 +2818,9 @@ async def bulk_assign_leads(
         raise PermissionDeniedError(f"User {officer_id} is not an officer")
     if officer.status != "active":
         raise BadRequest(f"Officer {officer_id} is not active")
+    # ✅ FIX Bug #2: Check availability_status
+    if officer.availability_status != "available":
+        raise BadRequest(f"Officer {officer_id} is not available for assignment")
 
     assigned_lead_ids = []
     errors = []
