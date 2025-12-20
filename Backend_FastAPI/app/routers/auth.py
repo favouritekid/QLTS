@@ -485,27 +485,14 @@ async def check_session_status(
     authorization: Annotated[str | None, Header()] = None,
     db: AsyncSession = Depends(database.get_db),
 ):
-    # ✅ PHASE 2: Use session_service instead of direct SQL
+    # ✅ FIX: get_current_user already validates session in Redis
+    # No need to check again - if we reach here, session is valid
+    
+    # Get active sessions count for user info
     active_sessions = await session_service.get_active_sessions(
         db=db,
         user_id=current_user.id
     )
-
-    # (Đoạn check `has_valid_session` này giờ có thể hơi thừa
-    # vì `get_current_user` đã làm, nhưng giữ lại cũng không sao)
-    has_valid_session = False
-    for session in active_sessions:
-        stored_user_id = await safe_redis_get(f"session:{session.refresh_jti}")
-        if stored_user_id and int(stored_user_id) == current_user.id:
-            has_valid_session = True
-            break
-
-    if not has_valid_session:
-        log.warning(
-            "No valid session found in Redis for user (in check-status)",
-            user_id=current_user.id,
-        )
-        raise HTTPException(status_code=401, detail="Session has been revoked")
 
     return {
         "status": "active",
@@ -558,6 +545,8 @@ async def perform_password_reset(
     # This prevents session hijacking if attacker had compromised account
     try:
         await user_service.invalidate_all_sessions(db, user)
+        # ✅ FIX: Refresh user object after session changes to avoid stale data
+        await db.refresh(user)
         log.warning(
             "All user sessions invalidated after password reset",
             user_id=user.id,

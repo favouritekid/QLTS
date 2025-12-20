@@ -943,7 +943,8 @@ async def handle_forgot_password(db: AsyncSession, email_in: str):
 
         # Tăng bộ đếm, set TTL 1 giờ (3600s)
         # Dùng pipeline để đảm bảo INCR và EXPIRE là atomic
-        async with redis_client.pipeline() as pipe:
+        # ✅ FIX: Use safe_redis_pipeline instead of redis_client.pipeline
+        async with safe_redis_pipeline() as pipe:
             pipe.incr(email_rate_limit_key)
             pipe.expire(email_rate_limit_key, 3600)
             await pipe.execute()
