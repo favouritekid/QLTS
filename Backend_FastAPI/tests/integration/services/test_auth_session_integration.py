@@ -200,7 +200,7 @@ class TestLogout:
         from app.main import fastapi_app
         async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as new_client:
             new_client.cookies.set("access_token", old_access_token)
-            profile_res = await new_client.get("/api/auth/profile")
+            profile_res = await new_client.get("/api/profile")
         
         assert profile_res.status_code == 401
 
