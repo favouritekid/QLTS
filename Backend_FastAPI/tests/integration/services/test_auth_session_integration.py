@@ -566,3 +566,289 @@ class TestSessionRevokeAll:
         # Others should be revoked
         assert sessions[0].revoked_at is not None
         assert sessions[2].revoked_at is not None
+
+
+# =============================================================================
+# COOKIE SECURITY TESTS (Unique from test_cookie_auth.py)
+# =============================================================================
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+class TestCookieSecurity:
+    """Tests for cookie security attributes and edge cases."""
+
+    async def test_cookie_only_auth_works(
+        self,
+        client: AsyncClient,
+        regular_user_in_db: dict
+    ):
+        """Test API endpoints authenticate using cookies only (no Authorization header)."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+
+        # Login
+        login_res = await client.post("/api/auth/login", data={
+            "username": username,
+            "password": password
+        })
+        assert login_res.status_code == 200
+
+        # Access protected endpoint with cookies only
+        profile_res = await client.get("/api/profile")
+        assert profile_res.status_code == 200
+        assert profile_res.json()["username"] == username
+
+    async def test_expired_cookie_rejected(
+        self,
+        client: AsyncClient,
+        regular_user_in_db: dict,
+        test_redis_client
+    ):
+        """Test expired/invalidated session cookie is rejected."""
+        from jose import jwt
+        from app.config import settings
+        
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+
+        # Login
+        login_res = await client.post("/api/auth/login", data={
+            "username": username,
+            "password": password
+        })
+        assert login_res.status_code == 200
+
+        # Extract r_jti and invalidate session
+        access_token = login_res.cookies.get("access_token")
+        payload = jwt.decode(
+            access_token,
+            settings.JWT_SECRET_KEY,
+            algorithms=[settings.JWT_ALGORITHM]
+        )
+        r_jti = payload.get("r_jti")
+        await test_redis_client.delete(f"session:{r_jti}")
+
+        # Try to access protected endpoint
+        profile_res = await client.get("/api/profile")
+        assert profile_res.status_code == 401
+
+    async def test_blacklisted_user_rejected(
+        self,
+        client: AsyncClient,
+        regular_user_in_db: dict,
+        test_redis_client
+    ):
+        """Test cookie from blacklisted user is rejected."""
+        user_id = regular_user_in_db["id"]
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+
+        # Login
+        login_res = await client.post("/api/auth/login", data={
+            "username": username,
+            "password": password
+        })
+        assert login_res.status_code == 200
+
+        # Blacklist user
+        await test_redis_client.set(f"user_blacklist:{user_id}", "password_changed", ex=3600)
+
+        # Try to access protected endpoint
+        profile_res = await client.get("/api/profile")
+        assert profile_res.status_code == 401
+
+        # Cleanup
+        await test_redis_client.delete(f"user_blacklist:{user_id}")
+
+    async def test_backward_compatibility_header_auth(
+        self,
+        client: AsyncClient,
+        regular_user_in_db: dict
+    ):
+        """Test both cookie and Authorization header work (backwards compatibility)."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+
+        # Login
+        login_res = await client.post("/api/auth/login", data={
+            "username": username,
+            "password": password
+        })
+        access_token = login_res.cookies.get("access_token")
+
+        # Test header-based auth with new client (no cookies)
+        from app.main import fastapi_app
+        headers = {"Authorization": f"Bearer {access_token}"}
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as new_client:
+            profile_res = await new_client.get("/api/profile", headers=headers)
+        
+        assert profile_res.status_code == 200
+
+
+# =============================================================================
+# SECURITY FIXES TESTS (Unique from test_authentication.py)
+# =============================================================================
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+class TestSecurityFixes:
+    """Tests for specific security fixes and regressions."""
+
+    async def test_logout_cookie_path_correct(
+        self,
+        client: AsyncClient,
+        regular_user_in_db: dict
+    ):
+        """Test logout deletes cookies with correct paths (FIX-1)."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+
+        # Login
+        login_res = await client.post("/api/auth/login", data={
+            "username": username,
+            "password": password
+        })
+        assert login_res.status_code == 200
+
+        # Logout
+        logout_res = await client.post("/api/auth/logout")
+        assert logout_res.status_code == 204
+
+        # Verify cookie paths
+        set_cookie_headers = logout_res.headers.get_list("set-cookie")
+        for header in set_cookie_headers:
+            if "access_token" in header:
+                assert "Path=/" in header or "path=/" in header.lower()
+            if "refresh_token" in header:
+                assert "Path=/api" in header or "path=/api" in header.lower()
+
+    async def test_refresh_cookie_path_consistency(
+        self,
+        client: AsyncClient,
+        regular_user_in_db: dict
+    ):
+        """Test refresh endpoint uses correct cookie paths (FIX-1)."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+
+        # Login
+        login_res = await client.post("/api/auth/login", data={
+            "username": username,
+            "password": password
+        })
+        assert login_res.status_code == 200
+
+        # Refresh
+        refresh_res = await client.post("/api/auth/refresh")
+        assert refresh_res.status_code == 200
+
+        # Verify cookie paths
+        set_cookie_headers = refresh_res.headers.get_list("set-cookie")
+        for header in set_cookie_headers:
+            if "access_token=" in header:
+                assert "Path=/" in header or "path=/" in header.lower()
+                assert "HttpOnly" in header or "httponly" in header.lower()
+            if "refresh_token=" in header:
+                assert "Path=/api" in header or "path=/api" in header.lower()
+                assert "HttpOnly" in header or "httponly" in header.lower()
+
+    async def test_change_password_invalidation_failure_returns_500(
+        self,
+        client: AsyncClient,
+        regular_user_in_db: dict
+    ):
+        """Test change password returns 500 if session invalidation fails (FIX-2)."""
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+
+        # Login
+        login_res = await client.post("/api/auth/login", data={
+            "username": username,
+            "password": password
+        })
+        assert login_res.status_code == 200
+
+        # Mock invalidate_all_sessions to fail
+        with patch(
+            "app.services.user_service.invalidate_all_sessions",
+            new_callable=AsyncMock,
+            side_effect=Exception("Redis connection failed")
+        ):
+            change_res = await client.post("/api/auth/change-password", json={
+                "old_password": password,
+                "new_password": "NewSecurePassword!123"
+            })
+            assert change_res.status_code == 500
+
+    async def test_reset_password_invalidation_failure_returns_500(
+        self,
+        client: AsyncClient,
+        regular_user_in_db: dict
+    ):
+        """Test reset password returns 500 if session invalidation fails (FIX-2)."""
+        from app.security import create_password_reset_token
+        
+        user_email = regular_user_in_db["email"]
+        reset_token = create_password_reset_token(email=user_email)
+
+        # Mock invalidate_all_sessions to fail
+        with patch(
+            "app.services.user_service.invalidate_all_sessions",
+            new_callable=AsyncMock,
+            side_effect=Exception("Database connection lost")
+        ):
+            reset_res = await client.post("/api/auth/reset-password", json={
+                "token": reset_token,
+                "new_password": "NewSecurePassword!123"
+            })
+            assert reset_res.status_code == 500
+
+    async def test_password_change_invalidates_all_sessions(
+        self,
+        client: AsyncClient,
+        regular_user_in_db: dict,
+        test_redis_client
+    ):
+        """Test password change invalidates all user sessions (FIX-2)."""
+        user_id = regular_user_in_db["id"]
+        username = regular_user_in_db["username"]
+        password = regular_user_in_db["password"]
+
+        # Create 2 sessions
+        login1_res = await client.post("/api/auth/login", data={
+            "username": username, "password": password
+        })
+        session1_cookies = dict(login1_res.cookies)
+
+        login2_res = await client.post("/api/auth/login", data={
+            "username": username, "password": password
+        })
+        session2_cookies = dict(login2_res.cookies)
+
+        # Change password from session 1
+        new_password = "NewSecurePassword!123"
+        from app.main import fastapi_app
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as change_client:
+            change_client.cookies.update(session1_cookies)
+            change_res = await change_client.post("/api/auth/change-password", json={
+                "old_password": password,
+                "new_password": new_password
+            })
+        assert change_res.status_code == 204
+
+        # Verify user_blacklist is set
+        blacklist_exists = await test_redis_client.exists(f"user_blacklist:{user_id}")
+        assert blacklist_exists == 1
+
+        # Verify both sessions are now invalid
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as check_client:
+            check_client.cookies.update(session1_cookies)
+            profile1_res = await check_client.get("/api/profile")
+        
+        async with AsyncClient(transport=ASGITransport(app=fastapi_app), base_url="http://test") as check_client2:
+            check_client2.cookies.update(session2_cookies)
+            profile2_res = await check_client2.get("/api/profile")
+
+        assert profile1_res.status_code == 401
+        assert profile2_res.status_code == 401
+
