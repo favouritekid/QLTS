@@ -89,7 +89,12 @@ async def register_user(
             detail="Username or email already registered",  # ✅ Generic message
         )
 
-    created_user = await user_service.create_user(db=db, user_in=user_in)
+    # ✅ FIX: create_user returns Tuple[User, Callback]
+    created_user, post_commit_callback = await user_service.create_user(db=db, user_in=user_in)
+    
+    # ✅ FIX: Commit transaction and execute callback
+    await db.commit()
+    await post_commit_callback()
 
     # ✅ FIX: Automatically add Casbin grouping policy to map user to their role
     try:
