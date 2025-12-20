@@ -333,7 +333,8 @@ async def revoke_session(
     try:
         # ✅ PHASE 2: Use SessionRepository with pessimistic lock
         repo = SessionRepository(db)
-        async with db.begin():  # Start transaction
+        # ✅ FIX: Use begin_nested() (savepoint) to avoid conflict with router's transaction
+        async with db.begin_nested():
             session = await repo.get_for_update(session_id, user_id)
 
             if not session:
