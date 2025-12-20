@@ -828,3 +828,47 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
         
         result = await self.db.execute(query)
         return list(result.scalars().all())
+
+    # =========================================================================
+    # PROGRAM OFFERINGS (Dropdown / Flat List)
+    # =========================================================================
+
+    async def get_all_offerings(
+        self,
+        is_active: Optional[bool] = None,
+        skip: int = 0,
+        limit: int = 1000,
+    ) -> List[models.ProgramOffering]:
+        """
+        Get all program offerings as flat list for dropdowns.
+        
+        Includes eager loading of parent program for display name.
+        
+        Args:
+            is_active: Filter by active status (None = all)
+            skip: Offset for pagination
+            limit: Maximum results
+            
+        Returns:
+            List of ProgramOffering with program loaded
+        """
+        query = (
+            select(models.ProgramOffering)
+            .options(
+                selectinload(models.ProgramOffering.program)  # Eager load for display
+            )
+        )
+        
+        if is_active is not None:
+            query = query.where(models.ProgramOffering.is_active == is_active)
+        
+        query = (
+            query
+            .order_by(models.ProgramOffering.offering_type)
+            .offset(skip)
+            .limit(limit)
+        )
+        
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+

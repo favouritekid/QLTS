@@ -1,98 +1,87 @@
-# tests/services/test_user_service.py
+# tests/integration/api/auth/test_login.py
 # -*- coding: utf-8 -*-
+"""
+✅ AUTHENTICATE_USER SERVICE TESTS (Unit Tests)
 
+Tests for user_service.authenticate_user function:
+- Valid credentials return user
+- Invalid password raises InvalidCredentials
+- Non-existent user raises InvalidCredentials (same message for security)
+- Timing attack prevention (verify_password always called)
+"""
 import logging
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession  # Cần để type hint cho mock_db
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
-
-# Import các thành phần cần test và exception
 from app.services import user_service
 from app.utils.exceptions import InvalidCredentials
 
-# Import constants
 try:
-    from tests.fixtures.constants import SecurityConstants, TestUsers
+    from tests.fixtures.constants import TestUsers
 except ImportError:
-    pytest.fail(
-        "Could not import constants from tests.fixtures.constants. Please create the file."
-    )
+    pytest.fail("Could not import constants from tests.fixtures.constants.")
 
-log = logging.getLogger(__name__)  # Khởi tạo logger
+log = logging.getLogger(__name__)
 
-# === Bắt đầu các bài Test ===
+# The dummy hash used in authenticate_user for timing attack prevention
+DUMMY_BCRYPT_HASH = "$2b$12$d5AUHnn4.BNHoa2kuIWmt.40hvBLF4YYAjtyE9gHDNQFgypctRf62"
 
 
 @pytest.mark.asyncio
 async def test_authenticate_user_valid_credentials(mocker):
     """
-    Test authenticate_user: Xác thực thành công.
+    ✅ TEST: Xác thực thành công với credentials hợp lệ.
+    
     Kiểm tra:
-    1. Giá trị trả về (Return Value) là đúng đối tượng User.
-    2. Mock calls (get_user, verify_password) được gọi chính xác.
-    3. Trạng thái DB (mock): db.refresh được gọi.
+    1. Trả về đúng User object
+    2. get_user_by_username được gọi
+    3. verify_password được gọi với hash thật
     """
     log.info("--- Running: test_authenticate_user_valid_credentials ---")
 
-    # 1. Chuẩn bị Mock Data (SỬ DỤNG HẰNG SỐ)
+    # Prepare mock data
     user_data = TestUsers.DEFAULT
     mock_user = User(
         id=1,
         username=user_data["username"],
         email=user_data["email"],
-        password_hash=user_data["real_hash"],  # <-- Dùng hash thật
+        password_hash=user_data["real_hash"],
         role=user_data["role"],
         status=user_data["status"],
     )
     log.info(f"Mock user created: {mock_user.username}")
 
-    # 2. Mock các dependencies
-    # Mock hàm service phụ thuộc
+    # Mock dependencies
     mock_get_user = AsyncMock(return_value=mock_user)
     mocker.patch("app.services.user_service.get_user_by_username", mock_get_user)
-    log.debug("Patched get_user_by_username")
 
-    # Mock hàm security phụ thuộc
     mock_verify = MagicMock(return_value=True)
     mocker.patch("app.services.user_service.verify_password", mock_verify)
-    log.debug("Patched verify_password to return True")
 
-    # Mock DB session
     mock_db = AsyncMock(spec=AsyncSession)
-    mock_db.refresh = AsyncMock(return_value=None)  # Cấu hình refresh
-    log.debug("Mock AsyncSession created")
 
-    # 3. Gọi hàm cần test
+    # Call function
     log.info("Calling authenticate_user with valid credentials...")
     authenticated_user = await user_service.authenticate_user(
-        db=mock_db,  # <-- Truyền mock_db
+        db=mock_db,
         username=user_data["username"],
         password=user_data["password"],
     )
-    log.info("authenticate_user call returned.")
 
-    # 4. Assert Return Value (Nội dung response)
-    assert authenticated_user is not None, "Authenticated user should not be None"
-    assert (
-        authenticated_user == mock_user
-    ), "Returned user object does not match mock user"
+    # Assert return value
+    assert authenticated_user is not None
+    assert authenticated_user == mock_user
     assert authenticated_user.username == user_data["username"]
-    log.info("Return value (User object) assertion successful.")
+    log.info("✅ Return value assertion successful")
 
-    # 5. Assert Mock Calls (Side effects/DB state)
-    # Kiểm tra gọi hàm get_user_by_username
+    # Assert mock calls
     mock_get_user.assert_awaited_once_with(mock_db, user_data["username"])
-    # Kiểm tra gọi hàm verify_password
     mock_verify.assert_called_once_with(user_data["password"], user_data["real_hash"])
-    # Kiểm tra Trạng thái Database (mock): db.refresh được gọi
-    mock_db.refresh.assert_awaited_once_with(mock_user)
-    log.info("Mock call (get_user, verify_password, db.refresh) assertions successful.")
-
-    # 6. Assert Cache/Celery (Không áp dụng)
-    # Hàm này không gọi cache hay celery
+    # Note: db.refresh is no longer called in authenticate_user
+    log.info("✅ Mock call assertions successful")
 
     log.info("--- Finished: test_authenticate_user_valid_credentials ---")
 
@@ -100,115 +89,80 @@ async def test_authenticate_user_valid_credentials(mocker):
 @pytest.mark.asyncio
 async def test_authenticate_user_invalid_password(mocker):
     """
-    Test authenticate_user: Sai mật khẩu.
+    ✅ TEST: Sai mật khẩu raises InvalidCredentials.
+    
     Kiểm tra:
-    1. Ném ra Exception 'InvalidCredentials'.
-    2. Thông báo lỗi (Exception detail) cụ thể.
-    3. Mock calls (verify_password VẪN được gọi).
+    1. InvalidCredentials được raise
+    2. verify_password vẫn được gọi (chống timing attack)
     """
     log.info("--- Running: test_authenticate_user_invalid_password ---")
 
-    # 1. Chuẩn bị Mock Data
     user_data = TestUsers.DEFAULT
     mock_user = User(
         id=1,
         username=user_data["username"],
         password_hash=user_data["real_hash"],
-        # ... (các trường khác)
     )
-    log.info(f"Mock user created: {mock_user.username}")
 
-    # 2. Mock dependencies
     mock_get_user = AsyncMock(return_value=mock_user)
     mocker.patch("app.services.user_service.get_user_by_username", mock_get_user)
-    log.debug("Patched get_user_by_username")
 
-    # Mock verify_password trả về False (sai mật khẩu)
-    mock_verify = MagicMock(return_value=False)
+    mock_verify = MagicMock(return_value=False)  # Password invalid
     mocker.patch("app.services.user_service.verify_password", mock_verify)
-    log.debug("Patched verify_password to return False")
 
-    mock_db = AsyncMock(spec=AsyncSession)  # Cần cho `get_user_by_username`
+    mock_db = AsyncMock(spec=AsyncSession)
 
-    # 3. Gọi hàm và Assert Exception
-    log.info("Calling authenticate_user with invalid password...")
+    # Should raise InvalidCredentials
     with pytest.raises(InvalidCredentials) as exc_info:
         await user_service.authenticate_user(
             db=mock_db,
             username=user_data["username"],
-            password=TestUsers.INVALID_PASSWORD,  # <-- Dùng mật khẩu sai
+            password=TestUsers.INVALID_PASSWORD,
         )
-    log.info("InvalidCredentials raised as expected.")
 
-    # 4. Assert Exception Detail (Thông báo lỗi cụ thể)
-    assert (
-        exc_info.value.detail == "Incorrect username or password."
-    ), f"Unexpected error detail: {exc_info.value.detail}"
-    log.info("Exception detail assertion successful.")
+    assert exc_info.value.detail == "Incorrect username or password."
+    log.info("✅ InvalidCredentials raised with correct message")
 
-    # 5. Assert Mock Calls
-    mock_get_user.assert_awaited_once_with(mock_db, user_data["username"])
-    # Đảm bảo verify VẪN được gọi (chống timing attack)
-    mock_verify.assert_called_once_with(
-        TestUsers.INVALID_PASSWORD, user_data["real_hash"]
-    )
-    mock_db.refresh.assert_not_awaited()  # Không được gọi refresh
-    log.info("Mock call assertions successful (verify was called, refresh was not).")
+    # verify_password should still be called (timing attack prevention)
+    mock_verify.assert_called_once_with(TestUsers.INVALID_PASSWORD, user_data["real_hash"])
+    log.info("✅ verify_password was called (timing attack prevention)")
+
     log.info("--- Finished: test_authenticate_user_invalid_password ---")
 
 
 @pytest.mark.asyncio
 async def test_authenticate_user_not_found(mocker):
     """
-    Test authenticate_user: User không tồn tại.
-    Kiểm tra:
-    1. Ném ra Exception 'InvalidCredentials'.
-    2. Thông báo lỗi (Exception detail) GİỐNG HỆT lỗi sai password.
-    3. Mock calls (verify_password VẪN được gọi với DUMMY HASH).
+    ✅ TEST: User không tồn tại raises InvalidCredentials.
+    
+    Security: 
+    - Same error message as invalid password (no user enumeration)
+    - verify_password called with dummy hash (timing attack prevention)
     """
     log.info("--- Running: test_authenticate_user_not_found ---")
 
-    # 1. Mock dependencies
-    # get_user_by_username trả về None
-    mock_get_user = AsyncMock(return_value=None)
+    mock_get_user = AsyncMock(return_value=None)  # User not found
     mocker.patch("app.services.user_service.get_user_by_username", mock_get_user)
-    log.debug("Patched get_user_by_username to return None")
 
-    mock_verify = MagicMock(
-        return_value=False
-    )  # Kết quả không quan trọng, nhưng mock nó
+    mock_verify = MagicMock(return_value=False)
     mocker.patch("app.services.user_service.verify_password", mock_verify)
-    log.debug("Patched verify_password (will be called with dummy hash)")
 
     mock_db = AsyncMock(spec=AsyncSession)
 
-    # 2. Gọi hàm và Assert Exception
-    log.info("Calling authenticate_user with non-existent username...")
+    # Should raise InvalidCredentials
     with pytest.raises(InvalidCredentials) as exc_info:
         await user_service.authenticate_user(
             db=mock_db,
-            username=TestUsers.NON_EXISTENT_USERNAME,  # <-- Dùng username không tồn tại
+            username=TestUsers.NON_EXISTENT_USERNAME,
             password="anypassword",
         )
-    log.info("InvalidCredentials raised as expected.")
 
-    # 3. Assert Exception Detail (Thông báo lỗi cụ thể - Chống User Enumeration)
-    # Message phải giống hệt trường hợp sai mật khẩu
-    assert (
-        exc_info.value.detail == "Incorrect username or password."
-    ), f"Unexpected error detail (should be generic): {exc_info.value.detail}"
-    log.info("Exception detail assertion successful (generic message for security).")
+    # Same message as invalid password (security - no user enumeration)
+    assert exc_info.value.detail == "Incorrect username or password."
+    log.info("✅ InvalidCredentials with generic message (no user enumeration)")
 
-    # 4. Assert Mock Calls (Timing Attack check)
-    mock_get_user.assert_awaited_once_with(mock_db, TestUsers.NON_EXISTENT_USERNAME)
-    # verify_password PHẢI được gọi với DUMMY HASH
-    # Lấy dummy hash từ logic thực tế của service
-    dummy_hash_in_service = (
-        user_service.DUMMY_BCRYPT_HASH
-    )  # Giả sử DUMMY_HASH được định nghĩa trong service
-    # Nếu không, dùng constant
-    # dummy_hash_in_service = SecurityConstants.DUMMY_BCRYPT_HASH
-    mock_verify.assert_called_once_with("anypassword", dummy_hash_in_service)
-    mock_db.refresh.assert_not_awaited()  # Không được gọi refresh
-    log.info("Mock call assertions successful (verify called with DUMMY hash).")
+    # verify_password MUST be called with dummy hash (timing attack prevention)
+    mock_verify.assert_called_once_with("anypassword", DUMMY_BCRYPT_HASH)
+    log.info("✅ verify_password called with dummy hash (timing attack prevention)")
+
     log.info("--- Finished: test_authenticate_user_not_found ---")

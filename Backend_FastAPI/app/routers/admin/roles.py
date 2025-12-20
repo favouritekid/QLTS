@@ -33,7 +33,6 @@ from fastapi import (
     Request,
     status,
 )
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models, schemas
@@ -407,16 +406,15 @@ async def get_role_users(
                 except (ValueError, IndexError):
                     continue
 
-    # Fetch user details from database
+    # Fetch user details from database using Repository
     if not user_ids:
         return {"role": role_name, "user_count": 0, "users": []}
 
-    result = await db.execute(
-        select(models.User).where(models.User.id.in_(user_ids))
-    )
-    users = result.scalars().all()
+    from app.repositories import UserRepository
+    user_repo = UserRepository(db)
+    users = await user_repo.get_by_ids(user_ids)
 
-    # Return user info with all Casbin roles
+    # Return user info with all Casbin roles 
     user_list = []
     for user in users:
         user_subject = f"user:{user.id}"
@@ -684,99 +682,26 @@ async def delete_role_atomic(
         400: If trying to delete a system role
         404: If role doesn't exist
     """
-    from app.services.casbin_service import CasbinPolicyService
+    from app.services import role_service
 
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
 
-    # STEP 1: Validate - System roles cannot be deleted
-    SYSTEM_ROLES = {"role:admin", "role:manager", "role:officer", "role:user"}
-    if role_name in SYSTEM_ROLES:
-        raise BadRequest(f"Cannot delete system role: {role_name}")
-
-    # STEP 2: Check if role exists (has any policies)
-    all_policies = enforcer.get_policy()
-    role_has_policies = any(p[0] == role_name for p in all_policies)
-    if not role_has_policies:
-        raise ResourceNotFoundError(f"Role not found: {role_name}")
-
-    # BEGIN ATOMIC TRANSACTION
     try:
-        # STEP 3a: Find all users with this role in DB
-        result = await db.execute(
-            select(models.User).where(models.User.role == role_name.replace("role:", ""))
+        # Delegate to Service Layer (Refactoring Pattern A)
+        # Service handles validation, logic, and atomic operations
+        result, post_commit = await role_service.delete_role_atomic(
+            db=db,
+            role_name=role_name,
+            enforcer=enforcer
         )
-        users_from_db = result.scalars().all()
 
-        # STEP 3b: Find all users with grouping policy for this role
-        all_grouping = enforcer.get_grouping_policy()
-        user_ids_from_casbin = []
-        for group in all_grouping:
-            # group format: ["user:123", "role:support"]
-            if len(group) >= 2 and group[1] == role_name and group[0].startswith("user:"):
-                try:
-                    user_id = int(group[0].split(":")[1])
-                    user_ids_from_casbin.append(user_id)
-                except (ValueError, IndexError):
-                    continue
-
-        # Merge: Get all unique user IDs
-        all_user_ids = set([u.id for u in users_from_db] + user_ids_from_casbin)
-
-        # STEP 4: Update users in DB to role:user
-        reassigned_count = 0
-        for user_id in all_user_ids:
-            result = await db.execute(
-                select(models.User).where(models.User.id == user_id)
-            )
-            user = result.scalar_one_or_none()
-            if user:
-                # Only update if they had this role
-                if user.role == role_name.replace("role:", ""):
-                    user.role = "user"
-                    db.add(user)
-                    reassigned_count += 1
-
-        # STEP 5: Remove grouping policies (user → role)
-        removed_g_user_count = 0
-        for user_id in all_user_ids:
-            user_subject = f"user:{user_id}"
-            removed = await enforcer.remove_grouping_policy(user_subject, role_name)
-            if removed:
-                removed_g_user_count += 1
-
-            # STEP 6: Add grouping policy (user → role:user) if needed
-            user_roles = await enforcer.get_roles_for_user(user_subject)
-            if not user_roles or len(user_roles) == 0:
-                await enforcer.add_grouping_policy(user_subject, "role:user")
-
-        # STEP 7: Remove all permission policies (p rules) for this role
-        policies_to_remove = [
-            (p[0], p[1], p[2])
-            for p in all_policies
-            if p[0] == role_name
-        ]
-        removed_p_count = 0
-        for p in policies_to_remove:
-            removed = await enforcer.remove_policy(p[0], p[1], p[2])
-            if removed:
-                removed_p_count += 1
-
-        # STEP 8: Remove role inheritance grouping policies (g, role:X, role:user)
-        removed_g_inherit_count = 0
-        for group in all_grouping:
-            # Check if this is a role inheriting from another role
-            if len(group) >= 2 and group[0] == role_name:
-                removed = await enforcer.remove_grouping_policy(group[0], group[1])
-                if removed:
-                    removed_g_inherit_count += 1
-
-        # STEP 9: Save Casbin policies
-        await enforcer.save_policy()
-
-        # STEP 10: Commit DB transaction
+        # Commit transaction
         await db.commit()
-
-        # STEP 11: Log activity
+        
+        # Execute post-commit side effects
+        await post_commit()
+        
+        # Log activity
         await log_admin_activity(
             db=db,
             request=request,
@@ -784,33 +709,16 @@ async def delete_role_atomic(
             resource_type="role",
             actor_id=current_admin.id,
             resource_id=None,
-            changes={
-                "role_name": role_name,
-                "users_reassigned": reassigned_count,
-                "permission_policies_removed": removed_p_count,
-                "user_grouping_policies_removed": removed_g_user_count,
-                "inheritance_grouping_policies_removed": removed_g_inherit_count,
-                "total_affected_users": len(all_user_ids),
-            },
+            changes=result,
         )
 
         log.info(
             "Role deleted atomically",
             admin_id=current_admin.id,
             role_name=role_name,
-            users_reassigned=reassigned_count,
-            policies_removed=removed_p_count,
         )
-
-        return {
-            "detail": f"Role {role_name} deleted successfully",
-            "role_name": role_name,
-            "users_reassigned": reassigned_count,
-            "permission_policies_removed": removed_p_count,
-            "user_grouping_policies_removed": removed_g_user_count,
-            "inheritance_grouping_policies_removed": removed_g_inherit_count,
-            "total_affected_users": len(all_user_ids),
-        }
+        
+        return result
 
     except Exception as e:
         # Rollback DB transaction

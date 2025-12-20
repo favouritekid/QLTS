@@ -68,7 +68,8 @@ print("INFO [conftest.py]: Redis patched with FakeRedis successfully")
 print("INFO [conftest.py]: Importing app components...")
 try:
     from app.database import AsyncSessionLocal, engine
-    from app.main import app
+    # ✅ FIX: Import fastapi_app (not 'app' which is Socket.IO wrapper)
+    from app.main import fastapi_app as app
     from app.models.base import Base as AppBase
 
     try:
@@ -330,27 +331,46 @@ async def setup_test_database(manage_engine):
         "--- [FUNCTION SETUP] Setting up test database (dropping and creating all tables) ---"
     )
 
-    # ✅ FIX: Drop tables with CASCADE to avoid constraint errors
-    # This handles old schema (no constraint name) vs new schema (with constraint name)
+    # ✅ FIX v2: Robust schema reset with explicit transaction handling
+    # Step 1: Drop schema in its OWN transaction (must commit before create)
     try:
         async with engine.begin() as conn:
-            # Drop all tables with CASCADE (ignores constraint issues)
+            # Drop all tables, indexes, and constraints with CASCADE
             await conn.execute(text("DROP SCHEMA public CASCADE"))
             await conn.execute(text("CREATE SCHEMA public"))
+            await conn.execute(text("GRANT ALL ON SCHEMA public TO CURRENT_USER"))
             await conn.execute(text("GRANT ALL ON SCHEMA public TO public"))
-            log.info("Schema reset complete (all tables dropped)")
+        # Transaction commits automatically when exiting 'async with'
+        log.info("Schema reset complete (all tables dropped)")
     except Exception as e:
-        log.warning(f"Schema reset failed, trying metadata drop: {e}")
-        # Fallback to metadata drop if schema drop fails
+        log.warning(f"Schema reset failed: {e}")
+        # Fallback: Try to drop all known orphan indexes explicitly
         try:
             async with engine.begin() as conn:
+                # Drop known problematic indexes
+                await conn.execute(text("DROP INDEX IF EXISTS ix_notification_action_rule_id"))
+                await conn.execute(text("DROP INDEX IF EXISTS ix_notification_action_step"))
+                # Then try metadata drop
                 if CasbinBase:
                     await conn.run_sync(CasbinBase.metadata.drop_all)
                 await conn.run_sync(AppBase.metadata.drop_all)
+            log.info("Fallback cleanup completed")
         except Exception as e2:
-            log.warning(f"Metadata drop also failed (will create fresh): {e2}")
+            log.warning(f"Fallback cleanup also failed: {e2}")
 
-    # Create all tables with new schema
+    # ✅ FIX v3: Explicitly drop known problematic indexes BEFORE create_all
+    # This handles connection pool caching stale schema state
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("DROP INDEX IF EXISTS public.ix_notification_action_rule_id"))
+            await conn.execute(text("DROP INDEX IF EXISTS public.ix_notification_action_step"))
+            await conn.execute(text("DROP TABLE IF EXISTS notification_action CASCADE"))
+            await conn.execute(text("DROP TABLE IF EXISTS notification_rule CASCADE"))
+            await conn.execute(text("DROP TABLE IF EXISTS notification_template CASCADE"))
+    except Exception as e:
+        log.debug(f"Pre-create cleanup (expected to fail on fresh db): {e}")
+
+    # Step 2: Create all tables in a NEW transaction (after drop committed)
     async with engine.begin() as conn:
         await conn.run_sync(AppBase.metadata.create_all)
         if CasbinBase:
@@ -367,6 +387,7 @@ async def setup_test_database(manage_engine):
             # Drop all tables with CASCADE
             await conn.execute(text("DROP SCHEMA public CASCADE"))
             await conn.execute(text("CREATE SCHEMA public"))
+            await conn.execute(text("GRANT ALL ON SCHEMA public TO CURRENT_USER"))
             await conn.execute(text("GRANT ALL ON SCHEMA public TO public"))
     except Exception as e:
         log.warning(f"Teardown schema drop failed: {e}")
@@ -404,7 +425,9 @@ async def clear_redis_keys(
 @pytest_asyncio.fixture(scope="function")
 async def client(setup_test_database) -> AsyncClient:  # Giữ dependency này
     log.info("--- [FUNCTION SETUP] Running app lifespan startup... ---")
-    async with app.router.lifespan_context(app):
+    # ✅ FIX: Use lifespan directly instead of app.router.lifespan_context
+    from app.main import lifespan
+    async with lifespan(app):
         log.info(
             "--- [FUNCTION SETUP] Lifespan startup complete. Creating HTTP Client. ---"
         )
@@ -504,7 +527,8 @@ async def test_user_in_db(setup_test_database):
         async with AsyncSessionLocal() as session:
             async with session.begin():
                 # Tạo user với HASH THẬT đã biết, KHÔNG gán ID
-                user = User(
+                # ✅ FIX: Use models.User instead of bare User
+                user = models.User(
                     username=user_data["username"],
                     email=user_data["email"],
                     password_hash=user_data["real_hash"],  # Dùng hash thật
@@ -637,7 +661,8 @@ async def seed_lead_dependencies(setup_test_database):
     async with AsyncSessionLocal() as session:
         async with session.begin():
             unit1 = models.OrganizationUnit(**unit_data)
-            major1 = models.Major(**major_data)
+            # ✅ FIX: Use MajorProgram instead of removed Major model
+            major1 = models.MajorProgram(**major_data)
             stage_a = models.PipelineStage(**stage_data)
             stage_lost = models.PipelineStage(**lost_stage_data)
             status_tthv000 = models.ConsultationStatus(**initial_status_data)
@@ -657,7 +682,7 @@ async def seed_lead_dependencies(setup_test_database):
     log.info("--- [FIXTURE conftest.py] Lead dependencies seeded ---")
     return {
         "unit_id": unit_data["id"],
-        "major_id": TestOrgData.MAJOR_1["id"],
+        "major_program_id": TestOrgData.MAJOR_1["id"],  # ✅ FIX: Renamed from major_id
         "initial_status_id": initial_status_id,
         "status_a1_id": status_a1_data["id"],
         "stage_id": stage_a_id,

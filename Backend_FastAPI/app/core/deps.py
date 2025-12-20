@@ -130,23 +130,13 @@ async def get_current_user(
                 "Redis user blacklist check failed", user_id=user.id, error=str(e)
             )
             # (Giữ nguyên logic fallback CSDL cho user blacklist)
+            # (✅ PHASE 2: Use SessionRepository instead of direct SQL)
             try:
-                from datetime import datetime, timezone
+                from app.repositories import SessionRepository
 
-                from sqlalchemy import and_, select
-
-                result = await db.execute(
-                    select(models.UserSession)
-                    .where(
-                        and_(
-                            models.UserSession.user_id == user.id,
-                            models.UserSession.revoked_at.is_(None),
-                            models.UserSession.expires_at > datetime.now(timezone.utc),
-                        )
-                    )
-                    .limit(1)
-                )
-                active_session = result.scalar_one_or_none()
+                repo = SessionRepository(db)
+                active_sessions = await repo.get_active_by_user(user.id)
+                active_session = active_sessions[0] if active_sessions else None
                 if active_session is None:
                     log.warning(
                         "Database fallback: No active sessions found for user",
@@ -185,22 +175,12 @@ async def get_current_user(
                 "Redis Session check failed", refresh_jti=refresh_jti, error=str(e)
             )
             # (Fallback CSDL cho session check)
+            # (✅ PHASE 2: Use SessionRepository instead of direct SQL)
             try:
-                from datetime import datetime, timezone
+                from app.repositories import SessionRepository
 
-                from sqlalchemy import and_, select
-
-                result = await db.execute(
-                    select(models.UserSession).where(
-                        and_(
-                            models.UserSession.user_id == user.id,
-                            models.UserSession.refresh_jti == refresh_jti,
-                            models.UserSession.revoked_at.is_(None),
-                            models.UserSession.expires_at > datetime.now(timezone.utc),
-                        )
-                    )
-                )
-                session = result.scalar_one_or_none()
+                repo = SessionRepository(db)
+                session = await repo.get_by_refresh_jti_and_user(refresh_jti, user.id)
                 if session is None:
                     log.warning(
                         "Database fallback: Session not found or revoked",
@@ -482,40 +462,30 @@ async def get_user_managed_units(
 ) -> List[int]:
     """
     Get list of unit IDs that a user manages.
-
+    
     Returns all organizational units where the user has an active manager assignment.
     This is used for ownership verification in IDOR prevention.
-
+    
+    ✅ REFACTORED: Uses UserRepository instead of direct SQL.
+    
     Args:
         db: Database session
         user_id: ID of the user to check
-
+        
     Returns:
         List of unit IDs where user is an active manager
-
-    Example:
-        >>> managed_units = await get_user_managed_units(db, user_id=5)
-        >>> # [10, 20, 30]  # User 5 manages units 10, 20, and 30
     """
-    from sqlalchemy import select
-    from ..models import UserUnitAssignment
-
-    # Query for active manager assignments
-    stmt = select(UserUnitAssignment.unit_id).where(
-        UserUnitAssignment.user_id == user_id,
-        UserUnitAssignment.role == UserRole.MANAGER,
-        UserUnitAssignment.is_active == True
-    )
-
-    result = await db.execute(stmt)
-    managed_unit_ids = [row[0] for row in result.all()]
-
+    from ..repositories import UserRepository
+    
+    repo = UserRepository(db)
+    managed_unit_ids = await repo.get_managed_unit_ids(user_id)
+    
     log.debug(
         "Fetched managed units",
         user_id=user_id,
         managed_units=managed_unit_ids
     )
-
+    
     return managed_unit_ids
 
 

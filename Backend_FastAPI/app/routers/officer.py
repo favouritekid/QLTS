@@ -66,7 +66,7 @@ async def update_availability(
 
 
 # =============================================================================
-# PHASE 1: Enhanced Dashboard with KPIs
+# PHASE 1: Enhanced Dashboard with KPIs (+ Date Range Filter)
 # =============================================================================
 
 @limiter.limit(RateLimits.DATA_READ)
@@ -78,22 +78,119 @@ async def update_availability(
 async def get_enhanced_dashboard(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, PermissionDep]
+    current_user: Annotated[models.User, PermissionDep],
+    start_date: str = None,  # ISO format YYYY-MM-DD
+    end_date: str = None,    # ISO format YYYY-MM-DD
+    # Phase 2: Scope and filter parameters
+    scope: str = "personal",  # "personal", "team", "organization"
+    officer_id: int = None,   # Filter to specific officer (manager/admin only)
+    unit_id: int = None,      # Filter to specific unit (admin only)
 ):
     """
-    Enhanced officer dashboard with:
-    - KPI cards (consultations, active leads, conversion rate, response time)
-    - Trend comparisons (vs yesterday, vs last week, vs last month)
-    - AI-powered priority actions
-    - Performance trends and pipeline funnel
+    Enhanced officer dashboard with role-based scoping.
+    
+    **Scope options:**
+    - `personal`: Own data only (default for officers)
+    - `team`: All officers in same unit (managers)
+    - `organization`: All officers (admins)
+    
+    **Filters:**
+    - `officer_id`: View specific officer's dashboard (requires manager/admin role)
+    - `unit_id`: Filter by unit (requires admin role)
+    
+    **Security:**
+    - Officers can only use scope="personal" and cannot filter
+    - Managers can use scope="team" and filter officers in their unit
+    - Admins can use any scope and any filters
     """
-    try:
-        stats = await officer_service.get_enhanced_dashboard_stats(
-            db=db, officer_id=current_user.id
+    # ==========================================================================
+    # SECURITY: Role-based permission validation
+    # ==========================================================================
+    user_role = current_user.role
+    
+    # Validate scope parameter
+    if scope not in ("personal", "team", "organization"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid scope: {scope}. Must be 'personal', 'team', or 'organization'"
         )
+    
+    # Officers: Can only view personal data
+    if user_role == "officer":
+        if scope != "personal":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Officers can only view personal dashboard"
+            )
+        if officer_id is not None and officer_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Officers cannot view other officers' data"
+            )
+        if unit_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Officers cannot filter by unit"
+            )
+        # Force personal scope
+        scope = "personal"
+        officer_id = current_user.id
+    
+    # Managers: Can view team or drill down to specific officer in their unit
+    elif user_role == "manager":
+        if scope == "organization":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Managers cannot view organization-wide data"
+            )
+        if unit_id is not None and unit_id != current_user.unit_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Managers cannot view data from other units"
+            )
+        # Force manager's unit
+        unit_id = current_user.unit_id
+        
+        # If filtering by officer, validate officer belongs to manager's unit
+        if officer_id is not None:
+            target_officer = await db.get(models.User, officer_id)
+            if not target_officer or target_officer.unit_id != current_user.unit_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Officer not found in your unit"
+                )
+    
+    # Admins: Full access (no restrictions)
+    # elif user_role == "admin": pass
+    
+    # ==========================================================================
+    # Fetch dashboard data based on scope
+    # ==========================================================================
+    try:
+        if scope == "personal":
+            # Personal dashboard: single officer
+            target_id = officer_id if officer_id else current_user.id
+            stats = await officer_service.get_enhanced_dashboard_stats(
+                db=db, 
+                officer_id=target_id,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        else:
+            # Team or Organization scope: aggregated dashboard
+            stats = await officer_service.get_aggregated_dashboard_stats(
+                db=db,
+                scope=scope,
+                requesting_user=current_user,
+                officer_id=officer_id,  # Optional: drill down to specific officer
+                unit_id=unit_id,        # Filter by unit (for organization scope)
+                start_date=start_date,
+                end_date=end_date,
+            )
         return stats
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 # =============================================================================
@@ -189,5 +286,45 @@ async def get_upcoming_activities(
             year=year
         )
         return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# PHASE 7: Auto Recommendations
+# =============================================================================
+
+@limiter.limit(RateLimits.DATA_READ)
+@router.get(
+    "/recommendations",
+    summary="Get AI-powered recommendations based on KPI performance"
+)
+async def get_recommendations(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[models.User, PermissionDep],
+    limit: int = 5,
+):
+    """
+    Phase 7: Auto Recommendations
+    
+    Returns actionable recommendations based on:
+    - KPI gaps (consultations vs target)
+    - Conversion rate analysis
+    - Response time optimization
+    - Hot leads needing attention
+    - Stale leads cleanup
+    
+    Recommendations are prioritized: CRITICAL > HIGH > MEDIUM > LOW
+    """
+    from app.services.recommendation_engine import get_officer_recommendations
+    
+    try:
+        recommendations = await get_officer_recommendations(
+            db=db,
+            officer_id=current_user.id,
+            limit=limit,
+        )
+        return {"recommendations": recommendations, "count": len(recommendations)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

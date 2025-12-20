@@ -17,11 +17,20 @@ class TrendPoint(BaseModel):
     consultations: int
     converted: int
 
+class OutcomeBreakdown(BaseModel):
+    positive: int = 0
+    negative: int = 0
+    neutral: int = 0
+
 class FunnelStage(BaseModel):
-    stage_id: str  # e.g. "stg05"
-    stage: str     # e.g. "Đã chốt deal"
-    count: int
-    fill: str 
+    stage_id: str                      # e.g. "stg05"
+    stage_name: str                    # e.g. "Đã nộp học phí"
+    stage_order: int                   # For frontend sorting
+    lead_count: int                    # Actual count at this stage
+    is_final_stage: bool = False       # For separating outcomes
+    fill: Optional[str] = None
+    conversion_rate: Optional[float] = None  # Historical conversion % (30 days)
+    outcome_breakdown: Optional[OutcomeBreakdown] = None  # positive/negative/neutral counts 
 
 class LeadPreview(BaseModel):
     id: int
@@ -119,6 +128,28 @@ class OfficerDashboardEnhanced(BaseModel):
     performance_trends: List[TrendPoint]
     sales_funnel: List[FunnelStage]
     actionable_lists: ActionableLists
+    # Phase 6: Annual target progress (rolling targets)
+    annual_progress: Optional["AnnualProgressInfo"] = None
+
+
+# =============================================================================
+# PHASE 6: Annual Progress Info (Rolling Targets)
+# =============================================================================
+
+class AnnualProgressInfo(BaseModel):
+    """Annual target progress with rolling monthly target calculation."""
+    kpi_code: str  # e.g., "enrollments"
+    fiscal_year: int
+    annual_target: float
+    achieved_ytd: float  # Year-to-date achievement
+    remaining: float  # annual_target - achieved_ytd
+    progress_pct: float  # (achieved_ytd / annual_target) * 100
+    months_left: int  # Months remaining in the year
+    monthly_target: float  # Rolling target = remaining / months_left
+    status: str  # "in_progress", "completed", "at_risk", "overdue"
+    on_track: bool  # True if progress >= expected pace
+    surplus: Optional[float] = None  # Only if status == "completed"
+    last_sync_at: Optional[datetime] = None  # Last YTD sync timestamp
 
 
 # =============================================================================

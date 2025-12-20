@@ -6,7 +6,7 @@
  */
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -41,6 +41,11 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
     statusOverview.availability_status === "available"
   );
 
+  // Fix: Sync local state when props change (e.g., after refetch)
+  useEffect(() => {
+    setIsAvailable(statusOverview.availability_status === "available");
+  }, [statusOverview.availability_status]);
+
   const mutation = useMutation({
     mutationFn: updateAvailability,
     onSuccess: (data) => {
@@ -59,7 +64,8 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
   };
 
   const utilizationPercentage = statusOverview.utilization ?? 0;
-  const remainingCapacity = (statusOverview.max_capacity ?? 0) - (statusOverview.current_workload ?? 0);
+  // Fix: Clamp remaining capacity to 0 to avoid showing negative values
+  const remainingCapacity = Math.max(0, (statusOverview.max_capacity ?? 0) - (statusOverview.current_workload ?? 0));
 
   // Donut chart values
   const circumference = 2 * Math.PI * 40;

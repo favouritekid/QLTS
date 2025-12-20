@@ -402,14 +402,18 @@ async def test_cookie_and_header_both_work(
     assert profile_res_cookie.status_code == 200, "Cookie auth should work"
     log.info("✅ Cookie-based auth works")
 
-    # Test 2: Header-based auth (without cookies, using Authorization header)
-    # Pass empty cookies dict to override client's cookies
+    # Test 2: Header-based auth (create new client without cookies to test header-only)
     headers = {"Authorization": f"Bearer {access_token}"}
-    profile_res_header = await client.get(
-        ProfileURLs.PROFILE,
-        headers=headers,
-        cookies={}  # Override client cookies to test header-only auth
-    )
+    from httpx import ASGITransport
+    from app.main import fastapi_app
+    async with AsyncClient(
+        transport=ASGITransport(app=fastapi_app), 
+        base_url="http://test"
+    ) as new_client:
+        profile_res_header = await new_client.get(
+            ProfileURLs.PROFILE,
+            headers=headers
+        )
     assert profile_res_header.status_code == 200, "Header auth should work"
     log.info("✅ Header-based auth works (backwards compatibility)")
 

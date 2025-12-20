@@ -1,0 +1,16 @@
+"sts00","Chưa liên hệ","#3B82F6","stg01","neutral",False,"new",False,True
+"sts01","Không nghe máy","#6366F1","stg01","neutral",False,"new",True,False
+"sts02","Thuê bao","#6B7280","stg01","neutral",False,"new",True,False
+"sts03","Nhầm số","#EF4444","stg01","negative",False,"rejected",True,False
+"sts04","Không đồng ý","#EF4444","stg02","negative",False,"rejected",False,True
+"sts05","Cân nhắc","#F59E0B","stg02","neutral",False,"contacted",False,True
+"sts06","Đồng ý tư vấn","#10B981","stg02","positive",False,"qualified",False,True
+"sts07","Chờ nhập học","#3B82F6","stg03","neutral",False,"qualified",False,True
+"sts08","Không nhập học","#EF4444","stg03","negative",False,"unqualified",False,True
+"sts09","Chờ đóng học phí","#F59E0B","stg04","neutral",False,"qualified",False,True
+"sts10","Đã nộp học phí","#10B981","stg05","positive",True,"qualified",False,True
+"sts11","Đã nhập học","#3B82F6","stg06","positive",True,"converted",False,True
+"sts12","Bỏ học","#EF4444","stg07","negative",False,"unqualified",False,True
+"sts13","Đã đóng lệ phí","#10B981","stg04","positive",False,"qualified",False,True
+"sts14","Đã rút lại học phí","#EF4444","stg07","negative",False,"unqualified",False,True
+"sts15","Nhắn tin không trả lời","#14B8A6","stg01","neutral",False,"new",True,False

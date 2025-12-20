@@ -1,0 +1,29 @@
+# Duplicate Test Analysis
+
+## 1. Direct duplicates (Same test name in multiple files)
+| Test Name | Occurrences | Files |
+| :--- | :--- | :--- |
+| `test_create_skill_rule_success` | 2 | `tests\integration\api\admin\test_config.py`, `tests\unit\services\test_config_service.py` |
+| `test_delete_skill_rule_success` | 2 | `tests\integration\api\admin\test_config.py`, `tests\unit\services\test_config_service.py` |
+| `test_delete_skill_rule_not_found` | 2 | `tests\integration\api\admin\test_config.py`, `tests\unit\services\test_config_service.py` |
+| `test_create_organization_unit_success` | 2 | `tests\integration\api\admin\test_organization.py`, `tests\unit\services\test_organization_service.py` |
+| `test_update_organization_unit_success` | 2 | `tests\integration\api\admin\test_organization.py`, `tests\unit\services\test_organization_service.py` |
+| `test_delete_organization_unit_success` | 2 | `tests\integration\api\admin\test_organization.py`, `tests\unit\services\test_organization_service.py` |
+| `test_create_pipeline_stage_success` | 2 | `tests\integration\api\admin\test_pipeline.py`, `tests\unit\services\test_pipeline_service.py` |
+| `test_update_pipeline_stage_success` | 2 | `tests\integration\api\admin\test_pipeline.py`, `tests\unit\services\test_pipeline_service.py` |
+| `test_delete_pipeline_stage_success` | 2 | `tests\integration\api\admin\test_pipeline.py`, `tests\unit\services\test_pipeline_service.py` |
+| `test_create_consultation_status_success` | 2 | `tests\integration\api\admin\test_pipeline.py`, `tests\unit\services\test_pipeline_service.py` |
+| `test_delete_consultation_status_success` | 2 | `tests\integration\api\admin\test_pipeline.py`, `tests\unit\services\test_pipeline_service.py` |
+| `test_create_user_success` | 2 | `tests\integration\api\admin\test_users.py`, `tests\unit\services\test_user_service_management.py` |
+| `test_authenticate_user_valid_credentials` | 2 | `tests\integration\api\auth\test_login.py`, `tests\unit\services\test_user_service.py` |
+| `test_authenticate_user_invalid_password` | 2 | `tests\integration\api\auth\test_login.py`, `tests\unit\services\test_user_service.py` |
+| `test_authenticate_user_not_found` | 2 | `tests\integration\api\auth\test_login.py`, `tests\unit\services\test_user_service.py` |
+
+## 2. file Overlap Analysis (Files sharing duplicates)
+| File A | File B | Shared Tests | Status |
+| :--- | :--- | :--- | :--- |
+| `tests\integration\api\admin\test_pipeline.py` | `tests\unit\services\test_pipeline_service.py` | 5 | Partial Overlap |
+| `tests\integration\api\admin\test_config.py` | `tests\unit\services\test_config_service.py` | 3 | Partial Overlap |
+| `tests\integration\api\admin\test_organization.py` | `tests\unit\services\test_organization_service.py` | 3 | Partial Overlap |
+| `tests\integration\api\auth\test_login.py` | `tests\unit\services\test_user_service.py` | 3 | **EXACT DUPLICATE FILES** |
+| `tests\integration\api\admin\test_users.py` | `tests\unit\services\test_user_service_management.py` | 1 | Partial Overlap |

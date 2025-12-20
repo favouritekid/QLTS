@@ -116,7 +116,26 @@ export function WeeklyLeaderboard() {
     );
   }
 
-  if (error || !data) {
+  // Fix: Show error state instead of silent fail
+  if (error) {
+    return (
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base font-medium flex items-center gap-2">
+            <Trophy className="h-5 w-5 text-amber-500" />
+            Bảng xếp hạng tuần
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-center py-6 text-muted-foreground text-sm">
+            Không thể tải bảng xếp hạng
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (!data) {
     return null;
   }
 
@@ -158,14 +177,14 @@ export function WeeklyLeaderboard() {
                     {getRankIcon(entry.rank)}
                   </div>
                   
-                  {/* Avatar placeholder */}
+                  {/* Avatar placeholder - Fix: Handle empty full_name */}
                   <div className={cn(
                     "h-8 w-8 rounded-full flex items-center justify-center text-xs font-medium",
-                    entry.is_current_user 
-                      ? "bg-primary text-primary-foreground" 
+                    entry.is_current_user
+                      ? "bg-primary text-primary-foreground"
                       : "bg-muted text-muted-foreground"
                   )}>
-                    {entry.full_name.slice(0, 2).toUpperCase()}
+                    {(entry.full_name || entry.username || "??").slice(0, 2).toUpperCase()}
                   </div>
                   
                   {/* Name */}

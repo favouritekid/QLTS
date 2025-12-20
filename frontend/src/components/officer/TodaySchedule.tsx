@@ -175,18 +175,19 @@ function MiniCalendar({
           <button
             key={index}
             disabled={day === null}
-            onClick={() => day && onDateSelect(new Date(year, month, day))}
+            onClick={() => day !== null && onDateSelect(new Date(year, month, day))}
             className={cn(
               "relative h-7 w-7 text-xs rounded-full transition-colors disabled:invisible",
               "hover:bg-muted focus:outline-none focus:ring-2 focus:ring-primary/20",
-              isToday(day!) && !isSelected(day!) && "bg-primary/10 text-primary font-semibold",
-              isSelected(day!) && "bg-primary text-primary-foreground font-semibold",
-              hasActivity(day!) && !isSelected(day!) && "font-semibold"
+              // Fix: Safe null checks instead of non-null assertions
+              day !== null && isToday(day) && !isSelected(day) && "bg-primary/10 text-primary font-semibold",
+              day !== null && isSelected(day) && "bg-primary text-primary-foreground font-semibold",
+              day !== null && hasActivity(day) && !isSelected(day) && "font-semibold"
             )}
           >
             {day}
             {/* Red dot indicator for days with activities */}
-            {day && hasActivity(day) && (
+            {day !== null && hasActivity(day) && (
               <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-red-500 rounded-full" />
             )}
           </button>
@@ -221,20 +222,18 @@ export function TodaySchedule({ className }: TodayScheduleProps) {
   });
   
   // Filter activities for selected date
+  // Fix: Compare date strings directly to avoid timezone shift issues
+  // When new Date("2024-12-15") is created, it's interpreted as UTC midnight,
+  // which shifts to a different day in local timezone (e.g., UTC+7)
   const selectedDateActivities = useMemo(() => {
     if (!data?.activities) return [];
     
-    const selectedDay = selectedDate.getDate();
-    const selectedMonth = selectedDate.getMonth() + 1;
-    const selectedYear = selectedDate.getFullYear();
+    // Format selected date as YYYY-MM-DD string for comparison
+    const selectedDateStr = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`;
     
     return data.activities.filter(activity => {
-      const activityDate = new Date(activity.date);
-      return (
-        activityDate.getDate() === selectedDay &&
-        activityDate.getMonth() + 1 === selectedMonth &&
-        activityDate.getFullYear() === selectedYear
-      );
+      // activity.date is already a YYYY-MM-DD string from the API
+      return activity.date === selectedDateStr;
     });
   }, [data?.activities, selectedDate]);
   

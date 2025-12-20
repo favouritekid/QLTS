@@ -163,6 +163,31 @@ async def get_user_by_id(db: AsyncSession, user_id: int) -> models.User:
     return user
 
 
+async def get_user_for_refresh(
+    db: AsyncSession, username: str
+) -> Optional[models.User]:
+    """
+    Get user by username with pessimistic lock for refresh token flow.
+
+    ✅ PHASE 2: Added for auth module refactor.
+
+    Uses SELECT ... FOR UPDATE to prevent race conditions during token refresh.
+    This is called from the /refresh endpoint to atomically lock the user
+    record before issuing new tokens.
+
+    Args:
+        db: Database session
+        username: Username to search and lock
+
+    Returns:
+        Locked User instance or None if not found
+    """
+    from app.repositories import UserRepository
+
+    repo = UserRepository(db)
+    return await repo.get_by_username_for_update(username)
+
+
 # ← PHASE 2: Helper function to get highest priority role from Casbin
 async def get_highest_priority_role_from_casbin(
     enforcer: casbin.AsyncEnforcer,
@@ -541,6 +566,47 @@ async def get_users(
         sort_by=params.get("sort", "id"),
         order=params.get("order", "asc"),
     )
+
+
+async def get_all_users(db: AsyncSession) -> List[models.User]:
+    """
+    Get all users (for admin sync status).
+    Wraps UserRepository.get_all()
+    """
+    from app.repositories import UserRepository
+    repo = UserRepository(db)
+    return await repo.get_all()
+
+
+async def list_users(
+    db: AsyncSession,
+    unit_id: Optional[int] = None,
+    include_children: bool = False,
+    is_active: Optional[int] = None,  # Note: Router might pass bool, but Repo uses str/None
+    skip: int = 0,
+    limit: int = 100,
+) -> List[models.User]:
+    """
+    Get list of users with hierarchical filtering (Router-friendly wrapper).
+    Returns just the list of users (ignoring total count).
+    """
+    from app.repositories import UserRepository
+    repo = UserRepository(db)
+
+    # Convert is_active bool to status string if needed, or pass strict params
+    # Repo search_with_hierarchy takes 'status' string (active/inactive)
+    status_filter = None
+    if is_active is not None:
+        status_filter = "active" if is_active else "inactive"
+
+    _, users = await repo.search_with_hierarchy(
+        skip=skip,
+        limit=limit,
+        unit_id=unit_id,
+        include_children=include_children,
+        status=status_filter,
+    )
+    return users
 
 
 # --- Hàm Cập nhật User ---
@@ -1069,16 +1135,15 @@ async def invalidate_all_sessions(db: AsyncSession, user: models.User):
 
     try:
         # 1. Bắt đầu transaction và LẤY KHÓA
-        async with db.begin():
-            result = await db.execute(
-                select(models.UserSession)
-                .where(
-                    models.UserSession.user_id == user_id,
-                    models.UserSession.revoked_at.is_(None),  # Chỉ khóa session active
-                )
-                .with_for_update()  # ✅ KHÓA CÁC DÒNG NÀY
-            )
-            all_sessions = result.scalars().all()
+        # ✅ FIX: Use begin_nested() (savepoint) if already in transaction
+        # 1. Bắt đầu transaction và LẤY KHÓA
+        # ✅ FIX: Use begin_nested() (savepoint) if already in transaction
+        async with db.begin_nested():
+            # ✅ SPRINT 7: Use SessionRepository
+            from app.repositories import SessionRepository
+            session_repo = SessionRepository(db)
+            
+            all_sessions = await session_repo.get_active_sessions_for_update(user_id)
 
             if not all_sessions:
                 log.info("No active sessions to invalidate", user_id=user_id)
@@ -1282,24 +1347,21 @@ async def perform_bulk_action(
                 raise BadRequest(detail=error_msg)
 
             # Unassign leads from users being deleted (set assigned_officer_id to NULL)
-            await db.execute(
-                select(models.Lead)
-                .where(models.Lead.assigned_officer_id.in_(user_ids))
-            )
-            unassign_result = await db.execute(
-                select(models.Lead)
-                .where(models.Lead.assigned_officer_id.in_(user_ids))
-            )
-            leads_to_unassign = unassign_result.scalars().all()
-            for lead in leads_to_unassign:
-                lead.assigned_officer_id = None
-                db.add(lead)
+            # ✅ SPRINT 7: Use LeadRepository
+            from app.repositories import LeadRepository
+            lead_repo = LeadRepository(db)
+            
+            # Direct usage of repository method which handles bulk update efficiently
+            unassigned_count = await lead_repo.unassign_leads_from_officers(user_ids)
+            
+            # Compatibility variable for logging logic below
+            leads_to_unassign = [True] * unassigned_count if unassigned_count > 0 else []
 
-            if leads_to_unassign:
+            if unassigned_count > 0:
                 log.info(
                     "Unassigned leads before bulk delete",
                     admin_id=admin_user.id,
-                    lead_count=len(leads_to_unassign),
+                    lead_count=unassigned_count,
                 )
 
             ids_to_delete = []
@@ -1390,32 +1452,12 @@ async def stream_users_csv(
 
     # --- 1. Xây dựng Query (Sao chép logic filter/sort từ get_users) ---
     
-    # ✅ Tối ưu: Eager load 'unit' để tránh N+1 query khi stream
-    query = select(models.User).options(selectinload(models.User.unit))
-
-    # Sao chép logic filter từ hàm get_users
-    allowed_filters = {
-        "role": models.User.role,
-        "status": models.User.status,
-    }
-
-    # ✅ SECURITY FIX: Search DoS Prevention (same as get_users)
-    filters = []
-    for key, value in params.items():
-        if key in allowed_filters and value:
-            values_to_filter = [v.strip() for v in value.split(",")]
-            query = query.filter(allowed_filters[key].in_(values_to_filter))
-        elif key == "search" and value:
-            # ✅ NEW: Use full-text search (same as get_users)
-            search_term = value.strip().replace(' ', ' & ')
-            query = query.filter(
-                models.User.search_vector.op('@@')(
-                    func.to_tsquery('simple', search_term)
-                )
-            )
-
-    if filters:
-        query = query.where(*filters)
+    # ✅ SPRINT 7: Use UserRepository to build query (DRY)
+    from app.repositories import UserRepository
+    user_repo = UserRepository(db)
+    
+    # Get base query with all filters applied from Repository
+    query = await user_repo.get_users_stream_query(params)
 
     # Sao chép logic sort từ hàm get_users
     sort = params.get("sort", "id")

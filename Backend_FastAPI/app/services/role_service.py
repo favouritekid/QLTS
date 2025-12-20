@@ -129,10 +129,10 @@ async def remove_role_from_users(
                 log.info(f"User {user_id} had no roles left, auto-assigned role:user")
 
             # Update database user.role field to highest priority remaining role
-            result = await db.execute(
-                select(models.User).where(models.User.id == user_id)
-            )
-            user = result.scalar_one_or_none()
+            # ✅ REFACTORED: Use UserRepository
+            from app.repositories import UserRepository
+            user_repo = UserRepository(db)
+            user = await user_repo.get_by_id(user_id)
 
             if user:
                 # Find highest priority role from remaining roles
@@ -145,6 +145,7 @@ async def remove_role_from_users(
                 # Extract role name without "role:" prefix for DB
                 db_role_name = highest_priority_role.replace("role:", "")
                 user.role = db_role_name
+                db.add(user)
 
                 log.info(
                     f"User {user_id} updated",
@@ -174,4 +175,127 @@ async def remove_role_from_users(
         "failed_users": failed_users,
     }
 
+    return result, _post_commit
+
+
+async def delete_role_atomic(
+    db: AsyncSession,
+    role_name: str,
+    enforcer: casbin.AsyncEnforcer,
+) -> Tuple[Dict[str, Any], Callable]:
+    """
+    Atomically delete a role with all its associations.
+    Moved from Router to Service (Refactoring Pattern A).
+    
+    Args:
+        db: Database session
+        role_name: Role identifier (e.g., "role:support")
+        enforcer: Casbin enforcer
+        
+    Returns:
+        Tuple of (stats_dict, post_commit_callback)
+    """
+    from app.repositories import UserRepository
+    from app.utils.exceptions import BadRequest, ResourceNotFoundError
+    
+    # STEP 1: Validate - System roles cannot be deleted
+    SYSTEM_ROLES = {"role:admin", "role:manager", "role:officer", "role:user"}
+    if role_name in SYSTEM_ROLES:
+        raise BadRequest(f"Cannot delete system role: {role_name}")
+
+    # STEP 2: Check if role exists (has any policies)
+    all_policies = enforcer.get_policy()
+    role_has_policies = any(p[0] == role_name for p in all_policies)
+    if not role_has_policies:
+        raise ResourceNotFoundError(f"Role not found: {role_name}")
+
+    user_repo = UserRepository(db)
+    
+    # STEP 3a: Find all users with this role in DB (using Repository)
+    db_role = role_name.replace("role:", "")
+    users_from_db = await user_repo.get_by_db_role(db_role)
+
+    # STEP 3b: Find all users with grouping policy for this role
+    all_grouping = enforcer.get_grouping_policy()
+    user_ids_from_casbin = []
+    for group in all_grouping:
+        # group format: ["user:123", "role:support"]
+        if len(group) >= 2 and group[1] == role_name and group[0].startswith("user:"):
+            try:
+                user_id = int(group[0].split(":")[1])
+                user_ids_from_casbin.append(user_id)
+            except (ValueError, IndexError):
+                continue
+
+    # Merge: Get all unique user IDs
+    all_user_ids = set([u.id for u in users_from_db] + user_ids_from_casbin)
+
+    # STEP 4: Update users in DB to role:user (using Repository)
+    reassigned_count = 0
+    users_to_update = await user_repo.get_by_ids(list(all_user_ids))
+    for user in users_to_update:
+        # Only update if they had this role
+        if user.role == db_role:
+            user.role = "user"
+            db.add(user)
+            reassigned_count += 1
+
+    # STEP 5: Remove grouping policies (user → role)
+    removed_g_user_count = 0
+    for user_id in all_user_ids:
+        user_subject = f"user:{user_id}"
+        removed = await enforcer.remove_grouping_policy(user_subject, role_name)
+        if removed:
+            removed_g_user_count += 1
+
+        # STEP 6: Add grouping policy (user → role:user) if needed
+        user_roles = await enforcer.get_roles_for_user(user_subject)
+        if not user_roles or len(user_roles) == 0:
+            await enforcer.add_grouping_policy(user_subject, "role:user")
+
+    # STEP 7: Remove all permission policies (p rules) for this role
+    policies_to_remove = [
+        (p[0], p[1], p[2])
+        for p in all_policies
+        if p[0] == role_name
+    ]
+    removed_p_count = 0
+    for p in policies_to_remove:
+        removed = await enforcer.remove_policy(p[0], p[1], p[2])
+        if removed:
+            removed_p_count += 1
+
+    # STEP 8: Remove role inheritance grouping policies (g, role:X, role:user)
+    removed_g_inherit_count = 0
+    for group in all_grouping:
+        # Check if this is a role inheriting from another role
+        if len(group) >= 2 and group[0] == role_name:
+            removed = await enforcer.remove_grouping_policy(group[0], group[1])
+            if removed:
+                removed_g_inherit_count += 1
+
+    # ✅ TRANSACTION FIX: Flush instead of commit
+    await db.flush()
+
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        # Save Casbin policies
+        await enforcer.save_policy()
+        log.info(
+            f"Atomic role deletion complete for {role_name}",
+            reassigned=reassigned_count,
+            policies_removed=removed_p_count
+        )
+
+    result = {
+        "detail": f"Role {role_name} deleted successfully",
+        "role_name": role_name,
+        "users_reassigned": reassigned_count,
+        "permission_policies_removed": removed_p_count,
+        "user_grouping_policies_removed": removed_g_user_count,
+        "inheritance_grouping_policies_removed": removed_g_inherit_count,
+        "total_affected_users": len(all_user_ids),
+    }
+    
     return result, _post_commit

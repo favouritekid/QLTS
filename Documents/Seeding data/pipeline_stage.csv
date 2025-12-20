@@ -1,0 +1,8 @@
+"id","name","order","is_final_stage"
+"stg01","Chưa tư vấn",1,False
+"stg02","Đang tư vấn",2,False
+"stg03","Đã nộp hồ sơ",3,False
+"stg04","Chờ nhập học",4,False
+"stg05","Đã nộp học phí",5,False
+"stg06","Đã nhập học",6,True
+"stg07","Không đi học",7,True

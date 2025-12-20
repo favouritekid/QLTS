@@ -349,15 +349,25 @@ def process_automatic_lead_assignment_task(self, lead_id: int):
     try:
         result = asyncio.run(_run_async_assignment())
         
-        # ✅ RETRY LOGIC: If assignment failed (capacity/no officers), retry task
+        # ✅ FIX: Only retry for transient failures (capacity), not permanent ones (no officers)
         if result.get("status") == "failed":
-            task_log.warning(
-                f"Assignment logic returned 'failed' for lead_id: {lead_id}. "
-                f"Reason: {result.get('reason')}. Retrying..."
-            )
-            # Raise retry with exponential backoff handled by decorator (if configured) or defaults
-            # Using verify_connection=False involves internal Celery logic, omitting for simplicity
-            raise self.retry(exc=Exception(f"Assignment Failed: {result.get('reason')}"))
+            reason = result.get("reason")
+            
+            if reason == "all_officers_at_capacity":
+                # ✅ RETRY: Officers might free up capacity soon
+                task_log.warning(
+                    f"Assignment failed for lead_id: {lead_id}. "
+                    f"Reason: {reason}. Retrying (officers may free up capacity)..."
+                )
+                raise self.retry(exc=Exception(f"Assignment Failed: {reason}"))
+            else:
+                # ❌ NO RETRY: no_officers_available requires admin action
+                task_log.warning(
+                    f"Assignment failed for lead_id: {lead_id}. "
+                    f"Reason: {reason}. NOT retrying (requires admin action)."
+                )
+                # Return without retry - task completes as "failed"
+                return result
 
         task_log.info(f"Task completed for lead_id: {lead_id}. Result: {result}")
         return result
@@ -843,3 +853,99 @@ def recalculate_lead_caches_task(self):
     except Exception as e:
         task_log.error(f"Nightly recalculation failed: {e}", exc_info=True)
         raise e
+
+
+# ==================================================================
+# === Phase 6: KPI YTD Sync Task (Rolling Targets) ===
+# ==================================================================
+
+@celery_app.task(
+    name="sync_kpi_ytd_task",
+    bind=True,
+    autoretry_for=(Exception,),
+    max_retries=2,
+    default_retry_delay=300,  # 5 minutes between retries
+)
+def sync_kpi_ytd_task(self):
+    """
+    Celery Beat daily task to sync KPI Year-to-Date progress for all officers.
+    
+    Runs at 01:00 daily to update:
+    - achieved_ytd for each officer's annual targets (e.g., enrollments)
+    - last_sync_at timestamp
+    
+    This ensures rolling monthly targets are calculated correctly based on
+    actual progress toward annual goals.
+    """
+    task_log = logging.getLogger("sync_kpi_ytd_task")
+    task_log.info("Starting KPI YTD sync...")
+
+    async def _run_ytd_sync() -> dict:
+        from datetime import datetime, timezone
+        from sqlalchemy import select
+        from . import models
+        from .services import kpi_service
+
+        # Create engine INSIDE async context
+        engine = _create_task_async_engine()
+        session_maker = _create_task_session_maker(engine)
+
+        result = {"officers": 0, "synced": 0, "errors": 0}
+        fiscal_year = datetime.now(timezone.utc).year
+
+        try:
+            async with session_maker() as session:
+                # Get all active officers
+                officers_result = await session.execute(
+                    select(models.User.id)
+                    .where(
+                        models.User.role == "officer",
+                        models.User.status == "active",
+                    )
+                )
+                officer_ids = [row[0] for row in officers_result.all()]
+                result["officers"] = len(officer_ids)
+
+                if result["officers"] == 0:
+                    task_log.info("No active officers to sync")
+                    return result
+
+                task_log.info(f"Syncing YTD for {result['officers']} officers")
+
+                # Sync each officer
+                for officer_id in officer_ids:
+                    try:
+                        await kpi_service.sync_officer_ytd(
+                            session, officer_id, fiscal_year
+                        )
+                        result["synced"] += 1
+                    except Exception as e:
+                        task_log.warning(f"Error syncing officer {officer_id}: {e}")
+                        result["errors"] += 1
+
+                # Commit all changes
+                await session.commit()
+
+        finally:
+            await engine.dispose()
+
+        return result
+
+    try:
+        result = asyncio.run(_run_ytd_sync())
+        task_log.info(
+            f"KPI YTD sync completed: officers={result['officers']}, "
+            f"synced={result['synced']}, errors={result['errors']}"
+        )
+        return result
+    except Exception as e:
+        task_log.error(f"KPI YTD sync failed: {e}", exc_info=True)
+        raise e
+
+
+# Update beat schedule with KPI sync task
+celery_app.conf.beat_schedule["sync-kpi-ytd-daily"] = {
+    "task": "sync_kpi_ytd_task",
+    "schedule": crontab(hour=1, minute=0),  # Runs at 01:00 daily
+}
+

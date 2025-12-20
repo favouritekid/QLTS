@@ -77,17 +77,17 @@ export const navigationConfig: NavigationConfig = {
       title: "Overview",
       items: [
         {
-          label: "Dashboard",
-          href: "/dashboard",
-          icon: LayoutDashboard,
-          roles: [], // Accessible to all roles EXCEPT officers
-          excludeRoles: ["officer"], // Officers have their own dashboard
-        },
-        {
-          label: "Officer Dashboard",
+          label: "Performance Dashboard",
           href: "/dashboard/officer",
           icon: TrendingUp,
-          roles: ["officer"], // Only officers can see this
+          roles: [], // Unified dashboard for ALL roles
+          // Officers see personal data, Managers see team, Admins see organization
+        },
+        {
+          label: "Admin Dashboard",
+          href: "/dashboard",
+          icon: LayoutDashboard,
+          roles: ["admin"], // Admin-only legacy dashboard
         },
       ],
     },
@@ -208,6 +208,12 @@ export const navigationConfig: NavigationConfig = {
           href: "/admin/distribution",
           icon: Share2,
           roles: ["admin", "manager"],
+        },
+        {
+          label: "KPI Configuration",
+          href: "/admin/kpi-config",
+          icon: TrendingUp,
+          roles: ["admin"],  // Admin only
         },
       ],
     },

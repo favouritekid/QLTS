@@ -1,0 +1,23 @@
+"id","offering_type","duration_semesters","total_credits","is_active","program_id","admission_rules","scoring_rules"
+12,"Chính quy",6,120,True,9,NULL,"{""hot_level"": 2, ""target_age_max"": 20, ""target_age_min"": 18, ""required_education"": ""high_school""}"
+13,"Chính quy",6,NULL,True,10,NULL,NULL
+14,"Chính quy",4,NULL,True,11,NULL,NULL
+15,"Chính quy",6,NULL,True,22,NULL,NULL
+16,"Chính quy",6,NULL,True,31,NULL,NULL
+17,"Chính quy",5,NULL,True,8,NULL,NULL
+18,"Chính quy",4,NULL,True,13,NULL,NULL
+19,"Chính quy",4,NULL,True,12,NULL,NULL
+20,"Chính quy",5,NULL,True,14,NULL,NULL
+21,"Chính quy",4,NULL,True,26,NULL,NULL
+22,"Chính quy",5,NULL,True,25,NULL,NULL
+23,"Chính quy",4,NULL,True,24,NULL,NULL
+24,"Chính quy",5,NULL,True,23,NULL,NULL
+25,"Chính quy",4,NULL,True,21,NULL,NULL
+26,"Chính quy",4,NULL,True,20,NULL,NULL
+27,"Chính quy",4,NULL,True,19,NULL,NULL
+28,"Chính quy",5,NULL,True,18,NULL,NULL
+29,"Chính quy",5,NULL,True,17,NULL,NULL
+30,"Chính quy",5,NULL,True,16,NULL,NULL
+31,"Chính quy",5,NULL,True,15,NULL,NULL
+32,"Vừa làm vừa học",NULL,NULL,True,9,NULL,NULL
+33,"Liên thông",NULL,NULL,True,9,NULL,NULL

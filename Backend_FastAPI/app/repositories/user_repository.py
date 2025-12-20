@@ -12,7 +12,7 @@ Benefits:
 - Separates SQL from business logic
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -132,6 +132,93 @@ class UserRepository(BaseRepository[models.User]):
 
         return total_count, users
 
+    async def _resolve_unit_hierarchy(self, unit_id: int) -> List[int]:
+        """Resolve unit hierarchy using recursive CTE to get all descendant IDs."""
+        cte_query = text("""
+            WITH RECURSIVE unit_hierarchy AS (
+                SELECT id FROM organization_unit WHERE id = :unit_id
+                UNION ALL
+                SELECT u.id FROM organization_unit u
+                JOIN unit_hierarchy uh ON u.parent_id = uh.id
+            )
+            SELECT id FROM unit_hierarchy
+        """)
+        hierarchy_result = await self.db.execute(cte_query, {"unit_id": unit_id})
+        return [row[0] for row in hierarchy_result.fetchall()]
+
+    def _apply_user_filters(
+        self,
+        query,
+        role: Optional[str] = None,
+        status: Optional[str] = None,
+        unit_id: Optional[int] = None,
+        unit_ids: Optional[List[int]] = None,
+        search: Optional[str] = None,
+    ):
+        """Apply standard user filters to the query."""
+        filters = []
+
+        if unit_ids:
+            filters.append(models.User.unit_id.in_(unit_ids))
+        elif unit_id is not None:
+            filters.append(models.User.unit_id == unit_id)
+
+        if role:
+            values = [v.strip() for v in role.split(",") if v.strip()]
+            if values:
+                filters.append(models.User.role.in_(values))
+
+        if status:
+            values = [v.strip() for v in status.split(",") if v.strip()]
+            if values:
+                filters.append(models.User.status.in_(values))
+
+        if search:
+            search_term = search.strip().replace(' ', ' & ')
+            filters.append(
+                models.User.search_vector.op('@@')(
+                    func.to_tsquery('simple', search_term)
+                )
+            )
+
+        if filters:
+            query = query.where(*filters)
+        
+        return query
+
+    async def get_users_stream_query(self, params: Dict[str, Any]):
+        """
+        Get query for streaming users (CSV export).
+        
+        ✅ SPRINT 7: Added for user_service migration.
+        """
+        # Optimized eager loading for CSV (only unit is typically needed)
+        query = select(self.model).options(
+            selectinload(models.User.unit)
+        )
+
+        unit_id = None
+        if "unit_id" in params and params["unit_id"]:
+            try:
+                unit_id = int(params["unit_id"])
+            except ValueError:
+                pass
+
+        include_children = str(params.get("include_children", "")).lower() == "true"
+        
+        unit_ids = []
+        if unit_id and include_children:
+            unit_ids = await self._resolve_unit_hierarchy(unit_id)
+
+        return self._apply_user_filters(
+            query,
+            role=params.get("role"),
+            status=params.get("status"),
+            unit_id=unit_id,
+            unit_ids=unit_ids,
+            search=params.get("search")
+        )
+
     async def search_with_hierarchy(
         self,
         skip: int = 0,
@@ -148,26 +235,7 @@ class UserRepository(BaseRepository[models.User]):
         Get users with hierarchical unit filtering and full-text search.
         
         ✅ SPRINT 2: Added for user_service migration.
-        
-        This method supports:
-        - Hierarchical unit filter via recursive CTE
-        - Full-text search using search_vector (PostgreSQL ts_vector)
-        - Multi-value filters (comma-separated)
-        - Eager loading for N+1 prevention
-        
-        Args:
-            skip: Number of records to skip
-            limit: Maximum number of records to return
-            role: Filter by role (comma-separated for multi-select)
-            status: Filter by status (comma-separated for multi-select)
-            unit_id: Filter by organization unit
-            include_children: If True, include users from child units (uses CTE)
-            search: Full-text search term
-            sort_by: Column to sort by
-            order: Sort order (asc/desc)
-            
-        Returns:
-            Tuple of (total_count, user_list)
+        ✅ SPRINT 7: Refactored to use shared filter logic.
         """
         # Build base query with eager loading
         query = select(self.model).options(
@@ -175,61 +243,19 @@ class UserRepository(BaseRepository[models.User]):
             selectinload(models.User.sessions),
         )
         
-        filters = []
+        unit_ids = []
+        if unit_id is not None and include_children:
+            unit_ids = await self._resolve_unit_hierarchy(unit_id)
         
-        # =========================================================================
-        # HIERARCHICAL UNIT FILTER (CTE-based)
-        # =========================================================================
-        if unit_id is not None:
-            if include_children:
-                # Recursive CTE to get all descendant unit IDs
-                cte_query = text("""
-                    WITH RECURSIVE unit_hierarchy AS (
-                        SELECT id FROM organization_unit WHERE id = :unit_id
-                        UNION ALL
-                        SELECT u.id FROM organization_unit u
-                        JOIN unit_hierarchy uh ON u.parent_id = uh.id
-                    )
-                    SELECT id FROM unit_hierarchy
-                """)
-                
-                # Execute CTE to get list of unit IDs
-                hierarchy_result = await self.db.execute(cte_query, {"unit_id": unit_id})
-                all_unit_ids = [row[0] for row in hierarchy_result.fetchall()]
-                
-                if all_unit_ids:
-                    filters.append(models.User.unit_id.in_(all_unit_ids))
-            else:
-                # Simple exact match
-                filters.append(models.User.unit_id == unit_id)
-        
-        # =========================================================================
-        # ROLE & STATUS FILTERS (multi-value support)
-        # =========================================================================
-        if role:
-            values = [v.strip() for v in role.split(",") if v.strip()]
-            if values:
-                filters.append(models.User.role.in_(values))
-        
-        if status:
-            values = [v.strip() for v in status.split(",") if v.strip()]
-            if values:
-                filters.append(models.User.status.in_(values))
-        
-        # =========================================================================
-        # FULL-TEXT SEARCH (using search_vector with GIN index)
-        # =========================================================================
-        if search:
-            search_term = search.strip().replace(' ', ' & ')
-            filters.append(
-                models.User.search_vector.op('@@')(
-                    func.to_tsquery('simple', search_term)
-                )
-            )
-        
-        # Apply filters
-        if filters:
-            query = query.where(*filters)
+        # Apply filters using helper
+        query = self._apply_user_filters(
+            query,
+            role=role,
+            status=status,
+            unit_id=unit_id,
+            unit_ids=unit_ids,
+            search=search
+        )
         
         # Count query
         count_query = select(func.count()).select_from(query.alias())
@@ -531,7 +557,25 @@ class UserRepository(BaseRepository[models.User]):
         Returns:
             List of users matching the IDs
         """
+        if not user_ids:
+            return []
         query = select(models.User).where(models.User.id.in_(user_ids))
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+    async def get_by_db_role(self, role: str) -> List[models.User]:
+        """
+        Get users by database role field.
+        
+        ✅ SPRINT 6: Added for admin/roles.py migration.
+        
+        Args:
+            role: Role name (e.g., 'admin', 'manager', 'officer', 'user')
+            
+        Returns:
+            List of users with this role
+        """
+        query = select(models.User).where(models.User.role == role)
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
@@ -641,4 +685,54 @@ class UserRepository(BaseRepository[models.User]):
         )
         result = await self.db.execute(query)
         return {row[0]: row[1] for row in result.all()}
+
+    # =========================================================================
+    # PHASE 2: Auth Refactor - Pessimistic Lock Methods
+    # =========================================================================
+
+    async def get_by_username_for_update(
+        self,
+        username: str
+    ) -> Optional[models.User]:
+        """
+        Get user by username with pessimistic lock.
+
+        ✅ PHASE 2: Added for auth refactor - refresh token flow.
+
+        Uses SELECT ... FOR UPDATE to prevent concurrent modifications
+        during token refresh operations.
+
+        Args:
+            username: Username to search and lock
+
+        Returns:
+            Locked User instance or None if not found
+        """
+        result = await self.db.execute(
+            select(models.User)
+            .where(models.User.username == username)
+            .with_for_update(nowait=False)
+        )
+        return result.scalar_one_or_none()
+
+    async def get_managed_unit_ids(self, user_id: int) -> List[int]:
+        """
+        Get list of unit IDs that a user manages.
+        
+        ✅ SPRINT 7: Added for deps.py refactor.
+        
+        Args:
+            user_id: ID of the user to check
+            
+        Returns:
+            List of unit IDs where user is an active manager
+        """
+        stmt = select(models.UserUnitAssignment.unit_id).where(
+            models.UserUnitAssignment.user_id == user_id,
+            models.UserUnitAssignment.role == UserRole.MANAGER,
+            models.UserUnitAssignment.is_active == True
+        )
+        result = await self.db.execute(stmt)
+        return [row[0] for row in result.all()]
+
 

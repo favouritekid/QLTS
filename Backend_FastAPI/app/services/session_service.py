@@ -1,27 +1,33 @@
 # app/services/session_service.py
+"""
+✅ PHASE 2: Session Service - Refactored to use SessionRepository
+
+This service manages user sessions following the Repository Pattern:
+Router → Service → Repository
+
+No direct SQL queries - all data access through SessionRepository.
+"""
 from datetime import datetime, timezone
 from typing import Optional
 
 import structlog
-from sqlalchemy import and_, select
-from sqlalchemy.exc import NoResultFound  # ✅ Thêm exception
 from sqlalchemy.ext.asyncio import AsyncSession
 from user_agents import parse as parse_user_agent
 
 from .. import models
 from ..database import safe_redis_delete, safe_redis_set
-# ✅ PHASE 1: Removed AsyncSessionLocal import (DI pattern - db injected via parameter)
-from ..utils.exceptions import (  # ✅ PHASE 1: Custom exceptions (protocol-independent)
+from ..repositories import SessionRepository  # ✅ PHASE 2: Use Repository Pattern
+from ..utils.exceptions import (
     SessionRevocationError,
     SessionServiceError,
 )
-from ..core.events import dispatcher, TransportEvents  # ✅ Event Dispatcher Pattern
-from ..socket_metrics import socket_emit_failures_total  # ✅ Thêm Metrics
+from ..core.events import dispatcher, TransportEvents
+from ..socket_metrics import socket_emit_failures_total
 from ..socket_metrics import (
     socket_events_emitted_total,
     track_event_latency,
 )
-from .geoip_service import get_geoip_service  # ✅ Import GeoIP service
+from .geoip_service import get_geoip_service
 
 log = structlog.get_logger(__name__)
 
@@ -58,18 +64,14 @@ async def _revoke_previous_sessions_on_device(
         None (modifies database state)
     """
     try:
-        # Find all active sessions on same device
-        stmt = select(models.UserSession).where(
-            and_(
-                models.UserSession.user_id == user_id,
-                models.UserSession.device_type == device_type,
-                models.UserSession.browser == browser,
-                models.UserSession.os == os,
-                models.UserSession.revoked_at.is_(None)
-            )
+        # ✅ PHASE 2: Use SessionRepository instead of direct SQL
+        repo = SessionRepository(db)
+        old_sessions = await repo.get_active_on_device(
+            user_id=user_id,
+            device_type=device_type,
+            browser=browser,
+            os=os
         )
-        result = await db.execute(stmt)
-        old_sessions = result.scalars().all()
 
         if not old_sessions:
             log.debug(
@@ -270,18 +272,9 @@ async def check_new_ip_address(
     if not ip_address:
         return False
 
-    # Query for any previous session from this IP
-    result = await db.execute(
-        select(models.UserSession)
-        .where(
-            and_(
-                models.UserSession.user_id == user_id,
-                models.UserSession.ip_address == ip_address,
-            )
-        )
-        .limit(1)
-    )
-    existing_session = result.scalar_one_or_none()
+    # ✅ PHASE 2: Use SessionRepository instead of direct SQL
+    repo = SessionRepository(db)
+    existing_session = await repo.get_by_ip(user_id, ip_address)
 
     is_new = existing_session is None
 
@@ -307,25 +300,13 @@ async def get_active_sessions(
     Returns:
         List of active UserSession instances
     """
-    now = datetime.now(timezone.utc)
-
-    result = await db.execute(
-        select(models.UserSession)
-        .where(
-            and_(
-                models.UserSession.user_id == user_id,
-                models.UserSession.revoked_at.is_(None),
-                models.UserSession.expires_at > now,
-            )
-        )
-        .order_by(models.UserSession.last_activity_at.desc())
-    )
-
-    sessions = result.scalars().all()
+    # ✅ PHASE 2: Use SessionRepository instead of direct SQL
+    repo = SessionRepository(db)
+    sessions = await repo.get_active_by_user(user_id)
 
     log.info("Retrieved active sessions", user_id=user_id, session_count=len(sessions))
 
-    return list(sessions)
+    return sessions
 
 
 async def revoke_session(
@@ -350,22 +331,18 @@ async def revoke_session(
     session_to_emit = None  # Store session JTI for socket emission
 
     try:
-        # ✅ PHASE 1: Use injected db session (no AsyncSessionLocal creation)
+        # ✅ PHASE 2: Use SessionRepository with pessimistic lock
+        repo = SessionRepository(db)
         async with db.begin():  # Start transaction
-            result = await db.execute(
-                select(models.UserSession)
-                .where(
-                    and_(
-                        models.UserSession.id == session_id,
-                        models.UserSession.user_id == user_id,
-                    )
-                )
-                .with_for_update()
-            )
-            session = result.scalar_one_or_none()
+            session = await repo.get_for_update(session_id, user_id)
 
             if not session:
-                raise NoResultFound("Session not found")
+                log.warning(
+                    "Session not found or doesn't belong to user",
+                    session_id=session_id,
+                    user_id=user_id,
+                )
+                return False
 
             if session.revoked_at is not None:
                 log.warning("Session already revoked, skipping", session_id=session_id)
@@ -394,13 +371,6 @@ async def revoke_session(
         # Transaction committed automatically
         log.info("Revoke transaction committed", session_id=session_id, user_id=user_id)
 
-    except NoResultFound:
-        log.warning(
-            "Session not found or doesn't belong to user",
-            session_id=session_id,
-            user_id=user_id,
-        )
-        return False  # Session not found (safe failure)
     except Exception as e:
         # Any error (database or Redis) will be caught here
         # db.rollback() is called automatically by db.begin() context manager
@@ -453,15 +423,19 @@ async def update_session_activity(
     Returns:
         Updated UserSession instance, or None if not found
     """
-    result = await db.execute(
-        select(models.UserSession).where(
-            and_(
-                models.UserSession.refresh_jti == old_refresh_jti,
-                models.UserSession.user_id == user_id,
-            )
+    # ✅ PHASE 2: Use SessionRepository instead of direct SQL
+    repo = SessionRepository(db)
+    session = await repo.get_by_jti(old_refresh_jti)
+
+    # Verify ownership
+    if session and session.user_id != user_id:
+        log.warning(
+            "Session JTI found but belongs to different user",
+            old_refresh_jti=old_refresh_jti[:8],
+            session_user_id=session.user_id,
+            requested_user_id=user_id,
         )
-    )
-    session = result.scalar_one_or_none()
+        return None
 
     if session:
         session.last_activity_at = datetime.now(timezone.utc)
@@ -508,20 +482,16 @@ async def revoke_all_other_sessions(
     revoked_count = 0
 
     try:
-        # ✅ FIX: Use existing transaction from caller (don't start new one)
-        # The db session already has an active transaction from the endpoint
+        # ✅ PHASE 2: Use SessionRepository instead of direct SQL
+        repo = SessionRepository(db)
         now = datetime.now(timezone.utc)
-        conditions = [
-            models.UserSession.user_id == user_id,
-            models.UserSession.revoked_at.is_(None),
-        ]
-        if except_session_id is not None:
-            conditions.append(models.UserSession.id != except_session_id)
 
-        result = await db.execute(
-            select(models.UserSession).where(and_(*conditions)).with_for_update()
-        )
-        sessions = result.scalars().all()
+        # Get all active sessions for user
+        sessions = await repo.get_active_by_user(user_id)
+
+        # Filter out the session to preserve
+        if except_session_id is not None:
+            sessions = [s for s in sessions if s.id != except_session_id]
 
         for session in sessions:
             session.revoked_at = now
@@ -577,8 +547,62 @@ async def revoke_all_other_sessions(
             except Exception as e_dispatch:
                 socket_emit_failures_total.labels(event_type="force_logout_batch").inc()
                 log.error(
-                    "Failed to emit socket event for revoke-all", 
-                    error_message=str(e_socket)
+                    "Failed to emit socket event for revoke-all",
+                    error=str(e_dispatch)
                 )
 
     return revoked_count
+
+
+async def revoke_session_by_jti(
+    db: AsyncSession,
+    refresh_jti: str,
+    user_id: int
+) -> bool:
+    """
+    ✅ PHASE 2: Revoke a session by its refresh token JTI.
+
+    This is a wrapper function for the /logout endpoint to use instead of
+    direct SQL queries in the router layer.
+
+    Args:
+        db: Database session
+        refresh_jti: Refresh token JTI to revoke
+        user_id: User ID for ownership verification
+
+    Returns:
+        True if session was found and revoked, False if not found
+    """
+    repo = SessionRepository(db)
+    session = await repo.get_by_refresh_jti_and_user(refresh_jti, user_id)
+
+    if not session:
+        log.warning(
+            "Session not found for JTI revocation",
+            refresh_jti=refresh_jti[:8] + "..." if refresh_jti else None,
+            user_id=user_id,
+        )
+        return False
+
+    # Already revoked
+    if session.revoked_at is not None:
+        log.warning(
+            "Session already revoked",
+            session_id=session.id,
+            refresh_jti=refresh_jti[:8] + "...",
+        )
+        return False
+
+    # Revoke the session
+    session.revoked_at = datetime.now(timezone.utc)
+    db.add(session)
+    await db.flush()
+
+    log.info(
+        "Session revoked by JTI",
+        session_id=session.id,
+        user_id=user_id,
+        refresh_jti=refresh_jti[:8] + "...",
+    )
+
+    return True

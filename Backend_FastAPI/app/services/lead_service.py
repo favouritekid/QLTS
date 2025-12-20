@@ -56,27 +56,11 @@ async def update_lead_next_activity(
     # Tìm scheduled_at sớm nhất chưa reminder
     now = datetime.now(timezone.utc)
 
-    result = await db.execute(
-        select(func.min(models.Consultation.scheduled_at))
-        .where(
-            and_(
-                models.Consultation.lead_id == lead_id,
-                models.Consultation.scheduled_at.isnot(None),
-                models.Consultation.scheduled_at >= now,
-                models.Consultation.reminder_sent == False,
-            )
-        )
-    )
-    earliest_scheduled = result.scalar_one_or_none()
-
-    # Update lead
-    lead.next_activity_at = earliest_scheduled
-
-    log.debug(
-        "Updated lead.next_activity_at",
-        lead_id=lead_id,
-        next_activity_at=earliest_scheduled.isoformat() if earliest_scheduled else None,
-    )
+    # ✅ REFACTORED: Use LeadRepository
+    repo = LeadRepository(db)
+    await repo.update_next_activity(lead_id)
+    # Logging handled inside repository or implicit
+    return
 
 
 def calculate_fit_score(
@@ -616,6 +600,11 @@ async def create_lead(
                         raise PermissionDeniedError(
                             detail="Can only assign leads to users with 'officer' role"
                         )
+                    # ✅ FIX: Check officer is active (consistent with assign_lead_manually)
+                    if officer.status != "active":
+                        raise PermissionDeniedError(
+                            detail=f"Cannot assign to inactive officer (status: {officer.status})"
+                        )
                     direct_assignment_officer_id = create_data["assigned_officer_id"]
                     skip_auto_assignment = True
                     log.info(
@@ -632,39 +621,33 @@ async def create_lead(
         # Phone: Check globally across ALL units (phone must be unique system-wide)
         # Email: Check within same unit only (email can exist in different units)
         
-        # Build phone conditions
-        phone_conditions = [models.Lead.phone == lead_in.phone]
-        if lead_in.phone2:
-            phone_conditions.append(models.Lead.phone == lead_in.phone2)
-            phone_conditions.append(models.Lead.phone2 == lead_in.phone)
-            phone_conditions.append(models.Lead.phone2 == lead_in.phone2)
-
-        # Check phone duplicate GLOBALLY (across all units)
-        global_phone_query = (
-            select(models.Lead)
-            .where(
-                models.Lead.deleted_at.is_(None),  # Exclude soft-deleted
-                or_(*phone_conditions)
-            )
-            .with_for_update()  # Lock to prevent race condition
-        )
-        global_phone_result = await db.execute(global_phone_query)
-        existing_phone_lead = global_phone_result.scalars().first()
+        # ✅ REFACTORED: Use LeadRepository for phone check
+        repo = LeadRepository(db)
+        
+        # Determine check values
+        check_phone = lead_in.phone
+        check_phone2 = lead_in.phone2
+        
+        # Check for conflict
+        existing_phone_lead = await repo.check_phone_conflict(check_phone, check_phone2)
         
         if existing_phone_lead:
-            # Fetch officer info separately (can't use joinedload with FOR UPDATE)
+            # Helper to get officer name
             officer_name = "Chưa phân công"
-            if existing_phone_lead.assigned_officer_id:
-                officer = await db.get(models.User, existing_phone_lead.assigned_officer_id)
-                if officer:
-                    officer_name = officer.full_name or "N/A"
+            if existing_phone_lead.assigned_officer:
+                officer_name = existing_phone_lead.assigned_officer.full_name or "N/A"
             
-            # Get unit name
+            # Helper to get unit name (need to load if not loaded)
             unit_name = "N/A"
             if existing_phone_lead.unit_id:
-                unit = await db.get(models.OrganizationUnit, existing_phone_lead.unit_id)
-                if unit:
-                    unit_name = unit.name
+                # Optimized: Repo should load unit or we fallback
+                # For now assume repo loaded it or we lazy load
+                if existing_phone_lead.unit:
+                     unit_name = existing_phone_lead.unit.name
+                else:
+                     # Fallback minimal query if absolutely needed (avoid if possible)
+                     unit_temp = await db.get(models.OrganizationUnit, existing_phone_lead.unit_id)
+                     if unit_temp: unit_name = unit_temp.name
             
             lead_name = existing_phone_lead.full_name or "N/A"
             lead_phone = existing_phone_lead.phone or "N/A"
@@ -675,24 +658,16 @@ async def create_lead(
 
         # Check email duplicate WITHIN SAME UNIT (if email provided)
         if lead_in.email:
-            email_query = (
-                select(models.Lead)
-                .where(
-                    models.Lead.unit_id == create_data["unit_id"],
-                    models.Lead.deleted_at.is_(None),
-                    func.lower(models.Lead.email) == lead_in.email.lower()
-                )
-                .with_for_update()
-            )
-            email_result = await db.execute(email_query)
-            existing_email_lead = email_result.scalars().first()
-            
-            if existing_email_lead:
+             # ✅ REFACTORED: Use LeadRepository for email check
+             existing_email_lead = await repo.check_email_conflict(
+                 email=lead_in.email, 
+                 unit_id=create_data["unit_id"]
+             )
+             
+             if existing_email_lead:
                 officer_name = "Chưa phân công"
-                if existing_email_lead.assigned_officer_id:
-                    officer = await db.get(models.User, existing_email_lead.assigned_officer_id)
-                    if officer:
-                        officer_name = officer.full_name or "N/A"
+                if existing_email_lead.assigned_officer:
+                    officer_name = existing_email_lead.assigned_officer.full_name or "N/A"
                 
                 lead_name = existing_email_lead.full_name or "N/A"
                 lead_phone = existing_email_lead.phone or "N/A"
@@ -917,15 +892,20 @@ async def update_lead(
     """
     async with db.begin_nested():  # Sử dụng transaction lồng nhau
         try:
-            # Lấy và khóa Lead để cập nhật
-            stmt = (
-                select(models.Lead).where(models.Lead.id == lead_id).with_for_update()
-            )
-            result = await db.execute(stmt)
-            db_lead = result.scalar_one_or_none()
+            # ✅ REFACTORED: Use LeadRepository for locking
+            repo = LeadRepository(db)
+            db_lead = await repo.get_by_id_for_update(lead_id)
 
             if not db_lead:
                 raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found")
+
+            # ✅ FIX: Implement proper permission check (was just pass before)
+            # Admin/Manager can update any lead, Officer can only update their assigned leads
+            if updated_by.role not in (UserRole.ADMIN, UserRole.MANAGER):
+                if db_lead.assigned_officer_id != updated_by.id:
+                    raise PermissionDeniedError(
+                        detail="You are not assigned to this lead."
+                    )
 
             # Lưu trạng thái cũ trước khi thay đổi
             old_state = _get_current_lead_state(db_lead)
@@ -936,20 +916,18 @@ async def update_lead(
             # (Dọn dẹp .strip() đã bị xóa vì Pydantic xử lý)
 
             # Kiểm tra trùng lặp email nếu email được cập nhật (case-insensitive)
+            # Kiểm tra trùng lặp email nếu email được cập nhật (case-insensitive)
             if "email" in update_data and update_data["email"] and (
                 not db_lead.email or update_data["email"].lower() != db_lead.email.lower()
             ):
-                existing_lead_query = (
-                    select(models.Lead)
-                    .options(joinedload(models.Lead.assigned_officer))
-                    .where(
-                        func.lower(models.Lead.email) == update_data["email"].lower(),
-                        models.Lead.unit_id == db_lead.unit_id,  # Trong cùng unit
-                        models.Lead.id != lead_id,  # Loại trừ chính lead này
-                    )
+                # ✅ REFACTORED: Use LeadRepository
+                new_email = update_data["email"]
+                dup_lead = await repo.check_email_conflict(
+                    email=new_email, 
+                    unit_id=db_lead.unit_id,
+                    exclude_id=lead_id
                 )
-                existing_lead_result = await db.execute(existing_lead_query)
-                dup_lead = existing_lead_result.scalars().first()
+                
                 if dup_lead:
                     officer_name = (
                         dup_lead.assigned_officer.full_name 
@@ -1263,32 +1241,29 @@ async def add_consultation(
     """
     async with db.begin_nested():
         try:
-            # ✅ FIX: Row-level lock để prevent race condition
-            # Sử dụng with_for_update() thay vì get_lead_by_id() đơn thuần
-            stmt = (
-                select(models.Lead)
-                .options(
-                    selectinload(models.Lead.assigned_officer),
-                    selectinload(models.Lead.pipeline_stage),
-                    selectinload(models.Lead.consultation_status).selectinload(models.ConsultationStatus.stage),
-                )
-                .where(models.Lead.id == lead_id)
-                .where(models.Lead.deleted_at.is_(None))
-                .with_for_update()  # ROW LOCK - prevents concurrent modifications
-            )
-            result = await db.execute(stmt)
-            lead = result.scalar_one_or_none()
+            # ✅ REFACTORED: Use LeadRepository for locking
+            repo = LeadRepository(db)
+            lead = await repo.get_by_id_for_update(lead_id)
 
             if not lead:
                 raise ResourceNotFoundError(f"Lead with id {lead_id} not found")
+            
+            # ✅ FIX: Check if lead is deleted
+            if lead.deleted_at is not None:
+                raise BadRequest(detail="Cannot add consultation to a deleted lead.")
+            
+            # Note: Relations are not eagerly loaded here. If accessed, explicit refresh needed.
+            
             # Lấy Officer
             officer = await db.get(models.User, officer_id)
             if not officer:
                 raise ResourceNotFoundError(f"Officer with id {officer_id} not found.")
 
-            # Kiểm tra quyền: Officer phải được gán cho Lead này
-            if lead.assigned_officer_id != officer_id:
-                raise PermissionDeniedError(detail="You are not assigned to this lead.")
+            # ✅ FIX: Kiểm tra quyền - Admin có thể thêm consultation cho bất kỳ lead
+            # Officer phải được gán cho Lead này
+            if officer.role != UserRole.ADMIN:
+                if lead.assigned_officer_id != officer_id:
+                    raise PermissionDeniedError(detail="You are not assigned to this lead.")
 
             # Lấy ConsultationStatus mới từ DB
             new_status = await db.get(models.ConsultationStatus, data.status_id)
@@ -1449,6 +1424,11 @@ async def assign_lead_manually(
         try:
             # Lấy Lead và Officer
             lead = await get_lead_by_id(db, lead_id)
+            
+            # ✅ FIX: Explicit deleted check (get_lead_by_id may not always exclude)
+            if lead.deleted_at is not None:
+                raise BadRequest(detail="Cannot assign a deleted lead.")
+            
             officer = await db.get(models.User, officer_id)
 
             # Kiểm tra Officer hợp lệ
@@ -1459,6 +1439,11 @@ async def assign_lead_manually(
             if officer.role != UserRole.OFFICER:
                 raise PermissionDeniedError(
                     detail=f"User with id {officer_id} is not an officer."
+                )
+            # ✅ FIX: Check officer is active
+            if officer.status != "active":
+                raise PermissionDeniedError(
+                    detail=f"Officer with id {officer_id} is not active (status: {officer.status})."
                 )
 
             # Lưu trạng thái cũ
@@ -1629,16 +1614,15 @@ async def delete_consultation(
     async with db.begin_nested():
         try:
             # ✅ FIX: Row-level lock để prevent race condition
-            lead_query = (
-                select(models.Lead)
-                .where(models.Lead.id == lead_id)
-                .where(models.Lead.deleted_at.is_(None))
-                .with_for_update()  # ROW LOCK - prevents concurrent modifications
-            )
-            lead_result = await db.execute(lead_query)
-            lead = lead_result.scalar_one_or_none()
+            # ✅ REFACTORED: Use LeadRepository for locking
+            repo = LeadRepository(db)
+            lead = await repo.get_by_id_for_update(lead_id)
             if not lead:
                 raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found.")
+            
+            # ✅ FIX: Check if lead is deleted
+            if lead.deleted_at is not None:
+                raise BadRequest(detail="Cannot modify consultations for a deleted lead.")
 
             # Lấy Consultation cần xóa
             consultation = await db.get(models.Consultation, consultation_id)
@@ -1653,22 +1637,15 @@ async def delete_consultation(
                 )
 
             # Kiểm tra quyền
-            if current_user.role == UserRole.ADMIN:
-                # Admin có quyền xóa bất kỳ consultation nào
+            if current_user.role in (UserRole.ADMIN, UserRole.MANAGER):
+                # ✅ FIX: Admin và Manager có quyền xóa bất kỳ consultation nào
                 pass
             elif current_user.role == UserRole.OFFICER:
                 # Officer chỉ được xóa consultation mới nhất
                 # Tìm consultation mới nhất của Lead này
-                latest_consultation_query = (
-                    select(models.Consultation)
-                    .where(models.Consultation.lead_id == lead_id)
-                    .order_by(
-                        models.Consultation.consultation_date.desc(),
-                        models.Consultation.id.desc(),
-                    )
-                )
-                latest_consultation_result = await db.execute(latest_consultation_query)
-                latest_consultation = latest_consultation_result.scalars().first()
+                # Officer chỉ được xóa consultation mới nhất
+                # ✅ REFACTORED: Use LeadRepository
+                latest_consultation = await repo.get_latest_consultation(lead_id)
 
                 if not latest_consultation or latest_consultation.id != consultation_id:
                     raise PermissionDeniedError(
@@ -1689,19 +1666,12 @@ async def delete_consultation(
 
             # Xóa consultation
             await db.delete(consultation)
+            await db.flush() # Ensure delete is processed before querying remaining
             log.info("Consultation marked for deletion", consultation_id=consultation_id)
 
             # Tìm consultation gần nhất còn lại để cập nhật trạng thái Lead
-            remaining_consultations_query = (
-                select(models.Consultation)
-                .where(models.Consultation.lead_id == lead.id)
-                .order_by(
-                    models.Consultation.consultation_date.desc(),
-                    models.Consultation.id.desc(),
-                )  # Sắp xếp cả theo ID để ổn định
-            )
-            remaining_consultations_result = await db.execute(remaining_consultations_query)
-            latest_remaining = remaining_consultations_result.scalars().first()
+            # ✅ REFACTORED: Use LeadRepository
+            latest_remaining = await repo.get_latest_consultation(lead_id)
 
             new_status_id = None
             new_stage_id = None
@@ -1854,17 +1824,16 @@ async def update_consultation(
     """
     async with db.begin_nested():
         try:
-            # ✅ FIX: Row-level lock để prevent race condition
-            lead_query = (
-                select(models.Lead)
-                .where(models.Lead.id == lead_id)
-                .where(models.Lead.deleted_at.is_(None))
-                .with_for_update()  # ROW LOCK - prevents concurrent modifications
-            )
-            lead_result = await db.execute(lead_query)
-            lead = lead_result.scalar_one_or_none()
+            # ✅ REFACTORED: Use LeadRepository for locking
+            repo = LeadRepository(db)
+            lead = await repo.get_by_id_for_update(lead_id)
+            
             if not lead:
                 raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found.")
+            
+            # ✅ FIX: Check if lead is deleted (consistent with delete_consultation)
+            if lead.deleted_at is not None:
+                raise BadRequest(detail="Cannot modify consultations for a deleted lead.")
 
             # Lấy Consultation cần update
             consultation = await db.get(models.Consultation, consultation_id)
@@ -1880,16 +1849,8 @@ async def update_consultation(
 
             # ✅ FIX: Single check for latest consultation (eliminates TOCTOU vulnerability)
             # Query once and reuse the result for both permission check and status update
-            latest_consultation_query = (
-                select(models.Consultation)
-                .where(models.Consultation.lead_id == lead_id)
-                .order_by(
-                    models.Consultation.consultation_date.desc(),
-                    models.Consultation.id.desc(),
-                )
-            )
-            latest_consultation_result = await db.execute(latest_consultation_query)
-            latest_consultation = latest_consultation_result.scalars().first()
+            # ✅ REFACTORED: Use LeadRepository
+            latest_consultation = await repo.get_latest_consultation(lead_id)
             is_latest_consultation = (
                 latest_consultation and latest_consultation.id == consultation_id
             )
@@ -2139,6 +2100,10 @@ async def process_officer_action(
             lead = await repo.get_by_id_for_update(lead_id)
             if not lead:
                 raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found.")
+            
+            # ✅ FIX: Check if lead is deleted
+            if lead.deleted_at is not None:
+                raise BadRequest(detail="Cannot process action on a deleted lead.")
 
             # ✅ FIX: Admin/Manager can reassign ANY lead, Officers can only reassign their own
             if not is_admin_or_manager and lead.assigned_officer_id != officer_id:
@@ -2316,25 +2281,28 @@ async def revert_last_status(
     """
     (Admin only) Hoàn tác thay đổi trạng thái cuối cùng của Lead về trạng thái trước đó.
     """
+    # ✅ FIX: Check admin role at service layer
+    if admin_user.role != UserRole.ADMIN:
+        raise PermissionDeniedError(
+            detail="Only admin can revert lead status."
+        )
+    
     # (Pydantic/Form() nên xử lý .strip(), nhưng giữ ở đây để an toàn nếu gọi nội bộ)
     final_reason = reason.strip() if reason else "Admin reverted last status change"
     try:
         async with db.begin_nested():
+            # ✅ SPRINT 5: Import Repository FIRST before usage
+            from app.repositories import LeadRepository
+            
             # Lấy Lead (không cần eager load quá nhiều)
-            lead_query = (
-                select(models.Lead).where(models.Lead.id == lead_id).with_for_update()
-            )
-            lead_result = await db.execute(lead_query)
-            lead = lead_result.scalar_one_or_none()
+            # ✅ REFACTORED: Use LeadRepository for locking
+            repo = LeadRepository(db)
+            lead = await repo.get_by_id_for_update(lead_id)
             if not lead:
                 raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found.")
 
-            # ✅ SPRINT 5: Use Repository for status history lookup
-            from app.repositories import LeadRepository
-            lead_repo = LeadRepository(db)
-            
             # Tìm bản ghi lịch sử gần nhất
-            last_history_entry = await lead_repo.get_last_status_history_entry(lead_id)
+            last_history_entry = await repo.get_last_status_history_entry(lead_id)
 
             if not last_history_entry:
                 raise BadRequest(
@@ -2568,11 +2536,17 @@ async def import_leads_from_file_content(
     initial_stage_id = initial_status_obj.stage_id
     initial_legacy_status = initial_status_obj.legacy_status or "new"
 
-    # Get existing emails to check for duplicates efficiently (case-insensitive)
-    existing_emails_in_db = set()
-    async for email_tuple in await db.stream(select(models.Lead.email)):
-        if email_tuple[0]:  # Only add non-null emails
-            existing_emails_in_db.add(email_tuple[0].lower())
+    # ✅ REFACTORED: Use LeadRepository for batch email check
+    # We no longer stream everything. We extract emails from file first.
+    repo = LeadRepository(db)
+    
+    all_emails_in_file = set()
+    if 'email' in df.columns:
+        # Extract emails, lowercased
+        raw_emails = df['email'].dropna().astype(str).tolist()
+        all_emails_in_file = {e.strip().lower() for e in raw_emails if e.strip()}
+    
+    existing_emails_in_db = await repo.check_batch_email_conflict(list(all_emails_in_file))
     emails_in_current_file = set()
 
     # ✅ FIX: Batch check for existing phones
@@ -2732,18 +2706,14 @@ async def import_leads_from_file_content(
         try:
             for i in range(0, len(leads_to_insert), batch_size):
                 batch = leads_to_insert[i : i + batch_size]
+                
+                if not batch:
+                    continue
 
                 async with db.begin_nested():  # Start nested transaction
-                    # Insert batch
-                    await db.execute(pg_insert(models.Lead), batch)
-
-                    # Get IDs of inserted leads
-                    inserted_emails = [ld["email"] for ld in batch]
-                    query = select(models.Lead.id).where(
-                        models.Lead.email.in_(inserted_emails)
-                    )
-                    result = await db.execute(query)
-                    batch_ids = result.scalars().all()
+                    # Insert batch and get IDs
+                    # ✅ REFACTORED: Use LeadRepository
+                    batch_ids = await repo.bulk_insert_leads(batch)
                     created_lead_ids.extend(batch_ids)
 
                 log.info(
@@ -2921,6 +2891,12 @@ async def delete_lead(
         >>> lead = await delete_lead(db, lead_id=123, deleted_by=admin_user)
         >>> print(lead.deleted_at)  # 2025-11-18 02:30:00+00:00
     """
+    # ✅ FIX: Enforce admin-only at service layer
+    if deleted_by.role != UserRole.ADMIN:
+        raise PermissionDeniedError(
+            detail="Only admin can delete leads."
+        )
+    
     try:
         async with db.begin_nested():
             # Fetch lead (exclude already deleted leads)

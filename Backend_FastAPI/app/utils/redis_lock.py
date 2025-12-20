@@ -51,7 +51,7 @@ async def close_redis_client():
     """Close Redis client (call this in main.py shutdown event)."""
     global _redis_client
     if _redis_client:
-        await _redis_client.close()
+        await _redis_client.aclose()
         log.info("Redis client closed")
         _redis_client = None
 

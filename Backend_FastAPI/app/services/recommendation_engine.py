@@ -1,0 +1,320 @@
+# app/services/recommendation_engine.py
+"""
+Recommendation Engine - Phase 7
+
+Generates actionable recommendations based on KPI performance analysis.
+Rules-based engine that analyzes:
+1. KPI gaps (actual vs target)
+2. Trends (improving, declining, stagnant)
+3. Historical patterns
+4. Industry benchmarks
+
+Returns structured recommendations with priority, action items, and expected impact.
+"""
+import structlog
+from datetime import datetime, timezone, timedelta
+from typing import Any, Dict, List, Optional
+
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app import models
+from app.services import kpi_service
+
+log = structlog.get_logger(__name__)
+
+
+# =============================================================================
+# RECOMMENDATION RULES
+# =============================================================================
+
+class RecommendationType:
+    """Types of recommendations."""
+    INCREASE_ACTIVITY = "increase_activity"
+    IMPROVE_CONVERSION = "improve_conversion"
+    REDUCE_RESPONSE_TIME = "reduce_response_time"
+    FOCUS_HOT_LEADS = "focus_hot_leads"
+    CLEAR_STALE_LEADS = "clear_stale_leads"
+    BALANCE_WORKLOAD = "balance_workload"
+    CELEBRATE_SUCCESS = "celebrate_success"
+    MAINTAIN_MOMENTUM = "maintain_momentum"
+
+
+class RecommendationPriority:
+    """Priority levels for recommendations."""
+    CRITICAL = "critical"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+# Rule thresholds
+THRESHOLDS = {
+    "consultations_gap_critical": 0.5,  # < 50% of target
+    "consultations_gap_warning": 0.8,    # < 80% of target
+    "conversion_rate_low": 10,           # < 10%
+    "conversion_rate_good": 20,          # >= 20%
+    "response_time_critical": 4,         # > 4 hours
+    "response_time_warning": 2,          # > 2 hours
+    "hot_leads_untouched": 3,            # > 3 hot leads without recent activity
+    "stale_leads_threshold": 5,          # > 5 stale leads
+}
+
+
+# =============================================================================
+# RECOMMENDATION GENERATION
+# =============================================================================
+
+async def generate_recommendations(
+    db: AsyncSession,
+    officer_id: int,
+    kpis: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """
+    Generate actionable recommendations based on KPI data.
+    
+    Args:
+        db: Database session
+        officer_id: Officer ID to generate recommendations for
+        kpis: Current KPI data from dashboard
+        
+    Returns:
+        List of recommendation objects with priority, action, and impact
+    """
+    recommendations = []
+    
+    # Get user info
+    user = await db.get(models.User, officer_id)
+    if not user:
+        return recommendations
+    
+    # Rule 1: Consultations below target
+    consultations_today = kpis.get("consultations_today", 0)
+    consultations_target = kpis.get("consultations_target", 10)
+    
+    if consultations_target > 0:
+        ratio = consultations_today / consultations_target
+        
+        if ratio < THRESHOLDS["consultations_gap_critical"]:
+            recommendations.append({
+                "type": RecommendationType.INCREASE_ACTIVITY,
+                "priority": RecommendationPriority.CRITICAL,
+                "title": "Tăng cường hoạt động tư vấn",
+                "message": f"Bạn mới hoàn thành {consultations_today}/{consultations_target} tư vấn hôm nay. "
+                          f"Hãy liên hệ ngay với các lead có điểm cao nhất.",
+                "action": "Xem lead nóng",
+                "action_link": "/leads?filter=hot",
+                "expected_impact": f"Đạt chỉ tiêu {consultations_target} tư vấn/ngày",
+            })
+        elif ratio < THRESHOLDS["consultations_gap_warning"]:
+            recommendations.append({
+                "type": RecommendationType.INCREASE_ACTIVITY,
+                "priority": RecommendationPriority.HIGH,
+                "title": "Gần đạt chỉ tiêu",
+                "message": f"Còn {consultations_target - consultations_today} tư vấn nữa để đạt chỉ tiêu. "
+                          f"Tập trung vào lead có khả năng chuyển đổi cao.",
+                "action": "Xem danh sách lead ưu tiên",
+                "action_link": "/leads?sort=lead_score&order=desc",
+                "expected_impact": "Đạt 100% chỉ tiêu ngày",
+            })
+    
+    # Rule 2: Low conversion rate
+    conversion_rate = kpis.get("conversion_rate", 0)
+    
+    if conversion_rate < THRESHOLDS["conversion_rate_low"]:
+        recommendations.append({
+            "type": RecommendationType.IMPROVE_CONVERSION,
+            "priority": RecommendationPriority.HIGH,
+            "title": "Cải thiện tỷ lệ chuyển đổi",
+            "message": f"Tỷ lệ chuyển đổi hiện tại là {conversion_rate}%, thấp hơn mục tiêu. "
+                      f"Xem lại quy trình tư vấn và nghiên cứu các case thành công.",
+            "action": "Xem lead đã chuyển đổi",
+            "action_link": "/leads?filter=converted",
+            "expected_impact": f"Tăng tỷ lệ chuyển đổi lên {THRESHOLDS['conversion_rate_good']}%",
+        })
+    
+    # Rule 3: Slow response time
+    avg_response_time = kpis.get("avg_response_time", 0)
+    
+    if avg_response_time > THRESHOLDS["response_time_critical"]:
+        recommendations.append({
+            "type": RecommendationType.REDUCE_RESPONSE_TIME,
+            "priority": RecommendationPriority.CRITICAL,
+            "title": "Giảm thời gian phản hồi",
+            "message": f"Thời gian phản hồi trung bình là {avg_response_time}h, quá lâu. "
+                      f"Lead mới cần được liên hệ trong vòng 2 giờ.",
+            "action": "Xem lead mới",
+            "action_link": "/leads?filter=new",
+            "expected_impact": "Tăng tỷ lệ tiếp cận thành công 30%",
+        })
+    elif avg_response_time > THRESHOLDS["response_time_warning"]:
+        recommendations.append({
+            "type": RecommendationType.REDUCE_RESPONSE_TIME,
+            "priority": RecommendationPriority.MEDIUM,
+            "title": "Cải thiện thời gian phản hồi",
+            "message": f"Thời gian phản hồi {avg_response_time}h có thể tốt hơn. "
+                      f"Mục tiêu là dưới 2 giờ.",
+            "action": "Xem lead chưa liên hệ",
+            "action_link": "/leads?filter=no_contact",
+            "expected_impact": "Cải thiện trải nghiệm khách hàng",
+        })
+    
+    # Rule 4: Hot leads need attention
+    hot_leads_count = await _count_hot_leads_needing_attention(db, officer_id)
+    
+    if hot_leads_count > THRESHOLDS["hot_leads_untouched"]:
+        recommendations.append({
+            "type": RecommendationType.FOCUS_HOT_LEADS,
+            "priority": RecommendationPriority.CRITICAL,
+            "title": "Lead nóng cần chú ý",
+            "message": f"Có {hot_leads_count} lead nóng chưa được liên hệ trong 3 ngày qua. "
+                      f"Đây là cơ hội chuyển đổi cao nhất!",
+            "action": "Xem lead nóng",
+            "action_link": "/leads?filter=hot&sort=last_contact",
+            "expected_impact": f"Tăng {hot_leads_count * 2} enrollments tiềm năng",
+        })
+    
+    # Rule 5: Too many stale leads
+    stale_leads_count = await _count_stale_leads(db, officer_id)
+    
+    if stale_leads_count > THRESHOLDS["stale_leads_threshold"]:
+        recommendations.append({
+            "type": RecommendationType.CLEAR_STALE_LEADS,
+            "priority": RecommendationPriority.MEDIUM,
+            "title": "Dọn dẹp lead cũ",
+            "message": f"Có {stale_leads_count} lead không hoạt động hơn 14 ngày. "
+                      f"Xem xét liên hệ lại hoặc chuyển trạng thái để tập trung vào lead tiềm năng.",
+            "action": "Xem lead cũ",
+            "action_link": "/leads?filter=stale",
+            "expected_impact": "Workload gọn gàng, tập trung hơn",
+        })
+    
+    # Rule 6: Success celebration (positive reinforcement)
+    if consultations_target > 0 and consultations_today >= consultations_target:
+        recommendations.append({
+            "type": RecommendationType.CELEBRATE_SUCCESS,
+            "priority": RecommendationPriority.LOW,
+            "title": "🎉 Hoàn thành chỉ tiêu!",
+            "message": f"Tuyệt vời! Bạn đã hoàn thành {consultations_today}/{consultations_target} tư vấn. "
+                      f"Tiếp tục duy trì phong độ!",
+            "action": None,
+            "action_link": None,
+            "expected_impact": "Duy trì hiệu suất cao",
+        })
+    
+    # Rule 7: Conversion rate excellent
+    if conversion_rate >= THRESHOLDS["conversion_rate_good"]:
+        recommendations.append({
+            "type": RecommendationType.MAINTAIN_MOMENTUM,
+            "priority": RecommendationPriority.LOW,
+            "title": "✨ Tỷ lệ chuyển đổi xuất sắc",
+            "message": f"Tỷ lệ chuyển đổi {conversion_rate}% rất tốt! "
+                      f"Chia sẻ kinh nghiệm với đồng nghiệp.",
+            "action": None,
+            "action_link": None,
+            "expected_impact": "Lan tỏa best practices",
+        })
+    
+    # Sort by priority
+    priority_order = {
+        RecommendationPriority.CRITICAL: 0,
+        RecommendationPriority.HIGH: 1,
+        RecommendationPriority.MEDIUM: 2,
+        RecommendationPriority.LOW: 3,
+    }
+    recommendations.sort(key=lambda r: priority_order.get(r["priority"], 99))
+    
+    log.info(
+        "Generated recommendations",
+        officer_id=officer_id,
+        count=len(recommendations),
+    )
+    
+    return recommendations
+
+
+# =============================================================================
+# HELPER QUERIES
+# =============================================================================
+
+async def _count_hot_leads_needing_attention(
+    db: AsyncSession,
+    officer_id: int,
+    days_threshold: int = 3
+) -> int:
+    """Count hot leads that haven't been contacted in X days."""
+    threshold_date = datetime.now(timezone.utc) - timedelta(days=days_threshold)
+    
+    query = (
+        select(func.count(models.Lead.id))
+        .where(
+            models.Lead.assigned_officer_id == officer_id,
+            models.Lead.is_hot_lead == True,
+            models.Lead.deleted_at.is_(None),
+            models.Lead.last_consultation_at < threshold_date,
+        )
+    )
+    result = await db.execute(query)
+    return result.scalar() or 0
+
+
+async def _count_stale_leads(
+    db: AsyncSession,
+    officer_id: int,
+    days_threshold: int = 14
+) -> int:
+    """Count leads with no activity in X days."""
+    threshold_date = datetime.now(timezone.utc) - timedelta(days=days_threshold)
+    
+    query = (
+        select(func.count(models.Lead.id))
+        .join(
+            models.ConsultationStatus,
+            models.Lead.consultation_status_id == models.ConsultationStatus.id,
+            isouter=True
+        )
+        .where(
+            models.Lead.assigned_officer_id == officer_id,
+            models.Lead.deleted_at.is_(None),
+            models.Lead.updated_at < threshold_date,
+            # Only non-final status leads are considered stale
+            models.ConsultationStatus.is_final_status == False,
+        )
+    )
+    result = await db.execute(query)
+    return result.scalar() or 0
+
+
+# =============================================================================
+# API INTEGRATION
+# =============================================================================
+
+async def get_officer_recommendations(
+    db: AsyncSession,
+    officer_id: int,
+    limit: int = 5,
+) -> List[Dict[str, Any]]:
+    """
+    Get recommendations for an officer, intended for dashboard display.
+    
+    Args:
+        db: Database session
+        officer_id: Officer ID
+        limit: Maximum recommendations to return
+        
+    Returns:
+        List of recommendation objects
+    """
+    # First, get current KPIs
+    from app.services.officer_service import get_enhanced_dashboard_stats
+    
+    try:
+        stats = await get_enhanced_dashboard_stats(db, officer_id)
+        kpis = stats.get("kpis", {})
+    except Exception as e:
+        log.warning(f"Could not fetch KPIs for recommendations: {e}")
+        kpis = {}
+    
+    recommendations = await generate_recommendations(db, officer_id, kpis)
+    
+    return recommendations[:limit]

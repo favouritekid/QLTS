@@ -1539,3 +1539,38 @@ async def get_programs_by_unit_tree(
         search_term=search_term,
         limit=20
     )
+
+
+# =============================================================================
+# PROGRAM OFFERINGS (Flat List for Dropdowns)
+# =============================================================================
+
+async def get_all_program_offerings(
+    db: AsyncSession,
+    is_active: Optional[bool] = None,
+    skip: int = 0,
+    limit: int = 1000,
+) -> List[models.ProgramOffering]:
+    """
+    Get all program offerings as flat list for dropdowns.
+    
+    Uses OrganizationRepository with eager loading for program name display.
+    
+    Args:
+        db: Database session
+        is_active: Filter by active status (None = all)
+        skip: Offset for pagination
+        limit: Maximum results
+        
+    Returns:
+        List of ProgramOffering with program loaded
+    """
+    from app.repositories import OrganizationRepository
+    
+    repo = OrganizationRepository(db)
+    return await repo.get_all_offerings(
+        is_active=is_active,
+        skip=skip,
+        limit=limit
+    )
+
