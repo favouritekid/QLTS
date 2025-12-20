@@ -1,0 +1,295 @@
+# tests/integration/services/conftest.py
+"""
+Fixtures for service layer integration tests.
+
+These fixtures provide real database objects for testing service functions directly
+without going through the API layer.
+"""
+import logging
+from datetime import datetime, timezone
+
+import pytest
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app import models
+from app.database import AsyncSessionLocal
+from app.security import get_password_hash
+from app.config import settings
+
+# Import shared constants
+try:
+    from tests.fixtures.constants import (
+        TestUsers,
+        TestOrgData,
+        TestPipelineData,
+        TestLeadData,
+    )
+except ImportError:
+    logging.warning("Could not import constants from tests.fixtures.constants")
+
+log = logging.getLogger(__name__)
+
+
+# =============================================================================
+# DATABASE SESSION FIXTURE
+# =============================================================================
+
+@pytest_asyncio.fixture
+async def db(setup_test_database) -> AsyncSession:
+    """
+    Provide a database session for service integration tests.
+    
+    This fixture:
+    1. Depends on setup_test_database to ensure schema is ready
+    2. Creates a new AsyncSession for the test
+    3. Yields the session for test use
+    4. Closes the session after test completes
+    """
+    async with AsyncSessionLocal() as session:
+        yield session
+
+
+# =============================================================================
+# USER FIXTURES FOR SERVICE TESTS
+# =============================================================================
+
+@pytest_asyncio.fixture
+async def admin_user(db: AsyncSession) -> models.User:
+    """Create an admin user directly in database."""
+    user = models.User(
+        username="service_test_admin",
+        email="service_admin@test.com",
+        password_hash=get_password_hash("AdminPass123!"),
+        role="admin",
+        status="active",
+        full_name="Service Test Admin"
+    )
+    db.add(user)
+    await db.flush()
+    await db.refresh(user)
+    return user
+
+
+@pytest_asyncio.fixture
+async def officer_user(db: AsyncSession, seeded_dependencies: dict) -> models.User:
+    """Create an officer user assigned to a unit."""
+    user = models.User(
+        username="service_test_officer",
+        email="service_officer@test.com",
+        password_hash=get_password_hash("OfficerPass123!"),
+        role="officer",
+        status="active",
+        full_name="Service Test Officer",
+        unit_id=seeded_dependencies["unit_id"]
+    )
+    db.add(user)
+    await db.flush()
+    await db.refresh(user)
+    return user
+
+
+@pytest_asyncio.fixture
+async def manager_user(db: AsyncSession, seeded_dependencies: dict) -> models.User:
+    """Create a manager user assigned to a unit."""
+    user = models.User(
+        username="service_test_manager",
+        email="service_manager@test.com",
+        password_hash=get_password_hash("ManagerPass123!"),
+        role="manager",
+        status="active",
+        full_name="Service Test Manager",
+        unit_id=seeded_dependencies["unit_id"]
+    )
+    db.add(user)
+    await db.flush()
+    await db.refresh(user)
+    return user
+
+
+@pytest_asyncio.fixture
+async def regular_user(db: AsyncSession) -> models.User:
+    """Create a regular user without special role."""
+    user = models.User(
+        username="service_test_user",
+        email="service_user@test.com",
+        password_hash=get_password_hash("UserPass123!"),
+        role="user",
+        status="active",
+        full_name="Service Test User"
+    )
+    db.add(user)
+    await db.flush()
+    await db.refresh(user)
+    return user
+
+
+# =============================================================================
+# LEAD DEPENDENCIES FIXTURE
+# =============================================================================
+
+@pytest_asyncio.fixture
+async def seeded_dependencies(db: AsyncSession) -> dict:
+    """
+    Seed required dependencies for Lead tests: Unit, Pipeline Stages, Statuses.
+    
+    This is a lighter version that uses the same db session as the test.
+    """
+    # Organization Unit - use correct field names
+    unit = models.OrganizationUnit(
+        id=1001,
+        name="Service Test Unit",
+        type="department"  # Field is 'type', not 'code' or 'unit_type'
+    )
+    db.add(unit)
+    
+    # Pipeline Stage
+    stage = models.PipelineStage(
+        id="SERVICE_TEST_STAGE",
+        name="Service Test Stage",
+        order=10
+    )
+    db.add(stage)
+    
+    # Initial Status (system default)
+    initial_status = models.ConsultationStatus(
+        id=settings.DEFAULT_INITIAL_LEAD_STATUS_ID,
+        name="New Lead (Test)",
+        color_code="#0000FF",
+        stage_id="SERVICE_TEST_STAGE"
+    )
+    db.add(initial_status)
+    
+    # Additional status for transitions
+    status_contacted = models.ConsultationStatus(
+        id="CONTACTED_TEST",
+        name="Contacted (Test)",
+        color_code="#00FF00",
+        stage_id="SERVICE_TEST_STAGE",
+        updates_pipeline=True
+    )
+    db.add(status_contacted)
+    
+    # Lost status
+    lost_stage = models.PipelineStage(
+        id="LOST_TEST_STAGE",
+        name="Lost Stage (Test)",
+        order=999
+    )
+    db.add(lost_stage)
+    
+    lost_status = models.ConsultationStatus(
+        id=settings.DEFAULT_LOST_LEAD_STATUS_ID,
+        name="Lost (Test)",
+        color_code="#FF0000",
+        stage_id="LOST_TEST_STAGE"
+    )
+    db.add(lost_status)
+    
+    await db.flush()
+    
+    return {
+        "unit_id": unit.id,
+        "stage_id": stage.id,
+        "initial_status_id": initial_status.id,
+        "contacted_status_id": status_contacted.id,
+        "lost_status_id": lost_status.id,
+    }
+
+
+# =============================================================================
+# LEAD FIXTURES
+# =============================================================================
+
+@pytest_asyncio.fixture
+async def seeded_lead(
+    db: AsyncSession, 
+    seeded_dependencies: dict, 
+    officer_user: models.User
+) -> models.Lead:
+    """Create a lead assigned to the officer user."""
+    lead = models.Lead(
+        full_name="Service Test Lead",
+        phone="0909111222",
+        email="service_lead@test.com",
+        source="Website",
+        unit_id=seeded_dependencies["unit_id"],
+        status=seeded_dependencies["initial_status_id"],
+        consultation_status_id=seeded_dependencies["initial_status_id"],
+        pipeline_stage_id=seeded_dependencies["stage_id"],
+        assigned_officer_id=officer_user.id,
+        assigned_at=datetime.now(timezone.utc),
+    )
+    db.add(lead)
+    await db.flush()
+    await db.refresh(lead)
+    
+    # Add assignment log
+    assignment_log = models.AssignmentLog(
+        lead_id=lead.id,
+        officer_id=officer_user.id,
+        method="fixture_setup",
+        reason="Assigned during test setup",
+        timestamp=datetime.now(timezone.utc)
+    )
+    db.add(assignment_log)
+    await db.flush()
+    
+    return lead
+
+
+@pytest_asyncio.fixture
+async def unassigned_lead(
+    db: AsyncSession, 
+    seeded_dependencies: dict
+) -> models.Lead:
+    """Create an unassigned lead."""
+    lead = models.Lead(
+        full_name="Unassigned Test Lead",
+        phone="0909333444",
+        email="unassigned_lead@test.com",
+        source="Facebook",
+        unit_id=seeded_dependencies["unit_id"],
+        status=seeded_dependencies["initial_status_id"],
+        consultation_status_id=seeded_dependencies["initial_status_id"],
+        pipeline_stage_id=seeded_dependencies["stage_id"],
+        assigned_officer_id=None,
+        assigned_at=None,
+    )
+    db.add(lead)
+    await db.flush()
+    await db.refresh(lead)
+    return lead
+
+
+# =============================================================================
+# HELPER FIXTURES
+# =============================================================================
+
+@pytest_asyncio.fixture
+async def multiple_leads(
+    db: AsyncSession,
+    seeded_dependencies: dict,
+    officer_user: models.User
+) -> list:
+    """Create multiple leads for bulk operation tests."""
+    leads = []
+    for i in range(5):
+        lead = models.Lead(
+            full_name=f"Bulk Test Lead {i+1}",
+            phone=f"090900000{i}",
+            email=f"bulk_lead_{i}@test.com",
+            source="Import",
+            unit_id=seeded_dependencies["unit_id"],
+            status=seeded_dependencies["initial_status_id"],
+            consultation_status_id=seeded_dependencies["initial_status_id"],
+            pipeline_stage_id=seeded_dependencies["stage_id"],
+        )
+        db.add(lead)
+        leads.append(lead)
+    
+    await db.flush()
+    for lead in leads:
+        await db.refresh(lead)
+    
+    return leads

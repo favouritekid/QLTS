@@ -675,7 +675,10 @@ class LeadRepository(BaseRepository[models.Lead]):
             
         query = (
             select(models.Lead)
-            .options(selectinload(models.Lead.assigned_officer))
+            .options(
+                selectinload(models.Lead.assigned_officer),
+                selectinload(models.Lead.unit)  # ✅ FIX MissingGreenlet: Eager load unit for error message
+            )
             .where(
                 or_(*conditions),
                 models.Lead.deleted_at.is_(None)
