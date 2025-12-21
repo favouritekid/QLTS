@@ -249,6 +249,10 @@ class PermissionDeniedError(BaseAppException):
     error_code = "PERMISSION_DENIED"
 
 
+# Alias for convenience (Level-specific IDOR checks)
+ForbiddenError = PermissionDeniedError
+
+
 # ============================================================================
 # SERVICE LAYER EXCEPTIONS (500)
 # ============================================================================

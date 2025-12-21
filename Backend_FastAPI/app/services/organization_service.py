@@ -11,20 +11,19 @@ Handles:
 """
 # ✅ REMOVED (Priority 2): import asyncio (no longer needed - using redis_distributed_lock)
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Callable, List, Optional, Tuple  # ✅ ADD Callable, Tuple for transaction pattern
 
 import structlog
-from sqlalchemy import select, text, update
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-
+from sqlalchemy.ext.asyncio import AsyncSession
 from .. import models, schemas
 from ..config import settings
 from ..database import safe_redis_delete, safe_redis_get, safe_redis_set, redis_distributed_lock
+from ..repositories import OrganizationRepository
 from ..socket_manager import emit_to_all
-from ..utils.exceptions import BadRequest, DuplicateResourceError, ResourceNotFoundError
+from ..utils.exceptions import BadRequest, DuplicateResourceError, ForbiddenError, ResourceNotFoundError
 
 log = structlog.get_logger(__name__)
 
@@ -131,7 +130,7 @@ async def emit_organization_updated(
                 "operation": operation,
                 "resource_id": resource_id,
                 "resource_name": resource_name,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
         )
         log.info(
@@ -142,6 +141,31 @@ async def emit_organization_updated(
         )
     except Exception as e:
         log.error("Failed to emit organization update", error=str(e))
+
+
+# =============================================================================
+# ACCESS CONTROL HELPERS (IDOR PROTECTION)
+# =============================================================================
+
+async def _check_unit_access(
+    db: AsyncSession,
+    unit_id: int,
+    current_user: models.User,
+    allow_read_only: bool = False
+) -> models.OrganizationUnit:
+    """
+    INTERNAL: Rigorous unit-level access check (IDOR protection).
+    
+    Ensures that current_user has permission to view/modify the unit_id.
+    Standardized across all service operations.
+    """
+    from app.core import deps
+    return await deps.get_organizational_unit_for_user(
+        unit_id=unit_id,
+        db=db,
+        current_user=current_user,
+        allow_read_only=allow_read_only
+    )
 
 
 # =============================================================================
@@ -163,8 +187,6 @@ async def check_duplicate_unit_name(
     the "Zombie Data Problem" where soft-deleted units prevent
     creating new units with the same name.
     """
-    from app.repositories import OrganizationRepository
-    
     repo = OrganizationRepository(db)
     existing = await repo.check_duplicate_name(name, parent_id, exclude_unit_id)
 
@@ -184,8 +206,6 @@ async def _get_user_counts_by_unit(db: AsyncSession) -> dict:
     Returns:
         Dict mapping unit_id -> user_count
     """
-    from app.repositories import OrganizationRepository
-    
     repo = OrganizationRepository(db)
     return await repo.get_user_counts_by_unit()
 
@@ -256,8 +276,6 @@ async def get_all_organization_units(db: AsyncSession) -> List[dict]:
         # (moved to module level for OrganizationRepository import)
 
         # ✅ SPRINT 3 REFACTORED: Use Repository for tree loading
-        from app.repositories import OrganizationRepository
-        
         repo = OrganizationRepository(db)
         root_units = await repo.get_tree_with_programs(depth=9)
 
@@ -301,8 +319,6 @@ async def get_organization_unit_by_id(
     
     ✅ SPRINT 3 REFACTORED: Now uses OrganizationRepository for data access.
     """
-    from app.repositories import OrganizationRepository
-    
     repo = OrganizationRepository(db)
     unit = await repo.get_by_id_full(unit_id)
     
@@ -315,10 +331,13 @@ async def get_organization_unit_by_id(
 
 async def create_organization_unit(
     db: AsyncSession,
-    unit_in: schemas.OrganizationUnitCreate
+    unit_in: schemas.OrganizationUnitCreate,
+    current_user: models.User
 ) -> Tuple[models.OrganizationUnit, Callable]:
     """
     Create a new organization unit.
+
+    ✅ IDOR: Verify parent unit access.
 
     IMPORTANT: This function does NOT commit the transaction.
     Router must call db.commit() and then execute the returned callback.
@@ -327,12 +346,17 @@ async def create_organization_unit(
         Tuple of (organization_unit, post_commit_callback)
     """
     try:
+        # ✅ IDOR: If parent is specified, must have access to it
+        if unit_in.parent_id:
+            await _check_unit_access(db, unit_in.parent_id, current_user)
+
         # Check duplicate name
         await check_duplicate_unit_name(db, unit_in.name, unit_in.parent_id)
 
         # Verify parent exists if specified
         if unit_in.parent_id:
-            parent_unit = await db.get(models.OrganizationUnit, unit_in.parent_id)
+            repo = OrganizationRepository(db)
+            parent_unit = await repo.get_by_id(unit_in.parent_id)
             if not parent_unit:
                 raise ResourceNotFoundError(
                     detail=f"Parent unit with id {unit_in.parent_id} not found."
@@ -397,8 +421,6 @@ async def check_circular_dependency(
         )
 
     # ✅ SPRINT 3 REFACTORED: Use Repository for cycle detection
-    from app.repositories import OrganizationRepository
-    
     repo = OrganizationRepository(db)
     found_cycle = await repo.check_cycle_in_hierarchy(unit_id, new_parent_id)
 
@@ -412,10 +434,13 @@ async def check_circular_dependency(
 async def update_organization_unit(
     db: AsyncSession,
     unit_id: int,
-    unit_in: schemas.OrganizationUnitUpdate
+    unit_in: schemas.OrganizationUnitUpdate,
+    current_user: models.User
 ) -> Tuple[models.OrganizationUnit, Callable]:
     """
     Update an organization unit.
+
+    ✅ IDOR: Verify access to target unit and new parent.
 
     IMPORTANT: This function does NOT commit the transaction.
     Router must call db.commit() and then execute the returned callback.
@@ -425,6 +450,10 @@ async def update_organization_unit(
     """
     try:
         db_unit = await get_organization_unit_by_id(db, unit_id)
+        
+        # ✅ IDOR: Must have access to target unit
+        await _check_unit_access(db, unit_id, current_user)
+
         update_data = unit_in.model_dump(exclude_unset=True)
 
         # Check duplicate name if being changed
@@ -439,11 +468,15 @@ async def update_organization_unit(
         if "parent_id" in update_data:
             new_parent_id = update_data["parent_id"]
             if new_parent_id is not None:
+                # ✅ IDOR: Must have access to new parent
+                await _check_unit_access(db, new_parent_id, current_user)
+
                 # Check for circular dependency (includes self-parent check)
                 await check_circular_dependency(db, unit_id, new_parent_id)
 
                 # Verify parent exists
-                parent_unit = await db.get(models.OrganizationUnit, new_parent_id)
+                repo = OrganizationRepository(db)
+                parent_unit = await repo.get_by_id(new_parent_id)
                 if not parent_unit:
                     raise ResourceNotFoundError(
                         detail=f"Parent unit with id {new_parent_id} not found."
@@ -480,9 +513,15 @@ async def update_organization_unit(
         raise
 
 
-async def delete_organization_unit(db: AsyncSession, unit_id: int) -> Tuple[None, Callable]:
+async def delete_organization_unit(
+    db: AsyncSession, 
+    unit_id: int,
+    current_user: models.User
+) -> Tuple[None, Callable]:
     """
     Soft delete an organization unit.
+
+    ✅ IDOR: Verify access to target unit.
 
     IMPORTANT: This function does NOT commit the transaction.
     Router must call db.commit() and then execute the returned callback.
@@ -497,9 +536,10 @@ async def delete_organization_unit(db: AsyncSession, unit_id: int) -> Tuple[None
         db_unit = await get_organization_unit_by_id(db, unit_id)
         unit_name = db_unit.name
 
+        # ✅ IDOR: Must have access to target unit
+        await _check_unit_access(db, unit_id, current_user)
+
         # ✅ SPRINT 3 REFACTORED: Use Repository for validation checks
-        from app.repositories import OrganizationRepository
-        
         repo = OrganizationRepository(db)
         
         # Check counts via repository
@@ -563,8 +603,6 @@ async def get_major_program_by_id(
     
     ✅ SPRINT 3 REFACTORED: Now uses OrganizationRepository for data access.
     """
-    from app.repositories import OrganizationRepository
-    
     repo = OrganizationRepository(db)
     program = await repo.get_major_program_by_id_full(program_id)
     
@@ -577,10 +615,13 @@ async def get_major_program_by_id(
 
 async def create_major_program(
     db: AsyncSession,
-    program_in: schemas.MajorProgramCreate
+    program_in: schemas.MajorProgramCreate,
+    current_user: models.User
 ) -> Tuple[models.MajorProgram, Callable]:
     """
     Create a new major program.
+
+    ✅ IDOR: Verify access to unit_id.
 
     ✅ SPRINT 3 REFACTORED: Uses OrganizationRepository for duplicate check.
     
@@ -590,9 +631,10 @@ async def create_major_program(
     Returns:
         Tuple of (major_program, post_commit_callback)
     """
-    from app.repositories import OrganizationRepository
-    
     try:
+        # ✅ IDOR: Must have access to unit_id
+        await _check_unit_access(db, program_in.unit_id, current_user)
+
         repo = OrganizationRepository(db)
         
         # Check duplicate code via repository
@@ -603,7 +645,7 @@ async def create_major_program(
             )
 
         # Verify unit exists
-        unit = await db.get(models.OrganizationUnit, program_in.unit_id)
+        unit = await repo.get_by_id(program_in.unit_id)
         if not unit:
             raise ResourceNotFoundError(
                 detail=f"Organization unit with id {program_in.unit_id} not found."
@@ -650,10 +692,13 @@ async def create_major_program(
 async def update_major_program(
     db: AsyncSession,
     program_id: int,
-    program_in: schemas.MajorProgramUpdate
+    program_in: schemas.MajorProgramUpdate,
+    current_user: models.User
 ) -> Tuple[models.MajorProgram, Callable]:
     """
     Update a major program. Note: code cannot be updated.
+
+    ✅ IDOR: Verify access to program's unit.
 
     IMPORTANT: This function does NOT commit the transaction.
     Router must call db.commit() and then execute the returned callback.
@@ -663,6 +708,10 @@ async def update_major_program(
     """
     try:
         db_program = await get_major_program_by_id(db, program_id)
+        
+        # ✅ IDOR: Must have access to unit managing this program
+        await _check_unit_access(db, db_program.unit_id, current_user)
+
         update_data = program_in.model_dump(exclude_unset=True)
 
         # Code cannot be updated (business rule)
@@ -702,9 +751,15 @@ async def update_major_program(
         raise
 
 
-async def delete_major_program(db: AsyncSession, program_id: int) -> Tuple[None, Callable]:
+async def delete_major_program(
+    db: AsyncSession, 
+    program_id: int,
+    current_user: models.User
+) -> Tuple[None, Callable]:
     """
     Soft delete a Major Program and CASCADE soft delete to all its Program Offerings.
+
+    ✅ IDOR: Verify access to program's unit.
 
     IMPORTANT: This function does NOT commit the transaction.
     Router must call db.commit() and then execute the returned callback.
@@ -717,6 +772,10 @@ async def delete_major_program(db: AsyncSession, program_id: int) -> Tuple[None,
     try:
         # 1. Kiểm tra tồn tại (để lấy tên log và confirm ID hợp lệ)
         db_program = await get_major_program_by_id(db, program_id)
+        
+        # ✅ IDOR: Must have access to unit managing this program
+        await _check_unit_access(db, db_program.unit_id, current_user)
+
         program_name = db_program.name
 
         # 2. Thực hiện Soft Delete (Set is_active = False)
@@ -779,8 +838,6 @@ async def get_program_offering_by_id(
     
     ✅ SPRINT 3 REFACTORED: Now uses OrganizationRepository for data access.
     """
-    from app.repositories import OrganizationRepository
-    
     repo = OrganizationRepository(db)
     offering = await repo.get_offering_by_id_full(offering_id)
     
@@ -793,10 +850,13 @@ async def get_program_offering_by_id(
 
 async def create_program_offering(
     db: AsyncSession,
-    offering_in: schemas.ProgramOfferingCreate
+    offering_in: schemas.ProgramOfferingCreate,
+    current_user: models.User
 ) -> Tuple[models.ProgramOffering, Callable]:
     """
     Create a new program offering.
+
+    ✅ IDOR: Verify access to program's unit.
 
     ✅ SPRINT 3 REFACTORED: Uses OrganizationRepository for duplicate check.
     
@@ -806,17 +866,18 @@ async def create_program_offering(
     Returns:
         Tuple of (program_offering, post_commit_callback)
     """
-    from app.repositories import OrganizationRepository
-    
     try:
         repo = OrganizationRepository(db)
         
         # Verify program exists
-        program = await db.get(models.MajorProgram, offering_in.program_id)
+        program = await repo.get_major_program_by_id(offering_in.program_id)
         if not program:
             raise ResourceNotFoundError(
                 detail=f"Major program with id {offering_in.program_id} not found."
             )
+
+        # ✅ IDOR: Must have access to unit managing this program
+        await _check_unit_access(db, program.unit_id, current_user)
 
         # Check duplicate (program_id, offering_type) via repository
         existing = await repo.check_duplicate_offering(
@@ -866,10 +927,13 @@ async def create_program_offering(
 async def update_program_offering(
     db: AsyncSession,
     offering_id: int,
-    offering_in: schemas.ProgramOfferingUpdate
+    offering_in: schemas.ProgramOfferingUpdate,
+    current_user: models.User
 ) -> Tuple[models.ProgramOffering, Callable]:
     """
     Update a program offering.
+
+    ✅ IDOR: Verify access to program's unit.
 
     IMPORTANT: This function does NOT commit the transaction.
     Router must call db.commit() and then execute the returned callback.
@@ -879,12 +943,15 @@ async def update_program_offering(
     """
     try:
         db_offering = await get_program_offering_by_id(db, offering_id)
+        
+        # ✅ IDOR: Must have access to unit managing this program
+        program = await get_major_program_by_id(db, db_offering.program_id)
+        await _check_unit_access(db, program.unit_id, current_user)
+
         update_data = offering_in.model_dump(exclude_unset=True)
 
         # ✅ SPRINT 3 REFACTORED: Use Repository for duplicate check
         if "offering_type" in update_data and update_data["offering_type"] != db_offering.offering_type:
-            from app.repositories import OrganizationRepository
-            
             repo = OrganizationRepository(db)
             existing = await repo.check_duplicate_offering(
                 db_offering.program_id,
@@ -928,9 +995,15 @@ async def update_program_offering(
         raise
 
 
-async def delete_program_offering(db: AsyncSession, offering_id: int) -> Tuple[None, Callable]:
+async def delete_program_offering(
+    db: AsyncSession, 
+    offering_id: int,
+    current_user: models.User
+) -> Tuple[None, Callable]:
     """
     Soft delete a program offering.
+
+    ✅ IDOR: Verify access to program's unit.
 
     IMPORTANT: This function does NOT commit the transaction.
     Router must call db.commit() and then execute the returned callback.
@@ -942,11 +1015,26 @@ async def delete_program_offering(db: AsyncSession, offering_id: int) -> Tuple[N
     """
     try:
         db_offering = await get_program_offering_by_id(db, offering_id)
+        
+        # ✅ IDOR: Must have access to unit managing this program
+        program = await get_major_program_by_id(db, db_offering.program_id)
+        await _check_unit_access(db, program.unit_id, current_user)
+
         offering_name = db_offering.offering_type
 
         # Soft delete
         db_offering.is_active = False
         db.add(db_offering)
+
+        # ✅ CASCADE: Soft delete related academic info
+        from sqlalchemy import update
+        stmt_academic = (
+            update(models.OfferingAcademicInfo)
+            .where(models.OfferingAcademicInfo.offering_id == offering_id)
+            .values(is_deleted=True, updated_at=datetime.now(timezone.utc))
+            .execution_options(synchronize_session=False)
+        )
+        await db.execute(stmt_academic)
 
         # ✅ TRANSACTION FIX: Flush instead of commit
         await db.flush()
@@ -980,7 +1068,8 @@ async def get_academic_info_by_id(
     academic_info_id: int
 ) -> models.OfferingAcademicInfo:
     """Get academic info by ID."""
-    academic_info = await db.get(models.OfferingAcademicInfo, academic_info_id)
+    repo = OrganizationRepository(db)
+    academic_info = await repo.get_academic_info_by_id(academic_info_id)
     if not academic_info:
         raise ResourceNotFoundError(
             detail=f"Academic info with id {academic_info_id} not found."
@@ -998,8 +1087,6 @@ async def get_academic_info_by_offering_and_year(
     
     ✅ SPRINT 3 REFACTORED: Now uses OrganizationRepository for data access.
     """
-    from app.repositories import OrganizationRepository
-    
     repo = OrganizationRepository(db)
     return await repo.get_academic_info_by_offering_and_year(offering_id, academic_year)
 
@@ -1013,10 +1100,8 @@ async def get_current_academic_info(
     
     ✅ SPRINT 3 REFACTORED: Now uses OrganizationRepository for data access.
     """
-    from app.repositories import OrganizationRepository
-    
     repo = OrganizationRepository(db)
-    current_year = datetime.now().year
+    current_year = datetime.now(timezone.utc).year
     return await repo.get_current_academic_info(offering_id, current_year)
 
 
@@ -1038,8 +1123,6 @@ async def get_academic_info_history(
     Returns:
         List of academic info records ordered by academic_year descending
     """
-    from app.repositories import OrganizationRepository
-    
     repo = OrganizationRepository(db)
     return await repo.get_academic_info_history(offering_id, published_only)
 
@@ -1047,10 +1130,13 @@ async def get_academic_info_history(
 async def create_academic_info(
     db: AsyncSession,
     academic_info_in: schemas.OfferingAcademicInfoCreate,
+    current_user: models.User,
     created_by_user_id: Optional[int] = None
 ) -> Tuple[models.OfferingAcademicInfo, Callable]:
     """
     Create new academic info for an offering.
+
+    ✅ IDOR: Verify access to offering's unit.
 
     IMPORTANT: This function does NOT commit the transaction.
     Router must call db.commit() and then execute the returned callback.
@@ -1060,11 +1146,16 @@ async def create_academic_info(
     """
     try:
         # Verify offering exists
-        offering = await db.get(models.ProgramOffering, academic_info_in.offering_id)
+        repo = OrganizationRepository(db)
+        offering = await repo.get_offering_by_id(academic_info_in.offering_id)
         if not offering:
             raise ResourceNotFoundError(
                 detail=f"Program offering with id {academic_info_in.offering_id} not found."
             )
+
+        # ✅ IDOR: Must have access to unit managing this offering
+        program = await get_major_program_by_id(db, offering.program_id)
+        await _check_unit_access(db, program.unit_id, current_user)
 
         # Check duplicate (offering_id, academic_year)
         existing = await get_academic_info_by_offering_and_year(
@@ -1115,10 +1206,13 @@ async def update_academic_info(
     db: AsyncSession,
     academic_info_id: int,
     academic_info_in: schemas.OfferingAcademicInfoUpdate,
+    current_user: models.User,
     updated_by_user_id: Optional[int] = None
 ) -> Tuple[models.OfferingAcademicInfo, Callable]:
     """
     Update existing academic info.
+
+    ✅ IDOR: Verify access to offering's unit.
 
     IMPORTANT: This function does NOT commit the transaction.
     Router must call db.commit() and then execute the returned callback.
@@ -1131,10 +1225,16 @@ async def update_academic_info(
     """
     try:
         db_academic_info = await get_academic_info_by_id(db, academic_info_id)
+        
+        # ✅ IDOR: Must have access to unit managing this offering
+        offering = await get_program_offering_by_id(db, db_academic_info.offering_id)
+        program = await get_major_program_by_id(db, offering.program_id)
+        await _check_unit_access(db, program.unit_id, current_user)
+
         update_data = academic_info_in.model_dump(exclude_unset=True)
 
         # ✅ FIX: Prevent editing financial data for past academic years
-        current_year = datetime.now().year
+        current_year = datetime.now(timezone.utc).year
         if db_academic_info.academic_year < current_year:
             # Check if trying to modify tuition fee
             if "tuition_fee_per_year" in update_data:
@@ -1185,7 +1285,11 @@ async def update_academic_info(
         raise
 
 
-async def delete_academic_info(db: AsyncSession, academic_info_id: int) -> Tuple[None, Callable]:
+async def delete_academic_info(
+    db: AsyncSession, 
+    academic_info_id: int,
+    current_user: models.User
+) -> Tuple[None, Callable]:
     """
     Soft delete academic info.
 
@@ -1210,11 +1314,17 @@ async def delete_academic_info(db: AsyncSession, academic_info_id: int) -> Tuple
     """
     try:
         db_academic_info = await get_academic_info_by_id(db, academic_info_id)
+        
+        # ✅ IDOR: Must have access to unit managing this offering
+        offering = await get_program_offering_by_id(db, db_academic_info.offering_id)
+        program = await get_major_program_by_id(db, offering.program_id)
+        await _check_unit_access(db, program.unit_id, current_user)
+
         offering_id = db_academic_info.offering_id
         academic_year = db_academic_info.academic_year
 
         # ✅ FIX: Prevent deletion of past academic year data
-        current_year = datetime.now().year
+        current_year = datetime.now(timezone.utc).year
         if academic_year < current_year:
             raise BadRequest(
                 detail=f"Không thể xóa dữ liệu tuyển sinh của năm học {academic_year} "
@@ -1224,7 +1334,7 @@ async def delete_academic_info(db: AsyncSession, academic_info_id: int) -> Tuple
 
         # Soft delete - set flag instead of removing from database
         db_academic_info.is_deleted = True
-        db_academic_info.updated_at = datetime.now()  # ✅ FIX: Explicitly update timestamp
+        db_academic_info.updated_at = datetime.now(timezone.utc)  # ✅ FIX: Explicitly update timestamp
 
         # ✅ TRANSACTION FIX: Flush instead of commit
         await db.flush()
@@ -1254,7 +1364,11 @@ async def delete_academic_info(db: AsyncSession, academic_info_id: int) -> Tuple
         raise
 
 
-async def restore_academic_info(db: AsyncSession, academic_info_id: int) -> Tuple[models.OfferingAcademicInfo, Callable]:
+async def restore_academic_info(
+    db: AsyncSession, 
+    academic_info_id: int,
+    current_user: models.User
+) -> Tuple[models.OfferingAcademicInfo, Callable]:
     """
     Restore a soft-deleted academic info record.
 
@@ -1269,6 +1383,12 @@ async def restore_academic_info(db: AsyncSession, academic_info_id: int) -> Tupl
     """
     try:
         db_academic_info = await get_academic_info_by_id(db, academic_info_id)
+        
+        # ✅ IDOR: Must have access to unit managing this offering
+        offering = await get_program_offering_by_id(db, db_academic_info.offering_id)
+        program = await get_major_program_by_id(db, offering.program_id)
+        await _check_unit_access(db, program.unit_id, current_user)
+
         offering_id = db_academic_info.offering_id
         academic_year = db_academic_info.academic_year
 
@@ -1279,7 +1399,7 @@ async def restore_academic_info(db: AsyncSession, academic_info_id: int) -> Tupl
 
         # Restore - set flag back to False
         db_academic_info.is_deleted = False
-        db_academic_info.updated_at = datetime.now()
+        db_academic_info.updated_at = datetime.now(timezone.utc)
 
         # ✅ TRANSACTION FIX: Flush instead of commit
         await db.flush()
@@ -1336,7 +1456,7 @@ async def get_organization_tree_with_aggregation(
 
     # Determine academic year
     if academic_year is None:
-        academic_year = datetime.now().year
+        academic_year = datetime.now(timezone.utc).year
 
     # ✅ PERFORMANCE FIX: Use Redis cache for aggregation results
     cache_key = f"{ORG_TREE_AGG_CACHE_KEY}:{academic_year}:{include_inactive}"
@@ -1366,8 +1486,6 @@ async def get_organization_tree_with_aggregation(
     # we query only the academic info for the specified year separately.
 
     # ✅ SPRINT 3 REFACTORED: Use Repository for data access
-    from app.repositories import OrganizationRepository
-    
     repo = OrganizationRepository(db)
     
     # Step 1: Query all units with programs and offerings (without academic info history)
@@ -1526,8 +1644,6 @@ async def get_programs_by_unit_tree(
         return []
 
     # ✅ Use Repository for CTE query and program search
-    from app.repositories import OrganizationRepository
-    
     repo = OrganizationRepository(db)
     
     # Get all related unit IDs using recursive CTE
@@ -1565,8 +1681,6 @@ async def get_all_program_offerings(
     Returns:
         List of ProgramOffering with program loaded
     """
-    from app.repositories import OrganizationRepository
-    
     repo = OrganizationRepository(db)
     return await repo.get_all_offerings(
         is_active=is_active,

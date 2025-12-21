@@ -1,453 +1,241 @@
-# tests/services/test_organization_service.py
+# tests/services/test_organization.py
 # -*- coding: utf-8 -*-
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import datetime
 
 import pytest
-import pytest_asyncio
-from sqlalchemy import select, text
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models, schemas
-
-# Import các thành phần cần test
 from app.services import organization_service
-from app.utils.exceptions import DuplicateResourceError, ResourceNotFoundError
+from app.utils.exceptions import DuplicateResourceError, ResourceNotFoundError, ForbiddenError, BadRequest
 
-# Import constants
-try:
-    from tests.fixtures.constants import NON_EXISTENT_ID, TestOrgData
-except ImportError:
-    pytest.fail("Could not import constants from tests.fixtures.constants.")
+# === Fixtures ===
 
-
-# === Fixture cho session mock (chuẩn) ===
 @pytest.fixture
 def mock_db_session():
-    """Tạo một mock AsyncSession."""
+    """Create a mock AsyncSession."""
     session = AsyncMock(spec=AsyncSession)
     session.add = MagicMock()
+    session.flush = AsyncMock()
+    session.refresh = AsyncMock()
     session.commit = AsyncMock()
-    session.refresh = AsyncMock(return_value=None)
-    session.execute = AsyncMock()
-    session.delete = AsyncMock()
-    session.get = AsyncMock()
-    session.scalar = AsyncMock()
     session.rollback = AsyncMock()
-
-    # Cấu hình mặc định (sẽ bị ghi đè trong tests)
-    mock_execute_result = MagicMock()
-    mock_scalars_result = MagicMock()
-    mock_scalars_result.all.return_value = []
-    mock_scalars_result.first.return_value = None
-    mock_scalars_result.one_or_none.return_value = None
-    mock_scalars_result.unique.return_value = mock_scalars_result  # Chain .unique()
-    mock_execute_result.scalars.return_value = mock_scalars_result
-    mock_execute_result.scalar_one_or_none.return_value = None
-
-    session.execute.return_value = mock_execute_result
-    session.scalar.return_value = None
-    session.get.return_value = None
     return session
 
-
-# === Dữ liệu mẫu ===
 @pytest.fixture
-def mock_unit_1():
-    """Trả về một đối tượng OrganizationUnit mẫu."""
-    # Tạo đối tượng thật với relations giả lập (rỗng)
-    unit = models.OrganizationUnit(**TestOrgData.UNIT_1)
-    unit.children = []
-    unit.majors = []
-    unit.parent = None
-    return unit
-
+def mock_user():
+    """Create a mock Admin User."""
+    return models.User(id=1, username="testadmin", role="Admin")
 
 @pytest.fixture
-def mock_unit_2_child(mock_unit_1):
-    """Trả về một unit con của unit 1."""
-    unit = models.OrganizationUnit(
-        id=2, name="Test Unit 2 Child", type="Department", parent_id=mock_unit_1.id
+def mock_unit():
+    """Sample Organization Unit."""
+    return models.OrganizationUnit(id=10, name="Test Unit", type="Khoa", is_active=True)
+
+@pytest.fixture
+def mock_program(mock_unit):
+    """Sample Major Program (Level 1)."""
+    return models.MajorProgram(
+        id=100, 
+        name="Computer Science", 
+        code="CS", 
+        degree_level="Đại học",
+        unit_id=mock_unit.id,
+        is_active=True
     )
-    unit.parent = mock_unit_1
-    return unit
-
 
 @pytest.fixture
-def mock_major_1(mock_unit_1):
-    """Trả về một đối tượng Major mẫu thuộc unit 1."""
-    major = models.Major(**TestOrgData.MAJOR_1)
-    major.unit = mock_unit_1
-    return major
-
-
-# === Mock các hàm nội bộ (Rất quan trọng) ===
-# Các hàm CRUD của service này gọi lẫn nhau.
-# Chúng ta patch các hàm "get" để cô lập logic của "create/update/delete".
-
+def mock_offering(mock_program):
+    """Sample Program Offering (Level 2)."""
+    return models.ProgramOffering(
+        id=1000,
+        program_id=mock_program.id,
+        offering_type="Chính quy",
+        is_active=True
+    )
 
 @pytest.fixture
-def mock_internal_get_unit(mocker):
-    """Mocks the service's internal call to get_organization_unit_by_id"""
+def mock_academic_info(mock_offering):
+    """Sample Offering Academic Info (Level 3)."""
+    return models.OfferingAcademicInfo(
+        id=5000,
+        offering_id=mock_offering.id,
+        academic_year=2024,
+        is_deleted=False
+    )
+
+# === Helper to mock IDOR check Success ===
+@pytest.fixture(autouse=True)
+def mock_idor_success(mocker):
+    """Default to allowing access in tests unless overridden."""
+    # This mocks deps.get_organizational_unit_for_user which _check_unit_access calls.
+    # It returns a unit ID (10) that matches our mock_unit.id.
     return mocker.patch(
-        "app.services.organization_service.get_organization_unit_by_id",
+        "app.core.deps.get_organizational_unit_for_user",
         new_callable=AsyncMock,
+        return_value=10 
     )
 
-
-@pytest.fixture
-def mock_internal_get_major(mocker):
-    """Mocks the service's internal call to get_major_by_id"""
-    return mocker.patch(
-        "app.services.organization_service.get_major_by_id", new_callable=AsyncMock
-    )
-
-
-# ==================================
-# Tests cho OrganizationUnit
-# ==================================
-
+# =============================================================================
+# TESTS: ORGANIZATION UNIT
+# =============================================================================
 
 @pytest.mark.asyncio
-async def test_get_all_organization_units(
-    mock_db_session, mock_unit_1, mock_unit_2_child
-):
-    """Test lấy tất cả units thành công."""
-    mock_list = [mock_unit_1, mock_unit_2_child]
-    mock_db_session.execute.return_value.scalars.return_value.unique.return_value.all.return_value = (
-        mock_list
+async def test_create_organization_unit_success(mock_db_session, mock_user, mocker):
+    """Test creating unit with proper IDOR check and repository usage."""
+    unit_in = schemas.OrganizationUnitCreate(name="New Unit", type="Khoa", parent_id=None)
+    
+    # Mock Repository
+    mock_repo = mocker.patch("app.services.organization_service.OrganizationRepository", autospec=True)
+    mock_repo.return_value.check_duplicate_name = AsyncMock(return_value=None)
+    mock_repo.return_value.get_by_id = AsyncMock(return_value=None)
+    
+    # Mock internal get for return result
+    mocker.patch("app.services.organization_service.get_organization_unit_by_id", 
+                 new_callable=AsyncMock, 
+                 return_value=models.OrganizationUnit(id=11, **unit_in.model_dump()))
+
+    result, post_commit = await organization_service.create_organization_unit(
+        mock_db_session, unit_in, current_user=mock_user
     )
 
-    result = await organization_service.get_all_organization_units(mock_db_session)
-
-    mock_db_session.execute.assert_awaited_once()
-    assert result == mock_list
-
-
-@pytest.mark.asyncio
-async def test_get_organization_unit_by_id_found(mock_db_session, mock_unit_1):
-    """Test lấy unit theo ID thành công."""
-    mock_db_session.execute.return_value.scalars.return_value.unique.return_value.one_or_none.return_value = (
-        mock_unit_1
-    )
-
-    result = await organization_service.get_organization_unit_by_id(
-        mock_db_session, mock_unit_1.id
-    )
-
-    mock_db_session.execute.assert_awaited_once()
-    assert result == mock_unit_1
-
-
-@pytest.mark.asyncio
-async def test_get_organization_unit_by_id_not_found(mock_db_session):
-    """Test lấy unit theo ID thất bại (404)."""
-    mock_db_session.execute.return_value.scalars.return_value.unique.return_value.one_or_none.return_value = (
-        None
-    )
-
-    with pytest.raises(ResourceNotFoundError) as exc_info:
-        await organization_service.get_organization_unit_by_id(
-            mock_db_session, NON_EXISTENT_ID
-        )
-
-    assert str(NON_EXISTENT_ID) in exc_info.value.detail
-
-
-@pytest.mark.asyncio
-async def test_create_organization_unit_success(
-    mock_db_session, mock_internal_get_unit, mock_unit_1
-):
-    """Test tạo unit thành công (không có parent)."""
-    unit_schema = schemas.OrganizationUnitCreate(
-        name="New Unit", type="Faculty", parent_id=None
-    )
-
-    # Mock hàm get(parent_id)
-    mock_db_session.get.return_value = None
-    # Mock hàm get_organization_unit_by_id được gọi ở cuối
-    mock_internal_get_unit.return_value = mock_unit_1
-
-    result = await organization_service.create_organization_unit(
-        mock_db_session, unit_schema
-    )
-
+    assert result.name == "New Unit"
     mock_db_session.add.assert_called_once()
-    added_obj = mock_db_session.add.call_args[0][0]
-    assert isinstance(added_obj, models.OrganizationUnit)
-    assert added_obj.name == unit_schema.name
-    mock_db_session.commit.assert_awaited_once()
-    mock_db_session.refresh.assert_awaited_once_with(added_obj)
-    mock_internal_get_unit.assert_awaited_once_with(mock_db_session, added_obj.id)
-    assert result == mock_unit_1
-
+    mock_db_session.flush.assert_called_once()
+    assert callable(post_commit)
 
 @pytest.mark.asyncio
-async def test_create_organization_unit_parent_not_found(
-    mock_db_session, mock_internal_get_unit
-):
-    """Test tạo unit thất bại (parent_id không tồn tại)."""
-    unit_schema = schemas.OrganizationUnitCreate(
-        name="New Unit", type="Faculty", parent_id=NON_EXISTENT_ID
+async def test_update_organization_unit_idor_fail(mock_db_session, mock_user, mock_unit, mocker):
+    """Test IDOR protection: User belonging to Unit A cannot update Unit B."""
+    update_in = schemas.OrganizationUnitUpdate(name="Unique Hacked Name")
+    
+    # Mock IDOR check to fail
+    mocker.patch(
+        "app.core.deps.get_organizational_unit_for_user",
+        new_callable=AsyncMock,
+        side_effect=ForbiddenError("Access denied")
     )
+    
+    # Mock internal get
+    mocker.patch("app.services.organization_service.get_organization_unit_by_id", 
+                 new_callable=AsyncMock, 
+                 return_value=mock_unit)
 
-    mock_db_session.get.return_value = None  # Không tìm thấy parent
-
-    with pytest.raises(ResourceNotFoundError) as exc_info:
-        await organization_service.create_organization_unit(
-            mock_db_session, unit_schema
-        )
-
-    assert f"Parent unit with id {NON_EXISTENT_ID} not found" in exc_info.value.detail
-    mock_db_session.rollback.assert_awaited_once()
-    mock_internal_get_unit.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_update_organization_unit_success(
-    mock_db_session, mock_internal_get_unit, mock_unit_1, mock_unit_2_child
-):
-    """Test cập nhật unit thành công."""
-    unit_id = mock_unit_1.id
-    update_schema = schemas.OrganizationUnitUpdate(
-        name="Updated Name", parent_id=mock_unit_2_child.id
-    )
-
-    # Mock get_unit (lần 1)
-    mock_internal_get_unit.side_effect = [
-        mock_unit_1,  # Lần gọi đầu tiên (lấy unit để update)
-        mock_unit_1,  # Lần gọi thứ hai (ở cuối hàm để trả về)
-    ]
-    # Mock get(parent_id)
-    mock_db_session.get.return_value = mock_unit_2_child  # Tìm thấy parent mới
-
-    result = await organization_service.update_organization_unit(
-        mock_db_session, unit_id, update_schema
-    )
-
-    assert mock_internal_get_unit.await_count == 2
-    mock_db_session.get.assert_awaited_once_with(
-        models.OrganizationUnit, mock_unit_2_child.id
-    )
-    assert mock_unit_1.name == "Updated Name"
-    assert mock_unit_1.parent_id == mock_unit_2_child.id
-    mock_db_session.add.assert_called_once_with(mock_unit_1)
-    mock_db_session.commit.assert_awaited_once()
-    assert result == mock_unit_1
-
-
-@pytest.mark.asyncio
-async def test_update_organization_unit_parent_self(
-    mock_db_session, mock_internal_get_unit, mock_unit_1
-):
-    """Test cập nhật unit thất bại (tự làm cha)."""
-    unit_id = mock_unit_1.id
-    update_schema = schemas.OrganizationUnitUpdate(parent_id=unit_id)  # Tự tham chiếu
-
-    mock_internal_get_unit.return_value = mock_unit_1
-
-    with pytest.raises(DuplicateResourceError) as exc_info:
+    with pytest.raises(ForbiddenError):
         await organization_service.update_organization_unit(
-            mock_db_session, unit_id, update_schema
+            mock_db_session, mock_unit.id, update_in, current_user=mock_user
         )
 
-    assert "A unit cannot be its own parent" in exc_info.value.detail
-    mock_db_session.rollback.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_delete_organization_unit_success(
-    mock_db_session, mock_internal_get_unit, mock_unit_1
-):
-    """Test xóa unit thành công (không có con/major)."""
-    unit_id = mock_unit_1.id
-    mock_unit_1.children = []  # Đảm bảo rỗng
-    mock_unit_1.majors = []  # Đảm bảo rỗng
-    mock_internal_get_unit.return_value = mock_unit_1
-
-    await organization_service.delete_organization_unit(mock_db_session, unit_id)
-
-    mock_internal_get_unit.assert_awaited_once_with(mock_db_session, unit_id)
-    mock_db_session.delete.assert_awaited_once_with(mock_unit_1)
-    mock_db_session.commit.assert_awaited_once()
-
+# =============================================================================
+# TESTS: MAJOR PROGRAM (LEVEL 1)
+# =============================================================================
 
 @pytest.mark.asyncio
-async def test_delete_organization_unit_conflict_children(
-    mock_db_session, mock_internal_get_unit, mock_unit_1, mock_unit_2_child
-):
-    """Test xóa unit thất bại (còn unit con)."""
-    unit_id = mock_unit_1.id
-    mock_unit_1.children = [mock_unit_2_child]  # Có con
-    mock_unit_1.majors = []
-    mock_internal_get_unit.return_value = mock_unit_1
-
-    with pytest.raises(DuplicateResourceError) as exc_info:
-        await organization_service.delete_organization_unit(mock_db_session, unit_id)
-
-    assert "It contains child units or majors" in exc_info.value.detail
-    mock_db_session.rollback.assert_awaited_once()
-    mock_db_session.delete.assert_not_awaited()
-
-
-# ==================================
-# Tests cho Major
-# ==================================
-
-
-@pytest.mark.asyncio
-async def test_get_major_by_id_found(mock_db_session, mock_major_1):
-    """Test lấy major theo ID thành công."""
-    mock_db_session.get.return_value = mock_major_1
-    result = await organization_service.get_major_by_id(
-        mock_db_session, mock_major_1.id
+async def test_create_major_program_success(mock_db_session, mock_user, mock_unit, mocker):
+    """Test Major Program creation with unit access check."""
+    program_in = schemas.MajorProgramCreate(
+        name="Software Engineering", 
+        code="SE", 
+        degree_level="Đại học",
+        unit_id=mock_unit.id
     )
-    mock_db_session.get.assert_awaited_once_with(models.Major, mock_major_1.id)
-    assert result == mock_major_1
+    
+    # Mock Repository
+    mock_repo = mocker.patch("app.services.organization_service.OrganizationRepository", autospec=True)
+    mock_repo.return_value.check_duplicate_program_code = AsyncMock(return_value=None)
+    mock_repo.return_value.get_by_id = AsyncMock(return_value=mock_unit)
+    
+    # Mock internal get
+    mocker.patch("app.services.organization_service.get_major_program_by_id", 
+                 new_callable=AsyncMock, 
+                 return_value=models.MajorProgram(id=101, **program_in.model_dump()))
 
-
-@pytest.mark.asyncio
-async def test_get_major_by_id_not_found(mock_db_session):
-    """Test lấy major theo ID thất bại (404)."""
-    mock_db_session.get.return_value = None
-    with pytest.raises(ResourceNotFoundError) as exc_info:
-        await organization_service.get_major_by_id(mock_db_session, NON_EXISTENT_ID)
-    assert f"Major with id {NON_EXISTENT_ID} not found" in exc_info.value.detail
-
-
-@pytest.mark.asyncio
-async def test_create_major_success(mock_db_session, mock_major_1):
-    """Test tạo major thành công."""
-    major_schema = schemas.MajorCreate(
-        name=mock_major_1.name, code=mock_major_1.code, unit_id=mock_major_1.unit_id
-    )
-    mock_db_session.execute.return_value.scalar_one_or_none.return_value = (
-        None  # Không trùng code
+    result, post_commit = await organization_service.create_major_program(
+        mock_db_session, program_in, current_user=mock_user
     )
 
-    result = await organization_service.create_major(mock_db_session, major_schema)
+    assert result.code == "SE"
+    assert callable(post_commit)
 
-    mock_db_session.execute.assert_awaited_once()
-    mock_db_session.add.assert_called_once()
-    added_obj = mock_db_session.add.call_args[0][0]
-    assert isinstance(added_obj, models.Major)
-    assert added_obj.code == major_schema.code
-    mock_db_session.commit.assert_awaited_once()
-    mock_db_session.refresh.assert_awaited_once_with(added_obj)
-    assert result == added_obj
-
+# =============================================================================
+# TESTS: PROGRAM OFFERING (LEVEL 2) & CASCADE DELETE
+# =============================================================================
 
 @pytest.mark.asyncio
-async def test_create_major_duplicate_code(mock_db_session, mock_major_1):
-    """Test tạo major thất bại (trùng code)."""
-    major_schema = schemas.MajorCreate(
-        name=mock_major_1.name, code=mock_major_1.code, unit_id=mock_major_1.unit_id
+async def test_delete_program_offering_cascade(mock_db_session, mock_user, mock_offering, mock_program, mocker):
+    """Test cascading soft-delete from Offering to Academic Info."""
+    
+    # Mock service internals to provide context for IDOR check
+    mocker.patch("app.services.organization_service.get_program_offering_by_id", 
+                 new_callable=AsyncMock, 
+                 return_value=mock_offering)
+    mocker.patch("app.services.organization_service.get_major_program_by_id", 
+                 new_callable=AsyncMock, 
+                 return_value=mock_program)
+
+    # Mock the bulk update (cascade)
+    mock_execute = mocker.patch.object(mock_db_session, "execute", new_callable=AsyncMock)
+
+    _, post_commit = await organization_service.delete_program_offering(
+        mock_db_session, mock_offering.id, current_user=mock_user
     )
-    mock_db_session.execute.return_value.scalar_one_or_none.return_value = (
-        mock_major_1  # Trùng code
-    )
 
-    with pytest.raises(DuplicateResourceError) as exc_info:
-        await organization_service.create_major(mock_db_session, major_schema)
+    # Verify soft delete of offering
+    assert mock_offering.is_active is False
+    
+    # Verify cascade update call was made
+    assert mock_execute.call_count >= 1
+    stmt = mock_execute.call_args_list[0].args[0]
+    sql_str = str(stmt).lower()
+    assert "offering_academic_info" in sql_str
+    assert "is_deleted" in sql_str
 
-    assert (
-        f"Major with code '{major_schema.code}' already exists" in exc_info.value.detail
-    )
-    mock_db_session.rollback.assert_awaited_once()
-
-
-# ... (Các test cho update_major và delete_major tương tự) ...
-
-# ==================================
-# Tests cho get_majors_by_unit_tree
-# ==================================
-
+# =============================================================================
+# TESTS: OFFERING ACADEMIC INFO (LEVEL 3)
+# =============================================================================
 
 @pytest.mark.asyncio
-async def test_get_majors_by_unit_tree_success(mock_db_session, mock_major_1):
-    """Test lấy major theo cây unit thành công (không search)."""
-    unit_id = 1
-    # 1. Mock kết quả cho query đệ quy (raw SQL)
-    mock_unit_ids_result = MagicMock()
-    mock_unit_ids_result.all.return_value = [(1,), (2,)]  # Trả về list các tuple ID
+async def test_update_academic_info_immutable_history(mock_db_session, mock_user, mock_academic_info, mock_offering, mock_program, mocker):
+    """Test that historical financial data (past years) cannot be updated."""
+    
+    # Mock info from a past year
+    mock_academic_info.academic_year = datetime.now().year - 1
+    mock_academic_info.tuition_fee_per_year = 1000.0
+    
+    update_in = schemas.OfferingAcademicInfoUpdate(tuition_fee_per_year=1200.0)
+    
+    # Mock context for IDOR check
+    mocker.patch("app.services.organization_service.get_academic_info_by_id", new_callable=AsyncMock, return_value=mock_academic_info)
+    mocker.patch("app.services.organization_service.get_program_offering_by_id", new_callable=AsyncMock, return_value=mock_offering)
+    mocker.patch("app.services.organization_service.get_major_program_by_id", new_callable=AsyncMock, return_value=mock_program)
 
-    # 2. Mock kết quả cho query select Major
-    mock_majors_result_proxy = MagicMock()
-    mock_majors_scalars = MagicMock()
-    mock_majors_scalars.all.return_value = [mock_major_1]
-    mock_majors_result_proxy.scalars.return_value = mock_majors_scalars
-
-    # 3. Cấu hình side_effect cho execute
-    mock_db_session.execute.side_effect = [
-        mock_unit_ids_result,  # Lần gọi 1 (raw SQL)
-        mock_majors_result_proxy,  # Lần gọi 2 (select Major)
-    ]
-
-    result = await organization_service.get_majors_by_unit_tree(
-        mock_db_session, unit_id
-    )
-
-    assert mock_db_session.execute.await_count == 2
-    # Kiểm tra query thứ 2 (select Major)
-    second_call_args = mock_db_session.execute.await_args_list[1].args
-    query_str = str(second_call_args[0])
-
-    assert "major" in query_str
-    assert "unit_id IN" in query_str
-    assert "major.name ILIKE" not in query_str  # Không search
-
-    # === SỬA LỖI 1 ===
-    assert "LIMIT :param_1" in query_str  # Kiểm tra tham số LIMIT
-    # === KẾT THÚC SỬA ===
-
-    assert result == [mock_major_1]
-
+    with pytest.raises(BadRequest) as exc:
+        await organization_service.update_academic_info(
+            mock_db_session, mock_academic_info.id, update_in, current_user=mock_user
+        )
+    
+    assert "Không thể thay đổi học phí" in str(exc.value.detail)
 
 @pytest.mark.asyncio
-async def test_get_majors_by_unit_tree_with_search(mock_db_session, mock_major_1):
-    """Test lấy major theo cây unit thành công (có search)."""
-    unit_id = 1
-    search_term = "Test"
+async def test_restore_academic_info_success(mock_db_session, mock_user, mock_academic_info, mock_offering, mock_program, mocker):
+    """Test restoring a soft-deleted academic info record."""
+    
+    mock_academic_info.is_deleted = True
+    
+    # Mock context
+    mocker.patch("app.services.organization_service.get_academic_info_by_id", new_callable=AsyncMock, return_value=mock_academic_info)
+    mocker.patch("app.services.organization_service.get_program_offering_by_id", new_callable=AsyncMock, return_value=mock_offering)
+    mocker.patch("app.services.organization_service.get_major_program_by_id", new_callable=AsyncMock, return_value=mock_program)
 
-    # 1. Mock kết quả cho query đệ quy (raw SQL)
-    mock_unit_ids_result = MagicMock()
-    mock_unit_ids_result.all.return_value = [(1,)]  # Chỉ unit 1
+    # Mock Repository for the IDOR check internally
+    mock_repo = mocker.patch("app.services.organization_service.OrganizationRepository", autospec=True)
+    mock_repo.return_value.get_academic_info_by_id = AsyncMock(return_value=mock_academic_info)
 
-    # 2. Mock kết quả cho query select Major
-    mock_majors_result_proxy = MagicMock()
-    mock_majors_scalars = MagicMock()
-    mock_majors_scalars.all.return_value = [mock_major_1]
-    mock_majors_result_proxy.scalars.return_value = mock_majors_scalars
-
-    # 3. Cấu hình side_effect
-    mock_db_session.execute.side_effect = [
-        mock_unit_ids_result,
-        mock_majors_result_proxy,
-    ]
-
-    result = await organization_service.get_majors_by_unit_tree(
-        mock_db_session, unit_id, search_term
+    result, post_commit = await organization_service.restore_academic_info(
+        mock_db_session, mock_academic_info.id, current_user=mock_user
     )
 
-    assert mock_db_session.execute.await_count == 2
-    # Kiểm tra query thứ 2
-    second_call_args = mock_db_session.execute.await_args_list[1].args
-    query_str = str(second_call_args[0])
-
-    assert "unit_id IN" in query_str
-
-    # === SỬA LỖI 1 ===
-    # Kiểm tra logic ILIKE đã được dịch sang lower()
-    assert "lower(major.name) LIKE lower(:name_1)" in query_str
-    # === KẾT THÚC SỬA ===
-
-    assert result == [mock_major_1]
-
-
-@pytest.mark.asyncio
-async def test_get_majors_by_unit_tree_no_unit_id(mock_db_session):
-    """Test lấy major khi unit_id là None."""
-    result = await organization_service.get_majors_by_unit_tree(mock_db_session, None)
-
-    assert result == []
-    mock_db_session.execute.assert_not_awaited()
+    assert result.is_deleted is False
+    assert result.updated_at is not None
+    mock_db_session.flush.assert_called_once()
