@@ -66,6 +66,13 @@ async def create_template(
             f"Template with name '{template_data.name}' already exists (ID: {existing_template.id})"
         )
 
+    # Check for duplicate template_code
+    existing_by_code = await repo.get_by_template_code(template_data.template_code)
+    if existing_by_code:
+        raise BadRequest(
+            f"Template with code '{template_data.template_code}' already exists (ID: {existing_by_code.id})"
+        )
+
     # Create new template
     new_template = models.NotificationTemplate(
         name=template_data.name,

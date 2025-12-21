@@ -87,6 +87,13 @@ class NotificationRuleRepository(BaseRepository[models.NotificationRule]):
         Create a new rule along with its actions and update template usage.
         """
         # Create new rule
+        # Convert Pydantic models to dict for JSON serialization
+        recipient_config_dict = (
+            rule_data.recipient_config.model_dump() 
+            if hasattr(rule_data.recipient_config, 'model_dump') 
+            else rule_data.recipient_config
+        )
+        
         new_rule = models.NotificationRule(
             event=rule_data.event,
             title_template=rule_data.title_template,
@@ -94,11 +101,12 @@ class NotificationRuleRepository(BaseRepository[models.NotificationRule]):
             notification_type=rule_data.notification_type,
             link_template=rule_data.link_template,
             channels=rule_data.channels,
-            recipient_config=rule_data.recipient_config,
+            recipient_config=recipient_config_dict,
             condition=rule_data.condition,
             enabled=rule_data.enabled,
             template_id=rule_data.template_id
         )
+
         self.db.add(new_rule)
         await self.db.flush()
 

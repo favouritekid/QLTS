@@ -26,7 +26,7 @@ from .admission import AdmissionProfile
 from .student import Student, StudentDocument
 
 # Notification models
-from .notification import Notification, NotificationRule, NotificationTemplate
+from .notification import Notification, NotificationAction, NotificationRule, NotificationTemplate
 from .notification_preference import NotificationPreference
 
 # Organization models (includes temporal models)

@@ -54,6 +54,10 @@ class NotificationRepository(BaseRepository[models.Notification]):
             )
         )
 
+    async def get_total_count(self, user_id: int) -> int:
+        """Count total notifications for a user."""
+        return await self.count(self.model.user_id == user_id)
+
     async def get_by_ids(self, notification_ids: List[int]) -> List[models.Notification]:
         """Fetch notifications by a list of IDs."""
         if not notification_ids:

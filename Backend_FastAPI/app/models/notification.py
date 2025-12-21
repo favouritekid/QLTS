@@ -1,9 +1,11 @@
 # app/models/notification.py
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, JSON, Index, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from .base import Base
+
 
 
 class Notification(Base):
@@ -208,11 +210,12 @@ class NotificationTemplate(Base):
     category = Column(String(50), nullable=True, index=True,
                      comment="Template category (e.g., 'lead', 'consultation')")
 
-    # NEW: NOTIFICATION 2.0 - Channel and Event filtering
-    supported_channels = Column(JSON, nullable=False, default=["socket"],
+    # NEW: NOTIFICATION 2.0 - Channel and Event filtering (JSONB for efficient queries)
+    supported_channels = Column(JSONB, nullable=False, default=["socket"],
                                comment='Channels this template supports (["socket", "email", "zalo", "sms"])')
-    allowed_events = Column(JSON, nullable=True,
+    allowed_events = Column(JSONB, nullable=True,
                            comment='Events this template is designed for (null = all events)')
+
     template_type = Column(String(50), nullable=False, default="system",
                           comment='Template type: system, zalo_zns, email_html, sms')
 

@@ -39,6 +39,12 @@ class NotificationTemplateRepository(BaseRepository[models.NotificationTemplate]
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
+    async def get_by_template_code(self, template_code: str) -> Optional[models.NotificationTemplate]:
+        """Get template by template_code (unique identifier)."""
+        query = select(self.model).where(self.model.template_code == template_code)
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
     async def list_templates(
         self,
         skip: int = 0,
