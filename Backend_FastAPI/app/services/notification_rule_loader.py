@@ -351,6 +351,8 @@ class DatabaseRuleConfig:
         channels: List[str],
         resolver: BaseResolver,
         condition: Optional[Dict[str, Any]],
+        priority: int = 100,
+        dedup_key_template: Optional[str] = None,
     ):
         self.rule_id = rule_id
         self.event = event
@@ -358,9 +360,11 @@ class DatabaseRuleConfig:
         self.message_template = message_template
         self.notification_type = notification_type
         self.link_template = link_template
-        self.channels = channels
+        self._channels = channels  # Store raw strings
         self.resolver = resolver
         self.condition = condition
+        self.priority = priority
+        self.dedup_key_template = dedup_key_template
 
         # Derive group from event
         try:
@@ -376,6 +380,16 @@ class DatabaseRuleConfig:
             from app.core.event_groups import NotificationEventGroup
             self.group = NotificationEventGroup.SYSTEM
 
+    @property
+    def channels(self) -> List[str]:
+        """Get channels as list of strings (matches NotificationConfig.channel_values)."""
+        return self._channels
+    
+    @property
+    def channel_values(self) -> List[str]:
+        """Alias for channels for interface compatibility with NotificationConfig."""
+        return self._channels
+
     def render_title(self, payload: dict) -> str:
         """Render title template with payload data."""
         return Template(self.title_template).safe_substitute(payload)
@@ -389,6 +403,12 @@ class DatabaseRuleConfig:
         if not self.link_template:
             return None
         return Template(self.link_template).safe_substitute(payload)
+    
+    def render_dedup_key(self, payload: dict) -> Optional[str]:
+        """Render deduplication key template with payload data."""
+        if not self.dedup_key_template:
+            return None
+        return Template(self.dedup_key_template).safe_substitute(payload)
 
     def should_activate(self, payload: dict) -> bool:
         """Check if this rule should activate for the given payload."""

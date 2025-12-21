@@ -396,3 +396,14 @@ Khi touch code cũ không tuân thủ:
 ---
 
 *Last updated: 2025-12-21*
+
+## K. Notification Module Compliance
+
+Các module notification sau đã được migrate sang Pattern A:
+
+| Repository | Service | Status |
+|------------|---------|--------|
+| `NotificationRepository` | `notification_service.py` | ✅ Done |
+| `NotificationRuleRepository` | `notification_rule_crud_service.py` | ✅ Done |
+| `NotificationTemplateRepository` | `notification_template_service.py` | ✅ Done |
+| `NotificationPreferenceRepository` | `notification_preference_service.py` | ✅ Done |

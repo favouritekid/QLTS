@@ -1,51 +1,52 @@
 # 🔔 Notification System - Development Guide
 
 > Tài liệu hướng dẫn phát triển hệ thống thông báo real-time cho dự án QLTS.
+> **Phiên bản: NOTIFICATION 2.0** (Cập nhật: 2024-12-21)
 
 ---
 
 ## 📋 Mục lục
 
 1. [Tổng quan kiến trúc](#1-tổng-quan-kiến-trúc)
-2. [Các thành phần chính](#2-các-thành-phần-chính)
-3. [Flow xử lý notification](#3-flow-xử-lý-notification)
-4. [Hướng dẫn thêm event mới](#4-hướng-dẫn-thêm-event-mới)
-5. [Frontend Integration](#5-frontend-integration)
-6. [Troubleshooting](#6-troubleshooting)
+2. [NOTIFICATION 2.0 - Database Rules](#2-notification-20---database-rules)
+3. [Các thành phần chính](#3-các-thành-phần-chính)
+4. [Flow xử lý notification](#4-flow-xử-lý-notification)
+5. [Hướng dẫn thêm event mới](#5-hướng-dẫn-thêm-event-mới)
+6. [Frontend Integration](#6-frontend-integration)
+7. [Troubleshooting](#7-troubleshooting)
 
 ---
 
 ## 1. Tổng quan kiến trúc
 
-### Mô hình tổng quát
+### NOTIFICATION 2.0 Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
-│                           NOTIFICATION FLOW                                      │
+│                      NOTIFICATION 2.0 ARCHITECTURE                               │
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                  │
 │  ┌──────────────┐    ┌─────────────────────┐    ┌──────────────────────────┐   │
-│  │ Service      │───▶│ notification_       │───▶│ notification_            │   │
-│  │ (lead_service│    │ dispatcher.dispatch │    │ channels/               │   │
-│  │ user_service)│    │ ()                  │    │                          │   │
-│  └──────────────┘    └─────────────────────┘    │ ┌────────────────────┐  │   │
-│                              │                   │ │ socket_channel.py  │  │   │
-│                              ▼                   │ │ (Socket.IO emit)   │  │   │
-│                ┌─────────────────────────┐      │ └────────────────────┘  │   │
-│                │ notification_service.py │      │ ┌────────────────────┐  │   │
-│                │ - Resolve recipients    │      │ │ db_channel.py      │  │   │
-│                │ - Check user preferences│      │ │ (DB persistence)   │  │   │
-│                │ - Create notification   │      │ └────────────────────┘  │   │
-│                └─────────────────────────┘      │ ┌────────────────────┐  │   │
-│                                                  │ │ email_channel.py   │  │   │
-│                                                  │ │ (Celery async)     │  │   │
-│                                                  │ └────────────────────┘  │   │
-│                                                  └──────────────────────────┘   │
+│  │   ROUTER     │───▶│   dispatcher.py     │───▶│   Notification DB        │   │
+│  │ (Trigger)    │    │   (Entry Point)     │    │   (Persistence)          │   │
+│  └──────────────┘    └─────────────────────┘    └──────────────────────────┘   │
+│         │                    │                             │                    │
+│         │           ┌────────┴────────┐                   │                    │
+│         │           ▼                  ▼                   ▼                    │
+│         │    ┌────────────────┐ ┌────────────────┐ ┌────────────────────┐      │
+│         │    │ RULE LOADER    │ │ RESOLVERS      │ │ SIDE EFFECTS       │      │
+│         │    │ (DB + Redis)   │ │ (Recipients)   │ │ (Socket.IO/Email)  │      │
+│         │    │                │ │                │ │                    │      │
+│         │    │ 1. DB Rule     │ │ lead_owner     │ │ _emit_domain_event │      │
+│         │    │ 2. Registry    │ │ unit_staff     │ │ _send_via_channel  │      │
+│         │    │    Fallback    │ │ all_admins     │ │                    │      │
+│         │    └────────────────┘ └────────────────┘ └────────────────────┘      │
 │                                                                                  │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Nguyên tắc thiết kế
+
 
 1. **Event-Driven Architecture**: Các service emit events, notification system subscribe và xử lý
 2. **Channel-Based Delivery**: Mỗi kênh (Socket.IO, Email, Database) xử lý độc lập

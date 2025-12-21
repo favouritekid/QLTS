@@ -256,7 +256,7 @@ async def dispatch(
         event_type=event.value,
         rule_source=rule_source,
         rule_id=getattr(config, 'rule_id', None),
-        channels=config.channels
+        channels=config.channel_values
     )
 
     # Step 1.5: ✅ PHASE 2.3: Check activation condition (database rules only)
@@ -443,7 +443,7 @@ async def dispatch(
                     context=payload,
                     event=event.value
                 )
-                for channel_name in config.channels
+                for channel_name in config.channel_values
             ]
 
             # Execute all channel deliveries in parallel
@@ -494,7 +494,7 @@ async def dispatch(
                 event_type=event.value,
                 error=str(e),
                 notification_count=len(notification_ids),
-                channels=config.channels,
+                channels=config.channel_values,
                 fallback="Notifications are in DB but delivery failed"
             )
 
