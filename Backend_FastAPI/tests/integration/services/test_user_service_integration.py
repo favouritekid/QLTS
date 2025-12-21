@@ -625,3 +625,83 @@ class TestGetUsers:
         # Assert
         for user in users:
             assert user.role == "admin"
+
+
+# =============================================================================
+# CASBIN & ASSIGNMENT LOGIC TESTS (Migrated from unit tests)
+# =============================================================================
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+class TestCasbinAndAssignment:
+    """Tests for Casbin sync and assignment helper logic."""
+    
+    async def test_update_user_role_change_syncs_casbin(
+        self, 
+        db: AsyncSession, 
+        regular_user: models.User
+    ):
+        """Test updating role triggers Casbin policy sync."""
+        # Arrange
+        user_update = MagicMock()
+        user_update.model_dump.return_value = {"role": "officer"}
+        
+        mock_enforcer = AsyncMock()
+        mock_enforcer.add_grouping_policy.return_value = True
+        mock_enforcer.remove_grouping_policy.return_value = True
+        mock_enforcer.save_policy.return_value = None
+        
+        # Act
+        updated_user, callback = await user_service.update_user(
+            db, 
+            regular_user, 
+            user_in=user_update, 
+            enforcer=mock_enforcer
+        )
+        await db.commit()
+        if callback:
+            await callback()
+        
+        # Assert - Verify Casbin was called
+        mock_enforcer.remove_grouping_policy.assert_awaited()
+        mock_enforcer.add_grouping_policy.assert_awaited()
+        mock_enforcer.save_policy.assert_awaited()
+        
+        # Verify role was changed in DB
+        await db.refresh(regular_user)
+        assert regular_user.role == "officer"
+    
+    async def test_update_user_unit_change_triggers_assignment_logic(
+        self, 
+        db: AsyncSession, 
+        regular_user: models.User,
+        seeded_dependencies: dict
+    ):
+        """Test changing unit_id triggers assignment helper."""
+        # Arrange - set initial unit
+        regular_user.unit_id = seeded_dependencies["unit_id"]
+        regular_user.role = "officer"
+        await db.flush()
+        
+        # Create a second unit for transfer
+        second_unit = models.OrganizationUnit(
+            name="Second Unit",
+            type="Phòng ban"
+        )
+        db.add(second_unit)
+        await db.flush()
+        
+        user_update = MagicMock()
+        user_update.model_dump.return_value = {"unit_id": second_unit.id}
+        
+        # Act
+        with patch("app.services.user_service._create_or_update_user_assignment", new_callable=AsyncMock) as mock_assign:
+            updated_user, callback = await user_service.update_user(db, regular_user, user_update)
+            await db.commit()
+            if callback:
+                await callback()
+            
+            # Assert - assignment helper was called
+            mock_assign.assert_awaited_once()
+            call_kwargs = mock_assign.call_args[1]
+            assert call_kwargs["new_unit_id"] == second_unit.id

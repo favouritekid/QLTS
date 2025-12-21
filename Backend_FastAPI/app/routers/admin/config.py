@@ -98,9 +98,11 @@ async def update_assignment_config_route(
     - Assignment config controls officer distribution settings per unit
     - Changes affect future lead assignments only (not existing assignments)
     """
-    updated_model = await config_service.update_assignment_config(
+    updated_model, post_commit = await config_service.update_assignment_config(
         db, unit.id, config_in.params
     )
+    await db.commit()
+    await post_commit()
     # Trả về schema Pydantic dựa trên model đã cập nhật từ DB
     return schemas.AssignmentConfig(params=updated_model.params)
 

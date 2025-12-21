@@ -862,3 +862,177 @@ async def test_admin_delete_status_not_found(
         == f"Consultation Status '{NON_EXISTENT_STATUS_ID}' not found."
     )
     log.info("Delete non-existent status correctly failed (404) with specific message.")
+
+
+# ============================================================================
+# AUTHORIZATION TESTS (Migrated from test_pipeline.py)
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_create_pipeline_stage_unauthorized(
+    client: AsyncClient,
+):
+    """
+    Test: POST /api/admin/pipeline-stages - Unauthorized access
+
+    Verifies:
+    - Non-admin users cannot create pipeline stages
+    - Returns 401 or 403 status
+    """
+    log.info("--- Running: test_create_pipeline_stage_unauthorized ---")
+
+    stage_data = {
+        "id": "test_unauthorized",
+        "name": "Unauthorized Test",
+        "order": 999,
+        "is_final_stage": False,
+    }
+
+    response = await client.post(
+        "/api/admin/pipeline-stages",
+        json=stage_data,
+    )
+
+    assert response.status_code in [401, 403], f"Expected 401/403, got {response.status_code}"
+    log.info("✅ Unauthorized access rejected as expected")
+
+
+@pytest.mark.asyncio
+async def test_delete_consultation_status_unauthorized(
+    client: AsyncClient,
+):
+    """
+    Test: DELETE /api/admin/consultation-statuses/{status_id} - Unauthorized access
+
+    Verifies:
+    - Non-admin users cannot delete consultation statuses
+    - Returns 401 or 403 status
+    """
+    log.info("--- Running: test_delete_consultation_status_unauthorized ---")
+
+    response = await client.delete(
+        "/api/admin/consultation-statuses/some_status",
+    )
+
+    assert response.status_code in [401, 403], f"Expected 401/403, got {response.status_code}"
+    log.info("✅ Unauthorized access rejected as expected")
+
+
+# ============================================================================
+# INTEGRATION TESTS (Migrated from test_pipeline.py)
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_pipeline_workflow_integration(
+    client: AsyncClient,
+    admin_token_headers: dict,
+):
+    """
+    Integration test: Complete pipeline workflow
+
+    Tests:
+    1. Create pipeline stage
+    2. Create consultation statuses in the stage
+    3. Create allowed transitions between statuses
+    4. Verify all components work together
+    """
+    log.info("--- Running: test_pipeline_workflow_integration ---")
+
+    # 1. Create pipeline stage
+    stage_data = {
+        "id": "test_stage_integration",
+        "name": "Integration Test Stage",
+        "order": 200,
+        "is_final_stage": False,
+    }
+
+    stage_response = await client.post(
+        "/api/admin/pipeline-stages",
+        json=stage_data,
+        headers=admin_token_headers,
+    )
+    assert stage_response.status_code == 201
+    stage_id = stage_response.json()["id"]
+
+    # 2. Create first consultation status
+    status1_data = {
+        "id": "test_status_int_1",
+        "name": "Integration Status 1",
+        "color_code": "#ABCDEF",
+        "stage_id": stage_id,
+        "outcome_type": "neutral",
+        "is_final_status": False,
+    }
+
+    status1_response = await client.post(
+        "/api/admin/consultation-statuses",
+        json=status1_data,
+        headers=admin_token_headers,
+    )
+    assert status1_response.status_code == 201
+    status1_id = status1_response.json()["id"]
+
+    # 3. Create second consultation status
+    status2_data = {
+        "id": "test_status_int_2",
+        "name": "Integration Status 2",
+        "color_code": "#FEDCBA",
+        "stage_id": stage_id,
+        "outcome_type": "positive",
+        "is_final_status": False,
+    }
+
+    status2_response = await client.post(
+        "/api/admin/consultation-statuses",
+        json=status2_data,
+        headers=admin_token_headers,
+    )
+    assert status2_response.status_code == 201
+    status2_id = status2_response.json()["id"]
+
+    # 4. Create allowed transition
+    transition_data = {
+        "from_status_id": status1_id,
+        "to_status_id": status2_id,
+    }
+
+    transition_response = await client.post(
+        "/api/admin/allowed-transitions",
+        json=transition_data,
+        headers=admin_token_headers,
+    )
+    assert transition_response.status_code == 201
+
+    # 5. Verify all components
+    # Get all stages
+    stages_response = await client.get(
+        "/api/admin/pipeline-stages",
+        headers=admin_token_headers,
+    )
+    assert stages_response.status_code == 200
+    stages = stages_response.json()
+    assert any(s["id"] == stage_id for s in stages)
+
+    # Get all statuses
+    statuses_response = await client.get(
+        "/api/admin/consultation-statuses",
+        headers=admin_token_headers,
+    )
+    assert statuses_response.status_code == 200
+    statuses = statuses_response.json()
+    assert any(s["id"] == status1_id for s in statuses)
+    assert any(s["id"] == status2_id for s in statuses)
+
+    # Get all transitions
+    transitions_response = await client.get(
+        "/api/admin/allowed-transitions",
+        headers=admin_token_headers,
+    )
+    assert transitions_response.status_code == 200
+    transitions = transitions_response.json()
+    assert len(transitions) >= 1
+
+    log.info("✅ Pipeline workflow integration test completed successfully")
+
