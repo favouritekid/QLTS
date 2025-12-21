@@ -220,6 +220,10 @@ from .notification import (
     NotificationCreate,
     NotificationsPage,
     MarkAsReadRequest,
+    # ✅ NOTIFICATION 2.0: Notification Action schemas
+    NotificationAction,
+    NotificationActionCreate,
+    NotificationActionUpdate,
     # ✅ PHASE 2.2: Notification Rule schemas
     NotificationRule,
     NotificationRuleBase,

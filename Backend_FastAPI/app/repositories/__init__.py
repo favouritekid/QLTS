@@ -22,6 +22,9 @@ from app.repositories.insights_repository import InsightsRepository
 from app.repositories.kpi_repository import KpiRepository
 from app.repositories.lead_repository import LeadRepository
 from app.repositories.notification_repository import NotificationRepository
+from app.repositories.notification_rule_repository import NotificationRuleRepository
+from app.repositories.notification_template_repository import NotificationTemplateRepository
+from app.repositories.notification_preference_repository import NotificationPreferenceRepository
 from app.repositories.officer_repository import OfficerRepository
 from app.repositories.organization_repository import OrganizationRepository
 from app.repositories.pipeline_repository import PipelineRepository
