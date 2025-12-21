@@ -42,7 +42,7 @@ import structlog
 from datetime import datetime, timezone
 from typing import Any, Callable, List, Optional, Tuple
 
-from sqlalchemy import and_, cast, insert, select, String
+# from sqlalchemy import and_, cast, insert, select, String (removed - using repository)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models
@@ -51,6 +51,7 @@ from app.core.event_groups import get_event_group, NotificationChannel
 from app.database import safe_redis_lpush, safe_redis_ltrim, safe_redis_expire
 from app.services.notification_registry import get_event_config, NotificationConfig
 from app.services import notification_preference_service
+from app.repositories import NotificationRepository
 # ✅ PHASE 2.3: Import database rule loader
 from app.services.notification_rule_loader import get_rule_for_event
 
@@ -423,11 +424,8 @@ async def dispatch(
         # Step 8: Send notifications through configured channels IN PARALLEL
         try:
             # Fetch notifications from database for channel delivery
-            result = await db.execute(
-                select(models.Notification)
-                .where(models.Notification.id.in_(notification_ids))
-            )
-            notifications = list(result.scalars().all())
+            repo = NotificationRepository(db)
+            notifications = await repo.get_by_ids(notification_ids)
 
             if not notifications:
                 log.warning(
@@ -531,18 +529,8 @@ async def _apply_deduplication(
     try:
         # Find users who already have notification with this dedupe_key
         # The dedupe_key is stored in the data JSON column
-        result = await db.execute(
-            select(models.Notification.user_id)
-            .where(
-                and_(
-                    models.Notification.user_id.in_(user_ids),
-                    # ✅ FIX: Use cast() instead of .astext which fails in async SQLAlchemy
-                    # PostgreSQL JSONB: data->>'dedupe_key' = :value
-                    cast(models.Notification.data["dedupe_key"], String) == dedupe_key
-                )
-            )
-        )
-        existing_user_ids = {row[0] for row in result.fetchall()}
+        repo = NotificationRepository(db)
+        existing_user_ids = await repo.get_by_dedupe_key(user_ids, dedupe_key)
 
         # Return users who don't have the notification yet
         filtered_ids = [uid for uid in user_ids if uid not in existing_user_ids]
@@ -599,6 +587,8 @@ async def _bulk_create_notifications(
     notification_ids = []
     now = datetime.now(timezone.utc)
 
+    repo = NotificationRepository(db)
+
     # Process in chunks
     for i in range(0, len(user_ids), BULK_INSERT_CHUNK_SIZE):
         chunk = user_ids[i:i + BULK_INSERT_CHUNK_SIZE]
@@ -619,13 +609,8 @@ async def _bulk_create_notifications(
         ]
 
         try:
-            # Use insert with RETURNING to get IDs
-            result = await db.execute(
-                insert(models.Notification)
-                .values(values)
-                .returning(models.Notification.id)
-            )
-            chunk_ids = [row[0] for row in result.fetchall()]
+            # Use repository for bulk insert
+            chunk_ids = await repo.bulk_create(values)
             notification_ids.extend(chunk_ids)
 
             log.debug(

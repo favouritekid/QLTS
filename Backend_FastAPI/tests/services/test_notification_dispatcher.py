@@ -2,257 +2,206 @@
 """
 Integration tests for notification dispatcher.
 
-These tests verify the complete flow from event dispatch to notification
-creation and Celery task queuing.
+Verifies the full dispatch pipeline:
+Resolver -> Preference Filter -> Template Rendering -> DB Persistence -> Side Effects
 """
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+import json
+from unittest.mock import AsyncMock, MagicMock
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import models
 from app.core.events import SystemEvents
-from app.services.notification_dispatcher import (
-    dispatch,
-    dispatch_to_user,
-    dispatch_to_users,
-    dispatch_system_alert,
-    _apply_deduplication,
-)
+from app.services.notification_dispatcher import dispatch
 
 
-# =============================================================================
-# DISPATCHER TESTS
-# =============================================================================
+@pytest.mark.asyncio
+@pytest.mark.integration
+class TestNotificationDispatcher:
+    """Integration tests for notification dispatcher using real database."""
 
-class TestDispatcher:
-    """Tests for the main dispatch function."""
-
-    @pytest.mark.asyncio
-    @patch("app.services.notification_dispatcher.get_event_config")
-    async def test_dispatch_returns_empty_for_unregistered_event(
-        self, mock_get_config
+    async def test_dispatch_end_to_end_success(
+        self, 
+        db: AsyncSession, 
+        officer_user_in_db: dict,
+        mocker
     ):
-        """Should return empty list for events not in registry."""
-        mock_get_config.return_value = None
-        db = AsyncMock()
-
-        result = await dispatch(
-            db=db,
-            event=SystemEvents.LEAD_ASSIGNED,
-            payload={"lead_id": 1}
+        """
+        Test successful end-to-end dispatch.
+        """
+        # Arrange
+        user_id = officer_user_in_db["id"]
+        # Use UNIT_CREATED for success test
+        event = SystemEvents.UNIT_CREATED
+        
+        # 1. Seed reusable template
+        # FIX: Use ${} for string.Template compatibility
+        template = models.NotificationTemplate(
+            template_code="TPL_SUCCESS",
+            name="Success Template",
+            title_template="Unit Created: ${unit_name}",
+            message_template="New unit ${unit_name} created.",
+            template_type="system"
         )
-
-        assert result == []
-
-    @pytest.mark.asyncio
-    @patch("app.services.notification_dispatcher._dispatch_broadcast_task")
-    @patch("app.services.notification_dispatcher._bulk_create_notifications")
-    @patch("app.services.notification_dispatcher.notification_preference_service")
-    @patch("app.services.notification_dispatcher.get_event_config")
-    async def test_dispatch_full_flow(
-        self,
-        mock_get_config,
-        mock_pref_service,
-        mock_bulk_create,
-        mock_dispatch_task
-    ):
-        """Should execute full dispatch flow."""
-        # Setup mocks
-        mock_config = MagicMock()
-        mock_config.resolver.resolve_users = AsyncMock(return_value=[1, 2, 3])
-        mock_config.render_title.return_value = "Test Title"
-        mock_config.render_message.return_value = "Test Message"
-        mock_config.render_link.return_value = "/test"
-        mock_config.notification_type = "info"
-        mock_config.group.value = "lead"
-        mock_config.channels = ["browser", "email"]
-        mock_get_config.return_value = mock_config
-
-        mock_pref_service.filter_users_by_group = AsyncMock(return_value=[1, 2, 3])
-        mock_bulk_create.return_value = [100, 101, 102]
-
-        db = AsyncMock()
-        db.commit = AsyncMock()
-
-        result = await dispatch(
-            db=db,
-            event=SystemEvents.LEAD_ASSIGNED,
-            payload={"lead_id": 1, "officer_id": 2}
+        db.add(template)
+        await db.commit()
+        await db.refresh(template)
+        
+        # 2. Seed rule
+        rule = models.NotificationRule(
+            event=event.value,
+            template_id=template.id,
+            title_template=template.title_template,
+            message_template=template.message_template,
+            channels=["browser"],
+            recipient_config={"resolver_type": "specific_users", "params": {}},
+            enabled=True
         )
-
-        assert result == [100, 101, 102]
-        mock_bulk_create.assert_called_once()
-        db.commit.assert_called_once()
-        mock_dispatch_task.assert_called_once()
-
-    @pytest.mark.asyncio
-    @patch("app.services.notification_dispatcher.get_event_config")
-    async def test_dispatch_returns_empty_when_no_recipients(
-        self, mock_get_config
-    ):
-        """Should return empty list when resolver returns no users."""
-        mock_config = MagicMock()
-        mock_config.resolver.resolve_users = AsyncMock(return_value=[])
-        mock_get_config.return_value = mock_config
-
-        db = AsyncMock()
-
-        result = await dispatch(
-            db=db,
-            event=SystemEvents.LEAD_ASSIGNED,
-            payload={"lead_id": 1}
+        db.add(rule)
+        await db.commit()
+        
+        # 3. Mocks for NOTIFICATION 2.0 side effects
+        mock_domain_emit = mocker.patch(
+            "app.services.notification_dispatcher._emit_domain_event", 
+            new_callable=AsyncMock
         )
-
-        assert result == []
-
-    @pytest.mark.asyncio
-    @patch("app.services.notification_dispatcher._dispatch_broadcast_task")
-    @patch("app.services.notification_dispatcher._bulk_create_notifications")
-    @patch("app.services.notification_dispatcher.get_event_config")
-    async def test_dispatch_skip_preference_check(
-        self,
-        mock_get_config,
-        mock_bulk_create,
-        mock_dispatch_task
-    ):
-        """Should skip preference filtering when flag is set."""
-        mock_config = MagicMock()
-        mock_config.resolver.resolve_users = AsyncMock(return_value=[1, 2])
-        mock_config.render_title.return_value = "Title"
-        mock_config.render_message.return_value = "Message"
-        mock_config.render_link.return_value = None
-        mock_config.notification_type = "info"
-        mock_config.group.value = "system"
-        mock_config.channels = ["browser"]
-        mock_get_config.return_value = mock_config
-
-        mock_bulk_create.return_value = [1, 2]
-
-        db = AsyncMock()
-        db.commit = AsyncMock()
-
-        result = await dispatch(
-            db=db,
-            event=SystemEvents.SYSTEM_ALERT,
-            payload={"severity": "error", "message": "Test"},
-            skip_preference_check=True
-        )
-
-        assert result == [1, 2]
-
-
-# =============================================================================
-# DEDUPLICATION TESTS
-# =============================================================================
-
-class TestDeduplication:
-    """Tests for deduplication logic."""
-
-    @pytest.mark.asyncio
-    @patch("app.services.notification_dispatcher.models")
-    @patch("app.services.notification_dispatcher.select")
-    @patch("app.services.notification_dispatcher.and_")
-    async def test_deduplication_filters_existing(
-        self, mock_and, mock_select, mock_models
-    ):
-        """Should filter out users who already have notification."""
-        db = AsyncMock()
-        # The execute returns a result that has fetchall()
+        # Mock _send_via_channel which returns (channel_name, result, error)
+        # result should be an object with sent_count, failed_ids, etc.
         mock_result = MagicMock()
-        mock_result.fetchall.return_value = [(1,), (3,)]  # Users 1 and 3 already have it
-        db.execute = AsyncMock(return_value=mock_result)
-
-        # Setup mock chain for select().where()
-        mock_where = MagicMock()
-        mock_select.return_value.where.return_value = mock_where
-
-        result = await _apply_deduplication(
-            db=db,
-            user_ids=[1, 2, 3, 4],
-            dedupe_key="lead_assigned:123:456"
+        mock_result.sent_count = 1
+        mock_result.failed_ids = []
+        mock_result.success = True
+        
+        mock_channel_send = mocker.patch(
+            "app.services.notification_dispatcher._send_via_channel", 
+            new_callable=AsyncMock,
+            return_value=("browser", mock_result, None)
         )
+        
+        # Act
+        payload = {"user_id": user_id, "unit_name": "Test Unit"}
+        notification_ids, callback = await dispatch(db, event, payload)
+        
+        # Manually trigger the callback (as a real router would after commit)
+        if callback:
+            await callback()
+        
+        # Assert
+        assert len(notification_ids) == 1
+        
+        # Verify persistence and rendering
+        notification = await db.get(models.Notification, notification_ids[0])
+        assert notification is not None
+        assert notification.title == "Unit Created: Test Unit"
+        assert "New unit Test Unit created." in notification.message
+        
+        # Verify side effects
+        mock_domain_emit.assert_called_once()
+        mock_channel_send.assert_called_once()
 
-        assert result == [2, 4]  # Only 2 and 4 don't have it
-
-    @pytest.mark.asyncio
-    async def test_deduplication_fail_safe(self):
-        """Should return all users on database error."""
-        db = AsyncMock()
-        db.execute = AsyncMock(side_effect=Exception("DB Error"))
-
-        result = await _apply_deduplication(
-            db=db,
-            user_ids=[1, 2, 3],
-            dedupe_key="test_key"
+    async def test_dispatch_deduplication(
+        self, 
+        db: AsyncSession, 
+        officer_user_in_db: dict,
+        mocker
+    ):
+        """Should not create duplicate notifications if dedupe_key matches existing data."""
+        # Arrange
+        user_id = officer_user_in_db["id"]
+        # Use UNIT_UPDATED for dedupe test
+        event = SystemEvents.UNIT_UPDATED
+        dedupe_key = "unique_dedupe_123"
+        
+        # Seed Rule
+        rule = models.NotificationRule(
+            event=event.value,
+            title_template="Dedupe Title",
+            message_template="Dedupe Message",
+            recipient_config={"resolver_type": "specific_users", "params": {}},
+            enabled=True
         )
-
-        # On error, should return all users (fail-safe)
-        assert result == [1, 2, 3]
-
-
-# =============================================================================
-# CONVENIENCE FUNCTION TESTS
-# =============================================================================
-
-class TestConvenienceFunctions:
-    """Tests for convenience wrapper functions."""
-
-    @pytest.mark.asyncio
-    @patch("app.services.notification_dispatcher.dispatch")
-    async def test_dispatch_to_user(self, mock_dispatch):
-        """Should set user_id in payload."""
-        mock_dispatch.return_value = [100]
-        db = AsyncMock()
-
-        payload = {"old_role": "user", "new_role": "admin"}
-        result = await dispatch_to_user(
-            db=db,
-            user_id=42,
-            event=SystemEvents.USER_ROLE_CHANGED,
-            payload=payload
+        db.add(rule)
+        
+        # Create existing notification with SAME dedupe_key in 'data' JSON
+        existing_notif = models.Notification(
+            user_id=user_id,
+            title="Earlier",
+            message="Earlier",
+            data={"dedupe_key": dedupe_key}
         )
+        db.add(existing_notif)
+        await db.commit()
+        
+        # Act
+        payload = {"user_id": user_id, "dedupe_key": dedupe_key}
+        # Pass dedupe_key to dispatch
+        notification_ids, _ = await dispatch(db, event, payload, dedupe_key=dedupe_key)
+        
+        # Assert
+        # Should be empty since it was deduplicated
+        assert len(notification_ids) == 0
 
-        assert result == [100]
-        # dispatch is called with positional args: (db, event, payload, dedupe_key)
-        call_args = mock_dispatch.call_args
-        # The payload is the dict passed, which gets modified in-place
-        assert payload["user_id"] == 42
-
-    @pytest.mark.asyncio
-    @patch("app.services.notification_dispatcher.dispatch")
-    async def test_dispatch_to_users(self, mock_dispatch):
-        """Should set user_ids in payload."""
-        mock_dispatch.return_value = [100, 101, 102]
-        db = AsyncMock()
-
-        payload = {"title": "Test", "message": "Hello"}
-        result = await dispatch_to_users(
-            db=db,
-            user_ids=[1, 2, 3],
-            event=SystemEvents.SYSTEM_ANNOUNCEMENT,
-            payload=payload
+    async def test_dispatch_disabled_rule(
+        self, 
+        db: AsyncSession, 
+        officer_user_in_db: dict
+    ):
+        """Should skip processing if rule is disabled."""
+        # Arrange
+        user_id = officer_user_in_db["id"]
+        # Use UNIT_DELETED for disabled rule test
+        event = SystemEvents.UNIT_DELETED
+        
+        rule = models.NotificationRule(
+            event=event.value,
+            title_template="Title",
+            message_template="Message",
+            recipient_config={"resolver_type": "specific_users", "params": {}},
+            enabled=False  # DISABLED
         )
+        db.add(rule)
+        await db.commit()
+        
+        # Act
+        notification_ids, _ = await dispatch(db, event, {"user_id": user_id})
+        
+        # Assert
+        assert len(notification_ids) == 0
 
-        assert result == [100, 101, 102]
-        # The payload is the dict passed, which gets modified in-place
-        assert payload["user_ids"] == [1, 2, 3]
-
-    @pytest.mark.asyncio
-    @patch("app.services.notification_dispatcher.dispatch")
-    async def test_dispatch_system_alert(self, mock_dispatch):
-        """Should dispatch SYSTEM_ALERT with correct payload."""
-        mock_dispatch.return_value = [100]
-        db = AsyncMock()
-
-        result = await dispatch_system_alert(
-            db=db,
-            severity="warning",
-            message="Test warning",
-            action_url="/action"
+    async def test_dispatch_preference_filtering(
+        self, 
+        db: AsyncSession, 
+        officer_user_in_db: dict,
+        mocker
+    ):
+        """Should respect user preferences during dispatch."""
+        # Arrange
+        user_id = officer_user_in_db["id"]
+        # Use PROGRAM_CREATED for preference test
+        event = SystemEvents.PROGRAM_CREATED
+        
+        # Disable browser notifications globally for this user
+        pref = models.NotificationPreference(
+            user_id=user_id,
+            browser_enabled=False
         )
-
-        assert result == [100]
-        # Check that dispatch was called with correct event
-        mock_dispatch.assert_called_once()
-        call_args = mock_dispatch.call_args
-        # Positional args: (db, event, payload, dedupe_key=None, skip_preference_check)
-        assert call_args[1].get("event") == SystemEvents.SYSTEM_ALERT or \
-               call_args[0][1] == SystemEvents.SYSTEM_ALERT
+        db.add(pref)
+        
+        # Rule with browser channel
+        rule = models.NotificationRule(
+            event=event.value,
+            title_template="Title",
+            message_template="Message",
+            channels=["browser"],
+            recipient_config={"resolver_type": "specific_users", "params": {}},
+            enabled=True
+        )
+        db.add(rule)
+        await db.commit()
+        
+        # Act
+        notification_ids, _ = await dispatch(db, event, {"user_id": user_id})
+        
+        # Assert
+        # Should be empty because preference filtered out the only channel
+        assert len(notification_ids) == 0

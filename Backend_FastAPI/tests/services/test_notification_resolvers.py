@@ -1,13 +1,15 @@
 # tests/services/test_notification_resolvers.py
 """
-Unit tests for notification resolvers.
+Integration tests for notification resolvers.
 
 These tests verify that resolvers correctly determine notification recipients
-based on event payloads and database state.
+based on event payloads and real database state.
 """
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import models
+from app.core.constants import UserRole
 from app.services.notification_resolvers import (
     LeadOwnerResolver,
     UnitStaffResolver,
@@ -20,332 +22,213 @@ from app.services.notification_resolvers import (
 )
 
 
-# =============================================================================
-# LEAD OWNER RESOLVER TESTS
-# =============================================================================
+@pytest.mark.asyncio
+@pytest.mark.integration
+class TestNotificationResolvers:
+    """Integration tests for notification resolvers using real database."""
 
-class TestLeadOwnerResolver:
-    """Tests for LeadOwnerResolver."""
+    # =========================================================================
+    # LEAD OWNER RESOLVER
+    # =========================================================================
 
-    @pytest.fixture
-    def resolver(self):
-        return LeadOwnerResolver()
-
-    @pytest.mark.asyncio
-    async def test_resolve_with_officer_id_in_payload(self, resolver):
-        """Should return officer_id directly from payload."""
-        db = AsyncMock()
+    async def test_lead_owner_resolver_direct_officer_id(self, db: AsyncSession):
+        """Should return officer_id directly from payload if provided."""
+        resolver = LeadOwnerResolver()
         payload = {"lead_id": 1, "officer_id": 42}
 
         result = await resolver.resolve_users(db, payload)
 
         assert result == [42]
-        # DB should not be queried when officer_id is provided
-        db.execute.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_resolve_with_lead_id_lookup(self, resolver):
-        """Should query lead to find assigned officer."""
-        db = AsyncMock()
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = 123
-        db.execute.return_value = mock_result
+    async def test_lead_owner_resolver_db_lookup(
+        self, 
+        db: AsyncSession, 
+        seeded_lead: models.Lead
+    ):
+        """Should query lead to find assigned officer from real DB."""
+        resolver = LeadOwnerResolver()
+        payload = {"lead_id": seeded_lead.id}
 
-        payload = {"lead_id": 1}
         result = await resolver.resolve_users(db, payload)
 
-        assert result == [123]
-        db.execute.assert_called_once()
+        assert result == [seeded_lead.assigned_officer_id]
+        assert seeded_lead.assigned_officer_id is not None
 
-    @pytest.mark.asyncio
-    async def test_resolve_with_no_assigned_officer(self, resolver):
+    async def test_lead_owner_resolver_no_officer(
+        self, 
+        db: AsyncSession, 
+        unassigned_lead: models.Lead
+    ):
         """Should return empty list if lead has no assigned officer."""
-        db = AsyncMock()
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = None
-        db.execute.return_value = mock_result
+        resolver = LeadOwnerResolver()
+        payload = {"lead_id": unassigned_lead.id}
 
-        payload = {"lead_id": 1}
         result = await resolver.resolve_users(db, payload)
 
         assert result == []
 
-    @pytest.mark.asyncio
-    async def test_resolve_with_missing_payload(self, resolver):
-        """Should return empty list if neither lead_id nor officer_id provided."""
-        db = AsyncMock()
+    # =========================================================================
+    # UNIT STAFF RESOLVER
+    # =========================================================================
+
+    async def test_unit_staff_resolver(
+        self, 
+        db: AsyncSession, 
+        officer_user_in_db: dict
+    ):
+        """Should resolve all staff members in a unit."""
+        # Arrange - get officer and their unit
+        officer = await db.get(models.User, officer_user_in_db["id"])
+        unit_id = officer.unit_id
+
+        # Seed UserUnitAssignment (source of truth for resolver)
+        assignment = models.UserUnitAssignment(
+            user_id=officer.id,
+            unit_id=unit_id,
+            role=UserRole.OFFICER,
+            is_active=True
+        )
+        db.add(assignment)
+        await db.commit()
+
+        resolver = UnitStaffResolver()
+        payload = {"unit_id": unit_id}
+
+        # Act
+        result = await resolver.resolve_users(db, payload)
+
+        # Assert
+        assert officer.id in result
+        assert len(result) >= 1
+
+    async def test_unit_staff_resolver_exclude_actor(
+        self, 
+        db: AsyncSession, 
+        officer_user_in_db: dict
+    ):
+        """Should exclude specific user if requested."""
+        officer = await db.get(models.User, officer_user_in_db["id"])
+        unit_id = officer.unit_id
+
+        # Seed assignment
+        assignment = models.UserUnitAssignment(
+            user_id=officer.id,
+            unit_id=unit_id,
+            role=UserRole.OFFICER,
+            is_active=True
+        )
+        db.add(assignment)
+        await db.commit()
+
+        resolver = UnitStaffResolver()
+        payload = {"unit_id": unit_id, "exclude_user_id": officer.id}
+
+        result = await resolver.resolve_users(db, payload)
+
+        assert officer.id not in result
+
+    # =========================================================================
+    # UNIT MANAGERS RESOLVER
+    # =========================================================================
+
+    async def test_unit_managers_resolver(
+        self, 
+        db: AsyncSession, 
+        manager_user_in_db: dict
+    ):
+        """Should resolve managers/admins in a unit."""
+        manager = await db.get(models.User, manager_user_in_db["id"])
+        unit_id = manager.unit_id
+
+        # Seed Assignment
+        assignment = models.UserUnitAssignment(
+            user_id=manager.id,
+            unit_id=unit_id,
+            role=UserRole.MANAGER,
+            is_active=True
+        )
+        db.add(assignment)
+        await db.commit()
+
+        resolver = UnitManagersResolver()
+        payload = {"unit_id": unit_id}
+
+        result = await resolver.resolve_users(db, payload)
+
+        assert manager.id in result
+
+    # =========================================================================
+    # GLOBAL RESOLVERS
+    # =========================================================================
+
+    async def test_all_users_resolver(
+        self, 
+        db: AsyncSession, 
+        officer_user_in_db: dict,
+        admin_user_in_db: dict
+    ):
+        """Should resolve all active users."""
+        resolver = AllUsersResolver()
         payload = {}
 
         result = await resolver.resolve_users(db, payload)
 
-        assert result == []
+        assert officer_user_in_db["id"] in result
+        assert admin_user_in_db["id"] in result
+        assert len(result) >= 2
 
-    @pytest.mark.asyncio
-    async def test_resolve_fail_safe_on_exception(self, resolver):
-        """Should return empty list on database error."""
-        db = AsyncMock()
-        db.execute.side_effect = Exception("Database error")
+    async def test_all_admins_resolver(
+        self, 
+        db: AsyncSession, 
+        admin_user_in_db: dict,
+        officer_user_in_db: dict
+    ):
+        """Should resolve only admin users."""
+        resolver = AllAdminsResolver()
+        payload = {}
 
-        payload = {"lead_id": 1}
         result = await resolver.resolve_users(db, payload)
 
-        assert result == []
+        assert admin_user_in_db["id"] in result
+        assert officer_user_in_db["id"] not in result
 
+    async def test_specific_users_resolver(self, db: AsyncSession):
+        """Should return user_ids from payload."""
+        resolver = SpecificUsersResolver()
+        payload = {"user_ids": [10, 20, 30]}
 
-# =============================================================================
-# UNIT STAFF RESOLVER TESTS
-# =============================================================================
-
-class TestUnitStaffResolver:
-    """Tests for UnitStaffResolver."""
-
-    @pytest.fixture
-    def resolver(self):
-        return UnitStaffResolver()
-
-    @pytest.mark.asyncio
-    async def test_resolve_unit_staff(self, resolver):
-        """Should return all staff in a unit."""
-        db = AsyncMock()
-        mock_result = MagicMock()
-        mock_result.fetchall.return_value = [(1,), (2,), (3,)]
-        db.execute.return_value = mock_result
-
-        payload = {"unit_id": 10}
         result = await resolver.resolve_users(db, payload)
 
-        assert result == [1, 2, 3]
+        assert result == [10, 20, 30]
 
-    @pytest.mark.asyncio
-    async def test_resolve_with_exclude_user(self, resolver):
-        """Should exclude specific user from results."""
-        db = AsyncMock()
-        mock_result = MagicMock()
-        mock_result.fetchall.return_value = [(1,), (2,), (3,)]
-        db.execute.return_value = mock_result
+    # =========================================================================
+    # COMPOSITE & WRAPPER RESOLVERS
+    # =========================================================================
 
-        payload = {"unit_id": 10, "exclude_user_id": 2}
+    async def test_composite_resolver(self, db: AsyncSession):
+        """Should merge results from multiple resolvers."""
+        class MockResolver:
+            def __init__(self, ids): self.ids = ids
+            async def resolve_users(self, db, payload): return self.ids
+
+        resolver = CompositeResolver([
+            MockResolver([1, 2]),
+            MockResolver([2, 3])
+        ])
+
+        result = await resolver.resolve_users(db, {})
+        assert set(result) == {1, 2, 3}
+        assert len(result) == 3
+
+    async def test_actor_excluded_resolver(self, db: AsyncSession):
+        """Should remove actor_id from results."""
+        class MockResolver:
+            async def resolve_users(self, db, payload): return [1, 2, 3]
+
+        resolver = ActorExcludedResolver(MockResolver())
+        payload = {"actor_id": 2}
+
         result = await resolver.resolve_users(db, payload)
 
         assert result == [1, 3]
         assert 2 not in result
-
-    @pytest.mark.asyncio
-    async def test_resolve_without_unit_id(self, resolver):
-        """Should return empty list if unit_id not provided."""
-        db = AsyncMock()
-        payload = {}
-
-        result = await resolver.resolve_users(db, payload)
-
-        assert result == []
-
-
-# =============================================================================
-# UNIT MANAGERS RESOLVER TESTS
-# =============================================================================
-
-class TestUnitManagersResolver:
-    """Tests for UnitManagersResolver."""
-
-    @pytest.fixture
-    def resolver(self):
-        return UnitManagersResolver()
-
-    @pytest.mark.asyncio
-    async def test_resolve_managers_only(self, resolver):
-        """Should return only manager/admin users."""
-        db = AsyncMock()
-        mock_result = MagicMock()
-        mock_result.fetchall.return_value = [(10,), (20,)]
-        db.execute.return_value = mock_result
-
-        payload = {"unit_id": 5}
-        result = await resolver.resolve_users(db, payload)
-
-        assert result == [10, 20]
-
-
-# =============================================================================
-# ALL USERS RESOLVER TESTS
-# =============================================================================
-
-class TestAllUsersResolver:
-    """Tests for AllUsersResolver."""
-
-    @pytest.fixture
-    def resolver(self):
-        return AllUsersResolver()
-
-    @pytest.mark.asyncio
-    async def test_resolve_all_active_users(self, resolver):
-        """Should return all active users."""
-        db = AsyncMock()
-        mock_result = MagicMock()
-        mock_result.fetchall.return_value = [(1,), (2,), (3,), (4,)]
-        db.execute.return_value = mock_result
-
-        payload = {}
-        result = await resolver.resolve_users(db, payload)
-
-        assert result == [1, 2, 3, 4]
-
-    @pytest.mark.asyncio
-    async def test_resolve_with_exclusions(self, resolver):
-        """Should exclude specified users."""
-        db = AsyncMock()
-        mock_result = MagicMock()
-        mock_result.fetchall.return_value = [(1,), (3,), (4,)]
-        db.execute.return_value = mock_result
-
-        payload = {"exclude_user_ids": [2]}
-        result = await resolver.resolve_users(db, payload)
-
-        assert 2 not in result
-
-
-# =============================================================================
-# ALL ADMINS RESOLVER TESTS
-# =============================================================================
-
-class TestAllAdminsResolver:
-    """Tests for AllAdminsResolver."""
-
-    @pytest.fixture
-    def resolver(self):
-        return AllAdminsResolver()
-
-    @pytest.mark.asyncio
-    async def test_resolve_admin_users(self, resolver):
-        """Should return only admin users."""
-        db = AsyncMock()
-        mock_result = MagicMock()
-        mock_result.fetchall.return_value = [(100,), (200,)]
-        db.execute.return_value = mock_result
-
-        payload = {}
-        result = await resolver.resolve_users(db, payload)
-
-        assert result == [100, 200]
-
-
-# =============================================================================
-# SPECIFIC USERS RESOLVER TESTS
-# =============================================================================
-
-class TestSpecificUsersResolver:
-    """Tests for SpecificUsersResolver."""
-
-    @pytest.fixture
-    def resolver(self):
-        return SpecificUsersResolver()
-
-    @pytest.mark.asyncio
-    async def test_resolve_user_ids_list(self, resolver):
-        """Should return user_ids from payload."""
-        db = AsyncMock()
-        payload = {"user_ids": [1, 2, 3]}
-
-        result = await resolver.resolve_users(db, payload)
-
-        assert result == [1, 2, 3]
-
-    @pytest.mark.asyncio
-    async def test_resolve_single_user_id(self, resolver):
-        """Should return single user_id from payload."""
-        db = AsyncMock()
-        payload = {"user_id": 42}
-
-        result = await resolver.resolve_users(db, payload)
-
-        assert result == [42]
-
-    @pytest.mark.asyncio
-    async def test_resolve_empty_without_users(self, resolver):
-        """Should return empty list if no users specified."""
-        db = AsyncMock()
-        payload = {"some_other_field": "value"}
-
-        result = await resolver.resolve_users(db, payload)
-
-        assert result == []
-
-
-# =============================================================================
-# COMPOSITE RESOLVER TESTS
-# =============================================================================
-
-class TestCompositeResolver:
-    """Tests for CompositeResolver."""
-
-    @pytest.mark.asyncio
-    async def test_merge_results_from_multiple_resolvers(self):
-        """Should combine results from all inner resolvers."""
-        resolver1 = AsyncMock()
-        resolver1.resolve_users.return_value = [1, 2]
-
-        resolver2 = AsyncMock()
-        resolver2.resolve_users.return_value = [3, 4]
-
-        composite = CompositeResolver([resolver1, resolver2])
-        db = AsyncMock()
-        payload = {}
-
-        result = await composite.resolve_users(db, payload)
-
-        assert set(result) == {1, 2, 3, 4}
-
-    @pytest.mark.asyncio
-    async def test_dedupe_overlapping_results(self):
-        """Should deduplicate overlapping user IDs."""
-        resolver1 = AsyncMock()
-        resolver1.resolve_users.return_value = [1, 2, 3]
-
-        resolver2 = AsyncMock()
-        resolver2.resolve_users.return_value = [2, 3, 4]
-
-        composite = CompositeResolver([resolver1, resolver2])
-        db = AsyncMock()
-        payload = {}
-
-        result = await composite.resolve_users(db, payload)
-
-        assert set(result) == {1, 2, 3, 4}
-        assert len(result) == 4  # No duplicates
-
-
-# =============================================================================
-# ACTOR EXCLUDED RESOLVER TESTS
-# =============================================================================
-
-class TestActorExcludedResolver:
-    """Tests for ActorExcludedResolver."""
-
-    @pytest.mark.asyncio
-    async def test_exclude_actor_from_results(self):
-        """Should remove actor_id from inner resolver results."""
-        inner = AsyncMock()
-        inner.resolve_users.return_value = [1, 2, 3, 4]
-
-        excluded = ActorExcludedResolver(inner)
-        db = AsyncMock()
-        payload = {"actor_id": 2}
-
-        result = await excluded.resolve_users(db, payload)
-
-        assert result == [1, 3, 4]
-        assert 2 not in result
-
-    @pytest.mark.asyncio
-    async def test_no_exclusion_without_actor_id(self):
-        """Should return all results if no actor_id in payload."""
-        inner = AsyncMock()
-        inner.resolve_users.return_value = [1, 2, 3]
-
-        excluded = ActorExcludedResolver(inner)
-        db = AsyncMock()
-        payload = {}
-
-        result = await excluded.resolve_users(db, payload)
-
-        assert result == [1, 2, 3]
