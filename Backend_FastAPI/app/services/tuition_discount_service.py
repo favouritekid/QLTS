@@ -11,17 +11,23 @@ from decimal import Decimal
 from typing import Callable, List, Optional, Tuple
 
 import structlog
-from sqlalchemy import and_, or_, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import TuitionDiscountPolicy, DiscountTypeEnum, User
+from app.models import TuitionDiscountPolicy, DiscountTypeEnum
 from app.schemas.tuition_discount_policy import (
     TuitionDiscountPolicyCreate,
     TuitionDiscountPolicyUpdate,
     DiscountType,
 )
+from app.repositories import TuitionDiscountRepository
+from app.utils.exceptions import BadRequest, DuplicateResourceError
 
 log = structlog.get_logger(__name__)
+
+
+def _get_repo(db: AsyncSession) -> TuitionDiscountRepository:
+    """Helper to get repository instance. Uses local import to avoid circular dependency."""
+    return TuitionDiscountRepository(db)
 
 
 # =============================================================================
@@ -38,59 +44,16 @@ async def get_all_policies(
 ) -> Tuple[List[TuitionDiscountPolicy], int]:
     """
     Lấy danh sách chính sách ưu đãi với phân trang và lọc.
-
-    Args:
-        db: Database session
-        skip: Số bản ghi bỏ qua (offset)
-        limit: Số bản ghi tối đa
-        is_active: Lọc theo trạng thái (None = tất cả)
-        include_expired: Bao gồm chính sách hết hạn
-
-    Returns:
-        Tuple[List[TuitionDiscountPolicy], int]: Danh sách và tổng số
     """
-    # Build base query
-    query = select(TuitionDiscountPolicy)
-    count_query = select(func.count(TuitionDiscountPolicy.id))
-
-    # Filter by active status
-    if is_active is not None:
-        query = query.where(TuitionDiscountPolicy.is_active == is_active)
-        count_query = count_query.where(TuitionDiscountPolicy.is_active == is_active)
-
-    # Filter expired policies
-    if not include_expired:
-        today = date.today()
-        query = query.where(
-            or_(
-                TuitionDiscountPolicy.valid_to.is_(None),
-                TuitionDiscountPolicy.valid_to >= today
-            )
-        )
-        count_query = count_query.where(
-            or_(
-                TuitionDiscountPolicy.valid_to.is_(None),
-                TuitionDiscountPolicy.valid_to >= today
-            )
-        )
-
-    # Order by priority (desc), then by created_at (desc)
-    query = query.order_by(
-        TuitionDiscountPolicy.priority.desc(),
-        TuitionDiscountPolicy.created_at.desc()
+    repo = _get_repo(db)
+    total, policies = await repo.get_filtered(
+        skip=skip,
+        limit=limit,
+        is_active=is_active,
+        include_expired=include_expired
     )
 
-    # Pagination
-    query = query.offset(skip).limit(limit)
-
-    # Execute queries
-    result = await db.execute(query)
-    policies = result.scalars().all()
-
-    count_result = await db.execute(count_query)
-    total = count_result.scalar() or 0
-
-    return list(policies), total
+    return policies, total
 
 
 async def get_policy_by_id(
@@ -98,10 +61,7 @@ async def get_policy_by_id(
     policy_id: int
 ) -> Optional[TuitionDiscountPolicy]:
     """Lấy chính sách theo ID"""
-    result = await db.execute(
-        select(TuitionDiscountPolicy).where(TuitionDiscountPolicy.id == policy_id)
-    )
-    return result.scalar_one_or_none()
+    return await _get_repo(db).get_by_id(policy_id)
 
 
 async def get_policy_by_code(
@@ -109,12 +69,7 @@ async def get_policy_by_code(
     code: str
 ) -> Optional[TuitionDiscountPolicy]:
     """Lấy chính sách theo mã"""
-    result = await db.execute(
-        select(TuitionDiscountPolicy).where(
-            TuitionDiscountPolicy.code == code.upper()
-        )
-    )
-    return result.scalar_one_or_none()
+    return await _get_repo(db).get_by_code(code)
 
 
 async def create_policy(
@@ -139,40 +94,33 @@ async def create_policy(
     Raises:
         ValueError: Nếu mã đã tồn tại
     """
+    repo = _get_repo(db)
+    
     # Check duplicate code
-    existing = await get_policy_by_code(db, policy_data.code)
+    existing = await repo.get_by_code(policy_data.code)
     if existing:
-        raise ValueError(f"Mã chính sách '{policy_data.code}' đã tồn tại")
+        raise DuplicateResourceError(f"Mã chính sách '{policy_data.code}' đã tồn tại")
 
-    # Map discount_type string to enum VALUE (lowercase for PostgreSQL)
+    # Validate JSON structures
+    _validate_json_fields(policy_data.applicable_scope, policy_data.target_criteria)
+
+    # Map discount_type string to enum VALUE for DB
     discount_type_value = "amount"
     if policy_data.discount_type == DiscountType.PERCENTAGE:
         discount_type_value = "percentage"
 
-    # Create new policy
-    db_policy = TuitionDiscountPolicy(
-        code=policy_data.code.upper(),
-        name=policy_data.name,
-        description=policy_data.description,
-        discount_type=discount_type_value,  # Use string value directly
-        discount_value=policy_data.discount_value,
-        valid_from=policy_data.valid_from,
-        valid_to=policy_data.valid_to,
-        applicable_scope=policy_data.applicable_scope or {},
-        target_criteria=policy_data.target_criteria or {},
-        is_stackable=policy_data.is_stackable,
-        priority=policy_data.priority,
-        max_usage=policy_data.max_usage,
-        is_active=policy_data.is_active,
-        created_by_user_id=created_by_user_id,
-        updated_by_user_id=created_by_user_id,
-    )
+    # Prepare data
+    policy_dict = policy_data.model_dump()
+    policy_dict.update({
+        "code": policy_data.code.upper(),
+        "discount_type": discount_type_value,
+        "created_by_user_id": created_by_user_id,
+        "updated_by_user_id": created_by_user_id,
+    })
 
-    db.add(db_policy)
-
-    # ✅ TRANSACTION FIX: Flush instead of commit
+    # Create new policy via repository
+    db_policy = await repo.create(TuitionDiscountPolicy(**policy_dict))
     await db.flush()
-    await db.refresh(db_policy)
 
     # ✅ Create post-commit callback
     async def _post_commit():
@@ -208,27 +156,33 @@ async def update_policy(
     Returns:
         Tuple of (policy_or_None, post_commit_callback_or_None)
     """
-    db_policy = await get_policy_by_id(db, policy_id)
+    repo = _get_repo(db)
+    db_policy = await repo.get_by_id(policy_id)
     if not db_policy:
         return None, None
 
     # Update fields if provided
     update_data = policy_data.model_dump(exclude_unset=True)
 
-    for field, value in update_data.items():
-        if field == "discount_type" and value:
-            # Map to lowercase string value for PostgreSQL enum
-            if value == DiscountType.PERCENTAGE or value == "percentage":
-                value = "percentage"
-            else:
-                value = "amount"
-        setattr(db_policy, field, value)
+    # Validate JSON if provided
+    if "applicable_scope" in update_data or "target_criteria" in update_data:
+        _validate_json_fields(
+            update_data.get("applicable_scope", db_policy.applicable_scope),
+            update_data.get("target_criteria", db_policy.target_criteria)
+        )
 
-    db_policy.updated_by_user_id = updated_by_user_id
+    if "discount_type" in update_data and update_data["discount_type"]:
+        # Map to lowercase string value for PostgreSQL enum
+        if update_data["discount_type"] in [DiscountType.PERCENTAGE, "percentage"]:
+            update_data["discount_type"] = "percentage"
+        else:
+            update_data["discount_type"] = "amount"
 
-    # ✅ TRANSACTION FIX: Flush instead of commit
+    update_data["updated_by_user_id"] = updated_by_user_id
+
+    # Update via repository
+    db_policy = await repo.update(db_policy, **update_data)
     await db.flush()
-    await db.refresh(db_policy)
 
     # ✅ Create post-commit callback
     async def _post_commit():
@@ -261,15 +215,16 @@ async def delete_policy(
     Returns:
         Tuple of (success, post_commit_callback_or_None)
     """
-    db_policy = await get_policy_by_id(db, policy_id)
+    repo = _get_repo(db)
+    db_policy = await repo.get_by_id(policy_id)
     if not db_policy:
         return False, None
 
     if hard_delete:
-        await db.delete(db_policy)
+        await repo.delete(db_policy)
         delete_type = "hard"
     else:
-        db_policy.is_active = False
+        await repo.soft_delete(db_policy)
         delete_type = "soft"
 
     # ✅ TRANSACTION FIX: Flush instead of commit
@@ -300,6 +255,7 @@ async def get_applicable_policies(
     offering_id: Optional[int] = None,
     student_priority_type: Optional[str] = None,
     student_region: Optional[str] = None,
+    student_gpa: Optional[float] = None,
 ) -> List[TuitionDiscountPolicy]:
     """
     Lấy danh sách chính sách ưu đãi áp dụng được.
@@ -310,29 +266,8 @@ async def get_applicable_policies(
     - Điều kiện đối tượng (target_criteria)
     - Còn quota sử dụng
     """
-    today = date.today()
-
-    # Base query: active, within validity, has quota
-    query = select(TuitionDiscountPolicy).where(
-        TuitionDiscountPolicy.is_active == True,
-        or_(
-            TuitionDiscountPolicy.valid_from.is_(None),
-            TuitionDiscountPolicy.valid_from <= today
-        ),
-        or_(
-            TuitionDiscountPolicy.valid_to.is_(None),
-            TuitionDiscountPolicy.valid_to >= today
-        ),
-        or_(
-            TuitionDiscountPolicy.max_usage.is_(None),
-            TuitionDiscountPolicy.current_usage < TuitionDiscountPolicy.max_usage
-        )
-    ).order_by(TuitionDiscountPolicy.priority.desc())
-
-    result = await db.execute(query)
-    all_policies = result.scalars().all()
-
-    # Filter by scope and criteria (JSON filtering done in Python for flexibility)
+    repo = _get_repo(db)
+    all_policies = await repo.get_active_within_validity()
     applicable = []
 
     for policy in all_policies:
@@ -355,6 +290,7 @@ async def get_applicable_policies(
             criteria,
             priority_type=student_priority_type,
             region=student_region,
+            gpa=student_gpa,
         ):
             continue
 
@@ -492,3 +428,26 @@ def calculate_discount(
             break
 
     return total_discount, applied
+
+
+def _validate_json_fields(scope: Optional[dict], criteria: Optional[dict]):
+    """
+    Validate structure of JSON config fields using Pydantic schemas.
+    Raises BadRequest if invalid.
+    """
+    from app.schemas.tuition_discount_policy import ApplicableScope, TargetCriteria
+    from pydantic import ValidationError as PydanticValidationError
+
+    if scope:
+        try:
+            ApplicableScope(**scope)
+        except PydanticValidationError as e:
+            log.warning("Invalid applicable_scope structure", error=str(e))
+            raise BadRequest(detail=f"Cấu hình phạm vi áp dụng không hợp lệ: {str(e)}")
+
+    if criteria:
+        try:
+            TargetCriteria(**criteria)
+        except PydanticValidationError as e:
+            log.warning("Invalid target_criteria structure", error=str(e))
+            raise BadRequest(detail=f"Cấu hình điều kiện đối tượng không hợp lệ: {str(e)}")
