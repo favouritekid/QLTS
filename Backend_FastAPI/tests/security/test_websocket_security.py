@@ -148,13 +148,13 @@ async def test_server():
     """
     import asyncio
     import uvicorn
-    from app.main import app_with_sockets
+    from app.main import app
 
     # Use a random available port
     port = 8765
 
-    # Create server config - serve app_with_sockets for Socket.IO support
-    config = uvicorn.Config(app_with_sockets, host="127.0.0.1", port=port, log_level="error")
+    # Create server config - serve app for Socket.IO support
+    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
     server = uvicorn.Server(config)
 
     # Run server in background
