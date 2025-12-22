@@ -450,3 +450,4 @@ socketService.getSocket().id         // có socket ID?
 ---
 
 *Cập nhật lần cuối: 2025-12-11*
+![alt text](image.png)
