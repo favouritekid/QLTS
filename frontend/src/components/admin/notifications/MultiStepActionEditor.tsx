@@ -59,8 +59,8 @@ interface MultiStepActionEditorProps {
 // ============================================
 
 const CHANNEL_CONFIG = {
-  socket: {
-    label: "Socket (Real-time)",
+  browser: {
+    label: "Browser (Real-time)",
     icon: Bell,
     color: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
     description: "Hiển thị popup trong trình duyệt ngay lập tức",
@@ -294,7 +294,7 @@ export function MultiStepActionEditor({
     const newStep = actions.length + 1;
     const newAction: NotificationActionCreate = {
       step: newStep,
-      channel: availableChannels[0] || "socket",
+      channel: availableChannels[0] || "browser",
       delay_minutes: 0,
       template_code: null,
       config: null,
@@ -437,7 +437,7 @@ export function MultiStepActionEditor({
       <div className="rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-900 dark:bg-blue-950 dark:text-blue-100">
         <p className="font-medium mb-1">💡 Mẹo sử dụng:</p>
         <ul className="list-disc list-inside space-y-0.5 text-xs">
-          <li>Bước 1 thường gửi qua Socket để thông báo ngay</li>
+          <li>Bước 1 thường gửi qua Browser để thông báo ngay</li>
           <li>Bước 2+ có thể gửi qua Email/SMS với độ trễ để nhắc nhở</li>
           <li>Sử dụng độ trễ để tránh spam notifications</li>
           <li>Kéo thả để sắp xếp lại thứ tự các bước</li>

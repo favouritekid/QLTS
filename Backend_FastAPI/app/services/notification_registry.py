@@ -51,7 +51,7 @@ log = logging.getLogger(__name__)
 
 class NotificationChannel(str, Enum):
     """Supported notification delivery channels."""
-    SOCKET = "socket"  # Real-time browser notifications via Socket.IO
+    BROWSER = "browser"  # In-browser notifications (delivered via Socket.IO)
     EMAIL = "email"
     SMS = "sms"
     ZALO = "zalo"
@@ -147,7 +147,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "New Lead Assigned",
             "Lead #${lead_id} (${lead_name}) has been assigned to you."
         ),
-        channels=(CH.SOCKET, CH.EMAIL),
+        channels=(CH.BROWSER, CH.EMAIL),
         notification_type=NT.INFO,
         link_template="/leads/${lead_id}",
         priority=50,  # High priority for new assignments
@@ -161,7 +161,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "Lead Assignment Failed",
             "Lead #${lead_id} (${lead_name}) could not be assigned automatically. Reason: ${reason}. Please assign manually or adjust officer capacity."
         ),
-        channels=(CH.SOCKET,),
+        channels=(CH.BROWSER,),
         notification_type=NT.ERROR,
         link_template="/leads/${lead_id}",
         priority=30,  # Critical - needs attention
@@ -177,7 +177,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "Lead Transferred",
             "Lead #${lead_id} has been transferred from Unit #${old_unit_id} to Unit #${new_unit_id}. Reason: ${reason}"
         ),
-        channels=(CH.SOCKET, CH.EMAIL),
+        channels=(CH.BROWSER, CH.EMAIL),
         notification_type=NT.WARNING,
         link_template="/leads/${lead_id}",
         priority=60,
@@ -191,7 +191,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "Lead Status Updated",
             "Lead #${lead_id} status changed from ${old_status} to ${new_status}."
         ),
-        channels=(CH.SOCKET,),
+        channels=(CH.BROWSER,),
         notification_type=NT.INFO,
         link_template="/leads/${lead_id}",
         priority=100,
@@ -205,7 +205,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "New Lead Created",
             "A new lead (${lead_name}) has been created from ${source}."
         ),
-        channels=(CH.SOCKET,),
+        channels=(CH.BROWSER,),
         notification_type=NT.SUCCESS,
         link_template="/leads/${lead_id}",
         priority=80,
@@ -221,7 +221,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "Lead Deleted",
             "Lead #${lead_id} (${lead_name}) has been deleted."
         ),
-        channels=(CH.SOCKET,),
+        channels=(CH.BROWSER,),
         notification_type=NT.WARNING,
         link_template="/leads",
         priority=100,
@@ -237,7 +237,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "Lead Information Updated",
             "Lead #${lead_id} updated: ${updated_summary} by ${actor_name}."
         ),
-        channels=(CH.SOCKET,),
+        channels=(CH.BROWSER,),
         notification_type=NT.INFO,
         link_template="/leads/${lead_id}",
         priority=150,  # Lower priority - routine updates
@@ -257,7 +257,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "New Consultation Added",
             "A consultation has been added to Lead #${lead_id}."
         ),
-        channels=(CH.SOCKET,),
+        channels=(CH.BROWSER,),
         notification_type=NT.INFO,
         link_template="/leads/${lead_id}?tab=consultations",
         priority=100,
@@ -270,7 +270,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "Consultation Updated",
             "Consultation #${consultation_id} for Lead #${lead_id} has been updated."
         ),
-        channels=(CH.SOCKET,),
+        channels=(CH.BROWSER,),
         notification_type=NT.INFO,
         link_template="/leads/${lead_id}?tab=consultations",
         priority=120,
@@ -283,7 +283,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "Consultation Deleted",
             "Consultation #${consultation_id} for Lead #${lead_id} has been deleted."
         ),
-        channels=(CH.SOCKET,),
+        channels=(CH.BROWSER,),
         notification_type=NT.WARNING,
         link_template="/leads/${lead_id}?tab=consultations",
         priority=100,
@@ -296,7 +296,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "⏰ Nhắc nhở: Lịch hẹn tư vấn",
             "Bạn có lịch hẹn gọi ${lead_name} (${lead_phone}) trong ${minutes_until} phút nữa."
         ),
-        channels=(CH.SOCKET,),
+        channels=(CH.BROWSER,),
         notification_type=NT.REMINDER,
         link_template="/leads/${lead_id}",
         priority=10,  # Very high priority for reminders
@@ -317,7 +317,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "New Application Created",
             "Application #${application_id} created for Lead #${lead_id} - ${major_program_name}."
         ),
-        channels=(CH.SOCKET, CH.EMAIL),
+        channels=(CH.BROWSER, CH.EMAIL),
         notification_type=NT.SUCCESS,
         link_template="/applications/${application_id}",
         priority=70,
@@ -333,7 +333,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "Application Status Changed",
             "Application #${application_id} status changed from ${old_status} to ${new_status}."
         ),
-        channels=(CH.SOCKET, CH.EMAIL),
+        channels=(CH.BROWSER, CH.EMAIL),
         notification_type=NT.INFO,
         link_template="/applications/${application_id}",
         priority=80,
@@ -350,7 +350,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "Application Documents Updated",
             "Documents for Application #${application_id} have been updated: ${document_summary}."
         ),
-        channels=(CH.SOCKET,),
+        channels=(CH.BROWSER,),
         notification_type=NT.INFO,
         link_template="/applications/${application_id}",
         priority=120,
@@ -366,7 +366,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "Application Deleted",
             "Application #${application_id} for ${lead_name} has been deleted."
         ),
-        channels=(CH.SOCKET,),
+        channels=(CH.BROWSER,),
         notification_type=NT.WARNING,
         link_template="/applications",
         priority=100,
@@ -383,7 +383,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "Dorm Fee Notification",
             "A new dorm fee of ${amount} has been created. Due date: ${due_date}."
         ),
-        channels=(CH.SOCKET, CH.EMAIL),
+        channels=(CH.BROWSER, CH.EMAIL),
         notification_type=NT.WARNING,
         link_template="/finance/fees/${fee_id}",
         priority=60,
@@ -396,7 +396,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "Payment Received",
             "Your payment of ${amount} for ${payment_type} has been received. Thank you!"
         ),
-        channels=(CH.SOCKET, CH.EMAIL),
+        channels=(CH.BROWSER, CH.EMAIL),
         notification_type=NT.SUCCESS,
         link_template="/finance/payments/${payment_id}",
         priority=70,
@@ -409,7 +409,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "Payment Overdue",
             "Your ${fee_type} payment of ${amount} is ${days_overdue} days overdue. Please settle immediately."
         ),
-        channels=(CH.SOCKET, CH.EMAIL),
+        channels=(CH.BROWSER, CH.EMAIL),
         notification_type=NT.ERROR,
         link_template="/finance/fees/${fee_id}",
         priority=20,  # Very high priority for overdue
@@ -426,7 +426,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "Room Assignment",
             "You have been assigned to Room ${room_id} in Dorm ${dorm_id}."
         ),
-        channels=(CH.SOCKET, CH.EMAIL),
+        channels=(CH.BROWSER, CH.EMAIL),
         notification_type=NT.SUCCESS,
         link_template="/dorm/rooms/${room_id}",
         priority=60,
@@ -439,7 +439,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "Maintenance Request [${priority}]",
             "New maintenance request for Dorm ${dorm_id}: ${description}"
         ),
-        channels=(CH.SOCKET, CH.EMAIL),
+        channels=(CH.BROWSER, CH.EMAIL),
         notification_type=NT.WARNING,
         link_template="/dorm/maintenance/${request_id}",
         priority=50,
@@ -456,7 +456,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "Asset Maintenance Alert",
             "Asset '${asset_name}' requires ${maintenance_type} maintenance by ${due_date}."
         ),
-        channels=(CH.SOCKET, CH.EMAIL),
+        channels=(CH.BROWSER, CH.EMAIL),
         notification_type=NT.WARNING,
         link_template="/assets/${asset_id}",
         priority=70,
@@ -469,7 +469,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "Asset Checked Out",
             "Asset '${asset_name}' has been checked out. Expected return: ${expected_return}."
         ),
-        channels=(CH.SOCKET,),
+        channels=(CH.BROWSER,),
         notification_type=NT.INFO,
         link_template="/assets/${asset_id}",
         priority=120,
@@ -486,7 +486,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "[${severity}] System Alert",
             "${message}"
         ),
-        channels=(CH.SOCKET, CH.EMAIL),
+        channels=(CH.BROWSER, CH.EMAIL),
         notification_type=NT.WARNING,
         link_template="${action_url}",
         priority=10,  # Critical system alerts
@@ -499,7 +499,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "${title}",
             "${message}"
         ),
-        channels=(CH.SOCKET, CH.EMAIL),
+        channels=(CH.BROWSER, CH.EMAIL),
         notification_type=NT.INFO,
         link_template=None,
         priority=50,
@@ -512,7 +512,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "Your Role Has Changed",
             "Your role has been changed from ${old_role} to ${new_role}."
         ),
-        channels=(CH.SOCKET, CH.EMAIL),
+        channels=(CH.BROWSER, CH.EMAIL),
         notification_type=NT.INFO,
         link_template="/profile",
         priority=40,
@@ -525,7 +525,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "Account Deactivated",
             "Your account has been deactivated. Reason: ${reason}. Please contact administrator if you believe this is an error."
         ),
-        channels=(CH.SOCKET,),
+        channels=(CH.BROWSER,),
         notification_type=NT.ERROR,
         link_template=None,
         priority=5,  # Highest priority
@@ -542,7 +542,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "Pipeline Configuration Updated",
             "${config_type} '${resource_name}' was ${operation}."
         ),
-        channels=(CH.SOCKET,),
+        channels=(CH.BROWSER,),
         notification_type=NT.INFO,
         link_template="/admin/pipeline",
         priority=100,
@@ -559,7 +559,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
             "Officer Availability Changed",
             "${username} is now ${new_status}."
         ),
-        channels=(CH.SOCKET,),
+        channels=(CH.BROWSER,),
         notification_type=NT.INFO,
         link_template="/admin/officers",
         priority=100,

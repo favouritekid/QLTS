@@ -674,14 +674,14 @@ export function NotificationRuleWizard({
       message_template: "",
       notification_type: "info",
       link_template: "",
-      channels: ["socket"], // ✅ NOTIFICATION 2.0: Changed from "browser" to "socket"
+      channels: ["browser"], // ✅ Channel for in-browser notifications
       recipient_config: { resolver_type: "lead_owner", params: {} },
       condition: null,
       enabled: true,
       actions: [ // ✅ NOTIFICATION 2.0: Default single-step action
         {
           step: 1,
-          channel: "socket",
+          channel: "browser",
           template_code: null,
           delay_minutes: 0,
           config: null,
@@ -712,13 +712,13 @@ export function NotificationRuleWizard({
   // Dynamic channels from metadata (convert to full format with labels)
   const dynamicChannels = useMemo(() => {
     const channelLabels: Record<string, { label: string; description: string }> = {
-      socket: { label: "Socket (Real-time)", description: "Hiển thị popup trong trình duyệt ngay lập tức" },
+      browser: { label: "Browser (Real-time)", description: "Hiển thị popup trong trình duyệt ngay lập tức" },
       email: { label: "Email", description: "Gửi email đến hộp thư của người dùng" },
       zalo: { label: "Zalo", description: "Gửi tin nhắn qua Zalo OA" },
       sms: { label: "SMS", description: "Gửi tin nhắn SMS" },
     };
 
-    const channels = metadata?.channels || ["socket", "email", "zalo", "sms"];
+    const channels = metadata?.channels || ["browser", "email", "zalo", "sms"];
     return channels.map((channel) => ({
       value: channel,
       label: channelLabels[channel]?.label || channel,
@@ -1718,7 +1718,7 @@ export function NotificationRuleWizard({
                       <h3 className="text-lg font-semibold mb-1 flex items-center gap-2">
                         <Layers className="h-5 w-5 text-primary" />
                         Bước 5: Quy trình gửi thông báo
-                        <HelpTooltip content="Cấu hình quy trình gửi thông báo qua nhiều kênh với độ trễ khác nhau. Ví dụ: Gửi Socket ngay, sau 30 phút gửi Email nhắc nhở." />
+                        <HelpTooltip content="Cấu hình quy trình gửi thông báo qua nhiều kênh với độ trễ khác nhau. Ví dụ: Gửi Browser ngay, sau 30 phút gửi Email nhắc nhở." />
                       </h3>
                       <p className="text-sm text-muted-foreground">
                         Tạo quy trình gửi thông báo qua nhiều bước với các kênh khác nhau
@@ -1735,7 +1735,7 @@ export function NotificationRuleWizard({
                             <MultiStepActionEditor
                               actions={field.value || []}
                               onChange={field.onChange}
-                              availableChannels={metadata?.channels || ["socket", "email", "zalo", "sms"]}
+                              availableChannels={metadata?.channels || ["browser", "email", "zalo", "sms"]}
                             />
                           </FormControl>
                           <FormMessage />
