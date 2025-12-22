@@ -308,7 +308,15 @@ async def login_for_access_token(
     # ✅ PHASE 1: Record login history for persistent audit trail
     # Unlike UserSession (which is revoked on logout), LoginHistory is permanent
     # for security auditing and suspicious login detection
-    login_history_callback = None
+    # ✅ PHASE 1: Record login history for persistent audit trail
+    # Unlike UserSession (which is revoked on logout), LoginHistory is permanent
+    # for security auditing and suspicious login detection
+    post_commit_callbacks = []
+    
+    # Add record_login callback if provided
+    if "login_history_callback" in locals() and login_history_callback:
+        post_commit_callbacks.append(login_history_callback)
+        
     try:
         login_record, login_history_callback = await login_history_service.record_login(
             db=db,
@@ -318,6 +326,9 @@ async def login_for_access_token(
             country=session.country if 'session' in dir() else None,
             city=session.city if 'session' in dir() else None,
         )
+        if login_history_callback:
+            post_commit_callbacks.append(login_history_callback)
+
         if login_record.is_suspicious:
             log.warning(
                 "Login recorded with security flags",
@@ -337,7 +348,7 @@ async def login_for_access_token(
                 anomalies.append("new_location")
             
             try:
-                await notification_dispatcher.dispatch(
+                _, notif_callback = await notification_dispatcher.dispatch(
                     db=db,
                     event=SystemEvents.SUSPICIOUS_LOGIN,
                     payload={
@@ -352,6 +363,8 @@ async def login_for_access_token(
                         "actor_id": user.id,
                     },
                 )
+                if notif_callback:
+                    post_commit_callbacks.append(notif_callback)
                 log.info("Suspicious login notification dispatched", user_id=user.id)
             except Exception as notif_error:
                 log.error(
@@ -368,9 +381,15 @@ async def login_for_access_token(
         )
         # Don't fail login if history recording fails
 
-    # (Giữ nguyên logic commit và response)
+    # ✅ (Giữ nguyên logic commit và response)
     try:
         await db.commit()
+        # Execute post-commit callbacks
+        for callback in post_commit_callbacks:
+            try:
+                await callback()
+            except Exception as cb_e:
+                log.error("Post-commit callback failed", error=str(cb_e))
     except Exception as e:
         await db.rollback()
         try:

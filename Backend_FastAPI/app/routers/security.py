@@ -261,12 +261,11 @@ async def secure_account(
             login_id=login_id,
         )
         
-        # Revoke all sessions except current
-        sessions_revoked = await session_service.revoke_all_user_sessions(
+        # Revoke all sessions including current
+        sessions_revoked = await session_service.revoke_all_other_sessions(
             db=db,
             user_id=current_user.id,
-            # Note: This revokes ALL sessions including current
-            # User will need to re-login
+            except_session_id=None  # Revoke ALL sessions
         )
         
         # Remove all trusted devices
