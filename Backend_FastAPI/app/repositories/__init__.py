@@ -32,6 +32,7 @@ from app.repositories.session_repository import SessionRepository
 from app.repositories.tuition_discount_repository import TuitionDiscountRepository
 from app.repositories.user_repository import UserRepository
 from app.repositories.login_history_repository import LoginHistoryRepository
+from app.repositories.trusted_device_repository import TrustedDeviceRepository
 
 __all__ = [
     "BaseRepository",
@@ -53,4 +54,5 @@ __all__ = [
     "TuitionDiscountRepository",
     "UserRepository",
     "LoginHistoryRepository",
+    "TrustedDeviceRepository",
 ]
