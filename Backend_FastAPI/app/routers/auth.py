@@ -89,7 +89,12 @@ async def register_user(
             detail="Username or email already registered",  # ✅ Generic message
         )
 
-    created_user = await user_service.create_user(db=db, user_in=user_in)
+    # ✅ FIX: create_user returns Tuple[User, Callback]
+    created_user, post_commit_callback = await user_service.create_user(db=db, user_in=user_in)
+    
+    # ✅ FIX: Commit transaction and execute callback
+    await db.commit()
+    await post_commit_callback()
 
     # ✅ FIX: Automatically add Casbin grouping policy to map user to their role
     try:
@@ -480,27 +485,14 @@ async def check_session_status(
     authorization: Annotated[str | None, Header()] = None,
     db: AsyncSession = Depends(database.get_db),
 ):
-    # ✅ PHASE 2: Use session_service instead of direct SQL
+    # ✅ FIX: get_current_user already validates session in Redis
+    # No need to check again - if we reach here, session is valid
+    
+    # Get active sessions count for user info
     active_sessions = await session_service.get_active_sessions(
         db=db,
         user_id=current_user.id
     )
-
-    # (Đoạn check `has_valid_session` này giờ có thể hơi thừa
-    # vì `get_current_user` đã làm, nhưng giữ lại cũng không sao)
-    has_valid_session = False
-    for session in active_sessions:
-        stored_user_id = await safe_redis_get(f"session:{session.refresh_jti}")
-        if stored_user_id and int(stored_user_id) == current_user.id:
-            has_valid_session = True
-            break
-
-    if not has_valid_session:
-        log.warning(
-            "No valid session found in Redis for user (in check-status)",
-            user_id=current_user.id,
-        )
-        raise HTTPException(status_code=401, detail="Session has been revoked")
 
     return {
         "status": "active",
@@ -553,6 +545,8 @@ async def perform_password_reset(
     # This prevents session hijacking if attacker had compromised account
     try:
         await user_service.invalidate_all_sessions(db, user)
+        # ✅ FIX: Refresh user object after session changes to avoid stale data
+        await db.refresh(user)
         log.warning(
             "All user sessions invalidated after password reset",
             user_id=user.id,
@@ -727,8 +721,8 @@ async def refresh_access_token(
         except Exception as e:
             log.error("Blacklist check failed", error=str(e), exc_info=True)
 
-        # (✅ PHASE 2: Use user_service with pessimistic lock instead of direct SQL)
-        async with db.begin():
+        # ✅ FIX: Use begin_nested() (savepoint) to avoid conflict with implicit transaction
+        async with db.begin_nested():
             try:
                 user = await user_service.get_user_for_refresh(db, username)
 

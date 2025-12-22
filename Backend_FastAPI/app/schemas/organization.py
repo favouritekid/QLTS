@@ -495,6 +495,8 @@ class DistributionRuleCreate(DistributionRuleBase):
     pass
 
 class DistributionRuleUpdate(BaseModel):
+    offering_id: Optional[int] = None
+    unit_id: Optional[int] = None
     weight: Optional[int] = None
     priority: Optional[int] = None
     is_active: Optional[bool] = None

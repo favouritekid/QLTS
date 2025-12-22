@@ -79,7 +79,7 @@ async def create_new_organization_unit(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Tạo một đơn vị tổ chức mới."""
-    unit, post_commit = await organization_service.create_organization_unit(db, unit_in)
+    unit, post_commit = await organization_service.create_organization_unit(db, unit_in, current_user=current_admin)
     await db.commit()
     await post_commit()
     
@@ -151,7 +151,7 @@ async def update_existing_organization_unit(
     Admin: Can update all units
     Manager: Can update only managed units
     """
-    updated_unit, post_commit = await organization_service.update_organization_unit(db, unit.id, unit_in)
+    updated_unit, post_commit = await organization_service.update_organization_unit(db, unit.id, unit_in, current_user=current_admin)
     await db.commit()
     await post_commit()
     
@@ -199,7 +199,7 @@ async def delete_existing_organization_unit(
     Admin: Can delete all units
     Manager: Can delete only managed units
     """
-    _, post_commit = await organization_service.delete_organization_unit(db, unit.id)
+    _, post_commit = await organization_service.delete_organization_unit(db, unit.id, current_user=current_admin)
     await db.commit()
     await post_commit()
     
@@ -233,7 +233,7 @@ async def create_new_program(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Tạo chương trình đào tạo mới (Level 1)."""
-    program, post_commit = await organization_service.create_major_program(db, program_in)
+    program, post_commit = await organization_service.create_major_program(db, program_in, current_user=current_admin)
     await db.commit()
     await post_commit()
     
@@ -276,7 +276,7 @@ async def update_existing_program(
     current_admin: models.User = PermissionDep,
 ):
     """(Admin only) Cập nhật chương trình đào tạo."""
-    program, post_commit = await organization_service.update_major_program(db, program_id, program_in)
+    program, post_commit = await organization_service.update_major_program(db, program_id, program_in, current_user=current_admin)
     await db.commit()
     await post_commit()
     
@@ -304,7 +304,7 @@ async def delete_existing_program(
 ):
     """(Admin only) Xóa chương trình đào tạo (soft delete)."""
     program = await organization_service.get_major_program_by_id(db, program_id)  # Get info before delete
-    _, post_commit = await organization_service.delete_major_program(db, program_id)
+    _, post_commit = await organization_service.delete_major_program(db, program_id, current_user=current_admin)
     await db.commit()
     await post_commit()
     
@@ -342,7 +342,7 @@ async def create_new_offering(
     if offering_in.program_id != program_id:
         raise BadRequest(detail="program_id in path must match program_id in request body")
 
-    offering, post_commit = await organization_service.create_program_offering(db, offering_in)
+    offering, post_commit = await organization_service.create_program_offering(db, offering_in, current_user=current_admin)
     await db.commit()
     await post_commit()
     
@@ -387,7 +387,7 @@ async def update_existing_offering(
     """(Admin only) Cập nhật loại hình đào tạo."""
     # Service returns (offering, callback) tuple
     offering, post_commit = await organization_service.update_program_offering(
-        db, offering_id, offering_in
+        db, offering_id, offering_in, current_user=current_admin
     )
 
     # Commit transaction
@@ -421,7 +421,7 @@ async def delete_existing_offering(
     """(Admin only) Xóa loại hình đào tạo (soft delete)."""
     # Get offering info before delete
     offering = await organization_service.get_program_offering_by_id(db, offering_id)
-    _, post_commit = await organization_service.delete_program_offering(db, offering_id)
+    _, post_commit = await organization_service.delete_program_offering(db, offering_id, current_user=current_admin)
     await db.commit()
     await post_commit()
     
@@ -467,6 +467,7 @@ async def create_new_academic_info(
     academic_info, post_commit = await organization_service.create_academic_info(
         db,
         academic_info_in=academic_info_in,
+        current_user=current_admin,
         created_by_user_id=current_admin.id
     )
     await db.commit()
@@ -496,6 +497,7 @@ async def update_existing_academic_info(
         db,
         academic_info_id=academic_info_id,
         academic_info_in=academic_info_in,
+        current_user=current_admin,
         updated_by_user_id=current_admin.id
     )
     await db.commit()
@@ -521,7 +523,7 @@ async def delete_existing_academic_info(
     Có thể khôi phục bằng endpoint POST /academic-info/{id}/restore.
     Returns 404 nếu academic info không tồn tại.
     """
-    _, post_commit = await organization_service.delete_academic_info(db, academic_info_id=academic_info_id)
+    _, post_commit = await organization_service.delete_academic_info(db, academic_info_id=academic_info_id, current_user=current_admin)
     await db.commit()
     await post_commit()
     return None
@@ -546,7 +548,7 @@ async def restore_deleted_academic_info(
     Returns 400 nếu bản ghi chưa bị xóa.
     Returns 404 nếu academic info không tồn tại.
     """
-    academic_info, post_commit = await organization_service.restore_academic_info(db, academic_info_id=academic_info_id)
+    academic_info, post_commit = await organization_service.restore_academic_info(db, academic_info_id=academic_info_id, current_user=current_admin)
     await db.commit()
     await post_commit()
     return academic_info

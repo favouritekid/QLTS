@@ -1,0 +1,45 @@
+# app/tasks/__init__.py
+"""
+Celery Tasks Package.
+
+This package organizes Celery tasks by functionality:
+- email_tasks: Password reset, login alerts, etc.
+- assignment_tasks: Automatic lead assignment
+- notification_tasks: Broadcast notifications, reminders
+- cache_tasks: Lead cache recalculation, KPI sync
+
+Usage:
+    from app.tasks import send_password_reset_email_task
+    send_password_reset_email_task.delay(email, url, username)
+"""
+
+# Re-export all tasks for convenient imports
+from .email_tasks import (
+    send_password_reset_email_task,
+    send_login_alert_email_task,
+    send_password_reset_confirmation_email_task,
+)
+from .assignment_tasks import process_automatic_lead_assignment_task
+from .notification_tasks import (
+    broadcast_notification_task,
+    check_consultation_reminders_task,
+)
+from .cache_tasks import (
+    recalculate_lead_caches_task,
+    sync_kpi_ytd_task,
+)
+
+__all__ = [
+    # Email tasks
+    "send_password_reset_email_task",
+    "send_login_alert_email_task",
+    "send_password_reset_confirmation_email_task",
+    # Assignment tasks
+    "process_automatic_lead_assignment_task",
+    # Notification tasks
+    "broadcast_notification_task",
+    "check_consultation_reminders_task",
+    # Cache tasks
+    "recalculate_lead_caches_task",
+    "sync_kpi_ytd_task",
+]

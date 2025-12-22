@@ -838,7 +838,7 @@ async def update_existing_user(
                 raise ValueError("Skills must be a JSON list of strings")
         except (json.JSONDecodeError, ValueError) as e:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f'Invalid format for skills. Must be a JSON string of a list (e.g., \'["skill1", "skill2"]\'): {e}',
             )
     # Chỉ xử lý email nếu được cung cấp và không rỗng
@@ -861,7 +861,7 @@ async def update_existing_user(
         except ValidationError as e:
             error_detail = e.errors()[0].get("msg", "Invalid email format")
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Invalid email format: {cleaned_email}. Error: {error_detail}",
             )
         # (Thêm HTTPException nếu raise từ logic check DB)

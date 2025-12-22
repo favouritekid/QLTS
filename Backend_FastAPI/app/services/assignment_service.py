@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import models
 from ..core.constants import UserRole
 from ..core.events import SystemEvents
+from ..core.task_constants import AssignmentResult, AssignmentFailureReason
 from .notification_dispatcher import dispatch
 from .status_helper import StatusHelper, AssignmentStatus
 
@@ -61,20 +62,20 @@ async def automatically_assign_lead(
                 log.warning(
                     f"[Lead ID: {lead_id}] Lead not found, skipping assignment."
                 )
-                return {"status": "skipped", "reason": "lead_not_found", "lead_id": lead_id}
+                return {"status": AssignmentResult.SKIPPED, "reason": AssignmentFailureReason.LEAD_NOT_FOUND, "lead_id": lead_id}
             
             # ✅ FIX: Check if lead is deleted (soft delete)
             elif lead.deleted_at is not None:
                 log.warning(
                     f"[Lead ID: {lead_id}] Lead is soft-deleted, skipping assignment."
                 )
-                return {"status": "skipped", "reason": "lead_deleted", "lead_id": lead_id}
+                return {"status": AssignmentResult.SKIPPED, "reason": AssignmentFailureReason.LEAD_DELETED, "lead_id": lead_id}
             
             elif lead.assigned_officer_id:
                 log.info(
                     f"[Lead ID: {lead_id}] Lead already assigned to officer {lead.assigned_officer_id}, skipping."
                 )
-                return {"status": "skipped", "reason": "already_assigned", "lead_id": lead_id, "officer_id": lead.assigned_officer_id}
+                return {"status": AssignmentResult.SKIPPED, "reason": AssignmentFailureReason.ALREADY_ASSIGNED, "lead_id": lead_id, "officer_id": lead.assigned_officer_id}
             else:
                 lead_unit_id = lead.unit_id
                 # Get blacklisted officers for this lead
@@ -140,7 +141,7 @@ async def automatically_assign_lead(
                             f"[Lead ID: {lead_id}] Failed to dispatch assignment failure notification: {e}"
                         )
 
-                    return {"status": "failed", "reason": "no_officers_available", "lead_id": lead_id, "unit_id": lead_unit_id}
+                    return {"status": AssignmentResult.FAILED, "reason": AssignmentFailureReason.NO_OFFICERS, "lead_id": lead_id, "unit_id": lead_unit_id}
 
                 log.debug(
                     f"[Lead ID: {lead_id}] Found {len(available_officers)} available officers for unit {lead_unit_id}."
@@ -235,7 +236,7 @@ async def automatically_assign_lead(
                             f"[Lead ID: {lead_id}] Failed to dispatch assignment failure notification: {e}"
                         )
 
-                    return {"status": "failed", "reason": "all_officers_at_capacity", "lead_id": lead_id, "unit_id": lead_unit_id}
+                    return {"status": AssignmentResult.FAILED, "reason": AssignmentFailureReason.AT_CAPACITY, "lead_id": lead_id, "unit_id": lead_unit_id}
 
                 # === BƯỚC 5: Sắp xếp và Chọn Officer (HYBRID THRESHOLD ROUND ROBIN) ===
                 # ✅ REFACTORED: Thuật toán mới chống "Flooding" cho nhân viên mới
@@ -334,7 +335,7 @@ async def automatically_assign_lead(
             )
 
         # Return success result
-        return {"status": "assigned", "lead_id": lead_id, "officer_id": chosen_one.id}
+        return {"status": AssignmentResult.ASSIGNED, "lead_id": lead_id, "officer_id": chosen_one.id}
 
     except OperationalError as e:
         # Bắt lỗi "LockNotAvailableError" (chủ yếu cho việc khóa Lead ban đầu)

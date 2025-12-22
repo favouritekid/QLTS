@@ -11,26 +11,44 @@ Export all repositories for easy import:
 from app.repositories.base import BaseRepository
 from app.repositories.admission_repository import AdmissionRepository
 from app.repositories.application_repository import ApplicationRepository
+from app.repositories.config_repository import (
+    AssignmentConfigRepository,
+    DegreeLevelRepository,
+    DocumentTypeRepository,
+    OfferingTypeRepository,
+    SkillRuleRepository,
+)
 from app.repositories.insights_repository import InsightsRepository
 from app.repositories.kpi_repository import KpiRepository
 from app.repositories.lead_repository import LeadRepository
+from app.repositories.notification_repository import NotificationRepository
+from app.repositories.notification_rule_repository import NotificationRuleRepository
+from app.repositories.notification_template_repository import NotificationTemplateRepository
+from app.repositories.notification_preference_repository import NotificationPreferenceRepository
 from app.repositories.officer_repository import OfficerRepository
 from app.repositories.organization_repository import OrganizationRepository
 from app.repositories.pipeline_repository import PipelineRepository
 from app.repositories.session_repository import SessionRepository
+from app.repositories.tuition_discount_repository import TuitionDiscountRepository
 from app.repositories.user_repository import UserRepository
 
 __all__ = [
     "BaseRepository",
     "AdmissionRepository",
     "ApplicationRepository",
+    "AssignmentConfigRepository",
+    "DegreeLevelRepository",
+    "DocumentTypeRepository",
     "InsightsRepository",
     "KpiRepository",
     "LeadRepository",
+    "NotificationRepository",
+    "OfferingTypeRepository",
     "OfficerRepository",
     "OrganizationRepository",
     "PipelineRepository",
     "SessionRepository",
+    "SkillRuleRepository",
+    "TuitionDiscountRepository",
     "UserRepository",
 ]
-

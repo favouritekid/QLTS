@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import structlog
-from sqlalchemy import and_, desc, func, select
+# from sqlalchemy import and_, desc, func, select (removed - using repository)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import models, schemas
@@ -14,6 +14,7 @@ from app.database import (
     safe_redis_expire,
     safe_redis_delete,
 )
+from app.repositories import NotificationRepository
 from app.services import notification_preference_service
 from app.services.email_service import EmailService
 
@@ -93,20 +94,15 @@ async def create_notification(
 
     # Always create the notification in the database
     # Preferences only control delivery channels (email, sound, browser)
-    notification = models.Notification(
-        user_id=user_id,
-        type=notification_type,
-        title=title,
-        message=message,
-        link=link,
-        data=data,
-    )
-
-    db.add(notification)
-
-    # ✅ TRANSACTION FIX: Flush instead of commit
-    await db.flush()
-    await db.refresh(notification)
+    repo = NotificationRepository(db)
+    notification = await repo.create({
+        "user_id": user_id,
+        "type": notification_type,
+        "title": title,
+        "message": message,
+        "link": link,
+        "data": data,
+    })
 
     # ✅ Create post-commit callback
     async def _post_commit():
@@ -115,7 +111,11 @@ async def create_notification(
         if should_send["send_email"]:
             try:
                 # Get user info for email
-                user = await db.get(models.User, user_id)
+                # Use repository for user if possible, but here we just need user.email
+                # We can keep db.get(models.User) or use UserRepository
+                from app.repositories import UserRepository
+                user_repo = UserRepository(db)
+                user = await user_repo.get_by_id(user_id)
                 if user and user.email:
                     email_service = EmailService()
                     email_sent = email_service.send_notification_email(
@@ -176,25 +176,9 @@ async def get_user_notifications(
     """
     # Always count from DB (counts are lightweight queries)
     # ✅ Counts not cached to avoid staleness issues
-    filters = [models.Notification.user_id == user_id]
-
-    if unread_only:
-        filters.append(models.Notification.is_read == False)  # noqa: E712
-
-    # Count total notifications
-    count_query = select(func.count()).select_from(models.Notification).where(and_(*filters))
-    total_result = await db.execute(count_query)
-    total_count = total_result.scalar() or 0
-
-    # Count unread notifications
-    unread_query = select(func.count()).select_from(models.Notification).where(
-        and_(
-            models.Notification.user_id == user_id,
-            models.Notification.is_read == False  # noqa: E712
-        )
-    )
-    unread_result = await db.execute(unread_query)
-    unread_count = unread_result.scalar() or 0
+    repo = NotificationRepository(db)
+    total_count = await repo.get_total_count(user_id)
+    unread_count = await repo.get_unread_count(user_id)
 
     # ✅ PHASE 1.2.2: Try cache first (only for non-filtered queries)
     notifications = []
@@ -218,11 +202,8 @@ async def get_user_notifications(
             notification_ids = [int(nid) for nid in cached_ids]
 
             # Query notifications by IDs (preserve order from cache)
-            query = select(models.Notification).where(
-                models.Notification.id.in_(notification_ids)
-            )
-            result = await db.execute(query)
-            notification_dict = {n.id: n for n in result.scalars().all()}
+            notifications_from_db = await repo.get_by_ids(notification_ids)
+            notification_dict = {n.id: n for n in notifications_from_db}
 
             # Preserve cache order
             notifications = [notification_dict[nid] for nid in notification_ids if nid in notification_dict]
@@ -234,15 +215,13 @@ async def get_user_notifications(
                 cache_key=cache_key
             )
 
-            query = (
-                select(models.Notification)
-                .where(and_(*filters))
-                .order_by(desc(models.Notification.created_at))
-                .limit(INBOX_CACHE_MAX_SIZE)  # Fetch max 100 for cache
+            # Fetch max items for cache via repository
+            _, all_notifications = await repo.get_filtered(
+                user_id=user_id,
+                unread_only=False,
+                skip=0,
+                limit=INBOX_CACHE_MAX_SIZE
             )
-
-            result = await db.execute(query)
-            all_notifications = result.scalars().all()
 
             if all_notifications:
                 # Populate cache with notification IDs
@@ -266,17 +245,13 @@ async def get_user_notifications(
             # Return paginated slice
             notifications = all_notifications[skip:skip + limit]
     else:
-        # For filtered queries (unread_only), skip cache and query DB directly
-        query = (
-            select(models.Notification)
-            .where(and_(*filters))
-            .order_by(desc(models.Notification.created_at))
-            .offset(skip)
-            .limit(limit)
+        # For filtered queries (unread_only), skip cache and query DB directly via repository
+        _, notifications = await repo.get_filtered(
+            user_id=user_id,
+            unread_only=unread_only,
+            skip=skip,
+            limit=limit
         )
-
-        result = await db.execute(query)
-        notifications = result.scalars().all()
 
     return total_count, unread_count, list(notifications)
 
@@ -295,22 +270,15 @@ async def mark_as_read(
     Returns:
         Tuple of (count, post_commit_callback)
     """
-    # Get notifications that belong to the user and are unread
-    query = select(models.Notification).where(
-        and_(
-            models.Notification.id.in_(notification_ids),
-            models.Notification.user_id == user_id,
-            models.Notification.is_read == False  # noqa: E712
-        )
-    )
-
-    result = await db.execute(query)
-    notifications = result.scalars().all()
+    repo = NotificationRepository(db)
+    notifications = await repo.get_unread_for_user(user_id, notification_ids)
 
     # Mark as read
+    from datetime import timezone
+    now = datetime.now(timezone.utc)
     for notification in notifications:
         notification.is_read = True
-        notification.read_at = datetime.utcnow()
+        notification.read_at = now
 
     # ✅ TRANSACTION FIX: Flush instead of commit
     await db.flush()
@@ -343,20 +311,15 @@ async def mark_all_as_read(
     Returns:
         Tuple of (count, post_commit_callback)
     """
-    query = select(models.Notification).where(
-        and_(
-            models.Notification.user_id == user_id,
-            models.Notification.is_read == False  # noqa: E712
-        )
-    )
-
-    result = await db.execute(query)
-    notifications = result.scalars().all()
+    repo = NotificationRepository(db)
+    notifications = await repo.get_unread_for_user(user_id)
 
     # Mark as read
+    from datetime import timezone
+    now = datetime.now(timezone.utc)
     for notification in notifications:
         notification.is_read = True
-        notification.read_at = datetime.utcnow()
+        notification.read_at = now
 
     # ✅ TRANSACTION FIX: Flush instead of commit
     await db.flush()
@@ -391,15 +354,8 @@ async def delete_notification(
     Returns:
         Tuple of (success, post_commit_callback)
     """
-    query = select(models.Notification).where(
-        and_(
-            models.Notification.id == notification_id,
-            models.Notification.user_id == user_id,
-        )
-    )
-
-    result = await db.execute(query)
-    notification = result.scalar_one_or_none()
+    repo = NotificationRepository(db)
+    notification = await repo.get_for_user_by_id(user_id, notification_id)
 
     if not notification:
         # Return False with empty callback
@@ -407,10 +363,7 @@ async def delete_notification(
             pass
         return False, _empty_callback
 
-    await db.delete(notification)
-
-    # ✅ TRANSACTION FIX: Flush instead of commit
-    await db.flush()
+    await repo.delete(notification)
 
     # ✅ Create post-commit callback
     async def _post_commit():

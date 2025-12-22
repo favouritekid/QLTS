@@ -943,7 +943,8 @@ async def handle_forgot_password(db: AsyncSession, email_in: str):
 
         # Tăng bộ đếm, set TTL 1 giờ (3600s)
         # Dùng pipeline để đảm bảo INCR và EXPIRE là atomic
-        async with redis_client.pipeline() as pipe:
+        # ✅ FIX: Use safe_redis_pipeline instead of redis_client.pipeline
+        async with safe_redis_pipeline() as pipe:
             pipe.incr(email_rate_limit_key)
             pipe.expire(email_rate_limit_key, 3600)
             await pipe.execute()
@@ -1325,8 +1326,11 @@ async def perform_bulk_action(
                 "Bulk action: No users found matching provided IDs.",
                 user_ids=user_ids,
                 admin_id=admin_user.id,
-            )  # ✅ SỬa LỖI: Xóa `await`
-            return "No users found for the provided IDs. 0 users affected."
+            )
+            # ✅ FIX Bug #2: Return Tuple instead of string
+            async def _noop():
+                pass
+            return "No users found for the provided IDs. 0 users affected.", _noop
 
         processed_count = 0
         message = ""
@@ -1396,7 +1400,16 @@ async def perform_bulk_action(
 
         elif action == "change_status":
             ids_changed = []
+            skipped_users = []
             for user in users_to_process:
+                # ✅ FIX Bug #1: Prevent admin from banning/pending themselves
+                if user.id == admin_user.id and new_status in ["banned", "pending"]:
+                    log.warning(
+                        "Admin attempted to ban/pend self during bulk action, skipping.",
+                        admin_id=admin_user.id,
+                    )
+                    skipped_users.append(user.id)
+                    continue
                 if user.status != new_status:
                     user.status = new_status
                     db.add(user)
@@ -1407,7 +1420,7 @@ async def perform_bulk_action(
                         "Skipping status update for user already in desired state.",
                         user_id=user.id,
                         status=new_status,
-                    )  # ✅ SỬA LỖI: Xóa `await`
+                    )
 
             message = f"Successfully updated status to '{new_status}' for {processed_count} users."
             if ids_changed:

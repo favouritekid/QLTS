@@ -2,40 +2,131 @@
 """
 Fixtures for integration tests.
 
-Integration tests:
-- Test components working together
-- Use real database (test DB)
-- Use real Redis (test Redis)
-- Test API endpoints with real requests
-- May be slower than unit tests
+Provides database sessions and model fixtures for end-to-end integration testing.
 """
+import logging
+from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import models
 from app.database import AsyncSessionLocal
+from app.security import get_password_hash
+from app.config import settings
 
-# Import shared fixtures from root conftest
-# This allows integration tests to use database and Redis fixtures
+log = logging.getLogger(__name__)
 
+
+# =============================================================================
+# DATABASE SESSION FIXTURE
+# =============================================================================
 
 @pytest_asyncio.fixture
 async def db(setup_test_database) -> AsyncSession:
     """
     Provide a database session for integration tests.
-
-    This fixture:
-    1. Depends on setup_test_database to ensure schema is ready
-    2. Creates a new AsyncSession for the test
-    3. Yields the session for test use
-    4. Closes the session after test completes
-
-    Usage:
-        async def test_something(db: AsyncSession):
-            user = models.User(...)
-            db.add(user)
-            await db.commit()
     """
     async with AsyncSessionLocal() as session:
         yield session
+
+
+# =============================================================================
+# USER FIXTURES
+# =============================================================================
+
+@pytest_asyncio.fixture
+async def admin_user(db: AsyncSession) -> models.User:
+    """Create an admin user directly in database."""
+    user = models.User(
+        username="integration_test_admin",
+        email="integration_admin@test.com",
+        password_hash=get_password_hash("AdminPass123!"),
+        role="admin",
+        status="active",
+        full_name="Integration Test Admin"
+    )
+    db.add(user)
+    await db.flush()
+    await db.refresh(user)
+    return user
+
+
+@pytest_asyncio.fixture
+async def officer_user(db: AsyncSession, seeded_dependencies: dict) -> models.User:
+    """Create an officer user assigned to a unit."""
+    user = models.User(
+        username="integration_test_officer",
+        email="integration_officer@test.com",
+        password_hash=get_password_hash("OfficerPass123!"),
+        role="officer",
+        status="active",
+        full_name="Integration Test Officer",
+        unit_id=seeded_dependencies["unit_id"]
+    )
+    db.add(user)
+    await db.flush()
+    await db.refresh(user)
+    return user
+
+
+@pytest_asyncio.fixture
+async def manager_user(db: AsyncSession, seeded_dependencies: dict) -> models.User:
+    """Create a manager user assigned to a unit."""
+    user = models.User(
+        username="integration_test_manager",
+        email="integration_manager@test.com",
+        password_hash=get_password_hash("ManagerPass123!"),
+        role="manager",
+        status="active",
+        full_name="Integration Test Manager",
+        unit_id=seeded_dependencies["unit_id"]
+    )
+    db.add(user)
+    await db.flush()
+    await db.refresh(user)
+    return user
+
+
+# =============================================================================
+# DEPENDENCIES FIXTURE
+# =============================================================================
+
+@pytest_asyncio.fixture
+async def seeded_dependencies(db: AsyncSession) -> dict:
+    """
+    Seed required dependencies for integration tests.
+    """
+    # Organization Unit
+    unit = models.OrganizationUnit(
+        id=3001,
+        name="Integration Test Unit",
+        type="department"
+    )
+    db.add(unit)
+    
+    # Pipeline Stage
+    stage = models.PipelineStage(
+        id="INTEGRATION_TEST_STAGE",
+        name="Integration Test Stage",
+        order=10
+    )
+    db.add(stage)
+    
+    # Initial Status
+    initial_status = models.ConsultationStatus(
+        id=settings.DEFAULT_INITIAL_LEAD_STATUS_ID,
+        name="New Lead (Integration Test)",
+        color_code="#0000FF",
+        stage_id="INTEGRATION_TEST_STAGE"
+    )
+    db.add(initial_status)
+    
+    await db.flush()
+    
+    return {
+        "unit_id": unit.id,
+        "stage_id": stage.id,
+        "initial_status_id": initial_status.id,
+    }

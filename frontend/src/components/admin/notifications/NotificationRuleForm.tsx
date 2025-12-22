@@ -68,7 +68,7 @@ const formSchema = z.object({
   event: z.string().min(1, "Event is required"),
   title_template: z.string().min(1, "Title template is required"),
   message_template: z.string().min(1, "Message template is required"),
-  notification_type: z.enum(["info", "success", "warning", "error"]),
+  notification_type: z.enum(["info", "success", "warning", "error", "reminder", "admin_update", "system"]),
   link_template: z.string().optional(),
   channels: z.array(z.string()).min(1, "At least one channel is required"),
   recipient_config: z.record(z.string(), z.unknown()),
@@ -130,12 +130,16 @@ const NOTIFICATION_TYPES = [
   { value: "success", label: "Success", color: "bg-green-100 text-green-800" },
   { value: "warning", label: "Warning", color: "bg-yellow-100 text-yellow-800" },
   { value: "error", label: "Error", color: "bg-red-100 text-red-800" },
+  { value: "reminder", label: "Reminder", color: "bg-purple-100 text-purple-800" },
+  { value: "admin_update", label: "Admin Update", color: "bg-indigo-100 text-indigo-800" },
+  { value: "system", label: "System", color: "bg-gray-100 text-gray-800" },
 ];
 
 const CHANNELS = [
   { value: "browser", label: "Browser" },
   { value: "email", label: "Email" },
   { value: "sms", label: "SMS" },
+  { value: "zalo", label: "Zalo" },
 ];
 
 const RESOLVER_TYPES = [
