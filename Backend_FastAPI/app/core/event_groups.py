@@ -57,6 +57,9 @@ class NotificationEventGroup(str, Enum):
     ORGANIZATION = "organization"
     """Organization events: unit, program, offering changes (Admin only)"""
 
+    SECURITY = "security"
+    """Security events: suspicious logins, password changes, device changes"""
+
 
 # Mapping from SystemEvents to NotificationEventGroup
 # This determines which preference group controls each event
@@ -115,6 +118,9 @@ EVENT_GROUP_MAPPING: Dict[SystemEvents, NotificationEventGroup] = {
     SystemEvents.OFFERING_CREATED: NotificationEventGroup.ORGANIZATION,
     SystemEvents.OFFERING_UPDATED: NotificationEventGroup.ORGANIZATION,
     SystemEvents.OFFERING_DELETED: NotificationEventGroup.ORGANIZATION,
+
+    # Security events
+    SystemEvents.SUSPICIOUS_LOGIN: NotificationEventGroup.SECURITY,
 }
 
 
@@ -211,6 +217,12 @@ EVENT_GROUP_LABELS: Dict[NotificationEventGroup, Dict[str, str]] = {
         "description_en": "Notifications about unit, program, and offering changes (Admin only)",
         "description_vi": "Thông báo về thay đổi đơn vị, chương trình, loại hình đào tạo (Chỉ Admin)"
     },
+    NotificationEventGroup.SECURITY: {
+        "en": "Security",
+        "vi": "Bảo mật",
+        "description_en": "Notifications about suspicious logins and security events",
+        "description_vi": "Thông báo về đăng nhập đáng ngờ và sự kiện bảo mật"
+    },
 }
 
 
@@ -273,6 +285,11 @@ DEFAULT_GROUP_CHANNELS: Dict[NotificationEventGroup, Dict[NotificationChannel, b
     NotificationEventGroup.ORGANIZATION: {
         NotificationChannel.BROWSER: True,
         NotificationChannel.EMAIL: False,
+        NotificationChannel.SMS: False,
+    },
+    NotificationEventGroup.SECURITY: {
+        NotificationChannel.BROWSER: True,
+        NotificationChannel.EMAIL: True,
         NotificationChannel.SMS: False,
     },
 }

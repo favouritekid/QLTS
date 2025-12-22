@@ -52,6 +52,7 @@ from .user import User
 from .user_unit_assignment import UserUnitAssignment  # NEW: Assignment history
 from .user_activity import UserActivityLog
 from .user_session import UserSession
+from .login_history import LoginHistory  # Security: Login audit trail
 
 # Import tất cả các model để chúng được đăng ký với Base
 # và để chúng có thể được truy cập qua package 'models' (vd: models.User)
@@ -106,4 +107,5 @@ __all__ = [
     "UserUnitAssignment",
     "UserActivityLog",
     "UserSession",
+    "LoginHistory",
 ]

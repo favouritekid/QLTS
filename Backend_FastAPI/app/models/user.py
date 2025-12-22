@@ -148,6 +148,14 @@ class User(Base):
         foreign_keys="OfferingAcademicInfo.updated_by_user_id"
     )
 
+    # Login history for security audit
+    login_history = relationship(
+        "LoginHistory",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        order_by="desc(LoginHistory.login_at)"
+    )
+
     def __repr__(self) -> str:
         return f"<User {self.username}>"
 

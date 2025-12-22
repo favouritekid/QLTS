@@ -407,3 +407,6 @@ Các module notification sau đã được migrate sang Pattern A:
 | `NotificationRuleRepository` | `notification_rule_crud_service.py` | ✅ Done |
 | `NotificationTemplateRepository` | `notification_template_service.py` | ✅ Done |
 | `NotificationPreferenceRepository` | `notification_preference_service.py` | ✅ Done |
+
+Chạy test:
+wsl bash -c "cd /mnt/d/QLTS/Backend_FastAPI && source venv/bin/activate && pytest tests/integration/api/auth/ -v --tb=short 2>&1 | tail -50"

@@ -648,10 +648,33 @@ class SystemEvents(str, Enum):
             "offering_id": int,           # Required: ID of the offering
             "program_id": int,            # Required: Parent program ID
             "offering_type": str,         # Offering type
-            "actor_id": int               # Admin who deleted the offering
+            \"actor_id\": int               # Admin who deleted the offering
         }
 
     Recipients: All admins
+    """
+
+    # =========================================================================
+    # SECURITY EVENTS
+    # =========================================================================
+
+    SUSPICIOUS_LOGIN = "suspicious_login"
+    """
+    Triggered when a login is flagged as suspicious (new IP, device, or location).
+
+    Payload Schema:
+        {
+            "user_id": int,               # Required: ID of the user who logged in
+            "login_history_id": int,      # Required: ID of the login history record
+            "ip_address": str,            # IP address used for login
+            "location": str,              # Location (city, country)
+            "device": str,                # Device/browser info
+            "risk_score": int,            # Risk score (0-100)
+            "anomalies": List[str],       # List of anomalies detected (new_ip, new_device, new_location)
+            "actor_id": int               # Same as user_id (self-login)
+        }
+
+    Recipients: The user who logged in (for awareness)
     """
 
 

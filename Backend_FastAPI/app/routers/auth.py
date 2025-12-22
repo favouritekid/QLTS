@@ -36,8 +36,11 @@ from ..database import (
 )
 from ..core.rate_limits import limiter, RateLimits  # ✅ MIGRATED: Use new rate limits module
 from ..services import session_service, user_service
+from ..services import login_history_service  # Security: Persistent login audit trail
+from ..services import notification_dispatcher  # Security: Suspicious login alerts
 from ..services.anomaly_detection import AnomalyDetector
 from ..utils.exceptions import InvalidToken
+from ..core.events import SystemEvents  # Security: Event registry
 
 router = APIRouter(tags=["Authentication"])
 log = structlog.get_logger(__name__)
@@ -314,6 +317,69 @@ async def login_for_access_token(
             error=str(session_error),
             exc_info=True,
         )
+
+    # ✅ PHASE 1: Record login history for persistent audit trail
+    # Unlike UserSession (which is revoked on logout), LoginHistory is permanent
+    # for security auditing and suspicious login detection
+    login_history_callback = None
+    try:
+        login_record, login_history_callback = await login_history_service.record_login(
+            db=db,
+            user_id=user.id,
+            ip_address=ip_address,
+            user_agent=user_agent_string,
+            country=session.country if 'session' in dir() else None,
+            city=session.city if 'session' in dir() else None,
+        )
+        if login_record.is_suspicious:
+            log.warning(
+                "Login recorded with security flags",
+                user_id=user.id,
+                is_new_ip=login_record.is_new_ip,
+                is_new_device=login_record.is_new_device,
+                is_new_location=login_record.is_new_location,
+                risk_score=login_record.risk_score,
+            )
+            # ✅ PHASE 3: Dispatch notification for suspicious login
+            anomalies = []
+            if login_record.is_new_ip:
+                anomalies.append("new_ip")
+            if login_record.is_new_device:
+                anomalies.append("new_device")
+            if login_record.is_new_location:
+                anomalies.append("new_location")
+            
+            try:
+                await notification_dispatcher.dispatch(
+                    db=db,
+                    event=SystemEvents.SUSPICIOUS_LOGIN,
+                    payload={
+                        "user_id": user.id,
+                        "user_ids": [user.id],  # For SpecificUsersResolver
+                        "login_history_id": login_record.id,
+                        "ip_address": ip_address or "unknown",
+                        "location": f"{login_record.city or ''}, {login_record.country or ''}".strip(", "),
+                        "device": f"{login_record.browser or ''} on {login_record.os or ''}".strip(),
+                        "risk_score": login_record.risk_score,
+                        "anomalies": anomalies,
+                        "actor_id": user.id,
+                    },
+                )
+                log.info("Suspicious login notification dispatched", user_id=user.id)
+            except Exception as notif_error:
+                log.error(
+                    "Failed to dispatch suspicious login notification",
+                    user_id=user.id,
+                    error=str(notif_error),
+                )
+    except Exception as history_error:
+        log.error(
+            "Failed to record login history",
+            user_id=user.id,
+            error=str(history_error),
+            exc_info=True,
+        )
+        # Don't fail login if history recording fails
 
     # (Giữ nguyên logic commit và response)
     try:

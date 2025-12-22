@@ -564,6 +564,24 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         link_template="/admin/officers",
         priority=100,
     ),
+
+    # =========================================================================
+    # 🔐 SECURITY EVENTS
+    # =========================================================================
+
+    SystemEvents.SUSPICIOUS_LOGIN: NotificationConfig(
+        group=NotificationEventGroup.SECURITY,
+        resolver=SpecificUsersResolver(),
+        template=(
+            "⚠️ Đăng nhập mới từ thiết bị lạ",
+            "Phát hiện đăng nhập từ ${location} (${device}). Nếu không phải bạn, hãy bảo mật tài khoản ngay."
+        ),
+        channels=(CH.BROWSER, CH.EMAIL),
+        notification_type=NT.WARNING,
+        link_template="/settings/security",
+        priority=10,  # High priority for security events
+        dedup_key_template="security:${user_id}:suspicious_login:${login_history_id}"
+    ),
 }
 
 
