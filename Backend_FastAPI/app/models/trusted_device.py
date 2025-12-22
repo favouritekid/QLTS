@@ -11,7 +11,7 @@ from typing import Optional
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import relationship
 
-from ..database import Base
+from .base import Base
 
 
 class TrustedDevice(Base):

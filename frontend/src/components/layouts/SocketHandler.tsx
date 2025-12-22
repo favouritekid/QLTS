@@ -127,7 +127,13 @@ export function SocketHandler() {
       // Gửi xác nhận về server
       socket.emit("logout_confirmed", {});
 
-      logoutRef.current(); // Dùng ref để gọi logout
+      logoutRef.current(); // Clear auth state
+      
+      // ✅ FIX: Redirect to login page after clearing state
+      // logout() only clears state, doesn't redirect
+      setTimeout(() => {
+        window.location.href = "/login";
+      }, 1500); // Short delay to show toast
     };
 
     // Lắng nghe sự kiện "thu hồi tất cả" (ví dụ: đổi mật khẩu)
@@ -141,7 +147,12 @@ export function SocketHandler() {
       // Gửi xác nhận về server
       socket.emit("logout_confirmed", { reason: data.reason });
 
-      logoutRef.current(); // Dùng ref
+      logoutRef.current(); // Clear auth state
+      
+      // ✅ FIX: Redirect to login page after clearing state
+      setTimeout(() => {
+        window.location.href = "/login";
+      }, 1500);
     };
 
     // Lắng nghe sự kiện notification (real-time notifications)

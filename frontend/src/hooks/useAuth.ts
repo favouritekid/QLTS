@@ -44,7 +44,7 @@ export function useAuth(options?: UseAuthOptions) {
     LoginRequest
   >({
     mutationFn: async (credentials: LoginRequest) => {
-      console.log("Credentials received by mutationFn:", credentials);
+      // ⚠️ SECURITY: Never log credentials!
       const params = new URLSearchParams();
       params.append("username", credentials.username);
       params.append("password", credentials.password);

@@ -578,7 +578,7 @@ NOTIFICATION_REGISTRY: Dict[SystemEvents, NotificationConfig] = {
         ),
         channels=(CH.BROWSER, CH.EMAIL),
         notification_type=NT.WARNING,
-        link_template="/settings/security",
+        link_template="/settings/login-history",  # Fixed: was /settings/security
         priority=10,  # High priority for security events
         dedup_key_template="security:${user_id}:suspicious_login:${login_history_id}"
     ),

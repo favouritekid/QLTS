@@ -12,7 +12,7 @@ from sqlalchemy import and_, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models
-from .base_repository import BaseRepository
+from .base import BaseRepository
 
 
 class TrustedDeviceRepository(BaseRepository[models.TrustedDevice]):
@@ -195,3 +195,38 @@ class TrustedDeviceRepository(BaseRepository[models.TrustedDevice]):
             self.model.user_id == user_id
         )
         return await self.db.scalar(query) or 0
+
+    async def get_filtered(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+        **filters,
+    ) -> Tuple[int, List[models.TrustedDevice]]:
+        """
+        Get filtered trusted devices with pagination.
+        
+        Required by BaseRepository abstract method.
+        
+        Args:
+            skip: Number of records to skip
+            limit: Maximum number of records to return
+            **filters: Filter parameters (user_id supported)
+            
+        Returns:
+            Tuple of (total_count, list of devices)
+        """
+        user_id = filters.get("user_id")
+        if user_id:
+            return await self.get_by_user_id(user_id, skip, limit)
+        
+        # Admin view: all trusted devices
+        total = await self.count()
+        query = (
+            select(self.model)
+            .order_by(self.model.trusted_at.desc())
+            .offset(skip)
+            .limit(limit)
+        )
+        result = await self.db.execute(query)
+        return total, list(result.scalars().all())
+

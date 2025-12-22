@@ -182,29 +182,16 @@ async def login_for_access_token(
             error=str(e),
         )
 
-    # ✅ SECURITY FIX: Revoke all old sessions to prevent session fixation
-    # This ensures only the new session (from this login) will be valid
-    try:
-        from ..services import session_service
-        revoked_count = await session_service.revoke_all_other_sessions(
-            db=db,
-            user_id=user.id,
-            except_session_id=None  # Revoke ALL old sessions
-        )
-        if revoked_count > 0:
-            log.info(
-                "Old sessions revoked on login (session fixation prevention)",
-                user_id=user.id,
-                revoked_count=revoked_count
-            )
-    except Exception as e:
-        log.error(
-            "Failed to revoke old sessions during login",
-            user_id=user.id,
-            error=str(e),
-            exc_info=True
-        )
-        # Continue login even if revocation fails (fail-open for availability)
+    # ✅ SECURITY REFACTOR: Allow multiple concurrent sessions
+    # Previous: revoke_all_other_sessions() → victim kicked before seeing notification
+    # New: Victim receives real-time alert, then decides action
+    # 
+    # Revoke ONLY happens when:
+    # - User clicks "Không phải tôi" (Secure Account) 
+    # - User manually revokes in Settings > Sessions
+    # - Admin force revokes
+    #
+    # This follows Google/Microsoft/GitHub security best practices
 
     # ✅ BƯỚC 2: SỬA HÀM LOGIN
 
