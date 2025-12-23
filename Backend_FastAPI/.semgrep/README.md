@@ -31,9 +31,12 @@
 #   - prefer-repository-pattern: Use Repository classes
 #   - no-db-scalar-in-services: Move to Repository
 #   - no-complex-logic-in-routers: Business logic in services
+#   - repository-inherit-base: Repos inherit BaseRepository
+#   - service-raise-generic-exception: Use domain exceptions
+#   - no-model-creation-in-routers: Models via Repository
 #
 # INFO level (suggestions):
-#   - repository-import-pattern: Use package imports
+#   - service-missing-transaction-docs: Document transaction responsibility
 #
 # Ignoring Rules:
 # ---------------

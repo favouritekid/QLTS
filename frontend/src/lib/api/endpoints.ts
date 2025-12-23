@@ -174,4 +174,13 @@ export const API_ENDPOINTS = {
     UPDATE: (applicationId: number) => `/api/applications/${applicationId}`,
     GET: (applicationId: number) => `/api/applications/${applicationId}`,
   },
+  // ✅ LOGIN SECURITY: Phase 5 - User Response Flow
+  SECURITY: {
+    LOGIN_HISTORY: "/api/security/login-history",
+    SUSPICIOUS_LOGINS: "/api/security/suspicious-logins",
+    CONFIRM_LOGIN: "/api/security/confirm-login",
+    SECURE_ACCOUNT: "/api/security/secure-account",
+    TRUSTED_DEVICES: "/api/security/trusted-devices",
+    REMOVE_TRUSTED_DEVICE: (id: number) => `/api/security/trusted-devices/${id}`,
+  },
 } as const;

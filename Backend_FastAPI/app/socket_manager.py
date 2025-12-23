@@ -300,13 +300,19 @@ async def connect(sid, environ, auth):
                 raise ConnectionRefusedError("Authentication failed: No token in cookie or auth")
 
             user = await _get_user_from_token(token)
+            
+            # ✅ SECURITY FIX: Extract JTI from token for session-specific room
+            # We already verified the token in _get_user_from_token
+            payload = security.decode_token(token)
+            refresh_jti = payload.get("r_jti")
 
             # Save session with extended info
             await sio.save_session(sid, {
                 "user_id": user.id,
                 "username": user.username,
                 "role": user.role,
-                "unit_id": user.unit_id
+                "unit_id": user.unit_id,
+                "jti": refresh_jti  # Store JTI in socket session
             })
 
             # === Join rooms based on user attributes ===
@@ -316,6 +322,12 @@ async def connect(sid, environ, auth):
             room_name = f"user_room_{user.id}"
             await sio.enter_room(sid, room_name)
             rooms_joined.append(room_name)
+
+            # 2. Session-specific room (Targeted Revocation)
+            if refresh_jti:
+                session_room = f"session_room_{refresh_jti}"
+                await sio.enter_room(sid, session_room)
+                rooms_joined.append(session_room)
 
             # 2. Role-based room (for role-specific broadcasts)
             if user.role:
@@ -364,6 +376,7 @@ async def disconnect(sid):
             user_id = session.get("user_id")
             role = session.get("role")
             unit_id = session.get("unit_id")
+            refresh_jti = session.get("jti")
             socket_connections_active.dec()  # Giảm bộ đếm
 
             # === Leave all rooms ===
@@ -373,6 +386,12 @@ async def disconnect(sid):
             room_name = f"user_room_{user_id}"
             await sio.leave_room(sid, room_name)
             rooms_left.append(room_name)
+
+            # 2. Session room
+            if refresh_jti:
+                session_room = f"session_room_{refresh_jti}"
+                await sio.leave_room(sid, session_room)
+                rooms_left.append(session_room)
 
             # 2. Role room
             if role:
@@ -445,8 +464,22 @@ async def revalidate_auth(sid):
                 return {"valid": False, "reason": "No session"}
 
             user_id = session.get("user_id")
+            refresh_jti = session.get("jti")
 
-            # Check user blacklist
+            # Check if this specific session is still valid in Redis
+            if refresh_jti:
+                session_valid = await safe_redis_get(f"session:{refresh_jti}")
+                if not session_valid:
+                    log.warning(
+                        "Revalidation failed: Session revoked",
+                        sid=sid,
+                        user_id=user_id,
+                        jti=refresh_jti
+                    )
+                    await sio.disconnect(sid)
+                    return {"valid": False, "reason": "Session revoked"}
+
+            # Check user blacklist (Password changed or admin ban)
             is_blacklisted = await safe_redis_get(f"user_blacklist:{user_id}")
             if is_blacklisted:
                 log.warning(
@@ -457,7 +490,7 @@ async def revalidate_auth(sid):
                 await sio.disconnect(sid)
                 return {"valid": False, "reason": "User session invalidated"}
 
-            # Check if any active sessions exist (fallback check)
+            # Fallback: Check if ANY active session exists in DB
             from datetime import datetime, timezone
             from sqlalchemy import and_, select
 
@@ -477,7 +510,7 @@ async def revalidate_auth(sid):
 
                 if not active_session:
                     log.warning(
-                        "Revalidation failed: No active sessions",
+                        "Revalidation failed: No active sessions in DB",
                         sid=sid,
                         user_id=user_id
                     )
@@ -573,17 +606,29 @@ async def emit_force_logout(user_id: int, revoked_jtis: list, **kwargs):
 
     Args:
         user_id: User to logout
-        revoked_jtis: List of revoked session JTIs
+        revoked_jtis: List of revoked session JTIs. If empty, logout all sessions for user.
         **kwargs: Additional event data (ignored)
     """
     try:
-        room_name = f"user_room_{user_id}"
-        await sio.emit(
-            "force_logout_batch",
-            {"revoked_jtis": revoked_jtis},
-            room=room_name
-        )
-        log.debug("Emitted force_logout_batch event", user_id=user_id, count=len(revoked_jtis))
+        if revoked_jtis:
+            # Targeted logout: Emit to specific session rooms
+            for jti in revoked_jtis:
+                session_room = f"session_room_{jti}"
+                await sio.emit(
+                    "force_logout_batch",
+                    {"revoked_jtis": [jti]},
+                    room=session_room
+                )
+            log.info("Emitted targeted force_logout_batch", user_id=user_id, count=len(revoked_jtis))
+        else:
+            # Broadcast logout: Emit to all user sessions
+            room_name = f"user_room_{user_id}"
+            await sio.emit(
+                "force_logout_batch",
+                {"revoked_jtis": []}, # Empty list means all
+                room=room_name
+            )
+            log.warning("Emitted broadcast force_logout_batch (ALL)", user_id=user_id)
     except Exception as e:
         log.error("Failed to emit force_logout event", user_id=user_id, error=str(e))
 

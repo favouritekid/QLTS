@@ -48,6 +48,7 @@ from .routers import (
     organization,
     pipeline,
     profile,
+    security,  # ✅ LOGIN SECURITY: Phase 5 - User response flow
     sessions,
     users
 )
@@ -543,6 +544,7 @@ fastapi_app.include_router(
 )
 fastapi_app.include_router(officer.router, prefix="/api", tags=["Officer Dashboard"])
 fastapi_app.include_router(kpi_config.router)  # ✅ PHASE 5: KPI Configuration Admin
+fastapi_app.include_router(security.router, prefix="/api", tags=["Security"])  # ✅ LOGIN SECURITY: Phase 5
 fastapi_app.include_router(monitoring.router, prefix="/api", tags=["System Monitoring"])
 
 # ===============================================================

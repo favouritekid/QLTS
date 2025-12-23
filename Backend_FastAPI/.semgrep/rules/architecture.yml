@@ -59,6 +59,7 @@ rules:
         # These services handle their own transactions for specific reasons
         - "**/app/services/notification_dispatcher.py"
         - "**/app/services/notification_preference_service.py"
+        - "**/app/services/lead_cache_service.py"  # Batch job for nightly cron
     message: |
       ❌ ARCHITECTURE VIOLATION: db.commit() not allowed in service layer.
       
@@ -185,3 +186,138 @@ rules:
       category: architecture
       rule-type: router-purity
 
+  # ============================================================================
+  # RULE 6: Repository must inherit BaseRepository
+  # ============================================================================
+  # All Repository classes should extend BaseRepository for consistency
+  
+  - id: repository-inherit-base
+    patterns:
+      - pattern: |
+          class $REPO:
+              ...
+      - pattern-not: |
+          class $REPO(BaseRepository):
+              ...
+      - pattern-not: |
+          class $REPO(BaseRepository[$MODEL]):
+              ...
+      - metavariable-regex:
+          metavariable: $REPO
+          regex: '.*Repository$'
+    paths:
+      include:
+        - "**/app/repositories/**/*.py"
+      exclude:
+        - "**/app/repositories/base.py"
+        - "**/app/repositories/__init__.py"
+    message: |
+      ⚠️ ARCHITECTURE WARNING: Repository should inherit from BaseRepository.
+      
+      Pattern:
+        from app.repositories.base import BaseRepository
+        
+        class MyRepository(BaseRepository[models.MyModel]):
+            model = models.MyModel
+    severity: WARNING
+    languages:
+      - python
+    metadata:
+      category: architecture
+      rule-type: repository-pattern
+
+  # ============================================================================
+  # RULE 7: Service must raise domain exceptions (not generic Exception)
+  # ============================================================================
+  
+  - id: service-raise-generic-exception
+    patterns:
+      - pattern: raise Exception(...)
+    paths:
+      include:
+        - "**/app/services/**/*.py"
+    message: |
+      ⚠️ ARCHITECTURE WARNING: Use domain-specific exceptions.
+      
+      Instead of raising generic Exception, use:
+      - ResourceNotFoundError
+      - DuplicateResourceError
+      - AuthorizationError
+      - BadRequest
+      
+      Import from: from app.utils.exceptions import ResourceNotFoundError
+    severity: WARNING
+    languages:
+      - python
+    metadata:
+      category: architecture
+      rule-type: exception-handling
+
+  # ============================================================================
+  # RULE 8: Avoid direct model creation in routers
+  # ============================================================================
+  # Models should be created via Repository.create()
+  
+  - id: no-model-creation-in-routers
+    patterns:
+      - pattern: models.$MODEL(...)
+      - pattern-inside: |
+          async def $FUNC(...):
+              ...
+    paths:
+      include:
+        - "**/app/routers/**/*.py"
+    message: |
+      ⚠️ ARCHITECTURE WARNING: Model creation should be in Repository/Service.
+      
+      Routers should call service functions, not create models directly.
+      
+      Move this to the appropriate Service which uses Repository.create()
+    severity: WARNING
+    languages:
+      - python
+    metadata:
+      category: architecture
+      rule-type: router-purity
+
+  # ============================================================================
+  # RULE 9: Service docstrings should mention transaction responsibility
+  # ============================================================================
+  # Write operations should document that Router handles commit
+  
+  - id: service-missing-transaction-docs
+    patterns:
+      - pattern-either:
+          - pattern: |
+              async def create_$NAME(...):
+                  ...
+          - pattern: |
+              async def update_$NAME(...):
+                  ...
+          - pattern: |
+              async def delete_$NAME(...):
+                  ...
+      - pattern-not: |
+          async def $FUNC(...):
+              """
+              ...
+              Router must call db.commit()
+              ...
+              """
+              ...
+    paths:
+      include:
+        - "**/app/services/**/*.py"
+      exclude:
+        - "**/app/services/*_tasks.py"
+    message: |
+      💡 INFO: Write operations should document transaction responsibility.
+      
+      Add to docstring:
+        "IMPORTANT: This function does NOT commit. Router must call db.commit()"
+    severity: INFO
+    languages:
+      - python
+    metadata:
+      category: documentation
+      rule-type: docstring
