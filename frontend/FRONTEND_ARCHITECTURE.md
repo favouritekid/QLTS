@@ -500,64 +500,86 @@ Need state?
 
 ## Part 7: Implementation Roadmap
 
-### Phase 1: Quick Wins (1-2 days)
+> **Last Audit:** 2025-12-23 | **Next Review:** Monthly
 
-| # | Task | Effort | Impact |
-|---|------|--------|--------|
-| 1 | Add `MobileBottomNav` component | 2h | 📱 Mobile UX |
-| 2 | Add `manifest.json` (PWA) | 1h | 📱 Install capability |
-| 3 | Audit touch targets ≥ 44px | 2h | ♿ Accessibility |
-| 4 | Add `useOptimistic` to notifications | 2h | ⚡ Instant feedback |
+### Phase 1: Mobile UX & PWA (HIGH PRIORITY) ⏳ NOT STARTED
 
----
-
-### Phase 2: React 19 Adoption (3-5 days)
-
-| # | Task | Effort | Impact |
-|---|------|--------|--------|
-| 5 | Server Actions for simple forms | 1d | 📦 Smaller bundle |
-| 6 | Add `loading.tsx` to remaining routes | 2h | ⚡ Streaming |
-| 7 | Implement `useActionState` for forms | 4h | ⚡ Pending states |
+| # | Task | Effort | Impact | Status |
+|---|------|--------|--------|--------|
+| 1 | Add `MobileBottomNav` component | 2h | 📱 Mobile UX | ❌ Not started |
+| 2 | Add `manifest.json` (PWA) | 1h | 📱 Install capability | ❌ Not started |
+| 3 | Audit touch targets ≥ 44px | 2h | ♿ Accessibility | ❌ Not started |
+| 4 | Add `useOptimistic` to notifications | 2h | ⚡ Instant feedback | ❌ Not started |
 
 ---
 
-### Phase 3: Feature Gaps (2-3 days)
+### Phase 2: React 19 Adoption ⏳ PARTIAL
 
-| # | Task | Effort | Impact |
-|---|------|--------|--------|
-| 8 | Build **KPI Config Admin Page** | 2d | 📊 Admin set targets |
-| 9 | Build **Profile Settings Page** | 1d | 👤 User edit info |
-
----
-
-### Phase 4: DX Improvements (Optional)
-
-| # | Task | Effort | Impact |
-|---|------|--------|--------|
-| 10 | Add Storybook | 2d | 📚 Component catalog |
-| 11 | Create ADR documentation | 2h | 📚 Decision tracking |
-| 12 | Feature-based folder structure | 3d | 📁 Scalability |
+| # | Task | Effort | Impact | Status |
+|---|------|--------|--------|--------|
+| 5 | Add `loading.tsx` to routes | 2h | ⚡ Streaming | ✅ Done (4 files) |
+| 6 | Server Actions for simple forms | 1d | 📦 Smaller bundle | ❌ Not started |
+| 7 | Implement `useActionState` for forms | 4h | ⚡ Pending states | ❌ Not started |
 
 ---
 
-### Priority Matrix
+### Phase 3: Feature Gaps ✅ COMPLETED
+
+| # | Task | Effort | Impact | Status |
+|---|------|--------|--------|--------|
+| 8 | Build **KPI Config Admin Page** | 2d | 📊 Admin set targets | ✅ Done |
+| 9 | Build **Profile Settings Page** | 1d | 👤 User edit info | ✅ Done |
+
+> **Note:** `kpi-config/page.tsx` (624 lines) and `profile/page.tsx` (hybrid pattern) are complete.
+
+---
+
+### Phase 4: Performance Optimization 🆕 NEW
+
+| # | Task | Effort | Impact | Status |
+|---|------|--------|--------|--------|
+| 10 | Refactor nested `useQuery` in Officer Dashboard | 4h | ⚡ Reduce waterfalls | ❌ Not started |
+| 11 | Consider Server Component migration for `kpi-config` | 2h | 📦 Less client JS | ❌ Not started |
+| 12 | Consider Server Component migration for `monitoring` | 2h | 📦 Less client JS | ❌ Not started |
+
+> **Audit Finding:** `TodaySchedule`, `WeeklyLeaderboard`, `RecommendationsPanel` have nested fetching.
+
+---
+
+### Phase 5: DX Improvements (Optional)
+
+| # | Task | Effort | Impact | Status |
+|---|------|--------|--------|--------|
+| 13 | Add Storybook | 2d | 📚 Component catalog | ❌ Not started |
+| 14 | Create ADR documentation | 2h | 📚 Decision tracking | ❌ Not started |
+| 15 | Feature-based folder structure | 3d | 📁 Scalability | ❌ Not started |
+
+---
+
+### Priority Matrix (Updated)
 
 ```
            HIGH IMPACT
                ↑
     ┌──────────┼──────────┐
     │  Phase 1 │ Phase 3  │
-    │ (Mobile) │(Features)│
-    │          │          │
+    │ (Mobile) │ ✅ DONE  │
+    │ ⚠️ GAP   │          │
 LOW ←──────────┼──────────→ HIGH
 EFFORT         │          EFFORT
-    │  Phase 2 │ Phase 4  │
-    │ (React19)│  (DX)    │
-    │          │          │
+    │  Phase 2 │ Phase 5  │
+    │(React19) │  (DX)    │
+    │ PARTIAL  │          │
     └──────────┼──────────┘
                ↓
            LOW IMPACT
 ```
+
+**Recommended Focus Order:**
+1. 🔴 Phase 1 (Mobile) - Actual gap, high user impact
+2. 🟡 Phase 4 (Performance) - Technical debt from audit
+3. 🟡 Phase 2 (React 19) - Continue adoption
+4. 🟢 Phase 5 (DX) - Nice to have
 
 ---
 
