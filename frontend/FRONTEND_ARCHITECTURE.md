@@ -15,6 +15,7 @@
 4. [Data Fetching Decision Matrix](#part-4-data-fetching-decision-matrix)
 5. [Component Classification](#part-5-component-classification)
 6. [Quick Reference](#part-6-quick-reference)
+7. [Implementation Roadmap](#part-7-implementation-roadmap)
 
 ---
 
@@ -497,6 +498,69 @@ Need state?
 
 ---
 
+## Part 7: Implementation Roadmap
+
+### Phase 1: Quick Wins (1-2 days)
+
+| # | Task | Effort | Impact |
+|---|------|--------|--------|
+| 1 | Add `MobileBottomNav` component | 2h | 📱 Mobile UX |
+| 2 | Add `manifest.json` (PWA) | 1h | 📱 Install capability |
+| 3 | Audit touch targets ≥ 44px | 2h | ♿ Accessibility |
+| 4 | Add `useOptimistic` to notifications | 2h | ⚡ Instant feedback |
+
+---
+
+### Phase 2: React 19 Adoption (3-5 days)
+
+| # | Task | Effort | Impact |
+|---|------|--------|--------|
+| 5 | Server Actions for simple forms | 1d | 📦 Smaller bundle |
+| 6 | Add `loading.tsx` to remaining routes | 2h | ⚡ Streaming |
+| 7 | Implement `useActionState` for forms | 4h | ⚡ Pending states |
+
+---
+
+### Phase 3: Feature Gaps (2-3 days)
+
+| # | Task | Effort | Impact |
+|---|------|--------|--------|
+| 8 | Build **KPI Config Admin Page** | 2d | 📊 Admin set targets |
+| 9 | Build **Profile Settings Page** | 1d | 👤 User edit info |
+
+---
+
+### Phase 4: DX Improvements (Optional)
+
+| # | Task | Effort | Impact |
+|---|------|--------|--------|
+| 10 | Add Storybook | 2d | 📚 Component catalog |
+| 11 | Create ADR documentation | 2h | 📚 Decision tracking |
+| 12 | Feature-based folder structure | 3d | 📁 Scalability |
+
+---
+
+### Priority Matrix
+
+```
+           HIGH IMPACT
+               ↑
+    ┌──────────┼──────────┐
+    │  Phase 1 │ Phase 3  │
+    │ (Mobile) │(Features)│
+    │          │          │
+LOW ←──────────┼──────────→ HIGH
+EFFORT         │          EFFORT
+    │  Phase 2 │ Phase 4  │
+    │ (React19)│  (DX)    │
+    │          │          │
+    └──────────┼──────────┘
+               ↓
+           LOW IMPACT
+```
+
+---
+
 ## Appendix: ADR Template
 
 When violating principles, create an ADR:
@@ -523,3 +587,4 @@ What else could we have done?
 ---
 
 *Playbook v1.0 – Maintained by Frontend Team*
+
