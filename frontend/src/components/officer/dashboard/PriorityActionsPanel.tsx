@@ -7,7 +7,6 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,7 +31,6 @@ const filterConfig: Record<FilterType, { label: string; icon?: typeof Flame; col
 };
 
 export function PriorityActionsPanel({ actions }: PriorityActionsPanelProps) {
-  const router = useRouter();
   const [filter, setFilter] = useState<FilterType>("all");
   
   const urgentCount = actions.filter((a) => a.priority === "urgent").length;
@@ -52,12 +50,14 @@ export function PriorityActionsPanel({ actions }: PriorityActionsPanelProps) {
     new_lead: actions.filter(a => a.type === "new_lead").length,
   }), [actions]);
 
-  const handleCall = (leadId: number) => {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const handleCall = (_leadId: number) => {
     // In real implementation, this would trigger a call modal or redirect
     toast.info("Tính năng gọi điện đang phát triển");
   };
 
-  const handleZalo = (leadId: number, phone?: string) => {
+   
+  const handleZalo = (_leadId: number, phone?: string) => {
     if (phone) {
       // Clean phone number and open Zalo
       const cleanPhone = phone.replace(/\D/g, '');

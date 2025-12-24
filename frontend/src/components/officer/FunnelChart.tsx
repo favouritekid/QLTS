@@ -412,7 +412,7 @@ export function FunnelChart({ funnel, previousPeriodConversion, config }: Funnel
                               }
                             </p>
                             <p className="text-white/50 text-[10px] italic">
-                              % leads đã tiến từ "{coreStages[index - 1].stage_name}" lên stage tiếp theo
+                              {`% leads đã tiến từ "${coreStages[index - 1].stage_name}" lên stage tiếp theo`}
                             </p>
                           </div>
                           
@@ -422,10 +422,10 @@ export function FunnelChart({ funnel, previousPeriodConversion, config }: Funnel
                               <span className="font-medium text-white">Phân bố hiện tại:</span>
                             </p>
                             <p className="text-white/70 pl-2">
-                              • "{coreStages[index - 1].stage_name}": {metrics.prevCount} leads
+                              {`• "${coreStages[index - 1].stage_name}": ${metrics.prevCount} leads`}
                             </p>
                             <p className="text-white/70 pl-2">
-                              • "{stage.stage_name}": {stage.lead_count} leads
+                              {`• "${stage.stage_name}": ${stage.lead_count} leads`}
                             </p>
                             {metrics.dropOff > 0 && (
                               <p className="text-amber-300 pl-2">

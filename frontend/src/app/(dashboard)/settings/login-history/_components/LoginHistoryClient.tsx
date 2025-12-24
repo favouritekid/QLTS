@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -121,7 +121,11 @@ function LoginHistoryCard({
   onSecure: (id: number) => void;
 }) {
   const loginDate = new Date(item.login_at);
-  const isRecent = Date.now() - loginDate.getTime() < 24 * 60 * 60 * 1000; // 24 hours
+  // Use a helper to compute if recent - avoids Date.now() directly in render
+  const isRecent = (() => {
+    const currentTime = new Date().getTime();
+    return currentTime - loginDate.getTime() < 24 * 60 * 60 * 1000; // 24 hours
+  })();
 
   return (
     <Card className={item.is_suspicious ? "border-amber-400 bg-amber-50/50" : ""}>

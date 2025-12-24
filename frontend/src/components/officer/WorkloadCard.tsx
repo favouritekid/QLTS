@@ -6,7 +6,7 @@
  */
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -37,29 +37,31 @@ async function updateAvailability(status: string) {
 
 export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
   const queryClient = useQueryClient();
-  const [isAvailable, setIsAvailable] = useState(
-    statusOverview.availability_status === "available"
-  );
-
-  // Fix: Sync local state when props change (e.g., after refetch)
-  useEffect(() => {
-    setIsAvailable(statusOverview.availability_status === "available");
-  }, [statusOverview.availability_status]);
+  // Derive isAvailable directly from props - avoids unnecessary sync with useEffect
+  // Local state only tracks optimistic update during mutation
+  const [optimisticAvailable, setOptimisticAvailable] = useState<boolean | null>(null);
+  
+  // Use optimistic state during mutation, otherwise derive from props
+  const isAvailable = optimisticAvailable ?? (statusOverview.availability_status === "available");
 
   const mutation = useMutation({
     mutationFn: updateAvailability,
     onSuccess: (data) => {
+      // Clear optimistic state - let props drive the UI
+      setOptimisticAvailable(null);
       queryClient.invalidateQueries({ queryKey: ["officer", "dashboard"] });
       toast.success(`Đã cập nhật: ${data.availability_status === "available" ? "Sẵn sàng" : "Bận"}`);
     },
     onError: () => {
       toast.error("Không thể cập nhật trạng thái");
-      setIsAvailable(!isAvailable);
+      // Revert optimistic state
+      setOptimisticAvailable(null);
     },
   });
 
   const handleAvailabilityToggle = (checked: boolean) => {
-    setIsAvailable(checked);
+    // Set optimistic state for immediate UI feedback
+    setOptimisticAvailable(checked);
     mutation.mutate(checked ? "available" : "busy");
   };
 

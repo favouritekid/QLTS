@@ -6,7 +6,7 @@
  */
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -85,9 +85,6 @@ function MiniCalendar({
   const month = viewDate.getMonth();
   const today = new Date();
   
-  const daysInMonth = getDaysInMonth(year, month);
-  const firstDayOfMonth = getFirstDayOfMonth(year, month);
-  
   // Previous month navigation
   const goToPrevMonth = () => {
     onViewDateChange(new Date(year, month - 1, 1));
@@ -98,22 +95,25 @@ function MiniCalendar({
     onViewDateChange(new Date(year, month + 1, 1));
   };
   
-  // Generate calendar days
+  // Generate calendar days - use year/month as stable dependencies
+  // Calculate derived values inside useMemo to ensure React Compiler can optimize
   const calendarDays = useMemo(() => {
+    const totalDays = getDaysInMonth(year, month);
+    const firstDay = getFirstDayOfMonth(year, month);
     const days: (number | null)[] = [];
     
     // Add empty cells for days before the first day of month
-    for (let i = 0; i < firstDayOfMonth; i++) {
+    for (let i = 0; i < firstDay; i++) {
       days.push(null);
     }
     
     // Add days of the month
-    for (let day = 1; day <= daysInMonth; day++) {
+    for (let day = 1; day <= totalDays; day++) {
       days.push(day);
     }
     
     return days;
-  }, [firstDayOfMonth, daysInMonth]);
+  }, [year, month]);
   
   const isToday = (day: number) => {
     return (
@@ -225,17 +225,18 @@ export function TodaySchedule({ className }: TodayScheduleProps) {
   // Fix: Compare date strings directly to avoid timezone shift issues
   // When new Date("2024-12-15") is created, it's interpreted as UTC midnight,
   // which shifts to a different day in local timezone (e.g., UTC+7)
+  const activities = data?.activities;
   const selectedDateActivities = useMemo(() => {
-    if (!data?.activities) return [];
+    if (!activities) return [];
     
     // Format selected date as YYYY-MM-DD string for comparison
     const selectedDateStr = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`;
     
-    return data.activities.filter(activity => {
+    return activities.filter(activity => {
       // activity.date is already a YYYY-MM-DD string from the API
       return activity.date === selectedDateStr;
     });
-  }, [data?.activities, selectedDate]);
+  }, [activities, selectedDate]);
   
   // Get dates with activities for calendar highlighting
   const datesWithActivities = data?.dates_with_activities || [];

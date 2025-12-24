@@ -94,6 +94,7 @@ export interface Lead {
   cached_urgency_score: number; // Điểm khẩn cấp 0-100
   is_hot_lead: boolean; // lead_score >= 70
   is_overdue: boolean; // Chưa liên hệ theo lịch hẹn (next_activity_at đã qua)
+  days_in_stage: number; // Số ngày trong giai đoạn hiện tại
   // =========================================================================
 
   // Foreign Keys
