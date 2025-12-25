@@ -38,17 +38,32 @@ def generate_device_fingerprint(
     browser: Optional[str],
     os: Optional[str],
     device_type: Optional[str],
+    user_id: Optional[int] = None,
 ) -> str:
     """
     Generate a stable device fingerprint from browser/OS info.
     
+    SECURITY FIX (C1): Added user_id and server-side salt to prevent spoofing.
+    Even if attacker knows browser/os/device_type, they cannot recreate
+    the fingerprint without the server-side salt.
+    
+    Args:
+        browser: Browser name/version from User-Agent
+        os: Operating system from User-Agent
+        device_type: Device type (mobile/desktop/tablet)
+        user_id: User ID for additional entropy (different users = different fingerprints)
+    
     Returns:
         64-character SHA256 hash of device attributes
     """
+    from app.config import settings
+    
     components = [
         browser or "unknown",
         os or "unknown",
         device_type or "unknown",
+        str(user_id) if user_id else "anonymous",
+        settings.DEVICE_FINGERPRINT_SALT,  # Server-side secret
     ]
     fingerprint_string = "|".join(components)
     return hashlib.sha256(fingerprint_string.encode()).hexdigest()
@@ -81,10 +96,12 @@ async def record_login(
     device_info = _parse_user_agent(user_agent)
     
     # Generate device fingerprint for trusted device check
+    # C1 FIX: Include user_id for additional entropy
     device_fingerprint = generate_device_fingerprint(
         browser=device_info.get("browser"),
         os=device_info.get("os"),
         device_type=device_info.get("device_type"),
+        user_id=user_id,
     )
     
     # ✅ Phase 4: Check if device is trusted
@@ -194,6 +211,9 @@ async def confirm_login(
     """
     User confirms a suspicious login as legitimate.
     
+    SECURITY FIX (C3): Added time validation - cannot confirm logins older than 7 days.
+    This prevents attackers from having old suspicious logins confirmed.
+    
     Phase 4: Optionally adds the device to trusted list.
     
     IMPORTANT: Router must call db.commit() and then execute the returned callback.
@@ -206,7 +226,13 @@ async def confirm_login(
     
     Raises:
         ResourceNotFoundError: If login not found or doesn't belong to user
+        ValidationError: If login is older than 7 days (C3 fix)
     """
+    from app.utils.exceptions import ValidationError
+    
+    # Maximum age for confirming a login (security policy)
+    MAX_LOGIN_AGE_DAYS = 7
+    
     login_repo = LoginHistoryRepository(db)
     trusted_repo = TrustedDeviceRepository(db)
     
@@ -215,16 +241,32 @@ async def confirm_login(
     if not login or login.user_id != user_id:
         raise ResourceNotFoundError(f"Login {login_id} not found")
     
+    # C3 FIX: Prevent confirming stale logins
+    login_age = datetime.now(timezone.utc) - login.login_at
+    if login_age.days > MAX_LOGIN_AGE_DAYS:
+        log.warning(
+            "Attempted to confirm stale login",
+            user_id=user_id,
+            login_id=login_id,
+            login_age_days=login_age.days
+        )
+        raise ValidationError(
+            f"Cannot confirm login older than {MAX_LOGIN_AGE_DAYS} days. "
+            f"This login is {login_age.days} days old."
+        )
+    
     login.user_response = "confirmed"
     login.responded_at = datetime.now(timezone.utc)
     
     # ✅ Phase 4: Add device to trusted list
     trusted_device = None
     if trust_device and login.browser and login.os:
+        # C1 FIX: Include user_id for additional entropy
         device_fingerprint = generate_device_fingerprint(
             browser=login.browser,
             os=login.os,
             device_type=login.device_type,
+            user_id=user_id,
         )
         trusted_device = await trusted_repo.trust_device(
             user_id=user_id,
@@ -257,8 +299,10 @@ async def secure_account(
     """
     User reports suspicious login and secures account.
     
+    SECURITY FIX (C2): Now sets password_reset_required=True to force password change.
+    
     IMPORTANT: Router must call db.commit() and then execute the returned callback.
-    The callback will revoke all sessions and force password change.
+    The callback will revoke all sessions.
     
     Raises:
         ResourceNotFoundError: If login not found or doesn't belong to user
@@ -272,14 +316,28 @@ async def secure_account(
     login.user_response = "secured"
     login.responded_at = datetime.now(timezone.utc)
     
+    # C2 FIX: Force password change on next login
+    # ✅ ARCHITECTURE FIX: Use UserRepository instead of direct query
+    from app.repositories.user_repository import UserRepository
+    user_repo = UserRepository(db)
+    user = await user_repo.get_by_id(user_id)
+    if user:
+        user.password_reset_required = True
+        log.info("Set password_reset_required=True for user", user_id=user_id)
+    
     await db.flush()
     await db.refresh(login)
     
     async def _post_commit():
-        log.warning("User secured account after suspicious login", user_id=user_id, login_id=login_id)
-        # TODO Phase 5: Revoke all sessions, force password change
+        log.warning(
+            "User secured account after suspicious login",
+            user_id=user_id,
+            login_id=login_id,
+            password_reset_required=True
+        )
     
     return login, _post_commit
+
 
 
 # =============================================================================

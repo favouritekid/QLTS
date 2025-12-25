@@ -43,6 +43,17 @@ class User(Base):
 
     status = Column(String(50), nullable=False, server_default="active")
     active_jti = Column(String(36), nullable=True, index=True)
+    
+    # ===== SECURITY FIX (C2) =====
+    # When True, user must change password before accessing the system
+    # Set to True when user clicks "Not Me" on suspicious login
+    password_reset_required = Column(
+        Boolean,
+        nullable=False,
+        server_default="false",
+        default=False,
+        comment="Forces password change on next login when True"
+    )
 
     # Lead assignment fields
     skills = Column(JSON, nullable=True)

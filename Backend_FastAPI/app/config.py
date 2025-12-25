@@ -155,6 +155,15 @@ class Settings(BaseSettings):
         default=60, validation_alias="SOCKET_MAX_CONN_PER_MINUTE"
     )  # Max WebSocket connections per minute per IP
 
+    # -- Security: Device Fingerprint --
+    # Server-side salt to prevent fingerprint spoofing
+    # IMPORTANT: This should be a random string, set in .env
+    # Example: openssl rand -base64 32
+    DEVICE_FINGERPRINT_SALT: str = Field(
+        default="CHANGE_ME_IN_PRODUCTION",
+        validation_alias="DEVICE_FINGERPRINT_SALT"
+    )
+
     # -- Lead Scoring Defaults (Không từ env) --
     LEAD_SCORING_ENGAGEMENT_POINTS: Dict[str, Any] = {
         "consultation_count_multiplier": 5,
