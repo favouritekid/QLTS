@@ -670,6 +670,12 @@ async def perform_change_password(
         new_password=password_data.new_password,
     )
 
+    # C2 SECURITY FIX: Clear password_reset_required flag after password change
+    if hasattr(current_user, 'password_reset_required') and current_user.password_reset_required:
+        current_user.password_reset_required = False
+        db.add(current_user)
+        log.info("Cleared password_reset_required flag", user_id=current_user.id)
+
     # ✅ FIX: Commit the password change to DB
     await db.commit()
     await post_commit_callback()

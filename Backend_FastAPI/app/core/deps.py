@@ -245,6 +245,64 @@ async def get_current_user(
         raise credentials_exception
 
 
+# =============================================================================
+# C2 SECURITY FIX: Password Reset Required Check
+# =============================================================================
+
+
+class PasswordChangeRequired(Exception):
+    """Exception raised when user must change password before accessing system."""
+    pass
+
+
+async def require_password_not_forced(
+    current_user: models.User = Depends(get_current_user),
+) -> models.User:
+    """
+    C2 SECURITY FIX: Dependency to block users who must change their password.
+    
+    When user clicks "Not Me" (secure_account), their password_reset_required
+    flag is set to True. This dependency blocks all protected endpoints until
+    they change their password.
+    
+    Use this dependency on all endpoints EXCEPT:
+    - /auth/change-password (user needs this to change password)
+    - /auth/logout (user should be able to logout)
+    - /auth/refresh (needed for token rotation)
+    
+    Raises:
+        HTTPException 403: If password_reset_required is True
+    
+    Example:
+        @router.get("/leads")
+        async def get_leads(
+            current_user: models.User = Depends(require_password_not_forced)
+        ):
+            # User is guaranteed to NOT have password_reset_required=True
+            ...
+    """
+    if hasattr(current_user, 'password_reset_required') and current_user.password_reset_required:
+        log.warning(
+            "Access blocked: Password change required",
+            user_id=current_user.id,
+            username=current_user.username
+        )
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "PASSWORD_CHANGE_REQUIRED",
+                "message": "You must change your password before accessing the system. "
+                           "Your account was flagged for security reasons.",
+            }
+        )
+    return current_user
+
+
+# Alias for use in router Depends
+PasswordSafeDep = Depends(require_password_not_forced)
+
+
 async def check_permission(
     request: Request, current_user: models.User = Depends(get_current_user)
 ):
