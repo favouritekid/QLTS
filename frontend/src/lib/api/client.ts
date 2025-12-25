@@ -189,6 +189,29 @@ api.interceptors.response.use(
       }
     }
 
+    // ========================================
+    // C2 SECURITY FIX: Handle PASSWORD_CHANGE_REQUIRED
+    // ========================================
+    if (
+      error.response?.status === 403 &&
+      typeof error.response?.data === "object" &&
+      error.response.data !== null &&
+      "detail" in error.response.data &&
+      typeof error.response.data.detail === "object" &&
+      error.response.data.detail !== null &&
+      "code" in error.response.data.detail &&
+      error.response.data.detail.code === "PASSWORD_CHANGE_REQUIRED"
+    ) {
+      console.log("[API Client] 🔐 Password change required - redirecting...");
+      
+      if (typeof window !== "undefined") {
+        // Redirect to change-password page with a flag
+        window.location.href = "/settings/change-password?forced=true";
+      }
+      
+      return Promise.reject(error);
+    }
+
     // For non-401 errors, just reject
     return Promise.reject(error);
   }

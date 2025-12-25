@@ -7,7 +7,8 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { AlertTriangle } from "lucide-react";
+import { useSearchParams } from "next/navigation";
+import { AlertTriangle, ShieldAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -60,6 +61,10 @@ export function ChangePasswordForm() {
   const { changePassword, isLoading: isChangingPassword } = useAuth();
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [pendingData, setPendingData] = useState<ChangePasswordFormValues | null>(null);
+  
+  // C2 SECURITY FIX: Check if user was forced to change password
+  const searchParams = useSearchParams();
+  const isForced = searchParams.get("forced") === "true";
 
   // Fetch active sessions count
   const { data: sessionsData, isLoading: isLoadingSessions } = useQuery({
@@ -110,6 +115,23 @@ export function ChangePasswordForm() {
   return (
     <div className="w-full max-w-xl space-y-4">
       <h2 className="text-xl font-semibold">Đổi Mật Khẩu</h2>
+
+      {/* C2 SECURITY FIX: Forced password change warning */}
+      {isForced && (
+        <Alert className="border-red-500 bg-red-50">
+          <ShieldAlert className="h-5 w-5 text-red-600" />
+          <AlertTitle className="text-red-800">Yêu cầu Đổi Mật Khẩu</AlertTitle>
+          <AlertDescription className="text-red-700">
+            <p>
+              Tài khoản của bạn đã được đánh dấu cần <strong>đổi mật khẩu ngay lập tức</strong>.
+              Điều này có thể do bạn đã báo cáo một đăng nhập đáng ngờ.
+            </p>
+            <p className="mt-2 text-sm">
+              Vui lòng đổi mật khẩu để tiếp tục sử dụng hệ thống.
+            </p>
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Security Warning Alert */}
       <Alert variant="destructive">
