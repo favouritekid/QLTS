@@ -77,14 +77,26 @@ async def record_login(
     country: Optional[str] = None,
     city: Optional[str] = None,
     oauth_provider: Optional[str] = None,
+    # Phase 1: Added for merged email sending (previously in AnomalyDetector)
+    email_to: Optional[str] = None,
+    username: Optional[str] = None,
 ) -> Tuple[models.LoginHistory, Callable]:
     """
     Record a login attempt and detect anomalies.
+    
+    PHASE 1 MERGE: This is now the single source of truth for anomaly detection.
+    - Records login history for persistent audit trail
+    - Detects suspicious activity (new IP, device, location)
+    - Sends email alert for suspicious logins (moved from AnomalyDetector)
     
     IMPORTANT: This function does NOT commit the transaction.
     Router must call db.commit() and then execute the returned callback.
     
     Phase 4: Trusted devices skip "new device" anomaly detection.
+    
+    Args:
+        email_to: User email for sending login alert (required for email)
+        username: Username for email personalization
     
     Returns:
         Tuple of (login_history, post_commit_callback)
@@ -150,7 +162,8 @@ async def record_login(
     if is_trusted_device:
         await trusted_repo.update_last_used(user_id, device_fingerprint)
     
-    # Post-commit callback for notifications
+    # Post-commit callback for notifications and email alerts
+    # PHASE 1 MERGE: Email sending moved here from AnomalyDetector
     async def _post_commit():
         if login.is_suspicious:
             log.warning(
@@ -162,7 +175,51 @@ async def record_login(
                 new_device=is_new_device,
                 new_location=is_new_location,
             )
-            # Note: Notification is dispatched in auth.py router (Phase 3)
+            
+            # PHASE 1: Send email alert (previously in AnomalyDetector/auth.py)
+            if email_to and username:
+                try:
+                    from app.celery_utils import send_login_alert_email_task
+                    
+                    # Build location string
+                    location_parts = []
+                    if city:
+                        location_parts.append(city)
+                    if country:
+                        location_parts.append(country)
+                    location = ", ".join(location_parts) if location_parts else None
+                    
+                    # Build anomalies dict for email template
+                    anomalies_dict = {
+                        "is_suspicious": True,
+                        "new_ip": is_new_ip,
+                        "new_device": is_new_device,
+                        "new_location": is_new_location,
+                    }
+                    
+                    send_login_alert_email_task.delay(
+                        email_to=email_to,
+                        username=username,
+                        ip_address=ip_address or "Unknown",
+                        user_agent=user_agent or "Unknown",
+                        device_type=device_info.get("device_type") or "Unknown",
+                        browser=device_info.get("browser") or "Unknown",
+                        os=device_info.get("os") or "Unknown",
+                        anomalies=anomalies_dict,
+                        location=location,
+                    )
+                    log.info(
+                        "Login alert email queued from login_history_service",
+                        user_id=user_id,
+                        email_to=email_to,
+                    )
+                except Exception as email_error:
+                    log.error(
+                        "Failed to queue login alert email",
+                        user_id=user_id,
+                        error=str(email_error),
+                    )
+            # Note: Socket notification is dispatched in auth.py router (Phase 3)
     
     return login, _post_commit
 
