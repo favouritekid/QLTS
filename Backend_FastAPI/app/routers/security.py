@@ -248,10 +248,14 @@ async def secure_account(
     
     This will:
     1. Mark the login as "secured"
-    2. Revoke all other sessions
+    2. Revoke all other sessions (R7 FIX: EXCEPT current session)
     3. Remove all trusted devices
-    4. User should change password after this
+    4. Force password change on next protected endpoint
     """
+    from fastapi import Cookie
+    from ..core import security
+    from ..repositories.session_repository import SessionRepository
+    
     try:
         from ..services import session_service
         
@@ -261,11 +265,34 @@ async def secure_account(
             login_id=login_id,
         )
         
-        # Revoke all sessions including current
+        # R7 FIX: Get current session ID to exclude from revocation
+        # This prevents user from being logged out when securing their account
+        current_session_id = None
+        try:
+            # Get refresh_token from cookie (manual extraction since we're mid-function)
+            refresh_token = request.cookies.get("refresh_token")
+            if refresh_token:
+                payload = security.decode_token(refresh_token)
+                jti = payload.get("jti")  # refresh token's own JTI
+                if jti:
+                    session_repo = SessionRepository(db)
+                    current_session = await session_repo.get_by_jti(jti)
+                    if current_session and current_session.user_id == current_user.id:
+                        current_session_id = current_session.id
+                        log.info(
+                            "R7: Will preserve current session during secure_account",
+                            session_id=current_session_id,
+                            user_id=current_user.id
+                        )
+        except Exception as e:
+            # If we can't get session, continue anyway (user will be logged out - acceptable fallback)
+            log.warning("R7: Could not get current session, will revoke all", error=str(e))
+        
+        # Revoke all sessions EXCEPT current (R7 FIX)
         sessions_revoked = await session_service.revoke_all_other_sessions(
             db=db,
             user_id=current_user.id,
-            except_session_id=None  # Revoke ALL sessions
+            except_session_id=current_session_id  # R7: Preserve current session
         )
         
         # Remove all trusted devices
@@ -280,10 +307,12 @@ async def secure_account(
             user_id=current_user.id,
             login_id=login_id,
             sessions_revoked=sessions_revoked,
+            current_session_preserved=current_session_id is not None,
         )
         
+        # R7: Update message to reflect user stays logged in
         return SecureAccountResponse(
-            message="Account secured. Please change your password and login again.",
+            message="Account secured. Please change your password.",
             sessions_revoked=sessions_revoked,
         )
         
