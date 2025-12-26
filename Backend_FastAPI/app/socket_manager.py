@@ -359,60 +359,9 @@ async def connect(sid, environ, auth):
                 token=sanitize_token(token),  # ✅ Log an toàn
             )
             
-            # R1+R2 FIX: Check and emit pending login notifications
-            # IMPORTANT: Use background task so connect handler returns immediately
-            # Client only registers listeners AFTER receiving "connected" acknowledgment
-            if refresh_jti:
-                async def emit_pending_notifications():
-                    """Background task to emit pending notifications after connect completes"""
-                    try:
-                        import json
-                        from .database import safe_redis_lrange, safe_redis_delete
-                        
-                        # Wait for client to register listeners
-                        # This delay happens AFTER connect handler returns
-                        await asyncio.sleep(2)
-                        
-                        pending_key = f"pending_login_notif:{user.id}:{refresh_jti}"
-                        pending_items = await safe_redis_lrange(pending_key, 0, -1)
-                        
-                        if pending_items:
-                            log.info(
-                                "R1+R2: Found pending login notifications",
-                                user_id=user.id,
-                                count=len(pending_items),
-                                sid=sid
-                            )
-                            user_room = f"user_room_{user.id}"
-                            for item in pending_items:
-                                try:
-                                    notification = json.loads(item)
-                                    await sio.emit("login_notification", notification, room=user_room)
-                                    log.info(
-                                        "R1+R2: Emitted pending notification (background)",
-                                        user_id=user.id,
-                                        login_id=notification.get("login_id"),
-                                        target_room=user_room
-                                    )
-                                except Exception as emit_error:
-                                    log.error(
-                                        "R1+R2: Failed to emit pending notification",
-                                        error=str(emit_error)
-                                    )
-                            
-                            # Clear pending after emit
-                            await safe_redis_delete(pending_key)
-                            log.info("R1+R2: Cleared pending notifications from Redis", user_id=user.id)
-                    except Exception as redis_error:
-                        log.error(
-                            "R1+R2: Failed to check pending notifications",
-                            user_id=user.id,
-                            error=str(redis_error)
-                        )
-                
-                # Spawn background task - connect handler returns immediately
-                import asyncio
-                asyncio.create_task(emit_pending_notifications())
+            # R1+R2: Pending login notifications are now handled via Client-Pull model
+            # Client emits "get_pending_login_notifications" after registering listeners
+            # See: @sio.event get_pending_login_notifications() handler below
 
         except Exception as e:
             log.error(
@@ -481,6 +430,76 @@ async def ping(sid):
     async with track_event_latency("ping"):
         socket_events_received_total.labels(event_type="ping").inc()
         await sio.emit("pong", to=sid)  # Pong vẫn không cần metric emit
+
+
+# R1+R2: Client-Pull Model for pending login notifications
+@sio.event
+async def get_pending_login_notifications(sid):
+    """
+    Client requests pending login notifications after registering listeners.
+    
+    This is the proper Client-Pull model that avoids race conditions:
+    1. Server connect handler returns immediately (no delay)
+    2. Client receives "connected" ACK
+    3. Client registers all event listeners
+    4. Client emits "get_pending_login_notifications"
+    5. Server checks Redis and responds with pending notifications
+    """
+    async with track_event_latency("get_pending_login_notifications"):
+        session = await sio.get_session(sid)
+        if not session:
+            log.warning("R1+R2: No session found for pending notification request", sid=sid)
+            return
+        
+        user_id = session.get("user_id")
+        refresh_jti = session.get("jti")
+        
+        if not user_id or not refresh_jti:
+            log.warning("R1+R2: Missing user_id or jti in session", sid=sid)
+            return
+        
+        try:
+            import json
+            from .database import safe_redis_lrange, safe_redis_delete
+            
+            pending_key = f"pending_login_notif:{user_id}:{refresh_jti}"
+            pending_items = await safe_redis_lrange(pending_key, 0, -1)
+            
+            if pending_items:
+                log.info(
+                    "R1+R2: Client-Pull - Found pending login notifications",
+                    user_id=user_id,
+                    count=len(pending_items),
+                    sid=sid
+                )
+                
+                for item in pending_items:
+                    try:
+                        notification = json.loads(item)
+                        await sio.emit("login_notification", notification, to=sid)
+                        log.info(
+                            "R1+R2: Client-Pull - Emitted pending notification",
+                            user_id=user_id,
+                            login_id=notification.get("login_id")
+                        )
+                    except Exception as emit_error:
+                        log.error(
+                            "R1+R2: Client-Pull - Failed to emit notification",
+                            error=str(emit_error)
+                        )
+                
+                # Clear pending after emit
+                await safe_redis_delete(pending_key)
+                log.info("R1+R2: Client-Pull - Cleared pending from Redis", user_id=user_id)
+            else:
+                log.debug("R1+R2: Client-Pull - No pending notifications", user_id=user_id)
+                
+        except Exception as e:
+            log.error(
+                "R1+R2: Client-Pull - Error checking pending notifications",
+                user_id=user_id,
+                error=str(e)
+            )
 
 
 # ✅ CẢI TIẾN: Vấn đề #6 - Thêm event handler cho acknowledgment
