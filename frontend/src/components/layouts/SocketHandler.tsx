@@ -897,10 +897,8 @@ export function SocketHandler() {
     };
     socket.onAny(handleAnyEvent);
 
-    // R1+R2 Client-Pull: Request pending login notifications AFTER all listeners registered
-    // This ensures we don't miss any events due to race conditions
-    console.log("[SocketHandler] 📤 Requesting pending login notifications (Client-Pull)");
-    socket.emit("get_pending_login_notifications");
+    // R1+R2: Client-Pull code removed - login notification is now included directly
+    // in the login API response and handled by useAuth.ts
 
     // Cleanup listeners khi effect này chạy lại hoặc component unmount
     return () => {

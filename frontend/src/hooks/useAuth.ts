@@ -66,11 +66,24 @@ export function useAuth(options?: UseAuthOptions) {
       // ✅ SECURITY FIX: Token is now in httpOnly cookie (set by backend)
       // We only need to store user info in Zustand
 
-      const { user } = loginResponse;
+      const { user, login_notification } = loginResponse;
 
       setAuth(user); // No longer pass token
 
       toast.success("Login successful!");
+
+      // R1+R2: Show suspicious login warning immediately (no socket needed)
+      if (login_notification) {
+        const locationInfo = login_notification.location || "Unknown location";
+        const deviceInfo = login_notification.device || "Unknown device";
+        
+        toast.warning(
+          `⚠️ Phát hiện đăng nhập đáng ngờ\nIP: ${login_notification.ip_address} - ${locationInfo}\n${deviceInfo}`,
+          { duration: 10000 }
+        );
+        
+        console.log("[useAuth] Suspicious login detected:", login_notification);
+      }
 
       // ✅ PHASE 7: Role-based redirect
       // Officers go to /dashboard/officer, others go to /dashboard

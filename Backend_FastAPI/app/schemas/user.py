@@ -230,6 +230,24 @@ class TokenData(BaseModel):
     username: Optional[str] = None
 
 
+class LoginNotificationData(BaseModel):
+    """
+    R1+R2: Suspicious login notification data included in login response.
+    
+    This eliminates the need for socket-based notification delivery,
+    providing immediate feedback to the user upon login.
+    """
+    type: str = "SUSPICIOUS_LOGIN"
+    login_id: int
+    ip_address: str
+    location: Optional[str] = None
+    device: Optional[str] = None
+    browser: Optional[str] = None
+    os: Optional[str] = None
+    risk_score: float = 0.0
+    anomalies: List[str] = []
+
+
 class ForgotPasswordSchema(BaseModel):
     email: EmailStr
 

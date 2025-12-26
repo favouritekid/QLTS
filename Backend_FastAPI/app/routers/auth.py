@@ -268,6 +268,7 @@ async def login_for_access_token(
     # Unlike UserSession (which is revoked on logout), LoginHistory is permanent
     # for security auditing and suspicious login detection
     post_commit_callbacks = []
+    login_notification_data = None  # R1+R2: Will be set if login is suspicious
     
     # Add record_login callback if provided
     if "login_history_callback" in locals() and login_history_callback:
@@ -298,6 +299,26 @@ async def login_for_access_token(
                 is_new_location=login_record.is_new_location,
                 risk_score=login_record.risk_score,
             )
+            # R1+R2: Build notification data for immediate response
+            anomalies = []
+            if login_record.is_new_ip:
+                anomalies.append("new_ip")
+            if login_record.is_new_device:
+                anomalies.append("new_device")
+            if login_record.is_new_location:
+                anomalies.append("new_location")
+            
+            login_notification_data = {
+                "type": "SUSPICIOUS_LOGIN",
+                "login_id": login_record.id,
+                "ip_address": ip_address or "unknown",
+                "location": f"{login_record.city or ''}, {login_record.country or ''}".strip(", ") or None,
+                "device": f"{login_record.browser or ''} on {login_record.os or ''}".strip() or None,
+                "browser": login_record.browser,
+                "os": login_record.os,
+                "risk_score": login_record.risk_score,
+                "anomalies": anomalies,
+            }
             # PHASE 1: Sync is_suspicious to UserSession for consistency
             if 'session' in dir() and session:
                 session.is_suspicious = True
@@ -385,6 +406,8 @@ async def login_for_access_token(
                 "full_name": user.full_name,
                 "role": user.role,
             },
+            # R1+R2: Include suspicious login notification in response (optional field)
+            "login_notification": login_notification_data,
         },
         status_code=200,
     )
