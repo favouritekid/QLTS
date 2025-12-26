@@ -363,8 +363,13 @@ async def connect(sid, environ, auth):
             # This solves the race condition where notification is emitted before socket connects
             if refresh_jti:
                 try:
+                    import asyncio
                     import json
                     from .database import safe_redis_lrange, safe_redis_delete
+                    
+                    # R1+R2 FIX: Wait for frontend to register event listeners
+                    # Frontend React effect needs ~500ms to register socket listeners after connect
+                    await asyncio.sleep(1)
                     
                     pending_key = f"pending_login_notif:{user.id}:{refresh_jti}"
                     pending_items = await safe_redis_lrange(pending_key, 0, -1)
