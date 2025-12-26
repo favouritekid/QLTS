@@ -10,7 +10,7 @@ Following Architecture Guidelines:
 - Returns Tuple[result, post_commit_callback] for write operations
 """
 import hashlib
-import logging
+import structlog
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -22,7 +22,7 @@ from app.repositories.login_history_repository import LoginHistoryRepository
 from app.repositories.trusted_device_repository import TrustedDeviceRepository
 from app.utils.exceptions import ResourceNotFoundError
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 
 # Risk score weights
