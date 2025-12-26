@@ -284,6 +284,7 @@ async def login_for_access_token(
             city=session.city if 'session' in dir() else None,
             email_to=user.email,  # Phase 1: For email alert
             username=user.username,  # Phase 1: For email personalization
+            refresh_jti=refresh_jti,  # R1+R2 FIX: For pending notification storage
         )
         if login_history_callback:
             post_commit_callbacks.append(login_history_callback)

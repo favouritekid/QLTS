@@ -80,6 +80,8 @@ async def record_login(
     # Phase 1: Added for merged email sending (previously in AnomalyDetector)
     email_to: Optional[str] = None,
     username: Optional[str] = None,
+    # R1+R2 FIX: Added for pending notification storage
+    refresh_jti: Optional[str] = None,
 ) -> Tuple[models.LoginHistory, Callable]:
     """
     Record a login attempt and detect anomalies.
@@ -218,6 +220,43 @@ async def record_login(
                         "Failed to queue login alert email",
                         user_id=user_id,
                         error=str(email_error),
+                    )
+            
+            # R1+R2 FIX: Store pending notification in Redis for socket delivery on connect
+            # This solves the race condition where socket isn't connected when notification is emitted
+            if refresh_jti:
+                try:
+                    import json
+                    from ..database import safe_redis_lpush, safe_redis_expire
+                    
+                    pending_key = f"pending_login_notif:{user_id}:{refresh_jti}"
+                    notification_data = json.dumps({
+                        "type": "SUSPICIOUS_LOGIN",
+                        "login_id": login.id,
+                        "login_at": login.login_at.isoformat() if login.login_at else None,
+                        "ip_address": ip_address,
+                        "city": city,
+                        "country": country,
+                        "device_type": device_info.get("device_type"),
+                        "browser": device_info.get("browser"),
+                        "os": device_info.get("os"),
+                        "risk_score": login.risk_score,
+                        "is_new_ip": is_new_ip,
+                        "is_new_device": is_new_device,
+                        "is_new_location": is_new_location,
+                    })
+                    await safe_redis_lpush(pending_key, notification_data)
+                    await safe_redis_expire(pending_key, 60)  # 60 seconds TTL
+                    log.info(
+                        "R1+R2: Stored pending login notification in Redis",
+                        user_id=user_id,
+                        refresh_jti=refresh_jti[:8] + "..."
+                    )
+                except Exception as redis_error:
+                    log.error(
+                        "R1+R2: Failed to store pending notification",
+                        user_id=user_id,
+                        error=str(redis_error),
                     )
             # Note: Socket notification is dispatched in auth.py router (Phase 3)
     
