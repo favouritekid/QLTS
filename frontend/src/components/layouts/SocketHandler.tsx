@@ -816,6 +816,53 @@ export function SocketHandler() {
       }, 3000);
     };
 
+    // R1+R2 FIX: Handle pending login notifications from Redis queue
+    // These are emitted on socket connect if there was a suspicious login
+    const handleLoginNotification = (data: {
+      type: string;
+      login_id: number;
+      login_at: string;
+      ip_address: string;
+      city?: string;
+      country?: string;
+      device_type: string;
+      browser: string;
+      os: string;
+      risk_score: number;
+      is_new_ip: boolean;
+      is_new_device: boolean;
+      is_new_location: boolean;
+    }) => {
+      console.log("[SocketHandler] Received login_notification (R1+R2):", data);
+
+      // Build location string
+      const location = [data.city, data.country].filter(Boolean).join(", ") || "Unknown";
+
+      // Show warning toast with details
+      toast.warning("⚠️ Phát hiện đăng nhập đáng ngờ", {
+        description: `IP: ${data.ip_address} - ${location}\n${data.browser} / ${data.os}`,
+        duration: 15000,
+        action: {
+          label: "Xem lịch sử",
+          onClick: () => (window.location.href = "/settings/login-history"),
+        },
+      });
+
+      // Play sound if enabled
+      if (preferences?.sound_enabled) {
+        playNotificationSound();
+      }
+
+      // Show browser notification
+      if (preferences?.browser_enabled) {
+        showBrowserNotification("⚠️ Đăng nhập đáng ngờ", {
+          body: `Có đăng nhập từ ${location} (${data.ip_address})`,
+          icon: "/favicon.ico",
+          tag: `login-notification-${data.login_id}`,
+        });
+      }
+    };
+
     // Đăng ký listeners
     socket.on("force_logout_batch", handleForceLogoutBatch);
     socket.on("force_logout_all", handleForceLogoutAll);
@@ -842,6 +889,7 @@ export function SocketHandler() {
     socket.on("consultation_reminder", handleConsultationReminder);
     socket.on("application_deleted", handleApplicationDeleted);
     socket.on("user_deactivated", handleUserDeactivated);
+    socket.on("login_notification", handleLoginNotification);  // R1+R2 FIX
 
     // ✅ DEBUG: Log all incoming Socket.IO events to diagnose real-time sync issues
     const handleAnyEvent = (event: string, ...args: unknown[]) => {
@@ -876,6 +924,7 @@ export function SocketHandler() {
       socket.off("consultation_reminder", handleConsultationReminder);
       socket.off("application_deleted", handleApplicationDeleted);
       socket.off("user_deactivated", handleUserDeactivated);
+      socket.off("login_notification", handleLoginNotification);  // R1+R2 FIX
       socket.offAny(handleAnyEvent);
     };
     // ✅ FIX: Added isSocketConnected to dependencies to trigger listener setup when socket connects
