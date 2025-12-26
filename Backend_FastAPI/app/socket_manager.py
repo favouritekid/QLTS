@@ -360,51 +360,59 @@ async def connect(sid, environ, auth):
             )
             
             # R1+R2 FIX: Check and emit pending login notifications
-            # This solves the race condition where notification is emitted before socket connects
+            # IMPORTANT: Use background task so connect handler returns immediately
+            # Client only registers listeners AFTER receiving "connected" acknowledgment
             if refresh_jti:
-                try:
-                    import asyncio
-                    import json
-                    from .database import safe_redis_lrange, safe_redis_delete
-                    
-                    # R1+R2 FIX: Wait for frontend to register event listeners
-                    # Frontend React effect needs ~500ms to register socket listeners after connect
-                    await asyncio.sleep(1)
-                    
-                    pending_key = f"pending_login_notif:{user.id}:{refresh_jti}"
-                    pending_items = await safe_redis_lrange(pending_key, 0, -1)
-                    
-                    if pending_items:
-                        log.info(
-                            "R1+R2: Found pending login notifications",
-                            user_id=user.id,
-                            count=len(pending_items),
-                            sid=sid
-                        )
-                        for item in pending_items:
-                            try:
-                                notification = json.loads(item)
-                                await sio.emit("login_notification", notification, to=sid)
-                                log.debug(
-                                    "R1+R2: Emitted pending notification",
-                                    user_id=user.id,
-                                    login_id=notification.get("login_id")
-                                )
-                            except Exception as emit_error:
-                                log.error(
-                                    "R1+R2: Failed to emit pending notification",
-                                    error=str(emit_error)
-                                )
+                async def emit_pending_notifications():
+                    """Background task to emit pending notifications after connect completes"""
+                    try:
+                        import json
+                        from .database import safe_redis_lrange, safe_redis_delete
                         
-                        # Clear pending after emit
-                        await safe_redis_delete(pending_key)
-                        log.info("R1+R2: Cleared pending notifications from Redis", user_id=user.id)
-                except Exception as redis_error:
-                    log.error(
-                        "R1+R2: Failed to check pending notifications",
-                        user_id=user.id,
-                        error=str(redis_error)
-                    )
+                        # Wait for client to register listeners
+                        # This delay happens AFTER connect handler returns
+                        await asyncio.sleep(2)
+                        
+                        pending_key = f"pending_login_notif:{user.id}:{refresh_jti}"
+                        pending_items = await safe_redis_lrange(pending_key, 0, -1)
+                        
+                        if pending_items:
+                            log.info(
+                                "R1+R2: Found pending login notifications",
+                                user_id=user.id,
+                                count=len(pending_items),
+                                sid=sid
+                            )
+                            user_room = f"user_room_{user.id}"
+                            for item in pending_items:
+                                try:
+                                    notification = json.loads(item)
+                                    await sio.emit("login_notification", notification, room=user_room)
+                                    log.info(
+                                        "R1+R2: Emitted pending notification (background)",
+                                        user_id=user.id,
+                                        login_id=notification.get("login_id"),
+                                        target_room=user_room
+                                    )
+                                except Exception as emit_error:
+                                    log.error(
+                                        "R1+R2: Failed to emit pending notification",
+                                        error=str(emit_error)
+                                    )
+                            
+                            # Clear pending after emit
+                            await safe_redis_delete(pending_key)
+                            log.info("R1+R2: Cleared pending notifications from Redis", user_id=user.id)
+                    except Exception as redis_error:
+                        log.error(
+                            "R1+R2: Failed to check pending notifications",
+                            user_id=user.id,
+                            error=str(redis_error)
+                        )
+                
+                # Spawn background task - connect handler returns immediately
+                import asyncio
+                asyncio.create_task(emit_pending_notifications())
 
         except Exception as e:
             log.error(
