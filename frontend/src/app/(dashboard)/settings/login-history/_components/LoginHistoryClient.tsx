@@ -299,10 +299,10 @@ export function LoginHistoryClient() {
       setSuccessMessage(
         `Tài khoản đã được bảo mật. ${response.sessions_revoked} phiên đăng nhập đã bị thu hồi. Đang chuyển đến trang đổi mật khẩu...`
       );
-      // R1+R2: Redirect to change-password page after 2 seconds
+      // R1+R2: Redirect to settings page after 2 seconds (user should change password)
       setTimeout(() => {
         setSuccessMessage(null);
-        router.push("/settings/change-password");
+        router.push("/settings");
       }, 2000);
     },
     onError: () => {
