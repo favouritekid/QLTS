@@ -50,6 +50,11 @@ const changePasswordSchema = z
       .regex(/[^A-Za-z0-9]/, { message: "Phải chứa ký tự đặc biệt" }),
     confirm_new_password: z.string().min(1, { message: "Vui lòng xác nhận mật khẩu" }),
   })
+  // ✅ SECURITY: Ensure new password is different from old password
+  .refine((data) => data.new_password !== data.old_password, {
+    message: "Mật khẩu mới phải khác mật khẩu hiện tại",
+    path: ["new_password"],
+  })
   .refine((data) => data.new_password === data.confirm_new_password, {
     message: "Mật khẩu mới không khớp",
     path: ["confirm_new_password"],

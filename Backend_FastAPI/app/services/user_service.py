@@ -1003,6 +1003,11 @@ async def reset_password(
                 detail="User associated with this token not found."
             )
 
+        # ✅ SECURITY: Prevent resetting to the same password
+        # Even in forgot-password flow, same password is a security risk
+        if verify_password(new_password, user.password_hash):
+            raise BadRequest(detail="New password must be different from your current password")
+
         user.password_hash = get_password_hash(new_password)
         db.add(user)
 
@@ -1100,6 +1105,11 @@ async def set_password_by_admin(
     """
     try:
         user = await get_user_by_id(db, user_id)
+        
+        # ✅ SECURITY: Prevent setting the same password (for consistency)
+        if verify_password(new_password, user.password_hash):
+            raise BadRequest(detail="New password must be different from the current password")
+
         user.password_hash = get_password_hash(new_password)
         db.add(user)
 
