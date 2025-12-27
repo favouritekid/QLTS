@@ -79,7 +79,14 @@ export function useAuth(options?: UseAuthOptions) {
         
         toast.warning(
           `⚠️ Phát hiện đăng nhập đáng ngờ\nIP: ${login_notification.ip_address} - ${locationInfo}\n${deviceInfo}`,
-          { duration: 10000 }
+          { 
+            duration: 15000,  // 15 giây - quan trọng, cần user đọc
+            id: `suspicious-login-${login_notification.login_id}`,  // Unique ID để tránh trùng lắp
+            action: {
+              label: "Xem chi tiết",
+              onClick: () => router.push("/settings/login-history"),
+            },
+          }
         );
         
         console.log("[useAuth] Suspicious login detected:", login_notification);

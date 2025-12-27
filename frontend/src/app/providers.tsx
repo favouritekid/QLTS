@@ -64,7 +64,20 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
       {children}
-      <Toaster position="top-right" richColors closeButton expand={false} />
+      <Toaster 
+        position="top-right" 
+        richColors 
+        closeButton 
+        expand={false}
+        duration={8000}        // Tăng thời gian hiển thị: 8 giây (mặc định 4s)
+        visibleToasts={3}      // Tối đa 3 toast hiển thị cùng lúc
+        gap={8}                // Khoảng cách giữa các toast (px)
+        toastOptions={{
+          style: {
+            maxWidth: '400px', // Giới hạn chiều rộng toast
+          },
+        }}
+      />
       <ReactQueryDevtools initialIsOpen={false} />
     </QueryClientProvider>
   );
