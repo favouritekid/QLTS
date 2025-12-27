@@ -7,6 +7,7 @@ import { AppSidebar } from "./dashboard/AppSidebar";
 import { Header } from "./dashboard/Header";
 import { Main } from "./dashboard/Main";
 import { CommandPalette } from "@/components/common/CommandPalette";
+import { SecurityBanner } from "./SecurityBanner";
 import { useEffect } from "react";
 
 export function DashboardLayout({
@@ -59,6 +60,9 @@ export function DashboardLayout({
             !isSidebarCollapsed && "lg:ml-64"
           )}
         >
+          {/* Security Banner - Shows when password change required */}
+          <SecurityBanner />
+
           {/* Header */}
           <Header />
 

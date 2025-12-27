@@ -168,6 +168,7 @@ class User(UserBase):
     unit_id: Optional[int] = None
     skills: Optional[List[str]] = None
     availability_status: Optional[str] = None
+    password_reset_required: Optional[bool] = False  # Security: True when user needs to change password
 
     model_config = ConfigDict(from_attributes=True)
 

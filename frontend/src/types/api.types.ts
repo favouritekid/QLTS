@@ -15,6 +15,7 @@ export interface User {
   skills?: string[] | null; // User skills
   availability_status?: string | null; // Availability status
   max_capacity?: number | null; // Max capacity
+  password_reset_required?: boolean; // Security: Set true after "Secure Account" action
 }
 
 // Kiểu dữ liệu cho request body khi login (khớp schemas/user.py -> LoginSchema)
