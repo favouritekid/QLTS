@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { useAuthStore } from "@/lib/stores/auth.store";
 import { socketService } from "@/lib/socket/client";
 import { toast } from "sonner";
-import { useAddNotification } from "@/hooks/useNotifications";
+import { useAddNotification, useMarkAsRead } from "@/hooks/useNotifications";
 import { useNotificationPreferences } from "@/hooks/useNotificationPreferences";
 import { playNotificationSound, showBrowserNotification } from "@/lib/sound";
 import type { Notification } from "@/types/api.types";
@@ -19,6 +19,7 @@ import { leadsKeys } from "@/hooks/useLeads";
 export function SocketHandler() {
   const { isAuthenticated, logout, user } = useAuthStore();
   const addNotification = useAddNotification();
+  const markAsRead = useMarkAsRead();  // ✅ For marking as read when user clicks toast action
   const { data: preferences } = useNotificationPreferences();
   const queryClient = useQueryClient();
 
@@ -182,26 +183,32 @@ export function SocketHandler() {
       }
 
       // Always show toast notification (this is in-app, separate from browser notifications)
-      // Use different toast style for reminders
-      if (notification.type === "reminder") {
-        toast.warning(notification.title, {
-          description: notification.message,
-          duration: 15000, // 15 seconds for reminders - more prominent
-          action: notification.link
-            ? {
-                label: "Xem Lead",
-                onClick: () => {
-                  window.location.href = notification.link!;
-                },
-              }
-            : undefined,
-        });
-      } else {
-        toast.info(notification.title, {
-          description: notification.message,
-          duration: 5000,
-        });
-      }
+      // ✅ UX FIX: Add action button + markAsRead for ALL notification types
+      const toastFn = notification.type === "reminder" || notification.type === "warning" 
+        ? toast.warning 
+        : notification.type === "error" 
+          ? toast.error
+          : toast.info;
+      
+      const duration = notification.type === "reminder" ? 15000 
+        : notification.type === "warning" || notification.type === "error" ? 10000 
+        : 8000;
+
+      toastFn(notification.title, {
+        description: notification.message,
+        duration,
+        id: `notification-${notification.id}`,  // Prevent duplicates
+        action: notification.link
+          ? {
+              label: "Xem chi tiết",
+              onClick: () => {
+                // ✅ Mark as read BEFORE navigating (updates bell icon)
+                markAsRead.mutate({ notification_ids: [notification.id] });
+                window.location.href = notification.link!;
+              },
+            }
+          : undefined,
+      });
     };
 
     // ✅ REAL-TIME DATA SYNC (v16): Lắng nghe sự kiện data_updated
@@ -816,52 +823,9 @@ export function SocketHandler() {
       }, 3000);
     };
 
-    // R1+R2 FIX: Handle pending login notifications from Redis queue
-    // These are emitted on socket connect if there was a suspicious login
-    const handleLoginNotification = (data: {
-      type: string;
-      login_id: number;
-      login_at: string;
-      ip_address: string;
-      city?: string;
-      country?: string;
-      device_type: string;
-      browser: string;
-      os: string;
-      risk_score: number;
-      is_new_ip: boolean;
-      is_new_device: boolean;
-      is_new_location: boolean;
-    }) => {
-      console.log("[SocketHandler] Received login_notification (R1+R2):", data);
-
-      // Build location string
-      const location = [data.city, data.country].filter(Boolean).join(", ") || "Unknown";
-
-      // Show warning toast with details
-      toast.warning("⚠️ Phát hiện đăng nhập đáng ngờ", {
-        description: `IP: ${data.ip_address} - ${location}\n${data.browser} / ${data.os}`,
-        duration: 15000,
-        action: {
-          label: "Xem lịch sử",
-          onClick: () => (window.location.href = "/settings/login-history"),
-        },
-      });
-
-      // Play sound if enabled
-      if (preferences?.sound_enabled) {
-        playNotificationSound();
-      }
-
-      // Show browser notification
-      if (preferences?.browser_enabled) {
-        showBrowserNotification("⚠️ Đăng nhập đáng ngờ", {
-          body: `Có đăng nhập từ ${location} (${data.ip_address})`,
-          icon: "/favicon.ico",
-          tag: `login-notification-${data.login_id}`,
-        });
-      }
-    };
+    // R1+R2: handleLoginNotification REMOVED
+    // Login notification is now included in login API response and handled by useAuth.ts
+    // See: useAuth.ts onSuccess handler
 
     // Đăng ký listeners
     socket.on("force_logout_batch", handleForceLogoutBatch);
@@ -889,7 +853,6 @@ export function SocketHandler() {
     socket.on("consultation_reminder", handleConsultationReminder);
     socket.on("application_deleted", handleApplicationDeleted);
     socket.on("user_deactivated", handleUserDeactivated);
-    socket.on("login_notification", handleLoginNotification);  // R1+R2 FIX
 
     // ✅ DEBUG: Log all incoming Socket.IO events to diagnose real-time sync issues
     const handleAnyEvent = (event: string, ...args: unknown[]) => {
@@ -927,11 +890,10 @@ export function SocketHandler() {
       socket.off("consultation_reminder", handleConsultationReminder);
       socket.off("application_deleted", handleApplicationDeleted);
       socket.off("user_deactivated", handleUserDeactivated);
-      socket.off("login_notification", handleLoginNotification);  // R1+R2 FIX
       socket.offAny(handleAnyEvent);
     };
     // ✅ FIX: Added isSocketConnected to dependencies to trigger listener setup when socket connects
-  }, [isAuthenticated, isSocketConnected, addNotification, preferences, queryClient]);
+  }, [isAuthenticated, isSocketConnected, addNotification, markAsRead, preferences, queryClient]);
 
   return null; // Không render gì cả
 }
