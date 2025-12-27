@@ -253,7 +253,7 @@ async def secure_account(
     4. Force password change on next protected endpoint
     """
     from fastapi import Cookie
-    from ..core import security
+    from ..services.auth_service import decode_token
     from ..repositories.session_repository import SessionRepository
     
     try:
@@ -272,7 +272,7 @@ async def secure_account(
             # Get refresh_token from cookie (manual extraction since we're mid-function)
             refresh_token = request.cookies.get("refresh_token")
             if refresh_token:
-                payload = security.decode_token(refresh_token)
+                payload = decode_token(refresh_token)
                 jti = payload.get("jti")  # refresh token's own JTI
                 if jti:
                     session_repo = SessionRepository(db)
