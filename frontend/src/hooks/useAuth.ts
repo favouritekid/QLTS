@@ -88,7 +88,7 @@ export function useAuth(options?: UseAuthOptions) {
                 // R1+R2: Mark notification as read BEFORE navigating (updates bell icon)
                 if (login_notification.notification_id) {
                   try {
-                    await api.post(API_ENDPOINTS.NOTIFICATIONS.MARK_READ, {
+                    await api.post(API_ENDPOINTS.NOTIFICATIONS.MARK_AS_READ, {
                       notification_ids: [login_notification.notification_id],
                     });
                     console.log("[useAuth] Marked suspicious login notification as read:", login_notification.notification_id);
