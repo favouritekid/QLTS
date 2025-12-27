@@ -1009,6 +1009,14 @@ async def reset_password(
             raise BadRequest(detail="New password must be different from your current password")
 
         user.password_hash = get_password_hash(new_password)
+        
+        # ✅ SECURITY FIX: Clear password_reset_required flag
+        # This is important because forgot-password flow should also clear this flag
+        # (similar to change_password in auth.py router)
+        if hasattr(user, 'password_reset_required') and user.password_reset_required:
+            user.password_reset_required = False
+            log.info("Cleared password_reset_required flag via reset_password", user_id=user.id)
+
         db.add(user)
 
         # ✅ TRANSACTION FIX: Flush instead of commit
