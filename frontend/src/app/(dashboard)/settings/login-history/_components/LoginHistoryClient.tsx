@@ -2,6 +2,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format, formatDistanceToNow } from "date-fns";
 import { vi } from "date-fns/locale";
@@ -259,6 +260,7 @@ function LoginHistoryCard({
  * Main LoginHistory client component
  */
 export function LoginHistoryClient() {
+  const router = useRouter();  // R1+R2: For redirecting to change-password after secure account
   const queryClient = useQueryClient();
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -295,9 +297,13 @@ export function LoginHistoryClient() {
       queryClient.invalidateQueries({ queryKey: ["loginHistory"] });
       setSecureDialogOpen(false);
       setSuccessMessage(
-        `Tài khoản đã được bảo mật. ${response.sessions_revoked} phiên đăng nhập đã bị thu hồi.`
+        `Tài khoản đã được bảo mật. ${response.sessions_revoked} phiên đăng nhập đã bị thu hồi. Đang chuyển đến trang đổi mật khẩu...`
       );
-      setTimeout(() => setSuccessMessage(null), 5000);
+      // R1+R2: Redirect to change-password page after 2 seconds
+      setTimeout(() => {
+        setSuccessMessage(null);
+        router.push("/settings/change-password");
+      }, 2000);
     },
     onError: () => {
       setError("Không thể bảo mật tài khoản. Vui lòng thử lại.");

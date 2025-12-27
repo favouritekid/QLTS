@@ -333,7 +333,7 @@ async def login_for_access_token(
                 anomalies.append("new_location")
             
             try:
-                _, notif_callback = await notification_dispatcher.dispatch(
+                notification_ids, notif_callback = await notification_dispatcher.dispatch(
                     db=db,
                     event=SystemEvents.SUSPICIOUS_LOGIN,
                     payload={
@@ -350,7 +350,10 @@ async def login_for_access_token(
                 )
                 if notif_callback:
                     post_commit_callbacks.append(notif_callback)
-                log.info("Suspicious login notification dispatched", user_id=user.id)
+                # R1+R2: Add notification_id to login_notification_data for frontend markAsRead
+                if notification_ids and len(notification_ids) > 0:
+                    login_notification_data["notification_id"] = notification_ids[0]
+                log.info("Suspicious login notification dispatched", user_id=user.id, notification_id=notification_ids[0] if notification_ids else None)
             except Exception as notif_error:
                 log.error(
                     "Failed to dispatch suspicious login notification",

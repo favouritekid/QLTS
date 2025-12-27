@@ -31,6 +31,7 @@ export interface LoginRequest {
 export interface LoginNotification {
   type: "SUSPICIOUS_LOGIN";
   login_id: number;
+  notification_id?: number;  // R1+R2: Added for frontend markAsRead support
   ip_address: string;
   location?: string | null;
   device?: string | null;
