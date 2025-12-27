@@ -408,6 +408,8 @@ async def login_for_access_token(
                 "email": user.email,
                 "full_name": user.full_name,
                 "role": user.role,
+                "status": user.status,
+                "password_reset_required": user.password_reset_required,  # Security: For banner display
             },
             # R1+R2: Include suspicious login notification in response (optional field)
             "login_notification": login_notification_data,

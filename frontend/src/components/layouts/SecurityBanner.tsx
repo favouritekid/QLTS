@@ -7,6 +7,7 @@ import { Shield, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/lib/stores/auth.store";
 import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
 
 const DISMISS_KEY = "security_banner_dismissed_until";
 const DISMISS_DURATION_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -15,16 +16,28 @@ export const SECURITY_BANNER_HEIGHT = 44; // px - height of the banner
 /**
  * Store to track security banner visibility state globally
  * This ensures Header and Main content are in sync with banner visibility
+ * 
+ * PERSISTED to sessionStorage to survive client-side navigation between pages.
+ * This fixes the race condition where triggerBannerCheck() sets isVisible=true
+ * but the value is lost during Next.js navigation.
  */
 interface SecurityBannerStore {
   isVisible: boolean;
   setVisible: (visible: boolean) => void;
 }
 
-const useSecurityBannerStore = create<SecurityBannerStore>((set) => ({
-  isVisible: false,
-  setVisible: (visible: boolean) => set({ isVisible: visible }),
-}));
+export const useSecurityBannerStore = create<SecurityBannerStore>()(
+  persist(
+    (set) => ({
+      isVisible: false,
+      setVisible: (visible: boolean) => set({ isVisible: visible }),
+    }),
+    {
+      name: "security-banner-storage",
+      storage: createJSONStorage(() => sessionStorage),
+    }
+  )
+);
 
 /**
  * Hook to check if security banner should be visible
@@ -36,6 +49,16 @@ const useSecurityBannerStore = create<SecurityBannerStore>((set) => ({
 export function useShouldShowSecurityBanner(): boolean {
   const { isVisible } = useSecurityBannerStore();
   return isVisible;
+}
+
+/**
+ * Trigger function to check and update banner visibility
+ * Call this after login to ensure banner appears immediately
+ * @param password_reset_required - The user's password_reset_required flag from login response
+ */
+export function triggerBannerCheck(password_reset_required: boolean | undefined): void {
+  const shouldShow = checkShouldShowBanner(password_reset_required);
+  useSecurityBannerStore.getState().setVisible(shouldShow);
 }
 
 /**
@@ -70,17 +93,53 @@ function checkShouldShowBanner(password_reset_required: boolean | undefined): bo
  * after a "Secure Account" action. User can:
  * - Click "Đổi ngay" to navigate to settings
  * - Click "Nhắc sau" to dismiss for 24 hours
+ * 
+ * STATE PERSISTENCE FIX:
+ * - useSecurityBannerStore is now persisted to sessionStorage
+ * - triggerBannerCheck() sets isVisible=true in login callback
+ * - The sessionStorage persistence ensures the value survives navigation
+ * - Fallback effect re-syncs if user.password_reset_required is somehow out of sync
  */
 export function SecurityBanner() {
   const router = useRouter();
   const { user } = useAuthStore();
   const { isVisible, setVisible } = useSecurityBannerStore();
 
-  // Sync visibility state when user changes or on mount
+  // Sync visibility state when user changes (e.g., after password change clears flag)
+  // This effect runs on login (user: null → user object) and on user profile updates
   useEffect(() => {
-    const shouldShow = checkShouldShowBanner(user?.password_reset_required);
-    setVisible(shouldShow);
-  }, [user?.password_reset_required, setVisible]);
+    // If user logs out or password_reset_required becomes false, hide the banner
+    if (!user?.password_reset_required) {
+      // Only set to false if currently visible, to avoid unnecessary state updates
+      if (isVisible) {
+        setVisible(false);
+      }
+      // Clean up dismiss key when password_reset_required is cleared (after password change)
+      // This ensures next time password_reset_required=true, banner shows immediately
+      if (typeof window !== "undefined") {
+        localStorage.removeItem(DISMISS_KEY);
+      }
+      return;
+    }
+    
+    // Check dismiss state for non-persisted users
+    const dismissedUntil = localStorage.getItem(DISMISS_KEY);
+    if (dismissedUntil) {
+      const dismissedUntilTime = parseInt(dismissedUntil, 10);
+      if (Date.now() < dismissedUntilTime) {
+        if (isVisible) {
+          setVisible(false);
+        }
+        return;
+      }
+      localStorage.removeItem(DISMISS_KEY);
+    }
+    
+    // User has password_reset_required=true and not dismissed - show banner
+    if (!isVisible) {
+      setVisible(true);
+    }
+  }, [user?.password_reset_required, isVisible, setVisible]);
 
   // Handle "Đổi ngay" click
   const handleChangeNow = () => {

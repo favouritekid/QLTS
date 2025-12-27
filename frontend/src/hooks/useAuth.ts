@@ -19,6 +19,7 @@ import type {
 } from "@/types/api.types";
 import { useEffect } from "react";
 import { AxiosError } from "axios";
+import { triggerBannerCheck } from "@/components/layouts/SecurityBanner";
 
 /**
  * ✅ PHASE 1 - WEEK 3 - DAY 2: Added initialData support for SSR
@@ -69,6 +70,10 @@ export function useAuth(options?: UseAuthOptions) {
       const { user, login_notification } = loginResponse;
 
       setAuth(user); // No longer pass token
+
+      // Trigger security banner check immediately after login
+      // This ensures banner appears without requiring page refresh
+      triggerBannerCheck(user.password_reset_required);
 
       toast.success("Login successful!");
 

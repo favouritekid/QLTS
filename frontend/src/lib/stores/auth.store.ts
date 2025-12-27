@@ -47,11 +47,7 @@ export const useAuthStore = create<AuthState>()(
       logout: () => {
         // ✅ SECURITY FIX: No need to clear localStorage
         // Cookies are cleared by backend /logout endpoint
-
-        // Clear security banner dismiss state so it shows again on next login
-        if (typeof window !== "undefined") {
-          localStorage.removeItem("security_banner_dismissed_until");
-        }
+        // Note: "Nhắc sau" 24h dismiss persists through logout/login (by design)
 
         set({
           user: null,
