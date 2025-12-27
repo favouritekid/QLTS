@@ -96,6 +96,8 @@ export function useAuth(options?: UseAuthOptions) {
                     await api.post(API_ENDPOINTS.NOTIFICATIONS.MARK_AS_READ, {
                       notification_ids: [login_notification.notification_id],
                     });
+                    // Refresh notifications to update badge count
+                    queryClient.invalidateQueries({ queryKey: ["notifications"] });
                     console.log("[useAuth] Marked suspicious login notification as read:", login_notification.notification_id);
                   } catch (err) {
                     console.error("[useAuth] Failed to mark notification as read:", err);
