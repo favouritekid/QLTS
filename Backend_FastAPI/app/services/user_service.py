@@ -1041,6 +1041,11 @@ async def change_password(
         if not verify_password(old_password, user.password_hash):
             raise BadRequest(detail="Incorrect old password")
 
+        # ✅ SECURITY: Prevent setting the same password
+        # This is especially important when password_reset_required=true (security incident)
+        if verify_password(new_password, user.password_hash):
+            raise BadRequest(detail="New password must be different from your current password")
+
         user.password_hash = get_password_hash(new_password)
         db.add(user)
 
