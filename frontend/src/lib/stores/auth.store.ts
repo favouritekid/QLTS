@@ -48,6 +48,11 @@ export const useAuthStore = create<AuthState>()(
         // ✅ SECURITY FIX: No need to clear localStorage
         // Cookies are cleared by backend /logout endpoint
 
+        // Clear security banner dismiss state so it shows again on next login
+        if (typeof window !== "undefined") {
+          localStorage.removeItem("security_banner_dismissed_until");
+        }
+
         set({
           user: null,
           isAuthenticated: false,

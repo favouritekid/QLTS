@@ -9,6 +9,7 @@ import Link from "next/link";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { NotificationDropdown } from "@/components/notifications/NotificationDropdown";
 import { useCommandPalette } from "@/hooks/useCommandPalette";
+import { useShouldShowSecurityBanner, SECURITY_BANNER_HEIGHT } from "@/components/layouts/SecurityBanner";
 
 const TopNav = () => (
   <nav className="hidden items-center gap-4 text-sm font-medium lg:flex">
@@ -33,12 +34,13 @@ const TopNav = () => (
 export function Header() {
   const { isSidebarCollapsed, toggleSidebar } = useUIStore();
   const { open } = useCommandPalette();
+  const showSecurityBanner = useShouldShowSecurityBanner();
 
   return (
     <header
       className={cn(
         // Base styles - z-index cao để luôn ở trên main content
-        "bg-background/95 fixed top-0 right-0 z-40 flex h-14 items-center gap-4 border-b px-4 backdrop-blur-sm md:px-6",
+        "bg-background/95 fixed right-0 z-40 flex h-14 items-center gap-4 border-b px-4 backdrop-blur-sm md:px-6",
         // Smooth transition
         "transition-all duration-300 ease-in-out",
         // Left position based on sidebar state
@@ -46,6 +48,10 @@ export function Header() {
         "lg:left-[72px]",
         !isSidebarCollapsed && "lg:left-64"
       )}
+      style={{
+        // Adjust top position when security banner is visible
+        top: showSecurityBanner ? `${SECURITY_BANNER_HEIGHT}px` : 0,
+      }}
     >
       {/* Toggle Button */}
       <Button
