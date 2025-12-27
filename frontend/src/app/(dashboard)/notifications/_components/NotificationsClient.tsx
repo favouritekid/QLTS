@@ -40,7 +40,7 @@ interface NotificationsClientProps {
 export function NotificationsClient({ initialData }: NotificationsClientProps) {
   const [currentTab, setCurrentTab] = useState<"all" | "unread">("all");
   const [page, setPage] = useState(1);
-  const [viewMode, setViewMode] = useState<"list" | "table">("list");
+  const [viewMode, setViewMode] = useState<"list" | "table">("table");
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
