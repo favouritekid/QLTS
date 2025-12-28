@@ -289,7 +289,7 @@ async def secure_account(
             log.warning("R7: Could not get current session, will revoke all", error=str(e))
         
         # Revoke all sessions EXCEPT current (R7 FIX)
-        sessions_revoked = await session_service.revoke_all_other_sessions(
+        sessions_revoked, revoke_callback = await session_service.revoke_all_other_sessions(
             db=db,
             user_id=current_user.id,
             except_session_id=current_session_id  # R7: Preserve current session
@@ -301,6 +301,8 @@ async def secure_account(
         
         await db.commit()
         await callback()
+        if revoke_callback:
+            await revoke_callback()
         
         log.warning(
             "User secured account after suspicious login",
