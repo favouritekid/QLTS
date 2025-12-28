@@ -173,35 +173,46 @@ export function LeadsTable({
   const [columnResizeMode] = React.useState<ColumnResizeMode>("onChange");
   const [focusedRowIndex, setFocusedRowIndex] = React.useState<number>(-1);
   
-  // Load persisted states
-  const [densityMode, setDensityMode] = React.useState<DensityMode>(() => {
-    if (typeof window === "undefined") return 'regular';
-    const saved = localStorage.getItem(DENSITY_MODE_STORAGE_KEY);
-    return (saved as DensityMode) || 'regular';
-  });
-  
-  const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>(() => {
-    if (typeof window === "undefined") return {};
-    try {
-      const saved = localStorage.getItem(COLUMN_VISIBILITY_STORAGE_KEY);
-      return saved ? JSON.parse(saved) : {};
-    } catch {
-      return {};
+  // Load persisted states - START with defaults, then hydrate from localStorage
+  const [densityMode, setDensityMode] = React.useState<DensityMode>('regular');
+  const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({});
+  const [isHydrated, setIsHydrated] = React.useState(false);
+
+  // Hydrate from localStorage after mount to avoid SSR mismatch
+  useEffect(() => {
+    const savedDensity = localStorage.getItem(DENSITY_MODE_STORAGE_KEY);
+    if (savedDensity && ['condensed', 'regular', 'relaxed'].includes(savedDensity)) {
+      setDensityMode(savedDensity as DensityMode);
     }
-  });
+    
+    try {
+      const savedVisibility = localStorage.getItem(COLUMN_VISIBILITY_STORAGE_KEY);
+      if (savedVisibility) {
+        setColumnVisibility(JSON.parse(savedVisibility));
+      }
+    } catch {
+      // Ignore parse errors
+    }
+    
+    setIsHydrated(true);
+  }, []);
 
   const totalPages = Math.ceil(totalCount / pageSize);
   const densityConfig = DENSITY_CONFIG[densityMode];
 
-  // Persist density mode
+  // Persist density mode (only after hydration)
   useEffect(() => {
-    localStorage.setItem(DENSITY_MODE_STORAGE_KEY, densityMode);
-  }, [densityMode]);
+    if (isHydrated) {
+      localStorage.setItem(DENSITY_MODE_STORAGE_KEY, densityMode);
+    }
+  }, [densityMode, isHydrated]);
 
-  // Persist column visibility
+  // Persist column visibility (only after hydration)
   useEffect(() => {
-    localStorage.setItem(COLUMN_VISIBILITY_STORAGE_KEY, JSON.stringify(columnVisibility));
-  }, [columnVisibility]);
+    if (isHydrated) {
+      localStorage.setItem(COLUMN_VISIBILITY_STORAGE_KEY, JSON.stringify(columnVisibility));
+    }
+  }, [columnVisibility, isHydrated]);
 
   // ✅ Persist sorting preference
   useEffect(() => {
