@@ -112,6 +112,17 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
   const { data: lead, isLoading } = useLead(leadId || 0, !!leadId);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [reassignOpen, setReassignOpen] = useState(false);
+  const [daysSinceContact, setDaysSinceContact] = useState<number | null>(null);
+
+  // Calculate days since last contact on client side only to avoid hydration mismatch
+  useEffect(() => {
+    if (lead?.last_consultation_at) {
+      const days = Math.floor((Date.now() - new Date(lead.last_consultation_at).getTime()) / (1000 * 60 * 60 * 24));
+      setDaysSinceContact(days);
+    } else {
+      setDaysSinceContact(null);
+    }
+  }, [lead?.last_consultation_at]);
 
   // Auto-scroll to top when leadId changes
   useEffect(() => {
@@ -434,8 +445,8 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Liên hệ cuối:</span>
                   <span className="font-semibold">
-                    {lead.last_consultation_at 
-                      ? `${Math.floor((Date.now() - new Date(lead.last_consultation_at).getTime()) / (1000 * 60 * 60 * 24))} ngày`
+                    {daysSinceContact !== null 
+                      ? `${daysSinceContact} ngày`
                       : "Chưa có"
                     }
                   </span>
