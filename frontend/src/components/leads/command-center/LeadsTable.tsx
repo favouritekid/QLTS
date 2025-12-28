@@ -167,15 +167,7 @@ export function LeadsTable({
   const tableContainerRef = useRef<HTMLDivElement>(null);
   
   // ✅ Sorting state with localStorage persistence and default urgency sort
-  const [sorting, setSorting] = React.useState<SortingState>(() => {
-    if (typeof window === "undefined") return DEFAULT_SORTING;
-    try {
-      const saved = localStorage.getItem(SORTING_STORAGE_KEY);
-      return saved ? JSON.parse(saved) : DEFAULT_SORTING;
-    } catch {
-      return DEFAULT_SORTING;
-    }
-  });
+  const [sorting, setSorting] = React.useState<SortingState>(DEFAULT_SORTING);
   const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
   const [columnResizeMode] = React.useState<ColumnResizeMode>("onChange");
   const [focusedRowIndex, setFocusedRowIndex] = React.useState<number>(-1);
@@ -199,6 +191,15 @@ export function LeadsTable({
         const parsed = JSON.parse(savedVisibility);
         // Merge with defaults (user preferences override defaults)
         setColumnVisibility({ phone: false, ...parsed });
+      }
+    } catch {
+      // Ignore parse errors
+    }
+
+    try {
+      const savedSorting = localStorage.getItem(SORTING_STORAGE_KEY);
+      if (savedSorting) {
+        setSorting(JSON.parse(savedSorting));
       }
     } catch {
       // Ignore parse errors
