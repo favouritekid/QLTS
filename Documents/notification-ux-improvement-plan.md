@@ -99,14 +99,14 @@ This document outlines the roadmap for enhancing the Notification System UX and 
 ## Technical Checklist
 
 ### Frontend (Phase 2)
-- [ ] Create `NotificationTable` component.
-- [ ] Implement `useDisconnect` logic for Bulk Actions.
-- [ ] Add Search/Filter UI.
+- [x] Create `NotificationTable` component.
+- [x] Implement `useDisconnect` logic for Bulk Actions.
+- [x] Add Search/Filter UI.
 
 ### Backend (Phase 3)
-- [ ] Create `cleanup_notifications` Celery task.
-- [ ] **Refactor/Update** `session_service.py` to return `post_commit_callbacks` for socket events.
-- [ ] **Update** `auth.py` and `sessions.py` routers to execute these callbacks.
+- [x] Create `cleanup_notifications` Celery task.
+- [x] **Refactor/Update** `session_service.py` to return `post_commit_callbacks` for socket events.
+- [x] **Update** `auth.py` and `sessions.py` routers to execute these callbacks.
 
 ### Frontend (Phase 3)
-- [ ] Update `SocketHandler.tsx` for `session_updated`.
+- [x] Update `SocketHandler.tsx` for `session_updated`.

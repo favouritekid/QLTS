@@ -44,6 +44,10 @@ celery_app.conf.beat_schedule = {
         "task": "sync_kpi_ytd_task",
         "schedule": crontab(hour=1, minute=0),  # Runs at 01:00 daily
     },
+    "cleanup-old-notifications-daily": {
+        "task": "cleanup_old_notifications_task",
+        "schedule": crontab(hour=2, minute=0),  # Runs at 02:00 daily
+    },
 }
 
 # Timezone configuration

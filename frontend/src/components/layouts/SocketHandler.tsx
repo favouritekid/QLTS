@@ -823,6 +823,17 @@ export function SocketHandler() {
       }, 3000);
     };
 
+    // ✅ REAL-TIME SESSION LIST UPDATE: Lắng nghe sự kiện session_updated
+    const handleSessionUpdated = (data: {
+      user_id: number;
+      timestamp: string;
+    }) => {
+      console.log("[SocketHandler] session_updated → invalidating sessions (silent sync)");
+      if (data.user_id === user?.id) {
+        queryClient.invalidateQueries({ queryKey: ["sessions", "list"] });
+      }
+    };
+
     // R1+R2: handleLoginNotification REMOVED
     // Login notification is now included in login API response and handled by useAuth.ts
     // See: useAuth.ts onSuccess handler
@@ -853,6 +864,8 @@ export function SocketHandler() {
     socket.on("consultation_reminder", handleConsultationReminder);
     socket.on("application_deleted", handleApplicationDeleted);
     socket.on("user_deactivated", handleUserDeactivated);
+    socket.on("session_updated", handleSessionUpdated);
+
 
     // ✅ DEBUG: Log all incoming Socket.IO events to diagnose real-time sync issues
     const handleAnyEvent = (event: string, ...args: unknown[]) => {
@@ -890,6 +903,8 @@ export function SocketHandler() {
       socket.off("consultation_reminder", handleConsultationReminder);
       socket.off("application_deleted", handleApplicationDeleted);
       socket.off("user_deactivated", handleUserDeactivated);
+      socket.off("session_updated", handleSessionUpdated);
+
       socket.offAny(handleAnyEvent);
     };
     // ✅ FIX: Added isSocketConnected to dependencies to trigger listener setup when socket connects

@@ -235,6 +235,7 @@ async def login_for_access_token(
         raise HTTPException(status_code=500, detail="Could not process session")
 
     # (Giữ nguyên logic tạo session)
+    post_commit_callbacks = []
     try:
         from datetime import datetime, timedelta, timezone
 
@@ -243,7 +244,7 @@ async def login_for_access_token(
         expires_at = datetime.now(timezone.utc) + timedelta(
             days=settings.REFRESH_TOKEN_EXPIRE_DAYS
         )
-        session = await session_service.create_session(
+        session, session_callback = await session_service.create_session(
             db=db,
             user_id=user.id,
             refresh_jti=refresh_jti,
@@ -251,6 +252,9 @@ async def login_for_access_token(
             user_agent_string=user_agent_string,
             expires_at=expires_at,
         )
+        if session_callback:
+            post_commit_callbacks.append(session_callback)
+
         # PHASE 1 MERGE: AnomalyDetector removed - detection now in login_history_service
         # session.is_suspicious will be synced from login_record after record_login() call below
     except Exception as session_error:
@@ -267,7 +271,7 @@ async def login_for_access_token(
     # ✅ PHASE 1: Record login history for persistent audit trail
     # Unlike UserSession (which is revoked on logout), LoginHistory is permanent
     # for security auditing and suspicious login detection
-    post_commit_callbacks = []
+    
     login_notification_data = None  # R1+R2: Will be set if login is suspicious
     
     # Add record_login callback if provided
@@ -503,13 +507,15 @@ async def logout(
     if refresh_jti:
         # ✅ PHASE 2: Use session_service instead of direct SQL
         try:
-            revoked = await session_service.revoke_session_by_jti(
+            revoked, callback = await session_service.revoke_session_by_jti(
                 db=db,
                 refresh_jti=refresh_jti,
                 user_id=current_user.id
             )
             if revoked:
                 await db.commit()
+                if callback:
+                    await callback()
                 log.info(
                     "Session revoked on logout",
                     user_id=current_user.id,

@@ -120,7 +120,7 @@ class TestCreateSession:
         with patch.object(session_service, 'safe_redis_delete', new_callable=AsyncMock):
             with patch.object(session_service, 'safe_redis_set', new_callable=AsyncMock):
                 # Act
-                session = await session_service.create_session(
+                session, _ = await session_service.create_session(
                     db=db,
                     user_id=session_user.id,
                     refresh_jti=refresh_jti,
@@ -146,7 +146,7 @@ class TestCreateSession:
         """Test user agent parsing for desktop browser."""
         with patch.object(session_service, 'safe_redis_delete', new_callable=AsyncMock):
             with patch.object(session_service, 'safe_redis_set', new_callable=AsyncMock):
-                session = await session_service.create_session(
+                session, _ = await session_service.create_session(
                     db=db,
                     user_id=session_user.id,
                     refresh_jti="test-desktop-jti",
@@ -166,7 +166,7 @@ class TestCreateSession:
         """Test session creation with no user agent."""
         with patch.object(session_service, 'safe_redis_delete', new_callable=AsyncMock):
             with patch.object(session_service, 'safe_redis_set', new_callable=AsyncMock):
-                session = await session_service.create_session(
+                session, _ = await session_service.create_session(
                     db=db,
                     user_id=session_user.id,
                     refresh_jti="test-no-ua-jti",
@@ -247,7 +247,7 @@ class TestRevokeSession:
         with patch.object(session_service, 'safe_redis_set', new_callable=AsyncMock):
             with patch.object(session_service, 'safe_redis_delete', new_callable=AsyncMock):
                 with patch.object(session_service, 'dispatcher'):
-                    result = await session_service.revoke_session(
+                    result, _ = await session_service.revoke_session(
                         db=db,
                         session_id=active_session.id,
                         user_id=session_user.id
@@ -267,7 +267,7 @@ class TestRevokeSession:
         """Test revoking non-existent session returns False."""
         with patch.object(session_service, 'safe_redis_set', new_callable=AsyncMock):
             with patch.object(session_service, 'safe_redis_delete', new_callable=AsyncMock):
-                result = await session_service.revoke_session(
+                result, _ = await session_service.revoke_session(
                     db=db,
                     session_id=999999,
                     user_id=session_user.id
@@ -283,7 +283,7 @@ class TestRevokeSession:
         """Test revoking session with wrong user_id returns False."""
         with patch.object(session_service, 'safe_redis_set', new_callable=AsyncMock):
             with patch.object(session_service, 'safe_redis_delete', new_callable=AsyncMock):
-                result = await session_service.revoke_session(
+                result, _ = await session_service.revoke_session(
                     db=db,
                     session_id=active_session.id,
                     user_id=999999  # Wrong user
@@ -317,7 +317,7 @@ class TestRevokeAllOtherSessions:
         with patch.object(session_service, 'safe_redis_set', new_callable=AsyncMock):
             with patch.object(session_service, 'safe_redis_delete', new_callable=AsyncMock):
                 with patch.object(session_service, 'dispatcher'):
-                    count = await session_service.revoke_all_other_sessions(
+                    count, _ = await session_service.revoke_all_other_sessions(
                         db=db,
                         user_id=session_user.id,
                         except_session_id=preserve_session.id
@@ -347,7 +347,7 @@ class TestRevokeAllOtherSessions:
         with patch.object(session_service, 'safe_redis_set', new_callable=AsyncMock):
             with patch.object(session_service, 'safe_redis_delete', new_callable=AsyncMock):
                 with patch.object(session_service, 'dispatcher'):
-                    count = await session_service.revoke_all_other_sessions(
+                    count, _ = await session_service.revoke_all_other_sessions(
                         db=db,
                         user_id=session_user.id,
                         except_session_id=None  # Revoke ALL
@@ -440,7 +440,7 @@ class TestRevokeSessionByJti:
         active_session: models.UserSession
     ):
         """Test revoking session by JTI."""
-        result = await session_service.revoke_session_by_jti(
+        result, _ = await session_service.revoke_session_by_jti(
             db=db,
             refresh_jti=active_session.refresh_jti,
             user_id=session_user.id
@@ -457,7 +457,7 @@ class TestRevokeSessionByJti:
         session_user: models.User
     ):
         """Test returns False for non-existent JTI."""
-        result = await session_service.revoke_session_by_jti(
+        result, _ = await session_service.revoke_session_by_jti(
             db=db,
             refresh_jti="non-existent-jti",
             user_id=session_user.id
@@ -477,7 +477,7 @@ class TestRevokeSessionByJti:
         db.add(active_session)
         await db.flush()
         
-        result = await session_service.revoke_session_by_jti(
+        result, _ = await session_service.revoke_session_by_jti(
             db=db,
             refresh_jti=active_session.refresh_jti,
             user_id=session_user.id

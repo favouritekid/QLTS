@@ -143,7 +143,7 @@ async def revoke_session(
 
     try:
         # ✅ PHASE 1: Pass db parameter to service (DI pattern)
-        success = await session_service.revoke_session(
+        success, callback = await session_service.revoke_session(
             db=db,  # Pass injected database session
             session_id=session_id,
             user_id=current_user.id
@@ -155,10 +155,18 @@ async def revoke_session(
                 user_id=current_user.id,
                 session_id=session_id,
             )
+            # No commit needed
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Session not found or already revoked",
             )
+
+        # Commit transaction
+        await db.commit()
+        
+        # Execute callback for side effects (Socket.IO)
+        if callback:
+            await callback()
 
         log.info(
             "Session revoked successfully",
@@ -216,11 +224,18 @@ async def revoke_all_other_sessions(
 
     try:
         # ✅ PHASE 1: Pass db parameter to service (DI pattern)
-        revoked_count = await session_service.revoke_all_other_sessions(
+        revoked_count, callback = await session_service.revoke_all_other_sessions(
             db=db,  # Pass injected database session
             user_id=current_user.id,
             except_session_id=session_id_to_preserve
         )
+
+        # Commit transaction
+        await db.commit()
+        
+        # Execute callback for side effects
+        if callback:
+            await callback()
 
         log.info(
             "All other sessions revoked",
