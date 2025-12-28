@@ -333,15 +333,21 @@ export default function KpiConfigPage() {
     }
   }
 
-  function getScopeIcon(config: KpiConfig) {
-    if (config.officer_id) return <User className="h-4 w-4" />;
-    if (config.unit_id) return <Building2 className="h-4 w-4" />;
+  function getScopeIcon(item: { officer_id: number | null; unit_id: number | null }) {
+    if (item.officer_id) return <User className="h-4 w-4" />;
+    if (item.unit_id) return <Building2 className="h-4 w-4" />;
     return <Globe className="h-4 w-4" />;
   }
 
-  function getScopeLabel(config: KpiConfig) {
-    if (config.officer_id) return `Cán bộ #${config.officer_id}`;
-    if (config.unit_id) return `Đơn vị #${config.unit_id}`;
+  function getScopeLabel(item: { officer_id: number | null; unit_id: number | null }) {
+    if (item.officer_id) {
+      const officer = officers.find((o) => o.id === item.officer_id);
+      return officer ? `Cán bộ: ${officer.full_name || officer.email}` : `Cán bộ #${item.officer_id}`;
+    }
+    if (item.unit_id) {
+      const unit = units.find((u) => u.id === item.unit_id);
+      return unit ? `Đơn vị: ${unit.name}` : `Đơn vị #${item.unit_id}`;
+    }
     return "Toàn cục";
   }
 
@@ -807,6 +813,7 @@ export default function KpiConfigPage() {
                 <TableRow>
                   <TableHead>Mã KPI</TableHead>
                   <TableHead>Năm</TableHead>
+                  <TableHead>Phạm vi</TableHead>
                   <TableHead>Mục tiêu Năm</TableHead>
                   <TableHead>Đạt được (YTD)</TableHead>
                   <TableHead>Tiến độ</TableHead>
@@ -816,7 +823,7 @@ export default function KpiConfigPage() {
               <TableBody>
                 {targets?.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
                       Chưa có mục tiêu năm. Hãy thêm mục tiêu để theo dõi YTD.
                     </TableCell>
                   </TableRow>
@@ -833,6 +840,12 @@ export default function KpiConfigPage() {
                             target.kpi_code}
                         </TableCell>
                         <TableCell>{target.fiscal_year}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            {getScopeIcon(target)}
+                            <span className="text-sm">{getScopeLabel(target)}</span>
+                          </div>
+                        </TableCell>
                         <TableCell className="font-mono">
                           {target.annual_target.toLocaleString()}
                         </TableCell>
