@@ -27,28 +27,28 @@ export const LeadStats = React.memo(function LeadStats({
 
   const stats = [
     {
-      title: "Total Leads",
+      title: "Tổng số Lead",
       value: totalCount,
       icon: Users,
       color: "text-blue-600",
       bgColor: "bg-blue-50",
     },
     {
-      title: "New Leads",
+      title: "Lead mới",
       value: newLeadsCount,
       icon: UserPlus,
       color: "text-emerald-600",
       bgColor: "bg-emerald-50",
     },
     {
-      title: "High Score",
+      title: "Điểm cao",
       value: highScoreCount,
       icon: Flame,
       color: "text-orange-600",
       bgColor: "bg-orange-50",
     },
     {
-      title: "Conversion Rate",
+      title: "Tỉ lệ chuyển đổi",
       value: `${conversionRate}%`,
       icon: TrendingUp,
       color: "text-purple-600",
