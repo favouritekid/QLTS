@@ -317,12 +317,6 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
     const currentStageOrder = currentStatusObj?.stage?.order ?? -1;
     const currentStageId = currentStatusObj?.stage_id;
 
-    console.log("QuickConsultationSection - Grouping Debug:", {
-      currentStatusId,
-      currentStageOrder,
-      totalStatuses: statuses.length
-    });
-
     const displayStatuses = statuses.filter(s => {
       if (s.is_universal) {
         universal.push(s);
