@@ -309,21 +309,53 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
           {/* SECTION 1: Thông tin học viên (Combined) */}
           {/* ================================================== */}
           <Card>
-            <CardHeader className="px-4 py-3">
+            <CardHeader className="px-4 py-2.5">
               <CardTitle className="flex items-center justify-between text-sm font-medium">
                 <span className="flex items-center gap-2">
                   <User className="h-4 w-4 text-primary" />
                   Thông tin học viên
                 </span>
-                {lead.is_hot_lead && (
-                  <span className="flex items-center gap-1 text-orange-600 text-xs font-medium bg-orange-100 dark:bg-orange-950 px-2 py-0.5 rounded-full">
-                    🔥 Hot Lead
-                  </span>
-                )}
+                {/* Quick Action Buttons in Header */}
+                <div className="flex items-center gap-1">
+                  {lead.is_hot_lead && (
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 bg-orange-50 text-orange-600 border-orange-200">
+                      🔥 Hot
+                    </Badge>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2 text-[10px] text-blue-600 hover:bg-blue-50"
+                    onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
+                  >
+                    <Phone className="h-3 w-3 mr-1" />
+                    Gọi
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2 text-[10px] text-blue-600 hover:bg-blue-50"
+                    onClick={() => window.open(`https://zalo.me/${lead.phone?.replace(/\D/g, '')}`, "_blank")}
+                  >
+                    <span className="font-bold mr-1">Z</span>
+                    Zalo
+                  </Button>
+                  {lead.email && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-[10px] text-blue-600 hover:bg-blue-50"
+                      onClick={() => window.open(`mailto:${lead.email}`, "_blank")}
+                    >
+                      <Mail className="h-3 w-3 mr-1" />
+                      Email
+                    </Button>
+                  )}
+                </div>
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 px-4 pt-0 pb-4">
-              {/* Score Indicators - Row */}
+              {/* Score Indicators */}
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
                   <div className="flex items-center justify-between text-xs">
@@ -351,7 +383,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                     <div 
                       className={cn(
                         "h-full rounded-full transition-all duration-500",
-                        lead.cached_urgency_score >= 70 ? "bg-red-500" : lead.cached_urgency_score >= 40 ? "bg-yellow-500" : "bg-green-500"
+                        lead.cached_urgency_score >= 70 ? "bg-red-500" : lead.cached_urgency_score >= 40 ? "bg-amber-400" : "bg-green-500"
                       )}
                       style={{ width: `${Math.min(lead.cached_urgency_score, 100)}%` }}
                     />
@@ -359,139 +391,111 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                 </div>
               </div>
 
-              {/* Action Suggestions - Always show for hot/urgent leads */}
+              {/* Action Suggestions - Softer design */}
               {(lead.is_hot_lead || lead.cached_urgency_score >= 60 || lead.is_overdue) && (
-                <div className="rounded-lg px-3 py-2 text-sm bg-gradient-to-r from-orange-50 to-red-50 border border-orange-200 dark:from-orange-950/50 dark:to-red-950/50 dark:border-orange-800">
+                <div className="rounded-md px-3 py-2 text-xs bg-amber-50/80 border border-amber-200/60 dark:bg-amber-950/30 dark:border-amber-800/50">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="flex items-center gap-2 font-medium text-orange-800 dark:text-orange-200">
-                      {lead.is_hot_lead && <span>🔥</span>}
-                      {lead.cached_urgency_score >= 70 && <span>⚡</span>}
-                      {lead.is_overdue ? "Quá hạn liên hệ!" : lead.is_hot_lead ? "Lead nóng cần chú ý!" : "Ưu tiên liên hệ sớm"}
+                    <span className="flex items-center gap-1.5 font-medium text-amber-700 dark:text-amber-300">
+                      <Zap className="h-3.5 w-3.5" />
+                      {lead.is_overdue ? "Quá hạn liên hệ!" : lead.is_hot_lead ? "Lead nóng cần chú ý" : "Ưu tiên liên hệ sớm"}
                     </span>
                     <Button
                       size="sm"
-                      className="h-6 px-2 text-xs bg-orange-600 text-white hover:bg-orange-700"
+                      variant="outline"
+                      className="h-5 px-2 text-[10px] border-amber-300 text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-300"
                       onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
                     >
-                      <Phone className="h-3 w-3 mr-1" />
                       Gọi ngay
                     </Button>
                   </div>
                 </div>
               )}
 
-              {/* 2-Column Layout: Contact Info + Stats */}
-              <div className="grid grid-cols-2 gap-4 pt-2 border-t">
-                {/* Left Column: Contact Info */}
-                <div className="space-y-2 text-sm">
-                  {/* Phone */}
-                  <div className="flex items-center gap-2">
-                    <Phone className="text-muted-foreground h-3.5 w-3.5 shrink-0" />
-                    <CopyableCell value={lead.phone} label="SĐT" className="font-mono text-xs" />
-                  </div>
-                  {/* Email */}
-                  {lead.email && (
-                    <div className="flex items-center gap-2">
-                      <Mail className="text-muted-foreground h-3.5 w-3.5 shrink-0" />
-                      <span className="text-xs truncate">{lead.email}</span>
-                    </div>
-                  )}
-                  {/* Location */}
-                  {lead.location && (
-                    <div className="flex items-center gap-2">
-                      <MapPin className="text-muted-foreground h-3.5 w-3.5 shrink-0" />
-                      <span className="text-xs truncate">{lead.location}</span>
-                    </div>
-                  )}
-                  {/* Education */}
-                  {lead.education_level && (
-                    <div className="flex items-center gap-2">
-                      <GraduationCap className="text-muted-foreground h-3.5 w-3.5 shrink-0" />
-                      <span className="text-xs truncate">
-                        {getEducationLevelLabel(lead.education_level)}
-                        {lead.gpa && ` (${lead.gpa})`}
-                      </span>
-                    </div>
+              {/* 2-Column Info Grid */}
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 pt-2 border-t text-xs">
+                {/* Row 1: Phone | Consultation Count */}
+                <div className="flex items-center gap-2">
+                  <Phone className="text-muted-foreground h-3 w-3 shrink-0" />
+                  <CopyableCell value={lead.phone} label="SĐT" className="font-mono text-xs" />
+                  {lead.phone2 && (
+                    <>
+                      <span className="text-muted-foreground">/</span>
+                      <CopyableCell value={lead.phone2} label="SĐT2" className="font-mono text-xs" />
+                    </>
                   )}
                 </div>
-
-                {/* Right Column: Stats + Details */}
-                <div className="space-y-2 text-sm">
-                  {/* Consultation Count */}
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">Số lần tư vấn:</span>
-                    <span className="text-xs font-bold">{lead.consultation_count}</span>
-                  </div>
-                  {/* Days in Stage */}
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">Ngày trong stage:</span>
-                    <span className="text-xs font-bold">{lead.days_in_stage ?? 0}</span>
-                  </div>
-                  {/* Last Contact */}
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">Liên hệ cuối:</span>
-                    <span className="text-xs font-bold">
-                      {lead.last_consultation_at 
-                        ? new Date(lead.last_consultation_at).toLocaleDateString("vi-VN")
-                        : "Chưa có"
-                      }
-                    </span>
-                  </div>
-                  {/* Assigned Officer */}
-                  {lead.assigned_officer && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-muted-foreground">Phụ trách:</span>
-                      <span className="text-xs font-medium truncate max-w-[80px]">{lead.assigned_officer.full_name}</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Quick Actions Row */}
-              <div className="flex gap-2 pt-2 border-t">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="flex-1 h-8 text-xs"
-                  onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
-                >
-                  <Phone className="h-3.5 w-3.5 mr-1.5" />
-                  Gọi điện
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="flex-1 h-8 text-xs"
-                  onClick={() => window.open(`https://zalo.me/${lead.phone?.replace(/\D/g, '')}`, "_blank")}
-                >
-                  <span className="font-bold mr-1.5">Z</span>
-                  Zalo
-                </Button>
-                {lead.email && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="flex-1 h-8 text-xs"
-                    onClick={() => window.open(`mailto:${lead.email}`, "_blank")}
-                  >
-                    <Mail className="h-3.5 w-3.5 mr-1.5" />
-                    Email
-                  </Button>
-                )}
-              </div>
-
-              {/* Officer Rating */}
-              <div className="pt-2 border-t">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">⭐ Đánh giá của bạn</span>
-                  <OfficerRatingInput
-                    key={`rating-${lead.id}`}
-                    leadId={lead.id}
-                    currentRating={lead.officer_rating ?? null}
-                    currentLeadScore={lead.lead_score}
-                    compact
-                  />
+                  <span className="text-muted-foreground">Số lần tư vấn:</span>
+                  <span className="font-semibold">{lead.consultation_count}</span>
                 </div>
+
+                {/* Row 2: Email | Days in Stage */}
+                <div className="flex items-center gap-2">
+                  <Mail className="text-muted-foreground h-3 w-3 shrink-0" />
+                  {lead.email ? (
+                    <CopyableCell value={lead.email} label="Email" className="text-xs truncate max-w-[140px]" />
+                  ) : (
+                    <span className="text-muted-foreground italic">Chưa có</span>
+                  )}
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Ngày trong stage:</span>
+                  <span className="font-semibold">{lead.days_in_stage ?? 0}</span>
+                </div>
+
+                {/* Row 3: Location | Last Contact (Days) */}
+                <div className="flex items-center gap-2">
+                  <MapPin className="text-muted-foreground h-3 w-3 shrink-0" />
+                  <span className="truncate">{lead.location || <span className="text-muted-foreground italic">—</span>}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Liên hệ cuối:</span>
+                  <span className="font-semibold">
+                    {lead.last_consultation_at 
+                      ? `${Math.floor((Date.now() - new Date(lead.last_consultation_at).getTime()) / (1000 * 60 * 60 * 24))} ngày`
+                      : "Chưa có"
+                    }
+                  </span>
+                </div>
+
+                {/* Row 4: Education | Program */}
+                <div className="flex items-center gap-2">
+                  <GraduationCap className="text-muted-foreground h-3 w-3 shrink-0" />
+                  <span className="truncate">
+                    {lead.education_level ? (
+                      <>
+                        {getEducationLevelLabel(lead.education_level)}
+                        {lead.gpa && <span className="text-muted-foreground"> ({lead.gpa})</span>}
+                      </>
+                    ) : (
+                      <span className="text-muted-foreground italic">—</span>
+                    )}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Ngành:</span>
+                  <span className="font-semibold truncate max-w-[100px]" title={lead.offering?.program?.name || lead.offering?.offering_type}>
+                    {lead.offering?.program?.name || lead.offering?.offering_type || "—"}
+                  </span>
+                </div>
+              </div>
+
+              {/* Footer: Phụ trách + Rating (Merged) */}
+              <div className="flex items-center justify-between pt-2 border-t">
+                <div className="flex items-center gap-2 text-xs">
+                  <UserPlus className="h-3 w-3 text-muted-foreground" />
+                  <span className="text-muted-foreground">Phụ trách:</span>
+                  <span className="font-medium truncate max-w-[100px]">
+                    {lead.assigned_officer?.full_name || "Chưa phân công"}
+                  </span>
+                </div>
+                <OfficerRatingInput
+                  key={`rating-${lead.id}`}
+                  leadId={lead.id}
+                  currentRating={lead.officer_rating ?? null}
+                  currentLeadScore={lead.lead_score}
+                  compact
+                />
               </div>
             </CardContent>
           </Card>
