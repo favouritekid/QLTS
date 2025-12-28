@@ -354,11 +354,10 @@ export function LeadsTable({
           return (
             <Badge
               variant="secondary"
-              className="text-xs font-normal"
+              className="text-xs font-medium"
+              style={status.color ? { color: status.color } : undefined}
             >
-              <span style={{ color: status.color || "inherit" }}>
-                {status.name}
-              </span>
+              {status.name}
             </Badge>
           );
         },
