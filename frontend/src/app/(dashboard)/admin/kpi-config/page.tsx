@@ -55,6 +55,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+
 import {
   AlertDialog,
   AlertDialogAction,
@@ -65,6 +66,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Switch } from "@/components/ui/switch";
 
 import { api } from "@/lib/api/client";
 
@@ -158,10 +160,12 @@ async function createKpiTarget(data: Partial<KpiTarget>): Promise<KpiTarget> {
 
 export default function KpiConfigPage() {
   const queryClient = useQueryClient();
+
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isTargetDialogOpen, setIsTargetDialogOpen] = useState(false);
   const [editingConfig, setEditingConfig] = useState<KpiConfig | null>(null);
   const [deleteConfigId, setDeleteConfigId] = useState<number | null>(null);
+  const [showInactive, setShowInactive] = useState(false);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -180,8 +184,8 @@ export default function KpiConfigPage() {
 
   // Queries
   const { data: configs, isLoading: loadingConfigs } = useQuery({
-    queryKey: ["kpi-configs"],
-    queryFn: () => fetchKpiConfigs(true),
+    queryKey: ["kpi-configs", showInactive],
+    queryFn: () => fetchKpiConfigs(!showInactive),
   });
 
   const { data: targets, isLoading: loadingTargets } = useQuery({
@@ -238,6 +242,17 @@ export default function KpiConfigPage() {
     },
     onError: (err: Error) => {
       toast.error(err.message || "Tạo mục tiêu thất bại");
+    },
+  });
+
+  const restoreMutation = useMutation({
+    mutationFn: (id: number) => updateKpiConfig(id, { is_active: true }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["kpi-configs"] });
+      toast.success("Đã khôi phục cấu hình KPI");
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Khôi phục thất bại");
     },
   });
 
@@ -469,10 +484,22 @@ export default function KpiConfigPage() {
       {/* Daily/Monthly Configs */}
       <Card>
         <CardHeader>
-          <CardTitle>Mục tiêu Ngày/Tháng</CardTitle>
-          <CardDescription>
-            Cấu hình mục tiêu KPI định kỳ (kế thừa: Cán bộ → Đơn vị → Toàn cục)
-          </CardDescription>
+          <div className="flex justify-between items-center">
+            <div>
+              <CardTitle>Mục tiêu Ngày/Tháng</CardTitle>
+              <CardDescription>
+                Cấu hình mục tiêu KPI định kỳ (kế thừa: Cán bộ → Đơn vị → Toàn cục)
+              </CardDescription>
+            </div>
+            <div className="flex items-center space-x-2">
+              <Switch
+                id="show-inactive"
+                checked={showInactive}
+                onCheckedChange={setShowInactive}
+              />
+              <Label htmlFor="show-inactive">Hiển thị đã xóa</Label>
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
           {loadingConfigs ? (
@@ -523,20 +550,33 @@ export default function KpiConfigPage() {
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleEdit(config)}
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => setDeleteConfigId(config.id)}
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
+                        {showInactive ? (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => restoreMutation.mutate(config.id)}
+                            title="Khôi phục"
+                          >
+                            <RefreshCw className="h-4 w-4 text-green-600" />
+                          </Button>
+                        ) : (
+                          <>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleEdit(config)}
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => setDeleteConfigId(config.id)}
+                            >
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                            </Button>
+                          </>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))
