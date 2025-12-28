@@ -220,6 +220,7 @@ from .notification import (
     NotificationCreate,
     NotificationsPage,
     MarkAsReadRequest,
+    BulkDeleteRequest,  # ✅ TECHNICAL DEBT FIX: Bulk delete schema
     # ✅ NOTIFICATION 2.0: Notification Action schemas
     NotificationAction,
     NotificationActionCreate,
