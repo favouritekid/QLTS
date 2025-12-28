@@ -261,3 +261,64 @@ async def create_kpi_target(
     except kpi_service.DuplicateTargetError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+
+class KpiTargetUpdate(BaseModel):
+    """Update annual KPI target."""
+    annual_target: Optional[int] = Field(None, ge=0)
+    is_active: Optional[bool] = None
+
+
+@router.put(
+    "/targets/{target_id}",
+    response_model=KpiTargetResponse,
+    summary="Update annual KPI target"
+)
+async def update_kpi_target(
+    target_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[models.User, PermissionDep],
+    data: KpiTargetUpdate,
+):
+    """Update an existing annual KPI target. Admin only."""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    try:
+        target, callback = await kpi_service.update_kpi_target(
+            db,
+            target_id=target_id,
+            annual_target=data.annual_target,
+            is_active=data.is_active,
+            updated_by=current_user,
+        )
+        await db.commit()
+        await db.refresh(target)
+        await callback()
+        return target
+    except kpi_service.TargetNotFoundError:
+        raise HTTPException(status_code=404, detail="Target not found")
+
+
+@router.delete(
+    "/targets/{target_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete annual KPI target"
+)
+async def delete_kpi_target(
+    target_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[models.User, PermissionDep],
+):
+    """Delete an annual KPI target (soft delete). Admin only."""
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    try:
+        target, callback = await kpi_service.delete_kpi_target(
+            db, target_id=target_id, deleted_by=current_user
+        )
+        await db.commit()
+        await callback()
+    except kpi_service.TargetNotFoundError:
+        raise HTTPException(status_code=404, detail="Target not found")
+

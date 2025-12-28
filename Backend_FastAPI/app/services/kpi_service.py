@@ -565,3 +565,73 @@ async def create_kpi_target(
     
     return target, callback
 
+
+async def update_kpi_target(
+    db: AsyncSession,
+    target_id: int,
+    annual_target: Optional[int] = None,
+    is_active: Optional[bool] = None,
+    updated_by: Optional[models.User] = None,
+) -> Tuple[models.KpiTarget, Callback]:
+    """
+    Update an existing KPI target.
+    
+    Pattern A: Returns (result, callback) for transaction control.
+    
+    Raises:
+        TargetNotFoundError: If target not found
+    """
+    target = await db.get(models.KpiTarget, target_id)
+    if not target:
+        raise TargetNotFoundError(f"Target {target_id} not found")
+    
+    changes = []
+    if annual_target is not None and target.annual_target != annual_target:
+        old_value = target.annual_target
+        target.annual_target = annual_target
+        changes.append(f"annual_target: {old_value} → {annual_target}")
+    
+    if is_active is not None and target.is_active != is_active:
+        target.is_active = is_active
+        changes.append(f"is_active: {is_active}")
+    
+    async def callback():
+        if changes:
+            log.info(
+                "KPI target updated",
+                target_id=target_id,
+                changes=changes,
+                updated_by=updated_by.id if updated_by else None,
+            )
+    
+    return target, callback
+
+
+async def delete_kpi_target(
+    db: AsyncSession,
+    target_id: int,
+    deleted_by: Optional[models.User] = None,
+) -> Tuple[models.KpiTarget, Callback]:
+    """
+    Soft delete a KPI target (set is_active=False).
+    
+    Pattern A: Returns (result, callback) for transaction control.
+    
+    Raises:
+        TargetNotFoundError: If target not found
+    """
+    target = await db.get(models.KpiTarget, target_id)
+    if not target:
+        raise TargetNotFoundError(f"Target {target_id} not found")
+    
+    target.is_active = False
+    
+    async def callback():
+        log.info(
+            "KPI target deleted",
+            target_id=target_id,
+            deleted_by=deleted_by.id if deleted_by else None,
+        )
+    
+    return target, callback
+

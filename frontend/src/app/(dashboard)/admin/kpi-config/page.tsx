@@ -159,6 +159,18 @@ async function createKpiTarget(data: Partial<KpiTarget>): Promise<KpiTarget> {
   return res.data;
 }
 
+async function updateKpiTarget(
+  id: number,
+  data: Partial<KpiTarget>
+): Promise<KpiTarget> {
+  const res = await api.put(`/api/admin/kpi-config/targets/${id}`, data);
+  return res.data;
+}
+
+async function deleteKpiTarget(id: number): Promise<void> {
+  await api.delete(`/api/admin/kpi-config/targets/${id}`);
+}
+
 // =============================================================================
 // COMPONENT
 // =============================================================================
@@ -169,7 +181,9 @@ export default function KpiConfigPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isTargetDialogOpen, setIsTargetDialogOpen] = useState(false);
   const [editingConfig, setEditingConfig] = useState<KpiConfig | null>(null);
+  const [editingTarget, setEditingTarget] = useState<KpiTarget | null>(null);
   const [deleteConfigId, setDeleteConfigId] = useState<number | null>(null);
+  const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
   const [showInactive, setShowInactive] = useState(false);
 
   // Form state
@@ -293,6 +307,31 @@ export default function KpiConfigPage() {
     },
   });
 
+  const updateTargetMutation = useMutation({
+    mutationFn: ({ id, data }: { id: number; data: Partial<KpiTarget> }) =>
+      updateKpiTarget(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["kpi-targets"] });
+      toast.success("Đã cập nhật mục tiêu năm");
+      setIsTargetDialogOpen(false);
+      setEditingTarget(null);
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Cập nhật thất bại");
+    },
+  });
+
+  const deleteTargetMutation = useMutation({
+    mutationFn: deleteKpiTarget,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["kpi-targets"] });
+      toast.success("Đã vô hiệu hóa mục tiêu năm");
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Xóa mục tiêu thất bại");
+    },
+  });
+
   // Helpers
   function resetForm() {
     setFormData({
@@ -342,6 +381,34 @@ export default function KpiConfigPage() {
     }
   }
 
+  function handleEditTarget(target: KpiTarget) {
+    setEditingTarget(target);
+    let scope = "global";
+    if (target.officer_id) scope = "officer";
+    else if (target.unit_id) scope = "unit";
+
+    setTargetFormData({
+      kpi_code: target.kpi_code,
+      annual_target: target.annual_target,
+      fiscal_year: target.fiscal_year,
+      unit_id: target.unit_id,
+      officer_id: target.officer_id,
+      scope,
+    });
+    setIsTargetDialogOpen(true);
+  }
+
+  function handleTargetSubmit() {
+    if (editingTarget) {
+      updateTargetMutation.mutate({
+        id: editingTarget.id,
+        data: { annual_target: targetFormData.annual_target },
+      });
+    } else {
+      createTargetMutation.mutate(targetFormData);
+    }
+  }
+
   function getScopeIcon(item: { officer_id: number | null; unit_id: number | null }) {
     if (item.officer_id) return <User className="h-4 w-4" />;
     if (item.unit_id) return <Building2 className="h-4 w-4" />;
@@ -388,322 +455,6 @@ export default function KpiConfigPage() {
         </AlertDescription>
       </Alert>
 
-      <div className="flex justify-end items-center">
-        <div className="flex gap-2">
-          <Dialog open={isTargetDialogOpen} onOpenChange={setIsTargetDialogOpen}>
-            <DialogTrigger asChild>
-              <Button variant="outline">
-                <Target className="mr-2 h-4 w-4" />
-                Thêm Mục tiêu Năm
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Tạo Mục tiêu Năm</DialogTitle>
-                <DialogDescription>
-                  Đặt mục tiêu tuyển sinh/chuyển đổi năm để theo dõi tiến độ
-                </DialogDescription>
-              </DialogHeader>
-              <div className="grid gap-4 py-4">
-                <div className="space-y-2">
-                  <Label>Mã KPI</Label>
-                  <Select
-                    value={targetFormData.kpi_code}
-                    onValueChange={(v) =>
-                      setTargetFormData({ ...targetFormData, kpi_code: v })
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {KPI_CODES.map((k) => (
-                        <SelectItem key={k.value} value={k.value}>
-                          {k.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>Mục tiêu Năm</Label>
-                  <Input
-                    type="number"
-                    value={targetFormData.annual_target}
-                    onChange={(e) =>
-                      setTargetFormData({
-                        ...targetFormData,
-                        annual_target: parseInt(e.target.value) || 0,
-                      })
-                    }
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Năm Tài chính</Label>
-                  <Input
-                    type="number"
-                    value={targetFormData.fiscal_year}
-                    onChange={(e) =>
-                      setTargetFormData({
-                        ...targetFormData,
-                        fiscal_year: parseInt(e.target.value) || new Date().getFullYear(),
-                      })
-                    }
-                  />
-                </div>
-
-                {/* Scope Selection for Annual Target */}
-                <div className="space-y-2">
-                  <Label>Phạm vi áp dụng</Label>
-                  <Select
-                    value={targetFormData.scope}
-                    onValueChange={(v) => {
-                      setTargetFormData({
-                        ...targetFormData,
-                        scope: v,
-                        unit_id: null,
-                        officer_id: null,
-                      });
-                    }}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="global">Toàn cục (Mặc định)</SelectItem>
-                      <SelectItem value="unit">Đơn vị (Team)</SelectItem>
-                      <SelectItem value="officer">Cán bộ (Cá nhân)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {targetFormData.scope === "unit" && (
-                  <div className="space-y-2">
-                    <Label>Chọn Đơn vị</Label>
-                    <Select
-                      value={targetFormData.unit_id?.toString() || ""}
-                      onValueChange={(v) =>
-                        setTargetFormData({ ...targetFormData, unit_id: parseInt(v) })
-                      }
-                    >
-                      <SelectTrigger><SelectValue placeholder="Chọn đơn vị..." /></SelectTrigger>
-                      <SelectContent>
-                        {units.map((u) => (
-                          <SelectItem key={u.id} value={u.id.toString()}>
-                            {u.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-
-                {targetFormData.scope === "officer" && (
-                  <div className="space-y-2">
-                    <Label>Chọn Cán bộ</Label>
-                    <Select
-                      value={targetFormData.officer_id?.toString() || ""}
-                      onValueChange={(v) =>
-                        setTargetFormData({ ...targetFormData, officer_id: parseInt(v) })
-                      }
-                    >
-                      <SelectTrigger><SelectValue placeholder="Chọn cán bộ..." /></SelectTrigger>
-                      <SelectContent>
-                        {officers.map((u) => (
-                          <SelectItem key={u.id} value={u.id.toString()}>
-                            {u.full_name || u.email}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-              </div>
-              <DialogFooter>
-                <Button
-                  onClick={() => createTargetMutation.mutate(targetFormData)}
-                  disabled={
-                    createTargetMutation.isPending ||
-                    (targetFormData.scope === "unit" && !targetFormData.unit_id) ||
-                    (targetFormData.scope === "officer" && !targetFormData.officer_id)
-                  }
-                >
-                  Tạo Mục tiêu
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-
-          <Dialog open={isDialogOpen} onOpenChange={(open) => {
-            setIsDialogOpen(open);
-            if (!open) {
-              setEditingConfig(null);
-              resetForm();
-            }
-          }}>
-            <DialogTrigger asChild>
-              <Button>
-                <Plus className="mr-2 h-4 w-4" />
-                Thêm Cấu hình
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>
-                  {editingConfig ? "Sửa Cấu hình KPI" : "Tạo Cấu hình KPI"}
-                </DialogTitle>
-                <DialogDescription>
-                  Cấu hình giá trị mục tiêu cho các KPI cụ thể
-                </DialogDescription>
-              </DialogHeader>
-              <div className="grid gap-4 py-4">
-                <div className="space-y-2">
-                  <Label>Mã KPI</Label>
-                  <Select
-                    value={formData.kpi_code}
-                    onValueChange={(v) =>
-                      setFormData({ ...formData, kpi_code: v })
-                    }
-                    disabled={!!editingConfig}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Chọn KPI..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {KPI_CODES.map((k) => (
-                        <SelectItem key={k.value} value={k.value}>
-                          {k.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>Giá trị Mục tiêu</Label>
-                  <Input
-                    type="number"
-                    value={formData.target_value}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        target_value: parseInt(e.target.value) || 0,
-                      })
-                    }
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Loại Chu kỳ</Label>
-                  <Select
-                    value={formData.period_type}
-                    onValueChange={(v) =>
-                      setFormData({ ...formData, period_type: v })
-                    }
-                    disabled={!!editingConfig}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PERIOD_TYPES.map((p) => (
-                        <SelectItem key={p.value} value={p.value}>
-                          {p.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Scope Selection for Config */}
-                <div className="space-y-2">
-                  <Label>Phạm vi áp dụng</Label>
-                  <Select
-                    value={formData.scope}
-                    onValueChange={(v) => {
-                      setFormData({
-                        ...formData,
-                        scope: v,
-                        unit_id: null,
-                        officer_id: null,
-                      });
-                    }}
-                    disabled={!!editingConfig} // Prevent changing scope on edit for simplicity
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="global">Toàn cục (Mặc định)</SelectItem>
-                      <SelectItem value="unit">Đơn vị (Team)</SelectItem>
-                      <SelectItem value="officer">Cán bộ (Cá nhân)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-[10px] text-muted-foreground">
-                    Ưu tiên: Cán bộ &gt; Đơn vị &gt; Toàn cục
-                  </p>
-                </div>
-
-                {formData.scope === "unit" && (
-                  <div className="space-y-2">
-                    <Label>Chọn Đơn vị</Label>
-                    <Select
-                      value={formData.unit_id?.toString() || ""}
-                      onValueChange={(v) =>
-                        setFormData({ ...formData, unit_id: parseInt(v) })
-                      }
-                      disabled={!!editingConfig}
-                    >
-                      <SelectTrigger><SelectValue placeholder="Chọn đơn vị..." /></SelectTrigger>
-                      <SelectContent>
-                        {units.map((u) => (
-                          <SelectItem key={u.id} value={u.id.toString()}>
-                            {u.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-
-                {formData.scope === "officer" && (
-                  <div className="space-y-2">
-                    <Label>Chọn Cán bộ</Label>
-                    <Select
-                      value={formData.officer_id?.toString() || ""}
-                      onValueChange={(v) =>
-                        setFormData({ ...formData, officer_id: parseInt(v) })
-                      }
-                      disabled={!!editingConfig}
-                    >
-                      <SelectTrigger><SelectValue placeholder="Chọn cán bộ..." /></SelectTrigger>
-                      <SelectContent>
-                        {officers.map((u) => (
-                          <SelectItem key={u.id} value={u.id.toString()}>
-                            {u.full_name || u.email}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-              </div>
-              <DialogFooter>
-                <Button
-                  onClick={handleSubmit}
-                  disabled={
-                    createMutation.isPending ||
-                    updateMutation.isPending ||
-                    !formData.kpi_code ||
-                    (!editingConfig && formData.scope === "unit" && !formData.unit_id) ||
-                    (!editingConfig && formData.scope === "officer" && !formData.officer_id)
-                  }
-                >
-                  {editingConfig ? "Cập nhật" : "Tạo mới"}
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        </div>
-      </div>
 
       {/* Daily/Monthly Configs */}
       <Card>
@@ -715,13 +466,19 @@ export default function KpiConfigPage() {
                 Cấu hình mục tiêu KPI định kỳ (kế thừa: Cán bộ → Đơn vị → Toàn cục)
               </CardDescription>
             </div>
-            <div className="flex items-center space-x-2">
-              <Switch
-                id="show-inactive"
-                checked={showInactive}
-                onCheckedChange={setShowInactive}
-              />
-              <Label htmlFor="show-inactive">Hiển thị đã xóa</Label>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center space-x-2">
+                <Switch
+                  id="show-inactive"
+                  checked={showInactive}
+                  onCheckedChange={setShowInactive}
+                />
+                <Label htmlFor="show-inactive">Hiển thị đã xóa</Label>
+              </div>
+              <Button onClick={() => { resetForm(); setIsDialogOpen(true); }}>
+                <Plus className="mr-2 h-4 w-4" />
+                Thêm Cấu hình
+              </Button>
             </div>
           </div>
         </CardHeader>
@@ -814,10 +571,18 @@ export default function KpiConfigPage() {
       {/* Annual Targets */}
       <Card>
         <CardHeader>
-          <CardTitle>Mục tiêu Năm</CardTitle>
-          <CardDescription>
-            Các mục tiêu hàng năm với theo dõi tiến độ YTD (đồng bộ hàng ngày lúc 1:00 AM)
-          </CardDescription>
+          <div className="flex justify-between items-center">
+            <div>
+              <CardTitle>Mục tiêu Năm</CardTitle>
+              <CardDescription>
+                Các mục tiêu hàng năm với theo dõi tiến độ YTD (đồng bộ hàng ngày lúc 1:00 AM)
+              </CardDescription>
+            </div>
+            <Button variant="outline" onClick={() => { setEditingTarget(null); setTargetFormData({ kpi_code: 'enrollments', annual_target: 100, fiscal_year: new Date().getFullYear(), unit_id: null, officer_id: null, scope: 'global' }); setIsTargetDialogOpen(true); }}>
+              <Target className="mr-2 h-4 w-4" />
+              Thêm Mục tiêu Năm
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           {loadingTargets ? (
@@ -837,12 +602,13 @@ export default function KpiConfigPage() {
                   <TableHead>Đạt được (YTD)</TableHead>
                   <TableHead>Tiến độ</TableHead>
                   <TableHead>Đồng bộ cuối</TableHead>
+                  <TableHead className="text-right">Thao tác</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {targets?.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
                       Chưa có mục tiêu năm. Hãy thêm mục tiêu để theo dõi YTD.
                     </TableCell>
                   </TableRow>
@@ -887,6 +653,22 @@ export default function KpiConfigPage() {
                             ? new Date(target.last_sync_at).toLocaleDateString("vi-VN")
                             : "Chưa bao giờ"}
                         </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleEditTarget(target)}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => setDeleteTargetId(target.id)}
+                          >
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </TableCell>
                       </TableRow>
                     );
                   })
@@ -918,6 +700,346 @@ export default function KpiConfigPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Target Delete AlertDialog */}
+      <AlertDialog open={!!deleteTargetId} onOpenChange={(open) => !open && setDeleteTargetId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Vô hiệu hóa mục tiêu này?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Hành động này sẽ vô hiệu hóa mục tiêu năm. Bạn có thể kích hoạt lại sau nếu cần.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Hủy</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (deleteTargetId) deleteTargetMutation.mutate(deleteTargetId);
+                setDeleteTargetId(null);
+              }}
+            >
+              Vô hiệu hóa
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Config Dialog */}
+      <Dialog open={isDialogOpen} onOpenChange={(open) => {
+        setIsDialogOpen(open);
+        if (!open) {
+          setEditingConfig(null);
+          resetForm();
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {editingConfig ? "Sửa Cấu hình KPI" : "Tạo Cấu hình KPI"}
+            </DialogTitle>
+            <DialogDescription>
+              Cấu hình giá trị mục tiêu cho các KPI cụ thể
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="space-y-2">
+              <Label>Mã KPI</Label>
+              <Select
+                value={formData.kpi_code}
+                onValueChange={(v) =>
+                  setFormData({ ...formData, kpi_code: v })
+                }
+                disabled={!!editingConfig}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Chọn KPI..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {KPI_CODES.map((k) => (
+                    <SelectItem key={k.value} value={k.value}>
+                      {k.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Giá trị Mục tiêu</Label>
+              <Input
+                type="number"
+                value={formData.target_value}
+                onChange={(e) =>
+                  setFormData({
+                    ...formData,
+                    target_value: parseInt(e.target.value) || 0,
+                  })
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Loại Chu kỳ</Label>
+              <Select
+                value={formData.period_type}
+                onValueChange={(v) =>
+                  setFormData({ ...formData, period_type: v })
+                }
+                disabled={!!editingConfig}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PERIOD_TYPES.map((p) => (
+                    <SelectItem key={p.value} value={p.value}>
+                      {p.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Scope Selection for Config */}
+            <div className="space-y-2">
+              <Label>Phạm vi áp dụng</Label>
+              <Select
+                value={formData.scope}
+                onValueChange={(v) => {
+                  setFormData({
+                    ...formData,
+                    scope: v,
+                    unit_id: null,
+                    officer_id: null,
+                  });
+                }}
+                disabled={!!editingConfig}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="global">Toàn cục (Mặc định)</SelectItem>
+                  <SelectItem value="unit">Đơn vị (Team)</SelectItem>
+                  <SelectItem value="officer">Cán bộ (Cá nhân)</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-[10px] text-muted-foreground">
+                Ưu tiên: Cán bộ &gt; Đơn vị &gt; Toàn cục
+              </p>
+            </div>
+
+            {formData.scope === "unit" && (
+              <div className="space-y-2">
+                <Label>Chọn Đơn vị</Label>
+                <Select
+                  value={formData.unit_id?.toString() || ""}
+                  onValueChange={(v) =>
+                    setFormData({ ...formData, unit_id: parseInt(v) })
+                  }
+                  disabled={!!editingConfig}
+                >
+                  <SelectTrigger><SelectValue placeholder="Chọn đơn vị..." /></SelectTrigger>
+                  <SelectContent>
+                    {units.map((u) => (
+                      <SelectItem key={u.id} value={u.id.toString()}>
+                        {u.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {formData.scope === "officer" && (
+              <div className="space-y-2">
+                <Label>Chọn Cán bộ</Label>
+                <Select
+                  value={formData.officer_id?.toString() || ""}
+                  onValueChange={(v) =>
+                    setFormData({ ...formData, officer_id: parseInt(v) })
+                  }
+                  disabled={!!editingConfig}
+                >
+                  <SelectTrigger><SelectValue placeholder="Chọn cán bộ..." /></SelectTrigger>
+                  <SelectContent>
+                    {officers.map((u) => (
+                      <SelectItem key={u.id} value={u.id.toString()}>
+                        {u.full_name || u.email}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              onClick={handleSubmit}
+              disabled={
+                createMutation.isPending ||
+                updateMutation.isPending ||
+                !formData.kpi_code ||
+                (!editingConfig && formData.scope === "unit" && !formData.unit_id) ||
+                (!editingConfig && formData.scope === "officer" && !formData.officer_id)
+              }
+            >
+              {editingConfig ? "Cập nhật" : "Tạo mới"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Target Dialog */}
+      <Dialog open={isTargetDialogOpen} onOpenChange={(open) => {
+        setIsTargetDialogOpen(open);
+        if (!open) {
+          setEditingTarget(null);
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {editingTarget ? "Sửa Mục tiêu Năm" : "Tạo Mục tiêu Năm"}
+            </DialogTitle>
+            <DialogDescription>
+              Đặt mục tiêu tuyển sinh/chuyển đổi năm để theo dõi tiến độ
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="space-y-2">
+              <Label>Mã KPI</Label>
+              <Select
+                value={targetFormData.kpi_code}
+                onValueChange={(v) =>
+                  setTargetFormData({ ...targetFormData, kpi_code: v })
+                }
+                disabled={!!editingTarget}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {KPI_CODES.map((k) => (
+                    <SelectItem key={k.value} value={k.value}>
+                      {k.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Mục tiêu Năm</Label>
+              <Input
+                type="number"
+                value={targetFormData.annual_target}
+                onChange={(e) =>
+                  setTargetFormData({
+                    ...targetFormData,
+                    annual_target: parseInt(e.target.value) || 0,
+                  })
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Năm Tài chính</Label>
+              <Input
+                type="number"
+                value={targetFormData.fiscal_year}
+                onChange={(e) =>
+                  setTargetFormData({
+                    ...targetFormData,
+                    fiscal_year: parseInt(e.target.value) || new Date().getFullYear(),
+                  })
+                }
+                disabled={!!editingTarget}
+              />
+            </div>
+
+            {/* Scope Selection for Annual Target */}
+            <div className="space-y-2">
+              <Label>Phạm vi áp dụng</Label>
+              <Select
+                value={targetFormData.scope}
+                onValueChange={(v) => {
+                  setTargetFormData({
+                    ...targetFormData,
+                    scope: v,
+                    unit_id: null,
+                    officer_id: null,
+                  });
+                }}
+                disabled={!!editingTarget}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="global">Toàn cục (Mặc định)</SelectItem>
+                  <SelectItem value="unit">Đơn vị (Team)</SelectItem>
+                  <SelectItem value="officer">Cán bộ (Cá nhân)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {targetFormData.scope === "unit" && (
+              <div className="space-y-2">
+                <Label>Chọn Đơn vị</Label>
+                <Select
+                  value={targetFormData.unit_id?.toString() || ""}
+                  onValueChange={(v) =>
+                    setTargetFormData({ ...targetFormData, unit_id: parseInt(v) })
+                  }
+                  disabled={!!editingTarget}
+                >
+                  <SelectTrigger><SelectValue placeholder="Chọn đơn vị..." /></SelectTrigger>
+                  <SelectContent>
+                    {units.map((u) => (
+                      <SelectItem key={u.id} value={u.id.toString()}>
+                        {u.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {targetFormData.scope === "officer" && (
+              <div className="space-y-2">
+                <Label>Chọn Cán bộ</Label>
+                <Select
+                  value={targetFormData.officer_id?.toString() || ""}
+                  onValueChange={(v) =>
+                    setTargetFormData({ ...targetFormData, officer_id: parseInt(v) })
+                  }
+                  disabled={!!editingTarget}
+                >
+                  <SelectTrigger><SelectValue placeholder="Chọn cán bộ..." /></SelectTrigger>
+                  <SelectContent>
+                    {officers.map((u) => (
+                      <SelectItem key={u.id} value={u.id.toString()}>
+                        {u.full_name || u.email}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              onClick={handleTargetSubmit}
+              disabled={
+                createTargetMutation.isPending ||
+                updateTargetMutation.isPending ||
+                (!editingTarget && targetFormData.scope === "unit" && !targetFormData.unit_id) ||
+                (!editingTarget && targetFormData.scope === "officer" && !targetFormData.officer_id)
+              }
+            >
+              {editingTarget ? "Cập nhật" : "Tạo Mục tiêu"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
