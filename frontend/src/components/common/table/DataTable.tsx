@@ -124,8 +124,7 @@ export function DataTable<TData, TValue>({
   showToolbar = true,
   showSearch = true,
   searchPlaceholder = "Tim kiem...",
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  searchableColumns: _searchableColumns, // TODO: Implement column-specific search
+  searchableColumns, // ✅ TECHNICAL DEBT FIX: Implement column-specific search
   showColumnToggle = true,
   showPagination = true,
   serverSidePagination = false,
@@ -147,6 +146,28 @@ export function DataTable<TData, TValue>({
   const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
   const [globalFilter, setGlobalFilter] = React.useState("");
 
+  // ✅ TECHNICAL DEBT FIX: Custom global filter function for column-specific search
+  const columnSpecificFilter = React.useCallback(
+    (row: { getValue: (columnId: string) => unknown }, columnId: string, filterValue: string) => {
+      // If searchableColumns is specified, only filter those columns
+      if (searchableColumns && searchableColumns.length > 0) {
+        // Check if any of the searchable columns match
+        for (const column of searchableColumns) {
+          const value = row.getValue(column);
+          if (value && String(value).toLowerCase().includes(filterValue.toLowerCase())) {
+            return true;
+          }
+        }
+        return false;
+      }
+      
+      // Default behavior: filter the current column
+      const value = row.getValue(columnId);
+      return value ? String(value).toLowerCase().includes(filterValue.toLowerCase()) : false;
+    },
+    [searchableColumns]
+  );
+
   // Initialize table
   const table = useReactTable({
     data,
@@ -159,7 +180,7 @@ export function DataTable<TData, TValue>({
     onColumnFiltersChange: setColumnFilters,
     getFilteredRowModel: getFilteredRowModel(),
     onGlobalFilterChange: setGlobalFilter,
-    globalFilterFn: "includesString",
+    globalFilterFn: searchableColumns && searchableColumns.length > 0 ? columnSpecificFilter : "includesString",
     // Visibility
     onColumnVisibilityChange: setColumnVisibility,
     // Selection
