@@ -43,6 +43,7 @@ import {
   SearchX,
   ChevronRight,
   GripVertical,
+  Zap,
 } from "lucide-react";
 import {
   Table,
@@ -62,6 +63,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { Lead } from "@/types/lead.types";
 import { LEAD_SOURCE_OPTIONS } from "@/constants";
@@ -175,7 +182,8 @@ export function LeadsTable({
   
   // Load persisted states - START with defaults, then hydrate from localStorage
   const [densityMode, setDensityMode] = React.useState<DensityMode>('regular');
-  const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({});
+  // Default: hide phone column for privacy protection
+  const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({ phone: false });
   const [isHydrated, setIsHydrated] = React.useState(false);
 
   // Hydrate from localStorage after mount to avoid SSR mismatch
@@ -188,7 +196,9 @@ export function LeadsTable({
     try {
       const savedVisibility = localStorage.getItem(COLUMN_VISIBILITY_STORAGE_KEY);
       if (savedVisibility) {
-        setColumnVisibility(JSON.parse(savedVisibility));
+        const parsed = JSON.parse(savedVisibility);
+        // Merge with defaults (user preferences override defaults)
+        setColumnVisibility({ phone: false, ...parsed });
       }
     } catch {
       // Ignore parse errors
@@ -441,25 +451,30 @@ export function LeadsTable({
       // Urgency Score column (Lead Insights Upgrade)
       columnHelper.accessor("cached_urgency_score", {
         header: ({ column }) => (
-          <Button
-            variant="ghost"
-            className="-ml-3 h-8 font-medium"
-            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-          >
-            Khẩn cấp
-            {column.getIsSorted() === "asc" ? (
-              <ArrowUp className="ml-1 h-3.5 w-3.5" />
-            ) : column.getIsSorted() === "desc" ? (
-              <ArrowDown className="ml-1 h-3.5 w-3.5" />
-            ) : (
-              <ArrowUpDown className="ml-1 h-3.5 w-3.5 opacity-50" />
-            )}
-          </Button>
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  className="-ml-3 h-8 w-8 p-0"
+                  onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+                >
+                  <Zap className="h-4 w-4 text-amber-500" />
+                  {column.getIsSorted() === "asc" ? (
+                    <ArrowUp className="ml-0.5 h-3 w-3" />
+                  ) : column.getIsSorted() === "desc" ? (
+                    <ArrowDown className="ml-0.5 h-3 w-3" />
+                  ) : null}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Độ khẩn cấp</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         ),
         cell: ({ row }) => (
           <UrgencyBadge score={row.original.cached_urgency_score} showLabel={false} />
         ),
-        size: 80,
+        size: 50,
       }),
 
       // Actions column
