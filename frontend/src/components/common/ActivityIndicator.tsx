@@ -170,19 +170,10 @@ export function ActivityIndicator({
       <Tooltip>
         <TooltipTrigger asChild>
           <div className={cn(
-            "inline-flex items-center gap-1.5 cursor-default",
+            "inline-flex items-center cursor-default",
             className
           )}>
-            {/* Single dot - colored based on activity level */}
-            <div
-              className={cn(
-                "h-2 w-2 rounded-full shrink-0",
-                config.dotColor,
-                showPulse && "animate-pulse"
-              )}
-            />
-            
-            {/* Relative time - colored text */}
+            {/* Relative time - colored text only */}
             <span className={cn(
               "text-xs tabular-nums whitespace-nowrap",
               config.textColor
