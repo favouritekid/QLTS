@@ -203,27 +203,10 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                 </Badge>
               )}
               
-              {/* ✅ TECHNICAL DEBT FIX: Hot Lead Indicator */}
-              {lead.is_hot_lead && (
-                <Badge className="bg-orange-500 text-white text-xs">
-                  🔥 Hot
-                </Badge>
-              )}
-              
               {/* ✅ TECHNICAL DEBT FIX: Overdue Indicator */}
               {lead.is_overdue && (
                 <Badge variant="destructive" className="text-xs">
                   Quá hạn
-                </Badge>
-              )}
-              
-              {/* ✅ TECHNICAL DEBT FIX: Lead Score Badge */}
-              {lead.lead_score > 0 && (
-                <Badge
-                  variant="outline"
-                  className={cn("text-xs font-mono", getScoreColor(lead.lead_score))}
-                >
-                  {lead.lead_score} điểm
                 </Badge>
               )}
             </div>
