@@ -314,12 +314,12 @@ export function LeadsTable({
           const source = row.original.source;
           if (!source) return <span className="text-muted-foreground">—</span>;
           return (
-            <Badge variant="outline" className="text-xs font-normal">
+            <Badge variant="outline" className="text-[10px] h-5 px-2 font-normal">
               {getSourceLabel(source)}
             </Badge>
           );
         },
-        size: 100,
+        size: 90,
       }),
 
       // Pipeline Stage column
@@ -331,7 +331,7 @@ export function LeadsTable({
           const color = STAGE_COLORS[stage.id] || "#6B7280";
           return (
             <Badge
-              className="text-xs font-normal"
+              className="text-[10px] h-5 px-2 font-normal whitespace-nowrap"
               style={{
                 backgroundColor: `${color}20`,
                 color: color,
@@ -342,7 +342,7 @@ export function LeadsTable({
             </Badge>
           );
         },
-        size: 120,
+        size: 110,
       }),
 
       // Consultation Status column - text color from status.color
@@ -354,14 +354,14 @@ export function LeadsTable({
           return (
             <Badge
               variant="secondary"
-              className="text-xs font-medium"
+              className="text-[10px] h-5 px-2 font-medium whitespace-nowrap"
               style={{ color: status.color || status.color_code || "inherit" }}
             >
               {status.name}
             </Badge>
           );
         },
-        size: 130,
+        size: 110,
       }),
 
       // Officer column
