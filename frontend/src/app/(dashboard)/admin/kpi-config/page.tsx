@@ -17,6 +17,7 @@ import {
   User,
   Globe,
   RefreshCw,
+  RotateCcw,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -131,8 +132,9 @@ async function fetchKpiConfigs(isActive: boolean = true): Promise<KpiConfig[]> {
   return res.data;
 }
 
-async function fetchKpiTargets(fiscalYear?: number): Promise<KpiTarget[]> {
-  const params = fiscalYear ? `?fiscal_year=${fiscalYear}` : "";
+async function fetchKpiTargets(isActive: boolean = true, fiscalYear?: number): Promise<KpiTarget[]> {
+  let params = `?is_active=${isActive}`;
+  if (fiscalYear) params += `&fiscal_year=${fiscalYear}`;
   const res = await api.get(`/api/admin/kpi-config/targets${params}`);
   return res.data;
 }
@@ -185,6 +187,7 @@ export default function KpiConfigPage() {
   const [deleteConfigId, setDeleteConfigId] = useState<number | null>(null);
   const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
   const [showInactive, setShowInactive] = useState(false);
+  const [showInactiveTargets, setShowInactiveTargets] = useState(false);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -231,8 +234,8 @@ export default function KpiConfigPage() {
   });
 
   const { data: targets, isLoading: loadingTargets } = useQuery({
-    queryKey: ["kpi-targets"],
-    queryFn: () => fetchKpiTargets(),
+    queryKey: ["kpi-targets", showInactiveTargets],
+    queryFn: () => fetchKpiTargets(!showInactiveTargets),
   });
 
   // Mutations
@@ -329,6 +332,17 @@ export default function KpiConfigPage() {
     },
     onError: (err: Error) => {
       toast.error(err.message || "Xóa mục tiêu thất bại");
+    },
+  });
+
+  const restoreTargetMutation = useMutation({
+    mutationFn: (id: number) => updateKpiTarget(id, { is_active: true }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["kpi-targets"] });
+      toast.success("Đã khôi phục mục tiêu năm");
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Khôi phục thất bại");
     },
   });
 
@@ -578,10 +592,20 @@ export default function KpiConfigPage() {
                 Các mục tiêu hàng năm với theo dõi tiến độ YTD (đồng bộ hàng ngày lúc 1:00 AM)
               </CardDescription>
             </div>
-            <Button variant="outline" onClick={() => { setEditingTarget(null); setTargetFormData({ kpi_code: 'enrollments', annual_target: 100, fiscal_year: new Date().getFullYear(), unit_id: null, officer_id: null, scope: 'global' }); setIsTargetDialogOpen(true); }}>
-              <Target className="mr-2 h-4 w-4" />
-              Thêm Mục tiêu Năm
-            </Button>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center space-x-2">
+                <Switch
+                  id="show-inactive-targets"
+                  checked={showInactiveTargets}
+                  onCheckedChange={setShowInactiveTargets}
+                />
+                <Label htmlFor="show-inactive-targets">Hiển thị đã xóa</Label>
+              </div>
+              <Button variant="outline" onClick={() => { setEditingTarget(null); setTargetFormData({ kpi_code: 'enrollments', annual_target: 100, fiscal_year: new Date().getFullYear(), unit_id: null, officer_id: null, scope: 'global' }); setIsTargetDialogOpen(true); }}>
+                <Target className="mr-2 h-4 w-4" />
+                Thêm Mục tiêu Năm
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent>
@@ -654,20 +678,34 @@ export default function KpiConfigPage() {
                             : "Chưa bao giờ"}
                         </TableCell>
                         <TableCell className="text-right">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handleEditTarget(target)}
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => setDeleteTargetId(target.id)}
-                          >
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          </Button>
+                          {showInactiveTargets ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => restoreTargetMutation.mutate(target.id)}
+                              disabled={restoreTargetMutation.isPending}
+                            >
+                              <RotateCcw className="mr-1 h-4 w-4" />
+                              Khôi phục
+                            </Button>
+                          ) : (
+                            <>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleEditTarget(target)}
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => setDeleteTargetId(target.id)}
+                              >
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                              </Button>
+                            </>
+                          )}
                         </TableCell>
                       </TableRow>
                     );

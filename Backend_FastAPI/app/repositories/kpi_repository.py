@@ -222,12 +222,16 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         self,
         fiscal_year: Optional[int] = None,
         kpi_code: Optional[str] = None,
+        is_active: Optional[bool] = True,
     ) -> List[models.KpiTarget]:
         """
         List annual KPI targets with filters.
         Used by admin router.
         """
-        query = select(models.KpiTarget).where(models.KpiTarget.is_active == True)
+        query = select(models.KpiTarget)
+        
+        if is_active is not None:
+            query = query.where(models.KpiTarget.is_active == is_active)
         
         if fiscal_year:
             query = query.where(models.KpiTarget.fiscal_year == fiscal_year)

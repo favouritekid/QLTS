@@ -219,13 +219,14 @@ async def list_kpi_targets(
     current_user: Annotated[models.User, PermissionDep],
     fiscal_year: Optional[int] = None,
     kpi_code: Optional[str] = None,
+    is_active: bool = True,
 ):
     """List annual KPI targets. Admin/Manager only."""
     if current_user.role not in ("admin", "manager"):
         raise HTTPException(status_code=403, detail="Admin access required")
     
     return await kpi_service.list_kpi_targets(
-        db, fiscal_year=fiscal_year, kpi_code=kpi_code
+        db, fiscal_year=fiscal_year, kpi_code=kpi_code, is_active=is_active
     )
 
 

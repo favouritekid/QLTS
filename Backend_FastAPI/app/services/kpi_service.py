@@ -495,11 +495,12 @@ async def list_kpi_targets(
     db: AsyncSession,
     fiscal_year: Optional[int] = None,
     kpi_code: Optional[str] = None,
+    is_active: bool = True,
 ) -> List[models.KpiTarget]:
     """List annual KPI targets with filters."""
     from ..repositories import KpiRepository
     repo = KpiRepository(db)
-    return await repo.list_targets(fiscal_year=fiscal_year, kpi_code=kpi_code)
+    return await repo.list_targets(fiscal_year=fiscal_year, kpi_code=kpi_code, is_active=is_active)
 
 
 async def create_kpi_target(
