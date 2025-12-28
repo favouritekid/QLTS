@@ -35,6 +35,7 @@ import { cn } from "@/lib/utils";
 import type { LeadStatus } from "@/types/lead.types";
 import { LEAD_STATUS_OPTIONS, LEAD_SOURCE_OPTIONS } from "@/constants";
 import { usePipelineStages } from "@/hooks/usePipeline";
+import { useAllProgramOfferings } from "@/hooks/useOrganization";
 import { useAdminUsersList } from "@/hooks/useAdminUsers";
 import { STAGE_COLORS } from "@/types/pipeline.types";
 import { useAuth } from "@/hooks/useAuth";
@@ -188,6 +189,7 @@ export function LeadFilterBar({
   const [isPending, startTransition] = useTransition();
   const { user } = useAuth();
   const { data: pipelineStages = [] } = usePipelineStages();
+  const { data: offeringsList = [] } = useAllProgramOfferings();
   const { data: usersData } = useAdminUsersList({ page: 1, page_size: 100, status: "active" });
   const officers = usersData?.users?.filter((u) => u.role === "officer" || u.role === "manager") || [];
 
@@ -243,6 +245,16 @@ export function LeadFilterBar({
     });
   }, [officerFilters, onOfficerChange]);
 
+  const handleOfferingToggle = useCallback((offeringId: string) => {
+    startTransition(() => {
+      if (offeringFilters.includes(offeringId)) {
+        onOfferingChange(offeringFilters.filter((o) => o !== offeringId));
+      } else {
+        onOfferingChange([...offeringFilters, offeringId]);
+      }
+    });
+  }, [offeringFilters, onOfferingChange]);
+
   // Check if any filters are active
   const hasScoreFilter = scoreRange[0] > 0 || scoreRange[1] < 100;
   const hasActiveFilters =
@@ -265,6 +277,13 @@ export function LeadFilterBar({
     pipelineStages.find((s) => s.id === id)?.name || id;
   const getOfficerLabel = (id: string) =>
     officers.find((o) => o.id.toString() === id)?.full_name || id;
+  const getOfferingLabel = (id: string) => {
+    const offering = offeringsList.find((o) => o.id.toString() === id);
+    if (!offering) return id;
+    const programName = offering.program?.name || "";
+    const type = offering.offering_type || "";
+    return `${programName} - ${type}`;
+  };
 
   return (
     <div className="bg-background/95 supports-[backdrop-filter]:bg-background/60 border-b backdrop-blur">
@@ -528,6 +547,9 @@ export function LeadFilterBar({
         });
         officerFilters.forEach((officer) => {
           allPills.push({ key: `officer-${officer}`, label: getOfficerLabel(officer), onRemove: () => handleOfficerToggle(officer) });
+        });
+        offeringFilters.forEach((id) => {
+          allPills.push({ key: `offering-${id}`, label: getOfferingLabel(id), onRemove: () => handleOfferingToggle(id) });
         });
         if (hasScoreFilter) {
           allPills.push({ key: "score", label: `Điểm: ${scoreRange[0]}-${scoreRange[1]}`, onRemove: () => onScoreRangeChange([0, 100]) });
