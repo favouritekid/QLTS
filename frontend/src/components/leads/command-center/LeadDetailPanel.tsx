@@ -405,72 +405,84 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                 </div>
               )}
 
-              {/* 2-Column Info Grid */}
-              <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 pt-2 border-t text-xs">
-                {/* Row 1: Phone | Consultation Count */}
-                <div className="flex items-center gap-2">
-                  <Phone className="text-muted-foreground h-3 w-3 shrink-0" />
-                  <CopyableCell value={lead.phone} label="SĐT" className="font-mono text-xs" />
-                  {lead.phone2 && (
-                    <>
-                      <span className="text-muted-foreground">/</span>
-                      <CopyableCell value={lead.phone2} label="SĐT2" className="font-mono text-xs" />
-                    </>
-                  )}
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Số lần tư vấn:</span>
-                  <span className="font-semibold">{lead.consultation_count}</span>
-                </div>
-
-                {/* Row 2: Email | Days in Stage */}
-                <div className="flex items-center gap-2">
-                  <Mail className="text-muted-foreground h-3 w-3 shrink-0" />
-                  {lead.email ? (
-                    <CopyableCell value={lead.email} label="Email" className="text-xs" />
-                  ) : (
-                    <span className="text-muted-foreground italic">Chưa có</span>
-                  )}
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Ngày trong stage:</span>
-                  <span className="font-semibold">{lead.days_in_stage ?? 0}</span>
-                </div>
-
-                {/* Row 3: Location | Last Contact (Days) */}
-                <div className="flex items-center gap-2">
-                  <MapPin className="text-muted-foreground h-3 w-3 shrink-0" />
-                  <span className="truncate">{lead.location || <span className="text-muted-foreground italic">—</span>}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Liên hệ cuối:</span>
-                  <span className="font-semibold">
-                    {daysSinceContact !== null 
-                      ? `${daysSinceContact} ngày`
-                      : "Chưa có"
-                    }
-                  </span>
-                </div>
-
-                {/* Row 4: Education | Program */}
-                <div className="flex items-center gap-2">
-                  <GraduationCap className="text-muted-foreground h-3 w-3 shrink-0" />
-                  <span className="truncate">
-                    {lead.education_level ? (
+              {/* 2-Column Info Layout */}
+              <div className="flex gap-4 pt-2 border-t text-xs">
+                {/* Left Column: Contact & Personal Info */}
+                <div className="flex-1 space-y-1.5">
+                  {/* Phone - Always Visible */}
+                  <div className="flex items-center gap-2 h-5">
+                    <Phone className="text-muted-foreground h-3 w-3 shrink-0" />
+                    <CopyableCell value={lead.phone} label="SĐT" className="font-mono text-xs" />
+                    {lead.phone2 && (
                       <>
+                        <span className="text-muted-foreground">/</span>
+                        <CopyableCell value={lead.phone2} label="SĐT2" className="font-mono text-xs" />
+                      </>
+                    )}
+                  </div>
+
+                  {/* Email - Hide if empty */}
+                  {lead.email && (
+                    <div className="flex items-center gap-2 h-5">
+                      <Mail className="text-muted-foreground h-3 w-3 shrink-0" />
+                      <CopyableCell value={lead.email} label="Email" className="text-xs" />
+                    </div>
+                  )}
+
+                  {/* Location - Hide if empty */}
+                  {lead.location && (
+                    <div className="flex items-center gap-2 h-5">
+                      <MapPin className="text-muted-foreground h-3 w-3 shrink-0" />
+                      <span className="truncate">{lead.location}</span>
+                    </div>
+                  )}
+
+                  {/* Education - Hide if empty */}
+                  {lead.education_level && (
+                    <div className="flex items-center gap-2 h-5">
+                      <GraduationCap className="text-muted-foreground h-3 w-3 shrink-0" />
+                      <span className="truncate">
                         {getEducationLevelLabel(lead.education_level)}
                         {lead.gpa && <span className="text-muted-foreground"> ({lead.gpa})</span>}
-                      </>
-                    ) : (
-                      <span className="text-muted-foreground italic">—</span>
-                    )}
-                  </span>
+                      </span>
+                    </div>
+                  )}
                 </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Ngành:</span>
-                  <span className="font-semibold text-right" title={lead.offering?.program?.name || lead.offering?.offering_type}>
-                    {lead.offering?.program?.name || lead.offering?.offering_type || "—"}
-                  </span>
+
+                {/* Right Column: Stats & Program */}
+                <div className="flex-1 space-y-1.5">
+                  {/* Consultation Count */}
+                  <div className="flex items-center justify-between h-5">
+                    <span className="text-muted-foreground">Số lần tư vấn:</span>
+                    <span className="font-semibold">{lead.consultation_count}</span>
+                  </div>
+
+                  {/* Days in Stage */}
+                  <div className="flex items-center justify-between h-5">
+                    <span className="text-muted-foreground">Ngày trong stage:</span>
+                    <span className="font-semibold">{lead.days_in_stage ?? 0}</span>
+                  </div>
+
+                  {/* Last Contact */}
+                  <div className="flex items-center justify-between h-5">
+                    <span className="text-muted-foreground">Liên hệ cuối:</span>
+                    <span className="font-semibold">
+                      {daysSinceContact !== null 
+                        ? `${daysSinceContact} ngày`
+                        : "Chưa có"
+                      }
+                    </span>
+                  </div>
+
+                  {/* Program - Hide if empty */}
+                  {(lead.offering?.program?.name || lead.offering?.offering_type) && (
+                    <div className="flex items-center justify-between h-5">
+                      <span className="text-muted-foreground">Ngành:</span>
+                      <span className="font-semibold text-right" title={lead.offering?.program?.name || lead.offering?.offering_type}>
+                        {lead.offering?.program?.name || lead.offering?.offering_type}
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
 
