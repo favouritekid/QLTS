@@ -9,6 +9,7 @@ import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { AlertTriangle, ShieldAlert } from "lucide-react";
+import { PasswordStrengthIndicator } from "@/components/admin/PasswordStrengthIndicator";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -85,9 +86,11 @@ export function ChangePasswordForm() {
   const form = useForm<ChangePasswordFormValues>({
     resolver: zodResolver(changePasswordSchema),
     defaultValues: { old_password: "", new_password: "", confirm_new_password: "" },
-    mode: "onTouched",
-    reValidateMode: "onChange",
+    mode: "onChange", // ✅ FIX: Changed from onTouched to onChange for realtime validation
   });
+
+  // Watch new_password for strength indicator
+  const newPassword = form.watch("new_password");
 
   function onSubmit(values: ChangePasswordFormValues) {
     // Show confirmation dialog instead of submitting directly
@@ -200,6 +203,8 @@ export function ChangePasswordForm() {
                     {...field}
                   />
                 </FormControl>
+                {/* ✅ UX FIX: Show password strength indicator */}
+                {newPassword && <PasswordStrengthIndicator password={newPassword} />}
                 <FormMessage />
               </FormItem>
             )}
