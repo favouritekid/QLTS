@@ -70,11 +70,13 @@ class NotificationRepository(BaseRepository[models.Notification]):
     async def get_by_dedupe_key(self, user_ids: List[int], dedupe_key: str) -> List[int]:
         """
         Find user IDs who already have a notification with the given dedupe_key.
+        Uses PostgreSQL JSONB operator ->> for key extraction.
         """
         query = select(self.model.user_id).where(
             and_(
                 self.model.user_id.in_(user_ids),
-                func.json_extract(self.model.data, "$.dedupe_key") == dedupe_key
+                # PostgreSQL JSONB operator: data->>'dedupe_key' = value
+                self.model.data["dedupe_key"].astext == dedupe_key
             )
         )
         result = await self.db.execute(query)
