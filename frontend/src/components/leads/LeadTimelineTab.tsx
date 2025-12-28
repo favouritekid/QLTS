@@ -240,8 +240,12 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
 
               {groupedTimeline[dateKey].map((event, index) => {
                 const eventType = event.type || "lead_created";
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                const eventData = (event.data || {}) as any; // TODO: Refactor to use new TimelineItem structure
+                // ✅ TECHNICAL DEBT FIX: Use typed event data instead of `as any`
+                const eventData = event.data || {};
+
+                // Type guard helpers for typed data access
+                const getConsultationData = () => eventData as import("@/types/lead.types").ConsultationEventData;
+                const getAssignmentData = () => eventData as import("@/types/lead.types").AssignmentEventData;
 
                 // ✅ FIX: Match actual backend event types ("consultation", "assignment")
                 // Backend sends: type: "consultation" | "assignment"

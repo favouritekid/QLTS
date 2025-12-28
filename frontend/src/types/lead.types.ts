@@ -393,7 +393,77 @@ export interface TimelineItem {
   } | null;
   actor_id?: number | null; // Direct actor ID (alternative to actor object)
   metadata?: Record<string, unknown>;
+  data?: TimelineEventData; // ✅ TECHNICAL DEBT FIX: Typed event data
 }
+
+// ============================================
+// TIMELINE EVENT DATA TYPES
+// ✅ TECHNICAL DEBT FIX: Proper discriminated union types
+// ============================================
+
+/**
+ * Consultation event data
+ */
+export interface ConsultationEventData {
+  method?: ConsultationMethod;
+  notes?: string | null;
+  duration_minutes?: number | null;
+  consultation_date?: string;
+  scheduled_at?: string | null;
+  consultation_status?: ConsultationStatus | null;
+  officer?: {
+    id: number;
+    full_name: string;
+  } | null;
+}
+
+/**
+ * Assignment event data
+ */
+export interface AssignmentEventData {
+  method?: AssignmentMethod;
+  reason?: string | null;
+  officer?: {
+    id: number;
+    full_name: string;
+  } | null;
+  previous_officer?: {
+    id: number;
+    full_name: string;
+  } | null;
+}
+
+/**
+ * Status change event data
+ */
+export interface StatusChangeEventData {
+  old_status?: string | null;
+  new_status?: string | null;
+  old_stage?: string | null;
+  new_stage?: string | null;
+}
+
+/**
+ * Lead created event data
+ */
+export interface LeadCreatedEventData {
+  source?: LeadSource;
+  created_by?: {
+    id: number;
+    full_name: string;
+  } | null;
+}
+
+/**
+ * Unified timeline event data type
+ * Discriminated union for type-safe event data handling
+ */
+export type TimelineEventData = 
+  | ConsultationEventData
+  | AssignmentEventData
+  | StatusChangeEventData
+  | LeadCreatedEventData
+  | Record<string, unknown>; // Fallback for unknown event types
 
 // ============================================
 // INSIGHTS TYPES
