@@ -49,34 +49,43 @@ interface LeadDetailPanelProps {
   onAssign: (lead: Lead) => void;
 }
 
-// TODO: Use when implementing status badges
-// const getStatusColor = (status: LeadStatus) => {
-//   switch (status) {
-//     case "new":
-//       return "bg-blue-500";
-//     case "assigned":
-//       return "bg-purple-500";
-//     case "contacted":
-//       return "bg-cyan-500";
-//     case "qualified":
-//       return "bg-emerald-500";
-//     case "unqualified":
-//       return "bg-gray-500";
-//     case "converted":
-//       return "bg-green-500";
-//     case "rejected":
-//       return "bg-red-500";
-//     default:
-//       return "bg-gray-500";
-//   }
-// };
+// ✅ TECHNICAL DEBT FIX: Status badge color helper
+const getAssignmentStatusColor = (status: string) => {
+  switch (status) {
+    case "pending":
+      return "bg-yellow-100 text-yellow-700 border-yellow-200";
+    case "assigned":
+      return "bg-green-100 text-green-700 border-green-200";
+    case "failed":
+      return "bg-red-100 text-red-700 border-red-200";
+    case "reassign_pending":
+      return "bg-orange-100 text-orange-700 border-orange-200";
+    default:
+      return "bg-gray-100 text-gray-700 border-gray-200";
+  }
+};
 
-// TODO: Use when implementing score display
-// const getScoreColor = (score: number) => {
-//   if (score >= 80) return "text-red-600 bg-red-50 border-red-200";
-//   if (score >= 50) return "text-yellow-600 bg-yellow-50 border-yellow-200";
-//   return "text-gray-600 bg-gray-50 border-gray-200";
-// };
+const getAssignmentStatusLabel = (status: string) => {
+  switch (status) {
+    case "pending":
+      return "Chờ phân công";
+    case "assigned":
+      return "Đã phân công";
+    case "failed":
+      return "Phân công thất bại";
+    case "reassign_pending":
+      return "Chờ phân công lại";
+    default:
+      return status;
+  }
+};
+
+// ✅ TECHNICAL DEBT FIX: Score display color helper
+const getScoreColor = (score: number) => {
+  if (score >= 80) return "text-red-600 bg-red-50 border-red-200";
+  if (score >= 50) return "text-yellow-600 bg-yellow-50 border-yellow-200";
+  return "text-gray-600 bg-gray-50 border-gray-200";
+};
 
 const getInitials = (name: string) => {
   return name
@@ -165,22 +174,59 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
           </Avatar>
           <div className="min-w-0 flex-1 space-y-1">
             <h2 className="truncate text-lg font-semibold">{lead.full_name}</h2>
-            {lead.pipeline_stage &&
-              (() => {
-                const stageColor =
-                  lead.pipeline_stage.color_code || STAGE_COLORS[lead.pipeline_stage.id];
-                return (
-                  <Badge
-                    variant="outline"
-                    className={cn("border-0 font-medium", stageColor && "text-white")}
-                    style={{
-                      backgroundColor: stageColor || undefined,
-                    }}
-                  >
-                    {lead.pipeline_stage.name}
-                  </Badge>
-                );
-              })()}
+            <div className="flex flex-wrap items-center gap-1.5">
+              {/* Pipeline Stage Badge */}
+              {lead.pipeline_stage &&
+                (() => {
+                  const stageColor =
+                    lead.pipeline_stage.color_code || STAGE_COLORS[lead.pipeline_stage.id];
+                  return (
+                    <Badge
+                      variant="outline"
+                      className={cn("border-0 font-medium", stageColor && "text-white")}
+                      style={{
+                        backgroundColor: stageColor || undefined,
+                      }}
+                    >
+                      {lead.pipeline_stage.name}
+                    </Badge>
+                  );
+                })()}
+              
+              {/* ✅ TECHNICAL DEBT FIX: Assignment Status Badge */}
+              {lead.assignment_status && (
+                <Badge
+                  variant="outline"
+                  className={cn("text-xs", getAssignmentStatusColor(lead.assignment_status))}
+                >
+                  {getAssignmentStatusLabel(lead.assignment_status)}
+                </Badge>
+              )}
+              
+              {/* ✅ TECHNICAL DEBT FIX: Hot Lead Indicator */}
+              {lead.is_hot_lead && (
+                <Badge className="bg-orange-500 text-white text-xs">
+                  🔥 Hot
+                </Badge>
+              )}
+              
+              {/* ✅ TECHNICAL DEBT FIX: Overdue Indicator */}
+              {lead.is_overdue && (
+                <Badge variant="destructive" className="text-xs">
+                  Quá hạn
+                </Badge>
+              )}
+              
+              {/* ✅ TECHNICAL DEBT FIX: Lead Score Badge */}
+              {lead.lead_score > 0 && (
+                <Badge
+                  variant="outline"
+                  className={cn("text-xs font-mono", getScoreColor(lead.lead_score))}
+                >
+                  {lead.lead_score} điểm
+                </Badge>
+              )}
+            </div>
           </div>
 
           {/* Action Buttons with Tooltips */}
