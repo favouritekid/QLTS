@@ -290,23 +290,28 @@ export function LeadTimelineTab({ leadId, maxItems }: LeadTimelineTabProps) {
                 let title = "";
                 let subtitle = "";
                 let actorName = "";
+                
+                // Type assertion for consultation data (used in JSX below)
+                const consultData = isConsultation ? (eventData as Consultation) : null;
 
-                if (isConsultation) {
-                  const statusName = eventData.consultation_status?.name || "Tư vấn";
+                if (isConsultation && consultData) {
+                  const statusName = consultData.consultation_status?.name || "Tư vấn";
                   title = statusName;
 
                   // Only show notes if it's not the auto-generated "Ghi nhận nhanh: {status}" format
                   const autoNotePattern = `Ghi nhận nhanh: ${statusName}`;
-                  const notes = eventData.notes || "";
+                  const notes = consultData.notes || "";
                   if (notes && notes !== autoNotePattern) {
                     subtitle = notes;
                   }
 
-                  actorName = eventData.officer?.full_name || "";
+                  actorName = consultData.officer?.full_name || "";
                 } else if (isAssignment) {
+                  // Type assertion for assignment data
+                  const assignData = eventData as { reason?: string; officer?: { full_name?: string } };
                   title = "Phân công lead";
-                  subtitle = eventData.reason || "Lead được gán cho officer";
-                  actorName = eventData.officer?.full_name || "";
+                  subtitle = assignData.reason || "Lead được gán cho officer";
+                  actorName = assignData.officer?.full_name || "";
                 }
 
                 return (
@@ -333,7 +338,7 @@ export function LeadTimelineTab({ leadId, maxItems }: LeadTimelineTabProps) {
                               <h4 className="font-semibold text-sm text-foreground">
                                 {title}
                               </h4>
-                              {isConsultation && eventData.method && (
+                              {isConsultation && consultData?.method && (
                                 <Badge
                                   variant="secondary"
                                   className="text-[10px] px-1.5 py-0 font-normal"
@@ -363,7 +368,7 @@ export function LeadTimelineTab({ leadId, maxItems }: LeadTimelineTabProps) {
                           </div>
 
                           {/* Actions Menu */}
-                          {isConsultation && eventData.id && (
+                          {isConsultation && consultData?.id && (
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
                                 <Button
@@ -376,14 +381,14 @@ export function LeadTimelineTab({ leadId, maxItems }: LeadTimelineTabProps) {
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
                                 <DropdownMenuItem
-                                  onClick={() => handleEditConsultation(eventData)}
+                                  onClick={() => handleEditConsultation(consultData)}
                                 >
                                   <Edit className="h-4 w-4 mr-2" />
                                   Sửa
                                 </DropdownMenuItem>
                                 <DropdownMenuItem
                                   className="text-destructive focus:text-destructive"
-                                  onClick={() => handleDeleteConsultation(eventData.id)}
+                                  onClick={() => handleDeleteConsultation(consultData.id)}
                                 >
                                   <Trash2 className="h-4 w-4 mr-2" />
                                   Xóa
@@ -407,58 +412,41 @@ export function LeadTimelineTab({ leadId, maxItems }: LeadTimelineTabProps) {
                         {(isConsultation || isAssignment) && (
                           <div className="flex flex-wrap gap-2">
                             {/* Consultation: Scheduled follow-up */}
-                            {isConsultation && eventData.scheduled_at && (
+                            {isConsultation && consultData?.scheduled_at && (
                               <Badge
                                 variant="outline"
                                 className="text-xs font-normal gap-1 border-blue-200 bg-blue-50 text-blue-700"
                               >
                                 <Calendar className="h-3 w-3" />
-                                Hẹn: {format(parseISO(eventData.scheduled_at), "dd/MM HH:mm")}
+                                Hẹn: {format(parseISO(consultData.scheduled_at), "dd/MM HH:mm")}
                               </Badge>
                             )}
 
                             {/* Consultation: Duration */}
-                            {isConsultation && eventData.duration_minutes && eventData.duration_minutes > 0 && (
+                            {isConsultation && consultData?.duration_minutes && consultData.duration_minutes > 0 && (
                               <Badge
                                 variant="outline"
                                 className="text-xs font-normal gap-1 border-slate-200 bg-slate-50 text-slate-600"
                               >
                                 <Clock className="h-3 w-3" />
-                                {eventData.duration_minutes} phút
-                              </Badge>
-                            )}
-
-                            {/* Consultation: Outcome */}
-                            {isConsultation && eventData.outcome && (
-                              <Badge
-                                variant="outline"
-                                className={cn(
-                                  "text-xs font-normal gap-1",
-                                  eventData.outcome === "positive" && "border-green-200 bg-green-50 text-green-700",
-                                  eventData.outcome === "negative" && "border-red-200 bg-red-50 text-red-700",
-                                  eventData.outcome === "neutral" && "border-gray-200 bg-gray-50 text-gray-600"
-                                )}
-                              >
-                                {eventData.outcome === "positive" && "Tích cực"}
-                                {eventData.outcome === "negative" && "Tiêu cực"}
-                                {eventData.outcome === "neutral" && "Trung lập"}
+                                {consultData.duration_minutes} phút
                               </Badge>
                             )}
 
                             {/* Assignment: Method (automatic, officer_reassign, manual) */}
-                            {isAssignment && eventData.method && (
+                            {isAssignment && (eventData as { method?: string }).method && (
                               <Badge
                                 variant="outline"
                                 className={cn(
                                   "text-xs font-normal gap-1",
-                                  eventData.method === "automatic" && "border-purple-200 bg-purple-50 text-purple-700",
-                                  eventData.method === "officer_reassign" && "border-blue-200 bg-blue-50 text-blue-700",
-                                  eventData.method === "manual" && "border-orange-200 bg-orange-50 text-orange-700"
+                                  (eventData as { method?: string }).method === "automatic" && "border-purple-200 bg-purple-50 text-purple-700",
+                                  (eventData as { method?: string }).method === "officer_reassign" && "border-blue-200 bg-blue-50 text-blue-700",
+                                  (eventData as { method?: string }).method === "manual" && "border-orange-200 bg-orange-50 text-orange-700"
                                 )}
                               >
-                                {eventData.method === "automatic" && "Tự động"}
-                                {eventData.method === "officer_reassign" && "Yêu cầu phân công lại"}
-                                {eventData.method === "manual" && "Thủ công"}
+                                {(eventData as { method?: string }).method === "automatic" && "Tự động"}
+                                {(eventData as { method?: string }).method === "officer_reassign" && "Yêu cầu phân công lại"}
+                                {(eventData as { method?: string }).method === "manual" && "Thủ công"}
                               </Badge>
                             )}
                           </div>
