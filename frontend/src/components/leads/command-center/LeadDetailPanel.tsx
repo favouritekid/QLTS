@@ -433,7 +433,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                 <div className="flex items-center gap-2">
                   <Mail className="text-muted-foreground h-3 w-3 shrink-0" />
                   {lead.email ? (
-                    <CopyableCell value={lead.email} label="Email" className="text-xs truncate max-w-[140px]" />
+                    <CopyableCell value={lead.email} label="Email" className="text-xs" />
                   ) : (
                     <span className="text-muted-foreground italic">Chưa có</span>
                   )}
