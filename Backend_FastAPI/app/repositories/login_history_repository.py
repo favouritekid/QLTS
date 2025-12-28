@@ -110,7 +110,13 @@ class LoginHistoryRepository(BaseRepository[models.LoginHistory]):
         user_id: int,
         ip_address: str,
     ) -> bool:
-        """Check if this IP address has been used before by this user."""
+        """
+        Check if this IP address has been used before by this user.
+        
+        SECURITY FIX: Excludes logins marked 'secured' (user confirmed as attack).
+        This ensures attacker's IP triggers alerts on re-login after victim
+        clicks 'Not Me'.
+        """
         if not ip_address:
             return True  # Unknown IP treated as "seen" (no flag)
             
@@ -118,6 +124,8 @@ class LoginHistoryRepository(BaseRepository[models.LoginHistory]):
             and_(
                 self.model.user_id == user_id,
                 self.model.ip_address == ip_address,
+                # SECURITY FIX: Don't count 'secured' logins as legitimate history
+                self.model.user_response != "secured",
             )
         ).limit(1)
         result = await self.db.execute(query)
@@ -131,19 +139,22 @@ class LoginHistoryRepository(BaseRepository[models.LoginHistory]):
         """
         Check if this device has been used before.
         Device fingerprint = hash of (browser + os + device_type).
+        
+        SECURITY FIX: Excludes logins marked 'secured' (user confirmed as attack).
+        This ensures attacker's device triggers alerts on re-login after victim
+        clicks 'Not Me'.
         """
         if not device_fingerprint:
             return True
             
-        # Since we store components separately, we need to check combination
-        # For simplicity, we'll check exact match of browser+os+device_type
-        # In production, you'd want a device_fingerprint column
         query = select(self.model.id).where(
             and_(
                 self.model.user_id == user_id,
                 self.model.browser == device_fingerprint.get("browser", ""),
                 self.model.os == device_fingerprint.get("os", ""),
                 self.model.device_type == device_fingerprint.get("device_type", ""),
+                # SECURITY FIX: Don't count 'secured' logins as legitimate history
+                self.model.user_response != "secured",
             )
         ).limit(1)
         result = await self.db.execute(query)
@@ -154,7 +165,13 @@ class LoginHistoryRepository(BaseRepository[models.LoginHistory]):
         user_id: int,
         country: str,
     ) -> bool:
-        """Check if user has logged in from this country before."""
+        """
+        Check if user has logged in from this country before.
+        
+        SECURITY FIX: Excludes logins marked 'secured' (user confirmed as attack).
+        This ensures attacker's country triggers alerts on re-login after victim
+        clicks 'Not Me'.
+        """
         if not country:
             return True
             
@@ -162,6 +179,8 @@ class LoginHistoryRepository(BaseRepository[models.LoginHistory]):
             and_(
                 self.model.user_id == user_id,
                 self.model.country == country,
+                # SECURITY FIX: Don't count 'secured' logins as legitimate history
+                self.model.user_response != "secured",
             )
         ).limit(1)
         result = await self.db.execute(query)
