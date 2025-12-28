@@ -39,7 +39,7 @@ import { QuickConsultationSection } from "@/components/leads/QuickConsultationSe
 import { ReassignLeadDialog } from "@/components/leads/ReassignLeadDialog";
 import { CopyableCell } from "@/components/common/CopyableCell";
 import { STAGE_COLORS } from "@/types/pipeline.types";
-import { LeadInsightsCard } from "@/components/leads/LeadInsightsCard";
+import { OfficerRatingInput } from "@/components/leads/OfficerRatingInput";
 import type { Lead } from "@/types/lead.types";
 
 interface LeadDetailPanelProps {
@@ -305,120 +305,215 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
       {/* Scrollable Content */}
       <ScrollArea className="flex-1" ref={scrollAreaRef}>
         <div className="space-y-4 p-4">
-          {/* Thông tin liên hệ */}
+          {/* ================================================== */}
+          {/* SECTION 1: Thông tin học viên (Combined) */}
+          {/* ================================================== */}
           <Card>
             <CardHeader className="px-4 py-3">
-              <CardTitle className="text-sm font-medium">Thông tin liên hệ</CardTitle>
+              <CardTitle className="flex items-center justify-between text-sm font-medium">
+                <span className="flex items-center gap-2">
+                  <User className="h-4 w-4 text-primary" />
+                  Thông tin học viên
+                </span>
+                {lead.is_hot_lead && (
+                  <span className="flex items-center gap-1 text-orange-600 text-xs font-medium bg-orange-100 dark:bg-orange-950 px-2 py-0.5 rounded-full">
+                    🔥 Hot Lead
+                  </span>
+                )}
+              </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-2.5 px-4 pt-0 pb-4">
-              {/* Phone with Copy + Call */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3 text-sm">
-                  <Phone className="text-muted-foreground h-4 w-4 shrink-0" />
-                  <CopyableCell
-                    value={lead.phone}
-                    label="số điện thoại"
-                    className="font-mono"
-                  />
-                  {lead.phone2 && (
-                    <>
-                      <span className="text-muted-foreground">/</span>
-                      <CopyableCell
-                        value={lead.phone2}
-                        label="số điện thoại phụ"
-                        className="font-mono"
-                      />
-                    </>
-                  )}
+            <CardContent className="space-y-4 px-4 pt-0 pb-4">
+              {/* Score Indicators */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground">Điểm Lead</span>
+                    <span className="font-bold">{lead.lead_score}</span>
+                  </div>
+                  <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                    <div 
+                      className={cn(
+                        "h-full rounded-full transition-all duration-500",
+                        lead.lead_score >= 70 ? "bg-emerald-500" : lead.lead_score >= 40 ? "bg-blue-500" : "bg-slate-400"
+                      )}
+                      style={{ width: `${Math.min(lead.lead_score, 100)}%` }}
+                    />
+                  </div>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 px-2 text-xs text-blue-600 hover:bg-blue-50 hover:text-blue-700"
-                  onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
-                >
-                  <Phone className="mr-1 h-3 w-3" />
-                  Gọi
-                </Button>
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground">Độ khẩn cấp</span>
+                    <span className={cn("font-bold", lead.cached_urgency_score >= 70 && "text-red-600")}>
+                      {lead.cached_urgency_score}%
+                    </span>
+                  </div>
+                  <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                    <div 
+                      className={cn(
+                        "h-full rounded-full transition-all duration-500",
+                        lead.cached_urgency_score >= 70 ? "bg-red-500" : lead.cached_urgency_score >= 40 ? "bg-yellow-500" : "bg-green-500"
+                      )}
+                      style={{ width: `${Math.min(lead.cached_urgency_score, 100)}%` }}
+                    />
+                  </div>
+                </div>
               </div>
 
-              {/* Email with Copy */}
-              {lead.email && (
-                <div className="flex items-center gap-3 text-sm">
-                  <Mail className="text-muted-foreground h-4 w-4 shrink-0" />
-                  <CopyableCell
-                    value={lead.email}
-                    label="email"
-                    displayValue={
-                      <a
-                        href={`mailto:${lead.email}`}
-                        className="text-blue-600 hover:underline"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        {lead.email}
-                      </a>
+              {/* Contact Info */}
+              <div className="space-y-2.5 pt-2 border-t">
+                {/* Phone with Copy + Call + Zalo */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3 text-sm">
+                    <Phone className="text-muted-foreground h-4 w-4 shrink-0" />
+                    <CopyableCell
+                      value={lead.phone}
+                      label="số điện thoại"
+                      className="font-mono"
+                    />
+                  </div>
+                  <div className="flex gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 text-xs text-blue-600 hover:bg-blue-50 hover:text-blue-700"
+                      onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
+                    >
+                      <Phone className="mr-1 h-3 w-3" />
+                      Gọi
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 text-xs text-blue-600 hover:bg-blue-50 hover:text-blue-700"
+                      onClick={() => window.open(`https://zalo.me/${lead.phone?.replace(/\D/g, '')}`, "_blank")}
+                    >
+                      <span className="mr-1 text-xs font-bold">Z</span>
+                      Zalo
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Email with Copy */}
+                {lead.email && (
+                  <div className="flex items-center gap-3 text-sm">
+                    <Mail className="text-muted-foreground h-4 w-4 shrink-0" />
+                    <CopyableCell
+                      value={lead.email}
+                      label="email"
+                      displayValue={
+                        <a
+                          href={`mailto:${lead.email}`}
+                          className="text-blue-600 hover:underline"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {lead.email}
+                        </a>
+                      }
+                    />
+                  </div>
+                )}
+
+                {/* Location + Education (compact) */}
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
+                  {lead.location && (
+                    <span className="flex items-center gap-1">
+                      <MapPin className="h-3 w-3" />
+                      {lead.location}
+                    </span>
+                  )}
+                  {lead.education_level && (
+                    <span className="flex items-center gap-1">
+                      <GraduationCap className="h-3 w-3" />
+                      {getEducationLevelLabel(lead.education_level)}
+                      {lead.gpa && ` (GPA: ${lead.gpa})`}
+                    </span>
+                  )}
+                </div>
+
+                {/* Program + Officer (compact) */}
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
+                  {lead.offering && (
+                    <span className="flex items-center gap-1">
+                      <Building className="h-3 w-3" />
+                      {lead.offering.program?.name || lead.offering.offering_type}
+                    </span>
+                  )}
+                  {lead.assigned_officer && (
+                    <span className="flex items-center gap-1">
+                      <UserPlus className="h-3 w-3" />
+                      <span className="font-medium text-foreground">{lead.assigned_officer.full_name}</span>
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Stats Row */}
+              <div className="grid grid-cols-3 gap-2 text-center pt-2 border-t">
+                <div>
+                  <div className="text-lg font-bold">{lead.consultation_count}</div>
+                  <div className="text-xs text-muted-foreground">Lần tư vấn</div>
+                </div>
+                <div>
+                  <div className="text-lg font-bold">{lead.days_in_stage ?? 0}</div>
+                  <div className="text-xs text-muted-foreground">Ngày trong stage</div>
+                </div>
+                <div>
+                  <div className="text-lg font-bold">
+                    {lead.last_consultation_at 
+                      ? new Date(lead.last_consultation_at).toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit" })
+                      : "—"
                     }
-                  />
+                  </div>
+                  <div className="text-xs text-muted-foreground">Liên hệ cuối</div>
+                </div>
+              </div>
+
+              {/* Action Suggestions */}
+              {(lead.cached_urgency_score >= 70 || lead.is_overdue || lead.is_hot_lead) && (
+                <div className="pt-2 border-t">
+                  {lead.cached_urgency_score >= 70 && !lead.last_consultation_at && (
+                    <div className="flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-sm bg-red-100 border border-red-200 text-red-800">
+                      <span className="flex items-center gap-2 font-medium">
+                        <Phone className="h-4 w-4" />
+                        Lead cần được liên hệ ngay!
+                      </span>
+                      <Button
+                        size="sm"
+                        className="h-7 px-3 text-xs bg-red-600 text-white hover:bg-red-700"
+                        onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
+                      >
+                        Gọi ngay
+                      </Button>
+                    </div>
+                  )}
+                  {lead.is_overdue && (
+                    <div className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm bg-orange-100 border border-orange-200 text-orange-800 mt-2">
+                      <Calendar className="h-4 w-4" />
+                      <span className="font-medium">Đã quá hạn liên hệ theo lịch hẹn</span>
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* Location */}
-              {lead.location && (
-                <div className="flex items-center gap-3 text-sm">
-                  <MapPin className="text-muted-foreground h-4 w-4 shrink-0" />
-                  <span className="truncate">{lead.location}</span>
+              {/* Officer Rating */}
+              <div className="pt-2 border-t">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-sm text-muted-foreground">⭐ Đánh giá của bạn</span>
                 </div>
-              )}
-
-              {/* Trình độ học vấn */}
-              {lead.education_level && (
-                <div className="flex items-center gap-3 text-sm">
-                  <GraduationCap className="text-muted-foreground h-4 w-4 shrink-0" />
-                  <span className="truncate">
-                    {getEducationLevelLabel(lead.education_level)}
-                    {lead.gpa && ` (GPA: ${lead.gpa})`}
-                  </span>
-                </div>
-              )}
-
-              {/* Chương trình */}
-              {lead.offering && (
-                <div className="flex items-center gap-3 text-sm">
-                  <Building className="text-muted-foreground h-4 w-4 shrink-0" />
-                  <span className="truncate">
-                    {lead.offering.program?.degree_level &&
-                      `${lead.offering.program.degree_level} `}
-                    {lead.offering.program?.name || lead.offering.offering_type}
-                    {lead.offering.offering_type && ` (${lead.offering.offering_type})`}
-                  </span>
-                </div>
-              )}
-
-              {/* Tư vấn viên phụ trách */}
-              {lead.assigned_officer && (
-                <div className="flex items-center gap-3 text-sm">
-                  <UserPlus className="text-muted-foreground h-4 w-4 shrink-0" />
-                  <span className="truncate">
-                    <strong>{lead.assigned_officer.full_name}</strong>
-                  </span>
-                </div>
-              )}
-
-              {/* Ngày tạo */}
-              <div className="text-muted-foreground flex items-center gap-3 text-sm">
-                <Calendar className="h-4 w-4 shrink-0" />
-                <span>Ngày tạo: {new Date(lead.created_at).toLocaleDateString("vi-VN")}</span>
+                <OfficerRatingInput
+                  key={`rating-${lead.id}`}
+                  leadId={lead.id}
+                  currentRating={lead.officer_rating ?? null}
+                  currentLeadScore={lead.lead_score}
+                  compact
+                />
               </div>
             </CardContent>
           </Card>
 
-          {/* ✅ Combined Lead Insights + Action Suggestions */}
-          <LeadInsightsCard
-            lead={lead}
-            onContact={() => window.open(`tel:${lead.phone}`, "_blank")}
-          />
-
-          {/* Ghi nhận tư vấn nhanh */}
+          {/* ================================================== */}
+          {/* SECTION 2: Ghi nhận tư vấn (Keep as-is) */}
+          {/* ================================================== */}
           <Card className="border-slate-200 bg-slate-50">
             <CardHeader className="px-4 py-3">
               <CardTitle className="flex items-center gap-2 text-sm font-medium">
@@ -431,16 +526,18 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
             </CardContent>
           </Card>
 
-          {/* Dòng thời gian */}
+          {/* ================================================== */}
+          {/* SECTION 3: Lịch sử tư vấn (with maxItems) */}
+          {/* ================================================== */}
           <Card>
             <CardHeader className="px-4 py-3">
               <CardTitle className="flex items-center gap-2 text-sm font-medium">
                 <History className="text-muted-foreground h-4 w-4" />
-                Dòng thời gian
+                Lịch sử tư vấn
               </CardTitle>
             </CardHeader>
             <CardContent className="px-4 pt-0 pb-4">
-              <LeadTimelineTab leadId={lead.id} />
+              <LeadTimelineTab leadId={lead.id} maxItems={3} />
             </CardContent>
           </Card>
         </div>

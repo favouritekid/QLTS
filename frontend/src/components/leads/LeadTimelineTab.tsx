@@ -50,6 +50,8 @@ type TimelineItem = TimelineItemBase & {
 
 interface LeadTimelineTabProps {
   leadId: number;
+  /** Maximum items to show initially. Set 0 or undefined to show all. */
+  maxItems?: number;
 }
 
 // Get icon and color based on event type and method
@@ -164,13 +166,14 @@ const getInitials = (name: string) => {
     .slice(0, 2);
 };
 
-export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
+export function LeadTimelineTab({ leadId, maxItems }: LeadTimelineTabProps) {
   const { data: timeline, isLoading } = useLeadTimeline(leadId);
   const deleteMutation = useDeleteConsultation();
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedConsultationId, setSelectedConsultationId] = useState<number | null>(null);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingConsultation, setEditingConsultation] = useState<Consultation | null>(null);
+  const [showAll, setShowAll] = useState(false);
 
   if (isLoading || !timeline) {
     return (
@@ -194,6 +197,15 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
 
   const groupedTimeline = groupTimelineByDate(timeline);
   const dateKeys = Object.keys(groupedTimeline).sort().reverse();
+
+  // Calculate items to show based on maxItems prop
+  const hasLimit = maxItems && maxItems > 0 && !showAll;
+  const totalItems = timeline.length;
+  const remainingItems = hasLimit ? Math.max(0, totalItems - maxItems) : 0;
+  
+  // Limit items if maxItems is set and showAll is false
+  const itemsToShow = hasLimit ? maxItems : totalItems;
+  let itemCount = 0;
 
   const handleEditConsultation = (consultation: Consultation) => {
     setEditingConsultation(consultation);
@@ -222,7 +234,22 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
   return (
     <>
       <div className="space-y-8">
-        {dateKeys.map((dateKey) => (
+        {dateKeys.map((dateKey) => {
+          // Get items for this date
+          const dateItems = groupedTimeline[dateKey];
+          
+          // Filter items based on limit
+          const visibleItems = dateItems.filter(() => {
+            if (!hasLimit) return true;
+            if (itemCount >= itemsToShow) return false;
+            itemCount++;
+            return true;
+          });
+
+          // Skip entire date group if no visible items
+          if (visibleItems.length === 0) return null;
+
+          return (
           <div key={dateKey}>
             {/* Date Header */}
             <div className="flex items-center gap-3 mb-4">
@@ -238,7 +265,7 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
               {/* Connecting line */}
               <div className="absolute left-[15px] top-3 bottom-3 w-0.5 bg-gradient-to-b from-border via-border to-transparent" />
 
-              {groupedTimeline[dateKey].map((event, index) => {
+              {visibleItems.map((event, index) => {
                 const eventType = event.type || "lead_created";
                 // ✅ TECHNICAL DEBT FIX: Use typed event data instead of `as any`
                 const eventData = event.data || {};
@@ -443,8 +470,23 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
               })}
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
+
+      {/* Load more button */}
+      {remainingItems > 0 && (
+        <div className="mt-4 text-center">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowAll(true)}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            Tải thêm ({remainingItems} mục)
+          </Button>
+        </div>
+      )}
 
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
