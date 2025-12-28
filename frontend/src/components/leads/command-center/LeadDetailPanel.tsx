@@ -474,7 +474,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Ngành:</span>
-                  <span className="font-semibold truncate max-w-[100px]" title={lead.offering?.program?.name || lead.offering?.offering_type}>
+                  <span className="font-semibold text-right" title={lead.offering?.program?.name || lead.offering?.offering_type}>
                     {lead.offering?.program?.name || lead.offering?.offering_type || "—"}
                   </span>
                 </div>
@@ -483,9 +483,9 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
               {/* Footer: Phụ trách + Rating (Merged) */}
               <div className="flex items-center justify-between pt-2 border-t">
                 <div className="flex items-center gap-2 text-xs">
-                  <UserPlus className="h-3 w-3 text-muted-foreground" />
+                  <UserPlus className="h-3 w-3 text-muted-foreground shrink-0" />
                   <span className="text-muted-foreground">Phụ trách:</span>
-                  <span className="font-medium truncate max-w-[100px]">
+                  <span className="font-medium">
                     {lead.assigned_officer?.full_name || "Chưa phân công"}
                   </span>
                 </div>
