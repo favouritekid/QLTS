@@ -145,6 +145,7 @@ export const API_ENDPOINTS = {
     MARK_AS_READ: "/api/notifications/mark-as-read",
     MARK_ALL_AS_READ: "/api/notifications/mark-all-as-read",
     DELETE: (id: number) => `/api/notifications/${id}`,
+    BULK_DELETE: "/api/notifications/bulk", // ✅ TECHNICAL DEBT FIX: Bulk delete
     PREFERENCES: "/api/notifications/preferences",
     // Event Groups (NEW - Event-Driven Architecture)
     EVENT_GROUPS: "/api/notifications/event-groups",

@@ -261,6 +261,84 @@ export function useDeleteNotification() {
 }
 
 // ============================================
+// 🗑️ BULK DELETE NOTIFICATIONS MUTATION
+// ✅ TECHNICAL DEBT FIX: Single API call for multiple deletes
+// ============================================
+
+interface BulkDeleteRequest {
+  notification_ids: number[];
+}
+
+interface BulkDeleteResponse {
+  deleted: number;
+}
+
+export function useBulkDeleteNotifications() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    BulkDeleteResponse,
+    AxiosError<ApiErrorResponse>,
+    BulkDeleteRequest,
+    { previousData: [readonly unknown[], unknown][] }
+  >({
+    mutationFn: async (data: BulkDeleteRequest) => {
+      const response = await api.delete<BulkDeleteResponse>(
+        API_ENDPOINTS.NOTIFICATIONS.BULK_DELETE,
+        { data }
+      );
+      return response.data;
+    },
+    onMutate: async (data: BulkDeleteRequest) => {
+      // Cancel outgoing refetches
+      await queryClient.cancelQueries({ queryKey: notificationKeys.all });
+
+      // Snapshot previous values
+      const previousData = queryClient.getQueriesData({ queryKey: notificationKeys.lists() });
+
+      // Optimistically update all notification queries
+      queryClient.setQueriesData<NotificationsPage>(
+        { queryKey: notificationKeys.lists() },
+        (oldData) => {
+          if (!oldData) return oldData;
+
+          // Count unread notifications being deleted
+          const unreadBeingDeleted = oldData.notifications.filter(
+            (n) => data.notification_ids.includes(n.id) && !n.is_read
+          ).length;
+
+          // Remove deleted notifications from the list
+          const updatedNotifications = oldData.notifications.filter(
+            (n) => !data.notification_ids.includes(n.id)
+          );
+
+          return {
+            ...oldData,
+            total_count: Math.max(0, oldData.total_count - data.notification_ids.length),
+            unread_count: Math.max(0, oldData.unread_count - unreadBeingDeleted),
+            notifications: updatedNotifications,
+          };
+        }
+      );
+
+      return { previousData };
+    },
+    onError: (_err, _data, context) => {
+      // Rollback on error
+      if (context?.previousData) {
+        context.previousData.forEach(([queryKey, data]) => {
+          queryClient.setQueryData(queryKey, data);
+        });
+      }
+    },
+    onSettled: () => {
+      // Refetch to ensure sync with server
+      queryClient.invalidateQueries({ queryKey: notificationKeys.all });
+    },
+  });
+}
+
+// ============================================
 // 📡 ADD NEW NOTIFICATION (for real-time updates)
 // ============================================
 

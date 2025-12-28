@@ -28,6 +28,7 @@ import {
   useMarkAsRead,
   useMarkAllAsRead,
   useDeleteNotification,
+  useBulkDeleteNotifications,
 } from "@/hooks/useNotifications";
 import type { Notification, NotificationsPage } from "@/types/api.types";
 import { NotificationTable } from "./NotificationTable";
@@ -58,6 +59,7 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
   const markAsRead = useMarkAsRead();
   const markAllAsRead = useMarkAllAsRead();
   const deleteNotification = useDeleteNotification();
+  const bulkDeleteNotifications = useBulkDeleteNotifications();
 
   const notifications = data?.notifications || [];
   const unreadCount = data?.unread_count || 0;
@@ -122,24 +124,23 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
     );
   };
 
-  const handleBulkDelete = async () => {
+  const handleBulkDelete = () => {
     if (selectedIds.length === 0) return;
     if (!confirm(`Bạn chắc chắn muốn xóa ${selectedIds.length} thông báo?`)) return;
 
-    // TODO: Implement proper bulk delete API
-    // Currently loop through delete mutation (temporary solution)
-    let successCount = 0;
-    for (const id of selectedIds) {
-      try {
-        await deleteNotification.mutateAsync(id);
-        successCount++;
-      } catch (error) {
-        console.error(`Failed to delete notification ${id}`, error);
+    // ✅ TECHNICAL DEBT FIX: Use bulk delete API instead of loop
+    bulkDeleteNotifications.mutate(
+      { notification_ids: selectedIds },
+      {
+        onSuccess: (data) => {
+          setSelectedIds([]);
+          toast.success(`Đã xóa ${data.deleted} thông báo`);
+        },
+        onError: () => {
+          toast.error("Có lỗi khi xóa thông báo");
+        },
       }
-    }
-    
-    setSelectedIds([]);
-    toast.success(`Đã xóa ${successCount} thông báo`);
+    );
   };
 
   const getNotificationIcon = (type: Notification["type"]) => {

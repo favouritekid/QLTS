@@ -42,6 +42,11 @@ class MarkAsReadRequest(BaseModel):
     notification_ids: List[int]
 
 
+class BulkDeleteRequest(BaseModel):
+    """Request to delete multiple notifications"""
+    notification_ids: List[int]
+
+
 # =============================================================================
 # ✅ NOTIFICATION 2.0 - PHASE 1: Notification Action Schemas
 # =============================================================================

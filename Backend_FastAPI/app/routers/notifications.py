@@ -114,6 +114,32 @@ async def delete_notification(
     return None
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.delete("/bulk", status_code=status.HTTP_200_OK)
+async def bulk_delete_notifications(
+    request: Request,
+    body: schemas.BulkDeleteRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = PermissionDep,
+):
+    """
+    Delete multiple notifications at once.
+
+    ✅ TECHNICAL DEBT FIX: Replaces frontend loop-based single deletes.
+    Performance: O(1) API call vs O(n) calls.
+    """
+    deleted_count, callback = await notification_service.bulk_delete_notifications(
+        db=db,
+        user_id=current_user.id,
+        notification_ids=body.notification_ids,
+    )
+
+    await db.commit()
+    await callback()
+
+    return {"deleted": deleted_count}
+
+
 # Helper function to send real-time notification via WebSocket
 async def send_realtime_notification(
     notification: models.Notification,
