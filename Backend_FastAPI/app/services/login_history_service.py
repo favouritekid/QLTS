@@ -373,6 +373,20 @@ async def confirm_login(
             ip_address=login.ip_address,
         )
     
+    # ✅ FIX: Clear password_reset_required when user confirms login is legitimate
+    # This handles the case where user previously clicked "Not Me" (which set the flag),
+    # but now confirms a new suspicious login as legitimate.
+    from app.repositories.user_repository import UserRepository
+    user_repo = UserRepository(db)
+    user = await user_repo.get_by_id(user_id)
+    if user and user.password_reset_required:
+        user.password_reset_required = False
+        log.info(
+            "Cleared password_reset_required flag after user confirmed login",
+            user_id=user_id,
+            login_id=login_id
+        )
+    
     await db.flush()
     await db.refresh(login)
     
