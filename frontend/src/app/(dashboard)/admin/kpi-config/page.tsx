@@ -92,17 +92,17 @@ interface KpiTarget {
 // =============================================================================
 
 const KPI_CODES = [
-  { value: "consultations_daily", label: "Consultations (Daily)" },
-  { value: "consultations_monthly", label: "Consultations (Monthly)" },
-  { value: "enrollments", label: "Enrollments" },
-  { value: "conversion_rate", label: "Conversion Rate (%)" },
-  { value: "response_time", label: "Response Time (hours)" },
+  { value: "consultations_daily", label: "Tư vấn (Ngày)" },
+  { value: "consultations_monthly", label: "Tư vấn (Tháng)" },
+  { value: "enrollments", label: "Nhập học" },
+  { value: "conversion_rate", label: "Tỉ lệ chuyển đổi (%)" },
+  { value: "response_time", label: "Thời gian phản hồi (giờ)" },
 ];
 
 const PERIOD_TYPES = [
-  { value: "daily", label: "Daily" },
-  { value: "monthly", label: "Monthly" },
-  { value: "annual", label: "Annual" },
+  { value: "daily", label: "Hàng ngày" },
+  { value: "monthly", label: "Hàng tháng" },
+  { value: "annual", label: "Hàng năm" },
 ];
 
 // =============================================================================
@@ -183,12 +183,12 @@ export default function KpiConfigPage() {
     mutationFn: createKpiConfig,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["kpi-configs"] });
-      toast.success("KPI config created successfully");
+      toast.success("Đã tạo cấu hình KPI thành công");
       setIsDialogOpen(false);
       resetForm();
     },
     onError: (err: Error) => {
-      toast.error(err.message || "Failed to create config");
+      toast.error(err.message || "Tạo cấu hình thất bại");
     },
   });
 
@@ -197,13 +197,13 @@ export default function KpiConfigPage() {
       updateKpiConfig(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["kpi-configs"] });
-      toast.success("KPI config updated");
+      toast.success("Đã cập nhật KPI");
       setIsDialogOpen(false);
       setEditingConfig(null);
       resetForm();
     },
     onError: (err: Error) => {
-      toast.error(err.message || "Failed to update config");
+      toast.error(err.message || "Cập nhật thất bại");
     },
   });
 
@@ -211,10 +211,10 @@ export default function KpiConfigPage() {
     mutationFn: deleteKpiConfig,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["kpi-configs"] });
-      toast.success("KPI config deactivated");
+      toast.success("Đã vô hiệu hóa cấu hình KPI");
     },
     onError: (err: Error) => {
-      toast.error(err.message || "Failed to delete config");
+      toast.error(err.message || "Xóa cấu hình thất bại");
     },
   });
 
@@ -222,11 +222,11 @@ export default function KpiConfigPage() {
     mutationFn: createKpiTarget,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["kpi-targets"] });
-      toast.success("Annual target created");
+      toast.success("Đã tạo mục tiêu năm");
       setIsTargetDialogOpen(false);
     },
     onError: (err: Error) => {
-      toast.error(err.message || "Failed to create target");
+      toast.error(err.message || "Tạo mục tiêu thất bại");
     },
   });
 
@@ -271,9 +271,9 @@ export default function KpiConfigPage() {
   }
 
   function getScopeLabel(config: KpiConfig) {
-    if (config.officer_id) return `Officer #${config.officer_id}`;
-    if (config.unit_id) return `Unit #${config.unit_id}`;
-    return "Global";
+    if (config.officer_id) return `Cán bộ #${config.officer_id}`;
+    if (config.unit_id) return `Đơn vị #${config.unit_id}`;
+    return "Toàn cục";
   }
 
   return (
@@ -281,12 +281,12 @@ export default function KpiConfigPage() {
       {/* Header */}
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+            <h1 className="text-2xl font-bold flex items-center gap-2">
             <Target className="h-6 w-6 text-primary" />
-            KPI Configuration
+            Cấu hình KPI
           </h1>
           <p className="text-muted-foreground mt-1">
-            Configure daily/monthly targets and annual goals for officers
+            Cấu hình mục tiêu hàng ngày/tháng và mục tiêu năm cho cán bộ
           </p>
         </div>
         <div className="flex gap-2">
@@ -294,19 +294,19 @@ export default function KpiConfigPage() {
             <DialogTrigger asChild>
               <Button variant="outline">
                 <Target className="mr-2 h-4 w-4" />
-                Add Annual Target
+                Thêm Mục tiêu Năm
               </Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Create Annual Target</DialogTitle>
+                <DialogTitle>Tạo Mục tiêu Năm</DialogTitle>
                 <DialogDescription>
-                  Set annual enrollment/conversion goals for YTD tracking
+                  Đặt mục tiêu tuyển sinh/chuyển đổi năm để theo dõi tiến độ
                 </DialogDescription>
               </DialogHeader>
               <div className="grid gap-4 py-4">
                 <div className="space-y-2">
-                  <Label>KPI Code</Label>
+                  <Label>Mã KPI</Label>
                   <Select
                     value={targetFormData.kpi_code}
                     onValueChange={(v) =>
@@ -326,7 +326,7 @@ export default function KpiConfigPage() {
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label>Annual Target</Label>
+                  <Label>Mục tiêu Năm</Label>
                   <Input
                     type="number"
                     value={targetFormData.annual_target}
@@ -339,7 +339,7 @@ export default function KpiConfigPage() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label>Fiscal Year</Label>
+                  <Label>Năm Tài chính</Label>
                   <Input
                     type="number"
                     value={targetFormData.fiscal_year}
@@ -357,7 +357,7 @@ export default function KpiConfigPage() {
                   onClick={() => createTargetMutation.mutate(targetFormData)}
                   disabled={createTargetMutation.isPending}
                 >
-                  Create Target
+                  Tạo Mục tiêu
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -373,21 +373,21 @@ export default function KpiConfigPage() {
             <DialogTrigger asChild>
               <Button>
                 <Plus className="mr-2 h-4 w-4" />
-                Add Config
+                Thêm Cấu hình
               </Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>
-                  {editingConfig ? "Edit KPI Config" : "Create KPI Config"}
+                  {editingConfig ? "Sửa Cấu hình KPI" : "Tạo Cấu hình KPI"}
                 </DialogTitle>
                 <DialogDescription>
-                  Configure target values for specific KPIs
+                  Cấu hình giá trị mục tiêu cho các KPI cụ thể
                 </DialogDescription>
               </DialogHeader>
               <div className="grid gap-4 py-4">
                 <div className="space-y-2">
-                  <Label>KPI Code</Label>
+                  <Label>Mã KPI</Label>
                   <Select
                     value={formData.kpi_code}
                     onValueChange={(v) =>
@@ -396,7 +396,7 @@ export default function KpiConfigPage() {
                     disabled={!!editingConfig}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="Select KPI..." />
+                      <SelectValue placeholder="Chọn KPI..." />
                     </SelectTrigger>
                     <SelectContent>
                       {KPI_CODES.map((k) => (
@@ -408,7 +408,7 @@ export default function KpiConfigPage() {
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label>Target Value</Label>
+                  <Label>Giá trị Mục tiêu</Label>
                   <Input
                     type="number"
                     value={formData.target_value}
@@ -421,7 +421,7 @@ export default function KpiConfigPage() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label>Period Type</Label>
+                  <Label>Loại Chu kỳ</Label>
                   <Select
                     value={formData.period_type}
                     onValueChange={(v) =>
@@ -447,7 +447,7 @@ export default function KpiConfigPage() {
                   onClick={handleSubmit}
                   disabled={createMutation.isPending || updateMutation.isPending}
                 >
-                  {editingConfig ? "Update" : "Create"}
+                  {editingConfig ? "Cập nhật" : "Tạo mới"}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -458,9 +458,9 @@ export default function KpiConfigPage() {
       {/* Daily/Monthly Configs */}
       <Card>
         <CardHeader>
-          <CardTitle>Daily/Monthly Targets</CardTitle>
+          <CardTitle>Mục tiêu Ngày/Tháng</CardTitle>
           <CardDescription>
-            Configure periodic KPI targets (inheritance: Officer → Unit → Global)
+            Cấu hình mục tiêu KPI định kỳ (kế thừa: Cán bộ → Đơn vị → Toàn cục)
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -474,19 +474,19 @@ export default function KpiConfigPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>KPI Code</TableHead>
-                  <TableHead>Target</TableHead>
-                  <TableHead>Period</TableHead>
-                  <TableHead>Scope</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead>Mã KPI</TableHead>
+                  <TableHead>Mục tiêu</TableHead>
+                  <TableHead>Chu kỳ</TableHead>
+                  <TableHead>Phạm vi</TableHead>
+                  <TableHead>Trạng thái</TableHead>
+                  <TableHead className="text-right">Thao tác</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {configs?.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
-                      No configs yet. Add your first KPI configuration.
+                      Chưa có cấu hình nào. Hãy thêm cấu hình KPI đầu tiên của bạn.
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -508,7 +508,7 @@ export default function KpiConfigPage() {
                       </TableCell>
                       <TableCell>
                         <Badge variant={config.is_active ? "default" : "secondary"}>
-                          {config.is_active ? "Active" : "Inactive"}
+                          {config.is_active ? "Hoạt động" : "Ngừng"}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
@@ -523,7 +523,7 @@ export default function KpiConfigPage() {
                           variant="ghost"
                           size="icon"
                           onClick={() => {
-                            if (confirm("Deactivate this config?")) {
+                            if (confirm("Vô hiệu hóa cấu hình này?")) {
                               deleteMutation.mutate(config.id);
                             }
                           }}
@@ -543,9 +543,9 @@ export default function KpiConfigPage() {
       {/* Annual Targets */}
       <Card>
         <CardHeader>
-          <CardTitle>Annual Targets</CardTitle>
+          <CardTitle>Mục tiêu Năm</CardTitle>
           <CardDescription>
-            Yearly goals with YTD progress tracking (synced daily at 1:00 AM)
+            Các mục tiêu hàng năm với theo dõi tiến độ YTD (đồng bộ hàng ngày lúc 1:00 AM)
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -559,19 +559,19 @@ export default function KpiConfigPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>KPI Code</TableHead>
-                  <TableHead>Year</TableHead>
-                  <TableHead>Annual Target</TableHead>
-                  <TableHead>YTD Achieved</TableHead>
-                  <TableHead>Progress</TableHead>
-                  <TableHead>Last Sync</TableHead>
+                  <TableHead>Mã KPI</TableHead>
+                  <TableHead>Năm</TableHead>
+                  <TableHead>Mục tiêu Năm</TableHead>
+                  <TableHead>Đạt được (YTD)</TableHead>
+                  <TableHead>Tiến độ</TableHead>
+                  <TableHead>Đồng bộ cuối</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {targets?.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
-                      No annual targets. Add goals for YTD tracking.
+                      Chưa có mục tiêu năm. Hãy thêm mục tiêu để theo dõi YTD.
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -607,7 +607,7 @@ export default function KpiConfigPage() {
                         <TableCell className="text-muted-foreground text-sm">
                           {target.last_sync_at
                             ? new Date(target.last_sync_at).toLocaleDateString("vi-VN")
-                            : "Never"}
+                            : "Chưa bao giờ"}
                         </TableCell>
                       </TableRow>
                     );
