@@ -55,6 +55,16 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 import { api } from "@/lib/api/client";
 
@@ -151,6 +161,7 @@ export default function KpiConfigPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isTargetDialogOpen, setIsTargetDialogOpen] = useState(false);
   const [editingConfig, setEditingConfig] = useState<KpiConfig | null>(null);
+  const [deleteConfigId, setDeleteConfigId] = useState<number | null>(null);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -522,11 +533,7 @@ export default function KpiConfigPage() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          onClick={() => {
-                            if (confirm("Vô hiệu hóa cấu hình này?")) {
-                              deleteMutation.mutate(config.id);
-                            }
-                          }}
+                          onClick={() => setDeleteConfigId(config.id)}
                         >
                           <Trash2 className="h-4 w-4 text-destructive" />
                         </Button>
@@ -618,6 +625,28 @@ export default function KpiConfigPage() {
           )}
         </CardContent>
       </Card>
+      <AlertDialog open={!!deleteConfigId} onOpenChange={(open) => !open && setDeleteConfigId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Vô hiệu hóa cấu hình này?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Hành động này sẽ vô hiệu hóa cấu hình KPI. Bạn có thể kích hoạt lại sau nếu cần.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Hủy</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (deleteConfigId) deleteMutation.mutate(deleteConfigId);
+                setDeleteConfigId(null);
+              }}
+            >
+              Vô hiệu hóa
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
