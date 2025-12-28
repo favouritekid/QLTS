@@ -275,6 +275,10 @@ async def sync_officer_ytd(
     Sync achieved_ytd for an officer from actual data.
     Should be called by Celery job daily.
     
+    Uses PipelineStage + ConsultationStatus for consistency with funnel chart:
+    - PipelineStage.is_final_stage == True (lead has completed the funnel)
+    - ConsultationStatus.outcome_type == 'positive' (successful conversion)
+    
     Returns:
         Dict of kpi_code -> actual YTD value
     """
@@ -284,12 +288,16 @@ async def sync_officer_ytd(
     synced = {}
     
     # Sync enrollments YTD
+    # Uses same logic as funnel chart for data consistency:
+    # - Lead must be in a FINAL pipeline stage
+    # - Lead's consultation status must have POSITIVE outcome
     enrollments_query = (
         select(models.Lead)
-        .join(models.ConsultationStatus)
+        .join(models.PipelineStage, models.Lead.pipeline_stage_id == models.PipelineStage.id)
+        .join(models.ConsultationStatus, models.Lead.consultation_status_id == models.ConsultationStatus.id)
         .where(
             models.Lead.assigned_officer_id == officer_id,
-            models.ConsultationStatus.is_final_status == True,
+            models.PipelineStage.is_final_stage == True,
             models.ConsultationStatus.outcome_type == "positive",
             models.Lead.updated_at >= datetime(fiscal_year, 1, 1, tzinfo=timezone.utc),
             models.Lead.updated_at < datetime(fiscal_year + 1, 1, 1, tzinfo=timezone.utc),
