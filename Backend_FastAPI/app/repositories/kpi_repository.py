@@ -241,4 +241,39 @@ class KpiRepository(BaseRepository[models.KpiConfig]):
         
         result = await self.db.execute(query)
         return list(result.scalars().all())
+    
+    async def check_duplicate_target_exists(
+        self,
+        kpi_code: str,
+        fiscal_year: int,
+        unit_id: Optional[int] = None,
+        officer_id: Optional[int] = None,
+    ) -> Optional[models.KpiTarget]:
+        """
+        Check if active annual target exists for this scope + year.
+        Returns existing target or None.
+        
+        Uniqueness is determined by: kpi_code + fiscal_year + unit_id + officer_id
+        """
+        # Build conditions carefully for NULL equality
+        conditions = [
+            models.KpiTarget.kpi_code == kpi_code,
+            models.KpiTarget.fiscal_year == fiscal_year,
+            models.KpiTarget.is_active == True,
+        ]
+        
+        # Handle NULL comparisons correctly
+        if unit_id is None:
+            conditions.append(models.KpiTarget.unit_id.is_(None))
+        else:
+            conditions.append(models.KpiTarget.unit_id == unit_id)
+        
+        if officer_id is None:
+            conditions.append(models.KpiTarget.officer_id.is_(None))
+        else:
+            conditions.append(models.KpiTarget.officer_id == officer_id)
+        
+        query = select(models.KpiTarget).where(and_(*conditions))
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
 

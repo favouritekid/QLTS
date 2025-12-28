@@ -344,6 +344,11 @@ class TargetNotFoundError(Exception):
     pass
 
 
+class DuplicateTargetError(Exception):
+    """Raised when attempting to create a duplicate KPI target."""
+    pass
+
+
 # Type alias for callback
 from typing import Callable, Awaitable, Tuple
 Callback = Callable[[], Awaitable[None]]
@@ -510,7 +515,34 @@ async def create_kpi_target(
     Create an annual KPI target.
     
     Pattern A: Returns (result, callback) for transaction control.
+    
+    Raises:
+        DuplicateTargetError: If active target already exists for this scope + year
     """
+    from ..repositories import KpiRepository
+    repo = KpiRepository(db)
+    
+    # Check for duplicates
+    existing = await repo.check_duplicate_target_exists(
+        kpi_code=kpi_code,
+        fiscal_year=fiscal_year,
+        unit_id=unit_id,
+        officer_id=officer_id,
+    )
+    
+    if existing:
+        # Build scope description for error message
+        if officer_id:
+            scope = f"Cán bộ #{officer_id}"
+        elif unit_id:
+            scope = f"Đơn vị #{unit_id}"
+        else:
+            scope = "Toàn cục"
+        
+        raise DuplicateTargetError(
+            f"Mục tiêu năm {fiscal_year} cho '{kpi_code}' phạm vi {scope} đã tồn tại"
+        )
+    
     target = models.KpiTarget(
         kpi_code=kpi_code,
         annual_target=annual_target,

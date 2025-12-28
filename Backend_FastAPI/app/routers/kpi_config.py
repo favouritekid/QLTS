@@ -244,18 +244,20 @@ async def create_kpi_target(
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     
-    target, callback = await kpi_service.create_kpi_target(
-        db,
-        kpi_code=data.kpi_code,
-        annual_target=data.annual_target,
-        fiscal_year=data.fiscal_year,
-        unit_id=data.unit_id,
-        officer_id=data.officer_id,
-        created_by=current_user,
-    )
-    await db.commit()
-    await db.refresh(target)
-    await callback()
-    
-    return target
+    try:
+        target, callback = await kpi_service.create_kpi_target(
+            db,
+            kpi_code=data.kpi_code,
+            annual_target=data.annual_target,
+            fiscal_year=data.fiscal_year,
+            unit_id=data.unit_id,
+            officer_id=data.officer_id,
+            created_by=current_user,
+        )
+        await db.commit()
+        await db.refresh(target)
+        await callback()
+        return target
+    except kpi_service.DuplicateTargetError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 

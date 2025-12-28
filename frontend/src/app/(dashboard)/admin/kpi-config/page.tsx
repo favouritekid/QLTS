@@ -267,6 +267,15 @@ export default function KpiConfigPage() {
       queryClient.invalidateQueries({ queryKey: ["kpi-targets"] });
       toast.success("Đã tạo mục tiêu năm");
       setIsTargetDialogOpen(false);
+      // Reset form after success
+      setTargetFormData({
+        kpi_code: "enrollments",
+        annual_target: 100,
+        fiscal_year: new Date().getFullYear(),
+        unit_id: null,
+        officer_id: null,
+        scope: "global",
+      });
     },
     onError: (err: Error) => {
       toast.error(err.message || "Tạo mục tiêu thất bại");
@@ -513,7 +522,11 @@ export default function KpiConfigPage() {
               <DialogFooter>
                 <Button
                   onClick={() => createTargetMutation.mutate(targetFormData)}
-                  disabled={createTargetMutation.isPending}
+                  disabled={
+                    createTargetMutation.isPending ||
+                    (targetFormData.scope === "unit" && !targetFormData.unit_id) ||
+                    (targetFormData.scope === "officer" && !targetFormData.officer_id)
+                  }
                 >
                   Tạo Mục tiêu
                 </Button>
@@ -676,7 +689,13 @@ export default function KpiConfigPage() {
               <DialogFooter>
                 <Button
                   onClick={handleSubmit}
-                  disabled={createMutation.isPending || updateMutation.isPending}
+                  disabled={
+                    createMutation.isPending ||
+                    updateMutation.isPending ||
+                    !formData.kpi_code ||
+                    (!editingConfig && formData.scope === "unit" && !formData.unit_id) ||
+                    (!editingConfig && formData.scope === "officer" && !formData.officer_id)
+                  }
                 >
                   {editingConfig ? "Cập nhật" : "Tạo mới"}
                 </Button>
