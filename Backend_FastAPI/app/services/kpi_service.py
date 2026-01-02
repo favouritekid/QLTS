@@ -288,17 +288,17 @@ async def sync_officer_ytd(
     synced = {}
     
     # Sync enrollments YTD
-    # Uses same logic as funnel chart for data consistency:
-    # - Lead must be in a FINAL pipeline stage
-    # - Lead's consultation status must have POSITIVE outcome
+    # Count all leads that reached FINAL pipeline stage (is_final_stage = True)
+    # This includes:
+    # - "Đã nhập học" (stg06) - positive outcome
+    # - "Không đi học" (stg07) - negative outcome (but still counts as enrollment)
+    # This matches the funnel chart's total conversion count
     enrollments_query = (
         select(models.Lead)
         .join(models.PipelineStage, models.Lead.pipeline_stage_id == models.PipelineStage.id)
-        .join(models.ConsultationStatus, models.Lead.consultation_status_id == models.ConsultationStatus.id)
         .where(
             models.Lead.assigned_officer_id == officer_id,
             models.PipelineStage.is_final_stage == True,
-            models.ConsultationStatus.outcome_type == "positive",
             models.Lead.updated_at >= datetime(fiscal_year, 1, 1, tzinfo=timezone.utc),
             models.Lead.updated_at < datetime(fiscal_year + 1, 1, 1, tzinfo=timezone.utc),
         )
