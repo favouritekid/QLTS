@@ -130,7 +130,7 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
           </div>
           {/* Time Range Selector */}
           <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1 bg-muted rounded-lg p-1">
+            <div className="flex items-center gap-1.5 bg-muted rounded-lg p-1">
               {(["7D", "30D", "90D"] as TimeRange[]).map((range) => (
                 <Button
                   key={range}
