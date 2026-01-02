@@ -82,6 +82,21 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
     ? Math.round(totals.consultations / filteredTrends.length) 
     : 0;
 
+  // Calculate max value for Y-axis domain to ensure ReferenceLines are visible
+  const maxDataValue = Math.max(
+    ...filteredTrends.map(t => Math.max(t.leads_assigned, t.consultations, t.converted)),
+    0
+  );
+  
+  const chartMax = Math.max(
+    maxDataValue,
+    dailyGoal,
+    teamAverage || 0
+  );
+  
+  // Add some padding (e.g. 10%) on top
+  const yAxisDomain = [0, Math.ceil(chartMax * 1.1)];
+
   // Get description text based on date range
   const getDescription = () => {
     if (dateRange?.from && dateRange?.to) {
@@ -95,6 +110,7 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
   return (
     <Card>
       <CardHeader className="pb-3">
+        {/* ... existing header code ... */}
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
             <CardTitle className="text-base font-medium">
@@ -123,6 +139,7 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
               tickLine={false}
               axisLine={false}
               width={30}
+              domain={yAxisDomain}
             />
             <Tooltip
               contentStyle={{

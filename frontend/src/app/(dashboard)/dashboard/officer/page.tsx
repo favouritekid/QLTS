@@ -151,6 +151,7 @@ function DashboardContent() {
           <div className="grid gap-6 md:grid-cols-2">
             <PerformanceChart 
               trends={performanceTrends} 
+              dailyGoal={stats.kpis.consultations_target}
               teamAverage={teamStats?.team_avg_consultations}
             />
             <FunnelChart funnel={salesFunnel} />
