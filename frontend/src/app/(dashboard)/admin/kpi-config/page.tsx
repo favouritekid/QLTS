@@ -75,6 +75,7 @@ import { api } from "@/lib/api/client";
 import { useAdminUsersList } from "@/hooks/useAdminUsers";
 import { useOrganizationUnits } from "@/hooks/useOrganization";
 import { OrganizationUnit } from "@/types/organization.types";
+import { cn } from "@/lib/utils";
 
 // =============================================================================
 // TYPES
@@ -171,6 +172,20 @@ async function updateKpiTarget(
 
 async function deleteKpiTarget(id: number): Promise<void> {
   await api.delete(`/api/admin/kpi-config/targets/${id}`);
+}
+
+interface SyncYTDResponse {
+  target_id: number;
+  officer_id: number;
+  kpi_code: string;
+  fiscal_year: number;
+  achieved_ytd: number;
+  message: string;
+}
+
+async function syncKpiTarget(id: number): Promise<SyncYTDResponse> {
+  const res = await api.post(`/api/admin/kpi-config/targets/${id}/sync`);
+  return res.data;
 }
 
 // =============================================================================
@@ -343,6 +358,17 @@ export default function KpiConfigPage() {
     },
     onError: (err: Error) => {
       toast.error(err.message || "Khôi phục thất bại");
+    },
+  });
+
+  const syncTargetMutation = useMutation({
+    mutationFn: syncKpiTarget,
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["kpi-targets"] });
+      toast.success(data.message);
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Đồng bộ thất bại");
     },
   });
 
@@ -690,6 +716,18 @@ export default function KpiConfigPage() {
                             </Button>
                           ) : (
                             <>
+                              {/* Sync button only for officer-level targets */}
+                              {target.officer_id && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => syncTargetMutation.mutate(target.id)}
+                                  disabled={syncTargetMutation.isPending}
+                                  title="Đồng bộ YTD"
+                                >
+                                  <RefreshCw className={cn("h-4 w-4", syncTargetMutation.isPending && "animate-spin")} />
+                                </Button>
+                              )}
                               <Button
                                 variant="ghost"
                                 size="icon"

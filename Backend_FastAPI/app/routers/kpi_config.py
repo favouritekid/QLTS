@@ -323,3 +323,65 @@ async def delete_kpi_target(
     except kpi_service.TargetNotFoundError:
         raise HTTPException(status_code=404, detail="Target not found")
 
+
+class SyncYTDResponse(BaseModel):
+    """Response for YTD sync endpoint."""
+    target_id: int
+    officer_id: int
+    kpi_code: str
+    fiscal_year: int
+    achieved_ytd: int
+    message: str
+
+
+@router.post(
+    "/targets/{target_id}/sync",
+    response_model=SyncYTDResponse,
+    summary="Sync YTD for a specific target"
+)
+async def sync_target_ytd(
+    target_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[models.User, PermissionDep],
+):
+    """
+    Manually trigger YTD sync for a specific annual target.
+    
+    This recalculates achieved_ytd from actual lead data using:
+    - PipelineStage.is_final_stage == True
+    - ConsultationStatus.outcome_type == 'positive'
+    
+    Admin/Manager only.
+    """
+    if current_user.role not in ("admin", "manager"):
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    # Get target record
+    target = await db.get(models.KpiTarget, target_id)
+    if not target or not target.is_active:
+        raise HTTPException(status_code=404, detail="Target not found")
+    
+    # Sync YTD for the officer
+    if target.officer_id:
+        synced = await kpi_service.sync_officer_ytd(
+            db, officer_id=target.officer_id, fiscal_year=target.fiscal_year
+        )
+        await db.commit()
+        await db.refresh(target)
+        
+        return SyncYTDResponse(
+            target_id=target.id,
+            officer_id=target.officer_id,
+            kpi_code=target.kpi_code,
+            fiscal_year=target.fiscal_year,
+            achieved_ytd=target.achieved_ytd,
+            message=f"Đã đồng bộ YTD: {synced.get(target.kpi_code, 0)} {target.kpi_code}"
+        )
+    else:
+        # For global/unit targets, sync all officers and aggregate
+        # TODO: Implement aggregation for unit/global targets
+        raise HTTPException(
+            status_code=400, 
+            detail="Sync only supported for officer-level targets. Unit/Global targets aggregate automatically."
+        )
+
