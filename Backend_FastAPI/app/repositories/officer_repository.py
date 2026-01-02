@@ -663,6 +663,14 @@ class OfficerRepository(BaseRepository[models.User]):
                     select(models.User.id).where(*conditions)
                 )
             )
+        else:
+             # FIX: Ensure we only count consults from officers matching the "conditions" (Active Officers)
+             # This aligns the numerator (consults by active officers) with the denominator (count of active officers)
+             consult_conditions.append(
+                models.Consultation.officer_id.in_(
+                    select(models.User.id).where(*conditions)
+                )
+            )
         
         consult_query = (
             select(func.count(models.Consultation.id))
