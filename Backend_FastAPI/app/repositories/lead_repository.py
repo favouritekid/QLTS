@@ -969,3 +969,80 @@ class LeadRepository(BaseRepository[models.Lead]):
         result = await self.db.execute(query)
         return result.scalar() or 0
 
+    # =========================================================================
+    # ✅ RECOMMENDATION ENGINE: Methods for KPI recommendations
+    # =========================================================================
+
+    async def count_hot_leads_needing_attention(
+        self,
+        officer_id: int,
+        days_threshold: int = 3
+    ) -> int:
+        """
+        Count hot leads that haven't been contacted in X days.
+        
+        ✅ ARCHITECTURE COMPLIANT: Replaces direct query in recommendation_engine.
+        
+        Args:
+            officer_id: Officer ID
+            days_threshold: Days since last contact
+            
+        Returns:
+            Count of hot leads needing attention
+        """
+        from datetime import timedelta
+        
+        threshold_date = datetime.now(timezone.utc) - timedelta(days=days_threshold)
+        
+        query = (
+            select(func.count(models.Lead.id))
+            .where(
+                models.Lead.assigned_officer_id == officer_id,
+                models.Lead.is_hot_lead == True,
+                models.Lead.deleted_at.is_(None),
+                models.Lead.last_consultation_at < threshold_date,
+            )
+        )
+        result = await self.db.execute(query)
+        return result.scalar() or 0
+
+    async def count_stale_leads(
+        self,
+        officer_id: int,
+        days_threshold: int = 14
+    ) -> int:
+        """
+        Count leads with no activity in X days (non-final status only).
+        
+        ✅ ARCHITECTURE COMPLIANT: Replaces direct query in recommendation_engine.
+        
+        Args:
+            officer_id: Officer ID
+            days_threshold: Days of inactivity
+            
+        Returns:
+            Count of stale leads
+        """
+        from datetime import timedelta
+        
+        threshold_date = datetime.now(timezone.utc) - timedelta(days=days_threshold)
+        
+        query = (
+            select(func.count(models.Lead.id))
+            .join(
+                models.ConsultationStatus,
+                models.Lead.consultation_status_id == models.ConsultationStatus.id,
+                isouter=True
+            )
+            .where(
+                models.Lead.assigned_officer_id == officer_id,
+                models.Lead.deleted_at.is_(None),
+                models.Lead.updated_at < threshold_date,
+                # Only non-final status leads are considered stale
+                models.ConsultationStatus.is_final_status == False,
+            )
+        )
+        result = await self.db.execute(query)
+        return result.scalar() or 0
+
+
