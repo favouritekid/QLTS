@@ -622,18 +622,22 @@ class OfficerRepository(BaseRepository[models.User]):
     async def get_team_averages(
         self,
         unit_id: Optional[int],
-        days: int = 30,
+        start_date: date,
+        end_date: date,
     ) -> Dict[str, float]:
         """
         Get team average consultations and conversions.
         
         Args:
             unit_id: Filter by unit (None = all officers)
-            days: Number of days to average over
+            start_date: Start date for calculation
+            end_date: End date for calculation
         """
-        since_date = datetime.now(timezone.utc) - timedelta(days=days)
+        # Calculate number of days for averaging
+        days = (end_date - start_date).days + 1
+        if days < 1: days = 1
         
-        # Build conditions
+        # Build conditions for officers
         conditions = [
             models.User.role == "officer",
             models.User.status == "active",
@@ -646,7 +650,13 @@ class OfficerRepository(BaseRepository[models.User]):
         officer_count = (await self.db.execute(officer_count_query)).scalar() or 1
         
         # Total consultations
-        consult_conditions = [func.date(models.Consultation.consultation_date) >= since_date.date()]
+        # JOIN with Lead to filter soft-deleted leads
+        consult_conditions = [
+            func.date(models.Consultation.consultation_date) >= start_date,
+            func.date(models.Consultation.consultation_date) <= end_date,
+            models.Lead.deleted_at.is_(None) # Exclude consultations of deleted leads
+        ]
+        
         if unit_id:
             consult_conditions.append(
                 models.Consultation.officer_id.in_(
@@ -656,6 +666,7 @@ class OfficerRepository(BaseRepository[models.User]):
         
         consult_query = (
             select(func.count(models.Consultation.id))
+            .join(models.Lead, models.Consultation.lead_id == models.Lead.id)
             .where(*consult_conditions)
         )
         total_consultations = (await self.db.execute(consult_query)).scalar() or 0

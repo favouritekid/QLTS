@@ -235,15 +235,33 @@ async def get_team_stats(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[models.User, PermissionDep],
-    days: int = 30
+    days: int = 30,
+    start_date: str = None, # ISO format YYYY-MM-DD
+    end_date: str = None,   # ISO format YYYY-MM-DD
 ):
     """
     Get team average statistics for performance comparison.
     Shows team averages for consultations and conversions.
     """
+    from datetime import date
+    
+    parsed_start = None
+    parsed_end = None
+    
+    if start_date and end_date:
+        try:
+            parsed_start = date.fromisoformat(start_date)
+            parsed_end = date.fromisoformat(end_date)
+        except ValueError:
+            pass # Fallback to days param
+            
     try:
         stats = await officer_service.get_team_stats(
-            db=db, officer_id=current_user.id, days=days
+            db=db, 
+            officer_id=current_user.id, 
+            days=days,
+            start_date=parsed_start,
+            end_date=parsed_end
         )
         return stats
     except Exception as e:
