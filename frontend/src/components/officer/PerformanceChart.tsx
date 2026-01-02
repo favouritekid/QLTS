@@ -126,13 +126,14 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
             />
             <Tooltip
               contentStyle={{
-                backgroundColor: "hsl(var(--popover))",
-                border: "1px solid hsl(var(--border))",
-                borderRadius: "var(--radius)",
+                backgroundColor: "rgba(255, 255, 255, 0.95)", // High opacity white
+                border: "1px solid #e2e8f0", // border-slate-200
+                borderRadius: "6px",
                 fontSize: "12px",
-                boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)", // shadow-md
+                boxShadow: "0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)", // shadow-lg
                 padding: "8px 12px",
                 zIndex: 50,
+                color: "#0f172a" // slate-900
               }}
               wrapperStyle={{ zIndex: 50, pointerEvents: "none" }}
               cursor={{ stroke: "hsl(var(--muted-foreground))", strokeWidth: 1, strokeDasharray: "4 4" }}
