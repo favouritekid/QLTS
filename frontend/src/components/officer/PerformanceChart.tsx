@@ -201,24 +201,24 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
               dataKey="Leads được giao"
               stroke="#8b5cf6" // Violet-500
               strokeWidth={2}
-              dot={{ r: 4, fill: "#8b5cf6", strokeWidth: 0 }}
-              activeDot={{ r: 6 }}
+              dot={false}
+              activeDot={{ r: 6, fill: "#8b5cf6", strokeWidth: 0 }}
             />
             <Line
               type="monotone"
               dataKey="Lượt tư vấn"
               stroke="#f97316" // Orange-500 (High contrast vs Violet/Green)
               strokeWidth={2}
-              dot={{ r: 4, fill: "#f97316", strokeWidth: 0 }}
-              activeDot={{ r: 6 }}
+              dot={false}
+              activeDot={{ r: 6, fill: "#f97316", strokeWidth: 0 }}
             />
             <Line
               type="monotone"
               dataKey="Chuyển đổi"
               stroke="#10b981" // Emerald-500
               strokeWidth={2}
-              dot={{ r: 4, fill: "#10b981", strokeWidth: 0 }}
-              activeDot={{ r: 6 }}
+              dot={false}
+              activeDot={{ r: 6, fill: "#10b981", strokeWidth: 0 }}
             />
           </LineChart>
         </ResponsiveContainer>
