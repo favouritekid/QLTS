@@ -1,12 +1,15 @@
 // src/components/officer/PerformanceChart.tsx
+/**
+ * Performance Trend Chart
+ * Shows leads assigned, consultations, and conversions over time.
+ * Uses global DashboardDateContext for date filtering (no internal filter).
+ */
 "use client";
 
-import { useState, useMemo } from "react";
+import { useMemo } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { DateRangePicker } from "@/components/ui/date-range-picker";
-import { cn } from "@/lib/utils";
-import type { DateRange } from "react-day-picker";
+import { format } from "date-fns";
+import { vi } from "date-fns/locale";
 import {
   LineChart,
   Line,
@@ -18,6 +21,7 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from "recharts";
+import { useDashboardDate } from "@/contexts/DashboardDateContext";
 
 interface PerformanceTrend {
   date: string;
@@ -32,37 +36,24 @@ interface PerformanceChartProps {
   teamAverage?: number; // Optional team average for comparison
 }
 
-type TimeRange = "7D" | "30D" | "90D" | "custom";
-
 export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: PerformanceChartProps) {
-  const [timeRange, setTimeRange] = useState<TimeRange>("7D");
-  const [customDateRange, setCustomDateRange] = useState<DateRange | undefined>(undefined);
+  // Use global dashboard date context
+  const { dateRange } = useDashboardDate();
 
-  // Filter data based on time range
-  const getDaysForRange = (range: TimeRange): number => {
-    switch (range) {
-      case "7D": return 7;
-      case "30D": return 30;
-      case "90D": return 90;
-      default: return 7;
-    }
-  };
-
-  // Filter trends by custom date range or preset
+  // Filter trends by global date range
   const filteredTrends = useMemo(() => {
-    if (timeRange === "custom" && customDateRange?.from && customDateRange?.to) {
-      const fromDate = new Date(customDateRange.from);
-      const toDate = new Date(customDateRange.to);
-      fromDate.setHours(0, 0, 0, 0);
-      toDate.setHours(23, 59, 59, 999);
-      
-      return trends.filter((t) => {
-        const date = new Date(t.date);
-        return date >= fromDate && date <= toDate;
-      });
-    }
-    return trends.slice(-getDaysForRange(timeRange));
-  }, [trends, timeRange, customDateRange]);
+    if (!dateRange?.from || !dateRange?.to) return trends;
+    
+    const fromDate = new Date(dateRange.from);
+    const toDate = new Date(dateRange.to);
+    fromDate.setHours(0, 0, 0, 0);
+    toDate.setHours(23, 59, 59, 999);
+    
+    return trends.filter((t) => {
+      const date = new Date(t.date);
+      return date >= fromDate && date <= toDate;
+    });
+  }, [trends, dateRange]);
 
   // Format data for Recharts
   const chartData = filteredTrends.map((trend) => ({
@@ -91,29 +82,14 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
     ? Math.round(totals.consultations / filteredTrends.length) 
     : 0;
 
-  // Handle preset button click
-  const handlePresetClick = (range: TimeRange) => {
-    setTimeRange(range);
-    if (range !== "custom") {
-      setCustomDateRange(undefined);
-    }
-  };
-
-  // Handle custom date range change
-  const handleCustomDateChange = (range: DateRange | undefined) => {
-    setCustomDateRange(range);
-    if (range?.from && range?.to) {
-      setTimeRange("custom");
-    }
-  };
-
-  // Get description text
+  // Get description text based on date range
   const getDescription = () => {
-    if (timeRange === "custom" && customDateRange?.from && customDateRange?.to) {
-      const days = Math.ceil((customDateRange.to.getTime() - customDateRange.from.getTime()) / (1000 * 60 * 60 * 24)) + 1;
-      return `${days} ngày: ${totals.leads} leads • ${totals.consultations} tư vấn • ${totals.converted} chuyển đổi`;
+    if (dateRange?.from && dateRange?.to) {
+      const fromStr = format(dateRange.from, "dd/MM", { locale: vi });
+      const toStr = format(dateRange.to, "dd/MM", { locale: vi });
+      return `${fromStr} - ${toStr}: ${totals.leads} leads • ${totals.consultations} tư vấn • ${totals.converted} chuyển đổi`;
     }
-    return `${getDaysForRange(timeRange)} ngày: ${totals.leads} leads • ${totals.consultations} tư vấn • ${totals.converted} chuyển đổi`;
+    return `${totals.leads} leads • ${totals.consultations} tư vấn • ${totals.converted} chuyển đổi`;
   };
 
   return (
@@ -127,33 +103,6 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
             <CardDescription className="text-xs mt-1">
               {getDescription()}
             </CardDescription>
-          </div>
-          {/* Time Range Selector */}
-          <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1.5 bg-muted rounded-lg p-1">
-              {(["7D", "30D", "90D"] as TimeRange[]).map((range) => (
-                <Button
-                  key={range}
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handlePresetClick(range)}
-                  className={cn(
-                    "h-7 px-2.5 text-xs font-medium",
-                    timeRange === range 
-                      ? "bg-background shadow-sm" 
-                      : "hover:bg-background/50"
-                  )}
-                >
-                  {range}
-                </Button>
-              ))}
-            </div>
-            {/* Custom Date Range Picker */}
-            <DateRangePicker
-              dateRange={customDateRange}
-              onDateRangeChange={handleCustomDateChange}
-              placeholder="Tùy chỉnh"
-            />
           </div>
         </div>
       </CardHeader>
