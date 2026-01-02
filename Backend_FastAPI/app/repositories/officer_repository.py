@@ -272,7 +272,7 @@ class OfficerRepository(BaseRepository[models.User]):
         assigned_query = (
             select(
                 func.date(models.AssignmentLog.timestamp).label("day"),
-                func.count(models.AssignmentLog.id).label("count")
+                func.count(func.distinct(models.AssignmentLog.lead_id)).label("count")
             )
             .where(
                 models.AssignmentLog.officer_id == officer_id,
@@ -291,7 +291,7 @@ class OfficerRepository(BaseRepository[models.User]):
         consult_query = (
             select(
                 func.date(models.Consultation.consultation_date).label("day"),
-                func.count(models.Consultation.id).label("count")
+                func.count(func.distinct(models.Consultation.lead_id)).label("count")
             )
             .where(
                 models.Consultation.officer_id == officer_id,
@@ -310,7 +310,7 @@ class OfficerRepository(BaseRepository[models.User]):
         converted_query = (
             select(
                 func.date(models.LeadStatusHistory.changed_at).label("day"),
-                func.count(models.LeadStatusHistory.id).label("count")
+                func.count(func.distinct(models.LeadStatusHistory.lead_id)).label("count")
             )
             .join(models.PipelineStage, 
                   models.LeadStatusHistory.new_pipeline_stage_id == models.PipelineStage.id)

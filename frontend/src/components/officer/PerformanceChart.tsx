@@ -126,14 +126,17 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
             />
             <Tooltip
               contentStyle={{
-                backgroundColor: "hsl(var(--background))",
+                backgroundColor: "hsl(var(--popover))",
                 border: "1px solid hsl(var(--border))",
                 borderRadius: "var(--radius)",
                 fontSize: "12px",
+                boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)", // shadow-md
+                padding: "8px 12px",
               }}
+              cursor={{ stroke: "hsl(var(--muted-foreground))", strokeWidth: 1, strokeDasharray: "4 4" }}
             />
             <Legend 
-              wrapperStyle={{ fontSize: "11px" }}
+              wrapperStyle={{ fontSize: "11px", paddingTop: "10px" }}
               iconSize={10}
             />
             
@@ -175,26 +178,26 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
 
             <Line
               type="monotone"
-              dataKey="Consultations"
-              stroke="#3b82f6"
+              dataKey="Leads Assigned"
+              stroke="#8b5cf6" // Violet-500
               strokeWidth={2}
-              dot={{ r: 4, fill: "#3b82f6" }}
+              dot={{ r: 4, fill: "#8b5cf6", strokeWidth: 0 }}
+              activeDot={{ r: 6 }}
+            />
+            <Line
+              type="monotone"
+              dataKey="Consultations"
+              stroke="#f97316" // Orange-500 (High contrast vs Violet/Green)
+              strokeWidth={2}
+              dot={{ r: 4, fill: "#f97316", strokeWidth: 0 }}
               activeDot={{ r: 6 }}
             />
             <Line
               type="monotone"
               dataKey="Converted"
-              stroke="#10b981"
+              stroke="#10b981" // Emerald-500
               strokeWidth={2}
-              dot={{ r: 4, fill: "#10b981" }}
-              activeDot={{ r: 6 }}
-            />
-            <Line
-              type="monotone"
-              dataKey="Leads Assigned"
-              stroke="#6366f1"
-              strokeWidth={2}
-              dot={{ r: 4, fill: "#6366f1" }}
+              dot={{ r: 4, fill: "#10b981", strokeWidth: 0 }}
               activeDot={{ r: 6 }}
             />
           </LineChart>
@@ -202,21 +205,21 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
         
         {/* Summary Stats */}
         <div className="flex items-center justify-center gap-6 mt-4 pt-4 border-t text-xs text-muted-foreground flex-wrap">
-          <div className="flex items-center gap-1.5">
-            <div className="h-2 w-2 rounded-full" style={{ background: "#6366f1" }} />
+          <div className="flex items-center gap-2">
+            <div className="h-2 w-2 rounded-full ring-2 ring-violet-500/20 bg-violet-500" />
             <span>TB leads/ngày: {filteredTrends.length > 0 ? Math.round(totals.leads / filteredTrends.length) : 0}</span>
           </div>
-          <div className="flex items-center gap-1.5">
-            <div className="h-2 w-2 rounded-full" style={{ background: "#3b82f6" }} />
+          <div className="flex items-center gap-2">
+            <div className="h-2 w-2 rounded-full ring-2 ring-orange-500/20 bg-orange-500" />
             <span>TB tư vấn/ngày: {avgConsultations}</span>
           </div>
-          <div className="flex items-center gap-1.5">
-            <div className="h-2 w-2 rounded-full" style={{ background: "#10b981" }} />
+          <div className="flex items-center gap-2">
+            <div className="h-2 w-2 rounded-full ring-2 ring-emerald-500/20 bg-emerald-500" />
             <span>Tỉ lệ: {totals.consultations > 0 ? Math.round((totals.converted / totals.consultations) * 100) : 0}%</span>
           </div>
           {teamAverage !== undefined && (
-            <div className="flex items-center gap-1.5">
-              <div className="h-2 w-2 rounded-full" style={{ background: "#8b5cf6" }} />
+            <div className="flex items-center gap-2">
+              <div className="h-2 w-2 rounded-full ring-2 ring-purple-500/20 bg-purple-500" />
               <span>TB team: {teamAverage}</span>
             </div>
           )}
