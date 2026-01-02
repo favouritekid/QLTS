@@ -373,8 +373,9 @@ async def get_enhanced_dashboard_stats(
     
     # === 8. ANNUAL PROGRESS (Phase 6: Rolling Targets) ===
     # Get annual target progress for enrollments KPI
+    # Use fiscal year from date filter (filter_end.year)
     annual_progress = await kpi_service.get_annual_target_progress(
-        db, officer_id, kpi_code="enrollments"
+        db, officer_id, kpi_code="enrollments", fiscal_year=filter_end.year
     )
     
     # Build enhanced response
