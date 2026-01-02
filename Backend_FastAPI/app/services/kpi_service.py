@@ -299,6 +299,7 @@ async def sync_officer_ytd(
         .where(
             models.Lead.assigned_officer_id == officer_id,
             models.PipelineStage.is_final_stage == True,
+            models.Lead.deleted_at.is_(None),  # Exclude soft-deleted leads
             models.Lead.updated_at >= datetime(fiscal_year, 1, 1, tzinfo=timezone.utc),
             models.Lead.updated_at < datetime(fiscal_year + 1, 1, 1, tzinfo=timezone.utc),
         )
