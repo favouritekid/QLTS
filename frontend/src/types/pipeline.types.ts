@@ -85,6 +85,9 @@ export interface ConsultationStatus {
   is_universal?: boolean; // True nếu status có thể dùng ở mọi pipeline stage (VD: Không nghe máy, Thuê bao)
   updates_pipeline?: boolean; // False nếu chỉ ghi nhận activity, không thay đổi pipeline progression
 
+  // ✅ KPI counting flag
+  counts_for_kpi?: boolean; // True nếu status được đếm vào KPI enrollments (VD: False cho 'Đã rút học phí')
+
   // Relationship
   stage?: PipelineStage;
 
@@ -105,6 +108,7 @@ export interface ConsultationStatusCreate {
   legacy_status?: string | null; // Maps to lead.status for backward compatibility
   is_universal?: boolean; // Default: false
   updates_pipeline?: boolean; // Default: true
+  counts_for_kpi?: boolean; // Default: true
 }
 
 /**
@@ -119,6 +123,7 @@ export interface ConsultationStatusUpdate {
   legacy_status?: string | null; // Maps to lead.status for backward compatibility
   is_universal?: boolean;
   updates_pipeline?: boolean;
+  counts_for_kpi?: boolean;
 }
 
 // ============================================
