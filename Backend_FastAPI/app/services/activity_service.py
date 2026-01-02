@@ -89,48 +89,24 @@ async def get_activity_logs(
     """
     Get activity logs with optional filters.
 
+    ✅ REFACTORED: Uses ActivityRepository for data access.
+
     Returns:
         Tuple of (total_count, list of activity logs with user details)
     """
-    # Build filters
-    filters = []
-    if actor_id is not None:
-        filters.append(models.UserActivityLog.actor_id == actor_id)
-    if target_user_id is not None:
-        filters.append(models.UserActivityLog.target_user_id == target_user_id)
-    if action is not None:
-        filters.append(models.UserActivityLog.action == action)
-    if resource_type is not None:
-        filters.append(models.UserActivityLog.resource_type == resource_type)
-    if start_date is not None:
-        filters.append(models.UserActivityLog.created_at >= start_date)
-    if end_date is not None:
-        filters.append(models.UserActivityLog.created_at <= end_date)
-
-    # Count total
-    count_query = select(func.count()).select_from(models.UserActivityLog)
-    if filters:
-        count_query = count_query.where(and_(*filters))
-    total_result = await db.execute(count_query)
-    total_count = total_result.scalar() or 0
-
-    # Get logs with user details
-    query = (
-        select(models.UserActivityLog)
-        .options(
-            selectinload(models.UserActivityLog.actor),
-            selectinload(models.UserActivityLog.target_user),
-        )
-        .order_by(desc(models.UserActivityLog.created_at))
-        .offset(skip)
-        .limit(limit)
+    from ..repositories import ActivityRepository
+    
+    repo = ActivityRepository(db)
+    total_count, logs = await repo.get_filtered(
+        skip=skip,
+        limit=limit,
+        actor_id=actor_id,
+        target_user_id=target_user_id,
+        action=action,
+        resource_type=resource_type,
+        start_date=start_date,
+        end_date=end_date,
     )
-
-    if filters:
-        query = query.where(and_(*filters))
-
-    result = await db.execute(query)
-    logs = result.scalars().all()
 
     # Convert to schema with details
     logs_with_details = []
@@ -161,46 +137,29 @@ async def get_user_statistics(db: AsyncSession) -> schemas.UserStatistics:
     """
     Get comprehensive user statistics for the dashboard.
 
+    ✅ REFACTORED: Uses ActivityRepository for data access.
+
     Returns:
         UserStatistics schema with counts and recent activities
     """
-    # Count users by status
-    status_query = (
-        select(
-            models.User.status,
-            func.count(models.User.id).label("count")
-        )
-        .group_by(models.User.status)
-    )
-    status_result = await db.execute(status_query)
-    status_counts = {row.status: row.count for row in status_result}
-
+    from ..repositories import ActivityRepository
+    
+    repo = ActivityRepository(db)
+    
+    # Count users by status via repository
+    status_counts = await repo.get_user_counts_by_status()
     active_users = status_counts.get("active", 0)
     pending_users = status_counts.get("pending", 0)
     banned_users = status_counts.get("banned", 0)
 
-    # Total users
-    total_query = select(func.count()).select_from(models.User)
-    total_result = await db.execute(total_query)
-    total_users = total_result.scalar() or 0
+    # Total users via repository
+    total_users = await repo.get_total_user_count()
 
-    # Count users by role
-    role_query = (
-        select(
-            models.User.role,
-            func.count(models.User.id).label("count")
-        )
-        .group_by(models.User.role)
-    )
-    role_result = await db.execute(role_query)
-    users_by_role = {row.role: row.count for row in role_result}
+    # Count users by role via repository
+    users_by_role = await repo.get_user_counts_by_role()
 
     # New users in last 7 days and 30 days
     # Note: This assumes User model has created_at field - if not, skip or use another method
-    seven_days_ago = datetime.utcnow() - timedelta(days=7)
-    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
-
-    # Check if User model has created_at (or use id as proxy if not)
     # For now, let's set these to 0 as the User model doesn't have created_at
     new_users_last_7_days = 0
     new_users_last_30_days = 0
@@ -222,3 +181,4 @@ async def get_user_statistics(db: AsyncSession) -> schemas.UserStatistics:
         users_by_role=users_by_role,
         recent_activities=recent_activities,
     )
+
