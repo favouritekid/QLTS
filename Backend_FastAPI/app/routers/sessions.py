@@ -17,7 +17,7 @@ from ..services import session_service
 
 log = structlog.get_logger(__name__)
 
-router = APIRouter(prefix="/sessions", tags=["sessions"])
+router = APIRouter(prefix="/sessions", tags=["Sessions"])
 
 
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour

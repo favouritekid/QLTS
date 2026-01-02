@@ -526,26 +526,25 @@ async def add_security_headers(request: Request, call_next):
 # ===============================================================
 # === ROUTERS ===================================================
 # ===============================================================
+# NOTE: Tags are defined in each router file, not here (to avoid duplicates in Swagger)
 
-fastapi_app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
-fastapi_app.include_router(profile.router, prefix="/api/profile", tags=["Profile"])
-fastapi_app.include_router(users.router, prefix="/api/users", tags=["Users"])
-fastapi_app.include_router(sessions.router, prefix="/api", tags=["Sessions"])
-fastapi_app.include_router(notifications.router, prefix="/api/notifications", tags=["Notifications"])
-fastapi_app.include_router(notification_preferences.router, prefix="/api/notifications", tags=["Notification Preferences"])
-fastapi_app.include_router(notification_rules.router, prefix="/api", tags=["Notification Rules (Admin)"])  # ✅ PHASE 2.2: Admin-only notification rule management
-fastapi_app.include_router(notification_templates.router, prefix="/api", tags=["Notification Templates (Admin)"])  # ✅ PHASE 3.1: Admin-only template management
-fastapi_app.include_router(leads.router, prefix="/api/leads", tags=["Leads"])
-fastapi_app.include_router(applications.router, prefix="/api", tags=["Applications"])
-fastapi_app.include_router(admissions.router, prefix="/api", tags=["Admissions"])  # ✅ NEW: Admission Profile workflow
-fastapi_app.include_router(pipeline.router, prefix="/api/pipeline", tags=["Pipeline"])
-fastapi_app.include_router(
-    organization.router, prefix="/api", tags=["Organization"]
-)
-fastapi_app.include_router(officer.router, prefix="/api", tags=["Officer Dashboard"])
+fastapi_app.include_router(auth.router, prefix="/api/auth")
+fastapi_app.include_router(profile.router, prefix="/api/profile")
+fastapi_app.include_router(users.router, prefix="/api/users")
+fastapi_app.include_router(sessions.router, prefix="/api")
+fastapi_app.include_router(notifications.router, prefix="/api/notifications")
+fastapi_app.include_router(notification_preferences.router, prefix="/api/notifications")
+fastapi_app.include_router(notification_rules.router, prefix="/api")  # ✅ PHASE 2.2: Admin-only notification rule management
+fastapi_app.include_router(notification_templates.router, prefix="/api")  # ✅ PHASE 3.1: Admin-only template management
+fastapi_app.include_router(leads.router, prefix="/api/leads")
+fastapi_app.include_router(applications.router, prefix="/api")
+fastapi_app.include_router(admissions.router, prefix="/api")  # ✅ NEW: Admission Profile workflow
+fastapi_app.include_router(pipeline.router, prefix="/api/pipeline")
+fastapi_app.include_router(organization.router, prefix="/api")
+fastapi_app.include_router(officer.router, prefix="/api")
 fastapi_app.include_router(kpi_config.router)  # ✅ PHASE 5: KPI Configuration Admin
-fastapi_app.include_router(security.router, prefix="/api", tags=["Security"])  # ✅ LOGIN SECURITY: Phase 5
-fastapi_app.include_router(monitoring.router, prefix="/api", tags=["System Monitoring"])
+fastapi_app.include_router(security.router, prefix="/api")  # ✅ LOGIN SECURITY: Phase 5
+fastapi_app.include_router(monitoring.router, prefix="/api")
 
 # ===============================================================
 # === ADMIN ROUTERS (PHASE 2 COMPLETE) =========================
