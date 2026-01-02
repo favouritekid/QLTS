@@ -288,17 +288,20 @@ async def sync_officer_ytd(
     synced = {}
     
     # Sync enrollments YTD
-    # Count all leads that reached FINAL pipeline stage (is_final_stage = True)
+    # Count leads that reached FINAL pipeline stage with counts_for_kpi=True
     # This includes:
-    # - "Đã nhập học" (stg06) - positive outcome
-    # - "Không đi học" (stg07) - negative outcome (but still counts as enrollment)
-    # This matches the funnel chart's total conversion count
+    # - "Đã nhập học" (stg06) - counts_for_kpi=True
+    # - "Bỏ học" (stg07) - counts_for_kpi=True (was enrolled)
+    # Excludes:
+    # - "Đã rút lại học phí" (stg07) - counts_for_kpi=False (never enrolled)
     enrollments_query = (
         select(models.Lead)
         .join(models.PipelineStage, models.Lead.pipeline_stage_id == models.PipelineStage.id)
+        .join(models.ConsultationStatus, models.Lead.consultation_status_id == models.ConsultationStatus.id)
         .where(
             models.Lead.assigned_officer_id == officer_id,
             models.PipelineStage.is_final_stage == True,
+            models.ConsultationStatus.counts_for_kpi == True,  # Exclude refunded enrollments
             models.Lead.deleted_at.is_(None),  # Exclude soft-deleted leads
             models.Lead.updated_at >= datetime(fiscal_year, 1, 1, tzinfo=timezone.utc),
             models.Lead.updated_at < datetime(fiscal_year + 1, 1, 1, tzinfo=timezone.utc),
