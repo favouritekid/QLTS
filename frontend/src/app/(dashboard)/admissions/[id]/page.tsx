@@ -2,103 +2,64 @@
  * Admission Profile Detail Page
  *
  * Architecture:
- * - Server Component (async) for initial data fetch
- * - Hydrates Client Components with initialData
- * - Next.js 16 App Router with SSR
- *
- * Features:
- * - SEO-friendly (server-rendered content)
- * - No loading spinner on initial render
- * - TanStack Query hydration for client-side updates
+ * - Client Component for data fetch with authentication
+ * - Uses TanStack Query for client-side data fetching
+ * - Avoids SSR auth issues by fetching on client
  */
+"use client"
 
-import { Suspense } from "react"
-import { notFound } from "next/navigation"
-import { api } from "@/lib/api/client"
-import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
+import { useParams, notFound } from "next/navigation"
+import { useGetAdmission } from "@/hooks/admissions"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Card, CardContent, CardHeader } from "@/components/ui/card"
 
 import { AdmissionDetailClient } from "./AdmissionDetailClient"
 
 /**
- * Server-side data fetching
- * Runs on server, not included in client bundle
- */
-async function getAdmissionProfile(
-  id: string
-): Promise<AdmissionProfileResponse | null> {
-  try {
-    const response = await api.get<AdmissionProfileResponse>(
-      `/api/admissions/${id}`
-    )
-    return response.data
-  } catch (error: unknown) {
-    if (error && typeof error === 'object' && 'response' in error) {
-      const axiosError = error as { response?: { status?: number } };
-      if (axiosError.response?.status === 404) {
-        return null;
-      }
-    }
-    throw error
-  }
-}
-
-/**
- * Page Component (Server Component)
+ * Page Component (Client Component)
  *
- * Next.js 16: params is now a Promise that must be awaited
+ * Uses client-side data fetching to properly include auth cookies
  */
-export default async function AdmissionProfilePage({
-  params,
-}: {
-  params: Promise<{ id: string }>
-}) {
-  const { id } = await params;
+export default function AdmissionProfilePage() {
+  const params = useParams()
+  const id = params?.id as string
   const profileId = parseInt(id, 10)
+
+  // Use hook for client-side fetch with auth cookies
+  const { data: profile, isLoading, isError } = useGetAdmission(profileId, {
+    enabled: !isNaN(profileId) && profileId > 0,
+  })
 
   if (isNaN(profileId)) {
     notFound()
   }
 
-  // Server-side fetch (no loading spinner)
-  const initialData = await getAdmissionProfile(id)
+  if (isLoading) {
+    return (
+      <div className="container mx-auto py-6 space-y-6">
+        <Card>
+          <CardHeader>
+            <Skeleton className="h-6 w-48" />
+            <Skeleton className="h-4 w-32" />
+          </CardHeader>
+          <CardContent>
+            <Skeleton className="h-32 w-full" />
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
 
-  if (!initialData) {
+  if (isError || !profile) {
     notFound()
   }
 
   return (
     <div className="container mx-auto py-6 space-y-6">
-      <Suspense fallback={<div>Loading...</div>}>
-        <AdmissionDetailClient
-          profileId={profileId}
-          initialData={initialData}
-        />
-      </Suspense>
+      <AdmissionDetailClient
+        profileId={profileId}
+        initialData={profile}
+      />
     </div>
   )
-}
-
-/**
- * Metadata for SEO
- *
- * Next.js 16: params is now a Promise that must be awaited
- */
-export async function generateMetadata({
-  params
-}: {
-  params: Promise<{ id: string }>
-}) {
-  const { id } = await params;
-  const profile = await getAdmissionProfile(id)
-
-  if (!profile) {
-    return {
-      title: "Hồ sơ không tìm thấy",
-    }
-  }
-
-  return {
-    title: `Hồ sơ tuyển sinh #${profile.id}`,
-    description: `Quản lý hồ sơ tuyển sinh - Trạng thái: ${profile.status}`,
-  }
 }
