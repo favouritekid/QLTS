@@ -18,6 +18,7 @@ export {
   // Query Keys
   admissionsKeys,
   // Queries
+  useListAdmissions,
   useGetAdmission,
   useAdmissionProfile,
   // Mutations
