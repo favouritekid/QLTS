@@ -178,6 +178,27 @@ export function useEnrollStudent(id: number) {
   })
 }
 
+export function useUploadAdmissionDocument(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (variables: { docCode: string, file: File }) => 
+        admissionsApi.uploadAdmissionDocument(id, variables.docCode, variables.file),
+    onSuccess: () => {
+      toast.success("Tải liệu đã được tải lên")
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+        const detail = error.response?.data?.detail
+        const message =
+          typeof detail === "string"
+            ? detail
+            : "Lỗi tải lên tài liệu"
+        toast.error(message)
+    }
+  })
+}
+
 export function useDeleteAdmission(id: number) {
   const queryClient = useQueryClient()
   const router = useRouter()

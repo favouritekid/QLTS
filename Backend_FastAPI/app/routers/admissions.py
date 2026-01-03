@@ -18,7 +18,7 @@ Endpoints:
 - POST /api/admissions/{id}/enroll - Enroll student (ACID transaction)
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
@@ -388,6 +388,44 @@ async def submit_admission_profile(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
+
+
+@limiter.limit(RateLimits.DATA_WRITE)
+@router.post(
+    "/{profile_id}/documents/{doc_code}/upload",
+    summary="Upload admission document",
+    status_code=status.HTTP_200_OK,
+)
+async def upload_document(
+    request: Request,
+    profile_id: int,
+    doc_code: str,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = PermissionDep,
+):
+    """
+    Upload a document for an admission profile.
+    
+    File will be saved and the checklist item status updated to 'uploaded'.
+    """
+    try:
+        updated_doc = await admission_service.upload_document(
+            db=db,
+            profile_id=profile_id,
+            doc_code=doc_code,
+            file=file,
+            current_user=current_user,
+        )
+        await db.commit()
+        return updated_doc
+
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except PermissionDeniedError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour

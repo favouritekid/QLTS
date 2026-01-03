@@ -87,6 +87,25 @@ export async function deleteAdmission(id: number): Promise<void> {
   await api.delete(`/api/admissions/${id}`)
 }
 
+/**
+ * Upload admission document
+ */
+export async function uploadAdmissionDocument(
+  id: number,
+  docCode: string,
+  file: File
+): Promise<any> {
+    const formData = new FormData()
+    formData.append("file", file)
+    
+    // Note: No explicit Content-Type header needed, axios/browser sets it with boundary
+    const response = await api.post(
+        `/api/admissions/${id}/documents/${docCode}/upload`, 
+        formData
+    )
+    return response.data
+}
+
 // ============================================
 // EXPORT DEFAULT OBJECT (Lead Pattern)
 // ============================================
@@ -99,6 +118,7 @@ export const admissionsApi = {
   submitAdmission,
   enrollStudent,
   deleteAdmission,
+  uploadAdmissionDocument,
 }
 
 export default admissionsApi

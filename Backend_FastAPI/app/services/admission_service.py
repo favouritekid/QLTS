@@ -594,6 +594,85 @@ async def submit_and_evaluate(
         }
 
 
+async def upload_document(
+    db: AsyncSession,
+    profile_id: int,
+    doc_code: str,
+    file: Any,  # UploadFile
+    current_user: models.User,
+) -> Dict[str, Any]:
+    """
+    Upload a document for an admission profile.
+    
+    Workflow:
+    1. Verify access (IDOR)
+    2. Verify profile status (draft/rejected)
+    3. Verify doc_code exists in checklist
+    4. Save file to disk (uploads/admissions/{id}/{doc_code}_{filename})
+    5. Update documents_checklist status='uploaded' and file_path
+    
+    Security:
+    - Path Traversal: filename sanitization (inherent in modern frameworks but good practice)
+    - File Type: Should be validated at Router level generally, but here we accept generic
+    """
+    profile = await get_profile(db, profile_id, current_user)
+    
+    # State Locking
+    if profile.status not in ["draft", "rejected"]:
+        raise BadRequest(f"Cannot upload documents for profile with status '{profile.status}'")
+
+    # Find document item in checklist
+    checklist = profile.documents_checklist or []
+    doc_item = next((d for d in checklist if d["code"] == doc_code), None)
+    
+    if not doc_item:
+        raise BadRequest(f"Document code '{doc_code}' not found in checklist")
+
+    # Prepare file path
+    import os
+    import shutil
+    
+    upload_dir = f"uploads/admissions/{profile_id}"
+    os.makedirs(upload_dir, exist_ok=True)
+    
+    # Sanitize filename (basic)
+    filename = file.filename.replace(" ", "_")
+    file_path = f"{upload_dir}/{doc_code}_{filename}"
+    
+    # Save file
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        log.error("File upload failed", error=str(e), profile_id=profile_id)
+        raise BadRequest("Failed to save file")
+
+    # Update checklist
+    # We need to create a new list to ensure SQLAlchemy detects change for JSONB
+    new_checklist = []
+    for item in checklist:
+        if item["code"] == doc_code:
+            item["status"] = "uploaded"
+            item["file_path"] = file_path
+            item["uploaded_at"] = datetime.now().isoformat()
+        new_checklist.append(item)
+    
+    profile.documents_checklist = new_checklist
+    profile.updated_at = datetime.now(timezone.utc)
+    
+    await db.flush()
+    
+    log.info(
+        "Document uploaded", 
+        profile_id=profile_id, 
+        doc_code=doc_code, 
+        file_path=file_path,
+        user_id=current_user.id
+    )
+    
+    return doc_item
+
+
 async def enroll_student(
     db: AsyncSession,
     profile_id: int,

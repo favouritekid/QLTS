@@ -9,8 +9,10 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { FileText, Check, AlertCircle, Clock, XCircle, Upload } from "lucide-react"
+import { FileText, Check, AlertCircle, Clock, XCircle, Upload, Loader2 } from "lucide-react"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
+import { useUploadAdmissionDocument } from "@/hooks/admissions/useAdmissions"
+import { useRef, useState } from "react"
 
 interface DocumentsTabProps {
   profile: AdmissionProfileResponse
@@ -42,6 +44,24 @@ const STATUS_CONFIG = {
 
 export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
   const documents = profile.documents_checklist || []
+  const uploadMutation = useUploadAdmissionDocument(profile.id)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [selectedDocCode, setSelectedDocCode] = useState<string | null>(null)
+
+  const handleUploadClick = (code: string) => {
+    setSelectedDocCode(code)
+    if (fileInputRef.current) {
+        fileInputRef.current.value = "" // Reset input
+        fileInputRef.current.click()
+    }
+  }
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file && selectedDocCode) {
+        uploadMutation.mutate({ docCode: selectedDocCode, file })
+    }
+  }
   
   const uploadedCount = documents.filter(
     (d) => d.status === "uploaded" || d.status === "verified"
@@ -119,8 +139,17 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
                     </Badge>
                     
                     {isEditable && doc.status === "missing" && (
-                      <Button size="sm" variant="outline">
-                        <Upload className="h-4 w-4 mr-1" />
+                      <Button 
+                        size="sm" 
+                        variant="outline" 
+                        onClick={() => handleUploadClick(doc.code)}
+                        disabled={uploadMutation.isPending}
+                      >
+                        {uploadMutation.isPending && selectedDocCode === doc.code ? (
+                            <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                        ) : (
+                            <Upload className="h-4 w-4 mr-1" />
+                        )}
                         Tải lên
                       </Button>
                     )}
@@ -131,6 +160,14 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
           </div>
         )}
       </CardContent>
+            {/* Hidden File Input */}
+            <input 
+                type="file" 
+                ref={fileInputRef} 
+                className="hidden" 
+                onChange={handleFileChange}
+                accept=".pdf,.jpg,.jpeg,.png"
+            />
     </Card>
   )
 }
