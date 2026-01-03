@@ -31,6 +31,27 @@ import type {
 // ==============================================================================
 
 /**
+ * List AdmissionProfiles with optional filters
+ *
+ * @param params - { page?, page_size?, status? }
+ * @returns List of AdmissionProfiles
+ *
+ * @example
+ * ```ts
+ * const profiles = await listAdmissions({ status: 'draft' })
+ * ```
+ */
+export async function listAdmissions(
+  params?: { page?: number; page_size?: number; status?: string }
+): Promise<AdmissionProfileResponse[]> {
+  const response = await api.get<AdmissionProfileResponse[]>(
+    "/api/admissions",
+    { params }
+  )
+  return response.data
+}
+
+/**
  * Create new AdmissionProfile for a Lead
  *
  * @param data - { lead_id: number }

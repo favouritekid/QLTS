@@ -49,6 +49,27 @@ export const admissionsKeys = {
 // ==============================================================================
 
 /**
+ * List admission profiles with optional filters
+ *
+ * @param filters - { status?, page?, page_size? }
+ *
+ * @example
+ * ```tsx
+ * const { data: profiles } = useListAdmissions({ status: 'draft' })
+ * ```
+ */
+export function useListAdmissions(
+  filters?: { status?: string; page?: number; page_size?: number }
+) {
+  return useQuery<AdmissionProfileResponse[], AxiosError<ApiErrorResponse>>({
+    queryKey: admissionsKeys.list(filters),
+    queryFn: async () => await admissionsApi.listAdmissions(filters),
+    staleTime: 30_000,
+    gcTime: 300_000,
+  })
+}
+
+/**
  * Get admission profile by ID
  *
  * @param id - AdmissionProfile ID

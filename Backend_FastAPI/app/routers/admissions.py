@@ -46,6 +46,62 @@ PermissionDep = Depends(deps.check_permission)
 # ENDPOINTS
 # ==============================================================================
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
+@router.get(
+    "",
+    response_model=list[schemas.AdmissionProfileResponse],
+    summary="List admission profiles",
+)
+async def list_admission_profiles(
+    request: Request,
+    status: str | None = None,
+    skip: int = 0,
+    limit: int = 50,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = PermissionDep,
+):
+    """
+    List AdmissionProfiles accessible to current user.
+
+    **Security:**
+    - Admin: Can see all profiles
+    - Officer: Only profiles where lead.unit_id == user.unit_id
+
+    **Query Parameters:**
+    - status: Filter by status (draft, approved, rejected, enrolled)
+    - skip: Pagination offset (default: 0)
+    - limit: Page size (default: 50, max: 100)
+
+    **Returns:**
+    - List of AdmissionProfiles with relationships
+    """
+    from app.repositories import AdmissionRepository
+    from app.core.constants import UserRole
+    
+    admission_repo = AdmissionRepository(db)
+    
+    # Build filters
+    filters = {}
+    if status:
+        filters["status"] = status
+    
+    # Get profiles using repository
+    profiles = await admission_repo.get_filtered(
+        skip=skip,
+        limit=min(limit, 100),
+        **filters
+    )
+    
+    # IDOR Filter: Non-admins can only see profiles from their unit
+    if current_user.role != UserRole.ADMIN:
+        profiles = [
+            p for p in profiles
+            if p.lead and p.lead.unit_id == current_user.unit_id
+        ]
+    
+    return profiles
+
+
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post(
     "",
