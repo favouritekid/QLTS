@@ -143,14 +143,17 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
       <div className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-20">
         <div className="px-6 py-2 flex items-center justify-end">
           <div className="flex items-center gap-2">
-            <Button
-              variant="default"
-              size="sm"
-              onClick={() => router.push(`/admissions/create?lead_id=${leadId}`)}
-            >
-              <ClipboardCheck className="mr-1.5 h-4 w-4" />
-              Tạo hồ sơ tuyển sinh
-            </Button>
+            {/* Only show admission button if lead has a program offering */}
+            {lead.offering_id && (
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => router.push(`/admissions/create?lead_id=${leadId}`)}
+              >
+                <ClipboardCheck className="mr-1.5 h-4 w-4" />
+                Tạo hồ sơ tuyển sinh
+              </Button>
+            )}
             <Button variant="outline" size="sm" onClick={() => setEditDialogOpen(true)}>
               <Edit className="mr-1.5 h-4 w-4" />
               Chỉnh sửa
