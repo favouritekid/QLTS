@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { AppSidebar } from "./dashboard/AppSidebar";
 import { Header } from "./dashboard/Header";
 import { Main } from "./dashboard/Main";
+import { MobileBottomNav } from "./dashboard/MobileBottomNav";
 import { CommandPalette } from "@/components/common/CommandPalette";
 import { SecurityBanner, useShouldShowSecurityBanner, SECURITY_BANNER_HEIGHT } from "./SecurityBanner";
 import { useEffect } from "react";
@@ -72,14 +73,19 @@ export function DashboardLayout({
           <Header />
 
           {/* Main Content - Dynamic padding top based on header + banner */}
+          {/* Added pb-20 on mobile for MobileBottomNav (64px height + safe area) */}
           <div 
-            className="flex-1 transition-all duration-300 ease-in-out"
+            className="flex-1 transition-all duration-300 ease-in-out pb-20 lg:pb-0"
             style={{ marginTop: `${totalTopOffset}px` }}
           >
             <Main>{children}</Main>
           </div>
         </div>
       </div>
+
+      {/* Mobile Bottom Navigation - Only visible on mobile (< lg) */}
+      <MobileBottomNav />
     </>
   );
 }
+
