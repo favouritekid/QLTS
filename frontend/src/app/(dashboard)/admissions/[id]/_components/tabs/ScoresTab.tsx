@@ -9,22 +9,25 @@ import { Calculator, CheckCircle2, XCircle } from "lucide-react"
 interface ScoresTabProps {
   form: UseFormReturn<FieldValues>
   isEditable: boolean
+  minGpa: number
 }
 
-export function ScoresTab({ form, isEditable }: ScoresTabProps) {
+export function ScoresTab({ form, isEditable, minGpa }: ScoresTabProps) {
   // Real-time Calculation Logic
   const gpa = form.watch("admission_scores.gpa") || 0
   const math = form.watch("admission_scores.math_score") || 0
   const literature = form.watch("admission_scores.literature_score") || 0
   const english = form.watch("admission_scores.english_score") || 0
 
-  // Hardcoded rules for demo (should come from backend config)
+  // Ensure gpa is valid number for comparison
+  const currentGpa = gpa ? parseFloat(gpa) : 0
+
   const rules = [
-    { label: "GPA ≥ 5.0", passed: gpa >= 5.0 },
-    { label: "Toán hoặc Văn ≥ 5.0", passed: math >= 5.0 || literature >= 5.0 }
+    { label: `GPA ≥ ${minGpa.toFixed(1)}`, passed: currentGpa >= minGpa, value: currentGpa > 0 ? currentGpa.toFixed(1) : "--" },
+    { label: "Điểm thành phần có nhập", passed: (math > 0 || literature > 0 || english > 0), value: "Đã kiểm tra" }
   ]
 
-  const isQualified = rules.every(r => r.passed)
+  const isQualified = currentGpa >= minGpa && currentGpa > 0
 
   return (
     <div className="space-y-6">
@@ -122,30 +125,41 @@ export function ScoresTab({ form, isEditable }: ScoresTabProps) {
             </CardContent>
           </Card>
 
-          {/* RIGHT: RULES */}
-          <Card className={`border-l-4 ${isQualified ? "border-l-green-500" : "border-l-red-500"}`}>
-             <CardHeader>
-                <CardTitle>Quy tắc xét tuyển</CardTitle>
-                <CardDescription>Kết quả tự động</CardDescription>
-             </CardHeader>
-             <CardContent className="space-y-4">
-                {rules.map((rule, idx) => (
-                    <div key={idx} className="flex items-center gap-2">
-                        {rule.passed ? (
-                            <CheckCircle2 className="w-5 h-5 text-green-600" />
-                        ) : (
-                            <XCircle className="w-5 h-5 text-red-600" />
-                        )}
-                        <span className={rule.passed ? "text-foreground" : "text-muted-foreground"}>
-                            {rule.label}
-                        </span>
-                    </div>
-                ))}
-                
-                <div className={`mt-6 p-4 rounded-lg font-bold text-center border ${isQualified ? "bg-green-50 text-green-700 border-green-200" : "bg-red-50 text-red-700 border-red-200"}`}>
-                    {isQualified ? "ĐỦ ĐIỀU KIỆN" : "CHƯA ĐẠT"}
-                </div>
-             </CardContent>
+          {/* RIGHT: RESULT PANEL (Col span 1) */}
+          <Card className={isQualified ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"}>
+              <CardHeader>
+                  <CardTitle className="text-base flex items-center gap-2">
+                      {isQualified ? <CheckCircle2 className="text-green-600" /> : <XCircle className="text-red-600" />}
+                      KẾT QUẢ XÉT TUYỂN
+                  </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                      {rules.map((rule, idx) => (
+                          <div key={idx} className="flex justify-between items-center text-sm">
+                              <span>{rule.label}</span>
+                              <div className="flex items-center gap-2">
+                                  <span className="font-medium text-muted-foreground">{rule.value}</span>
+                                  {rule.passed ? <CheckCircle2 className="w-4 h-4 text-green-600" /> : <XCircle className="w-4 h-4 text-red-600" />}
+                              </div>
+                          </div>
+                      ))}
+                  </div>
+
+                  <div className="pt-4 border-t border-dashed">
+                      <div className="flex justify-between items-center font-semibold">
+                          <span>Trạng thái:</span>
+                          <span className={isQualified ? "text-green-700" : "text-red-700"}>
+                              {isQualified ? "ĐẠT" : "CHƯA ĐẠT"}
+                          </span>
+                      </div>
+                      {!isQualified && (
+                          <p className="text-xs text-red-600 mt-2">
+                              → Thiếu: {currentGpa < minGpa ? "GPA thấp hơn quy định" : "Chưa nhập đủ điểm"}
+                          </p>
+                      )}
+                  </div>
+              </CardContent>
           </Card>
        </div>
     </div>

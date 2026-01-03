@@ -6,11 +6,14 @@ import { AlertCircle, CheckCircle2, XCircle } from "lucide-react"
 
 interface AdmissionHeaderProps {
   profile: AdmissionProfileResponse | null
+  validation: {
+    isEligible: boolean
+    missingItems: { code: string; label: string; status: "error" | "warning" }[]
+  }
 }
 
-export function AdmissionHeader({ profile }: AdmissionHeaderProps) {
-  // Mock logic - will be replaced by real validation hook
-  const isEligible = false 
+export function AdmissionHeader({ profile, validation }: AdmissionHeaderProps) {
+  const { isEligible, missingItems } = validation
 
   return (
     <div className="h-16 px-6 flex items-center justify-between">
@@ -44,10 +47,19 @@ export function AdmissionHeader({ profile }: AdmissionHeaderProps) {
       {/* Quick Status Bar */}
       <div className="flex items-center gap-2">
          {/* Badges for critical missing items */}
-         <StatusBadge label="CCCD" status="error" />
-         <StatusBadge label="GPA" status="error" />
-         <StatusBadge label="Phụ huynh" status="error" />
-         <StatusBadge label="Tài liệu" status="error" value="0/3" />
+         {missingItems.map((item, idx) => (
+             <StatusBadge 
+                key={`${item.code}-${idx}`} 
+                label={item.label} 
+                status={item.status} 
+             />
+         ))}
+         {missingItems.length === 0 && (
+             <span className="text-sm text-green-600 flex items-center">
+                 <CheckCircle2 className="w-4 h-4 mr-1" />
+                 Hồ sơ đầy đủ
+             </span>
+         )}
       </div>
     </div>
   )

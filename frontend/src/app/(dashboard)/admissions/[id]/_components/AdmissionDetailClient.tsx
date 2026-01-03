@@ -19,6 +19,7 @@ import {
 
 // Layout & Components
 import { AdmissionLayout } from "./layout/AdmissionLayout"
+import { useAdmissionValidation } from "../_hooks/useAdmissionValidation"
 import { AdmissionActions } from "./AdmissionActions"
 
 // Tabs
@@ -138,55 +139,14 @@ export function AdmissionDetailClient({
   }, [profile, form])
 
   // 4. Real-time Validation Logic (Pipeline Status)
-  const [stepsStatus, setStepsStatus] = useState<Record<number, "success" | "warning" | "error" | "locked">>({})
+  const { stepsStatus, isEligible, missingItems, metrics } = useAdmissionValidation(form, profile)
   
-  // Optimized watch
-  const values = useWatch({ control: form.control })
-  const valuesStr = JSON.stringify(values)
+  // Watch for validation changes to update local step status if needed, 
+  // but strictly speaking dependent components use derived state.
+  // We keep stepsStatus for Layout.
 
-  useEffect(() => {
-     const w = form.getValues() 
-     const status: Record<number, "success" | "warning" | "error" | "locked"> = {}
-
-     // Step 1: Personal Info
-     const hasPersonal = !!(w.full_name && w.dob && w.gender && w.citizen_id)
-     status[1] = hasPersonal ? "success" : "warning" 
-     if (!w.citizen_id) status[1] = "error"
-
-     // Step 2: Family
-     const hasPrimaryGuardian = w.family_info?.some((f: any) => f.is_primary_guardian)
-     status[2] = hasPrimaryGuardian ? "success" : "error"
-
-     // Step 3: Academic
-     const hasAcademic = (w.academic_history?.length || 0) > 0
-     status[3] = hasAcademic ? "success" : "warning"
-
-     // Step 4: Scores
-     const gpa = w.admission_scores?.gpa || 0
-     const isQualified = gpa >= (profile?.applied_rules?.min_gpa ?? 5.0)
-     status[4] = isQualified ? "success" : "error"
-
-     // Step 5: Documents - Validate mandatory docs are uploaded
-     const mandatoryDocs: string[] = profile?.applied_rules?.mandatory_docs || []
-     const uploadedDocCodes = (w.documents_checklist || [])
-       .filter((d: any) => d.status === "uploaded" && d.file_path)
-       .map((d: any) => d.code)
-     const allMandatoryUploaded = mandatoryDocs.every((code: string) => uploadedDocCodes.includes(code))
-     status[5] = allMandatoryUploaded ? "success" : (mandatoryDocs.length > 0 ? "error" : "warning")
-
-     // Step 6 & 7
-     const isEligible = status[1] !== "error" && status[2] === "success" && status[4] === "success"
-     status[6] = isEligible ? "warning" : "locked"
-     status[7] = isEligible ? "warning" : "locked"
-
-     setStepsStatus(prev => {
-         if (JSON.stringify(prev) === JSON.stringify(status)) return prev
-         return status
-     })
-  }, [valuesStr, form])
-
-  // Determine global eligibility
-  const isEligible = stepsStatus[7] !== "locked"
+  // Determine global eligibility (already returned by hook)
+  // const isEligible = stepsStatus[7] !== "locked" -> handled by hook
 
   // 5. Handlers
   const handleSave = () => {
@@ -226,6 +186,7 @@ export function AdmissionDetailClient({
             currentStep={currentStep}
             onStepChange={setCurrentStep}
             stepsStatus={stepsStatus}
+            validation={{ isEligible, missingItems }}
         >
             {/* ALERT MESSAGES */}
             {submitResult && submitResult.status === "rejected" && (
@@ -247,7 +208,7 @@ export function AdmissionDetailClient({
                 {currentStep === 1 && <PersonalInfoTab profile={profile} form={form as any} isEditable={isEditable} />}
                 {currentStep === 2 && <FamilyTab form={form as any} isEditable={isEditable} />}
                 {currentStep === 3 && <AcademicHistoryTab form={form as any} isEditable={isEditable} />}
-                {currentStep === 4 && <ScoresTab form={form as any} isEditable={isEditable} />}
+                {currentStep === 4 && <ScoresTab form={form as any} isEditable={isEditable} minGpa={metrics.minGpa} />}
                 {currentStep === 5 && <DocumentsTab profile={profile} isEditable={isEditable} />}
                 {currentStep === 6 && <TuitionTab profile={profile} />}
                 {currentStep === 7 && <FinalizeTab isEligible={isEligible} onSubmit={handleSubmit} isSubmitting={submitMutation.isPending} />}
