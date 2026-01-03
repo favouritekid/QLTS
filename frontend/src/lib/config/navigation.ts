@@ -11,6 +11,7 @@ import {
   Activity,
   Bell,
   Building2,
+  ClipboardCheck,
   Cog,
   Database,
   FileText,
@@ -109,6 +110,12 @@ export const navigationConfig: NavigationConfig = {
           label: "Pipeline Board",
           href: "/leads/pipeline",
           icon: Trello,
+          roles: [], // Accessible to all roles
+        },
+        {
+          label: "Hồ sơ tuyển sinh",
+          href: "/admissions",
+          icon: ClipboardCheck,
           roles: [], // Accessible to all roles
         },
       ],
