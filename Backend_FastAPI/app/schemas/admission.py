@@ -307,14 +307,38 @@ class AdmissionProfileResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    # Nested relationships (optional)
-    lead: Optional[dict] = None  # LeadShallow from lead.py
-    student: Optional[dict] = None  # StudentShallow
+    # Nested relationships (using forward refs for circular import avoidance)
+    lead: Optional["LeadShallowForAdmission"] = None
+    student: Optional["StudentShallowForAdmission"] = None
 
     model_config = ConfigDict(
         from_attributes=True,
         validate_assignment=True
     )
+
+
+class LeadShallowForAdmission(BaseModel):
+    """Minimal Lead info for AdmissionProfileResponse."""
+    id: int
+    full_name: str
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    unit_id: Optional[int] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class StudentShallowForAdmission(BaseModel):
+    """Minimal Student info for AdmissionProfileResponse."""
+    id: int
+    student_code: str
+    enrollment_date: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# Update forward refs
+AdmissionProfileResponse.model_rebuild()
 
 
 class AdmissionSubmitResponse(BaseModel):
