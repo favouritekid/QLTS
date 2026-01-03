@@ -13,6 +13,7 @@
 
 import { Suspense } from 'react';
 import { serverApi } from '@/lib/api/server';
+import { getCachedUserStatistics } from '@/lib/api/cached-data';
 import { DashboardClient } from './_components/DashboardClient';
 
 /**
@@ -31,14 +32,16 @@ function DashboardLoading() {
 
 /**
  * Server Component - Fetches initial user and statistics data
+ * 
+ * ✅ Statistics now use `use cache` for faster subsequent loads
  */
 async function DashboardPageContent() {
-  // ✅ Fetch current user on server
+  // ✅ Fetch current user on server (user-specific, not cached)
   const initialUser = await serverApi.users.getCurrentUser();
 
-  // ✅ Conditionally fetch statistics for admin/manager
+  // ✅ Conditionally fetch statistics for admin/manager (CACHED)
   const isAdmin = initialUser?.role === "admin" || initialUser?.role === "manager";
-  const initialStats = isAdmin ? await serverApi.admin.users.getStatistics() : undefined;
+  const initialStats = isAdmin ? await getCachedUserStatistics() : undefined;
 
   return (
     <DashboardClient
@@ -47,6 +50,7 @@ async function DashboardPageContent() {
     />
   );
 }
+
 
 /**
  * Page Component (Server Component)
