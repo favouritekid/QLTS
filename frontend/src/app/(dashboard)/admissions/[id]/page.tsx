@@ -8,6 +8,9 @@
  */
 "use client"
 
+// Skip static prerendering - this route requires auth cookies
+export const dynamic = 'force-dynamic'
+
 import { useParams, notFound } from "next/navigation"
 import { useGetAdmission } from "@/hooks/admissions"
 import { Skeleton } from "@/components/ui/skeleton"
