@@ -20,6 +20,11 @@ from .config import (
     SkillRule,
     SkillRuleBase,
     SkillRuleCreate,
+    # System Category
+    SystemCategory,
+    SystemCategoryBase,
+    SystemCategoryCreate,
+    SystemCategoryUpdate,
 )
 
 # --- 2. Từ organization.py (Depends on: config) ---

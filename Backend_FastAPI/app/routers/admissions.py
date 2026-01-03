@@ -85,19 +85,16 @@ async def list_admission_profiles(
     if status:
         filters["status"] = status
     
-    # Get profiles using repository
+    # IDOR: Pass unit_id to repository for non-admin users (DB-level filter)
+    unit_filter = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+    
+    # Get profiles using repository (IDOR filtering done at DB level)
     profiles = await admission_repo.get_filtered(
         skip=skip,
         limit=min(limit, 100),
+        unit_id=unit_filter,
         **filters
     )
-    
-    # IDOR Filter: Non-admins can only see profiles from their unit
-    if current_user.role != UserRole.ADMIN:
-        profiles = [
-            p for p in profiles
-            if p.lead and p.lead.unit_id == current_user.unit_id
-        ]
     
     return profiles
 
@@ -484,5 +481,64 @@ async def enroll_student(
     except ConflictError as e:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
+            detail=str(e),
+        )
+
+
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.delete(
+    "/{profile_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete admission profile (draft only)",
+)
+async def delete_admission_profile(
+    request: Request,
+    profile_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = PermissionDep,
+):
+    """
+    Delete AdmissionProfile (only when status='draft').
+
+    **Security:**
+    - IDOR: Only accessible to users in same unit (unless admin)
+    - State Locking: Only draft profiles can be deleted
+
+    **Errors:**
+    - 404: Profile not found
+    - 403: User doesn't have access to this profile
+    - 400: Profile is not in draft status
+    """
+    try:
+        await admission_service.delete_profile(
+            db=db,
+            profile_id=profile_id,
+            current_user=current_user,
+        )
+
+        # Transaction commit
+        await db.commit()
+
+        log.info(
+            "Admission profile deleted via API",
+            profile_id=profile_id,
+            user_id=current_user.id,
+        )
+
+        return None
+
+    except ResourceNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    except PermissionDeniedError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e),
+        )
+    except BadRequest as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )

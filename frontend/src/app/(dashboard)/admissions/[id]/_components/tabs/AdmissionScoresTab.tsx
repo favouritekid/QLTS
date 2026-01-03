@@ -6,15 +6,14 @@
  * Form for GPA and subject scores.
  */
 
-import { UseFormReturn } from "react-hook-form"
+import { UseFormReturn, FieldValues } from "react-hook-form"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form"
 import { Calculator } from "lucide-react"
-import type { AdmissionProfileUpdate } from "@/lib/zod/admissions"
 
 interface AdmissionScoresTabProps {
-  form: UseFormReturn<AdmissionProfileUpdate>
+  form: UseFormReturn<FieldValues>
   isEditable: boolean
 }
 

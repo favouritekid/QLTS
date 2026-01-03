@@ -1030,3 +1030,4 @@ OfficerRequired = Depends(require_roles(["officer", "admin", "manager"]))
 # NEW: Ownership verification shortcuts for IDOR prevention
 DistributionRuleAccessDep = Depends(get_distribution_rule_for_user)
 OrgUnitAccessDep = Depends(get_organizational_unit_for_user)
+

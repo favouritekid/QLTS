@@ -6,16 +6,15 @@
  * Dynamic form for managing family members using useFieldArray.
  */
 
-import { useFieldArray, UseFormReturn } from "react-hook-form"
+import { useFieldArray, UseFormReturn, FieldValues } from "react-hook-form"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form"
 import { Plus, Trash2, Users } from "lucide-react"
-import type { AdmissionProfileUpdate } from "@/lib/zod/admissions"
 
 interface FamilyInfoTabProps {
-  form: UseFormReturn<AdmissionProfileUpdate>
+  form: UseFormReturn<FieldValues>
   isEditable: boolean
 }
 
@@ -31,6 +30,7 @@ export function FamilyInfoTab({ form, isEditable }: FamilyInfoTabProps) {
       full_name: "",
       occupation: "",
       phone: "",
+      is_primary_guardian: false,
     })
   }
 

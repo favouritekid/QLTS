@@ -71,6 +71,41 @@ class AdmissionProfile(Base):
         comment="State: draft | approved | rejected | enrolled"
     )
 
+    # =========================================================================
+    # PERSONAL INFO EXTENSIONS
+    # =========================================================================
+    
+    full_name: Mapped[str] = mapped_column(String(255), nullable=True)
+    dob: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    gender: Mapped[str] = mapped_column(String(50), nullable=True, comment="Nam/Nữ/Khác")
+    
+    email: Mapped[str] = mapped_column(String(255), nullable=True)
+    phone: Mapped[str] = mapped_column(String(20), nullable=True)
+    
+    social_insurance_number: Mapped[str] = mapped_column(String(50), nullable=True)
+    
+    # Linked to ConfigSystemCategory
+    nationality: Mapped[str] = mapped_column(String(100), nullable=True)
+    ethnicity: Mapped[str] = mapped_column(String(100), nullable=True)
+    religion: Mapped[str] = mapped_column(String(100), nullable=True)
+    disability_type: Mapped[str] = mapped_column(String(100), nullable=True)
+    
+    # Address
+    permanent_province: Mapped[str] = mapped_column(String(100), nullable=True)
+    permanent_district: Mapped[str] = mapped_column(String(100), nullable=True)
+    permanent_ward: Mapped[str] = mapped_column(String(100), nullable=True)
+    
+    place_of_birth: Mapped[str] = mapped_column(String(255), nullable=True)
+    native_place: Mapped[str] = mapped_column(String(255), nullable=True)
+    
+    # Political
+    union_entry_date: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    party_entry_date: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    party_official_entry_date: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+
+    # =========================================================================
+
+
     # Optimistic Locking (Prevent Concurrent Modification)
     # Incremented on every update/submit
     # Service must check version matches before modifying

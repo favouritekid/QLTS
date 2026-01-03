@@ -37,6 +37,7 @@ from .routers import (
     admissions,  # ✅ NEW: Admission Profile workflow (replacement for applications)
     applications,
     auth,
+    config_data, # ✅ NEW: Dynamic Config Data (Categories, Import)
     kpi_config,  # ✅ PHASE 5: KPI Configuration Admin
     leads,
     monitoring,
@@ -539,6 +540,7 @@ fastapi_app.include_router(notification_templates.router, prefix="/api")  # ✅ 
 fastapi_app.include_router(leads.router, prefix="/api/leads")
 fastapi_app.include_router(applications.router, prefix="/api")
 fastapi_app.include_router(admissions.router, prefix="/api")  # ✅ NEW: Admission Profile workflow
+fastapi_app.include_router(config_data.router, prefix="/api") # ✅ NEW: Config Data
 fastapi_app.include_router(pipeline.router, prefix="/api/pipeline")
 fastapi_app.include_router(organization.router, prefix="/api")
 fastapi_app.include_router(officer.router, prefix="/api")

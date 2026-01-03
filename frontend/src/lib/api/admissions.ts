@@ -80,6 +80,13 @@ export async function enrollStudent(
   return response.data
 }
 
+/**
+ * Delete admission profile (draft only)
+ */
+export async function deleteAdmission(id: number): Promise<void> {
+  await api.delete(`/api/admissions/${id}`)
+}
+
 // ============================================
 // EXPORT DEFAULT OBJECT (Lead Pattern)
 // ============================================
@@ -91,6 +98,7 @@ export const admissionsApi = {
   updateAdmission,
   submitAdmission,
   enrollStudent,
+  deleteAdmission,
 }
 
 export default admissionsApi

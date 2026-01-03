@@ -9,6 +9,7 @@ from .config import (
     ConfigDegreeLevel,
     ConfigDocumentType,
     ConfigOfferingType,
+    ConfigSystemCategory, # NEW
     KpiConfig,
     KpiMonthlySnapshot,
     KpiTarget,
@@ -64,6 +65,7 @@ __all__ = [
     "ConfigDegreeLevel",
     "ConfigDocumentType",
     "ConfigOfferingType",
+    "ConfigSystemCategory", # NEW
     "KpiConfig",
     "KpiMonthlySnapshot",
     "KpiTarget",

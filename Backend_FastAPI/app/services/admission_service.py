@@ -233,6 +233,10 @@ async def create_profile(
         academic_history=[],
         admission_scores=None,
         documents_checklist=documents_checklist,
+        # Pre-fill from Lead
+        full_name=lead.full_name,
+        phone=lead.phone,
+        email=lead.email,
     )
 
     db.add(new_profile)
@@ -332,18 +336,22 @@ async def update_profile(
     # Get profile with IDOR check
     profile = await get_profile(db, profile_id, current_user)
 
-    # State Locking: Only draft profiles can be updated
-    if profile.status != "draft":
+    # State Locking: Only draft or rejected profiles can be updated
+    if profile.status not in ["draft", "rejected"]:
         log.warning(
-            "Attempted to update non-draft profile",
+            "Attempted to update locked profile",
             profile_id=profile_id,
             current_status=profile.status,
             user_id=current_user.id,
         )
         raise BadRequest(
             f"Cannot update profile with status '{profile.status}'. "
-            "Only draft profiles can be updated."
+            "Only draft or rejected profiles can be updated."
         )
+    
+    # If profile is rejected, reset to draft on update
+    if profile.status == "rejected":
+        profile.status = "draft"
 
     # Optimistic Locking: Check version matches
     if "version" in data and data["version"] != profile.version:
@@ -361,20 +369,62 @@ async def update_profile(
         )
 
     # Update fields (only non-None values from schema)
+    # Update fields (only non-None values from schema)
     if "citizen_id" in data and data["citizen_id"] is not None:
         profile.citizen_id = data["citizen_id"]
 
+    # ✅ Sync with Lead: Full Name
+    if "full_name" in data and data["full_name"] is not None:
+        profile.full_name = data["full_name"]
+        if profile.lead and data["full_name"].strip():
+            profile.lead.full_name = data["full_name"]
+
+    # ✅ Sync with Lead: Phone
+    if "phone" in data and data["phone"] is not None:
+        profile.phone = data["phone"]
+        if profile.lead and data["phone"].strip():
+            profile.lead.phone = data["phone"]
+
+    # ✅ Sync with Lead: Email
+    if "email" in data and data["email"] is not None:
+        profile.email = data["email"]
+        if profile.lead:
+            profile.lead.email = data["email"]
+    
+    # Other fields
+    if "dob" in data and data["dob"] is not None:
+        profile.dob = data["dob"]
+    
+    if "gender" in data and data["gender"] is not None:
+        profile.gender = data["gender"]
+        
+    if "permanent_province" in data: profile.permanent_province = data["permanent_province"]
+    if "permanent_district" in data: profile.permanent_district = data["permanent_district"]
+    if "permanent_ward" in data: profile.permanent_ward = data["permanent_ward"]
+    if "place_of_birth" in data: profile.place_of_birth = data["place_of_birth"]
+    if "native_place" in data: profile.native_place = data["native_place"]
+    if "social_insurance_number" in data: profile.social_insurance_number = data["social_insurance_number"]
+    if "nationality" in data: profile.nationality = data["nationality"]
+    if "ethnicity" in data: profile.ethnicity = data["ethnicity"]
+    if "religion" in data: profile.religion = data["religion"]
+    if "disability_type" in data: profile.disability_type = data["disability_type"]
+    
+    # Political date fields
+    if "union_entry_date" in data: profile.union_entry_date = data["union_entry_date"]
+    if "party_entry_date" in data: profile.party_entry_date = data["party_entry_date"]
+    if "party_official_entry_date" in data: profile.party_official_entry_date = data["party_official_entry_date"]
+
     if "family_info" in data and data["family_info"] is not None:
-        profile.family_info = [member.model_dump() for member in data["family_info"]]
+        profile.family_info = data["family_info"]
 
     if "academic_history" in data and data["academic_history"] is not None:
-        profile.academic_history = [record.model_dump() for record in data["academic_history"]]
+        profile.academic_history = data["academic_history"]
 
     if "admission_scores" in data and data["admission_scores"] is not None:
-        profile.admission_scores = data["admission_scores"].model_dump()
+        profile.admission_scores = data["admission_scores"]
 
     if "documents_checklist" in data and data["documents_checklist"] is not None:
-        profile.documents_checklist = [doc.model_dump() for doc in data["documents_checklist"]]
+        profile.documents_checklist = data["documents_checklist"]
 
     # Update timestamp and increment version
     profile.updated_at = datetime.now(timezone.utc)
@@ -723,3 +773,68 @@ async def enroll_student(
             raise ConflictError(
                 "Enrollment failed due to data conflict. Please try again."
             )
+
+
+# ==============================================================================
+# DELETE PROFILE
+# ==============================================================================
+
+async def delete_profile(
+    db: AsyncSession,
+    profile_id: int,
+    current_user: models.User,
+) -> bool:
+    """
+    Delete AdmissionProfile (only when status='draft').
+
+    Security:
+    - IDOR: Check lead.unit_id == user.unit_id (unless admin)
+    - State Locking: Only draft profiles can be deleted
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() after this function returns.
+
+    Args:
+        db: AsyncSession for database operations
+        profile_id: AdmissionProfile ID to delete
+        current_user: Current authenticated user
+
+    Returns:
+        True if deleted successfully
+
+    Raises:
+        ResourceNotFoundError: Profile not found
+        PermissionDeniedError: User doesn't have access
+        BadRequest: Status is not 'draft'
+    """
+    from app.repositories import AdmissionRepository
+    
+    admission_repo = AdmissionRepository(db)
+    
+    # Get profile with lead (for IDOR check)
+    profile = await admission_repo.get_profile_by_id_with_lead(profile_id)
+    
+    if not profile:
+        raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
+    
+    # IDOR check
+    _check_admin_or_unit_access(profile, current_user)
+    
+    # State check: Only draft profiles can be deleted
+    if profile.status != "draft":
+        raise BadRequest(
+            f"Cannot delete profile with status '{profile.status}'. "
+            "Only draft profiles can be deleted."
+        )
+    
+    # Delete the profile
+    await db.delete(profile)
+    await db.flush()
+    
+    log.info(
+        "Admission profile deleted",
+        profile_id=profile_id,
+        user_id=current_user.id,
+    )
+    
+    return True

@@ -439,3 +439,58 @@ class KpiMonthlySnapshot(Base):
     def __repr__(self):
         return f"<KpiMonthlySnapshot {self.year}/{self.month}: {self.actual_value}/{self.target_value}>"
 
+
+class ConfigSystemCategory(Base):
+    """
+    Hệ thống Danh mục Động (Dynamic System Categories).
+    
+    Stores dynamic configuration data for dropdowns such as:
+    - Ethnicity (Dân tộc)
+    - Religion (Tôn giáo)
+    - Nationality (Quốc tịch)
+    - Disability Type (Loại khuyết tật)
+    
+    Fields:
+    - type: Category type (ethnicity, religion, etc.)
+    - code: Unique code (e.g., '01', 'VN')
+    - name: Display name (e.g., 'Kinh', 'Việt Nam')
+    """
+    __tablename__ = "config_system_category"
+
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Category Type (Group)
+    type = Column(
+        String(50),
+        nullable=False,
+        index=True,
+        comment="Category type: ethnicity, religion, nationality, disability_type"
+    )
+    
+    # Data
+    code = Column(
+        String(50),
+        nullable=False,
+        index=True,
+        comment="Unique code within type"
+    )
+    name = Column(
+        String(255),
+        nullable=False,
+        index=True,  # Indexed for search
+        comment="Display name"
+    )
+    
+    # Metadata
+    description = Column(String(500), nullable=True)
+    display_order = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True)
+    
+    __table_args__ = (
+        # Unique code per type
+        Index('uq_config_category_type_code', 'type', 'code', unique=True),
+    )
+
+    def __repr__(self):
+        return f"<ConfigSystemCategory {self.type}.{self.code}: {self.name}>"
+

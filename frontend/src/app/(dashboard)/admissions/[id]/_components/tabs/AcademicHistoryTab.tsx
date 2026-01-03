@@ -6,16 +6,16 @@
  * Dynamic form for managing school records.
  */
 
-import { useFieldArray, UseFormReturn } from "react-hook-form"
+import { useFieldArray, UseFormReturn, FieldValues } from "react-hook-form"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Plus, Trash2, GraduationCap } from "lucide-react"
-import type { AdmissionProfileUpdate } from "@/lib/zod/admissions"
 
 interface AcademicHistoryTabProps {
-  form: UseFormReturn<AdmissionProfileUpdate>
+  form: UseFormReturn<FieldValues>
   isEditable: boolean
 }
 
@@ -167,6 +167,34 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                             onChange={(e) => field.onChange(e.target.value ? parseFloat(e.target.value) : null)}
                           />
                         </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  
+                  <FormField
+                    control={form.control}
+                    name={`academic_history.${index}.graduation_type`}
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Trình độ / Loại tốt nghiệp</FormLabel>
+                         <Select onValueChange={field.onChange} value={field.value || ""} disabled={!isEditable}>
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Chọn trình độ" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent> 
+                            <SelectItem value="THCS">THCS</SelectItem>
+                            <SelectItem value="THPT">THPT</SelectItem>
+                            <SelectItem value="GDTX">GDTX</SelectItem>
+                            <SelectItem value="Sơ cấp">Sơ cấp</SelectItem>
+                            <SelectItem value="Trung cấp">Trung cấp</SelectItem>
+                            <SelectItem value="Cao đẳng">Cao đẳng</SelectItem>
+                            <SelectItem value="Đại học">Đại học</SelectItem>
+                            <SelectItem value="Khác">Khác</SelectItem>
+                          </SelectContent>
+                        </Select>
                         <FormMessage />
                       </FormItem>
                     )}

@@ -54,6 +54,10 @@ class FamilyMemberSchema(BaseModel):
         pattern=r"^0\d{9,10}$",
         description="Vietnam phone number (0 + 9-10 digits)"
     )
+    is_primary_guardian: bool = Field(
+        False,
+        description="Identify if this is the primary guardian"
+    )
 
     @field_validator('full_name', 'occupation', 'relationship')
     @classmethod
@@ -100,8 +104,14 @@ class AcademicRecordSchema(BaseModel):
         None,
         ge=0.0,
         le=10.0,
-        description="GPA on 10-point scale"
+        description="GPA (0.0 - 10.0)"
     )
+    graduation_type: Optional[str] = Field(
+        None,
+        max_length=50,
+        description="Type of graduation (THPT, Dai hoc, etc.)"
+    )
+
 
     @field_validator('school_name')
     @classmethod
@@ -257,19 +267,50 @@ class AdmissionProfileUpdate(BaseModel):
         ge=1,
         description="Current version (for optimistic locking, must match DB)"
     )
+    
+    # Personal Info Fields
+    full_name: Optional[str] = Field(None, max_length=255)
+    phone: Optional[str] = Field(
+        None, 
+        pattern=r"^0\d{9,10}$",
+        description="Phone number (10-11 digits starting with 0)"
+    )
+    email: Optional[str] = Field(None, max_length=255)
+    dob: Optional[datetime] = Field(None, description="Date of birth")
+    gender: Optional[str] = Field(None, max_length=50)
+    
     citizen_id: Optional[str] = Field(
         None,
         pattern=r"^\d{12}$",
         description="CCCD/CMND number (12 digits)"
     )
+    social_insurance_number: Optional[str] = Field(None, max_length=50)
+    
+    # Location Fields
+    nationality: Optional[str] = Field(None, max_length=100)
+    ethnicity: Optional[str] = Field(None, max_length=100)
+    religion: Optional[str] = Field(None, max_length=100)
+    disability_type: Optional[str] = Field(None, max_length=100)
+    permanent_province: Optional[str] = Field(None, max_length=100)
+    permanent_district: Optional[str] = Field(None, max_length=100)
+    permanent_ward: Optional[str] = Field(None, max_length=100)
+    place_of_birth: Optional[str] = Field(None, max_length=255)
+    native_place: Optional[str] = Field(None, max_length=255)
+    
+    # Political Info Dates
+    union_entry_date: Optional[datetime] = Field(None, description="Union entry date")
+    party_entry_date: Optional[datetime] = Field(None, description="Party entry date (probationary)")
+    party_official_entry_date: Optional[datetime] = Field(None, description="Party entry date (official)")
+    
+    # JSONB Arrays
     family_info: Optional[List[FamilyMemberSchema]] = Field(
         None,
-        max_items=10,
+        max_length=10,
         description="Array of family members (max 10)"
     )
     academic_history: Optional[List[AcademicRecordSchema]] = Field(
         None,
-        max_items=20,
+        max_length=20,
         description="Array of academic records (schools attended, max 20)"
     )
     admission_scores: Optional[AdmissionScoreSchema] = Field(
@@ -278,9 +319,29 @@ class AdmissionProfileUpdate(BaseModel):
     )
     documents_checklist: Optional[List[DocumentItemSchema]] = Field(
         None,
-        max_items=50,
+        max_length=50,
         description="Document upload checklist (max 50)"
     )
+
+    # Field validators to convert empty strings to None (for pattern fields)
+    @field_validator('phone', 'citizen_id', mode='before')
+    @classmethod
+    def empty_str_to_none(cls, v):
+        """Convert empty strings to None to bypass pattern validation."""
+        if v == "" or v is None:
+            return None
+        return v
+
+    @field_validator('email', 'full_name', 'gender', 'social_insurance_number', 
+                     'nationality', 'ethnicity', 'religion', 'disability_type',
+                     'permanent_province', 'permanent_district', 'permanent_ward',
+                     'place_of_birth', 'native_place', mode='before')
+    @classmethod
+    def empty_str_to_none_text(cls, v):
+        """Convert empty strings to None for text fields."""
+        if v == "" or v is None:
+            return None
+        return v
 
     model_config = ConfigDict(
         str_strip_whitespace=True,
@@ -296,16 +357,42 @@ class AdmissionProfileResponse(BaseModel):
     """
     id: int
     lead_id: int
-    citizen_id: Optional[str] = None
     status: str
     version: int
     applied_rules: dict
+    created_at: datetime
+    updated_at: datetime
+    
+    # Personal Info Fields
+    full_name: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    dob: Optional[datetime] = None
+    gender: Optional[str] = None
+    citizen_id: Optional[str] = None
+    social_insurance_number: Optional[str] = None
+    
+    # Location Fields
+    nationality: Optional[str] = None
+    ethnicity: Optional[str] = None
+    religion: Optional[str] = None
+    disability_type: Optional[str] = None
+    permanent_province: Optional[str] = None
+    permanent_district: Optional[str] = None
+    permanent_ward: Optional[str] = None
+    place_of_birth: Optional[str] = None
+    native_place: Optional[str] = None
+    
+    # Political Dates
+    union_entry_date: Optional[datetime] = None
+    party_entry_date: Optional[datetime] = None
+    party_official_entry_date: Optional[datetime] = None
+    
+    # JSONB Fields
     family_info: List[FamilyMemberSchema] = []
     academic_history: List[AcademicRecordSchema] = []
     admission_scores: Optional[AdmissionScoreSchema] = None
     documents_checklist: List[DocumentItemSchema] = []
-    created_at: datetime
-    updated_at: datetime
 
     # Nested relationships (using forward refs for circular import avoidance)
     lead: Optional["LeadShallowForAdmission"] = None

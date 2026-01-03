@@ -1,23 +1,9 @@
 "use client"
 
-/**
- * Admission Detail Client Component
- * 
- * Main client-side component for admission profile detail page.
- * Hydrates with server-fetched initial data, then uses TanStack Query for updates.
- * 
- * Architecture:
- * - Uses Tabs for organized form sections
- * - Form state managed by react-hook-form
- * - API calls via TanStack Query mutations
- */
-
-import { useState } from "react"
-import { useForm, FormProvider } from "react-hook-form"
+import { useState, useEffect } from "react"
+import { useForm, FormProvider, useWatch } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { User, Users, GraduationCap, Calculator, FileText, CreditCard } from "lucide-react"
 
 import {
   useGetAdmission,
@@ -31,15 +17,18 @@ import {
   type AdmissionProfileUpdate,
 } from "@/lib/zod/admissions"
 
-// Import sub-components
-import { AdmissionHeader } from "./AdmissionHeader"
+// Layout & Components
+import { AdmissionLayout } from "./layout/AdmissionLayout"
 import { AdmissionActions } from "./AdmissionActions"
+
+// Tabs
 import { PersonalInfoTab } from "./tabs/PersonalInfoTab"
-import { FamilyInfoTab } from "./tabs/FamilyInfoTab"
+import { FamilyTab } from "./tabs/FamilyTab"
 import { AcademicHistoryTab } from "./tabs/AcademicHistoryTab"
-import { AdmissionScoresTab } from "./tabs/AdmissionScoresTab"
+import { ScoresTab } from "./tabs/ScoresTab"
 import { DocumentsTab } from "./tabs/DocumentsTab"
 import { TuitionTab } from "./tabs/TuitionTab"
+import { FinalizeTab } from "./tabs/FinalizeTab"
 
 interface SubmitResult {
   status: "approved" | "rejected" | null
@@ -56,10 +45,10 @@ export function AdmissionDetailClient({
   profileId,
   initialData,
 }: AdmissionDetailClientProps) {
-  // TanStack Query with hydration
+  // 1. Data Fetching
   const { data: profile } = useGetAdmission(profileId, {
     initialData,
-    staleTime: 60000,
+    staleTime: 15000, // 15 seconds - auto-refresh when stale
   })
 
   const updateMutation = useUpdateAdmission(profileId)
@@ -67,17 +56,37 @@ export function AdmissionDetailClient({
   const enrollMutation = useEnrollStudent(profileId)
 
   const [submitResult, setSubmitResult] = useState<SubmitResult | null>(null)
-  const [activeTab, setActiveTab] = useState("personal")
+  
+  // 2. Navigation State
+  const [currentStep, setCurrentStep] = useState(1)
 
   const isDraft = profile?.status === "draft" || profile?.status === "rejected"
   const isApproved = profile?.status === "approved"
   const isEditable = isDraft
 
-  // React Hook Form
+  // 3. Form Setup
   const form = useForm<AdmissionProfileUpdate>({
     resolver: zodResolver(admissionProfileUpdateSchema),
     defaultValues: {
       citizen_id: profile?.citizen_id || "",
+      full_name: profile?.full_name || "",
+      phone: profile?.phone || "",
+      email: profile?.email || "",
+      dob: profile?.dob || undefined,
+      gender: profile?.gender || "",
+      social_insurance_number: profile?.social_insurance_number || "",
+      nationality: profile?.nationality || "",
+      ethnicity: profile?.ethnicity || "",
+      religion: profile?.religion || "",
+      disability_type: profile?.disability_type || "",
+      permanent_province: profile?.permanent_province || "",
+      permanent_district: profile?.permanent_district || "",
+      permanent_ward: profile?.permanent_ward || "",
+      place_of_birth: profile?.place_of_birth || "",
+      native_place: profile?.native_place || "",
+      union_entry_date: profile?.union_entry_date || undefined,
+      party_entry_date: profile?.party_entry_date || undefined,
+      party_official_entry_date: profile?.party_official_entry_date || undefined,
       family_info: profile?.family_info || [],
       academic_history: profile?.academic_history || [],
       admission_scores: profile?.admission_scores || {
@@ -87,130 +96,178 @@ export function AdmissionDetailClient({
         english_score: undefined,
       },
       documents_checklist: profile?.documents_checklist || [],
+      version: profile?.version ?? 1,
     },
   })
 
+  // 3.1 Form Reset on Data Update
+  useEffect(() => {
+    if (profile) {
+      form.reset({
+        citizen_id: profile.citizen_id || "",
+        full_name: profile.full_name || "",
+        phone: profile.phone || "",
+        email: profile.email || "",
+        dob: profile.dob || undefined,
+        gender: profile.gender || "",
+        social_insurance_number: profile.social_insurance_number || "",
+        nationality: profile.nationality || "",
+        ethnicity: profile.ethnicity || "",
+        religion: profile.religion || "",
+        disability_type: profile.disability_type || "",
+        permanent_province: profile.permanent_province || "",
+        permanent_district: profile.permanent_district || "",
+        permanent_ward: profile.permanent_ward || "",
+        place_of_birth: profile.place_of_birth || "",
+        native_place: profile.native_place || "",
+        union_entry_date: profile.union_entry_date || undefined,
+        party_entry_date: profile.party_entry_date || undefined,
+        party_official_entry_date: profile.party_official_entry_date || undefined,
+        family_info: profile.family_info || [],
+        academic_history: profile.academic_history || [],
+        admission_scores: profile.admission_scores || {
+           gpa: undefined,
+           math_score: undefined,
+           literature_score: undefined,
+           english_score: undefined,
+        },
+        documents_checklist: profile.documents_checklist || [],
+        version: profile.version ?? 1,
+      })
+    }
+  }, [profile, form])
+
+  // 4. Real-time Validation Logic (Pipeline Status)
+  const [stepsStatus, setStepsStatus] = useState<Record<number, "success" | "warning" | "error" | "locked">>({})
+  
+  // Optimized watch
+  const values = useWatch({ control: form.control })
+  const valuesStr = JSON.stringify(values)
+
+  useEffect(() => {
+     const w = form.getValues() 
+     const status: Record<number, "success" | "warning" | "error" | "locked"> = {}
+
+     // Step 1: Personal Info
+     const hasPersonal = !!(w.full_name && w.dob && w.gender && w.citizen_id)
+     status[1] = hasPersonal ? "success" : "warning" 
+     if (!w.citizen_id) status[1] = "error"
+
+     // Step 2: Family
+     const hasPrimaryGuardian = w.family_info?.some((f: any) => f.is_primary_guardian)
+     status[2] = hasPrimaryGuardian ? "success" : "error"
+
+     // Step 3: Academic
+     const hasAcademic = (w.academic_history?.length || 0) > 0
+     status[3] = hasAcademic ? "success" : "warning"
+
+     // Step 4: Scores
+     const gpa = w.admission_scores?.gpa || 0
+     const isQualified = gpa >= (profile?.applied_rules?.min_gpa ?? 5.0)
+     status[4] = isQualified ? "success" : "error"
+
+     // Step 5: Documents - Validate mandatory docs are uploaded
+     const mandatoryDocs: string[] = profile?.applied_rules?.mandatory_docs || []
+     const uploadedDocCodes = (w.documents_checklist || [])
+       .filter((d: any) => d.status === "uploaded" && d.file_path)
+       .map((d: any) => d.code)
+     const allMandatoryUploaded = mandatoryDocs.every((code: string) => uploadedDocCodes.includes(code))
+     status[5] = allMandatoryUploaded ? "success" : (mandatoryDocs.length > 0 ? "error" : "warning")
+
+     // Step 6 & 7
+     const isEligible = status[1] !== "error" && status[2] === "success" && status[4] === "success"
+     status[6] = isEligible ? "warning" : "locked"
+     status[7] = isEligible ? "warning" : "locked"
+
+     setStepsStatus(prev => {
+         if (JSON.stringify(prev) === JSON.stringify(status)) return prev
+         return status
+     })
+  }, [valuesStr, form])
+
+  // Determine global eligibility
+  const isEligible = stepsStatus[7] !== "locked"
+
+  // 5. Handlers
   const handleSave = () => {
     const data = form.getValues()
-    updateMutation.mutate(data)
+    const payload = {
+      ...data,
+      citizen_id: data.citizen_id === "" ? null : data.citizen_id,
+      admission_scores: !data.admission_scores?.gpa ? null : data.admission_scores
+    }
+    updateMutation.mutate(payload)
   }
 
   const handleSubmit = async () => {
     const result = await submitMutation.mutateAsync()
     setSubmitResult(result)
+    // On success, maybe redirect or refresh
   }
 
   const handleEnroll = () => {
     enrollMutation.mutate()
   }
 
+  const handleCheckCondition = () => {
+      // Logic to highlight errors
+      // Could scroll to first error step
+      if (stepsStatus[1] === "error") setCurrentStep(1)
+      else if (stepsStatus[2] === "error") setCurrentStep(2)
+      else if (stepsStatus[4] === "error") setCurrentStep(4)
+  }
+
   if (!profile) return null
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <AdmissionHeader profile={profile} />
+    <FormProvider {...form}>
+        <AdmissionLayout 
+            profile={profile}
+            currentStep={currentStep}
+            onStepChange={setCurrentStep}
+            stepsStatus={stepsStatus}
+        >
+            {/* ALERT MESSAGES */}
+            {submitResult && submitResult.status === "rejected" && (
+                <div className="mb-6">
+                    <Alert variant="destructive">
+                    <AlertDescription>
+                        <ul className="list-disc pl-5">
+                        {submitResult.errors?.map((err, idx) => (
+                            <li key={idx}>{err}</li>
+                        ))}
+                        </ul>
+                    </AlertDescription>
+                    </Alert>
+                </div>
+            )}
 
-      {/* Submit Result Alerts */}
-      {submitResult && submitResult.status === "rejected" && (
-        <Alert variant="destructive">
-          <AlertDescription>
-            <div className="font-semibold mb-2">
-              Hồ sơ không đạt yêu cầu ({submitResult.errors?.length || 0} lỗi):
+            {/* TAB CONTENT */}
+            <div className="bg-white rounded-lg shadow-sm min-h-[500px] p-1">
+                {currentStep === 1 && <PersonalInfoTab profile={profile} form={form as any} isEditable={isEditable} />}
+                {currentStep === 2 && <FamilyTab form={form as any} isEditable={isEditable} />}
+                {currentStep === 3 && <AcademicHistoryTab form={form as any} isEditable={isEditable} />}
+                {currentStep === 4 && <ScoresTab form={form as any} isEditable={isEditable} />}
+                {currentStep === 5 && <DocumentsTab profile={profile} isEditable={isEditable} />}
+                {currentStep === 6 && <TuitionTab profile={profile} />}
+                {currentStep === 7 && <FinalizeTab isEligible={isEligible} onSubmit={handleSubmit} isSubmitting={submitMutation.isPending} />}
             </div>
-            <ul className="list-disc pl-5 space-y-1">
-              {submitResult.errors?.map((error: string, idx: number) => (
-                <li key={idx}>{error}</li>
-              ))}
-            </ul>
-          </AlertDescription>
-        </Alert>
-      )}
 
-      {submitResult && submitResult.status === "approved" && (
-        <Alert>
-          <AlertDescription>
-            <div className="font-semibold text-green-600">
-              ✓ {submitResult.message}
-            </div>
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {/* Form with Tabs */}
-      <FormProvider {...form}>
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-3 lg:grid-cols-6">
-            <TabsTrigger value="personal" className="gap-1">
-              <User className="h-4 w-4 hidden sm:inline" />
-              <span>Cá nhân</span>
-            </TabsTrigger>
-            <TabsTrigger value="family" className="gap-1">
-              <Users className="h-4 w-4 hidden sm:inline" />
-              <span>Gia đình</span>
-            </TabsTrigger>
-            <TabsTrigger value="academic" className="gap-1">
-              <GraduationCap className="h-4 w-4 hidden sm:inline" />
-              <span>Học tập</span>
-            </TabsTrigger>
-            <TabsTrigger value="scores" className="gap-1">
-              <Calculator className="h-4 w-4 hidden sm:inline" />
-              <span>Điểm</span>
-            </TabsTrigger>
-            <TabsTrigger value="documents" className="gap-1">
-              <FileText className="h-4 w-4 hidden sm:inline" />
-              <span>Tài liệu</span>
-            </TabsTrigger>
-            <TabsTrigger value="tuition" className="gap-1">
-              <CreditCard className="h-4 w-4 hidden sm:inline" />
-              <span>Học phí</span>
-            </TabsTrigger>
-          </TabsList>
-
-          <div className="mt-6">
-            <TabsContent value="personal">
-              <PersonalInfoTab
-                profile={profile}
-                form={form}
-                isEditable={isEditable}
-              />
-            </TabsContent>
-
-            <TabsContent value="family">
-              <FamilyInfoTab form={form} isEditable={isEditable} />
-            </TabsContent>
-
-            <TabsContent value="academic">
-              <AcademicHistoryTab form={form} isEditable={isEditable} />
-            </TabsContent>
-
-            <TabsContent value="scores">
-              <AdmissionScoresTab form={form} isEditable={isEditable} />
-            </TabsContent>
-
-            <TabsContent value="documents">
-              <DocumentsTab profile={profile} isEditable={isEditable} />
-            </TabsContent>
-
-            <TabsContent value="tuition">
-              <TuitionTab profile={profile} />
-            </TabsContent>
-          </div>
-        </Tabs>
-      </FormProvider>
-
-      {/* Action Buttons */}
-      <AdmissionActions
-        status={profile?.status || ""}
-        isDraft={isDraft}
-        isApproved={isApproved}
-        isSaving={updateMutation.isPending}
-        isSubmitting={submitMutation.isPending}
-        isEnrolling={enrollMutation.isPending}
-        onSave={handleSave}
-        onSubmit={handleSubmit}
-        onEnroll={handleEnroll}
-      />
-    </div>
+            {/* STICKY ACTIONS */}
+            <AdmissionActions 
+                status={profile.status}
+                isDraft={isDraft}
+                isApproved={isApproved}
+                isSaving={updateMutation.isPending}
+                isSubmitting={submitMutation.isPending}
+                isEnrolling={enrollMutation.isPending}
+                onSave={handleSave}
+                onSubmit={handleSubmit}
+                onEnroll={handleEnroll}
+                onCheckCondition={handleCheckCondition}
+                isEligible={isEligible}
+            />
+        </AdmissionLayout>
+    </FormProvider>
   )
 }

@@ -18,8 +18,66 @@ from ..repositories.config_repository import (
     DistributionRuleRepository,
     DocumentTypeRepository,
     OfferingTypeRepository,
-    SkillRuleRepository
+    SkillRuleRepository,
+    SystemCategoryRepository
 )
+# ... (existing imports)
+import io
+import openpyxl
+
+# ... (End of file, append new functions)
+
+# =============================================================================
+# SYSTEM CATEGORY CONFIGURATION
+# =============================================================================
+
+async def get_system_categories(
+    db: AsyncSession,
+    type: str,
+    active_only: bool = True
+) -> List[models.ConfigSystemCategory]:
+    """Get system categories by type."""
+    repo = SystemCategoryRepository(db)
+    return await repo.get_by_type(type, active_only)
+
+async def import_system_categories(
+    db: AsyncSession,
+    type_key: str,
+    file_content: bytes
+) -> dict:
+    """
+    Import system categories from Excel file.
+    Expected format: Column A = Code, Column B = Name (optional)
+    """
+    repo = SystemCategoryRepository(db)
+    try:
+        wb = openpyxl.load_workbook(filename=io.BytesIO(file_content), data_only=True)
+        ws = wb.active # Use active sheet
+        
+        created_count = 0
+        updated_count = 0
+        
+        # Iterate rows starting from 2 (skip header)
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if not row or row[0] is None:
+                continue
+                
+            code = str(row[0]).strip()
+            # If name is missing, use code as name
+            name = str(row[1]).strip() if len(row) > 1 and row[1] else code
+            
+            _, created = await repo.create_or_update(type_key, code, name)
+            if created:
+                created_count += 1
+            else:
+                updated_count += 1
+                
+        return {"created": created_count, "updated": updated_count}
+        
+    except Exception as e:
+        log.error("Failed to import categories", error=str(e))
+        raise BadRequest(detail=f"Import failed: {str(e)}")
+
 from ..repositories.organization_repository import OrganizationRepository
 from ..services.pipeline_service import invalidate_pipeline_cache
 from ..utils.exceptions import BadRequest, DuplicateResourceError, ResourceNotFoundError

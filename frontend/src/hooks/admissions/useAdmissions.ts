@@ -10,11 +10,8 @@ import { useRouter } from "next/navigation"
 
 import { admissionsApi } from "@/lib/api/admissions"
 import type {
-  AdmissionProfileCreate,
   AdmissionProfileResponse,
   AdmissionProfileUpdate,
-  AdmissionSubmitResponse,
-  EnrollStudentResponse,
 } from "@/lib/zod/admissions"
 import type { ApiErrorResponse } from "@/types/api.types"
 
@@ -40,7 +37,8 @@ export function useListAdmissions(
   return useQuery({
     queryKey: admissionsKeys.list(filters),
     queryFn: () => admissionsApi.listAdmissions(filters),
-    staleTime: 30000,
+    staleTime: 15000, // 15 seconds
+    refetchOnWindowFocus: true,
   })
 }
 
@@ -57,7 +55,8 @@ export function useGetAdmission(
     queryFn: () => admissionsApi.getAdmission(id),
     enabled: (options?.enabled ?? true) && !!id,
     initialData: options?.initialData,
-    staleTime: options?.staleTime ?? 60000,
+    staleTime: options?.staleTime ?? 15000, // 15 seconds
+    refetchOnWindowFocus: true,
   })
 }
 
@@ -82,7 +81,7 @@ export function useCreateAdmission() {
         typeof detail === "string" 
           ? detail 
           : Array.isArray(detail)
-            ? detail.map((e: any) => e.msg).join(", ")
+            ? detail.map((e: { msg: string }) => e.msg).join(", ")
             : "Đã có lỗi xảy ra"
       
       toast.error("Lỗi tạo hồ sơ", {
@@ -108,7 +107,7 @@ export function useUpdateAdmission(id: number) {
         typeof detail === "string"
           ? detail
           : Array.isArray(detail)
-            ? detail.map((e: any) => e.msg).join(", ")
+            ? detail.map((e: { msg: string }) => e.msg).join(", ")
             : "Đã có lỗi xảy ra"
 
       toast.error("Lỗi cập nhật", {
@@ -139,7 +138,7 @@ export function useSubmitAdmission(id: number) {
         typeof detail === "string"
           ? detail
           : Array.isArray(detail)
-            ? detail.map((e: any) => e.msg).join(", ")
+            ? detail.map((e: { msg: string }) => e.msg).join(", ")
             : "Đã có lỗi xảy ra"
 
       toast.error("Lỗi nộp hồ sơ", {
@@ -169,10 +168,37 @@ export function useEnrollStudent(id: number) {
         typeof detail === "string"
           ? detail
           : Array.isArray(detail)
-            ? detail.map((e: any) => e.msg).join(", ")
+            ? detail.map((e: { msg: string }) => e.msg).join(", ")
             : "Đã có lỗi xảy ra"
 
       toast.error("Lỗi nhập học", {
+        description: message,
+      })
+    },
+  })
+}
+
+export function useDeleteAdmission(id: number) {
+  const queryClient = useQueryClient()
+  const router = useRouter()
+
+  return useMutation({
+    mutationFn: () => admissionsApi.deleteAdmission(id),
+    onSuccess: () => {
+      toast.success("Xóa hồ sơ thành công")
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+      router.push("/admissions")
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      const detail = error.response?.data?.detail
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e: { msg: string }) => e.msg).join(", ")
+            : "Đã có lỗi xảy ra"
+
+      toast.error("Lỗi xóa hồ sơ", {
         description: message,
       })
     },

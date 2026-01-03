@@ -420,3 +420,87 @@ class DistributionRuleRepository(BaseRepository[models.OfferingDistributionConfi
         
         # Re-fetch with relations
         return await self.get_by_id_with_relations(rule_id)
+    async def delete_document_type(
+        self,
+        type_id: int,
+        # ... logic
+    ):
+        pass # Placeholder as we're pasting inside existing file
+
+class SystemCategoryRepository(BaseRepository[models.ConfigSystemCategory]):
+    """Repository for ConfigSystemCategory model."""
+
+    def __init__(self, db: AsyncSession):
+        super().__init__(db, models.ConfigSystemCategory)
+
+    async def get_by_type(self, type: str, active_only: bool = True) -> List[models.ConfigSystemCategory]:
+        """Get categories by type ordered by display_order."""
+        query = select(self.model).where(self.model.type == type)
+        
+        if active_only:
+            query = query.where(self.model.is_active == True)
+        
+        query = query.order_by(self.model.display_order, self.model.name)
+        
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+    async def get_by_type_and_code(self, type: str, code: str) -> Optional[models.ConfigSystemCategory]:
+        """Get category by type and code."""
+        result = await self.db.execute(
+            select(self.model).where(
+                self.model.type == type,
+                self.model.code == code
+            )
+        )
+        return result.scalar_one_or_none()
+    
+    async def create_or_update(self, type: str, code: str, name: str) -> Tuple[models.ConfigSystemCategory, bool]:
+        """Create or update category."""
+        existing = await self.get_by_type_and_code(type, code)
+        if existing:
+            existing.name = name
+            await self.db.flush()
+            await self.db.refresh(existing)
+            return existing, False
+        else:
+            new_cat = models.ConfigSystemCategory(
+                type=type,
+                code=code,
+                name=name,
+                is_active=True
+            )
+            self.db.add(new_cat)
+            await self.db.flush()
+            await self.db.refresh(new_cat)
+            return new_cat, True
+
+    async def get_filtered(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+        **filters
+    ) -> Tuple[int, List[models.ConfigSystemCategory]]:
+        """
+        Get filtered listing of categories.
+        """
+        query = select(self.model)
+        
+        if "type" in filters:
+            query = query.where(self.model.type == filters["type"])
+            
+        if "is_active" in filters:
+             query = query.where(self.model.is_active == filters["is_active"])
+
+        # Count total
+        count_query = select(func.count()).select_from(query.subquery())
+        total = (await self.db.execute(count_query)).scalar() or 0
+        
+        # Order by display_order then name
+        query = query.order_by(self.model.display_order, self.model.name)
+        
+        # Apply pagination
+        query = query.offset(skip).limit(limit)
+        
+        result = await self.db.execute(query)
+        return total, list(result.scalars().all())
