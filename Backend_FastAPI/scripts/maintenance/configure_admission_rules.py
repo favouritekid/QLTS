@@ -68,7 +68,7 @@ async def configure_admission_rules():
         print(f"\n📝 Configuring default admission_rules for {len(offerings_no_rules)} offerings...")
         
         for offering in offerings_no_rules:
-            print(f"  → id={offering.id}, type={offering.offering_type}, unit_id={offering.unit_id}")
+            print(f"  → id={offering.id}, type={offering.offering_type}, program_id={offering.program_id}")
             offering.admission_rules = default_rules
 
         await session.commit()

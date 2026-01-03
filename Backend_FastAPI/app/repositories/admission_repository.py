@@ -139,13 +139,14 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             profile_id: AdmissionProfile ID
             
         Returns:
-            AdmissionProfile with lead loaded
+            AdmissionProfile with lead and student loaded
         """
         stmt = (
             select(models.AdmissionProfile)
             .where(models.AdmissionProfile.id == profile_id)
             .options(
                 joinedload(models.AdmissionProfile.lead),
+                selectinload(models.AdmissionProfile.student),  # Prevent MissingGreenlet
             )
         )
         result = await self.db.execute(stmt)
