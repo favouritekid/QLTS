@@ -69,7 +69,7 @@ export function AdmissionDetailClient({
   const [submitResult, setSubmitResult] = useState<SubmitResult | null>(null)
   const [activeTab, setActiveTab] = useState("personal")
 
-  const isDraft = profile?.status === "draft"
+  const isDraft = profile?.status === "draft" || profile?.status === "rejected"
   const isApproved = profile?.status === "approved"
   const isEditable = isDraft
 
@@ -201,6 +201,7 @@ export function AdmissionDetailClient({
 
       {/* Action Buttons */}
       <AdmissionActions
+        status={profile?.status || ""}
         isDraft={isDraft}
         isApproved={isApproved}
         isSaving={updateMutation.isPending}

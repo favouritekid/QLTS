@@ -7,10 +7,12 @@
  */
 
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
-import { Loader2, Save, Send, GraduationCap } from "lucide-react"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Loader2, Save, Send, GraduationCap, AlertCircle } from "lucide-react"
 
 interface AdmissionActionsProps {
+  status: string
   isDraft: boolean
   isApproved: boolean
   isSaving: boolean
@@ -21,7 +23,31 @@ interface AdmissionActionsProps {
   onEnroll: () => void
 }
 
+const STATUS_INFO: Record<string, { label: string; color: string; description: string }> = {
+  draft: {
+    label: "Nháp",
+    color: "bg-gray-100 text-gray-700",
+    description: "Có thể chỉnh sửa và nộp hồ sơ",
+  },
+  approved: {
+    label: "Đã duyệt",
+    color: "bg-green-100 text-green-700",
+    description: "Hồ sơ đã được phê duyệt, có thể xác nhận nhập học",
+  },
+  rejected: {
+    label: "Từ chối",
+    color: "bg-red-100 text-red-700",
+    description: "Hồ sơ không đạt yêu cầu",
+  },
+  enrolled: {
+    label: "Đã nhập học",
+    color: "bg-blue-100 text-blue-700",
+    description: "Học sinh đã hoàn tất nhập học",
+  },
+}
+
 export function AdmissionActions({
+  status,
   isDraft,
   isApproved,
   isSaving,
@@ -31,9 +57,22 @@ export function AdmissionActions({
   onSubmit,
   onEnroll,
 }: AdmissionActionsProps) {
+  const statusInfo = STATUS_INFO[status] || {
+    label: status || "Không xác định",
+    color: "bg-gray-100 text-gray-700",
+    description: "Trạng thái không xác định",
+  }
+
   return (
     <Card>
-      <CardContent className="pt-6">
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-lg">Hành động</CardTitle>
+          <Badge className={statusInfo.color}>{statusInfo.label}</Badge>
+        </div>
+        <CardDescription>{statusInfo.description}</CardDescription>
+      </CardHeader>
+      <CardContent>
         <div className="flex flex-col sm:flex-row gap-3 justify-end">
           {isDraft && (
             <>
@@ -80,12 +119,14 @@ export function AdmissionActions({
           )}
 
           {!isDraft && !isApproved && (
-            <Button disabled variant="secondary">
-              Không có hành động
-            </Button>
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <AlertCircle className="h-4 w-4" />
+              <span className="text-sm">Không có hành động khả dụng cho trạng thái này</span>
+            </div>
           )}
         </div>
       </CardContent>
     </Card>
   )
 }
+
