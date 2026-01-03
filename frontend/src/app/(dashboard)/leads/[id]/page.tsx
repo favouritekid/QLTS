@@ -11,10 +11,18 @@
  */
 
 import { Suspense } from 'react';
+import { notFound } from 'next/navigation';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent } from '@/components/ui/card';
 import { serverApi } from '@/lib/api/server';
 import { LeadDetailClient } from './_components/LeadDetailClient';
+
+// Placeholder param for Next.js 16 cacheComponents build validation
+// Real params are handled at runtime
+export function generateStaticParams() {
+  return [{ id: '__placeholder__' }];
+}
+
 
 /**
  * Loading component
@@ -63,6 +71,12 @@ export default async function LeadDetailPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params;
+  
+  // Handle placeholder used for build validation
+  if (id === '__placeholder__') {
+    notFound();
+  }
+  
   const leadId = Number(id);
 
   return (
@@ -71,3 +85,4 @@ export default async function LeadDetailPage({
     </Suspense>
   );
 }
+

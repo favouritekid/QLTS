@@ -1,68 +1,100 @@
+// src/app/(dashboard)/admissions/[id]/page.tsx
 /**
- * Admission Profile Detail Page
+ * ✅ Admission Detail Server Component
  *
- * Architecture:
- * - Client Component for data fetch with authentication
- * - Uses TanStack Query for client-side data fetching
- * - Avoids SSR auth issues by fetching on client
+ * REFACTOR: Follows Lead Detail page pattern (SSR + Suspense + Client Hydration)
+ *
+ * Benefits:
+ * - SSR: Admission data rendered on server
+ * - Faster initial load
+ * - Proper Suspense boundaries for Next.js 16 caching
  */
-"use client"
 
-// Skip static prerendering - this route requires auth cookies
-export const dynamic = 'force-dynamic'
+import { Suspense } from 'react';
+import { notFound } from 'next/navigation';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { serverApi } from '@/lib/api/server';
+import { AdmissionDetailClient } from './_components/AdmissionDetailClient';
 
-import { useParams, notFound } from "next/navigation"
-import { useGetAdmission } from "@/hooks/admissions"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Card, CardContent, CardHeader } from "@/components/ui/card"
-
-import { AdmissionDetailClient } from "./AdmissionDetailClient"
+// Placeholder param for Next.js 16 cacheComponents build validation
+// Real params are handled at runtime
+export function generateStaticParams() {
+  return [{ id: '__placeholder__' }];
+}
 
 /**
- * Page Component (Client Component)
- *
- * Uses client-side data fetching to properly include auth cookies
+ * Loading component (inline skeleton)
  */
-export default function AdmissionProfilePage() {
-  const params = useParams()
-  const id = params?.id as string
-  const profileId = parseInt(id, 10)
+function AdmissionDetailLoading() {
+  return (
+    <div className="space-y-6">
+      {/* Header Skeleton */}
+      <Card>
+        <CardHeader>
+          <div className="flex justify-between">
+            <div className="space-y-2">
+              <Skeleton className="h-6 w-48" />
+              <Skeleton className="h-4 w-32" />
+            </div>
+            <Skeleton className="h-8 w-24" />
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 gap-4">
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-10 w-full" />
+          </div>
+        </CardContent>
+      </Card>
 
-  // Use hook for client-side fetch with auth cookies
-  const { data: profile, isLoading, isError } = useGetAdmission(profileId, {
-    enabled: !isNaN(profileId) && profileId > 0,
-  })
+      {/* Content Skeleton */}
+      <Card>
+        <CardHeader>
+          <Skeleton className="h-6 w-32" />
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-24 w-full" />
+          <Skeleton className="h-8 w-full" />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
 
-  if (isNaN(profileId)) {
-    notFound()
+/**
+ * Server Component - Fetches initial admission data
+ */
+async function AdmissionDetailPageContent({ profileId }: { profileId: number }) {
+  // ✅ Fetch admission profile on server
+  const initialData = await serverApi.admissions.getProfile(profileId);
+
+  return <AdmissionDetailClient profileId={profileId} initialData={initialData} />;
+}
+
+/**
+ * Page Component (Server Component)
+ *
+ * Next.js 16: params is now a Promise that must be awaited
+ */
+export default async function AdmissionProfilePage({
+  params
+}: {
+  params: Promise<{ id: string }>
+}) {
+  const { id } = await params;
+  
+  // Handle placeholder used for build validation
+  if (id === '__placeholder__') {
+    notFound();
   }
-
-  if (isLoading) {
-    return (
-      <div className="container mx-auto py-6 space-y-6">
-        <Card>
-          <CardHeader>
-            <Skeleton className="h-6 w-48" />
-            <Skeleton className="h-4 w-32" />
-          </CardHeader>
-          <CardContent>
-            <Skeleton className="h-32 w-full" />
-          </CardContent>
-        </Card>
-      </div>
-    )
-  }
-
-  if (isError || !profile) {
-    notFound()
-  }
+  
+  const profileId = Number(id);
 
   return (
-    <div className="container mx-auto py-6 space-y-6">
-      <AdmissionDetailClient
-        profileId={profileId}
-        initialData={profile}
-      />
-    </div>
-  )
+    <Suspense fallback={<AdmissionDetailLoading />}>
+      <AdmissionDetailPageContent profileId={profileId} />
+    </Suspense>
+  );
 }
