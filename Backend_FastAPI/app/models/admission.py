@@ -51,6 +51,16 @@ class AdmissionProfile(Base):
         index=True,
         comment="Link to Lead (IDOR check point: lead.unit_id)"
     )
+    
+    # ✅ FK Traceability (Mandatory Requirement #1)
+    # Links to source config for audit/debug/report
+    offering_admission_config_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("offering_admission_config.id", ondelete="SET NULL"),
+        nullable=True,  # Nullable for backward compatibility with existing profiles
+        index=True,
+        comment="Source config (audit/debug/report)"
+    )
 
     # Applicant Identity (Must be unique across system)
     citizen_id: Mapped[str] = mapped_column(
@@ -191,6 +201,27 @@ class AdmissionProfile(Base):
         uselist=False,  # One-to-one
         cascade="all, delete-orphan"
     )
+    
+    # ✅ Phase 1: FK Traceability - link to source config
+    offering_admission_config: Mapped["OfferingAdmissionConfig"] = relationship(
+        "OfferingAdmissionConfig",
+        back_populates="admission_profiles"
+    )
+    
+    # ✅ Phase 1: Relational data (replaces JSON fields)
+    subject_scores: Mapped[list] = relationship(
+        "ProfileSubjectScore",
+        back_populates="profile",
+        cascade="all, delete-orphan",
+        lazy="selectin"
+    )
+    documents: Mapped[list] = relationship(
+        "ProfileDocument",
+        back_populates="profile",
+        cascade="all, delete-orphan",
+        lazy="selectin"
+    )
 
     def __repr__(self):
         return f"<AdmissionProfile {self.id}: Lead {self.lead_id}, Status: {self.status}>"
+

@@ -124,6 +124,13 @@ class OfferingAcademicInfo(Base):
         foreign_keys=[updated_by_user_id],
         back_populates="updated_academic_infos"
     )
+    
+    # ✅ Phase 1: Relational admission config (replaces admission_criteria JSON)
+    admission_configs = relationship(
+        "OfferingAdmissionConfig",
+        back_populates="academic_info",
+        cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         UniqueConstraint('offering_id', 'academic_year', name='uq_offering_academic_year'),

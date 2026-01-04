@@ -134,6 +134,13 @@ class ConfigOfferingType(Base):
         comment="Soft delete flag"
     )
 
+    # Relationships
+    document_groups = relationship(
+        "DocumentGroup",
+        back_populates="offering_type",
+        cascade="all, delete-orphan"
+    )
+
     def __repr__(self):
         return f"<ConfigOfferingType {self.code}: {self.name}>"
 
@@ -183,6 +190,18 @@ class ConfigDocumentType(Base):
         default=True,
         index=True,
         comment="Soft delete flag"
+    )
+
+    # Relationships
+    group_items = relationship(
+        "DocumentGroupItem",
+        back_populates="document_type",
+        cascade="all, delete-orphan"
+    )
+    profile_documents = relationship(
+        "ProfileDocument",
+        back_populates="document_type",
+        cascade="all, delete-orphan"
     )
 
     def __repr__(self):
