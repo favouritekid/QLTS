@@ -221,12 +221,20 @@ async def create_profile(
     
     # Step 5.1: Phase 6 - Include admission_criteria from OfferingAcademicInfo
     # OfferingAcademicInfo contains year-specific criteria (Level 3)
+    # ⚠️ Use repository method to avoid MissingGreenlet (lazy loading in async)
     criteria = []
-    if lead.offering.academic_info_history:
-        # Get the most recent (or published) academic info
+    from app.repositories import OrganizationRepository
+    org_repo = OrganizationRepository(db)
+    academic_info_list = await org_repo.get_academic_info_history(
+        lead.offering_id, 
+        published_only=False
+    )
+    
+    if academic_info_list:
+        # Get the first published, or fallback to most recent
         academic_info = next(
-            (info for info in lead.offering.academic_info_history if info.is_published),
-            lead.offering.academic_info_history[0] if lead.offering.academic_info_history else None
+            (info for info in academic_info_list if info.is_published),
+            academic_info_list[0] if academic_info_list else None
         )
         if academic_info and academic_info.admission_criteria:
             criteria = academic_info.admission_criteria
