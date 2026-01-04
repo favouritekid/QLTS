@@ -222,11 +222,11 @@ async def create_profile(
     # Step 5.1: Phase 6 - Include admission_criteria from OfferingAcademicInfo
     # OfferingAcademicInfo contains year-specific criteria (Level 3)
     criteria = []
-    if lead.offering.academic_infos:
+    if lead.offering.academic_info_history:
         # Get the most recent (or published) academic info
         academic_info = next(
-            (info for info in lead.offering.academic_infos if info.is_published),
-            lead.offering.academic_infos[0] if lead.offering.academic_infos else None
+            (info for info in lead.offering.academic_info_history if info.is_published),
+            lead.offering.academic_info_history[0] if lead.offering.academic_info_history else None
         )
         if academic_info and academic_info.admission_criteria:
             criteria = academic_info.admission_criteria
