@@ -489,25 +489,98 @@ async def submit_and_evaluate(
     errors: List[str] = []
 
     # Get applied_rules (snapshot)
-    applied_rules = profile.applied_rules
-    min_gpa = applied_rules.get("min_gpa")
+    applied_rules = profile.applied_rules or {}
     mandatory_docs = applied_rules.get("mandatory_docs", [])
-
-    # Validation 1: Check GPA
-    if not profile.admission_scores:
-        errors.append("Điểm thi chưa được nhập (admission_scores is null)")
-    else:
-        gpa = profile.admission_scores.get("gpa")
+    
+    # ========================================
+    # Phase 6: Dynamic Admission Scoring Validation
+    # ========================================
+    
+    # Get criteria from applied_rules (new structure)
+    criteria = applied_rules.get("criteria", [])
+    min_gpa = applied_rules.get("min_gpa")  # Legacy fallback
+    
+    # Get admission scores from profile
+    admission_scores = profile.admission_scores or {}
+    selected_criterion_id = admission_scores.get("selected_criterion_id")
+    
+    if not criteria and min_gpa is not None:
+        # Legacy validation: GPA-only (backward compatibility)
+        gpa = admission_scores.get("gpa")
         if gpa is None:
             errors.append("GPA chưa được nhập")
-        elif min_gpa is not None and gpa < min_gpa:
-            errors.append(
-                f"GPA ({gpa}) không đạt yêu cầu tối thiểu ({min_gpa})"
+        elif gpa < min_gpa:
+            errors.append(f"GPA ({gpa}) không đạt yêu cầu tối thiểu ({min_gpa})")
+    
+    elif criteria:
+        # New validation: Dynamic admission method
+        if not selected_criterion_id:
+            errors.append("Chưa chọn phương thức xét tuyển")
+        else:
+            # Find selected criterion
+            selected_criterion = next(
+                (c for c in criteria if c.get("id") == selected_criterion_id),
+                None
             )
+            
+            if not selected_criterion:
+                errors.append(f"Phương thức xét tuyển không hợp lệ: {selected_criterion_id}")
+            else:
+                method_name = selected_criterion.get("method_name", "")
+                min_score = selected_criterion.get("min_score", 0)
+                subject_groups = selected_criterion.get("subject_groups", [])
+                
+                # Determine validation type based on method name
+                is_gpa_method = (
+                    "học bạ" in method_name.lower() or 
+                    "gpa" in method_name.lower() or
+                    "điểm trung bình" in method_name.lower()
+                )
+                
+                if is_gpa_method:
+                    # GPA-based validation
+                    gpa = admission_scores.get("gpa")
+                    if gpa is None:
+                        errors.append("GPA chưa được nhập")
+                    elif min_score and gpa < min_score:
+                        errors.append(
+                            f"GPA ({gpa}) không đạt điểm chuẩn ({min_score}) "
+                            f"của phương thức '{method_name}'"
+                        )
+                else:
+                    # Exam-based validation (subject scores)
+                    selected_group = admission_scores.get("selected_group")
+                    subject_scores = admission_scores.get("subject_scores", {})
+                    
+                    if subject_groups and not selected_group:
+                        errors.append("Chưa chọn tổ hợp môn xét tuyển")
+                    elif selected_group and selected_group not in subject_groups:
+                        errors.append(
+                            f"Tổ hợp môn '{selected_group}' không thuộc danh sách cho phép "
+                            f"({', '.join(subject_groups)})"
+                        )
+                    
+                    # Calculate total score from subject_scores
+                    if subject_scores:
+                        total = sum(
+                            v for v in subject_scores.values() 
+                            if isinstance(v, (int, float))
+                        )
+                        if min_score and total < min_score:
+                            errors.append(
+                                f"Tổng điểm ({total:.1f}) không đạt điểm chuẩn ({min_score}) "
+                                f"của phương thức '{method_name}'"
+                            )
+                    else:
+                        errors.append("Chưa nhập điểm các môn xét tuyển")
+    else:
+        # No validation criteria defined
+        errors.append("Không có tiêu chí xét tuyển được định nghĩa")
 
     # Validation 2: Check mandatory documents
     if not profile.documents_checklist:
-        errors.append("Danh sách tài liệu trống (documents_checklist is empty)")
+        if mandatory_docs:
+            errors.append("Danh sách tài liệu trống (documents_checklist is empty)")
     else:
         uploaded_docs = {
             doc["code"]: doc
