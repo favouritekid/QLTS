@@ -1147,7 +1147,7 @@ async def create_academic_info(
     try:
         # Verify offering exists
         repo = OrganizationRepository(db)
-        offering = await repo.get_offering_by_id(academic_info_in.offering_id)
+        offering = await repo.get_offering_by_id_full(academic_info_in.offering_id)
         if not offering:
             raise ResourceNotFoundError(
                 detail=f"Program offering with id {academic_info_in.offering_id} not found."
