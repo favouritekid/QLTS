@@ -47,3 +47,47 @@ async def import_system_categories(
         "message": "Import successful",
         "details": result
     }
+
+
+# =============================================================================
+# SUBJECT GROUPS (Phase 6: Dynamic Admission Scoring)
+# =============================================================================
+
+@router.get(
+    "/config/subject-groups",
+    response_model=List[schemas.SubjectGroupResponse],
+)
+async def get_subject_groups(
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(deps.get_current_user),
+):
+    """
+    Get all active subject groups for admission scoring.
+    
+    Returns list of subject groups (e.g., A00, D01) with their details.
+    Used by frontend to populate dropdowns in admission forms.
+    """
+    return await config_service.get_subject_groups(db)
+
+
+@router.get(
+    "/config/subject-groups/{code}",
+    response_model=schemas.SubjectGroupResponse,
+)
+async def get_subject_group_by_code(
+    code: str,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(deps.get_current_user),
+):
+    """
+    Get a specific subject group by code.
+    
+    Example: GET /config/subject-groups/A00
+    """
+    from fastapi import HTTPException
+    
+    result = await config_service.get_subject_group_by_code(db, code=code)
+    if not result:
+        raise HTTPException(status_code=404, detail=f"Subject group '{code}' not found")
+    return result
+

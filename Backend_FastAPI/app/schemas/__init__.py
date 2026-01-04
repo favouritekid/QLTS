@@ -82,6 +82,8 @@ from .organization import (
     DistributionRuleCreate,
     DistributionRuleUpdate,
     DistributionRuleResponse,
+    # Subject Group schemas (Phase 6: Dynamic Admission Scoring)
+    SubjectGroupResponse,
 )
 
 # --- 3. Từ pipeline.py (Depends on: config, organization) ---

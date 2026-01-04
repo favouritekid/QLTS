@@ -1165,3 +1165,94 @@ async def delete_distribution_rule(
         )
 
     return None, _post_commit
+
+
+# =============================================================================
+# SUBJECT GROUP CONFIGURATION (Phase 6: Dynamic Admission Scoring)
+# =============================================================================
+
+async def get_subject_groups(
+    db: AsyncSession,
+    active_only: bool = True
+) -> List[models.ConfigSubjectGroup]:
+    """
+    Get all subject groups for admission scoring.
+    
+    Args:
+        db: Database session
+        active_only: If True, only return active groups
+        
+    Returns:
+        List of ConfigSubjectGroup models ordered by display_order
+    """
+    from sqlalchemy import select
+    
+    query = select(models.ConfigSubjectGroup)
+    
+    if active_only:
+        query = query.where(models.ConfigSubjectGroup.is_active == True)
+    
+    query = query.order_by(models.ConfigSubjectGroup.display_order)
+    
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+async def get_subject_group_by_code(
+    db: AsyncSession,
+    code: str
+) -> models.ConfigSubjectGroup | None:
+    """
+    Get a specific subject group by code.
+    
+    Args:
+        db: Database session
+        code: Subject group code (e.g., 'A00', 'D01')
+        
+    Returns:
+        ConfigSubjectGroup or None if not found
+    """
+    from sqlalchemy import select
+    
+    query = (
+        select(models.ConfigSubjectGroup)
+        .where(models.ConfigSubjectGroup.code == code.upper())
+        .where(models.ConfigSubjectGroup.is_active == True)
+    )
+    
+    result = await db.execute(query)
+    return result.scalar_one_or_none()
+
+
+async def get_subject_groups_by_codes(
+    db: AsyncSession,
+    codes: List[str]
+) -> List[models.ConfigSubjectGroup]:
+    """
+    Get multiple subject groups by their codes.
+    Used to resolve subject_groups array in admission_criteria.
+    
+    Args:
+        db: Database session
+        codes: List of codes (e.g., ['A00', 'D01', 'B00'])
+        
+    Returns:
+        List of ConfigSubjectGroup models matching the codes
+    """
+    from sqlalchemy import select
+    
+    if not codes:
+        return []
+    
+    upper_codes = [c.upper() for c in codes]
+    
+    query = (
+        select(models.ConfigSubjectGroup)
+        .where(models.ConfigSubjectGroup.code.in_(upper_codes))
+        .where(models.ConfigSubjectGroup.is_active == True)
+        .order_by(models.ConfigSubjectGroup.display_order)
+    )
+    
+    result = await db.execute(query)
+    return result.scalars().all()
+
