@@ -144,6 +144,8 @@ from .admission import (
     AdmissionProfileResponse,
     AdmissionSubmitResponse,
     EnrollStudentResponse,
+    # Document upload
+    DocumentUploadResponse,
     # Student schemas
     StudentDocumentResponse,
     StudentResponse,

@@ -486,6 +486,30 @@ class StudentDocumentResponse(BaseModel):
     )
 
 
+class DocumentUploadResponse(BaseModel):
+    """Schema for document upload response."""
+    code: str = Field(..., description="Document code (e.g., HOC_BA)")
+    label: str = Field(..., description="Human-readable name")
+    is_mandatory: bool = Field(default=True)
+    status: Literal["missing", "uploaded", "verified", "rejected"] = Field(
+        default="uploaded",
+        description="Upload status"
+    )
+    file_path: Optional[str] = Field(
+        None,
+        description="File path where document is stored"
+    )
+    uploaded_at: Optional[str] = Field(
+        None,
+        description="Upload timestamp (ISO format)"
+    )
+
+    model_config = ConfigDict(
+        from_attributes=True,
+        validate_assignment=True
+    )
+
+
 class StudentResponse(BaseModel):
     """Schema for Student response."""
     id: int
@@ -522,4 +546,5 @@ __all__ = [
     # Student schemas
     "StudentDocumentResponse",
     "StudentResponse",
+    "DocumentUploadResponse",
 ]

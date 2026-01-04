@@ -3,21 +3,27 @@
 /**
  * Documents Tab Component
  * 
- * Checklist of required documents with status badges.
+ * Checklist of required documents with status badges, upload, and view functionality.
  */
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { FileText, Check, AlertCircle, Clock, XCircle, Upload, Loader2 } from "lucide-react"
+import { FileText, Check, AlertCircle, Clock, XCircle, Upload, Loader2, Eye, ExternalLink } from "lucide-react"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import { useUploadAdmissionDocument } from "@/hooks/admissions/useAdmissions"
 import { useRef, useState } from "react"
+import { toast } from "sonner"
 
 interface DocumentsTabProps {
   profile: AdmissionProfileResponse
   isEditable: boolean
 }
+
+// File validation constants
+const ALLOWED_TYPES = ["application/pdf", "image/jpeg", "image/png", "image/jpg"]
+const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB
+const ALLOWED_EXTENSIONS = ".pdf, .jpg, .jpeg, .png"
 
 const STATUS_CONFIG = {
   missing: {
@@ -56,14 +62,46 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
     }
   }
 
+  const validateFile = (file: File): string | null => {
+    // Check file type
+    if (!ALLOWED_TYPES.includes(file.type)) {
+      return `Loại file không hợp lệ. Chỉ chấp nhận: ${ALLOWED_EXTENSIONS}`
+    }
+    // Check file size
+    if (file.size > MAX_FILE_SIZE) {
+      const sizeMB = (file.size / (1024 * 1024)).toFixed(1)
+      return `File quá lớn (${sizeMB}MB). Tối đa 10MB.`
+    }
+    return null
+  }
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file && selectedDocCode) {
-        uploadMutation.mutate({ docCode: selectedDocCode, file })
+      // Validate file
+      const error = validateFile(file)
+      if (error) {
+        toast.error(error)
+        return
+      }
+      // Upload file
+      uploadMutation.mutate({ docCode: selectedDocCode, file })
     }
+  }
+
+  const handleViewDocument = (filePath: string) => {
+    // Construct the URL to view the document
+    // Backend serves files from /uploads/* static path
+    const url = `${process.env.NEXT_PUBLIC_API_URL || ""}/${filePath}`
+    window.open(url, "_blank", "noopener,noreferrer")
   }
   
   const uploadedCount = documents.filter(
+    (d) => d.status === "uploaded" || d.status === "verified"
+  ).length
+
+  const mandatoryDocs = documents.filter((d) => d.is_mandatory)
+  const mandatoryUploadedCount = mandatoryDocs.filter(
     (d) => d.status === "uploaded" || d.status === "verified"
   ).length
 
@@ -78,13 +116,18 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
             </CardTitle>
             <CardDescription>
               {uploadedCount} / {documents.length} tài liệu đã nộp
+              {mandatoryDocs.length > 0 && (
+                <span className="ml-2">
+                  (Bắt buộc: {mandatoryUploadedCount}/{mandatoryDocs.length})
+                </span>
+              )}
             </CardDescription>
           </div>
           {/* Progress indicator */}
           <div className="flex items-center gap-2">
             <div className="w-32 h-2 bg-muted rounded-full overflow-hidden">
               <div
-                className="h-full bg-primary transition-all"
+                className="h-full bg-primary transition-all duration-300"
                 style={{
                   width: documents.length > 0
                     ? `${(uploadedCount / documents.length) * 100}%`
@@ -92,13 +135,18 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
                 }}
               />
             </div>
-            <span className="text-sm text-muted-foreground">
+            <span className="text-sm text-muted-foreground font-medium">
               {documents.length > 0
                 ? Math.round((uploadedCount / documents.length) * 100)
                 : 0}%
             </span>
           </div>
         </div>
+        
+        {/* File type info */}
+        <p className="text-xs text-muted-foreground mt-2">
+          Định dạng: {ALLOWED_EXTENSIONS} • Tối đa 10MB
+        </p>
       </CardHeader>
       <CardContent>
         {documents.length === 0 ? (
@@ -114,6 +162,8 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
             {documents.map((doc, index) => {
               const config = STATUS_CONFIG[doc.status] || STATUS_CONFIG.missing
               const StatusIcon = config.icon
+              const isUploading = uploadMutation.isPending && selectedDocCode === doc.code
+              const hasFile = doc.file_path && (doc.status === "uploaded" || doc.status === "verified")
               
               return (
                 <div
@@ -125,9 +175,19 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
                       <FileText className="h-4 w-4 text-muted-foreground" />
                     </div>
                     <div>
-                      <p className="font-medium">{doc.label}</p>
+                      <p className="font-medium flex items-center gap-1">
+                        {doc.label}
+                        {doc.is_mandatory && (
+                          <span className="text-red-500 text-xs">*</span>
+                        )}
+                      </p>
                       <p className="text-xs text-muted-foreground">
                         Mã: {doc.code}
+                        {doc.uploaded_at && (
+                          <span className="ml-2">
+                            • {new Date(doc.uploaded_at).toLocaleDateString("vi-VN")}
+                          </span>
+                        )}
                       </p>
                     </div>
                   </div>
@@ -138,19 +198,34 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
                       {config.label}
                     </Badge>
                     
-                    {isEditable && doc.status === "missing" && (
+                    {/* View button for uploaded documents */}
+                    {hasFile && (
+                      <Button 
+                        size="sm" 
+                        variant="ghost"
+                        onClick={() => handleViewDocument(doc.file_path!)}
+                        title="Xem tài liệu"
+                      >
+                        <Eye className="h-4 w-4 mr-1" />
+                        Xem
+                        <ExternalLink className="h-3 w-3 ml-1 opacity-50" />
+                      </Button>
+                    )}
+                    
+                    {/* Upload button */}
+                    {isEditable && (doc.status === "missing" || doc.status === "rejected") && (
                       <Button 
                         size="sm" 
                         variant="outline" 
                         onClick={() => handleUploadClick(doc.code)}
                         disabled={uploadMutation.isPending}
                       >
-                        {uploadMutation.isPending && selectedDocCode === doc.code ? (
+                        {isUploading ? (
                             <Loader2 className="h-4 w-4 mr-1 animate-spin" />
                         ) : (
                             <Upload className="h-4 w-4 mr-1" />
                         )}
-                        Tải lên
+                        {doc.status === "rejected" ? "Tải lại" : "Tải lên"}
                       </Button>
                     )}
                   </div>
@@ -160,14 +235,14 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
           </div>
         )}
       </CardContent>
-            {/* Hidden File Input */}
-            <input 
-                type="file" 
-                ref={fileInputRef} 
-                className="hidden" 
-                onChange={handleFileChange}
-                accept=".pdf,.jpg,.jpeg,.png"
-            />
+      {/* Hidden File Input */}
+      <input 
+        type="file" 
+        ref={fileInputRef} 
+        className="hidden" 
+        onChange={handleFileChange}
+        accept={ALLOWED_EXTENSIONS}
+      />
     </Card>
   )
 }

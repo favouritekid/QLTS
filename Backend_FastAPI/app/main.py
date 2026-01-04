@@ -584,6 +584,16 @@ if STATIC_DIR.exists():
 else:
     log.warning(f"⚠️ Static directory not found at {STATIC_DIR}")
 
+# Mount uploads directory to serve uploaded documents (admissions, etc.)
+UPLOADS_DIR = Path(__file__).parent.parent / "uploads"
+if UPLOADS_DIR.exists():
+    fastapi_app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
+    log.info(f"✅ Uploads files mounted at /uploads from {UPLOADS_DIR}")
+else:
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    fastapi_app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
+    log.info(f"✅ Uploads directory created and mounted at /uploads from {UPLOADS_DIR}")
+
 
 # === ✅ CẢI TIẾN: Vấn đề #4 - Thêm Metrics Endpoint ===
 @fastapi_app.get("/metrics", tags=["Utilities"])

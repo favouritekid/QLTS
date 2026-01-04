@@ -138,6 +138,7 @@ export const documentItemSchema = z.object({
     .min(1, "Tên tài liệu không được để trống")
     .max(255, "Tên tài liệu không được quá 255 ký tự")
     .trim(),
+  is_mandatory: z.boolean().optional(),
   status: z.enum(["missing", "uploaded", "verified", "rejected"]),
   file_path: z
     .string()
@@ -146,7 +147,6 @@ export const documentItemSchema = z.object({
     .optional(),
   uploaded_at: z
     .string()
-    .datetime()
     .nullable()
     .optional(),
 })

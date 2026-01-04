@@ -393,6 +393,7 @@ async def submit_admission_profile(
 @limiter.limit(RateLimits.DATA_WRITE)
 @router.post(
     "/{profile_id}/documents/{doc_code}/upload",
+    response_model=schemas.DocumentUploadResponse,
     summary="Upload admission document",
     status_code=status.HTTP_200_OK,
 )
@@ -410,7 +411,7 @@ async def upload_document(
     File will be saved and the checklist item status updated to 'uploaded'.
     """
     try:
-        updated_doc = await admission_service.upload_document(
+        updated_doc, post_commit = await admission_service.upload_document(
             db=db,
             profile_id=profile_id,
             doc_code=doc_code,
@@ -418,6 +419,7 @@ async def upload_document(
             current_user=current_user,
         )
         await db.commit()
+        await post_commit()
         return updated_doc
 
     except ResourceNotFoundError as e:

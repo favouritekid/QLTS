@@ -600,7 +600,7 @@ async def upload_document(
     doc_code: str,
     file: Any,  # UploadFile
     current_user: models.User,
-) -> Dict[str, Any]:
+) -> tuple[Dict[str, Any], Any]:
     """
     Upload a document for an admission profile.
     
@@ -610,6 +610,12 @@ async def upload_document(
     3. Verify doc_code exists in checklist
     4. Save file to disk (uploads/admissions/{id}/{doc_code}_{filename})
     5. Update documents_checklist status='uploaded' and file_path
+    
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+    
+    Returns:
+        Tuple of (updated_doc_item, post_commit_callback)
     
     Security:
     - Path Traversal: filename sanitization (inherent in modern frameworks but good practice)
@@ -621,6 +627,28 @@ async def upload_document(
     if profile.status not in ["draft", "rejected"]:
         raise BadRequest(f"Cannot upload documents for profile with status '{profile.status}'")
 
+    # File validation constants
+    ALLOWED_CONTENT_TYPES = ["application/pdf", "image/jpeg", "image/png"]
+    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+    
+    # Validate file type
+    if file.content_type not in ALLOWED_CONTENT_TYPES:
+        raise BadRequest(
+            f"Invalid file type '{file.content_type}'. "
+            "Allowed: PDF, JPG, PNG"
+        )
+    
+    # Validate file size (read file to check size)
+    file.file.seek(0, 2)  # Seek to end
+    file_size = file.file.tell()
+    file.file.seek(0)  # Reset to beginning
+    
+    if file_size > MAX_FILE_SIZE:
+        size_mb = file_size / (1024 * 1024)
+        raise BadRequest(
+            f"File too large ({size_mb:.1f}MB). Maximum allowed: 10MB"
+        )
+
     # Find document item in checklist
     checklist = profile.documents_checklist or []
     doc_item = next((d for d in checklist if d["code"] == doc_code), None)
@@ -628,16 +656,33 @@ async def upload_document(
     if not doc_item:
         raise BadRequest(f"Document code '{doc_code}' not found in checklist")
 
-    # Prepare file path
+    # Prepare file path with security measures
     import os
     import shutil
+    import uuid
     
     upload_dir = f"uploads/admissions/{profile_id}"
     os.makedirs(upload_dir, exist_ok=True)
     
-    # Sanitize filename (basic)
-    filename = file.filename.replace(" ", "_")
-    file_path = f"{upload_dir}/{doc_code}_{filename}"
+    # SECURITY: Delete old file if exists (prevent orphan files)
+    old_file_path = doc_item.get("file_path")
+    if old_file_path and os.path.exists(old_file_path):
+        try:
+            os.remove(old_file_path)
+            log.info("Old document file deleted", old_path=old_file_path)
+        except OSError as e:
+            log.warning("Failed to delete old file", path=old_file_path, error=str(e))
+    
+    # SECURITY: Generate UUID-based filename (prevents path traversal & leaks)
+    original_filename = file.filename or "document"
+    file_extension = os.path.splitext(original_filename)[1].lower()
+    # Whitelist extensions
+    allowed_extensions = {".pdf", ".jpg", ".jpeg", ".png"}
+    if file_extension not in allowed_extensions:
+        file_extension = ".bin"  # Fallback for unknown types
+    
+    unique_filename = f"{doc_code}_{uuid.uuid4().hex[:12]}{file_extension}"
+    file_path = f"{upload_dir}/{unique_filename}"
     
     # Save file
     try:
@@ -648,29 +693,55 @@ async def upload_document(
         raise BadRequest("Failed to save file")
 
     # Update checklist
-    # We need to create a new list to ensure SQLAlchemy detects change for JSONB
+    # IMPORTANT: SQLAlchemy doesn't detect in-place mutations of JSONB columns.
+    # We must create new dict objects AND use flag_modified() to ensure persistence.
+    from sqlalchemy.orm.attributes import flag_modified
+    
     new_checklist = []
+    uploaded_at = datetime.now().isoformat()
     for item in checklist:
         if item["code"] == doc_code:
-            item["status"] = "uploaded"
-            item["file_path"] = file_path
-            item["uploaded_at"] = datetime.now().isoformat()
-        new_checklist.append(item)
+            # Create a NEW dict with updated values (not mutate in place)
+            new_item = {
+                **item,
+                "status": "uploaded",
+                "file_path": file_path,
+                "uploaded_at": uploaded_at,
+            }
+            new_checklist.append(new_item)
+        else:
+            # Copy other items to create new references
+            new_checklist.append(dict(item))
     
     profile.documents_checklist = new_checklist
     profile.updated_at = datetime.now(timezone.utc)
     
+    # Explicitly mark the JSONB column as modified
+    flag_modified(profile, "documents_checklist")
+    
     await db.flush()
     
-    log.info(
-        "Document uploaded", 
-        profile_id=profile_id, 
-        doc_code=doc_code, 
-        file_path=file_path,
-        user_id=current_user.id
-    )
+    # Prepare response data (matches DocumentUploadResponse schema)
+    response_data = {
+        "code": doc_code,
+        "label": doc_item.get("label", doc_code),
+        "is_mandatory": doc_item.get("is_mandatory", True),
+        "status": "uploaded",
+        "file_path": file_path,
+        "uploaded_at": uploaded_at,
+    }
     
-    return doc_item
+    # Post-commit callback for logging/side effects
+    async def _post_commit():
+        log.info(
+            "Document uploaded", 
+            profile_id=profile_id, 
+            doc_code=doc_code, 
+            file_path=file_path,
+            user_id=current_user.id
+        )
+    
+    return response_data, _post_commit
 
 
 async def enroll_student(

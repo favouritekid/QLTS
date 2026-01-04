@@ -63,6 +63,7 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/admissions/{profile_id}", "action": "PUT"},   # Update profile
         {"subject": "{role}", "object": "/api/admissions/{profile_id}/submit", "action": "POST"},  # Submit
         {"subject": "{role}", "object": "/api/admissions/{profile_id}/enroll", "action": "POST"},  # Enroll
+        {"subject": "{role}", "object": "/api/admissions/{profile_id}/documents/{doc_code}/upload", "action": "POST"},  # Upload doc
         # Profile access
         {"subject": "{role}", "object": "/api/profile", "action": "GET"},
         {"subject": "{role}", "object": "/api/profile", "action": "PUT"},
