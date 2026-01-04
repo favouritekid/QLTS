@@ -9,7 +9,8 @@ from .config import (
     ConfigDegreeLevel,
     ConfigDocumentType,
     ConfigOfferingType,
-    ConfigSystemCategory, # NEW
+    ConfigSubjectGroup,  # Phase 6: Admission Scoring
+    ConfigSystemCategory,
     KpiConfig,
     KpiMonthlySnapshot,
     KpiTarget,
@@ -65,7 +66,8 @@ __all__ = [
     "ConfigDegreeLevel",
     "ConfigDocumentType",
     "ConfigOfferingType",
-    "ConfigSystemCategory", # NEW
+    "ConfigSubjectGroup",  # Phase 6: Admission Scoring
+    "ConfigSystemCategory",
     "KpiConfig",
     "KpiMonthlySnapshot",
     "KpiTarget",

@@ -494,3 +494,53 @@ class ConfigSystemCategory(Base):
     def __repr__(self):
         return f"<ConfigSystemCategory {self.type}.{self.code}: {self.name}>"
 
+
+class ConfigSubjectGroup(Base):
+    """
+    Cấu hình Tổ hợp môn xét tuyển (Subject Group Combinations).
+    
+    Stores standardized subject groups for admission scoring:
+    - A00: Toán - Lý - Hóa
+    - A01: Toán - Lý - Anh
+    - D01: Toán - Văn - Anh
+    - D07: Toán - Hóa - Anh
+    
+    Used to dynamically render score input fields on frontend.
+    """
+    __tablename__ = "config_subject_group"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(
+        String(10),
+        unique=True,
+        nullable=False,
+        index=True,
+        comment="Mã tổ hợp (vd: 'A00', 'D01')"
+    )
+    name = Column(
+        String(100),
+        nullable=False,
+        comment="Tên hiển thị (vd: 'Toán - Lý - Hóa')"
+    )
+    subjects = Column(
+        JSON,
+        nullable=False,
+        comment="Danh sách môn học (vd: ['math', 'physics', 'chemistry'])"
+    )
+    display_order = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="Thứ tự hiển thị trong dropdown"
+    )
+    is_active = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        index=True,
+        comment="Soft delete flag"
+    )
+
+    def __repr__(self):
+        return f"<ConfigSubjectGroup {self.code}: {self.name}>"
+
