@@ -7,7 +7,7 @@ Tables:
 - CriteriaSubjectGroup: Join table linking criteria to allowed subject groups
 """
 
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Numeric, Text, UniqueConstraint, CheckConstraint
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Numeric, Text, UniqueConstraint, CheckConstraint, Date
 from sqlalchemy.orm import relationship
 
 from app.models.base import Base
@@ -108,6 +108,29 @@ class AdmissionCriteria(Base):
         Numeric(precision=3, scale=1),
         nullable=True,
         comment="Điểm tối thiểu mỗi môn (vd: không môn nào dưới 1.0)"
+    )
+
+    # =========================================================================
+    # POLICY VERSIONING (Required for audit + rule change tracking)
+    # =========================================================================
+    
+    policy_version = Column(
+        String(20),
+        nullable=False,
+        default="2025.1",
+        comment="Phiên bản quy chế: 2025.1, 2026.1, etc."
+    )
+    
+    effective_from = Column(
+        Date,
+        nullable=True,
+        comment="Ngày bắt đầu áp dụng (NULL = có hiệu lực ngay)"
+    )
+    
+    effective_to = Column(
+        Date,
+        nullable=True,
+        comment="Ngày kết thúc hiệu lực (NULL = vẫn đang hiệu lực)"
     )
 
     # Relationships

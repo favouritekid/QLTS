@@ -14,7 +14,7 @@ Architecture Compliance:
 """
 
 from datetime import datetime
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Dict
 import html
 
 from pydantic import BaseModel, Field, field_validator, ConfigDict
@@ -135,39 +135,49 @@ class AdmissionScoreSchema(BaseModel):
     """
     Admission scores (stored in admission_profile.admission_scores JSONB object).
 
-    Security:
-    - GPA Range: 0.0 - 10.0 (Vietnam education system)
-    - Subject Scores: Optional, 0.0 - 10.0
+    Supports two scoring modes:
+    1. GPA-only: For "học bạ" methods without subject groups
+    2. Subject-based: For methods with subject_groups (e.g., A00, D01)
+
+    Phase 6: Dynamic Admission Scoring
     """
-    gpa: float = Field(
-        ...,
-        ge=0.0,
-        le=10.0,
-        description="Overall GPA (required for admission evaluation)"
+    # Selected admission criterion and subject group
+    selected_criterion_id: Optional[str] = Field(
+        None,
+        description="ID of selected admission criterion from applied_rules.criteria"
     )
-    math_score: Optional[float] = Field(
+    selected_group: Optional[str] = Field(
+        None,
+        description="Selected subject group code (e.g., 'A00', 'D01')"
+    )
+    
+    # GPA for học bạ-based methods
+    gpa: Optional[float] = Field(
         None,
         ge=0.0,
         le=10.0,
-        description="Math score (optional)"
+        description="Overall GPA (for học bạ/GPA-based methods)"
     )
-    literature_score: Optional[float] = Field(
+    
+    # Dynamic subject scores (e.g., {"math": 8.5, "physics": 7.0, "chemistry": 9.0})
+    subject_scores: Optional[Dict[str, Optional[float]]] = Field(
         None,
-        ge=0.0,
-        le=10.0,
-        description="Literature score (optional)"
+        description="Subject scores keyed by subject code (e.g., 'math', 'physics')"
     )
-    english_score: Optional[float] = Field(
-        None,
-        ge=0.0,
-        le=10.0,
-        description="English score (optional)"
-    )
-    # Add more subjects as needed
+    
+    # Legacy fields (kept for backward compatibility)
+    math_score: Optional[float] = Field(None, ge=0.0, le=10.0)
+    literature_score: Optional[float] = Field(None, ge=0.0, le=10.0)
+    english_score: Optional[float] = Field(None, ge=0.0, le=10.0)
+    
+    # Computed fields (optional, for display)
+    total_score: Optional[float] = Field(None, ge=0.0, description="Total of subject scores")
+    average_score: Optional[float] = Field(None, ge=0.0, le=10.0, description="Average score")
 
     model_config = ConfigDict(
         str_strip_whitespace=True,
-        validate_assignment=True
+        validate_assignment=True,
+        extra="allow"  # Allow extra fields for flexibility
     )
 
 

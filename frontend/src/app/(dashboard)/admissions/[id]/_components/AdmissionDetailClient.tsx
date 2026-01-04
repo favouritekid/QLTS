@@ -90,12 +90,7 @@ export function AdmissionDetailClient({
       party_official_entry_date: profile?.party_official_entry_date || undefined,
       family_info: profile?.family_info || [],
       academic_history: profile?.academic_history || [],
-      admission_scores: profile?.admission_scores || {
-        gpa: undefined,
-        math_score: undefined,
-        literature_score: undefined,
-        english_score: undefined,
-      },
+      admission_scores: profile?.admission_scores || {},
       documents_checklist: profile?.documents_checklist || [],
       version: profile?.version ?? 1,
     },
@@ -126,12 +121,7 @@ export function AdmissionDetailClient({
         party_official_entry_date: profile.party_official_entry_date || undefined,
         family_info: profile.family_info || [],
         academic_history: profile.academic_history || [],
-        admission_scores: profile.admission_scores || {
-           gpa: undefined,
-           math_score: undefined,
-           literature_score: undefined,
-           english_score: undefined,
-        },
+        admission_scores: profile.admission_scores || {},
         documents_checklist: profile.documents_checklist || [],
         version: profile.version ?? 1,
       })

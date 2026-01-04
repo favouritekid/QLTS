@@ -96,9 +96,10 @@ export function useUpdateAdmission(id: number) {
 
   return useMutation({
     mutationFn: (data: AdmissionProfileUpdate) => admissionsApi.updateAdmission(id, data),
-    onSuccess: (data) => {
+    onSuccess: () => {
       toast.success("Cập nhật thành công")
-      queryClient.setQueryData(admissionsKeys.detail(id), data)
+      // Invalidate to refetch fresh data from server
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
       queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {

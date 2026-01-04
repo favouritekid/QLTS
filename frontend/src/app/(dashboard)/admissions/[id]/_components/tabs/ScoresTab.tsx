@@ -1,13 +1,16 @@
 "use client"
 
 import { useMemo, useEffect } from "react"
-import { UseFormReturn, FieldValues } from "react-hook-form"
+import { UseFormReturn, FieldValues, useWatch } from "react-hook-form"
+import { useQuery } from "@tanstack/react-query"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Calculator, CheckCircle2, XCircle, AlertCircle, BookOpen } from "lucide-react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { configApi, type SubjectGroup } from "@/lib/api/config"
 
 // Types for admission criteria (from applied_rules snapshot)
 interface AdmissionCriterion {
@@ -27,8 +30,8 @@ interface ScoresTabProps {
   } | null
 }
 
-// Map subject group code to display name (Vietnamese)
-const SUBJECT_MAP: Record<string, string> = {
+// Vietnamese labels for subject codes
+const SUBJECT_LABELS: Record<string, string> = {
   math: "Toán",
   physics: "Vật lí",
   chemistry: "Hóa học",
@@ -52,29 +55,31 @@ const SUBJECT_MAP: Record<string, string> = {
   agricultural_tech: "Công nghệ nông nghiệp",
 }
 
-// Parse subjects from tổ hợp môn name (e.g., "Toán, Vật lí, Hóa học" -> ["math", "physics", "chemistry"])
-function parseSubjectsFromName(name: string): string[] {
-  const subjectKeys: string[] = []
-  const parts = name.split(",").map(s => s.trim())
-  
-  for (const part of parts) {
-    const entry = Object.entries(SUBJECT_MAP).find(([_, vn]) => vn === part)
-    if (entry) {
-      subjectKeys.push(entry[0])
-    }
-  }
-  
-  return subjectKeys
-}
 
 export function ScoresTab({ form, isEditable, minGpa, appliedRules }: ScoresTabProps) {
   // Get admission criteria from applied_rules
   const criteria = appliedRules?.criteria || []
   
-  // Watch current selections
-  const selectedCriterionId = form.watch("admission_scores.selected_criterion_id") || ""
-  const selectedGroup = form.watch("admission_scores.selected_group") || ""
-  const gpa = form.watch("admission_scores.gpa") || 0
+  // Use useWatch for better reactivity
+  const selectedCriterionId = useWatch({
+    control: form.control,
+    name: "admission_scores.selected_criterion_id",
+  })
+  
+  const selectedGroup = useWatch({
+    control: form.control,
+    name: "admission_scores.selected_group",
+  })
+  
+  const gpa = useWatch({
+    control: form.control,
+    name: "admission_scores.gpa",
+  })
+  
+  const subjectScoresData = useWatch({
+    control: form.control,
+    name: "admission_scores.subject_scores",
+  })
   
   // Find selected criterion
   const selectedCriterion = useMemo(() => {
@@ -84,46 +89,79 @@ export function ScoresTab({ form, isEditable, minGpa, appliedRules }: ScoresTabP
   // Get available subject groups for selected criterion
   const availableGroups = selectedCriterion?.subject_groups || []
   
-  // Get subjects for selected group (from name for now, until we fetch from API)
-  // TODO: Fetch from /config/subject-groups/{code} API for accurate subjects
+  // Fetch all subject groups from API
+  const { data: allSubjectGroups, isLoading: isLoadingGroups } = useQuery({
+    queryKey: ["subject-groups"],
+    queryFn: () => configApi.getSubjectGroups(),
+    staleTime: 1000 * 60 * 10, // Cache 10 mins
+  })
+  
+  // Get selected subject group details from API
+  const selectedGroupDetails = useMemo(() => {
+    if (!selectedGroup || !allSubjectGroups) return null
+    return allSubjectGroups.find(g => g.code === selectedGroup) || null
+  }, [selectedGroup, allSubjectGroups])
+  
+  // Get subjects from API data
   const subjects = useMemo(() => {
-    if (!selectedGroup) return []
-    // For now, return common subject combinations based on group code prefix
-    // This should be fetched from API in production
-    const commonGroups: Record<string, string[]> = {
-      "A00": ["math", "physics", "chemistry"],
-      "A01": ["math", "physics", "english"],
-      "B00": ["math", "chemistry", "biology"],
-      "C00": ["literature", "history", "geography"],
-      "D01": ["literature", "math", "english"],
-      "D07": ["math", "chemistry", "english"],
-    }
-    return commonGroups[selectedGroup] || ["math", "physics", "chemistry"]
-  }, [selectedGroup])
+    return selectedGroupDetails?.subjects || []
+  }, [selectedGroupDetails])
   
   // Calculate total score from subject scores
-  const subjectScores = subjects.map(subject => {
-    const score = form.watch(`admission_scores.subject_scores.${subject}`)
-    return score ? parseFloat(score) : 0
-  })
-  const totalScore = subjectScores.reduce((sum, s) => sum + s, 0)
+  const totalScore = useMemo(() => {
+    if (!subjectScoresData || typeof subjectScoresData !== 'object') return 0
+    return Object.values(subjectScoresData as Record<string, number>).reduce(
+      (sum, score) => sum + (typeof score === 'number' ? score : 0),
+      0
+    )
+  }, [subjectScoresData])
+  
   const averageScore = subjects.length > 0 ? totalScore / subjects.length : 0
   
-  // Auto-update calculated values
+  // Initialize subject_scores when group changes
   useEffect(() => {
-    if (subjects.length > 0 && totalScore > 0) {
-      form.setValue("admission_scores.total_score", totalScore)
-      form.setValue("admission_scores.average_score", averageScore)
+    if (selectedGroupDetails?.subjects && isEditable && selectedGroup) {
+      const currentScores = form.getValues("admission_scores.subject_scores") || {}
+      const newScores: Record<string, number | null> = {}
+      
+      selectedGroupDetails.subjects.forEach((subject) => {
+        // Preserve existing score if available
+        newScores[subject] = currentScores[subject] ?? null
+      })
+      
+      form.setValue("admission_scores.subject_scores", newScores, { 
+        shouldDirty: true,
+        shouldValidate: false 
+      })
     }
-  }, [totalScore, averageScore, subjects.length, form])
+  }, [selectedGroupDetails, selectedGroup, form, isEditable])
+  
+  // Reset selected_group when criterion changes and group is no longer valid
+  useEffect(() => {
+    if (isEditable && selectedCriterionId) {
+      const currentGroup = form.getValues("admission_scores.selected_group")
+      if (currentGroup && !availableGroups.includes(currentGroup)) {
+        form.setValue("admission_scores.selected_group", null, { shouldDirty: true })
+        form.setValue("admission_scores.subject_scores", {}, { shouldDirty: true })
+      }
+    }
+  }, [selectedCriterionId, availableGroups, form, isEditable])
   
   // Validation
   const currentGpa = gpa ? parseFloat(gpa) : 0
   const minScore = selectedCriterion?.min_score || 0
-  const isGpaMethod = selectedCriterion?.method_name?.toLowerCase().includes("học bạ") || 
-                      selectedCriterion?.method_name?.toLowerCase().includes("gpa")
   
-  const isQualified = isGpaMethod 
+  // Check if this is ONLY a GPA method (no subject groups) or also supports subject-based scoring
+  const isGpaOnlyMethod = (
+    (selectedCriterion?.method_name?.toLowerCase().includes("học bạ") || 
+     selectedCriterion?.method_name?.toLowerCase().includes("gpa")) &&
+    (!selectedCriterion?.subject_groups || selectedCriterion.subject_groups.length === 0)
+  )
+  
+  // Method supports subject-based scoring if it has subject_groups
+  const supportsSubjectScoring = availableGroups.length > 0
+  
+  const isQualified = isGpaOnlyMethod 
     ? currentGpa >= minGpa && currentGpa > 0
     : totalScore >= minScore && totalScore > 0
   
@@ -197,21 +235,33 @@ export function ScoresTab({ form, isEditable, minGpa, appliedRules }: ScoresTabP
                   <FormItem>
                     <FormLabel>Tổ hợp môn xét tuyển *</FormLabel>
                     <Select
-                      disabled={!isEditable}
+                      disabled={!isEditable || isLoadingGroups}
                       value={field.value || ""}
                       onValueChange={field.onChange}
                     >
                       <FormControl>
                         <SelectTrigger>
-                          <SelectValue placeholder="Chọn tổ hợp môn" />
+                          <SelectValue placeholder={isLoadingGroups ? "Đang tải..." : "Chọn tổ hợp môn"} />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        {availableGroups.map((group) => (
-                          <SelectItem key={group} value={group}>
-                            {group}
-                          </SelectItem>
-                        ))}
+                        {isLoadingGroups ? (
+                          <div className="p-2">
+                            <Skeleton className="h-6 w-full" />
+                          </div>
+                        ) : (
+                          availableGroups.map((group) => {
+                            const groupInfo = allSubjectGroups?.find(g => g.code === group)
+                            return (
+                              <SelectItem key={group} value={group}>
+                                <span className="font-medium">{group}</span>
+                                {groupInfo && (
+                                  <span className="ml-2 text-muted-foreground">({groupInfo.name})</span>
+                                )}
+                              </SelectItem>
+                            )
+                          })
+                        )}
                       </SelectContent>
                     </Select>
                     <FormMessage />
@@ -220,8 +270,8 @@ export function ScoresTab({ form, isEditable, minGpa, appliedRules }: ScoresTabP
               />
             )}
 
-            {/* Step 3A: GPA Input (for học bạ method) */}
-            {selectedCriterion && isGpaMethod && (
+            {/* Step 3A: GPA Input (for GPA-only methods) */}
+            {selectedCriterion && isGpaOnlyMethod && (
               <FormField
                 control={form.control}
                 name="admission_scores.gpa"
@@ -250,53 +300,79 @@ export function ScoresTab({ form, isEditable, minGpa, appliedRules }: ScoresTabP
               />
             )}
 
-            {/* Step 3B: Subject Score Inputs (for exam-based methods) */}
-            {selectedCriterion && !isGpaMethod && selectedGroup && subjects.length > 0 && (
+            {/* Step 3B: Subject Score Inputs (for methods with subject_groups) */}
+            {selectedCriterion && supportsSubjectScoring && selectedGroup && (
               <div className="space-y-4">
                 <p className="text-sm font-medium text-muted-foreground">
                   Nhập điểm các môn trong tổ hợp {selectedGroup}:
                 </p>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  {subjects.map((subject) => (
-                    <FormField
-                      key={subject}
-                      control={form.control}
-                      name={`admission_scores.subject_scores.${subject}`}
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>{SUBJECT_MAP[subject] || subject}</FormLabel>
-                          <FormControl>
-                            <Input
-                              type="number"
-                              step="0.1"
-                              min={0}
-                              max={10}
-                              disabled={!isEditable}
-                              {...field}
-                              value={field.value ?? ""}
-                              onChange={(e) =>
-                                field.onChange(
-                                  e.target.value ? parseFloat(e.target.value) : undefined
-                                )
-                              }
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                  ))}
-                </div>
-
-                {/* Auto-calculated Total */}
-                <div className="pt-4 border-t">
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="font-medium">Tổng điểm:</span>
-                    <span className="text-lg font-bold text-primary">
-                      {totalScore.toFixed(1)} / 30
-                    </span>
+                
+                {/* Loading state */}
+                {isLoadingGroups && (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <Skeleton className="h-16 w-full" />
+                    <Skeleton className="h-16 w-full" />
+                    <Skeleton className="h-16 w-full" />
                   </div>
-                </div>
+                )}
+                
+                {/* No subjects found */}
+                {!isLoadingGroups && subjects.length === 0 && (
+                  <Alert variant="destructive">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription>
+                      Không tìm thấy thông tin môn học cho tổ hợp {selectedGroup}. 
+                      Vui lòng liên hệ quản trị viên để cấu hình.
+                    </AlertDescription>
+                  </Alert>
+                )}
+                
+                {/* Subject inputs */}
+                {!isLoadingGroups && subjects.length > 0 && (
+                  <>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      {subjects.map((subject) => (
+                        <FormField
+                          key={subject}
+                          control={form.control}
+                          name={`admission_scores.subject_scores.${subject}`}
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{SUBJECT_LABELS[subject] || subject}</FormLabel>
+                              <FormControl>
+                                <Input
+                                  type="number"
+                                  step="0.1"
+                                  min={0}
+                                  max={10}
+                                  disabled={!isEditable}
+                                  {...field}
+                                  value={field.value ?? ""}
+                                  onChange={(e) =>
+                                    field.onChange(
+                                      e.target.value ? parseFloat(e.target.value) : null
+                                    )
+                                  }
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      ))}
+                    </div>
+
+                    {/* Auto-calculated Total */}
+                    <div className="pt-4 border-t">
+                      <div className="flex justify-between items-center text-sm">
+                        <span className="font-medium">Tổng điểm:</span>
+                        <span className="text-lg font-bold text-primary">
+                          {totalScore.toFixed(1)} / 30
+                        </span>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </CardContent>
@@ -345,13 +421,15 @@ export function ScoresTab({ form, isEditable, minGpa, appliedRules }: ScoresTabP
                   <div className="flex justify-between">
                     <span>Điểm chuẩn:</span>
                     <span className="font-medium">
-                      {isGpaMethod ? `GPA ≥ ${minGpa}` : `≥ ${minScore} điểm`}
+                      {isGpaOnlyMethod ? `GPA ≥ ${minGpa}` : `≥ ${minScore} điểm`}
                     </span>
                   </div>
                   <div className="flex justify-between">
                     <span>Điểm đạt được:</span>
                     <span className="font-medium">
-                      {isGpaMethod ? currentGpa.toFixed(1) : totalScore.toFixed(1)}
+                      {isGpaOnlyMethod
+                    ? currentGpa.toFixed(1)
+                    : totalScore.toFixed(1)}
                     </span>
                   </div>
                 </div>
@@ -366,7 +444,7 @@ export function ScoresTab({ form, isEditable, minGpa, appliedRules }: ScoresTabP
                   {!isQualified && (
                     <p className="text-xs text-red-600 mt-2">
                       → Thiếu:{" "}
-                      {isGpaMethod
+                      {isGpaOnlyMethod
                         ? "GPA thấp hơn điểm chuẩn"
                         : "Tổng điểm thấp hơn điểm chuẩn"}
                     </p>
