@@ -43,6 +43,7 @@ import type {
   AdmissionCriterion,
 } from "@/types/organization.types";
 import { DocumentTypesSelector } from "./DocumentTypesSelector"; // 👈 THÊM DÒNG NÀY
+import { SubjectGroupsSelector } from "./SubjectGroupsSelector"; // 👈 Phase 6: Subject Groups
 
 // =====================================================================
 // FORM TYPES & SCHEMA
@@ -680,10 +681,11 @@ export function OfferingAcademicInfoDialog({
                           <FormItem>
                             <FormLabel className="text-xs">Tổ hợp môn</FormLabel>
                             <FormControl>
-                              <Input
-                                placeholder="VD: A00, A01"
-                                {...field}
+                              <SubjectGroupsSelector
+                                value={field.value || ""}
+                                onChange={field.onChange}
                                 disabled={isSubmitting}
+                                placeholder="Chọn tổ hợp môn xét tuyển..."
                               />
                             </FormControl>
                             <FormMessage />
