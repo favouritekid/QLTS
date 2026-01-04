@@ -209,26 +209,58 @@ async def create_profile(
             f"Program offering {lead.offering_id} not found"
         )
 
-    admission_rules = lead.offering.admission_rules
+    admission_rules = lead.offering.admission_rules or {}
     if not admission_rules:
         log.warning(
             "ProgramOffering has no admission_rules configured",
             offering_id=lead.offering_id,
         )
-        raise BadRequest(
-            "Program offering has no admission rules configured. "
-            "Please contact administrator."
+        # Don't raise error - we can still create profile with empty rules
+        # This allows for profiles to be created before rules are fully configured
+        admission_rules = {}
+    
+    # Step 5.1: Phase 6 - Include admission_criteria from OfferingAcademicInfo
+    # OfferingAcademicInfo contains year-specific criteria (Level 3)
+    criteria = []
+    if lead.offering.academic_infos:
+        # Get the most recent (or published) academic info
+        academic_info = next(
+            (info for info in lead.offering.academic_infos if info.is_published),
+            lead.offering.academic_infos[0] if lead.offering.academic_infos else None
         )
+        if academic_info and academic_info.admission_criteria:
+            criteria = academic_info.admission_criteria
+            log.info(
+                "Snapshotting admission_criteria from OfferingAcademicInfo",
+                offering_id=lead.offering_id,
+                academic_year=academic_info.academic_year,
+                criteria_count=len(criteria),
+            )
+    
+    # Merge criteria into applied_rules for backward compatibility + new features
+    applied_rules = {
+        **admission_rules,
+        "criteria": criteria,  # New: dynamic admission methods
+    }
 
     # Step 6: Auto-generate documents_checklist
-    mandatory_docs = admission_rules.get("mandatory_docs", [])
+    mandatory_docs = applied_rules.get("mandatory_docs", [])
+    
+    # Also collect mandatory docs from criteria (if any)
+    for criterion in criteria:
+        required_docs = criterion.get("required_documents", [])
+        for doc in required_docs:
+            doc_code = doc.get("code") if isinstance(doc, dict) else doc
+            if doc_code and doc_code not in mandatory_docs:
+                mandatory_docs.append(doc_code)
+    
     documents_checklist = _generate_documents_checklist(mandatory_docs)
 
     # Step 7: Create AdmissionProfile
     new_profile = models.AdmissionProfile(
         lead_id=lead_id,
         status="draft",
-        applied_rules=admission_rules,  # Snapshot (immutable)
+        applied_rules=applied_rules,  # Snapshot (immutable) with criteria
         family_info=[],
         academic_history=[],
         admission_scores=None,
@@ -250,7 +282,8 @@ async def create_profile(
         profile_id=new_profile.id,
         lead_id=lead_id,
         user_id=current_user.id,
-        snapshot_min_gpa=admission_rules.get("min_gpa"),
+        snapshot_min_gpa=applied_rules.get("min_gpa"),
+        criteria_count=len(criteria),
         mandatory_docs_count=len(mandatory_docs),
     )
 
