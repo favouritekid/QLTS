@@ -95,12 +95,39 @@ export type AcademicRecord = z.infer<typeof academicRecordSchema>
 /**
  * Admission Score Schema
  * Stored in admission_profile.admission_scores JSONB object
+ * 
+ * Structure:
+ * - selected_criterion_id: ID of the selected admission method
+ * - selected_group: Subject group code (e.g., "A00", "D01")
+ * - gpa: GPA score (for học bạ method)
+ * - subject_scores: Dynamic object with subject scores (e.g., math: 8.5)
+ * - total_score: Auto-calculated total of subject scores
+ * - average_score: Auto-calculated average
  */
 export const admissionScoreSchema = z.object({
+  // Method selection
+  selected_criterion_id: z.string().optional().nullable(),
+  selected_group: z.string().optional().nullable(),
+  
+  // GPA-based method
   gpa: z
     .number()
     .min(0, "GPA phải từ 0 trở lên")
-    .max(10, "GPA không được quá 10"),
+    .max(10, "GPA không được quá 10")
+    .optional()
+    .nullable(),
+  
+  // Exam-based method - Dynamic subject scores
+  subject_scores: z.record(
+    z.string(),
+    z.number().min(0).max(10).optional().nullable()
+  ).optional().nullable(),
+  
+  // Auto-calculated values
+  total_score: z.number().optional().nullable(),
+  average_score: z.number().optional().nullable(),
+  
+  // Legacy fields for backward compatibility
   math_score: z
     .number()
     .min(0, "Điểm Toán phải từ 0 trở lên")

@@ -208,7 +208,7 @@ export function AdmissionDetailClient({
                 {currentStep === 1 && <PersonalInfoTab profile={profile} form={form as any} isEditable={isEditable} />}
                 {currentStep === 2 && <FamilyTab form={form as any} isEditable={isEditable} />}
                 {currentStep === 3 && <AcademicHistoryTab form={form as any} isEditable={isEditable} />}
-                {currentStep === 4 && <ScoresTab form={form as any} isEditable={isEditable} minGpa={metrics.minGpa} />}
+                {currentStep === 4 && <ScoresTab form={form as any} isEditable={isEditable} minGpa={metrics.minGpa} appliedRules={profile.applied_rules} />}
                 {currentStep === 5 && <DocumentsTab profile={profile} isEditable={isEditable} />}
                 {currentStep === 6 && <TuitionTab profile={profile} />}
                 {currentStep === 7 && <FinalizeTab isEligible={isEligible} onSubmit={handleSubmit} isSubmitting={submitMutation.isPending} />}
