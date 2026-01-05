@@ -13,7 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_current_active_user, get_criteria_access, get_config_filter, get_admission_config_repo
+from app.core.deps import get_current_active_user, get_criteria_access, get_config_filter, get_admission_config_repo, verify_criteria_visibility
 from app.models.admission_config.criteria import AdmissionCriteria
 from app.database import get_db
 from app.models import User
@@ -304,20 +304,8 @@ async def preview_scoring(
             detail=f"Criteria '{request.criteria_code}' not found"
         )
 
-    # Authorization Check: Viewing inactive data requires Admin/Manager role
-    if not criteria.is_active:
-        if current_user.role not in ["admin", "manager"]:
-             # IDOR Protection: Pretend it doesn't exist
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Criteria '{request.criteria_code}' not found"
-            )
-
-    if not criteria:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Criteria '{request.criteria_code}' not found"
-        )
+    # ✅ Phase 6.5: Use shared helper for visibility check (AUTHORIZATION_GUIDELINES compliant)
+    verify_criteria_visibility(criteria, current_user, request.criteria_code)
     
     # Get subject group (optional)
     subject_group = None

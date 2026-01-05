@@ -50,6 +50,7 @@ __all__ = [
     "get_criteria_access",
     "get_config_filter",
     "get_lead_list_filter",  # Phase 2.1
+    "verify_criteria_visibility",  # Phase 6.5
     "verify_user_management_permission",
     
     # Data Classes
@@ -1287,6 +1288,40 @@ async def get_admission_config_repo(
     return AdmissionConfigRepository(db)
 
 
+def verify_criteria_visibility(
+    criteria: models.AdmissionCriteria,
+    current_user: models.User,
+    criteria_code: str,
+) -> None:
+    """
+    Check if user can view criteria based on is_active status.
+    
+    Per AUTHORIZATION_GUIDELINES.md Section 4:
+    - Active criteria: Accessible by all active users
+    - Inactive (Draft): Accessible ONLY by Admin/Manager
+    - Returns 404 for unauthorized (not 403) - IDOR protection
+    
+    Use this helper for inline checks when criteria_code comes from Body
+    instead of Path parameter.
+    
+    Args:
+        criteria: The criteria to check
+        current_user: Current authenticated user
+        criteria_code: For error message
+        
+    Raises:
+        ResourceNotFoundError: If user cannot view inactive criteria
+    """
+    if not criteria.is_active:
+        if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER]:
+            log.warning(
+                "Unauthorized access attempt to inactive criteria",
+                user_id=current_user.id,
+                criteria_code=criteria_code
+            )
+            raise ResourceNotFoundError(detail=f"Criteria '{criteria_code}' not found")
+
+
 async def get_criteria_access(
     criteria_code: str = Path(..., description="Criteria Code"),
     db: AsyncSession = Depends(database.get_db),
@@ -1302,23 +1337,13 @@ async def get_criteria_access(
     Raises 404 if not found OR if user lacks permission to view inactive data.
     """
     repo = AdmissionConfigRepository(db)
-    # Fetch WITHOUT active filter (Repo is dumb)
     criteria = await repo.get_criteria_by_code(criteria_code, load_level="with_groups")
     
     if not criteria:
         raise ResourceNotFoundError(detail=f"Criteria '{criteria_code}' not found")
 
-    # Authorization Logic (Smart Dependency)
-    if not criteria.is_active:
-        if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER]:
-            # IDOR Protection: Pretend it doesn't exist
-            # Log for security monitoring
-            log.warning(
-                "Unauthorized access attempt to inactive criteria",
-                user_id=current_user.id,
-                criteria_code=criteria.code
-            )
-            raise ResourceNotFoundError(detail=f"Criteria '{criteria_code}' not found")
+    # Use shared helper for visibility check
+    verify_criteria_visibility(criteria, current_user, criteria_code)
             
     return criteria
 
