@@ -1,7 +1,8 @@
 # KẾ HOẠCH THỰC HIỆN CẢI TIẾN HỆ THỐNG PHÂN QUYỀN
 
-> **Phiên bản:** 1.0
+> **Phiên bản:** 2.0
 > **Ngày tạo:** 2026-01-05
+> **Cập nhật:** 2026-01-05 (thêm Guardrails, Policy Drift Detection)
 > **Dựa trên:** Authorization Audit Report, AUTHORIZATION_GUIDELINES.md, MASTER_ARCHITECTURE.md
 
 ---
@@ -13,12 +14,216 @@ Cải thiện hệ thống phân quyền Casbin để:
 1. Tuân thủ 100% AUTHORIZATION_GUIDELINES.md
 2. Khắc phục các lỗ hổng bảo mật được phát hiện
 3. Đơn giản hóa và thống nhất pattern authorization
+4. **MỚI:** Chặn vi phạm ở CI/CD, không chỉ code review
 
 ### Nguyên tắc thực hiện
 - **Không breaking change:** Các thay đổi phải backward compatible
 - **Refactor on touch:** Khi sửa file, áp dụng chuẩn mới
 - **Test first:** Viết test trước khi sửa code
 - **Incremental:** Triển khai từng phase, kiểm tra sau mỗi phase
+- **MỚI: Guardrails first:** CI chặn trước khi code vào repo
+
+---
+
+## PHASE -1: GUARDRAILS (Ưu tiên: CRITICAL - LÀM ĐẦU TIÊN)
+
+> **Triết lý:** Test có mà không chặn PR thì coi như chưa có.
+
+### -1.1. CI Pre-commit Rules
+
+**Tạo file:** `.github/workflows/authorization-check.yml`
+
+```yaml
+name: Authorization Guardrails
+
+on: [pull_request]
+
+jobs:
+  auth-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for inline role checks in routers
+        run: |
+          if grep -rn "user\.role ==" app/routers/; then
+            echo "❌ FAIL: Inline role check detected in router"
+            echo "   Move to deps.py dependency instead"
+            exit 1
+          fi
+
+      - name: Check for db.get() in routers
+        run: |
+          if grep -rn "db\.get\|await db\.get" app/routers/; then
+            echo "❌ FAIL: Direct db.get() in router (IDOR risk)"
+            echo "   Use get_{resource}_for_user dependency"
+            exit 1
+          fi
+
+      - name: Check router has authorization
+        run: |
+          # Find routers without CasbinAuth or require_*
+          python scripts/check_router_auth.py
+```
+
+**Tạo file:** `scripts/check_router_auth.py`
+
+```python
+#!/usr/bin/env python3
+"""
+CI Script: Kiểm tra tất cả router endpoint có authorization.
+
+Rules:
+- Mỗi async def trong router PHẢI có:
+  - CasbinAuth, hoặc
+  - require_admin, hoặc
+  - require_admin_or_manager, hoặc
+  - require_any_staff, hoặc
+  - require_roles
+- Ngoại trừ: endpoints trong WHITELIST (auth, health)
+"""
+import re
+import sys
+from pathlib import Path
+
+WHITELIST_FILES = {
+    "auth.py",      # Login, register không cần auth
+    "monitoring.py", # Health check
+}
+
+WHITELIST_FUNCTIONS = {
+    "health",
+    "health_detailed",
+    "login",
+    "register",
+    "refresh_token",
+    "forgot_password",
+    "reset_password",
+}
+
+AUTH_PATTERNS = [
+    r"CasbinAuth",
+    r"require_admin",
+    r"require_admin_or_manager",
+    r"require_any_staff",
+    r"require_roles",
+    r"get_current_active_user",  # Cho các endpoint đặc biệt
+]
+
+def check_file(filepath: Path) -> list[str]:
+    """Kiểm tra 1 file router."""
+    errors = []
+    content = filepath.read_text()
+
+    # Tìm tất cả async def
+    for match in re.finditer(r"async def (\w+)\([^)]*\):", content):
+        func_name = match.group(1)
+        start = match.start()
+
+        # Skip whitelist
+        if func_name in WHITELIST_FUNCTIONS:
+            continue
+
+        # Tìm decorator và signature (200 chars trước async def)
+        context = content[max(0, start-500):start + 500]
+
+        # Kiểm tra có auth pattern không
+        has_auth = any(re.search(pattern, context) for pattern in AUTH_PATTERNS)
+
+        if not has_auth:
+            errors.append(f"{filepath}:{func_name} - Missing authorization dependency")
+
+    return errors
+
+def main():
+    errors = []
+    router_dir = Path("app/routers")
+
+    for filepath in router_dir.rglob("*.py"):
+        if filepath.name in WHITELIST_FILES:
+            continue
+        if filepath.name.startswith("_"):
+            continue
+
+        file_errors = check_file(filepath)
+        errors.extend(file_errors)
+
+    if errors:
+        print("❌ Authorization check FAILED:")
+        for err in errors:
+            print(f"   {err}")
+        sys.exit(1)
+    else:
+        print("✅ All router endpoints have authorization")
+        sys.exit(0)
+
+if __name__ == "__main__":
+    main()
+```
+
+### -1.2. Policy Drift Detection (Deploy Guard)
+
+**Thêm vào:** `scripts/pre_deploy_check.py`
+
+```python
+#!/usr/bin/env python3
+"""
+Pre-deploy check: Đảm bảo admin không bị lockout.
+
+Chạy TRƯỚC MỌI DEPLOY.
+"""
+import asyncio
+import sys
+from sqlalchemy import text
+from app.database import async_db_engine
+
+CRITICAL_POLICIES = [
+    # (v0, v1, v2) - Admin wildcard PHẢI tồn tại
+    ("role:admin", "/*", ".*"),
+]
+
+async def check_critical_policies():
+    async with async_db_engine.connect() as conn:
+        for v0, v1, v2 in CRITICAL_POLICIES:
+            result = await conn.execute(text("""
+                SELECT COUNT(*) FROM casbin_rule
+                WHERE ptype = 'p' AND v0 = :v0 AND v1 = :v1 AND v2 = :v2
+            """), {"v0": v0, "v1": v1, "v2": v2})
+
+            count = result.scalar()
+            if count == 0:
+                print(f"🚨 CRITICAL: Missing policy ({v0}, {v1}, {v2})")
+                print("   Admin lockout risk! DEPLOY BLOCKED.")
+                return False
+
+    print("✅ All critical policies present")
+    return True
+
+if __name__ == "__main__":
+    success = asyncio.run(check_critical_policies())
+    sys.exit(0 if success else 1)
+```
+
+**Thêm vào CI/CD pipeline:**
+
+```yaml
+# .github/workflows/deploy.yml
+- name: Pre-deploy policy check
+  run: python scripts/pre_deploy_check.py
+  env:
+    DATABASE_URL: ${{ secrets.DATABASE_URL }}
+```
+
+### -1.3. Checklist Phase -1
+
+- [ ] File `authorization-check.yml` đã tạo
+- [ ] File `check_router_auth.py` đã tạo và test local
+- [ ] File `pre_deploy_check.py` đã tạo
+- [ ] CI chạy pass trên branch hiện tại
+- [ ] Team đã được thông báo về guardrails mới
+
+**Effort:** 2-3h
+**ROI:** Chặn 90% lỗi authorization trước khi vào main branch
 
 ---
 
@@ -54,111 +259,186 @@ def test_user_role_has_user():
 
 ### 0.2. Tạo file tài liệu chuẩn
 
-**Tạo mới:**
-- [ ] `Backend_FastAPI/AUTHORIZATION_GUIDELINES.md` (copy từ nội dung đã cung cấp)
-- [ ] `Backend_FastAPI/MASTER_ARCHITECTURE.md` (copy từ nội dung đã cung cấp)
+**Đã hoàn thành:**
+- [x] `Backend_FastAPI/AUTHORIZATION_GUIDELINES.md`
+- [x] `Backend_FastAPI/MASTER_ARCHITECTURE.md`
 
-**Lý do:** Code đã reference nhưng file chưa tồn tại.
+**Cần tạo thêm:**
+- [ ] `Backend_FastAPI/AUTHORIZATION_DECISIONS.md` (xem Phase 0.3)
+
+---
+
+### 0.3. Tạo AUTHORIZATION_DECISIONS.md (MỚI)
+
+> **Mục đích:** Ghi lại LÝ DO đằng sau các quyết định authorization.
+> Sau 1 năm, file này cứu team khỏi audit drama.
+
+**Nội dung cần có:**
+
+```markdown
+# Authorization Decisions Log
+
+## Decision 1: Admin Wildcard Policy
+- **Quyết định:** Admin có policy `(role:admin, /*, .*)`
+- **Lý do:** Admin cần full access để recovery khi có sự cố
+- **Rủi ro:** Nếu xóa nhầm → lockout toàn bộ system
+- **Mitigation:** Pre-deploy check, CRITICAL_POLICIES protection
+- **Ngày:** 2026-01-05
+- **Người quyết định:** [Tên]
+
+## Decision 2: IDOR trả 404 thay vì 403
+- **Quyết định:** Khi user truy cập resource không sở hữu → trả 404
+- **Lý do:** Tránh inference attack (user đoán ID tồn tại)
+- **Reference:** OWASP IDOR Prevention
+- **Ngày:** 2026-01-05
+
+## Decision 3: /api/system/* dùng require_admin
+- **Quyết định:** Các endpoint system dùng static role check
+- **Lý do:** Internal-only, không cần dynamic policy
+- **Constraint:** Chỉ áp dụng cho endpoint KHÔNG public-facing
+- **Review trigger:** Nếu endpoint có thể gọi từ client → chuyển sang Casbin
+- **Ngày:** 2026-01-05
+```
 
 ---
 
 ## PHASE 1: THỐNG NHẤT AUTHORIZATION PATTERN (Ưu tiên: HIGH)
 
-### 1.1. Phân tích hiện trạng
+### 1.1. Quy tắc áp dụng (ĐÃ CHỈNH)
 
-**Vấn đề:** Hệ thống dùng 2 pattern song song:
+| Module | Pattern | Lý do | Constraint |
+|--------|---------|-------|------------|
+| `/api/admin/*` | `CasbinAuth` | Policy có thể thay đổi | - |
+| `/api/leads/*` | `CasbinAuth` + IDOR | Dynamic + ownership | - |
+| `/api/officer/*` | `CasbinAuth` | Officer-specific | - |
+| `/api/system/*` | `require_admin` | Internal only | **Phải có comment lý do** |
+| `/api/internal/*` | `require_admin` | Internal only | **Không expose ra client** |
+| `/api/kpi-config/*` | `require_admin` | Static, internal | - |
 
-| Pattern | Cơ chế | Vấn đề |
-|---------|--------|--------|
-| `CasbinAuth` | Casbin enforce `(user, path, method)` | Dynamic, có thể thay đổi policy |
-| `require_*` | So sánh `user.role` string | Static, bypass Casbin |
+### 1.2. Rule mới (QUAN TRỌNG)
 
-**Theo AUTHORIZATION_GUIDELINES.md Section 3:**
-> "A. Casbin RBAC (Dynamic) - DEFAULT"
-> "B. Role-Based (Static) - When Needed"
+```yaml
+RULES:
+  - CasbinAuth là DEFAULT cho mọi API
+  - require_admin chỉ được dùng khi:
+    - Endpoint là internal-only (không public-facing)
+    - CÓ COMMENT giải thích lý do
+    - Đã ghi vào AUTHORIZATION_DECISIONS.md
 
-→ Cả 2 đều được phép, nhưng phải **nhất quán** trong cùng module.
+  - ❌ KHÔNG ĐƯỢC dùng require_admin cho:
+    - API mà client (web/mobile) gọi trực tiếp
+    - API có thể cần phân quyền chi tiết sau này
+```
 
-### 1.2. Quy tắc áp dụng
+### 1.3. Template khi dùng require_admin
 
-| Module | Nên dùng | Lý do |
-|--------|----------|-------|
-| `/api/admin/*` | `CasbinAuth` | Policy có thể thay đổi |
-| `/api/leads/*` | `CasbinAuth` + IDOR deps | Dynamic + ownership check |
-| `/api/officer/*` | `CasbinAuth` | Officer-specific policies |
-| `/api/kpi-config/*` | `require_admin` | Static, internal only |
-| `/api/system/*` | `require_admin` | Static, internal only |
+```python
+@router.get("/system/cache-stats")
+async def get_cache_stats(
+    request: Request,
+    # AUTH: require_admin vì:
+    # - Internal monitoring only
+    # - Không cần dynamic policy
+    # - Đã ghi vào AUTHORIZATION_DECISIONS.md
+    current_user: models.User = Depends(require_admin),
+):
+    ...
+```
 
-### 1.3. Danh sách endpoint cần review
-
-**Tìm các endpoint dùng cả 2 pattern:**
+### 1.4. Danh sách endpoint cần review
 
 ```bash
-# Tìm file dùng cả CasbinAuth và require_*
-grep -l "CasbinAuth" app/routers/**/*.py | xargs grep -l "require_admin\|require_roles"
+# Tìm endpoint dùng require_* để review
+grep -rn "require_admin\|require_roles" app/routers/ --include="*.py"
 ```
 
 **Action:**
-- [ ] Liệt kê tất cả endpoint có vấn đề
-- [ ] Quyết định pattern cho từng module
-- [ ] Refactor để nhất quán
-
-### 1.4. Template chuẩn cho endpoint mới
-
-```python
-# ============ BUSINESS API (Casbin) ============
-@router.get("/items")
-async def get_items(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-    current_user: models.User = CasbinAuth,  # Layer 2: Authorization
-):
-    ...
-
-# ============ ADMIN INTERNAL API (Static) ============
-@router.get("/config")
-async def get_config(
-    request: Request,
-    current_user: models.User = Depends(require_admin),  # Layer 2: Authorization
-):
-    ...
-
-# ============ API VỚI IDOR PROTECTION ============
-@router.get("/leads/{lead_id}")
-async def get_lead(
-    request: Request,
-    lead: models.Lead = Depends(get_lead_for_user),  # Layer 3: IDOR
-    # current_user đã được inject trong get_lead_for_user
-):
-    return lead
-```
+- [ ] Liệt kê tất cả endpoint dùng require_*
+- [ ] Với mỗi endpoint: xác nhận đúng là internal-only
+- [ ] Thêm comment giải thích
+- [ ] Ghi vào AUTHORIZATION_DECISIONS.md
 
 ---
 
 ## PHASE 2: TĂNG CƯỜNG IDOR PROTECTION (Ưu tiên: HIGH)
 
-### 2.1. Kiểm tra độ bao phủ IDOR
+### 2.1. Checklist tài nguyên cần IDOR (ĐÃ CẬP NHẬT)
 
-**Theo MASTER_ARCHITECTURE.md Section D.1:**
-> "Defense: Dependency Injection Resource Access"
-> "Mechanism: `get_resource_access` dependency fetches AND checks ownership"
+| Resource | Dependency | Status | Priority |
+|----------|-----------|--------|----------|
+| Lead | `get_lead_for_user` | ✅ Có | - |
+| Application | `get_application_for_user` | ✅ Có | - |
+| **Notification** | `get_notification_for_user` | ❌ **THIẾU** | **CRITICAL** |
+| Consultation | `get_consultation_for_user` | ❌ Thiếu | HIGH |
+| Document | `get_document_for_user` | ❌ Thiếu | HIGH |
+| KPI Target | `get_kpi_target_for_user` | ⚠️ Cần kiểm tra | MEDIUM |
 
-**Checklist tài nguyên cần IDOR:**
+### 2.2. Notification IDOR (CRITICAL - LÀM NGAY)
 
-| Resource | Dependency hiện có | Status |
-|----------|-------------------|--------|
-| Lead | `get_lead_for_user` | ✅ |
-| Application | `get_application_for_user` | ✅ |
-| Notification | ❓ Cần kiểm tra | ⚠️ |
-| Consultation | ❓ Cần kiểm tra | ⚠️ |
-| Document | ❓ Cần kiểm tra | ⚠️ |
+> **Cảnh báo:** Notification IDOR là lỗ hổng dễ bị bỏ sót nhất.
+> User có thể delete notification của người khác nếu không có check.
 
-### 2.2. Tạo dependency IDOR còn thiếu
-
-**Pattern theo AUTHORIZATION_GUIDELINES.md Section 4:**
+**Tạo dependency:**
 
 ```python
 # deps.py
+async def get_notification_for_user(
+    notification_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+) -> models.Notification:
+    """
+    IDOR Protection cho Notification.
+
+    Rules:
+    - Admin: Xem tất cả
+    - User/Officer/Manager: Chỉ xem notification của mình
+    """
+    repo = NotificationRepository(db)
+    notification = await repo.get(notification_id)
+
+    if not notification:
+        raise ResourceNotFoundError("Notification not found")
+
+    # Admin có thể xem tất cả
+    if current_user.role == UserRole.ADMIN:
+        return notification
+
+    # User chỉ xem notification của mình
+    if notification.user_id != current_user.id:
+        raise ResourceNotFoundError("Notification not found")  # 404, không 403
+
+    return notification
+```
+
+**Update router:**
+
+```python
+# TRƯỚC (NGUY HIỂM)
+@router.delete("/notifications/{notification_id}")
+async def delete_notification(
+    notification_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = CasbinAuth,
+):
+    notification = await db.get(models.Notification, notification_id)  # ❌ IDOR!
+    ...
+
+# SAU (AN TOÀN)
+@router.delete("/notifications/{notification_id}")
+async def delete_notification(
+    request: Request,
+    notification: models.Notification = Depends(get_notification_for_user),  # ✅
+    db: AsyncSession = Depends(get_db),
+):
+    await db.delete(notification)
+    await db.commit()
+    ...
+```
+
+### 2.3. Consultation IDOR
+
+```python
 async def get_consultation_for_user(
     consultation_id: int,
     db: AsyncSession = Depends(get_db),
@@ -177,7 +457,6 @@ async def get_consultation_for_user(
     if not consultation:
         raise ResourceNotFoundError("Consultation not found")
 
-    # IDOR CHECK - Luôn trả 404, không 403
     if current_user.role == UserRole.ADMIN:
         return consultation
 
@@ -193,19 +472,6 @@ async def get_consultation_for_user(
     return consultation
 ```
 
-### 2.3. Migration các endpoint chưa có IDOR
-
-**Tìm endpoint truy cập trực tiếp DB:**
-
-```bash
-grep -n "db.get\|db.execute" app/routers/**/*.py
-```
-
-**Action:**
-- [ ] Liệt kê endpoint vi phạm
-- [ ] Tạo dependency tương ứng
-- [ ] Refactor endpoint
-
 ---
 
 ## PHASE 3: KHẮC PHỤC VẤN ĐỀ POLICY (Ưu tiên: MEDIUM)
@@ -214,62 +480,101 @@ grep -n "db.get\|db.execute" app/routers/**/*.py
 
 **Vấn đề:** Policy `(role:manager, /api/leads/*, .*)` cho phép ALL operations.
 
-**Giải pháp:** Thay wildcard bằng explicit policies:
+**Giải pháp:** Thay wildcard bằng explicit policies.
 
+### 3.2. Safety Net cho Migration (QUAN TRỌNG)
+
+> **Rule sống còn:** TRƯỚC và SAU mọi migration policy → assert admin wildcard tồn tại.
+
+**Migration template:**
+
+```python
+# alembic/versions/xxx_refine_manager_lead_policies.py
+
+def upgrade():
+    # ========== SAFETY CHECK TRƯỚC ==========
+    conn = op.get_bind()
+    result = conn.execute(text("""
+        SELECT COUNT(*) FROM casbin_rule
+        WHERE ptype = 'p' AND v0 = 'role:admin' AND v1 = '/*' AND v2 = '.*'
+    """))
+    if result.scalar() == 0:
+        raise Exception("🚨 ABORT: Admin wildcard policy missing BEFORE migration")
+
+    # ========== MIGRATION ==========
+    # Xóa wildcard cũ
+    op.execute("""
+        DELETE FROM casbin_rule
+        WHERE ptype = 'p' AND v0 = 'role:manager' AND v1 = '/api/leads/*'
+    """)
+
+    # Thêm explicit policies
+    policies = [
+        ('role:manager', '/api/leads', 'GET'),
+        ('role:manager', '/api/leads', 'POST'),
+        ('role:manager', '/api/leads/{lead_id}', 'GET'),
+        ('role:manager', '/api/leads/{lead_id}', 'PUT'),
+        ('role:manager', '/api/leads/{lead_id}/consultations', 'GET'),
+        ('role:manager', '/api/leads/{lead_id}/consultations', 'POST'),
+        # Manager KHÔNG được DELETE lead
+    ]
+
+    for v0, v1, v2 in policies:
+        op.execute(f"""
+            INSERT INTO casbin_rule (ptype, v0, v1, v2)
+            SELECT 'p', '{v0}', '{v1}', '{v2}'
+            WHERE NOT EXISTS (
+                SELECT 1 FROM casbin_rule
+                WHERE ptype = 'p' AND v0 = '{v0}' AND v1 = '{v1}' AND v2 = '{v2}'
+            )
+        """)
+
+    # ========== SAFETY CHECK SAU ==========
+    result = conn.execute(text("""
+        SELECT COUNT(*) FROM casbin_rule
+        WHERE ptype = 'p' AND v0 = 'role:admin' AND v1 = '/*' AND v2 = '.*'
+    """))
+    if result.scalar() == 0:
+        raise Exception("🚨 ABORT: Admin wildcard policy missing AFTER migration")
+
+
+def downgrade():
+    # Rollback: khôi phục wildcard
+    op.execute("""
+        INSERT INTO casbin_rule (ptype, v0, v1, v2)
+        SELECT 'p', 'role:manager', '/api/leads/*', '.*'
+        WHERE NOT EXISTS (...)
+    """)
+    # Xóa explicit policies...
+```
+
+### 3.3. Sử dụng Role Inheritance (Giảm duplication)
+
+**Hiện tại (duplicate):**
+```
+(role:user, /api/profile, GET)
+(role:officer, /api/profile, GET)
+(role:manager, /api/profile, GET)
+```
+
+**Cải tiến:**
 ```sql
--- HIỆN TẠI (Quá rộng)
-DELETE FROM casbin_rule WHERE v0 = 'role:manager' AND v1 = '/api/leads/*';
-
--- THAY THẾ (Explicit)
+-- Base permissions
 INSERT INTO casbin_rule (ptype, v0, v1, v2) VALUES
-('p', 'role:manager', '/api/leads', 'GET'),
-('p', 'role:manager', '/api/leads', 'POST'),
-('p', 'role:manager', '/api/leads/{lead_id}', 'GET'),
-('p', 'role:manager', '/api/leads/{lead_id}', 'PUT'),
-('p', 'role:manager', '/api/leads/{lead_id}/consultations', 'GET'),
-('p', 'role:manager', '/api/leads/{lead_id}/consultations', 'POST'),
--- Manager KHÔNG được DELETE lead
--- Manager KHÔNG được bulk operations
-;
-```
-
-**Tạo migration:**
-- [ ] File: `alembic/versions/xxx_refine_manager_lead_policies.py`
-- [ ] Test rollback
-
-### 3.2. Sử dụng Role Inheritance
-
-**Vấn đề:** Cùng policy khai báo cho nhiều role (duplication).
-
-**Hiện tại:**
-```
-(role:user, /api/profile, GET)
-(role:officer, /api/profile, GET)  # Duplicate
-(role:manager, /api/profile, GET)  # Duplicate
-```
-
-**Cải tiến với grouping policy:**
-```
--- Base permissions cho role:user
-(role:user, /api/profile, GET)
-(role:user, /api/profile, PUT)
-(role:user, /api/notifications, GET)
+('p', 'role:user', '/api/profile', 'GET'),
+('p', 'role:user', '/api/profile', 'PUT'),
+('p', 'role:user', '/api/notifications', 'GET');
 
 -- Role inheritance
-g, role:officer, role:user
-g, role:manager, role:officer
-g, role:admin, role:manager
+INSERT INTO casbin_rule (ptype, v0, v1) VALUES
+('g', 'role:officer', 'role:user'),
+('g', 'role:manager', 'role:officer'),
+('g', 'role:admin', 'role:manager');
 ```
 
 **Lợi ích:**
-- Giảm số policy từ ~50 xuống ~20
-- Dễ maintain
-- Tự động inherit khi thêm permission cho role thấp
-
-**Action:**
-- [ ] Vẽ sơ đồ role hierarchy
-- [ ] Tạo migration để restructure policies
-- [ ] Test implicit permissions
+- Giảm policy từ ~50 xuống ~20
+- Thêm permission cho role:user → tất cả role cao hơn tự có
 
 ---
 
@@ -277,19 +582,13 @@ g, role:admin, role:manager
 
 ### 4.1. Enforce Password Reset Check
 
-**Vấn đề:** `require_password_not_forced` là optional dependency.
-
-**Giải pháp:** Tạo composite dependency mặc định:
-
 ```python
 # deps.py
-
 async def get_secure_active_user(
     current_user: models.User = Depends(get_current_active_user),
 ) -> models.User:
     """
     Composite dependency cho sensitive operations.
-    Kết hợp: active check + password reset check
     """
     if current_user.password_reset_required:
         raise PermissionDeniedError(
@@ -297,26 +596,18 @@ async def get_secure_active_user(
         )
     return current_user
 
-# Alias cho dễ dùng
+# Alias
 SecureUser = Depends(get_secure_active_user)
 ```
 
-**Áp dụng cho:**
-- [ ] Change email endpoint
-- [ ] Change phone endpoint
-- [ ] Financial operations
-- [ ] API key management
+### 4.2. Rate Limiting Audit
 
-### 4.2. Rate Limiting cho Sensitive Endpoints
-
-**Kiểm tra endpoint nhạy cảm có rate limit:**
-
-| Endpoint | Rate Limit | Status |
-|----------|------------|--------|
-| POST /api/auth/login | ✅ | OK |
-| POST /api/auth/forgot-password | ⚠️ | Cần kiểm tra |
-| DELETE /api/admin/roles/* | ✅ | OK |
-| POST /api/admin/roles/policies | ✅ | OK |
+| Endpoint | Sensitive? | Rate Limit | Status |
+|----------|------------|------------|--------|
+| POST /auth/login | ✅ | 5/minute | ✅ OK |
+| POST /auth/forgot-password | ✅ | 3/hour | ⚠️ Check |
+| DELETE /admin/roles/* | ✅ | 50/hour | ✅ OK |
+| POST /admin/policies/batch | ✅ | 10/hour | ✅ OK |
 
 ---
 
@@ -324,26 +615,21 @@ SecureUser = Depends(get_secure_active_user)
 
 ### 5.1. Authorization Integration Tests
 
-**Tạo test matrix:**
-
 ```python
 # tests/security/test_authorization_matrix.py
 
 @pytest.mark.parametrize("role,endpoint,method,expected", [
     # Admin - Full access
     (UserRole.ADMIN, "/api/admin/users", "GET", 200),
-    (UserRole.ADMIN, "/api/admin/users", "POST", 200),
     (UserRole.ADMIN, "/api/leads", "DELETE", 200),
 
-    # Manager - Limited admin
+    # Manager - Limited
     (UserRole.MANAGER, "/api/admin/users", "GET", 200),
-    (UserRole.MANAGER, "/api/admin/roles", "GET", 403),  # Cannot manage roles
-    (UserRole.MANAGER, "/api/leads", "GET", 200),
+    (UserRole.MANAGER, "/api/admin/roles", "GET", 403),
 
-    # Officer - Lead operations only
+    # Officer - Lead ops only
     (UserRole.OFFICER, "/api/admin/users", "GET", 403),
     (UserRole.OFFICER, "/api/leads", "GET", 200),
-    (UserRole.OFFICER, "/api/leads", "POST", 200),
 
     # User - Profile only
     (UserRole.USER, "/api/profile", "GET", 200),
@@ -353,89 +639,121 @@ async def test_role_permissions(role, endpoint, method, expected, test_client):
     ...
 ```
 
-### 5.2. IDOR Tests
+### 5.2. IDOR Tests (QUAN TRỌNG)
 
 ```python
 # tests/security/test_idor_protection.py
 
-async def test_officer_cannot_access_other_lead(test_client, officer_user, other_lead):
-    """Officer không thể xem lead của người khác."""
-    response = await test_client.get(
-        f"/api/leads/{other_lead.id}",
-        headers=auth_headers(officer_user)
-    )
-    assert response.status_code == 404  # NOT 403!
+async def test_notification_idor_returns_404(test_client, user_a, user_b):
+    """User A không thể xem notification của User B."""
+    # Tạo notification cho user_b
+    notif = await create_notification(user_id=user_b.id)
 
-async def test_manager_cannot_access_other_unit_lead(test_client, manager_user, other_unit_lead):
-    """Manager không thể xem lead của unit khác."""
+    # User A cố truy cập
     response = await test_client.get(
-        f"/api/leads/{other_unit_lead.id}",
-        headers=auth_headers(manager_user)
+        f"/api/notifications/{notif.id}",
+        headers=auth_headers(user_a)
     )
-    assert response.status_code == 404  # NOT 403!
+
+    # PHẢI trả 404, KHÔNG PHẢI 403
+    assert response.status_code == 404
+
+async def test_notification_delete_idor(test_client, user_a, user_b):
+    """User A không thể xóa notification của User B."""
+    notif = await create_notification(user_id=user_b.id)
+
+    response = await test_client.delete(
+        f"/api/notifications/{notif.id}",
+        headers=auth_headers(user_a)
+    )
+
+    assert response.status_code == 404
+    # Verify notification vẫn tồn tại
+    assert await notification_exists(notif.id)
 ```
 
-### 5.3. Cập nhật Documentation
+### 5.3. CI Gate (BẮT BUỘC)
 
-- [ ] Thêm section Authorization vào API docs
-- [ ] Tạo diagram cho permission flow
-- [ ] Document tất cả dependencies trong deps.py
+**Thêm vào `.github/workflows/test.yml`:**
+
+```yaml
+- name: Run authorization tests
+  run: |
+    pytest tests/security/test_authorization_matrix.py -v
+    pytest tests/security/test_idor_protection.py -v
+
+- name: Authorization tests must pass
+  if: failure()
+  run: |
+    echo "❌ Authorization tests failed - PR blocked"
+    exit 1
+```
 
 ---
 
-## TIMELINE VÀ PHÂN CÔNG
+## TIMELINE CẬP NHẬT
 
-### Sprint 1 (Tuần 1-2): Foundation
+### Sprint 0 (Tuần 0 - LÀM NGAY)
+| Task | Priority | Effort |
+|------|----------|--------|
+| Phase -1: Tạo CI guardrails | **CRITICAL** | 3h |
+| Phase -1: Test guardrails local | **CRITICAL** | 1h |
+
+### Sprint 1 (Tuần 1-2)
 | Task | Priority | Effort |
 |------|----------|--------|
 | Phase 0.1: Thêm USER enum | CRITICAL | 1h |
-| Phase 0.2: Tạo file docs | CRITICAL | 30m |
-| Phase 5.1: Viết auth tests | HIGH | 4h |
+| Phase 0.3: Tạo AUTHORIZATION_DECISIONS.md | HIGH | 2h |
+| Phase 2.2: Notification IDOR (CRITICAL) | **CRITICAL** | 2h |
+| Phase 5.1-5.2: Viết tests | HIGH | 4h |
 
-### Sprint 2 (Tuần 3-4): Authorization Cleanup
+### Sprint 2 (Tuần 3-4)
 | Task | Priority | Effort |
 |------|----------|--------|
-| Phase 1.3: Liệt kê endpoints | HIGH | 2h |
-| Phase 1.4: Refactor endpoints | HIGH | 8h |
-| Phase 2.1: Audit IDOR coverage | HIGH | 2h |
+| Phase 1: Review + refactor endpoints | HIGH | 8h |
+| Phase 2: Tạo các IDOR dependency còn lại | HIGH | 4h |
 
-### Sprint 3 (Tuần 5-6): Policy Refinement
+### Sprint 3 (Tuần 5-6)
 | Task | Priority | Effort |
 |------|----------|--------|
-| Phase 3.1: Refine manager policies | MEDIUM | 4h |
-| Phase 3.2: Implement inheritance | MEDIUM | 6h |
-| Phase 5.2: IDOR tests | HIGH | 4h |
+| Phase 3.1: Migration manager policies | MEDIUM | 4h |
+| Phase 3.3: Implement role inheritance | MEDIUM | 6h |
 
-### Sprint 4 (Tuần 7-8): Hardening
+### Sprint 4 (Tuần 7-8)
 | Task | Priority | Effort |
 |------|----------|--------|
-| Phase 4.1: Secure user dep | MEDIUM | 2h |
-| Phase 4.2: Rate limit audit | MEDIUM | 2h |
-| Phase 5.3: Documentation | MEDIUM | 4h |
+| Phase 4: Security hardening | MEDIUM | 4h |
+| Phase 5.3: Documentation update | MEDIUM | 4h |
 
 ---
 
 ## CHECKLIST HOÀN THÀNH
 
+### Phase -1: Guardrails
+- [ ] CI authorization check workflow hoạt động
+- [ ] Pre-deploy policy check hoạt động
+- [ ] Team đã được training về guardrails
+
 ### Phase 0: Cơ sở hạ tầng
 - [ ] `UserRole.USER` đã được thêm
-- [ ] `AUTHORIZATION_GUIDELINES.md` đã tạo
-- [ ] `MASTER_ARCHITECTURE.md` đã tạo
+- [ ] `AUTHORIZATION_DECISIONS.md` đã tạo
+- [ ] Tất cả decisions đã được ghi lại
 
 ### Phase 1: Authorization Pattern
-- [ ] Tất cả endpoint đã review
-- [ ] Pattern đã thống nhất theo module
-- [ ] Không còn inline role check trong router
+- [ ] Tất cả `require_admin` có comment lý do
+- [ ] Không có inline role check trong router
+- [ ] AUTHORIZATION_DECISIONS.md đã cập nhật
 
 ### Phase 2: IDOR Protection
-- [ ] Tất cả resource có dependency
+- [ ] **Notification IDOR đã implement** (CRITICAL)
+- [ ] Consultation IDOR đã implement
 - [ ] Không còn `db.get()` trong router
-- [ ] Trả 404 (không 403) cho unauthorized
+- [ ] Tất cả trả 404 cho unauthorized
 
 ### Phase 3: Policy
 - [ ] Manager không còn wildcard
+- [ ] Migration có safety checks
 - [ ] Role inheritance đã implement
-- [ ] Policy count giảm 30%+
 
 ### Phase 4: Security
 - [ ] Sensitive endpoints có password check
@@ -444,7 +762,7 @@ async def test_manager_cannot_access_other_unit_lead(test_client, manager_user, 
 ### Phase 5: Testing
 - [ ] Auth matrix test đạt 100%
 - [ ] IDOR test đạt 100%
-- [ ] Docs đã cập nhật
+- [ ] **CI gate chặn PR khi test fail**
 
 ---
 
@@ -455,23 +773,26 @@ async def test_manager_cannot_access_other_unit_lead(test_client, manager_user, 
 grep -rn "async def " app/routers/ | grep -v "CasbinAuth\|require_\|Depends"
 
 # Tìm inline role check (vi phạm)
-grep -rn "user.role ==" app/routers/
+grep -rn "user\.role ==" app/routers/
 
-# Tìm direct DB access trong router (vi phạm)
-grep -rn "db.get\|db.execute\|db.query" app/routers/
+# Tìm direct DB access trong router (vi phạm IDOR)
+grep -rn "db\.get\|await db\.get" app/routers/
 
-# Tìm HTTPException trong service (vi phạm)
+# Tìm HTTPException trong service (vi phạm architecture)
 grep -rn "HTTPException" app/services/
 
+# Kiểm tra admin policy tồn tại
+psql -c "SELECT * FROM casbin_rule WHERE v0 = 'role:admin' AND v1 = '/*'"
+
 # Count policies per role
-SELECT v0, COUNT(*) FROM casbin_rule WHERE ptype = 'p' GROUP BY v0;
+psql -c "SELECT v0, COUNT(*) FROM casbin_rule WHERE ptype = 'p' GROUP BY v0"
 ```
 
 ---
 
-**KẾT THÚC KẾ HOẠCH**
+**KẾT THÚC KẾ HOẠCH V2.0**
 
+> *"Test có mà không chặn PR thì coi như chưa có."*
+>
 > *"Authorization không phải là việc làm code chạy được.*
 > *Đó là việc ngủ ngon, pass audit, và không cháy production."*
->
-> — AUTHORIZATION_GUIDELINES.md
