@@ -52,6 +52,14 @@ WARNING_POLICIES: List[Tuple[str, str, str]] = [
     ("role:user", "/api/profile", "PUT"),
 ]
 
+# Role inheritance (g policies) - Phase 3.3
+# Format: (child_role, parent_role)
+ROLE_INHERITANCE: List[Tuple[str, str]] = [
+    ("role:officer", "role:user"),    # Officer inherits from User
+    ("role:manager", "role:officer"), # Manager inherits from Officer
+    ("role:admin", "role:manager"),   # Admin inherits from Manager
+]
+
 
 # ============================================================
 # DATABASE CONNECTION
@@ -108,20 +116,32 @@ async def check_policy_exists(conn, text_func, v0: str, v1: str, v2: str) -> boo
     return count > 0
 
 
-async def check_critical_policies() -> Tuple[bool, List[str], List[str]]:
+async def check_grouping_exists(conn, text_func, child: str, parent: str) -> bool:
+    """Check if a role inheritance (grouping policy) exists."""
+    result = await conn.execute(text_func("""
+        SELECT COUNT(*) FROM casbin_rule
+        WHERE ptype = 'g' AND v0 = :child AND v1 = :parent
+    """), {"child": child, "parent": parent})
+
+    count = result.scalar()
+    return count > 0
+
+
+async def check_critical_policies() -> Tuple[bool, List[str], List[str], List[str]]:
     """
     Check all critical policies exist.
 
     Returns:
-        (success, missing_critical, missing_warnings)
+        (success, missing_critical, missing_warnings, missing_inheritance)
     """
     engine, text_func = await get_db_connection()
 
     if engine is None:
-        return False, ["Could not connect to database"], []
+        return False, ["Could not connect to database"], [], []
 
     missing_critical = []
     missing_warnings = []
+    missing_inheritance = []
 
     try:
         async with engine.connect() as conn:
@@ -137,14 +157,20 @@ async def check_critical_policies() -> Tuple[bool, List[str], List[str]]:
                 if not exists:
                     missing_warnings.append(f"({v0}, {v1}, {v2})")
 
+            # Check role inheritance (Phase 3.3)
+            for child, parent in ROLE_INHERITANCE:
+                exists = await check_grouping_exists(conn, text_func, child, parent)
+                if not exists:
+                    missing_inheritance.append(f"({child} -> {parent})")
+
     except Exception as e:
-        return False, [f"Database error: {e}"], []
+        return False, [f"Database error: {e}"], [], []
 
     finally:
         await engine.dispose()
 
     success = len(missing_critical) == 0
-    return success, missing_critical, missing_warnings
+    return success, missing_critical, missing_warnings, missing_inheritance
 
 
 async def get_policy_counts() -> dict:
@@ -190,7 +216,7 @@ async def main():
     print()
 
     # Run checks
-    success, missing_critical, missing_warnings = await check_critical_policies()
+    success, missing_critical, missing_warnings, missing_inheritance = await check_critical_policies()
 
     # Get policy counts for reporting
     counts = await get_policy_counts()
@@ -206,7 +232,17 @@ async def main():
     if missing_warnings:
         print("WARNINGS (non-blocking):")
         for policy in missing_warnings:
-            print(f"  - Missing: {policy}")
+            print(f"  - Missing policy: {policy}")
+        print()
+
+    # Report missing inheritance (non-blocking but important)
+    if missing_inheritance:
+        print("ROLE INHERITANCE WARNINGS:")
+        print("  Role inheritance reduces policy duplication (Phase 3.3)")
+        for inheritance in missing_inheritance:
+            print(f"  - Missing: {inheritance}")
+        print()
+        print("  FIX: Run migration p3a1b2c3d4e5")
         print()
 
     # Report critical issues

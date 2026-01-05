@@ -751,9 +751,9 @@ async def test_notification_delete_idor(test_client, user_a, user_b):
 - [x] Tất cả trả 404 cho unauthorized (IDOR prevention pattern)
 
 ### Phase 3: Policy
-- [ ] Manager không còn wildcard
-- [ ] Migration có safety checks
-- [ ] Role inheritance đã implement
+- [x] Manager không còn wildcard (migration `p3a1b2c3d4e5`)
+- [x] Migration có safety checks (admin wildcard verified before/after)
+- [x] Role inheritance đã implement (`g` policies in migration)
 
 ### Phase 4: Security
 - [ ] Sensitive endpoints có password check

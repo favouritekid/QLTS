@@ -77,15 +77,25 @@ OFFICER_TEMPLATE: PolicyTemplate = {
 
 MANAGER_TEMPLATE: PolicyTemplate = {
     "display_name": "Manager (User & Lead Manager)",
-    "description": "Manager permissions: full lead management + user administration",
+    "description": "Manager permissions: lead CRUD (except DELETE) + user administration",
     "category": "core",
     "policies": [
-        # Inherit all officer permissions
-        *OFFICER_TEMPLATE["policies"],
-        # Additional manager permissions
+        # NOTE: With role inheritance, manager inherits officer policies
+        # These are ADDITIONAL manager-only permissions
+        # User management
         {"subject": "{role}", "object": "/api/admin/users", "action": ".*"},
-        {"subject": "{role}", "object": "/api/leads/*", "action": ".*"},
+        # Lead management - explicit policies (no wildcard)
+        # Manager can: List, Create, View, Update leads
+        # Manager CANNOT: Delete leads (requires admin) - Security Decision #3
         {"subject": "{role}", "object": "/api/leads", "action": "GET"},
+        {"subject": "{role}", "object": "/api/leads", "action": "POST"},
+        {"subject": "{role}", "object": "/api/leads/{lead_id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/leads/{lead_id}", "action": "PUT"},
+        {"subject": "{role}", "object": "/api/leads/{lead_id}/assign", "action": "POST"},
+        {"subject": "{role}", "object": "/api/leads/{lead_id}/applications", "action": "GET"},
+        {"subject": "{role}", "object": "/api/leads/{lead_id}/applications", "action": "POST"},
+        {"subject": "{role}", "object": "/api/leads/export/csv", "action": "GET"},
+        {"subject": "{role}", "object": "/api/leads/export/excel", "action": "GET"},
     ]
 }
 

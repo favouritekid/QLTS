@@ -151,8 +151,8 @@ if lead.owner_id != user.id:
 |-------|-------|
 | **Quyết định** | Role kế thừa theo chain: `user < officer < manager < admin` |
 | **Lý do** | Giảm duplicate policies, dễ maintain |
-| **Ngày** | 2026-01-05 (planned) |
-| **Status** | PLANNED - Chưa implement |
+| **Ngày** | 2026-01-05 |
+| **Status** | ✅ IMPLEMENTED - Migration `p3a1b2c3d4e5` |
 
 **Inheritance:**
 ```
@@ -193,6 +193,8 @@ role:admin
 | Date | Decision | Change | By |
 |------|----------|--------|-----|
 | 2026-01-05 | 1-9 | Initial decisions documented | Security Audit |
+| 2026-01-05 | 7 | Implemented via migration - manager wildcard removed | Phase 3 |
+| 2026-01-05 | 9 | Implemented via migration `p3a1b2c3d4e5` | Phase 3 |
 
 ---
 
