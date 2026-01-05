@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models
-from app.core import deps  # ✅ Fixed: Import from app.core instead of app.routers.admin
+from app.core.deps import CasbinAuth  # ✅ Phase 2.2: Use standard alias
 from app.services import activity_service
 
 # PHASE 2A routers
@@ -44,9 +44,6 @@ from . import system
 # Create main admin router
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
-# Permission dependency
-PermissionDep = Depends(deps.check_permission)
-
 
 # =============================================================================
 # TOP-LEVEL ADMIN ENDPOINTS (not specific to any sub-resource)
@@ -56,7 +53,7 @@ PermissionDep = Depends(deps.check_permission)
 async def get_activity_logs(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     actor_id: Optional[int] = Query(None),

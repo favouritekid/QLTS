@@ -97,10 +97,16 @@ export function LeadActionSuggestions({
   const suggestions = useMemo(() => {
     const items: Suggestion[] = [];
     
-    // Calculate days since last contact
-    const daysSinceLastContact = lead.last_consultation_at
-      ? Math.floor((Date.now() - new Date(lead.last_consultation_at).getTime()) / (1000 * 60 * 60 * 24))
-      : null;
+    // Pure calculation: compute days since last contact inside useMemo
+    // Using a local function to keep the impure Date call contained
+    const getDaysSinceLastContact = (): number | null => {
+      if (!lead.last_consultation_at) return null;
+      const lastContactTime = new Date(lead.last_consultation_at).getTime();
+      const currentTime = new Date().getTime();
+      return Math.floor((currentTime - lastContactTime) / (1000 * 60 * 60 * 24));
+    };
+    
+    const daysSinceLastContact = getDaysSinceLastContact();
     
     // 1. Urgent: High urgency score + no recent contact
     if (lead.cached_urgency_score >= 70 && !lead.last_consultation_at) {

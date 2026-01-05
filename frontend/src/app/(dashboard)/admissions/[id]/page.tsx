@@ -1,45 +1,76 @@
+// src/app/(dashboard)/admissions/[id]/page.tsx
 /**
- * Admission Profile Detail Page
+ * ✅ Admission Detail Server Component
  *
- * Architecture:
- * - Server Component (async) for initial data fetch
- * - Hydrates Client Components with initialData
- * - Next.js 16 App Router with SSR
+ * REFACTOR: Follows Lead Detail page pattern (SSR + Suspense + Client Hydration)
  *
- * Features:
- * - SEO-friendly (server-rendered content)
- * - No loading spinner on initial render
- * - TanStack Query hydration for client-side updates
+ * Benefits:
+ * - SSR: Admission data rendered on server
+ * - Faster initial load
+ * - Proper Suspense boundaries for Next.js 16 caching
  */
 
-import { Suspense } from "react"
-import { notFound } from "next/navigation"
-import { api } from "@/lib/api/client"
-import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
+import { Suspense } from 'react';
+import { notFound } from 'next/navigation';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { serverApi } from '@/lib/api/server';
+import { AdmissionDetailClient } from './_components/AdmissionDetailClient';
 
-import { AdmissionDetailClient } from "./AdmissionDetailClient"
+// Placeholder param for Next.js 16 cacheComponents build validation
+// Real params are handled at runtime
+export function generateStaticParams() {
+  return [{ id: '__placeholder__' }];
+}
 
 /**
- * Server-side data fetching
- * Runs on server, not included in client bundle
+ * Loading component (inline skeleton)
  */
-async function getAdmissionProfile(
-  id: string
-): Promise<AdmissionProfileResponse | null> {
-  try {
-    const response = await api.get<AdmissionProfileResponse>(
-      `/api/admissions/${id}`
-    )
-    return response.data
-  } catch (error: unknown) {
-    if (error && typeof error === 'object' && 'response' in error) {
-      const axiosError = error as { response?: { status?: number } };
-      if (axiosError.response?.status === 404) {
-        return null;
-      }
-    }
-    throw error
-  }
+function AdmissionDetailLoading() {
+  return (
+    <div className="space-y-6">
+      {/* Header Skeleton */}
+      <Card>
+        <CardHeader>
+          <div className="flex justify-between">
+            <div className="space-y-2">
+              <Skeleton className="h-6 w-48" />
+              <Skeleton className="h-4 w-32" />
+            </div>
+            <Skeleton className="h-8 w-24" />
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 gap-4">
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-10 w-full" />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Content Skeleton */}
+      <Card>
+        <CardHeader>
+          <Skeleton className="h-6 w-32" />
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-24 w-full" />
+          <Skeleton className="h-8 w-full" />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+/**
+ * Server Component - Fetches initial admission data
+ */
+async function AdmissionDetailPageContent({ profileId }: { profileId: number }) {
+  // ✅ Fetch admission profile on server
+  const initialData = await serverApi.admissions.getProfile(profileId);
+
+  return <AdmissionDetailClient profileId={profileId} initialData={initialData} />;
 }
 
 /**
@@ -48,57 +79,22 @@ async function getAdmissionProfile(
  * Next.js 16: params is now a Promise that must be awaited
  */
 export default async function AdmissionProfilePage({
-  params,
-}: {
-  params: Promise<{ id: string }>
-}) {
-  const { id } = await params;
-  const profileId = parseInt(id, 10)
-
-  if (isNaN(profileId)) {
-    notFound()
-  }
-
-  // Server-side fetch (no loading spinner)
-  const initialData = await getAdmissionProfile(id)
-
-  if (!initialData) {
-    notFound()
-  }
-
-  return (
-    <div className="container mx-auto py-6 space-y-6">
-      <Suspense fallback={<div>Loading...</div>}>
-        <AdmissionDetailClient
-          profileId={profileId}
-          initialData={initialData}
-        />
-      </Suspense>
-    </div>
-  )
-}
-
-/**
- * Metadata for SEO
- *
- * Next.js 16: params is now a Promise that must be awaited
- */
-export async function generateMetadata({
   params
 }: {
   params: Promise<{ id: string }>
 }) {
   const { id } = await params;
-  const profile = await getAdmissionProfile(id)
-
-  if (!profile) {
-    return {
-      title: "Hồ sơ không tìm thấy",
-    }
+  
+  // Handle placeholder used for build validation
+  if (id === '__placeholder__') {
+    notFound();
   }
+  
+  const profileId = Number(id);
 
-  return {
-    title: `Hồ sơ tuyển sinh #${profile.id}`,
-    description: `Quản lý hồ sơ tuyển sinh - Trạng thái: ${profile.status}`,
-  }
+  return (
+    <Suspense fallback={<AdmissionDetailLoading />}>
+      <AdmissionDetailPageContent profileId={profileId} />
+    </Suspense>
+  );
 }

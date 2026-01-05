@@ -14,7 +14,6 @@ import {
   Building2, 
   GraduationCap, 
   MapPin,
-  Users,
   Megaphone
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";

@@ -332,7 +332,91 @@ async def update_lead(
 
 ---
 
-## G. File Structure cho Module Mới
+## G. Security Gateway Layer Pattern
+
+**Nguyên tắc cốt lõi:** "Smart Dependency, Dumb Router". 
+Toàn bộ logic kiểm tra quyền (Authorization), xác thực (Authentication), và lọc dữ liệu (Data Visibility) PHẢI được thực hiện trong tầng Dependency (`deps.py`), KHÔNG được viết trong Router.
+
+### 1. Phân tầng Dependencies
+Hệ thống sử dụng mô hình bảo mật 4 lớp:
+
+| Lớp | Dependency | Chức năng | Ví dụ |
+|-----|------------|-----------|-------|
+| 1. Authentication | `get_current_active_user` | Xác định "Bạn là ai?" và "Bạn còn hoạt động không?" | Check JWT, Redis Blacklist, User Status |
+| 2. Gatekeeping | `require_roles`, `check_permission` | Xác định "Bạn được vào cửa này không?" | Check Role (Admin/Manager), Casbin Policy |
+| 3. Resource Access | `get_lead_for_user`, `get_criteria_access` | Xác định "Bạn được chạm vào vật này không?" (Chống IDOR) | Fetch Lead -> Check Owner ID |
+| 4. Context Filtering | `get_config_filter` | Xác định "Bạn được nhìn thấy dữ liệu nào?" | Input: `active_only=False` -> Output: `True` (nếu là Student) |
+
+### 2. Quy tắc triển khai
+
+#### ✅ IDOR Protection Dependency
+Thay vì Router tự fetch DB và check quyền, Dependency sẽ làm việc đó và trả về Object an toàn.
+
+```python
+# deps.py
+async def get_lead_access(
+    lead_id: int, 
+    current_user: models.User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+) -> models.Lead:
+    lead = await lead_service.get(db, lead_id)
+    if not lead:
+        raise ResourceNotFoundError()
+        
+    # Logic kiểm tra quyền sở hữu
+    if current_user.role != "admin" and lead.owner_id != current_user.id:
+        raise ResourceNotFoundError() # Ẩn luôn sự tồn tại của ID (Security through Obscurity cho IDOR)
+        
+    return lead
+
+# Router - Sạch sẽ, an toàn
+@router.get("/leads/{lead_id}")
+async def get_lead(lead: models.Lead = Depends(get_lead_access)):
+    return lead
+```
+
+#### ✅ Data Visibility Filtering (Context Filtering)
+Dependency có thể sửa đổi tham số input để ép buộc logic nghiệp vụ.
+
+```python
+# deps.py - Smart Dependency
+async def get_config_filter(
+    active_only: bool = True,
+    current_user: models.User = Depends(get_current_active_user)
+) -> bool:
+    # Nếu không phải Admin/Manager, BẮT BUỘC chỉ được xem Active
+    if current_user.role not in ["admin", "manager"]:
+        return True 
+    return active_only
+
+# Router - Dumb Router
+@router.get("/configs")
+async def list_configs(
+    # Dependency tự động override giá trị active_only dựa trên Role
+    active_only: bool = Depends(get_config_filter) 
+):
+    return repo.get_all(active_only=active_only)
+```
+
+#### ✅ Dependency Injection cho Repository
+Router không được tự khởi tạo Repository (`repo = UserRepo(db)`). Phải inject qua Dependency.
+
+```python
+# ✅ ĐÚNG
+@router.get("/users")
+async def list_users(repo: UserRepository = Depends(get_user_repo)):
+    return await repo.list()
+
+# ❌ SAI
+@router.get("/users")
+async def list_users(db: AsyncSession = Depends(get_db)):
+    repo = UserRepository(db) # Hard dependency
+    return await repo.list()
+```
+
+---
+
+## I. File Structure cho Module Mới
 
 ```
 app/
@@ -350,7 +434,7 @@ app/
 
 ---
 
-## H. Checklist cho Code Review
+## J. Checklist cho Code Review
 
 ### Router Review
 - [ ] Không có `select()`, `db.execute()`, `db.scalar()` trực tiếp
@@ -373,7 +457,7 @@ app/
 
 ---
 
-## I. Exceptions (Ngoại lệ được chấp nhận)
+## K. Exceptions (Ngoại lệ được chấp nhận)
 
 Các trường hợp sau được phép vi phạm Pattern A:
 
@@ -385,7 +469,7 @@ Các trường hợp sau được phép vi phạm Pattern A:
 
 ---
 
-## J. Migration Path cho Code Cũ
+## L. Migration Path cho Code Cũ
 
 Khi touch code cũ không tuân thủ:
 
@@ -397,7 +481,7 @@ Khi touch code cũ không tuân thủ:
 
 *Last updated: 2025-12-21*
 
-## K. Notification Module Compliance
+## M. Notification Module Compliance
 
 Các module notification sau đã được migrate sang Pattern A:
 

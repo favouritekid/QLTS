@@ -2,6 +2,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { format, formatDistanceToNow } from "date-fns";
 import { vi } from "date-fns/locale";
@@ -20,7 +21,7 @@ import {
 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -121,7 +122,19 @@ function LoginHistoryCard({
   onSecure: (id: number) => void;
 }) {
   const loginDate = new Date(item.login_at);
-  const isRecent = Date.now() - loginDate.getTime() < 24 * 60 * 60 * 1000; // 24 hours
+  // Use a helper to compute if recent - avoids Date.now() directly in render
+  const isRecent = (() => {
+    const currentTime = new Date().getTime();
+    return currentTime - loginDate.getTime() < 24 * 60 * 60 * 1000; // 24 hours
+  })();
+
+  // C3 SECURITY FIX: Check if login is too old to confirm (>7 days)
+  const STALE_LOGIN_DAYS = 7;
+  const isStale = (() => {
+    const currentTime = new Date().getTime();
+    const loginAge = currentTime - loginDate.getTime();
+    return loginAge > STALE_LOGIN_DAYS * 24 * 60 * 60 * 1000;
+  })();
 
   return (
     <Card className={item.is_suspicious ? "border-amber-400 bg-amber-50/50" : ""}>
@@ -201,25 +214,39 @@ function LoginHistoryCard({
             
             {/* Response buttons for suspicious logins without response */}
             {item.is_suspicious && !item.user_response && (
-              <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => onConfirm(item.id)}
-                  className="text-green-600 hover:text-green-700 hover:bg-green-50"
-                >
-                  <CheckCircle2 className="mr-1 h-3 w-3" />
-                  Là tôi
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => onSecure(item.id)}
-                  className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                >
-                  <ShieldAlert className="mr-1 h-3 w-3" />
-                  Không phải tôi
-                </Button>
+              <div className="flex flex-col gap-2 items-end">
+                {/* C3 SECURITY FIX: Warning for stale logins */}
+                {isStale && (
+                  <div className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded flex items-center gap-1">
+                    <Clock className="h-3 w-3" />
+                    <span>Đăng nhập cũ hơn 7 ngày - không thể xác nhận</span>
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => onConfirm(item.id)}
+                    disabled={isStale}
+                    className={isStale 
+                      ? "text-gray-400 cursor-not-allowed" 
+                      : "text-green-600 hover:text-green-700 hover:bg-green-50"
+                    }
+                    title={isStale ? "Không thể xác nhận đăng nhập cũ hơn 7 ngày" : "Xác nhận đây là bạn"}
+                  >
+                    <CheckCircle2 className="mr-1 h-3 w-3" />
+                    Là tôi
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => onSecure(item.id)}
+                    className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                  >
+                    <ShieldAlert className="mr-1 h-3 w-3" />
+                    Không phải tôi
+                  </Button>
+                </div>
               </div>
             )}
           </div>
@@ -233,6 +260,7 @@ function LoginHistoryCard({
  * Main LoginHistory client component
  */
 export function LoginHistoryClient() {
+  const router = useRouter();  // R1+R2: For redirecting to change-password after secure account
   const queryClient = useQueryClient();
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -269,9 +297,13 @@ export function LoginHistoryClient() {
       queryClient.invalidateQueries({ queryKey: ["loginHistory"] });
       setSecureDialogOpen(false);
       setSuccessMessage(
-        `Tài khoản đã được bảo mật. ${response.sessions_revoked} phiên đăng nhập đã bị thu hồi.`
+        `Tài khoản đã được bảo mật. ${response.sessions_revoked} phiên đăng nhập đã bị thu hồi. Đang chuyển đến trang đổi mật khẩu...`
       );
-      setTimeout(() => setSuccessMessage(null), 5000);
+      // R1+R2: Redirect to settings page after 2 seconds (user should change password)
+      setTimeout(() => {
+        setSuccessMessage(null);
+        router.push("/settings");
+      }, 2000);
     },
     onError: () => {
       setError("Không thể bảo mật tài khoản. Vui lòng thử lại.");

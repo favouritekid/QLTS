@@ -11,10 +11,17 @@
  */
 
 import { Suspense } from 'react';
+import { notFound } from 'next/navigation';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent } from '@/components/ui/card';
 import { serverApi } from '@/lib/api/server';
 import { UserDetailClient } from './_components/UserDetailClient';
+
+// Placeholder param for Next.js 16 cacheComponents build validation
+// Real params are handled at runtime
+export function generateStaticParams() {
+  return [{ id: '__placeholder__' }];
+}
 
 /**
  * Loading component
@@ -62,6 +69,12 @@ export default async function UserDetailPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params;
+  
+  // Handle placeholder used for build validation
+  if (id === '__placeholder__') {
+    notFound();
+  }
+  
   const userId = Number(id);
 
   return (

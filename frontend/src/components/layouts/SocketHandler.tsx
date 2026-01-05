@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { useAuthStore } from "@/lib/stores/auth.store";
 import { socketService } from "@/lib/socket/client";
 import { toast } from "sonner";
-import { useAddNotification } from "@/hooks/useNotifications";
+import { useAddNotification, useMarkAsRead } from "@/hooks/useNotifications";
 import { useNotificationPreferences } from "@/hooks/useNotificationPreferences";
 import { playNotificationSound, showBrowserNotification } from "@/lib/sound";
 import type { Notification } from "@/types/api.types";
@@ -19,6 +19,7 @@ import { leadsKeys } from "@/hooks/useLeads";
 export function SocketHandler() {
   const { isAuthenticated, logout, user } = useAuthStore();
   const addNotification = useAddNotification();
+  const markAsRead = useMarkAsRead();  // ✅ For marking as read when user clicks toast action
   const { data: preferences } = useNotificationPreferences();
   const queryClient = useQueryClient();
 
@@ -182,26 +183,32 @@ export function SocketHandler() {
       }
 
       // Always show toast notification (this is in-app, separate from browser notifications)
-      // Use different toast style for reminders
-      if (notification.type === "reminder") {
-        toast.warning(notification.title, {
-          description: notification.message,
-          duration: 15000, // 15 seconds for reminders - more prominent
-          action: notification.link
-            ? {
-                label: "Xem Lead",
-                onClick: () => {
-                  window.location.href = notification.link!;
-                },
-              }
-            : undefined,
-        });
-      } else {
-        toast.info(notification.title, {
-          description: notification.message,
-          duration: 5000,
-        });
-      }
+      // ✅ UX FIX: Add action button + markAsRead for ALL notification types
+      const toastFn = notification.type === "reminder" || notification.type === "warning" 
+        ? toast.warning 
+        : notification.type === "error" 
+          ? toast.error
+          : toast.info;
+      
+      const duration = notification.type === "reminder" ? 15000 
+        : notification.type === "warning" || notification.type === "error" ? 10000 
+        : 8000;
+
+      toastFn(notification.title, {
+        description: notification.message,
+        duration,
+        id: `notification-${notification.id}`,  // Prevent duplicates
+        action: notification.link
+          ? {
+              label: "Xem chi tiết",
+              onClick: () => {
+                // ✅ Mark as read BEFORE navigating (updates bell icon)
+                markAsRead.mutate({ notification_ids: [notification.id] });
+                window.location.href = notification.link!;
+              },
+            }
+          : undefined,
+      });
     };
 
     // ✅ REAL-TIME DATA SYNC (v16): Lắng nghe sự kiện data_updated
@@ -816,6 +823,21 @@ export function SocketHandler() {
       }, 3000);
     };
 
+    // ✅ REAL-TIME SESSION LIST UPDATE: Lắng nghe sự kiện session_updated
+    const handleSessionUpdated = (data: {
+      user_id: number;
+      timestamp: string;
+    }) => {
+      console.log("[SocketHandler] session_updated → invalidating sessions (silent sync)");
+      if (data.user_id === user?.id) {
+        queryClient.invalidateQueries({ queryKey: ["sessions", "list"] });
+      }
+    };
+
+    // R1+R2: handleLoginNotification REMOVED
+    // Login notification is now included in login API response and handled by useAuth.ts
+    // See: useAuth.ts onSuccess handler
+
     // Đăng ký listeners
     socket.on("force_logout_batch", handleForceLogoutBatch);
     socket.on("force_logout_all", handleForceLogoutAll);
@@ -842,12 +864,17 @@ export function SocketHandler() {
     socket.on("consultation_reminder", handleConsultationReminder);
     socket.on("application_deleted", handleApplicationDeleted);
     socket.on("user_deactivated", handleUserDeactivated);
+    socket.on("session_updated", handleSessionUpdated);
+
 
     // ✅ DEBUG: Log all incoming Socket.IO events to diagnose real-time sync issues
     const handleAnyEvent = (event: string, ...args: unknown[]) => {
       console.log(`[SocketHandler] 🔔 Event received: ${event}`, args);
     };
     socket.onAny(handleAnyEvent);
+
+    // R1+R2: Client-Pull code removed - login notification is now included directly
+    // in the login API response and handled by useAuth.ts
 
     // Cleanup listeners khi effect này chạy lại hoặc component unmount
     return () => {
@@ -876,10 +903,12 @@ export function SocketHandler() {
       socket.off("consultation_reminder", handleConsultationReminder);
       socket.off("application_deleted", handleApplicationDeleted);
       socket.off("user_deactivated", handleUserDeactivated);
+      socket.off("session_updated", handleSessionUpdated);
+
       socket.offAny(handleAnyEvent);
     };
     // ✅ FIX: Added isSocketConnected to dependencies to trigger listener setup when socket connects
-  }, [isAuthenticated, isSocketConnected, addNotification, preferences, queryClient]);
+  }, [isAuthenticated, isSocketConnected, addNotification, markAsRead, preferences, queryClient]);
 
   return null; // Không render gì cả
 }

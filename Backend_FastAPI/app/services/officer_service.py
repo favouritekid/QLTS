@@ -373,8 +373,9 @@ async def get_enhanced_dashboard_stats(
     
     # === 8. ANNUAL PROGRESS (Phase 6: Rolling Targets) ===
     # Get annual target progress for enrollments KPI
+    # Use fiscal year from date filter (filter_end.year)
     annual_progress = await kpi_service.get_annual_target_progress(
-        db, officer_id, kpi_code="enrollments"
+        db, officer_id, kpi_code="enrollments", fiscal_year=filter_end.year
     )
     
     # Build enhanced response
@@ -750,7 +751,9 @@ async def get_weekly_leaderboard(
 async def get_team_stats(
     db: AsyncSession,
     officer_id: int,
-    days: int = 30
+    days: int = 30,
+    start_date: date = None,
+    end_date: date = None
 ) -> Dict[str, Any]:
     """
     Get team average statistics for performance comparison.
@@ -765,7 +768,18 @@ async def get_team_stats(
     """
     repo = OfficerRepository(db)
     today = datetime.now(timezone.utc).date()
-    start_date = today - timedelta(days=days - 1)
+    
+    # Determine date range
+    if start_date and end_date:
+        calc_start = start_date
+        calc_end = end_date
+        # Recalculate days for rank logic if needed or just trust the range
+        calc_days = (end_date - start_date).days + 1
+        if calc_days < 1: calc_days = 1
+    else:
+        calc_start = today - timedelta(days=days - 1)
+        calc_end = today
+        calc_days = days
     
     # Get all active officers using Repository
     active_officers = await repo.get_active_officer_ids(scope="organization", unit_id=None)
@@ -779,10 +793,10 @@ async def get_team_stats(
         }
     
     # Get team averages using Repository
-    team_data = await repo.get_team_averages(unit_id=None, days=days)
+    team_data = await repo.get_team_averages(unit_id=None, start_date=calc_start, end_date=calc_end)
     
     # Get current officer's KPI for rank calculation
-    officer_kpi = await repo.get_kpi_stats(officer_id, start_date, today)
+    officer_kpi = await repo.get_kpi_stats(officer_id, calc_start, today)
     current_officer_count = officer_kpi["consultations_in_range"]
     
     # Calculate approximate rank percentile
@@ -790,7 +804,7 @@ async def get_team_stats(
     team_avg = team_data["team_avg_consultations"]
     if team_avg > 0:
         # Rough percentile: if above average, higher percentile
-        daily_avg = current_officer_count / days if days > 0 else 0
+        daily_avg = current_officer_count / calc_days if calc_days > 0 else 0
         if daily_avg >= team_avg:
             rank_percentile = min(90, 50 + int((daily_avg / team_avg - 1) * 50))
         else:
@@ -803,7 +817,7 @@ async def get_team_stats(
         "team_avg_conversions": team_data["team_avg_conversions"],
         "officer_rank_percentile": rank_percentile,
         "total_officers": team_data["total_officers"],
-        "period_days": days,
+        "period_days": calc_days,
     }
 
 

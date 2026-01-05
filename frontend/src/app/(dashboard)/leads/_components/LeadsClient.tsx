@@ -218,9 +218,15 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
   }, []);
 
   // Auto-scroll detail panel to top when selecting a new lead
+  // ✅ UX FIX: Also scroll window to top so panel is visible
   useEffect(() => {
     if (selectedLeadId && detailPanelRef.current) {
+      // 1. Scroll inside the panel container to top
       detailPanelRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+      
+      // 2. Scroll the panel INTO VIEW (for when user is scrolled down in main window)
+      // Using scrollIntoView with a block: 'start' to bring panel to top of viewport
+      detailPanelRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
   }, [selectedLeadId]);
 

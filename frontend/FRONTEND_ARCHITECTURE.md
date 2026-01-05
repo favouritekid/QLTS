@@ -1,21 +1,22 @@
 # 📘 Frontend Architecture Playbook
 ## React 19 / Next.js 16 – QLTS Project
 
-**Version:** 1.0  
+**Version:** 2.0  
 **Status:** Production Standard  
-**Last Updated:** 2025-12-23
+**Last Updated:** 2026-01-03
 
 ---
 
 ## Table of Contents
 
 1. [Architecture Principles (Immutable Rules)](#part-1-architecture-principles)
-2. [Anti-patterns & Guardrails](#part-2-anti-patterns--guardrails)
-3. [Security & Trust Boundaries](#part-3-security--trust-boundaries)
-4. [Data Fetching Decision Matrix](#part-4-data-fetching-decision-matrix)
-5. [Component Classification](#part-5-component-classification)
-6. [Quick Reference](#part-6-quick-reference)
-7. [Implementation Roadmap](#part-7-implementation-roadmap)
+2. [Next.js 16 cacheComponents Guide](#part-2-nextjs-16-cachecomponents-guide)
+3. [Anti-patterns & Guardrails](#part-3-anti-patterns--guardrails)
+4. [Security & Trust Boundaries](#part-4-security--trust-boundaries)
+5. [Data Fetching Decision Matrix](#part-5-data-fetching-decision-matrix)
+6. [Component Classification](#part-6-component-classification)
+7. [Quick Reference](#part-7-quick-reference)
+8. [Implementation Roadmap](#part-8-implementation-roadmap)
 
 ---
 
@@ -135,7 +136,166 @@ Spacing between touch targets ≥ 8px
 
 ---
 
-## Part 2: Anti-patterns & Guardrails
+## Part 2: Next.js 16 cacheComponents Guide
+
+> **🆕 NEW in v2.0** – Critical patterns for `cacheComponents: true`
+
+### 2.1 Configuration
+
+```typescript
+// next.config.ts
+const nextConfig: NextConfig = {
+  reactCompiler: true,       // ✅ React Compiler enabled
+  cacheComponents: true,     // ✅ Partial Prerendering enabled
+};
+```
+
+---
+
+### 2.2 Dynamic Route Requirements
+
+**⚠️ CRITICAL:** All `[param]` routes MUST export `generateStaticParams`
+
+```typescript
+// ❌ WRONG - Build will fail with cacheComponents
+export default async function Page({ params }) {
+  const { id } = await params;
+  return <div>Item {id}</div>;
+}
+
+// ✅ CORRECT - Placeholder pattern
+export function generateStaticParams() {
+  return [{ id: '__placeholder__' }];
+}
+
+export default async function Page({ params }) {
+  const { id } = await params;
+  
+  if (id === '__placeholder__') {
+    notFound();
+  }
+  
+  return <div>Item {id}</div>;
+}
+```
+
+**Applied to:**
+- `/leads/[id]/page.tsx` ✅
+- `/admissions/[id]/page.tsx` ✅
+- `/admin/users/[id]/page.tsx` ✅
+
+---
+
+### 2.3 Suspense Boundaries
+
+**Rule:** Async data fetching MUST be wrapped in `<Suspense>`
+
+```typescript
+// ✅ CORRECT Pattern - SSR with Suspense
+import { Suspense } from 'react';
+import { serverApi } from '@/lib/api/server';
+
+function LoadingFallback() {
+  return <Skeleton className="h-96" />;
+}
+
+async function DataContent({ id }: { id: number }) {
+  const data = await serverApi.leads.getLead(id);
+  return <LeadDetailClient initialData={data} />;
+}
+
+export default async function Page({ params }) {
+  const { id } = await params;
+  return (
+    <Suspense fallback={<LoadingFallback />}>
+      <DataContent id={Number(id)} />
+    </Suspense>
+  );
+}
+```
+
+---
+
+### 2.4 `use cache` Directive
+
+**NEW in Next.js 16:** Cache expensive computations at build time
+
+```typescript
+// ✅ Cache data that changes infrequently
+async function getStatistics() {
+  'use cache';
+  return await fetchDashboardStats();
+}
+
+// ✅ Cache with custom lifetime
+import { cacheLife } from 'next/cache';
+
+async function getLeaderboard() {
+  'use cache';
+  cacheLife('hours'); // Cache for 1 hour
+  return await fetchLeaderboard();
+}
+```
+
+**Use `use cache` for:**
+- Dashboard statistics
+- Pipeline aggregations
+- User leaderboards
+- Static configuration data
+
+**DO NOT use `use cache` for:**
+- User-specific data
+- Real-time data
+- Form submissions
+
+---
+
+### 2.5 Incompatible Route Segment Configs
+
+**⚠️ NOT allowed with `cacheComponents: true`:**
+
+```typescript
+// ❌ WILL FAIL - Route segment configs incompatible
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+export const fetchCache = 'force-no-store';
+```
+
+**Instead, use:**
+- `generateStaticParams` with placeholder
+- `<Suspense>` for dynamic content
+- `use cache` for cacheable data
+
+---
+
+### 2.6 Rendering Strategy Summary
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│              NEXT.JS 16 RENDERING STRATEGIES                │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌─── BUILD TIME ───┐    ┌─── REQUEST TIME ───┐            │
+│  │                  │    │                    │            │
+│  │  Static Shell    │    │  Dynamic Content   │            │
+│  │  (HTML + RSC)    │    │  (Streamed)        │            │
+│  │                  │    │                    │            │
+│  │  • Layouts       │    │  • User data       │            │
+│  │  • Loading UI    │    │  • Auth-dependent  │            │
+│  │  • Static text   │    │  • Filtered lists  │            │
+│  │  • use cache     │    │  • <Suspense>      │            │
+│  │                  │    │                    │            │
+│  └──────────────────┘    └────────────────────┘            │
+│                                                             │
+│  ═══════════════════════════════════════════════════════   │
+│                    PARTIAL PRERENDERING                     │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Part 3: Anti-patterns & Guardrails
 
 ### ❌ NEVER DO: Token in Client Storage
 
@@ -235,21 +395,6 @@ const { data: leads } = useQuery({
 
 ---
 
-### ❌ NEVER DO: Overuse Server Actions
-
-**Server Actions are NOT for:**
-- File uploads with progress
-- Complex multi-step wizards
-- Polling / real-time data
-- Operations needing offline support
-
-**Server Actions ARE for:**
-- Simple form submissions
-- One-click actions (approve, reject)
-- Actions that redirect after success
-
----
-
 ### ❌ NEVER DO: "use client" in Pages/Layouts
 
 ```typescript
@@ -268,23 +413,25 @@ export default async function LeadsPage() {
 
 ---
 
-### ❌ NEVER DO: Double Submit on Forms
+### ❌ NEVER DO: Empty generateStaticParams
 
 ```typescript
-// ❌ VULNERABLE - User can spam submit
-<button type="submit">Submit</button>
+// ❌ WRONG - Will fail with cacheComponents
+export function generateStaticParams() {
+  return []; // Empty array NOT allowed
+}
 
-// ✅ CORRECT - Disable during submission
-<button type="submit" disabled={isPending}>
-  {isPending ? 'Submitting...' : 'Submit'}
-</button>
+// ✅ CORRECT - Use placeholder
+export function generateStaticParams() {
+  return [{ id: '__placeholder__' }];
+}
 ```
 
 ---
 
-## Part 3: Security & Trust Boundaries
+## Part 4: Security & Trust Boundaries
 
-### 3.1 Trust Boundary Diagram
+### 4.1 Trust Boundary Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -331,7 +478,7 @@ export default async function LeadsPage() {
 
 ---
 
-### 3.2 Token Lifecycle
+### 4.2 Token Lifecycle
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -360,61 +507,11 @@ export default async function LeadsPage() {
 
 ---
 
-### 3.3 Socket.IO Auth
-
-| Phase | Action | Security |
-|-------|--------|----------|
-| Connect | Send cookies | ✅ httpOnly |
-| Handshake | Backend verifies JWT | ✅ Server-side |
-| Join Room | Backend assigns `user_room_{id}` | ✅ No client control |
-| Reconnect | Re-verify + invalidate cache | ✅ Fresh data |
-| Disconnect | Session cleanup | ✅ DB updated |
-
-**Enforcement:**
-```typescript
-// ✅ CORRECT - SocketHandler only after auth
-export default function DashboardLayout({ children }) {
-  return (
-    <>
-      {children}
-      <SocketHandler /> {/* Only rendered for authenticated users */}
-    </>
-  );
-}
-```
-
----
-
-### 3.4 Props Data Exposure
-
-**Rule:** Never pass sensitive data in props to Client Components that could be logged.
-
-```typescript
-// ❌ WRONG - Password visible in React DevTools
-<UserSettings user={{ ...user, password: 'hashed' }} />
-
-// ✅ CORRECT - Only safe fields
-<UserSettings user={{ id, name, email, role }} />
-```
-
----
-
-### 3.5 Replay Attack Prevention
-
-| Attack | Prevention |
-|--------|------------|
-| Form double submit | Disable button during `isPending` |
-| Token reuse | Backend blacklist + rotation |
-| Session fixation | New JTI on login |
-| CSRF | SameSite cookies + CORS |
-
----
-
-## Part 4: Data Fetching Decision Matrix
+## Part 5: Data Fetching Decision Matrix
 
 | Scenario | Approach | Reason |
 |----------|----------|--------|
-| Initial page data | Server Component `await` | No client JS |
+| Initial page data | Server Component `await` + Suspense | No client JS |
 | List with filters | React Query | Client-side state |
 | Simple form submit | Server Action | Less bundle |
 | Form with validation | RHF + React Query | Complex feedback |
@@ -422,19 +519,20 @@ export default function DashboardLayout({ children }) {
 | Optimistic toggle | `useOptimistic` | Instant feedback |
 | Polling | React Query `refetchInterval` | Built-in |
 | Real-time | Socket + targeted invalidation | Efficient |
+| **Static aggregations** | **`use cache`** | **🆕 Prerendered** |
 
 ---
 
-## Part 5: Component Classification
+## Part 6: Component Classification
 
-### 5.1 Server Components (No "use client")
+### 6.1 Server Components (No "use client")
 
 - `app/**/page.tsx` - Pages
 - `app/**/layout.tsx` - Layouts
 - Data display without interaction
 - Static UI (headers, footers)
 
-### 5.2 Client Components ("use client")
+### 6.2 Client Components ("use client")
 
 - Forms with state
 - Event handlers (onClick, onChange)
@@ -442,14 +540,20 @@ export default function DashboardLayout({ children }) {
 - Third-party client libs (Recharts, DnD)
 - Real-time updates
 
-### 5.3 Shared Components
+### 6.3 Co-location Pattern
 
-- `components/ui/*` - shadcn/ui primitives
-- Can be used in both, depends on usage
+```
+app/(dashboard)/leads/[id]/
+├── page.tsx              # Server Component (SSR)
+├── loading.tsx           # Loading UI
+├── error.tsx             # Error boundary (Client)
+└── _components/
+    └── LeadDetailClient.tsx  # Client Component
+```
 
 ---
 
-## Part 6: Quick Reference
+## Part 7: Quick Reference
 
 ### File Naming
 
@@ -466,120 +570,74 @@ export default function DashboardLayout({ children }) {
 
 ```typescript
 // 1. React/Next
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, Suspense } from 'react';
+import { notFound } from 'next/navigation';
 
 // 2. External libs
 import { useQuery } from '@tanstack/react-query';
 
-// 3. Internal - absolute paths
-import { api } from '@/lib/api/client';
+// 3. Internal - server API
+import { serverApi } from '@/lib/api/server';
+
+// 4. Internal - components
 import { Button } from '@/components/ui/button';
 
-// 4. Types
+// 5. Types
 import type { Lead } from '@/types/lead.types';
 ```
 
-### State Decision Tree
+### Dynamic Route Checklist
 
-```
-Need state?
-├── UI only (modal open, sidebar collapsed)?
-│   └── → Zustand
-├── Server data (leads, users)?
-│   └── → React Query
-├── Form values?
-│   └── → React Hook Form
-├── URL-dependent?
-│   └── → Next.js Router (searchParams)
-└── Derived value?
-    └── → useMemo / compute inline
-```
+- [ ] `generateStaticParams` exported with placeholder
+- [ ] `notFound()` called for placeholder
+- [ ] Async content wrapped in `<Suspense>`
+- [ ] `loading.tsx` exists for route
+- [ ] `error.tsx` exists for route
 
 ---
 
-## Part 7: Implementation Roadmap
+## Part 8: Implementation Roadmap
 
-> **Last Audit:** 2025-12-23 | **Next Review:** Monthly
+> **Last Audit:** 2026-01-03 | **Next Review:** Monthly
 
-### Phase 1: Mobile UX & PWA (HIGH PRIORITY) ⏳ NOT STARTED
+### Phase 1: cacheComponents Compliance ✅ COMPLETED
 
-| # | Task | Effort | Impact | Status |
-|---|------|--------|--------|--------|
-| 1 | Add `MobileBottomNav` component | 2h | 📱 Mobile UX | ❌ Not started |
-| 2 | Add `manifest.json` (PWA) | 1h | 📱 Install capability | ❌ Not started |
-| 3 | Audit touch targets ≥ 44px | 2h | ♿ Accessibility | ❌ Not started |
-| 4 | Add `useOptimistic` to notifications | 2h | ⚡ Instant feedback | ❌ Not started |
-
----
-
-### Phase 2: React 19 Adoption ⏳ PARTIAL
-
-| # | Task | Effort | Impact | Status |
-|---|------|--------|--------|--------|
-| 5 | Add `loading.tsx` to routes | 2h | ⚡ Streaming | ✅ Done (4 files) |
-| 6 | Server Actions for simple forms | 1d | 📦 Smaller bundle | ❌ Not started |
-| 7 | Implement `useActionState` for forms | 4h | ⚡ Pending states | ❌ Not started |
+| # | Task | Status |
+|---|------|--------|
+| 1 | Add `generateStaticParams` to `/leads/[id]` | ✅ Done |
+| 2 | Add `generateStaticParams` to `/admissions/[id]` | ✅ Done |
+| 3 | Add `generateStaticParams` to `/admin/users/[id]` | ✅ Done |
+| 4 | Build passes with cacheComponents | ✅ Done |
 
 ---
 
-### Phase 3: Feature Gaps ✅ COMPLETED
+### Phase 2: `use cache` Adoption ⏳ NOT STARTED
 
-| # | Task | Effort | Impact | Status |
-|---|------|--------|--------|--------|
-| 8 | Build **KPI Config Admin Page** | 2d | 📊 Admin set targets | ✅ Done |
-| 9 | Build **Profile Settings Page** | 1d | 👤 User edit info | ✅ Done |
-
-> **Note:** `kpi-config/page.tsx` (624 lines) and `profile/page.tsx` (hybrid pattern) are complete.
-
----
-
-### Phase 4: Performance Optimization 🆕 NEW
-
-| # | Task | Effort | Impact | Status |
-|---|------|--------|--------|--------|
-| 10 | Refactor nested `useQuery` in Officer Dashboard | 4h | ⚡ Reduce waterfalls | ❌ Not started |
-| 11 | Consider Server Component migration for `kpi-config` | 2h | 📦 Less client JS | ❌ Not started |
-| 12 | Consider Server Component migration for `monitoring` | 2h | 📦 Less client JS | ❌ Not started |
-
-> **Audit Finding:** `TodaySchedule`, `WeeklyLeaderboard`, `RecommendationsPanel` have nested fetching.
+| # | Task | Effort | Impact |
+|---|------|--------|--------|
+| 5 | Add `use cache` to dashboard statistics | 2h | ⚡ Faster load |
+| 6 | Add `use cache` to pipeline aggregations | 2h | ⚡ Faster load |
+| 7 | Add `cacheLife` for time-sensitive data | 2h | 🔄 Fresh data |
 
 ---
 
-### Phase 5: DX Improvements (Optional)
+### Phase 3: Error Boundary Coverage ⏳ PARTIAL
 
-| # | Task | Effort | Impact | Status |
-|---|------|--------|--------|--------|
-| 13 | Add Storybook | 2d | 📚 Component catalog | ❌ Not started |
-| 14 | Create ADR documentation | 2h | 📚 Decision tracking | ❌ Not started |
-| 15 | Feature-based folder structure | 3d | 📁 Scalability | ❌ Not started |
+| # | Task | Status |
+|---|------|--------|
+| 8 | Add `error.tsx` to `/settings/*` | ❌ Not done |
+| 9 | Add `error.tsx` to `/notifications` | ❌ Not done |
+| 10 | Add `error.tsx` to `/profile` | ❌ Not done |
 
 ---
 
-### Priority Matrix (Updated)
+### Phase 4: Mobile UX & PWA ⏳ NOT STARTED
 
-```
-           HIGH IMPACT
-               ↑
-    ┌──────────┼──────────┐
-    │  Phase 1 │ Phase 3  │
-    │ (Mobile) │ ✅ DONE  │
-    │ ⚠️ GAP   │          │
-LOW ←──────────┼──────────→ HIGH
-EFFORT         │          EFFORT
-    │  Phase 2 │ Phase 5  │
-    │(React19) │  (DX)    │
-    │ PARTIAL  │          │
-    └──────────┼──────────┘
-               ↓
-           LOW IMPACT
-```
-
-**Recommended Focus Order:**
-1. 🔴 Phase 1 (Mobile) - Actual gap, high user impact
-2. 🟡 Phase 4 (Performance) - Technical debt from audit
-3. 🟡 Phase 2 (React 19) - Continue adoption
-4. 🟢 Phase 5 (DX) - Nice to have
+| # | Task | Effort | Impact |
+|---|------|--------|--------|
+| 11 | Add `MobileBottomNav` component | 2h | 📱 Mobile UX |
+| 12 | Add `manifest.json` (PWA) | 1h | � Install capability |
+| 13 | Audit touch targets ≥ 44px | 2h | ♿ Accessibility |
 
 ---
 
@@ -608,5 +666,4 @@ What else could we have done?
 
 ---
 
-*Playbook v1.0 – Maintained by Frontend Team*
-
+*Playbook v2.0 – Updated for Next.js 16 cacheComponents – Maintained by Frontend Team*

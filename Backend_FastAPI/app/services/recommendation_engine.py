@@ -73,6 +73,8 @@ async def generate_recommendations(
     """
     Generate actionable recommendations based on KPI data.
     
+    ✅ REFACTORED: Uses repositories for data access.
+    
     Args:
         db: Database session
         officer_id: Officer ID to generate recommendations for
@@ -81,10 +83,13 @@ async def generate_recommendations(
     Returns:
         List of recommendation objects with priority, action, and impact
     """
+    from app.repositories import LeadRepository, UserRepository
+    
     recommendations = []
     
-    # Get user info
-    user = await db.get(models.User, officer_id)
+    # Get user info via repository
+    user_repo = UserRepository(db)
+    user = await user_repo.get_by_id(officer_id)
     if not user:
         return recommendations
     
@@ -159,8 +164,9 @@ async def generate_recommendations(
             "expected_impact": "Cải thiện trải nghiệm khách hàng",
         })
     
-    # Rule 4: Hot leads need attention
-    hot_leads_count = await _count_hot_leads_needing_attention(db, officer_id)
+    # Rule 4: Hot leads need attention (via repository)
+    lead_repo = LeadRepository(db)
+    hot_leads_count = await lead_repo.count_hot_leads_needing_attention(officer_id)
     
     if hot_leads_count > THRESHOLDS["hot_leads_untouched"]:
         recommendations.append({
@@ -174,8 +180,8 @@ async def generate_recommendations(
             "expected_impact": f"Tăng {hot_leads_count * 2} enrollments tiềm năng",
         })
     
-    # Rule 5: Too many stale leads
-    stale_leads_count = await _count_stale_leads(db, officer_id)
+    # Rule 5: Too many stale leads (via repository)
+    stale_leads_count = await lead_repo.count_stale_leads(officer_id)
     
     if stale_leads_count > THRESHOLDS["stale_leads_threshold"]:
         recommendations.append({
@@ -232,57 +238,11 @@ async def generate_recommendations(
     
     return recommendations
 
-
 # =============================================================================
-# HELPER QUERIES
+# ✅ DEPRECATED: Helper functions moved to LeadRepository
+# - count_hot_leads_needing_attention() -> LeadRepository.count_hot_leads_needing_attention()
+# - count_stale_leads() -> LeadRepository.count_stale_leads()
 # =============================================================================
-
-async def _count_hot_leads_needing_attention(
-    db: AsyncSession,
-    officer_id: int,
-    days_threshold: int = 3
-) -> int:
-    """Count hot leads that haven't been contacted in X days."""
-    threshold_date = datetime.now(timezone.utc) - timedelta(days=days_threshold)
-    
-    query = (
-        select(func.count(models.Lead.id))
-        .where(
-            models.Lead.assigned_officer_id == officer_id,
-            models.Lead.is_hot_lead == True,
-            models.Lead.deleted_at.is_(None),
-            models.Lead.last_consultation_at < threshold_date,
-        )
-    )
-    result = await db.execute(query)
-    return result.scalar() or 0
-
-
-async def _count_stale_leads(
-    db: AsyncSession,
-    officer_id: int,
-    days_threshold: int = 14
-) -> int:
-    """Count leads with no activity in X days."""
-    threshold_date = datetime.now(timezone.utc) - timedelta(days=days_threshold)
-    
-    query = (
-        select(func.count(models.Lead.id))
-        .join(
-            models.ConsultationStatus,
-            models.Lead.consultation_status_id == models.ConsultationStatus.id,
-            isouter=True
-        )
-        .where(
-            models.Lead.assigned_officer_id == officer_id,
-            models.Lead.deleted_at.is_(None),
-            models.Lead.updated_at < threshold_date,
-            # Only non-final status leads are considered stale
-            models.ConsultationStatus.is_final_status == False,
-        )
-    )
-    result = await db.execute(query)
-    return result.scalar() or 0
 
 
 # =============================================================================

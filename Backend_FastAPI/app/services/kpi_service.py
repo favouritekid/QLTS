@@ -129,37 +129,20 @@ async def get_annual_target_progress(
     if fiscal_year is None:
         fiscal_year = datetime.now(timezone.utc).year
     
+    # ✅ REFACTORED: Use repository for data access
+    from ..repositories import KpiRepository
+    repo = KpiRepository(db)
+    
     # Get officer's unit_id for fallback
-    user = await db.get(models.User, officer_id)
-    unit_id = user.unit_id if user else None
+    unit_id = await repo.get_user_unit_id(officer_id)
     
     # Try to find annual target (officer → unit → org)
-    result = await db.execute(
-        select(models.KpiTarget)
-        .where(
-            or_(
-                models.KpiTarget.officer_id == officer_id,
-                and_(
-                    models.KpiTarget.unit_id == unit_id,
-                    models.KpiTarget.officer_id.is_(None)
-                ) if unit_id else False,
-                and_(
-                    models.KpiTarget.unit_id.is_(None),
-                    models.KpiTarget.officer_id.is_(None)
-                )
-            ),
-            models.KpiTarget.kpi_code == kpi_code,
-            models.KpiTarget.fiscal_year == fiscal_year,
-            models.KpiTarget.is_active == True,
-        )
-        .order_by(
-            # Priority: officer-specific first, then unit, then global
-            models.KpiTarget.officer_id.desc().nulls_last(),
-            models.KpiTarget.unit_id.desc().nulls_last(),
-        )
-        .limit(1)
+    target_record = await repo.get_annual_target_with_priority(
+        officer_id=officer_id,
+        kpi_code=kpi_code,
+        fiscal_year=fiscal_year,
+        unit_id=unit_id,
     )
-    target_record = result.scalar_one_or_none()
     
     if not target_record:
         return None
@@ -275,43 +258,34 @@ async def sync_officer_ytd(
     Sync achieved_ytd for an officer from actual data.
     Should be called by Celery job daily.
     
+    ✅ REFACTORED: Uses KpiRepository for data access.
+    
+    Uses PipelineStage + ConsultationStatus for consistency with funnel chart:
+    - PipelineStage.is_final_stage == True (lead has completed the funnel)
+    - ConsultationStatus.counts_for_kpi == True (successful conversion)
+    
     Returns:
         Dict of kpi_code -> actual YTD value
     """
+    from ..repositories import KpiRepository
+    
     if fiscal_year is None:
         fiscal_year = datetime.now(timezone.utc).year
     
     synced = {}
+    repo = KpiRepository(db)
     
-    # Sync enrollments YTD
-    enrollments_query = (
-        select(models.Lead)
-        .join(models.ConsultationStatus)
-        .where(
-            models.Lead.assigned_officer_id == officer_id,
-            models.ConsultationStatus.is_final_status == True,
-            models.ConsultationStatus.outcome_type == "positive",
-            models.Lead.updated_at >= datetime(fiscal_year, 1, 1, tzinfo=timezone.utc),
-            models.Lead.updated_at < datetime(fiscal_year + 1, 1, 1, tzinfo=timezone.utc),
-        )
-    )
-    result = await db.execute(enrollments_query)
-    enrollments_ytd = len(result.scalars().all())
+    # Sync enrollments YTD via repository
+    # Count leads that reached FINAL pipeline stage with counts_for_kpi=True
+    enrollments_ytd = await repo.count_enrollments_ytd(officer_id, fiscal_year)
     synced["enrollments"] = enrollments_ytd
     
-    # Update kpi_target record
-    from sqlalchemy import update
-    await db.execute(
-        update(models.KpiTarget)
-        .where(
-            models.KpiTarget.officer_id == officer_id,
-            models.KpiTarget.kpi_code == "enrollments",
-            models.KpiTarget.fiscal_year == fiscal_year,
-        )
-        .values(
-            achieved_ytd=enrollments_ytd,
-            last_sync_at=datetime.now(timezone.utc),
-        )
+    # Update kpi_target record via repository
+    await repo.update_achieved_ytd(
+        officer_id=officer_id,
+        kpi_code="enrollments",
+        fiscal_year=fiscal_year,
+        ytd_value=enrollments_ytd,
     )
     
     log.info(
@@ -341,6 +315,11 @@ class ConfigNotFoundError(Exception):
 
 class TargetNotFoundError(Exception):
     """Raised when KPI target is not found."""
+    pass
+
+
+class DuplicateTargetError(Exception):
+    """Raised when attempting to create a duplicate KPI target."""
     pass
 
 
@@ -405,6 +384,10 @@ async def create_kpi_config(
     )
     db.add(config)
     
+    # ✅ REFACTORED: Add flush/refresh as per guidelines
+    await db.flush()
+    await db.refresh(config)
+    
     async def callback():
         log.info(
             "KPI config created",
@@ -431,7 +414,11 @@ async def update_kpi_config(
     Raises:
         ConfigNotFoundError: If config not found
     """
-    config = await db.get(models.KpiConfig, config_id)
+    # ✅ REFACTORED: Use repository for data access
+    from ..repositories import KpiRepository
+    repo = KpiRepository(db)
+    
+    config = await repo.get_config_by_id(config_id)
     if not config:
         raise ConfigNotFoundError(f"Config {config_id} not found")
     
@@ -470,7 +457,11 @@ async def delete_kpi_config(
     Raises:
         ConfigNotFoundError: If config not found
     """
-    config = await db.get(models.KpiConfig, config_id)
+    # ✅ REFACTORED: Use repository for data access
+    from ..repositories import KpiRepository
+    repo = KpiRepository(db)
+    
+    config = await repo.get_config_by_id(config_id)
     if not config:
         raise ConfigNotFoundError(f"Config {config_id} not found")
     
@@ -490,11 +481,12 @@ async def list_kpi_targets(
     db: AsyncSession,
     fiscal_year: Optional[int] = None,
     kpi_code: Optional[str] = None,
+    is_active: bool = True,
 ) -> List[models.KpiTarget]:
     """List annual KPI targets with filters."""
     from ..repositories import KpiRepository
     repo = KpiRepository(db)
-    return await repo.list_targets(fiscal_year=fiscal_year, kpi_code=kpi_code)
+    return await repo.list_targets(fiscal_year=fiscal_year, kpi_code=kpi_code, is_active=is_active)
 
 
 async def create_kpi_target(
@@ -510,7 +502,34 @@ async def create_kpi_target(
     Create an annual KPI target.
     
     Pattern A: Returns (result, callback) for transaction control.
+    
+    Raises:
+        DuplicateTargetError: If active target already exists for this scope + year
     """
+    from ..repositories import KpiRepository
+    repo = KpiRepository(db)
+    
+    # Check for duplicates
+    existing = await repo.check_duplicate_target_exists(
+        kpi_code=kpi_code,
+        fiscal_year=fiscal_year,
+        unit_id=unit_id,
+        officer_id=officer_id,
+    )
+    
+    if existing:
+        # Build scope description for error message
+        if officer_id:
+            scope = f"Cán bộ #{officer_id}"
+        elif unit_id:
+            scope = f"Đơn vị #{unit_id}"
+        else:
+            scope = "Toàn cục"
+        
+        raise DuplicateTargetError(
+            f"Mục tiêu năm {fiscal_year} cho '{kpi_code}' phạm vi {scope} đã tồn tại"
+        )
+    
     target = models.KpiTarget(
         kpi_code=kpi_code,
         annual_target=annual_target,
@@ -522,6 +541,10 @@ async def create_kpi_target(
     )
     db.add(target)
     
+    # ✅ REFACTORED: Add flush/refresh as per guidelines
+    await db.flush()
+    await db.refresh(target)
+    
     async def callback():
         log.info(
             "KPI target created",
@@ -529,6 +552,84 @@ async def create_kpi_target(
             kpi_code=kpi_code,
             fiscal_year=fiscal_year,
             created_by=created_by.id if created_by else None,
+        )
+    
+    return target, callback
+
+
+async def update_kpi_target(
+    db: AsyncSession,
+    target_id: int,
+    annual_target: Optional[int] = None,
+    is_active: Optional[bool] = None,
+    updated_by: Optional[models.User] = None,
+) -> Tuple[models.KpiTarget, Callback]:
+    """
+    Update an existing KPI target.
+    
+    Pattern A: Returns (result, callback) for transaction control.
+    
+    Raises:
+        TargetNotFoundError: If target not found
+    """
+    # ✅ REFACTORED: Use repository for data access
+    from ..repositories import KpiRepository
+    repo = KpiRepository(db)
+    
+    target = await repo.get_target_by_id(target_id)
+    if not target:
+        raise TargetNotFoundError(f"Target {target_id} not found")
+    
+    changes = []
+    if annual_target is not None and target.annual_target != annual_target:
+        old_value = target.annual_target
+        target.annual_target = annual_target
+        changes.append(f"annual_target: {old_value} → {annual_target}")
+    
+    if is_active is not None and target.is_active != is_active:
+        target.is_active = is_active
+        changes.append(f"is_active: {is_active}")
+    
+    async def callback():
+        if changes:
+            log.info(
+                "KPI target updated",
+                target_id=target_id,
+                changes=changes,
+                updated_by=updated_by.id if updated_by else None,
+            )
+    
+    return target, callback
+
+
+async def delete_kpi_target(
+    db: AsyncSession,
+    target_id: int,
+    deleted_by: Optional[models.User] = None,
+) -> Tuple[models.KpiTarget, Callback]:
+    """
+    Soft delete a KPI target (set is_active=False).
+    
+    Pattern A: Returns (result, callback) for transaction control.
+    
+    Raises:
+        TargetNotFoundError: If target not found
+    """
+    # ✅ REFACTORED: Use repository for data access
+    from ..repositories import KpiRepository
+    repo = KpiRepository(db)
+    
+    target = await repo.get_target_by_id(target_id)
+    if not target:
+        raise TargetNotFoundError(f"Target {target_id} not found")
+    
+    target.is_active = False
+    
+    async def callback():
+        log.info(
+            "KPI target deleted",
+            target_id=target_id,
+            deleted_by=deleted_by.id if deleted_by else None,
         )
     
     return target, callback

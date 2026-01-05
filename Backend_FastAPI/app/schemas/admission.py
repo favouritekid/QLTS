@@ -14,7 +14,7 @@ Architecture Compliance:
 """
 
 from datetime import datetime
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Dict
 import html
 
 from pydantic import BaseModel, Field, field_validator, ConfigDict
@@ -53,6 +53,10 @@ class FamilyMemberSchema(BaseModel):
         ...,
         pattern=r"^0\d{9,10}$",
         description="Vietnam phone number (0 + 9-10 digits)"
+    )
+    is_primary_guardian: bool = Field(
+        False,
+        description="Identify if this is the primary guardian"
     )
 
     @field_validator('full_name', 'occupation', 'relationship')
@@ -100,8 +104,14 @@ class AcademicRecordSchema(BaseModel):
         None,
         ge=0.0,
         le=10.0,
-        description="GPA on 10-point scale"
+        description="GPA (0.0 - 10.0)"
     )
+    graduation_type: Optional[str] = Field(
+        None,
+        max_length=50,
+        description="Type of graduation (THPT, Dai hoc, etc.)"
+    )
+
 
     @field_validator('school_name')
     @classmethod
@@ -125,39 +135,49 @@ class AdmissionScoreSchema(BaseModel):
     """
     Admission scores (stored in admission_profile.admission_scores JSONB object).
 
-    Security:
-    - GPA Range: 0.0 - 10.0 (Vietnam education system)
-    - Subject Scores: Optional, 0.0 - 10.0
+    Supports two scoring modes:
+    1. GPA-only: For "học bạ" methods without subject groups
+    2. Subject-based: For methods with subject_groups (e.g., A00, D01)
+
+    Phase 6: Dynamic Admission Scoring
     """
-    gpa: float = Field(
-        ...,
-        ge=0.0,
-        le=10.0,
-        description="Overall GPA (required for admission evaluation)"
+    # Selected admission criterion and subject group
+    selected_criterion_id: Optional[str] = Field(
+        None,
+        description="ID of selected admission criterion from applied_rules.criteria"
     )
-    math_score: Optional[float] = Field(
+    selected_group: Optional[str] = Field(
+        None,
+        description="Selected subject group code (e.g., 'A00', 'D01')"
+    )
+    
+    # GPA for học bạ-based methods
+    gpa: Optional[float] = Field(
         None,
         ge=0.0,
         le=10.0,
-        description="Math score (optional)"
+        description="Overall GPA (for học bạ/GPA-based methods)"
     )
-    literature_score: Optional[float] = Field(
+    
+    # Dynamic subject scores (e.g., {"math": 8.5, "physics": 7.0, "chemistry": 9.0})
+    subject_scores: Optional[Dict[str, Optional[float]]] = Field(
         None,
-        ge=0.0,
-        le=10.0,
-        description="Literature score (optional)"
+        description="Subject scores keyed by subject code (e.g., 'math', 'physics')"
     )
-    english_score: Optional[float] = Field(
-        None,
-        ge=0.0,
-        le=10.0,
-        description="English score (optional)"
-    )
-    # Add more subjects as needed
+    
+    # Legacy fields (kept for backward compatibility)
+    math_score: Optional[float] = Field(None, ge=0.0, le=10.0)
+    literature_score: Optional[float] = Field(None, ge=0.0, le=10.0)
+    english_score: Optional[float] = Field(None, ge=0.0, le=10.0)
+    
+    # Computed fields (optional, for display)
+    total_score: Optional[float] = Field(None, ge=0.0, description="Total of subject scores")
+    average_score: Optional[float] = Field(None, ge=0.0, le=10.0, description="Average score")
 
     model_config = ConfigDict(
         str_strip_whitespace=True,
-        validate_assignment=True
+        validate_assignment=True,
+        extra="allow"  # Allow extra fields for flexibility
     )
 
 
@@ -257,19 +277,50 @@ class AdmissionProfileUpdate(BaseModel):
         ge=1,
         description="Current version (for optimistic locking, must match DB)"
     )
+    
+    # Personal Info Fields
+    full_name: Optional[str] = Field(None, max_length=255)
+    phone: Optional[str] = Field(
+        None, 
+        pattern=r"^0\d{9,10}$",
+        description="Phone number (10-11 digits starting with 0)"
+    )
+    email: Optional[str] = Field(None, max_length=255)
+    dob: Optional[datetime] = Field(None, description="Date of birth")
+    gender: Optional[str] = Field(None, max_length=50)
+    
     citizen_id: Optional[str] = Field(
         None,
         pattern=r"^\d{12}$",
         description="CCCD/CMND number (12 digits)"
     )
+    social_insurance_number: Optional[str] = Field(None, max_length=50)
+    
+    # Location Fields
+    nationality: Optional[str] = Field(None, max_length=100)
+    ethnicity: Optional[str] = Field(None, max_length=100)
+    religion: Optional[str] = Field(None, max_length=100)
+    disability_type: Optional[str] = Field(None, max_length=100)
+    permanent_province: Optional[str] = Field(None, max_length=100)
+    permanent_district: Optional[str] = Field(None, max_length=100)
+    permanent_ward: Optional[str] = Field(None, max_length=100)
+    place_of_birth: Optional[str] = Field(None, max_length=255)
+    native_place: Optional[str] = Field(None, max_length=255)
+    
+    # Political Info Dates
+    union_entry_date: Optional[datetime] = Field(None, description="Union entry date")
+    party_entry_date: Optional[datetime] = Field(None, description="Party entry date (probationary)")
+    party_official_entry_date: Optional[datetime] = Field(None, description="Party entry date (official)")
+    
+    # JSONB Arrays
     family_info: Optional[List[FamilyMemberSchema]] = Field(
         None,
-        max_items=10,
+        max_length=10,
         description="Array of family members (max 10)"
     )
     academic_history: Optional[List[AcademicRecordSchema]] = Field(
         None,
-        max_items=20,
+        max_length=20,
         description="Array of academic records (schools attended, max 20)"
     )
     admission_scores: Optional[AdmissionScoreSchema] = Field(
@@ -278,9 +329,29 @@ class AdmissionProfileUpdate(BaseModel):
     )
     documents_checklist: Optional[List[DocumentItemSchema]] = Field(
         None,
-        max_items=50,
+        max_length=50,
         description="Document upload checklist (max 50)"
     )
+
+    # Field validators to convert empty strings to None (for pattern fields)
+    @field_validator('phone', 'citizen_id', mode='before')
+    @classmethod
+    def empty_str_to_none(cls, v):
+        """Convert empty strings to None to bypass pattern validation."""
+        if v == "" or v is None:
+            return None
+        return v
+
+    @field_validator('email', 'full_name', 'gender', 'social_insurance_number', 
+                     'nationality', 'ethnicity', 'religion', 'disability_type',
+                     'permanent_province', 'permanent_district', 'permanent_ward',
+                     'place_of_birth', 'native_place', mode='before')
+    @classmethod
+    def empty_str_to_none_text(cls, v):
+        """Convert empty strings to None for text fields."""
+        if v == "" or v is None:
+            return None
+        return v
 
     model_config = ConfigDict(
         str_strip_whitespace=True,
@@ -296,25 +367,75 @@ class AdmissionProfileResponse(BaseModel):
     """
     id: int
     lead_id: int
-    citizen_id: Optional[str] = None
     status: str
     version: int
     applied_rules: dict
+    created_at: datetime
+    updated_at: datetime
+    
+    # Personal Info Fields
+    full_name: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    dob: Optional[datetime] = None
+    gender: Optional[str] = None
+    citizen_id: Optional[str] = None
+    social_insurance_number: Optional[str] = None
+    
+    # Location Fields
+    nationality: Optional[str] = None
+    ethnicity: Optional[str] = None
+    religion: Optional[str] = None
+    disability_type: Optional[str] = None
+    permanent_province: Optional[str] = None
+    permanent_district: Optional[str] = None
+    permanent_ward: Optional[str] = None
+    place_of_birth: Optional[str] = None
+    native_place: Optional[str] = None
+    
+    # Political Dates
+    union_entry_date: Optional[datetime] = None
+    party_entry_date: Optional[datetime] = None
+    party_official_entry_date: Optional[datetime] = None
+    
+    # JSONB Fields
     family_info: List[FamilyMemberSchema] = []
     academic_history: List[AcademicRecordSchema] = []
     admission_scores: Optional[AdmissionScoreSchema] = None
     documents_checklist: List[DocumentItemSchema] = []
-    created_at: datetime
-    updated_at: datetime
 
-    # Nested relationships (optional)
-    lead: Optional[dict] = None  # LeadShallow from lead.py
-    student: Optional[dict] = None  # StudentShallow
+    # Nested relationships (using forward refs for circular import avoidance)
+    lead: Optional["LeadShallowForAdmission"] = None
+    student: Optional["StudentShallowForAdmission"] = None
 
     model_config = ConfigDict(
         from_attributes=True,
         validate_assignment=True
     )
+
+
+class LeadShallowForAdmission(BaseModel):
+    """Minimal Lead info for AdmissionProfileResponse."""
+    id: int
+    full_name: str
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    unit_id: Optional[int] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class StudentShallowForAdmission(BaseModel):
+    """Minimal Student info for AdmissionProfileResponse."""
+    id: int
+    student_code: str
+    enrollment_date: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# Update forward refs
+AdmissionProfileResponse.model_rebuild()
 
 
 class AdmissionSubmitResponse(BaseModel):
@@ -375,6 +496,30 @@ class StudentDocumentResponse(BaseModel):
     )
 
 
+class DocumentUploadResponse(BaseModel):
+    """Schema for document upload response."""
+    code: str = Field(..., description="Document code (e.g., HOC_BA)")
+    label: str = Field(..., description="Human-readable name")
+    is_mandatory: bool = Field(default=True)
+    status: Literal["missing", "uploaded", "verified", "rejected"] = Field(
+        default="uploaded",
+        description="Upload status"
+    )
+    file_path: Optional[str] = Field(
+        None,
+        description="File path where document is stored"
+    )
+    uploaded_at: Optional[str] = Field(
+        None,
+        description="Upload timestamp (ISO format)"
+    )
+
+    model_config = ConfigDict(
+        from_attributes=True,
+        validate_assignment=True
+    )
+
+
 class StudentResponse(BaseModel):
     """Schema for Student response."""
     id: int
@@ -411,4 +556,5 @@ __all__ = [
     # Student schemas
     "StudentDocumentResponse",
     "StudentResponse",
+    "DocumentUploadResponse",
 ]

@@ -47,6 +47,7 @@ export const useAuthStore = create<AuthState>()(
       logout: () => {
         // ✅ SECURITY FIX: No need to clear localStorage
         // Cookies are cleared by backend /logout endpoint
+        // Note: "Nhắc sau" 24h dismiss persists through logout/login (by design)
 
         set({
           user: null,

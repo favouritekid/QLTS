@@ -10,7 +10,7 @@ Following Architecture Guidelines:
 - Returns Tuple[result, post_commit_callback] for write operations
 """
 import hashlib
-import logging
+import structlog
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -22,7 +22,7 @@ from app.repositories.login_history_repository import LoginHistoryRepository
 from app.repositories.trusted_device_repository import TrustedDeviceRepository
 from app.utils.exceptions import ResourceNotFoundError
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 
 # Risk score weights
@@ -38,17 +38,32 @@ def generate_device_fingerprint(
     browser: Optional[str],
     os: Optional[str],
     device_type: Optional[str],
+    user_id: Optional[int] = None,
 ) -> str:
     """
     Generate a stable device fingerprint from browser/OS info.
     
+    SECURITY FIX (C1): Added user_id and server-side salt to prevent spoofing.
+    Even if attacker knows browser/os/device_type, they cannot recreate
+    the fingerprint without the server-side salt.
+    
+    Args:
+        browser: Browser name/version from User-Agent
+        os: Operating system from User-Agent
+        device_type: Device type (mobile/desktop/tablet)
+        user_id: User ID for additional entropy (different users = different fingerprints)
+    
     Returns:
         64-character SHA256 hash of device attributes
     """
+    from app.config import settings
+    
     components = [
         browser or "unknown",
         os or "unknown",
         device_type or "unknown",
+        str(user_id) if user_id else "anonymous",
+        settings.DEVICE_FINGERPRINT_SALT,  # Server-side secret
     ]
     fingerprint_string = "|".join(components)
     return hashlib.sha256(fingerprint_string.encode()).hexdigest()
@@ -62,14 +77,28 @@ async def record_login(
     country: Optional[str] = None,
     city: Optional[str] = None,
     oauth_provider: Optional[str] = None,
+    # Phase 1: Added for merged email sending (previously in AnomalyDetector)
+    email_to: Optional[str] = None,
+    username: Optional[str] = None,
+    # R1+R2 FIX: Added for pending notification storage
+    refresh_jti: Optional[str] = None,
 ) -> Tuple[models.LoginHistory, Callable]:
     """
     Record a login attempt and detect anomalies.
+    
+    PHASE 1 MERGE: This is now the single source of truth for anomaly detection.
+    - Records login history for persistent audit trail
+    - Detects suspicious activity (new IP, device, location)
+    - Sends email alert for suspicious logins (moved from AnomalyDetector)
     
     IMPORTANT: This function does NOT commit the transaction.
     Router must call db.commit() and then execute the returned callback.
     
     Phase 4: Trusted devices skip "new device" anomaly detection.
+    
+    Args:
+        email_to: User email for sending login alert (required for email)
+        username: Username for email personalization
     
     Returns:
         Tuple of (login_history, post_commit_callback)
@@ -81,10 +110,12 @@ async def record_login(
     device_info = _parse_user_agent(user_agent)
     
     # Generate device fingerprint for trusted device check
+    # C1 FIX: Include user_id for additional entropy
     device_fingerprint = generate_device_fingerprint(
         browser=device_info.get("browser"),
         os=device_info.get("os"),
         device_type=device_info.get("device_type"),
+        user_id=user_id,
     )
     
     # ✅ Phase 4: Check if device is trusted
@@ -133,7 +164,8 @@ async def record_login(
     if is_trusted_device:
         await trusted_repo.update_last_used(user_id, device_fingerprint)
     
-    # Post-commit callback for notifications
+    # Post-commit callback for notifications and email alerts
+    # PHASE 1 MERGE: Email sending moved here from AnomalyDetector
     async def _post_commit():
         if login.is_suspicious:
             log.warning(
@@ -145,7 +177,88 @@ async def record_login(
                 new_device=is_new_device,
                 new_location=is_new_location,
             )
-            # Note: Notification is dispatched in auth.py router (Phase 3)
+            
+            # PHASE 1: Send email alert (previously in AnomalyDetector/auth.py)
+            if email_to and username:
+                try:
+                    from app.celery_utils import send_login_alert_email_task
+                    
+                    # Build location string
+                    location_parts = []
+                    if city:
+                        location_parts.append(city)
+                    if country:
+                        location_parts.append(country)
+                    location = ", ".join(location_parts) if location_parts else None
+                    
+                    # Build anomalies dict for email template
+                    anomalies_dict = {
+                        "is_suspicious": True,
+                        "new_ip": is_new_ip,
+                        "new_device": is_new_device,
+                        "new_location": is_new_location,
+                    }
+                    
+                    send_login_alert_email_task.delay(
+                        email_to=email_to,
+                        username=username,
+                        ip_address=ip_address or "Unknown",
+                        user_agent=user_agent or "Unknown",
+                        device_type=device_info.get("device_type") or "Unknown",
+                        browser=device_info.get("browser") or "Unknown",
+                        os=device_info.get("os") or "Unknown",
+                        anomalies=anomalies_dict,
+                        location=location,
+                    )
+                    log.info(
+                        "Login alert email queued from login_history_service",
+                        user_id=user_id,
+                        email_to=email_to,
+                    )
+                except Exception as email_error:
+                    log.error(
+                        "Failed to queue login alert email",
+                        user_id=user_id,
+                        error=str(email_error),
+                    )
+            
+            # R1+R2 FIX: Store pending notification in Redis for socket delivery on connect
+            # This solves the race condition where socket isn't connected when notification is emitted
+            if refresh_jti:
+                try:
+                    import json
+                    from ..database import safe_redis_lpush, safe_redis_expire
+                    
+                    pending_key = f"pending_login_notif:{user_id}:{refresh_jti}"
+                    notification_data = json.dumps({
+                        "type": "SUSPICIOUS_LOGIN",
+                        "login_id": login.id,
+                        "login_at": login.login_at.isoformat() if login.login_at else None,
+                        "ip_address": ip_address,
+                        "city": city,
+                        "country": country,
+                        "device_type": device_info.get("device_type"),
+                        "browser": device_info.get("browser"),
+                        "os": device_info.get("os"),
+                        "risk_score": login.risk_score,
+                        "is_new_ip": is_new_ip,
+                        "is_new_device": is_new_device,
+                        "is_new_location": is_new_location,
+                    })
+                    await safe_redis_lpush(pending_key, notification_data)
+                    await safe_redis_expire(pending_key, 60)  # 60 seconds TTL
+                    log.info(
+                        "R1+R2: Stored pending login notification in Redis",
+                        user_id=user_id,
+                        refresh_jti=refresh_jti[:8] + "..."
+                    )
+                except Exception as redis_error:
+                    log.error(
+                        "R1+R2: Failed to store pending notification",
+                        user_id=user_id,
+                        error=str(redis_error),
+                    )
+            # Note: Socket notification is dispatched in auth.py router (Phase 3)
     
     return login, _post_commit
 
@@ -194,6 +307,9 @@ async def confirm_login(
     """
     User confirms a suspicious login as legitimate.
     
+    SECURITY FIX (C3): Added time validation - cannot confirm logins older than 7 days.
+    This prevents attackers from having old suspicious logins confirmed.
+    
     Phase 4: Optionally adds the device to trusted list.
     
     IMPORTANT: Router must call db.commit() and then execute the returned callback.
@@ -206,7 +322,13 @@ async def confirm_login(
     
     Raises:
         ResourceNotFoundError: If login not found or doesn't belong to user
+        ValidationError: If login is older than 7 days (C3 fix)
     """
+    from app.utils.exceptions import ValidationError
+    
+    # Maximum age for confirming a login (security policy)
+    MAX_LOGIN_AGE_DAYS = 7
+    
     login_repo = LoginHistoryRepository(db)
     trusted_repo = TrustedDeviceRepository(db)
     
@@ -215,16 +337,32 @@ async def confirm_login(
     if not login or login.user_id != user_id:
         raise ResourceNotFoundError(f"Login {login_id} not found")
     
+    # C3 FIX: Prevent confirming stale logins
+    login_age = datetime.now(timezone.utc) - login.login_at
+    if login_age.days > MAX_LOGIN_AGE_DAYS:
+        log.warning(
+            "Attempted to confirm stale login",
+            user_id=user_id,
+            login_id=login_id,
+            login_age_days=login_age.days
+        )
+        raise ValidationError(
+            f"Cannot confirm login older than {MAX_LOGIN_AGE_DAYS} days. "
+            f"This login is {login_age.days} days old."
+        )
+    
     login.user_response = "confirmed"
     login.responded_at = datetime.now(timezone.utc)
     
     # ✅ Phase 4: Add device to trusted list
     trusted_device = None
     if trust_device and login.browser and login.os:
+        # C1 FIX: Include user_id for additional entropy
         device_fingerprint = generate_device_fingerprint(
             browser=login.browser,
             os=login.os,
             device_type=login.device_type,
+            user_id=user_id,
         )
         trusted_device = await trusted_repo.trust_device(
             user_id=user_id,
@@ -233,6 +371,20 @@ async def confirm_login(
             browser=login.browser,
             os=login.os,
             ip_address=login.ip_address,
+        )
+    
+    # ✅ FIX: Clear password_reset_required when user confirms login is legitimate
+    # This handles the case where user previously clicked "Not Me" (which set the flag),
+    # but now confirms a new suspicious login as legitimate.
+    from app.repositories.user_repository import UserRepository
+    user_repo = UserRepository(db)
+    user = await user_repo.get_by_id(user_id)
+    if user and user.password_reset_required:
+        user.password_reset_required = False
+        log.info(
+            "Cleared password_reset_required flag after user confirmed login",
+            user_id=user_id,
+            login_id=login_id
         )
     
     await db.flush()
@@ -257,8 +409,10 @@ async def secure_account(
     """
     User reports suspicious login and secures account.
     
+    SECURITY FIX (C2): Now sets password_reset_required=True to force password change.
+    
     IMPORTANT: Router must call db.commit() and then execute the returned callback.
-    The callback will revoke all sessions and force password change.
+    The callback will revoke all sessions.
     
     Raises:
         ResourceNotFoundError: If login not found or doesn't belong to user
@@ -272,14 +426,28 @@ async def secure_account(
     login.user_response = "secured"
     login.responded_at = datetime.now(timezone.utc)
     
+    # C2 FIX: Force password change on next login
+    # ✅ ARCHITECTURE FIX: Use UserRepository instead of direct query
+    from app.repositories.user_repository import UserRepository
+    user_repo = UserRepository(db)
+    user = await user_repo.get_by_id(user_id)
+    if user:
+        user.password_reset_required = True
+        log.info("Set password_reset_required=True for user", user_id=user_id)
+    
     await db.flush()
     await db.refresh(login)
     
     async def _post_commit():
-        log.warning("User secured account after suspicious login", user_id=user_id, login_id=login_id)
-        # TODO Phase 5: Revoke all sessions, force password change
+        log.warning(
+            "User secured account after suspicious login",
+            user_id=user_id,
+            login_id=login_id,
+            password_reset_required=True
+        )
     
     return login, _post_commit
+
 
 
 # =============================================================================

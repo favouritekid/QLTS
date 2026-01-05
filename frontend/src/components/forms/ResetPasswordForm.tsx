@@ -20,6 +20,7 @@ import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/useAuth";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Terminal } from "lucide-react";
+import { PasswordStrengthIndicator } from "@/components/admin/PasswordStrengthIndicator";
 // Tạm định nghĩa
 interface ResetPasswordSchema {
   token: string;
@@ -54,7 +55,11 @@ export function ResetPasswordForm() {
   const form = useForm<ResetPasswordFormValues>({
     resolver: zodResolver(resetPasswordSchema),
     defaultValues: { new_password: "", confirm_new_password: "" },
+    mode: "onChange", // ✅ FIX: Realtime validation
   });
+
+  // Watch new_password for strength indicator
+  const newPassword = form.watch("new_password");
 
   function onSubmit(values: ResetPasswordFormValues) {
     if (!token) return; // Không submit nếu không có token
@@ -102,6 +107,8 @@ export function ResetPasswordForm() {
                 <FormControl>
                   <Input type="password" placeholder="••••••••" disabled={isLoading} {...field} />
                 </FormControl>
+                {/* ✅ UX FIX: Show password strength indicator */}
+                {newPassword && <PasswordStrengthIndicator password={newPassword} />}
                 <FormMessage />
               </FormItem>
             )}

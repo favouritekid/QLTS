@@ -8,7 +8,8 @@ Router → Service → Repository
 No direct SQL queries - all data access through SessionRepository.
 """
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Callable, Coroutine, Any, Tuple
+PostCommitCallback = Callable[[], Coroutine[Any, Any, None]]
 
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +31,21 @@ from ..socket_metrics import (
 from .geoip_service import get_geoip_service
 
 log = structlog.get_logger(__name__)
+
+
+async def _emit_session_updated(user_id: int):
+    """Emit session_updated event to refresh frontend session list."""
+    try:
+        from ..socket_manager import sio
+        room = f"user_room_{user_id}"
+        await sio.emit("session_updated", {
+            "user_id": user_id,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }, room=room)
+        log.debug("Emitted session_updated event", user_id=user_id)
+    except Exception as e:
+        log.error(f"Failed to emit session_updated: {e}")
+
 
 
 async def _revoke_previous_sessions_on_device(
@@ -141,7 +157,7 @@ async def create_session(
     ip_address: Optional[str],
     user_agent_string: Optional[str],
     expires_at: datetime,
-) -> models.UserSession:
+) -> Tuple[models.UserSession, PostCommitCallback]:
     """
     Create a new session record when user logs in.
 
@@ -154,7 +170,7 @@ async def create_session(
         expires_at: Session expiration time (same as refresh token expiry)
 
     Returns:
-        Created UserSession instance
+        Tuple[UserSession, PostCommitCallback]: Created session and callback to emit socket event
     """
     # Parse User-Agent to extract device info
     device_type = "unknown"
@@ -252,7 +268,10 @@ async def create_session(
         os=os,
     )
 
-    return session
+    async def callback():
+        await _emit_session_updated(user_id)
+
+    return session, callback
 
 
 async def check_new_ip_address(
@@ -313,7 +332,7 @@ async def revoke_session(
     db: AsyncSession,  # ✅ PHASE 1: Accept db parameter (DI pattern)
     session_id: int,
     user_id: int
-) -> bool:
+) -> Tuple[bool, Optional[PostCommitCallback]]:
     """
     Revoke a user session.
 
@@ -323,7 +342,7 @@ async def revoke_session(
         user_id: User ID for ownership verification
 
     Returns:
-        True if session was revoked, False if not found
+        Tuple[bool, Optional[PostCommitCallback]]: Success status and callback to emit socket events
 
     Raises:
         SessionRevocationError: If revocation fails
@@ -343,11 +362,11 @@ async def revoke_session(
                     session_id=session_id,
                     user_id=user_id,
                 )
-                return False
+                return False, None
 
             if session.revoked_at is not None:
                 log.warning("Session already revoked, skipping", session_id=session_id)
-                return False
+                return False, None
 
             # 1. Update database
             session.revoked_at = datetime.now(timezone.utc)
@@ -391,22 +410,25 @@ async def revoke_session(
             }
         )
 
-    # 4. Dispatch event (Chỉ khi transaction thành công) - Event Dispatcher Pattern
-    if session_to_emit:
-        async with track_event_latency("force_logout_batch"):
-            try:
-                await dispatcher.dispatch(
-                    TransportEvents.USER_FORCE_LOGOUT,
-                    user_id=user_id,
-                    revoked_jtis=[session_to_emit]
-                )
-                socket_events_emitted_total.labels(event_type="force_logout_batch").inc()
-                log.info("Dispatched force_logout event (single)", session_id=session_id)
-            except Exception as e_dispatch:
-                socket_emit_failures_total.labels(event_type="force_logout_batch").inc()
-                log.error("Failed to dispatch logout event", error=str(e_dispatch))
+    # 4. Prepare Callback (Dispatch event sau khi router commit)
+    async def callback():
+        if session_to_emit:
+            async with track_event_latency("force_logout_batch"):
+                try:
+                    await dispatcher.dispatch(
+                        TransportEvents.USER_FORCE_LOGOUT,
+                        user_id=user_id,
+                        revoked_jtis=[session_to_emit]
+                    )
+                    socket_events_emitted_total.labels(event_type="force_logout_batch").inc()
+                    log.info("Dispatched force_logout event (single)", session_id=session_id)
+                except Exception as e_dispatch:
+                    socket_emit_failures_total.labels(event_type="force_logout_batch").inc()
+                    log.error("Failed to dispatch logout event", error=str(e_dispatch))
+        
+        await _emit_session_updated(user_id)
 
-    return True
+    return True, callback
 
 
 async def update_session_activity(
@@ -464,7 +486,7 @@ async def revoke_all_other_sessions(
     db: AsyncSession,  # ✅ PHASE 1: Accept db parameter (DI pattern)
     user_id: int,
     except_session_id: Optional[int] = None
-) -> int:
+) -> Tuple[int, PostCommitCallback]:
     """
     Revoke all other sessions for a user except optionally one.
 
@@ -474,10 +496,7 @@ async def revoke_all_other_sessions(
         except_session_id: Optional session ID to preserve
 
     Returns:
-        Number of sessions revoked
-
-    Raises:
-        Exception: If revocation fails (caught and re-raised for router handling)
+        Tuple[int, PostCommitCallback]: Number of sessions revoked and callback
     """
     revoked_jtis = []
     revoked_count = 0
@@ -529,37 +548,40 @@ async def revoke_all_other_sessions(
 
 
     # Dispatch event (Sau khi đã commit) - Event Dispatcher Pattern
-    if revoked_jtis:
-        async with track_event_latency("force_logout_batch_all"):
-            try:
-                await dispatcher.dispatch(
-                    TransportEvents.USER_FORCE_LOGOUT,
-                    user_id=user_id,
-                    revoked_jtis=revoked_jtis
-                )
-                socket_events_emitted_total.labels(event_type="force_logout_batch").inc(
-                    len(revoked_jtis)
-                )
-                log.info(
-                    "Dispatched force_logout event (multiple)",
-                    user_id=user_id,
-                    revoked_count=revoked_count
-                )
-            except Exception as e_dispatch:
-                socket_emit_failures_total.labels(event_type="force_logout_batch").inc()
-                log.error(
-                    "Failed to emit socket event for revoke-all",
-                    error=str(e_dispatch)
-                )
+    async def callback():
+        if revoked_jtis:
+            async with track_event_latency("force_logout_batch_all"):
+                try:
+                    await dispatcher.dispatch(
+                        TransportEvents.USER_FORCE_LOGOUT,
+                        user_id=user_id,
+                        revoked_jtis=revoked_jtis
+                    )
+                    socket_events_emitted_total.labels(event_type="force_logout_batch").inc(
+                        len(revoked_jtis)
+                    )
+                    log.info(
+                        "Dispatched force_logout event (multiple)",
+                        user_id=user_id,
+                        revoked_count=revoked_count
+                    )
+                except Exception as e_dispatch:
+                    socket_emit_failures_total.labels(event_type="force_logout_batch").inc()
+                    log.error(
+                        "Failed to emit socket event for revoke-all",
+                        error=str(e_dispatch)
+                    )
+        
+        await _emit_session_updated(user_id)
 
-    return revoked_count
+    return revoked_count, callback
 
 
 async def revoke_session_by_jti(
     db: AsyncSession,
     refresh_jti: str,
     user_id: int
-) -> bool:
+) -> Tuple[bool, Optional[PostCommitCallback]]:
     """
     ✅ PHASE 2: Revoke a session by its refresh token JTI.
 
@@ -572,7 +594,7 @@ async def revoke_session_by_jti(
         user_id: User ID for ownership verification
 
     Returns:
-        True if session was found and revoked, False if not found
+        Tuple[bool, Optional[PostCommitCallback]]: Success status and callback
     """
     repo = SessionRepository(db)
     session = await repo.get_by_refresh_jti_and_user(refresh_jti, user_id)
@@ -583,7 +605,7 @@ async def revoke_session_by_jti(
             refresh_jti=refresh_jti[:8] + "..." if refresh_jti else None,
             user_id=user_id,
         )
-        return False
+        return False, None
 
     # Already revoked
     if session.revoked_at is not None:
@@ -592,7 +614,7 @@ async def revoke_session_by_jti(
             session_id=session.id,
             refresh_jti=refresh_jti[:8] + "...",
         )
-        return False
+        return False, None
 
     # Revoke the session
     session.revoked_at = datetime.now(timezone.utc)
@@ -606,4 +628,7 @@ async def revoke_session_by_jti(
         refresh_jti=refresh_jti[:8] + "...",
     )
 
-    return True
+    async def callback():
+        await _emit_session_updated(user_id)
+
+    return True, callback

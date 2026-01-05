@@ -74,18 +74,6 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
   // Additional roles are all roles except the primary role
   const additionalRoles = userRoles?.filter(role => role !== primaryRole) || [];
 
-  // Debug logging
-  if (open) {
-    console.log("ManageRolesDialog Debug:", {
-      userId: user.id,
-      primaryRole,
-      userRoles,
-      additionalRoles,
-      isLoadingRoles,
-      rolesError,
-    });
-  }
-
   async function handleAssignRole() {
     if (!selectedRole) return;
 

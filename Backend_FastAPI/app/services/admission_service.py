@@ -209,30 +209,74 @@ async def create_profile(
             f"Program offering {lead.offering_id} not found"
         )
 
-    admission_rules = lead.offering.admission_rules
+    admission_rules = lead.offering.admission_rules or {}
     if not admission_rules:
         log.warning(
             "ProgramOffering has no admission_rules configured",
             offering_id=lead.offering_id,
         )
-        raise BadRequest(
-            "Program offering has no admission rules configured. "
-            "Please contact administrator."
+        # Don't raise error - we can still create profile with empty rules
+        # This allows for profiles to be created before rules are fully configured
+        admission_rules = {}
+    
+    # Step 5.1: Phase 6 - Include admission_criteria from OfferingAcademicInfo
+    # OfferingAcademicInfo contains year-specific criteria (Level 3)
+    # ⚠️ Use repository method to avoid MissingGreenlet (lazy loading in async)
+    criteria = []
+    from app.repositories import OrganizationRepository
+    org_repo = OrganizationRepository(db)
+    academic_info_list = await org_repo.get_academic_info_history(
+        lead.offering_id, 
+        published_only=False
+    )
+    
+    if academic_info_list:
+        # Get the first published, or fallback to most recent
+        academic_info = next(
+            (info for info in academic_info_list if info.is_published),
+            academic_info_list[0] if academic_info_list else None
         )
+        if academic_info and academic_info.admission_criteria:
+            criteria = academic_info.admission_criteria
+            log.info(
+                "Snapshotting admission_criteria from OfferingAcademicInfo",
+                offering_id=lead.offering_id,
+                academic_year=academic_info.academic_year,
+                criteria_count=len(criteria),
+            )
+    
+    # Merge criteria into applied_rules for backward compatibility + new features
+    applied_rules = {
+        **admission_rules,
+        "criteria": criteria,  # New: dynamic admission methods
+    }
 
     # Step 6: Auto-generate documents_checklist
-    mandatory_docs = admission_rules.get("mandatory_docs", [])
+    mandatory_docs = applied_rules.get("mandatory_docs", [])
+    
+    # Also collect mandatory docs from criteria (if any)
+    for criterion in criteria:
+        required_docs = criterion.get("required_documents", [])
+        for doc in required_docs:
+            doc_code = doc.get("code") if isinstance(doc, dict) else doc
+            if doc_code and doc_code not in mandatory_docs:
+                mandatory_docs.append(doc_code)
+    
     documents_checklist = _generate_documents_checklist(mandatory_docs)
 
     # Step 7: Create AdmissionProfile
     new_profile = models.AdmissionProfile(
         lead_id=lead_id,
         status="draft",
-        applied_rules=admission_rules,  # Snapshot (immutable)
+        applied_rules=applied_rules,  # Snapshot (immutable) with criteria
         family_info=[],
         academic_history=[],
         admission_scores=None,
         documents_checklist=documents_checklist,
+        # Pre-fill from Lead
+        full_name=lead.full_name,
+        phone=lead.phone,
+        email=lead.email,
     )
 
     db.add(new_profile)
@@ -246,11 +290,58 @@ async def create_profile(
         profile_id=new_profile.id,
         lead_id=lead_id,
         user_id=current_user.id,
-        snapshot_min_gpa=admission_rules.get("min_gpa"),
+        snapshot_min_gpa=applied_rules.get("min_gpa"),
+        criteria_count=len(criteria),
         mandatory_docs_count=len(mandatory_docs),
     )
 
     return new_profile
+
+
+
+async def get_profiles(
+    db: AsyncSession,
+    skip: int,
+    limit: int,
+    status_filter: Optional[str],
+    current_user: models.User,
+) -> List[models.AdmissionProfile]:
+    """
+    Get filtered list of admission profiles.
+
+    Security:
+    - IDOR: Automatically filters by unit_id for non-admin users.
+
+    Args:
+        db: Database session
+        skip: Pagination offset
+        limit: Page size
+        status_filter: Optional status filter
+        current_user: Current authenticated user
+
+    Returns:
+        List of AdmissionProfile
+    """
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
+
+    # Build filters
+    filters = {}
+    if status_filter:
+        filters["status"] = status_filter
+
+    # IDOR: Pass unit_id to repository for non-admin users (DB-level filter)
+    unit_filter = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+
+    # Get profiles using repository
+    profiles = await admission_repo.get_filtered(
+        skip=skip,
+        limit=min(limit, 100),
+        unit_id=unit_filter,
+        **filters
+    )
+
+    return profiles
 
 
 async def get_profile(
@@ -332,18 +423,22 @@ async def update_profile(
     # Get profile with IDOR check
     profile = await get_profile(db, profile_id, current_user)
 
-    # State Locking: Only draft profiles can be updated
-    if profile.status != "draft":
+    # State Locking: Only draft or rejected profiles can be updated
+    if profile.status not in ["draft", "rejected"]:
         log.warning(
-            "Attempted to update non-draft profile",
+            "Attempted to update locked profile",
             profile_id=profile_id,
             current_status=profile.status,
             user_id=current_user.id,
         )
         raise BadRequest(
             f"Cannot update profile with status '{profile.status}'. "
-            "Only draft profiles can be updated."
+            "Only draft or rejected profiles can be updated."
         )
+    
+    # If profile is rejected, reset to draft on update
+    if profile.status == "rejected":
+        profile.status = "draft"
 
     # Optimistic Locking: Check version matches
     if "version" in data and data["version"] != profile.version:
@@ -361,20 +456,62 @@ async def update_profile(
         )
 
     # Update fields (only non-None values from schema)
+    # Update fields (only non-None values from schema)
     if "citizen_id" in data and data["citizen_id"] is not None:
         profile.citizen_id = data["citizen_id"]
 
+    # ✅ Sync with Lead: Full Name
+    if "full_name" in data and data["full_name"] is not None:
+        profile.full_name = data["full_name"]
+        if profile.lead and data["full_name"].strip():
+            profile.lead.full_name = data["full_name"]
+
+    # ✅ Sync with Lead: Phone
+    if "phone" in data and data["phone"] is not None:
+        profile.phone = data["phone"]
+        if profile.lead and data["phone"].strip():
+            profile.lead.phone = data["phone"]
+
+    # ✅ Sync with Lead: Email
+    if "email" in data and data["email"] is not None:
+        profile.email = data["email"]
+        if profile.lead:
+            profile.lead.email = data["email"]
+    
+    # Other fields
+    if "dob" in data and data["dob"] is not None:
+        profile.dob = data["dob"]
+    
+    if "gender" in data and data["gender"] is not None:
+        profile.gender = data["gender"]
+        
+    if "permanent_province" in data: profile.permanent_province = data["permanent_province"]
+    if "permanent_district" in data: profile.permanent_district = data["permanent_district"]
+    if "permanent_ward" in data: profile.permanent_ward = data["permanent_ward"]
+    if "place_of_birth" in data: profile.place_of_birth = data["place_of_birth"]
+    if "native_place" in data: profile.native_place = data["native_place"]
+    if "social_insurance_number" in data: profile.social_insurance_number = data["social_insurance_number"]
+    if "nationality" in data: profile.nationality = data["nationality"]
+    if "ethnicity" in data: profile.ethnicity = data["ethnicity"]
+    if "religion" in data: profile.religion = data["religion"]
+    if "disability_type" in data: profile.disability_type = data["disability_type"]
+    
+    # Political date fields
+    if "union_entry_date" in data: profile.union_entry_date = data["union_entry_date"]
+    if "party_entry_date" in data: profile.party_entry_date = data["party_entry_date"]
+    if "party_official_entry_date" in data: profile.party_official_entry_date = data["party_official_entry_date"]
+
     if "family_info" in data and data["family_info"] is not None:
-        profile.family_info = [member.model_dump() for member in data["family_info"]]
+        profile.family_info = data["family_info"]
 
     if "academic_history" in data and data["academic_history"] is not None:
-        profile.academic_history = [record.model_dump() for record in data["academic_history"]]
+        profile.academic_history = data["academic_history"]
 
     if "admission_scores" in data and data["admission_scores"] is not None:
-        profile.admission_scores = data["admission_scores"].model_dump()
+        profile.admission_scores = data["admission_scores"]
 
     if "documents_checklist" in data and data["documents_checklist"] is not None:
-        profile.documents_checklist = [doc.model_dump() for doc in data["documents_checklist"]]
+        profile.documents_checklist = data["documents_checklist"]
 
     # Update timestamp and increment version
     profile.updated_at = datetime.now(timezone.utc)
@@ -439,25 +576,98 @@ async def submit_and_evaluate(
     errors: List[str] = []
 
     # Get applied_rules (snapshot)
-    applied_rules = profile.applied_rules
-    min_gpa = applied_rules.get("min_gpa")
+    applied_rules = profile.applied_rules or {}
     mandatory_docs = applied_rules.get("mandatory_docs", [])
-
-    # Validation 1: Check GPA
-    if not profile.admission_scores:
-        errors.append("Điểm thi chưa được nhập (admission_scores is null)")
-    else:
-        gpa = profile.admission_scores.get("gpa")
+    
+    # ========================================
+    # Phase 6: Dynamic Admission Scoring Validation
+    # ========================================
+    
+    # Get criteria from applied_rules (new structure)
+    criteria = applied_rules.get("criteria", [])
+    min_gpa = applied_rules.get("min_gpa")  # Legacy fallback
+    
+    # Get admission scores from profile
+    admission_scores = profile.admission_scores or {}
+    selected_criterion_id = admission_scores.get("selected_criterion_id")
+    
+    if not criteria and min_gpa is not None:
+        # Legacy validation: GPA-only (backward compatibility)
+        gpa = admission_scores.get("gpa")
         if gpa is None:
             errors.append("GPA chưa được nhập")
-        elif min_gpa is not None and gpa < min_gpa:
-            errors.append(
-                f"GPA ({gpa}) không đạt yêu cầu tối thiểu ({min_gpa})"
+        elif gpa < min_gpa:
+            errors.append(f"GPA ({gpa}) không đạt yêu cầu tối thiểu ({min_gpa})")
+    
+    elif criteria:
+        # New validation: Dynamic admission method
+        if not selected_criterion_id:
+            errors.append("Chưa chọn phương thức xét tuyển")
+        else:
+            # Find selected criterion
+            selected_criterion = next(
+                (c for c in criteria if c.get("id") == selected_criterion_id),
+                None
             )
+            
+            if not selected_criterion:
+                errors.append(f"Phương thức xét tuyển không hợp lệ: {selected_criterion_id}")
+            else:
+                method_name = selected_criterion.get("method_name", "")
+                min_score = selected_criterion.get("min_score", 0)
+                subject_groups = selected_criterion.get("subject_groups", [])
+                
+                # Determine validation type based on method name
+                is_gpa_method = (
+                    "học bạ" in method_name.lower() or 
+                    "gpa" in method_name.lower() or
+                    "điểm trung bình" in method_name.lower()
+                )
+                
+                if is_gpa_method:
+                    # GPA-based validation
+                    gpa = admission_scores.get("gpa")
+                    if gpa is None:
+                        errors.append("GPA chưa được nhập")
+                    elif min_score and gpa < min_score:
+                        errors.append(
+                            f"GPA ({gpa}) không đạt điểm chuẩn ({min_score}) "
+                            f"của phương thức '{method_name}'"
+                        )
+                else:
+                    # Exam-based validation (subject scores)
+                    selected_group = admission_scores.get("selected_group")
+                    subject_scores = admission_scores.get("subject_scores", {})
+                    
+                    if subject_groups and not selected_group:
+                        errors.append("Chưa chọn tổ hợp môn xét tuyển")
+                    elif selected_group and selected_group not in subject_groups:
+                        errors.append(
+                            f"Tổ hợp môn '{selected_group}' không thuộc danh sách cho phép "
+                            f"({', '.join(subject_groups)})"
+                        )
+                    
+                    # Calculate total score from subject_scores
+                    if subject_scores:
+                        total = sum(
+                            v for v in subject_scores.values() 
+                            if isinstance(v, (int, float))
+                        )
+                        if min_score and total < min_score:
+                            errors.append(
+                                f"Tổng điểm ({total:.1f}) không đạt điểm chuẩn ({min_score}) "
+                                f"của phương thức '{method_name}'"
+                            )
+                    else:
+                        errors.append("Chưa nhập điểm các môn xét tuyển")
+    else:
+        # No validation criteria defined
+        errors.append("Không có tiêu chí xét tuyển được định nghĩa")
 
     # Validation 2: Check mandatory documents
     if not profile.documents_checklist:
-        errors.append("Danh sách tài liệu trống (documents_checklist is empty)")
+        if mandatory_docs:
+            errors.append("Danh sách tài liệu trống (documents_checklist is empty)")
     else:
         uploaded_docs = {
             doc["code"]: doc
@@ -542,6 +752,156 @@ async def submit_and_evaluate(
             "message": "Hồ sơ đã được duyệt tự động. Bạn có thể tiến hành nhập học.",
             "errors": None,
         }
+
+
+async def upload_document(
+    db: AsyncSession,
+    profile_id: int,
+    doc_code: str,
+    file: Any,  # UploadFile
+    current_user: models.User,
+) -> tuple[Dict[str, Any], Any]:
+    """
+    Upload a document for an admission profile.
+    
+    Workflow:
+    1. Verify access (IDOR)
+    2. Verify profile status (draft/rejected)
+    3. Verify doc_code exists in checklist
+    4. Save file to disk (uploads/admissions/{id}/{doc_code}_{filename})
+    5. Update documents_checklist status='uploaded' and file_path
+    
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+    
+    Returns:
+        Tuple of (updated_doc_item, post_commit_callback)
+    
+    Security:
+    - Path Traversal: filename sanitization (inherent in modern frameworks but good practice)
+    - File Type: Should be validated at Router level generally, but here we accept generic
+    """
+    profile = await get_profile(db, profile_id, current_user)
+    
+    # State Locking
+    if profile.status not in ["draft", "rejected"]:
+        raise BadRequest(f"Cannot upload documents for profile with status '{profile.status}'")
+
+    # File validation constants
+    ALLOWED_CONTENT_TYPES = ["application/pdf", "image/jpeg", "image/png"]
+    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+    
+    # Validate file type
+    if file.content_type not in ALLOWED_CONTENT_TYPES:
+        raise BadRequest(
+            f"Invalid file type '{file.content_type}'. "
+            "Allowed: PDF, JPG, PNG"
+        )
+    
+    # Validate file size (read file to check size)
+    file.file.seek(0, 2)  # Seek to end
+    file_size = file.file.tell()
+    file.file.seek(0)  # Reset to beginning
+    
+    if file_size > MAX_FILE_SIZE:
+        size_mb = file_size / (1024 * 1024)
+        raise BadRequest(
+            f"File too large ({size_mb:.1f}MB). Maximum allowed: 10MB"
+        )
+
+    # Find document item in checklist
+    checklist = profile.documents_checklist or []
+    doc_item = next((d for d in checklist if d["code"] == doc_code), None)
+    
+    if not doc_item:
+        raise BadRequest(f"Document code '{doc_code}' not found in checklist")
+
+    # Prepare file path with security measures
+    import os
+    import shutil
+    import uuid
+    
+    upload_dir = f"uploads/admissions/{profile_id}"
+    os.makedirs(upload_dir, exist_ok=True)
+    
+    # SECURITY: Delete old file if exists (prevent orphan files)
+    old_file_path = doc_item.get("file_path")
+    if old_file_path and os.path.exists(old_file_path):
+        try:
+            os.remove(old_file_path)
+            log.info("Old document file deleted", old_path=old_file_path)
+        except OSError as e:
+            log.warning("Failed to delete old file", path=old_file_path, error=str(e))
+    
+    # SECURITY: Generate UUID-based filename (prevents path traversal & leaks)
+    original_filename = file.filename or "document"
+    file_extension = os.path.splitext(original_filename)[1].lower()
+    # Whitelist extensions
+    allowed_extensions = {".pdf", ".jpg", ".jpeg", ".png"}
+    if file_extension not in allowed_extensions:
+        file_extension = ".bin"  # Fallback for unknown types
+    
+    unique_filename = f"{doc_code}_{uuid.uuid4().hex[:12]}{file_extension}"
+    file_path = f"{upload_dir}/{unique_filename}"
+    
+    # Save file
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        log.error("File upload failed", error=str(e), profile_id=profile_id)
+        raise BadRequest("Failed to save file")
+
+    # Update checklist
+    # IMPORTANT: SQLAlchemy doesn't detect in-place mutations of JSONB columns.
+    # We must create new dict objects AND use flag_modified() to ensure persistence.
+    from sqlalchemy.orm.attributes import flag_modified
+    
+    new_checklist = []
+    uploaded_at = datetime.now().isoformat()
+    for item in checklist:
+        if item["code"] == doc_code:
+            # Create a NEW dict with updated values (not mutate in place)
+            new_item = {
+                **item,
+                "status": "uploaded",
+                "file_path": file_path,
+                "uploaded_at": uploaded_at,
+            }
+            new_checklist.append(new_item)
+        else:
+            # Copy other items to create new references
+            new_checklist.append(dict(item))
+    
+    profile.documents_checklist = new_checklist
+    profile.updated_at = datetime.now(timezone.utc)
+    
+    # Explicitly mark the JSONB column as modified
+    flag_modified(profile, "documents_checklist")
+    
+    await db.flush()
+    
+    # Prepare response data (matches DocumentUploadResponse schema)
+    response_data = {
+        "code": doc_code,
+        "label": doc_item.get("label", doc_code),
+        "is_mandatory": doc_item.get("is_mandatory", True),
+        "status": "uploaded",
+        "file_path": file_path,
+        "uploaded_at": uploaded_at,
+    }
+    
+    # Post-commit callback for logging/side effects
+    async def _post_commit():
+        log.info(
+            "Document uploaded", 
+            profile_id=profile_id, 
+            doc_code=doc_code, 
+            file_path=file_path,
+            user_id=current_user.id
+        )
+    
+    return response_data, _post_commit
 
 
 async def enroll_student(
@@ -723,3 +1083,68 @@ async def enroll_student(
             raise ConflictError(
                 "Enrollment failed due to data conflict. Please try again."
             )
+
+
+# ==============================================================================
+# DELETE PROFILE
+# ==============================================================================
+
+async def delete_profile(
+    db: AsyncSession,
+    profile_id: int,
+    current_user: models.User,
+) -> bool:
+    """
+    Delete AdmissionProfile (only when status='draft').
+
+    Security:
+    - IDOR: Check lead.unit_id == user.unit_id (unless admin)
+    - State Locking: Only draft profiles can be deleted
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() after this function returns.
+
+    Args:
+        db: AsyncSession for database operations
+        profile_id: AdmissionProfile ID to delete
+        current_user: Current authenticated user
+
+    Returns:
+        True if deleted successfully
+
+    Raises:
+        ResourceNotFoundError: Profile not found
+        PermissionDeniedError: User doesn't have access
+        BadRequest: Status is not 'draft'
+    """
+    from app.repositories import AdmissionRepository
+    
+    admission_repo = AdmissionRepository(db)
+    
+    # Get profile with lead (for IDOR check)
+    profile = await admission_repo.get_profile_by_id_with_lead(profile_id)
+    
+    if not profile:
+        raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
+    
+    # IDOR check
+    _check_admin_or_unit_access(profile, current_user)
+    
+    # State check: Only draft profiles can be deleted
+    if profile.status != "draft":
+        raise BadRequest(
+            f"Cannot delete profile with status '{profile.status}'. "
+            "Only draft profiles can be deleted."
+        )
+    
+    # Delete the profile
+    await db.delete(profile)
+    await db.flush()
+    
+    log.info(
+        "Admission profile deleted",
+        profile_id=profile_id,
+        user_id=current_user.id,
+    )
+    
+    return True

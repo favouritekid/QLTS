@@ -50,6 +50,8 @@ type TimelineItem = TimelineItemBase & {
 
 interface LeadTimelineTabProps {
   leadId: number;
+  /** Maximum items to show initially. Set 0 or undefined to show all. */
+  maxItems?: number;
 }
 
 // Get icon and color based on event type and method
@@ -164,13 +166,14 @@ const getInitials = (name: string) => {
     .slice(0, 2);
 };
 
-export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
+export function LeadTimelineTab({ leadId, maxItems }: LeadTimelineTabProps) {
   const { data: timeline, isLoading } = useLeadTimeline(leadId);
   const deleteMutation = useDeleteConsultation();
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedConsultationId, setSelectedConsultationId] = useState<number | null>(null);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingConsultation, setEditingConsultation] = useState<Consultation | null>(null);
+  const [showAll, setShowAll] = useState(false);
 
   if (isLoading || !timeline) {
     return (
@@ -194,6 +197,15 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
 
   const groupedTimeline = groupTimelineByDate(timeline);
   const dateKeys = Object.keys(groupedTimeline).sort().reverse();
+
+  // Calculate items to show based on maxItems prop
+  const hasLimit = maxItems && maxItems > 0 && !showAll;
+  const totalItems = timeline.length;
+  const remainingItems = hasLimit ? Math.max(0, totalItems - maxItems) : 0;
+  
+  // Limit items if maxItems is set and showAll is false
+  const itemsToShow = hasLimit ? maxItems : totalItems;
+  let itemCount = 0;
 
   const handleEditConsultation = (consultation: Consultation) => {
     setEditingConsultation(consultation);
@@ -222,7 +234,22 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
   return (
     <>
       <div className="space-y-8">
-        {dateKeys.map((dateKey) => (
+        {dateKeys.map((dateKey) => {
+          // Get items for this date
+          const dateItems = groupedTimeline[dateKey];
+          
+          // Filter items based on limit
+          const visibleItems = dateItems.filter(() => {
+            if (!hasLimit) return true;
+            if (itemCount >= itemsToShow) return false;
+            itemCount++;
+            return true;
+          });
+
+          // Skip entire date group if no visible items
+          if (visibleItems.length === 0) return null;
+
+          return (
           <div key={dateKey}>
             {/* Date Header */}
             <div className="flex items-center gap-3 mb-4">
@@ -238,10 +265,14 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
               {/* Connecting line */}
               <div className="absolute left-[15px] top-3 bottom-3 w-0.5 bg-gradient-to-b from-border via-border to-transparent" />
 
-              {groupedTimeline[dateKey].map((event, index) => {
+              {visibleItems.map((event, index) => {
                 const eventType = event.type || "lead_created";
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                const eventData = (event.data || {}) as any; // TODO: Refactor to use new TimelineItem structure
+                // ✅ TECHNICAL DEBT FIX: Use typed event data instead of `as any`
+                const eventData = event.data || {};
+
+                // Type guard helpers for typed data access
+                const getConsultationData = () => eventData as import("@/types/lead.types").ConsultationEventData;
+                const getAssignmentData = () => eventData as import("@/types/lead.types").AssignmentEventData;
 
                 // ✅ FIX: Match actual backend event types ("consultation", "assignment")
                 // Backend sends: type: "consultation" | "assignment"
@@ -259,23 +290,28 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
                 let title = "";
                 let subtitle = "";
                 let actorName = "";
+                
+                // Type assertion for consultation data (used in JSX below)
+                const consultData = isConsultation ? (eventData as Consultation) : null;
 
-                if (isConsultation) {
-                  const statusName = eventData.consultation_status?.name || "Tư vấn";
+                if (isConsultation && consultData) {
+                  const statusName = consultData.consultation_status?.name || "Tư vấn";
                   title = statusName;
 
                   // Only show notes if it's not the auto-generated "Ghi nhận nhanh: {status}" format
                   const autoNotePattern = `Ghi nhận nhanh: ${statusName}`;
-                  const notes = eventData.notes || "";
+                  const notes = consultData.notes || "";
                   if (notes && notes !== autoNotePattern) {
                     subtitle = notes;
                   }
 
-                  actorName = eventData.officer?.full_name || "";
+                  actorName = consultData.officer?.full_name || "";
                 } else if (isAssignment) {
+                  // Type assertion for assignment data
+                  const assignData = eventData as { reason?: string; officer?: { full_name?: string } };
                   title = "Phân công lead";
-                  subtitle = eventData.reason || "Lead được gán cho officer";
-                  actorName = eventData.officer?.full_name || "";
+                  subtitle = assignData.reason || "Lead được gán cho officer";
+                  actorName = assignData.officer?.full_name || "";
                 }
 
                 return (
@@ -302,7 +338,7 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
                               <h4 className="font-semibold text-sm text-foreground">
                                 {title}
                               </h4>
-                              {isConsultation && eventData.method && (
+                              {isConsultation && consultData?.method && (
                                 <Badge
                                   variant="secondary"
                                   className="text-[10px] px-1.5 py-0 font-normal"
@@ -332,7 +368,7 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
                           </div>
 
                           {/* Actions Menu */}
-                          {isConsultation && eventData.id && (
+                          {isConsultation && consultData?.id && (
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
                                 <Button
@@ -345,14 +381,14 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
                                 <DropdownMenuItem
-                                  onClick={() => handleEditConsultation(eventData)}
+                                  onClick={() => handleEditConsultation(consultData)}
                                 >
                                   <Edit className="h-4 w-4 mr-2" />
                                   Sửa
                                 </DropdownMenuItem>
                                 <DropdownMenuItem
                                   className="text-destructive focus:text-destructive"
-                                  onClick={() => handleDeleteConsultation(eventData.id)}
+                                  onClick={() => handleDeleteConsultation(consultData.id)}
                                 >
                                   <Trash2 className="h-4 w-4 mr-2" />
                                   Xóa
@@ -376,58 +412,41 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
                         {(isConsultation || isAssignment) && (
                           <div className="flex flex-wrap gap-2">
                             {/* Consultation: Scheduled follow-up */}
-                            {isConsultation && eventData.scheduled_at && (
+                            {isConsultation && consultData?.scheduled_at && (
                               <Badge
                                 variant="outline"
                                 className="text-xs font-normal gap-1 border-blue-200 bg-blue-50 text-blue-700"
                               >
                                 <Calendar className="h-3 w-3" />
-                                Hẹn: {format(parseISO(eventData.scheduled_at), "dd/MM HH:mm")}
+                                Hẹn: {format(parseISO(consultData.scheduled_at), "dd/MM HH:mm")}
                               </Badge>
                             )}
 
                             {/* Consultation: Duration */}
-                            {isConsultation && eventData.duration_minutes && eventData.duration_minutes > 0 && (
+                            {isConsultation && consultData?.duration_minutes && consultData.duration_minutes > 0 && (
                               <Badge
                                 variant="outline"
                                 className="text-xs font-normal gap-1 border-slate-200 bg-slate-50 text-slate-600"
                               >
                                 <Clock className="h-3 w-3" />
-                                {eventData.duration_minutes} phút
-                              </Badge>
-                            )}
-
-                            {/* Consultation: Outcome */}
-                            {isConsultation && eventData.outcome && (
-                              <Badge
-                                variant="outline"
-                                className={cn(
-                                  "text-xs font-normal gap-1",
-                                  eventData.outcome === "positive" && "border-green-200 bg-green-50 text-green-700",
-                                  eventData.outcome === "negative" && "border-red-200 bg-red-50 text-red-700",
-                                  eventData.outcome === "neutral" && "border-gray-200 bg-gray-50 text-gray-600"
-                                )}
-                              >
-                                {eventData.outcome === "positive" && "Tích cực"}
-                                {eventData.outcome === "negative" && "Tiêu cực"}
-                                {eventData.outcome === "neutral" && "Trung lập"}
+                                {consultData.duration_minutes} phút
                               </Badge>
                             )}
 
                             {/* Assignment: Method (automatic, officer_reassign, manual) */}
-                            {isAssignment && eventData.method && (
+                            {isAssignment && (eventData as { method?: string }).method && (
                               <Badge
                                 variant="outline"
                                 className={cn(
                                   "text-xs font-normal gap-1",
-                                  eventData.method === "automatic" && "border-purple-200 bg-purple-50 text-purple-700",
-                                  eventData.method === "officer_reassign" && "border-blue-200 bg-blue-50 text-blue-700",
-                                  eventData.method === "manual" && "border-orange-200 bg-orange-50 text-orange-700"
+                                  (eventData as { method?: string }).method === "automatic" && "border-purple-200 bg-purple-50 text-purple-700",
+                                  (eventData as { method?: string }).method === "officer_reassign" && "border-blue-200 bg-blue-50 text-blue-700",
+                                  (eventData as { method?: string }).method === "manual" && "border-orange-200 bg-orange-50 text-orange-700"
                                 )}
                               >
-                                {eventData.method === "automatic" && "Tự động"}
-                                {eventData.method === "officer_reassign" && "Yêu cầu phân công lại"}
-                                {eventData.method === "manual" && "Thủ công"}
+                                {(eventData as { method?: string }).method === "automatic" && "Tự động"}
+                                {(eventData as { method?: string }).method === "officer_reassign" && "Yêu cầu phân công lại"}
+                                {(eventData as { method?: string }).method === "manual" && "Thủ công"}
                               </Badge>
                             )}
                           </div>
@@ -439,8 +458,23 @@ export function LeadTimelineTab({ leadId }: LeadTimelineTabProps) {
               })}
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
+
+      {/* Load more button */}
+      {remainingItems > 0 && (
+        <div className="mt-4 text-center">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowAll(true)}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            Tải thêm ({remainingItems} mục)
+          </Button>
+        </div>
+      )}
 
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>

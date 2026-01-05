@@ -1003,7 +1003,20 @@ async def reset_password(
                 detail="User associated with this token not found."
             )
 
+        # ✅ SECURITY: Prevent resetting to the same password
+        # Even in forgot-password flow, same password is a security risk
+        if verify_password(new_password, user.password_hash):
+            raise BadRequest(detail="New password must be different from your current password")
+
         user.password_hash = get_password_hash(new_password)
+        
+        # ✅ SECURITY FIX: Clear password_reset_required flag
+        # This is important because forgot-password flow should also clear this flag
+        # (similar to change_password in auth.py router)
+        if hasattr(user, 'password_reset_required') and user.password_reset_required:
+            user.password_reset_required = False
+            log.info("Cleared password_reset_required flag via reset_password", user_id=user.id)
+
         db.add(user)
 
         # ✅ TRANSACTION FIX: Flush instead of commit
@@ -1040,6 +1053,11 @@ async def change_password(
     try:
         if not verify_password(old_password, user.password_hash):
             raise BadRequest(detail="Incorrect old password")
+
+        # ✅ SECURITY: Prevent setting the same password
+        # This is especially important when password_reset_required=true (security incident)
+        if verify_password(new_password, user.password_hash):
+            raise BadRequest(detail="New password must be different from your current password")
 
         user.password_hash = get_password_hash(new_password)
         db.add(user)
@@ -1095,6 +1113,11 @@ async def set_password_by_admin(
     """
     try:
         user = await get_user_by_id(db, user_id)
+        
+        # ✅ SECURITY: Prevent setting the same password (for consistency)
+        if verify_password(new_password, user.password_hash):
+            raise BadRequest(detail="New password must be different from the current password")
+
         user.password_hash = get_password_hash(new_password)
         db.add(user)
 

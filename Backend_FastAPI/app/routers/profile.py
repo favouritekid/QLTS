@@ -6,12 +6,11 @@ from pydantic import EmailStr, TypeAdapter, ValidationError  # <-- BỔ SUNG Typ
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, models, schemas
-from ..core import deps
+from ..core.deps import CasbinAuth  # ✅ Phase 2.2: Use standard alias
 from ..services import activity_service, user_service
 from app.core.rate_limits import limiter, RateLimits
 
 router = APIRouter(tags=["Profile"])
-PermissionDep = Depends(deps.check_permission)
 
 
 # ✅ PHASE 1: Helper function for activity logging (replaces service-level log_activity_from_request)
@@ -49,7 +48,7 @@ async def log_profile_activity(
 @router.get("", response_model=schemas.User)
 async def read_current_user_profile(
     request: Request,
-    current_user: models.User = PermissionDep,  # <-- THAY ĐỔI
+    current_user: models.User = CasbinAuth,  # <-- THAY ĐỔI
 ):
     """
     Lấy thông tin profile của chính người dùng đang đăng nhập.
@@ -64,7 +63,7 @@ async def read_current_user_profile(
 async def update_current_user_profile(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
     full_name: Optional[str] = Form(None),
     phone_number: Optional[str] = Form(None),
     email: Optional[str] = Form(None),

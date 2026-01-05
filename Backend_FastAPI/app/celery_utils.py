@@ -31,6 +31,7 @@ from .tasks.assignment_tasks import process_automatic_lead_assignment_task
 from .tasks.notification_tasks import (
     broadcast_notification_task,
     check_consultation_reminders_task,
+    cleanup_old_notifications_task,
 )
 from .tasks.cache_tasks import (
     recalculate_lead_caches_task,
@@ -80,8 +81,10 @@ __all__ = [
     # Assignment tasks
     "process_automatic_lead_assignment_task",
     # Notification tasks
+    # Notification tasks
     "broadcast_notification_task",
     "check_consultation_reminders_task",
+    "cleanup_old_notifications_task",
     # Cache tasks
     "recalculate_lead_caches_task",
     "sync_kpi_ytd_task",

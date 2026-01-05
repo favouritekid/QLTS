@@ -64,6 +64,7 @@ import type {
   EventGroupPreferencesResponse,
   UserSessionListResponse,
 } from '@/types/api.types';
+import type { AdmissionProfileResponse } from '@/lib/zod/admissions';
 
 // ============================================
 // CONFIGURATION
@@ -441,6 +442,32 @@ const admin = {
 };
 
 // ============================================
+// ADMISSIONS API (SERVER-SIDE)
+// ============================================
+
+// Moved to top imports
+
+const admissions = {
+  /**
+   * Get admission profile by ID (Server-Side)
+   */
+  async getProfile(profileId: number): Promise<AdmissionProfileResponse> {
+    return serverFetch<AdmissionProfileResponse>(`/api/admissions/${profileId}`);
+  },
+
+  /**
+   * List admission profiles (Server-Side)
+   */
+  async listProfiles(params?: {
+    status?: string;
+    page?: number;
+    page_size?: number;
+  }): Promise<AdmissionProfileResponse[]> {
+    return serverFetch<AdmissionProfileResponse[]>('/api/admissions', { params });
+  },
+};
+
+// ============================================
 // TOP-LEVEL ENDPOINTS (User-facing)
 // ============================================
 
@@ -509,6 +536,7 @@ export const serverApi = {
   pipeline,
   notifications,
   sessions,
+  admissions,
 };
 
 /**

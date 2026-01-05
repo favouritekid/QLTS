@@ -38,6 +38,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         self,
         skip: int = 0,
         limit: int = 50,
+        unit_id: Optional[int] = None,
         **filters
     ) -> List[models.AdmissionProfile]:
         """
@@ -46,13 +47,15 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         Args:
             skip: Number of records to skip
             limit: Maximum records to return
-            **filters: Filter parameters
+            unit_id: Filter by lead.unit_id (for IDOR protection)
+            **filters: Filter parameters (status, lead_id)
             
         Returns:
             List of AdmissionProfile instances
         """
         query = (
             select(models.AdmissionProfile)
+            .join(models.Lead)  # Join for unit_id filter
             .options(
                 joinedload(models.AdmissionProfile.lead),
                 selectinload(models.AdmissionProfile.student),
@@ -60,6 +63,10 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             .offset(skip)
             .limit(limit)
         )
+        
+        # IDOR Filter: Filter at DB level for non-admin users
+        if unit_id is not None:
+            query = query.where(models.Lead.unit_id == unit_id)
         
         if filters.get("status"):
             query = query.where(models.AdmissionProfile.status == filters["status"])
@@ -139,13 +146,14 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             profile_id: AdmissionProfile ID
             
         Returns:
-            AdmissionProfile with lead loaded
+            AdmissionProfile with lead and student loaded
         """
         stmt = (
             select(models.AdmissionProfile)
             .where(models.AdmissionProfile.id == profile_id)
             .options(
                 joinedload(models.AdmissionProfile.lead),
+                selectinload(models.AdmissionProfile.student),  # Prevent MissingGreenlet
             )
         )
         result = await self.db.execute(stmt)

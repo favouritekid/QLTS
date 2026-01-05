@@ -90,35 +90,42 @@ export function DocumentTypesSelector({
           <Command>
             <CommandInput placeholder="Tìm kiếm loại hồ sơ..." />
             <CommandEmpty>Không tìm thấy loại hồ sơ nào.</CommandEmpty>
-            <CommandGroup className="max-h-64 overflow-auto">
-              {documentTypes.map((docType) => {
-                const isSelected = selectedCodes.includes(docType.code);
+            <CommandGroup className="max-h-64 overflow-y-auto">
+              {documentTypes.length === 0 ? (
+                <div className="p-2 text-center text-sm text-muted-foreground">
+                  Chưa có loại hồ sơ nào.
+                </div>
+              ) : (
+                documentTypes.map((docType) => {
+                  const isSelected = selectedCodes.includes(docType.code);
 
-                return (
-                  <CommandItem
-                    key={docType.id}
-                    value={docType.name}
-                    onSelect={() => {
-                      if (!isSelected) {
-                        handleAddDocument(docType.code, docType.name);
-                      }
-                    }}
-                    disabled={isSelected}
-                    className={cn(
-                      "flex cursor-pointer items-center gap-2",
-                      isSelected && "cursor-not-allowed opacity-50"
-                    )}
-                  >
-                    <Check className={cn("h-4 w-4 shrink-0", isSelected ? "opacity-100" : "opacity-0")} />
-                    <div className="min-w-0 flex-1">
-                      <div className="font-medium">{docType.name}</div>
-                      {docType.description && (
-                        <div className="text-muted-foreground truncate text-xs">{docType.description}</div>
+                  return (
+                    <CommandItem
+                      key={docType.id}
+                      value={`${docType.code} ${docType.name}`}
+                      onSelect={() => {
+                        if (!isSelected) {
+                          handleAddDocument(docType.code, docType.name);
+                        }
+                      }}
+                      disabled={isSelected}
+                      className={cn(
+                        "flex cursor-pointer items-center gap-2",
+                        isSelected && "cursor-not-allowed opacity-50"
                       )}
-                    </div>
-                  </CommandItem>
-                );
-              })}
+                    >
+                      <Check className={cn("h-4 w-4 shrink-0", isSelected ? "opacity-100" : "opacity-0")} />
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium">{docType.name}</div>
+                        <div className="text-muted-foreground text-xs">Mã: {docType.code}</div>
+                        {docType.description && (
+                          <div className="text-muted-foreground truncate text-xs">{docType.description}</div>
+                        )}
+                      </div>
+                    </CommandItem>
+                  );
+                })
+              )}
             </CommandGroup>
           </Command>
         </PopoverContent>

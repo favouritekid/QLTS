@@ -48,7 +48,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models, schemas
 from app.config import settings
-from app.core import deps
+from app.core.deps import CasbinAuth  # Phase 2.2
 from app.database import get_db
 from app.services import activity_service, lead_service, user_service
 from app.tasks import process_automatic_lead_assignment_task
@@ -63,8 +63,6 @@ log = structlog.get_logger(__name__)
 # Router definition
 router = APIRouter(prefix="/users", tags=["Admin - Users"])
 
-# Permission dependency
-PermissionDep = Depends(deps.check_permission)
 
 
 # ============================================================================
@@ -116,7 +114,7 @@ async def log_admin_activity(
 async def create_new_user(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
     username: str = Form(...),
     email: str = Form(...),
     password: str = Form(...),
@@ -196,7 +194,7 @@ async def create_new_user(
 async def get_all_users(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
 ):
@@ -231,7 +229,7 @@ async def list_users(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) List all users with optional filtering.
@@ -269,7 +267,7 @@ async def admin_set_user_password(
     user_id: int,
     password_data: schemas.AdminSetPasswordSchema,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Admin đặt lại mật khẩu cho người dùng."""
     await user_service.set_password_by_admin(
@@ -290,7 +288,7 @@ async def admin_set_user_password(
 async def export_all_users(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Export tất cả người dùng ra CSV (không phân trang).
@@ -344,7 +342,7 @@ async def export_all_users(
 async def stream_export_users_csv(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Stream export users ra file CSV.
@@ -389,7 +387,7 @@ async def bulk_user_action(
     action_data: schemas.BulkActionSchema,
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Thực hiện hành động hàng loạt (xóa, đổi trạng thái) trên nhiều người dùng."""
     enforcer = request.app.state.enforcer
@@ -453,7 +451,7 @@ async def bulk_user_action(
 async def get_sync_status(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep
+    current_admin: models.User = CasbinAuth
 ):
     """
     (Admin only) Kiểm tra tình trạng đồng bộ giữa DB (user.role) và Casbin (grouping policies).
@@ -509,7 +507,7 @@ async def sync_users(
     request: Request,
     sync_request: schemas.SyncUsersRequest,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Đồng bộ role từ Casbin về DB cho tất cả users hoặc một nhóm users cụ thể.
@@ -576,7 +574,7 @@ async def sync_users(
 async def bulk_assign_leads(
     request: Request,
     assignment_data: schemas.BulkAssignLeadsSchema,  # Sử dụng schema mới
-    current_admin: models.User = PermissionDep,  # Yêu cầu quyền admin (qua Casbin)
+    current_admin: models.User = CasbinAuth,  # Yêu cầu quyền admin (qua Casbin)
 ):
     """
     (Admin only) Kích hoạt tác vụ phân công tự động cho một danh sách các Lead ID.
@@ -639,7 +637,7 @@ async def import_leads_from_file(
         ..., description="CSV or Excel file containing lead data (.csv, .xlsx)"
     ),
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Import leads từ file CSV hoặc Excel.
@@ -714,7 +712,7 @@ async def import_leads_from_file(
 async def get_user_statistics(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Lấy thống kê tổng quan về users cho dashboard."""
     return await activity_service.get_user_statistics(db)
@@ -744,7 +742,7 @@ async def get_user_details(
     request: Request,
     user_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin/Manager) Get user details.
@@ -774,7 +772,7 @@ async def update_existing_user(
     request: Request,  # Required for rate limiter (must be first)
     user_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
     full_name: Optional[str] = Form(None),
     email: Optional[str] = Form(None),  # <-- Sửa lại thành Optional[str]
     phone_number: Optional[str] = Form(None),
@@ -817,9 +815,12 @@ async def update_existing_user(
         update_dict["max_capacity"] = max_capacity
 
     # Handle unit_id assignment - validate unit exists
+    # ✅ PHASE 8: Use OrganizationRepository instead of db.get()
     if unit_id is not None:
         if unit_id > 0:  # Assigning to a unit
-            unit = await db.get(models.OrganizationUnit, unit_id)
+            from app.repositories.organization_repository import OrganizationRepository
+            org_repo = OrganizationRepository(db)
+            unit = await org_repo.get_by_id_full(unit_id)
             if not unit:
                 raise ResourceNotFoundError(
                     detail=f"Organization unit with id {unit_id} not found."
@@ -1040,7 +1041,7 @@ async def delete_existing_user(
     user_id: int,
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin/Manager) Delete a user.

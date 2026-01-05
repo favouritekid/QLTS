@@ -22,11 +22,31 @@ export default function GlobalError({
   reset: () => void
 }) {
   useEffect(() => {
-    // Log error to monitoring service
+    // Log error to console in development
     console.error('Application error:', error)
 
-    // TODO: Send to error tracking service (Sentry, etc.)
-    // trackError(error)
+    // ✅ TECHNICAL DEBT FIX: Send to Sentry if configured
+    // To enable: Set NEXT_PUBLIC_SENTRY_DSN in your .env file
+    // Then install: npm install @sentry/nextjs
+    const sentryDsn = process.env.NEXT_PUBLIC_SENTRY_DSN;
+    if (sentryDsn) {
+      // Dynamic import to avoid loading Sentry if not configured
+      import('@sentry/nextjs').then((Sentry) => {
+        Sentry.captureException(error, {
+          tags: {
+            errorBoundary: 'global',
+            digest: error.digest || 'unknown',
+          },
+          extra: {
+            errorMessage: error.message,
+            errorStack: error.stack,
+          },
+        });
+      }).catch(() => {
+        // Sentry not installed - this is expected in dev without @sentry/nextjs
+        console.warn('Sentry is configured but @sentry/nextjs is not installed');
+      });
+    }
   }, [error])
 
   return (

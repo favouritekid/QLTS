@@ -300,3 +300,54 @@ async def _emit_lead_updated(lead_id: int):
         logging.getLogger("check_consultation_reminders_task").warning(
             f"Failed to emit lead_updated: {e}"
         )
+
+
+# ============================================================================
+# Cleanup Old Notifications Task
+# ============================================================================
+@celery_app.task(
+    name="cleanup_old_notifications_task",
+    bind=True,
+    autoretry_for=(Exception,),
+    max_retries=3,
+    default_retry_delay=60,
+)
+def cleanup_old_notifications_task(self):
+    """
+    Periodic task to clean up old notifications.
+    Retention period defaults to 30 days if not configured.
+    """
+    task_name = "cleanup_old_notifications_task"
+    task_log = logging.getLogger(task_name)
+    task_log.info("Starting notification cleanup task...")
+    
+    async def _run_cleanup():
+        from sqlalchemy import delete
+        from .. import models
+        
+        # Default 30 days retention
+        retention_days = getattr(settings, "NOTIFICATION_RETENTION_DAYS", 30)
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=retention_days)
+        
+        async with task_db_session() as session:
+            # Delete old notifications
+            result = await session.execute(
+                delete(models.Notification)
+                .where(models.Notification.created_at < cutoff_date)
+            )
+            deleted_count = result.rowcount
+            await session.commit()
+            
+        return {"deleted": deleted_count, "cutoff": cutoff_date.isoformat()}
+
+    # Run with standardized error handling
+    result = run_async_task(
+        async_func=_run_cleanup,
+        task_name=task_name,
+        task_log=task_log,
+        validate_keys=["deleted", "cutoff"]
+    )
+    
+    task_log.info(f"Cleanup completed: deleted {result.get('deleted')} notifications older than {result.get('cutoff')}")
+    return result
+

@@ -56,6 +56,14 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/officer/upcoming-activities", "action": "GET"},
         {"subject": "{role}", "object": "/api/officer/availability", "action": "POST"},
         {"subject": "{role}", "object": "/api/officer/recommendations", "action": "GET"},  # Phase 7
+        # Admissions access (Admission Profile workflow)
+        {"subject": "{role}", "object": "/api/admissions", "action": "GET"},   # List profiles
+        {"subject": "{role}", "object": "/api/admissions", "action": "POST"},  # Create profile
+        {"subject": "{role}", "object": "/api/admissions/{profile_id}", "action": "GET"},   # Read profile
+        {"subject": "{role}", "object": "/api/admissions/{profile_id}", "action": "PUT"},   # Update profile
+        {"subject": "{role}", "object": "/api/admissions/{profile_id}/submit", "action": "POST"},  # Submit
+        {"subject": "{role}", "object": "/api/admissions/{profile_id}/enroll", "action": "POST"},  # Enroll
+        {"subject": "{role}", "object": "/api/admissions/{profile_id}/documents/{doc_code}/upload", "action": "POST"},  # Upload doc
         # Profile access
         {"subject": "{role}", "object": "/api/profile", "action": "GET"},
         {"subject": "{role}", "object": "/api/profile", "action": "PUT"},

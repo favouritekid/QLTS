@@ -79,6 +79,8 @@ const statusFormSchema = z.object({
   // ✅ Universal status support (Phase 1 - Option B)
   is_universal: z.boolean(),
   updates_pipeline: z.boolean(),
+  // ✅ KPI counting flag
+  counts_for_kpi: z.boolean(),
 });
 
 type StatusFormValues = z.infer<typeof statusFormSchema>;
@@ -127,6 +129,8 @@ export function ConsultationStatusDialog({
       // ✅ Universal status defaults
       is_universal: false,
       updates_pipeline: true,
+      // ✅ KPI counting default
+      counts_for_kpi: true,
     },
   });
 
@@ -145,6 +149,8 @@ export function ConsultationStatusDialog({
           // ✅ Universal status fields
           is_universal: status.is_universal ?? false,
           updates_pipeline: status.updates_pipeline ?? true,
+          // ✅ KPI counting field
+          counts_for_kpi: status.counts_for_kpi ?? true,
         });
       } else {
         form.reset({
@@ -158,6 +164,8 @@ export function ConsultationStatusDialog({
           // ✅ Universal status defaults for create mode
           is_universal: false,
           updates_pipeline: true,
+          // ✅ KPI counting default for create mode
+          counts_for_kpi: true,
         });
       }
     }
@@ -179,6 +187,8 @@ export function ConsultationStatusDialog({
             // ✅ Universal status fields
             is_universal: values.is_universal,
             updates_pipeline: values.updates_pipeline,
+            // ✅ KPI counting field
+            counts_for_kpi: values.counts_for_kpi,
           } as ConsultationStatusUpdate,
         });
       } else {
@@ -193,6 +203,8 @@ export function ConsultationStatusDialog({
           // ✅ Universal status fields
           is_universal: values.is_universal,
           updates_pipeline: values.updates_pipeline,
+          // ✅ KPI counting field
+          counts_for_kpi: values.counts_for_kpi,
         } as ConsultationStatusCreate);
       }
 
@@ -454,6 +466,26 @@ export function ConsultationStatusDialog({
                       Bỏ tích nếu status chỉ ghi nhận activity mà KHÔNG thay đổi pipeline progression
                       của lead. Thường dùng cho universal retry statuses (VD: &quot;Không nghe
                       máy&quot;) để ghi nhận cuộc gọi nhưng giữ nguyên trạng thái lead.
+                    </FormDescription>
+                  </div>
+                </FormItem>
+              )}
+            />
+
+            {/* ✅ Counts for KPI Field */}
+            <FormField
+              control={form.control}
+              name="counts_for_kpi"
+              render={({ field }) => (
+                <FormItem className="flex flex-row items-start space-y-0 space-x-3 rounded-md border p-4 bg-green-50 border-green-200">
+                  <FormControl>
+                    <ShadcnCheckbox checked={field.value} onCheckedChange={field.onChange} />
+                  </FormControl>
+                  <div className="space-y-1 leading-none">
+                    <FormLabel>Đếm vào KPI Nhập học</FormLabel>
+                    <FormDescription>
+                      Bỏ tích nếu status KHÔNG được đếm vào chỉ tiêu nhập học (VD: &quot;Đã rút
+                      lại học phí&quot; - thí sinh đã hoàn tiền nên không tính là nhập học).
                     </FormDescription>
                   </div>
                 </FormItem>

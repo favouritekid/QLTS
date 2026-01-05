@@ -15,6 +15,7 @@ export interface User {
   skills?: string[] | null; // User skills
   availability_status?: string | null; // Availability status
   max_capacity?: number | null; // Max capacity
+  password_reset_required?: boolean; // Security: Set true after "Secure Account" action
 }
 
 // Kiểu dữ liệu cho request body khi login (khớp schemas/user.py -> LoginSchema)
@@ -26,10 +27,26 @@ export interface LoginRequest {
 // ✅ SECURITY FIX: Updated to match new HttpOnly cookie implementation
 // Backend now returns user object in response body
 // Refresh token is in HttpOnly cookie (not in response body)
+
+// R1+R2: Suspicious login notification data included in login response
+export interface LoginNotification {
+  type: "SUSPICIOUS_LOGIN";
+  login_id: number;
+  notification_id?: number;  // R1+R2: Added for frontend markAsRead support
+  ip_address: string;
+  location?: string | null;
+  device?: string | null;
+  browser?: string | null;
+  os?: string | null;
+  risk_score: number;
+  anomalies: string[];
+}
+
 export interface LoginResponse {
   access_token: string;
   token_type: string;
   user: User; // ✅ User object now returned directly from /login
+  login_notification?: LoginNotification | null;  // R1+R2: Optional suspicious login notification
   // refresh_token removed - now in HttpOnly cookie
 }
 

@@ -18,15 +18,11 @@ export {
   // Query Keys
   admissionsKeys,
   // Queries
+  useListAdmissions,
   useGetAdmission,
-  useAdmissionProfile,
   // Mutations
   useCreateAdmission,
   useUpdateAdmission,
   useSubmitAdmission,
   useEnrollStudent,
-  // Utilities
-  useIsProfileEditable,
-  useCanSubmitProfile,
-  useCanEnrollStudent,
 } from "./useAdmissions"

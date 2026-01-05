@@ -18,8 +18,66 @@ from ..repositories.config_repository import (
     DistributionRuleRepository,
     DocumentTypeRepository,
     OfferingTypeRepository,
-    SkillRuleRepository
+    SkillRuleRepository,
+    SystemCategoryRepository
 )
+# ... (existing imports)
+import io
+import openpyxl
+
+# ... (End of file, append new functions)
+
+# =============================================================================
+# SYSTEM CATEGORY CONFIGURATION
+# =============================================================================
+
+async def get_system_categories(
+    db: AsyncSession,
+    type: str,
+    active_only: bool = True
+) -> List[models.ConfigSystemCategory]:
+    """Get system categories by type."""
+    repo = SystemCategoryRepository(db)
+    return await repo.get_by_type(type, active_only)
+
+async def import_system_categories(
+    db: AsyncSession,
+    type_key: str,
+    file_content: bytes
+) -> dict:
+    """
+    Import system categories from Excel file.
+    Expected format: Column A = Code, Column B = Name (optional)
+    """
+    repo = SystemCategoryRepository(db)
+    try:
+        wb = openpyxl.load_workbook(filename=io.BytesIO(file_content), data_only=True)
+        ws = wb.active # Use active sheet
+        
+        created_count = 0
+        updated_count = 0
+        
+        # Iterate rows starting from 2 (skip header)
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if not row or row[0] is None:
+                continue
+                
+            code = str(row[0]).strip()
+            # If name is missing, use code as name
+            name = str(row[1]).strip() if len(row) > 1 and row[1] else code
+            
+            _, created = await repo.create_or_update(type_key, code, name)
+            if created:
+                created_count += 1
+            else:
+                updated_count += 1
+                
+        return {"created": created_count, "updated": updated_count}
+        
+    except Exception as e:
+        log.error("Failed to import categories", error=str(e))
+        raise BadRequest(detail=f"Import failed: {str(e)}")
+
 from ..repositories.organization_repository import OrganizationRepository
 from ..services.pipeline_service import invalidate_pipeline_cache
 from ..utils.exceptions import BadRequest, DuplicateResourceError, ResourceNotFoundError
@@ -1107,3 +1165,94 @@ async def delete_distribution_rule(
         )
 
     return None, _post_commit
+
+
+# =============================================================================
+# SUBJECT GROUP CONFIGURATION (Phase 6: Dynamic Admission Scoring)
+# =============================================================================
+
+async def get_subject_groups(
+    db: AsyncSession,
+    active_only: bool = True
+) -> List[models.ConfigSubjectGroup]:
+    """
+    Get all subject groups for admission scoring.
+    
+    Args:
+        db: Database session
+        active_only: If True, only return active groups
+        
+    Returns:
+        List of ConfigSubjectGroup models ordered by display_order
+    """
+    from sqlalchemy import select
+    
+    query = select(models.ConfigSubjectGroup)
+    
+    if active_only:
+        query = query.where(models.ConfigSubjectGroup.is_active == True)
+    
+    query = query.order_by(models.ConfigSubjectGroup.display_order)
+    
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+async def get_subject_group_by_code(
+    db: AsyncSession,
+    code: str
+) -> models.ConfigSubjectGroup | None:
+    """
+    Get a specific subject group by code.
+    
+    Args:
+        db: Database session
+        code: Subject group code (e.g., 'A00', 'D01')
+        
+    Returns:
+        ConfigSubjectGroup or None if not found
+    """
+    from sqlalchemy import select
+    
+    query = (
+        select(models.ConfigSubjectGroup)
+        .where(models.ConfigSubjectGroup.code == code.upper())
+        .where(models.ConfigSubjectGroup.is_active == True)
+    )
+    
+    result = await db.execute(query)
+    return result.scalar_one_or_none()
+
+
+async def get_subject_groups_by_codes(
+    db: AsyncSession,
+    codes: List[str]
+) -> List[models.ConfigSubjectGroup]:
+    """
+    Get multiple subject groups by their codes.
+    Used to resolve subject_groups array in admission_criteria.
+    
+    Args:
+        db: Database session
+        codes: List of codes (e.g., ['A00', 'D01', 'B00'])
+        
+    Returns:
+        List of ConfigSubjectGroup models matching the codes
+    """
+    from sqlalchemy import select
+    
+    if not codes:
+        return []
+    
+    upper_codes = [c.upper() for c in codes]
+    
+    query = (
+        select(models.ConfigSubjectGroup)
+        .where(models.ConfigSubjectGroup.code.in_(upper_codes))
+        .where(models.ConfigSubjectGroup.is_active == True)
+        .order_by(models.ConfigSubjectGroup.display_order)
+    )
+    
+    result = await db.execute(query)
+    return result.scalars().all()
+

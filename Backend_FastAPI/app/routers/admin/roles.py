@@ -36,7 +36,7 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models, schemas
-from app.core import deps
+from app.core.deps import CasbinAuth  # Phase 2.2
 from app.database import get_db
 from app.schemas.permissions import (
     PolicyCreate,
@@ -58,8 +58,6 @@ log = structlog.get_logger(__name__)
 # Router definition
 router = APIRouter(prefix="/roles", tags=["Admin - Roles & Permissions"])
 
-# Permission dependency
-PermissionDep = Depends(deps.check_permission)
 
 
 # ============================================================================
@@ -136,7 +134,7 @@ async def emit_policy_update(operation: str, data: dict):
 @limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/policies", response_model=List[List[str]])
 async def get_all_policies(
-    request: Request, current_admin: models.User = PermissionDep
+    request: Request, current_admin: models.User = CasbinAuth
 ):
     """(Admin only) Lấy tất cả các chính sách (policies) hiện có."""
     # SỬA: Type hint thành AsyncEnforcer
@@ -154,7 +152,7 @@ async def add_new_policy(
     policy_in: PolicyCreate,
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Add a new policy with validation, logging, and event consistency.
@@ -222,7 +220,7 @@ async def delete_policy(
     policy_in: PolicyCreate,
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Delete a policy with safety checks, logging, and event consistency.
@@ -311,7 +309,7 @@ async def delete_policy(
 async def assign_role_to_user(
     assignment: RoleAssignment,
     request: Request,
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Gán một vai trò cho người dùng."""
     # SỬA: Type hint thành AsyncEnforcer
@@ -336,7 +334,7 @@ async def assign_role_to_user(
 async def remove_role_from_user(
     assignment: RoleAssignment,
     request: Request,
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Xóa (thu hồi) vai trò của người dùng."""
     # SỬA: Type hint thành AsyncEnforcer
@@ -363,7 +361,7 @@ async def remove_role_from_user(
 async def get_user_roles(
     user_id: int,
     request: Request,
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Lấy tất cả các roles (grouping policies) của một user."""
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
@@ -383,7 +381,7 @@ async def get_role_users(
     role_name: str,
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Lấy tất cả users có một role cụ thể."""
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
@@ -444,7 +442,7 @@ async def get_role_users(
 async def remove_role_from_users(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
     user_ids: List[int] = Body(...),
     role_to_remove: str = Body(...),
 ):
@@ -490,7 +488,7 @@ async def add_grouping_policy(
     grouping: GroupingPolicyCreate,
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Add a grouping policy for role inheritance or role assignment.
@@ -558,7 +556,7 @@ async def delete_grouping_policy(
     grouping: GroupingPolicyCreate,
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Remove a grouping policy.
@@ -624,7 +622,7 @@ async def delete_grouping_policy(
 async def get_all_roles_with_info(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Get all roles with metadata and policy counts.
@@ -651,7 +649,7 @@ async def delete_role_atomic(
     role_name: str,
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Atomically delete a role with all its associations.
@@ -746,7 +744,7 @@ async def delete_role_atomic(
 @router.get("/templates")
 async def get_policy_templates(
     request: Request,
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Get all available policy templates.
@@ -784,7 +782,7 @@ async def apply_template_to_role(
     request: Request,
     template_req: schemas.TemplateApplicationRequest,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Apply a policy template to a role.
@@ -838,7 +836,7 @@ async def add_policies_batch(
     request: Request,
     batch_req: schemas.PolicyBatchRequest,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Add multiple policies in a batch operation.
@@ -916,7 +914,7 @@ async def validate_policy_operation(
     request: Request,
     validation_req: schemas.PolicyValidationRequest,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Validate a policy operation before applying.
@@ -963,7 +961,7 @@ async def validate_policy_operation(
 async def simulate_permission(
     request: Request,
     request_data: schemas.PermissionSimulateRequest,
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Simulate a permission check without actually granting access.
@@ -1021,7 +1019,7 @@ async def simulate_permission(
 async def get_policy_statistics(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Get statistics about policies.
@@ -1046,7 +1044,7 @@ async def get_policy_statistics(
 @router.get("/policies/suggestions")
 async def get_policy_suggestions(
     request: Request,
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Get autocomplete suggestions for policy fields.
@@ -1090,7 +1088,7 @@ async def get_policy_suggestions(
 async def explain_role_permissions(
     request: Request,
     role_name: str,
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Explain where a role's permissions come from.
@@ -1223,7 +1221,7 @@ async def who_can_access_resource(
     db: AsyncSession = Depends(database.get_db),
     object: str = Query(..., description="Resource path (e.g., /api/leads)"),
     action: str = Query(..., description="HTTP method (e.g., GET, POST)"),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     ✅ PATCHED FOR DoS (v15):
@@ -1320,7 +1318,7 @@ async def who_can_access_resource(
 async def get_role_features(
     request: Request,
     role_name: str,
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Get feature-based permission status for a role.
@@ -1392,7 +1390,7 @@ async def toggle_role_feature(
     role_name: str,
     request_data: schemas.ToggleFeatureRequest,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Enable or disable a feature for a role.

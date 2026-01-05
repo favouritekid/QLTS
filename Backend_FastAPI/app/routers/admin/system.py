@@ -23,7 +23,7 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models
-from app.core import deps
+from app.core.deps import CasbinAuth  # Phase 2.2
 from app.services.notification_dispatcher import dispatch
 from app.core.events import SystemEvents
 
@@ -32,8 +32,6 @@ log = structlog.get_logger(__name__)
 # Router definition
 router = APIRouter(tags=["Admin - System Management"])
 
-# Permission dependency
-PermissionDep = Depends(deps.check_permission)
 
 
 # ============================================================================
@@ -54,7 +52,7 @@ async def create_system_alert(
     action_url: Optional[str] = None,
     expires_at: Optional[datetime] = None,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Create a system-wide alert notification.
@@ -139,7 +137,7 @@ async def create_system_announcement(
     message: str,
     priority: str = "normal",  # normal, high
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Create a system-wide announcement.

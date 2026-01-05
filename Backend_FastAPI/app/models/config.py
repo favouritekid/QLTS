@@ -134,6 +134,13 @@ class ConfigOfferingType(Base):
         comment="Soft delete flag"
     )
 
+    # Relationships
+    document_groups = relationship(
+        "DocumentGroup",
+        back_populates="offering_type",
+        cascade="all, delete-orphan"
+    )
+
     def __repr__(self):
         return f"<ConfigOfferingType {self.code}: {self.name}>"
 
@@ -183,6 +190,18 @@ class ConfigDocumentType(Base):
         default=True,
         index=True,
         comment="Soft delete flag"
+    )
+
+    # Relationships
+    group_items = relationship(
+        "DocumentGroupItem",
+        back_populates="document_type",
+        cascade="all, delete-orphan"
+    )
+    profile_documents = relationship(
+        "ProfileDocument",
+        back_populates="document_type",
+        cascade="all, delete-orphan"
     )
 
     def __repr__(self):
@@ -438,4 +457,109 @@ class KpiMonthlySnapshot(Base):
 
     def __repr__(self):
         return f"<KpiMonthlySnapshot {self.year}/{self.month}: {self.actual_value}/{self.target_value}>"
+
+
+class ConfigSystemCategory(Base):
+    """
+    Hệ thống Danh mục Động (Dynamic System Categories).
+    
+    Stores dynamic configuration data for dropdowns such as:
+    - Ethnicity (Dân tộc)
+    - Religion (Tôn giáo)
+    - Nationality (Quốc tịch)
+    - Disability Type (Loại khuyết tật)
+    
+    Fields:
+    - type: Category type (ethnicity, religion, etc.)
+    - code: Unique code (e.g., '01', 'VN')
+    - name: Display name (e.g., 'Kinh', 'Việt Nam')
+    """
+    __tablename__ = "config_system_category"
+
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Category Type (Group)
+    type = Column(
+        String(50),
+        nullable=False,
+        index=True,
+        comment="Category type: ethnicity, religion, nationality, disability_type"
+    )
+    
+    # Data
+    code = Column(
+        String(50),
+        nullable=False,
+        index=True,
+        comment="Unique code within type"
+    )
+    name = Column(
+        String(255),
+        nullable=False,
+        index=True,  # Indexed for search
+        comment="Display name"
+    )
+    
+    # Metadata
+    description = Column(String(500), nullable=True)
+    display_order = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True)
+    
+    __table_args__ = (
+        # Unique code per type
+        Index('uq_config_category_type_code', 'type', 'code', unique=True),
+    )
+
+    def __repr__(self):
+        return f"<ConfigSystemCategory {self.type}.{self.code}: {self.name}>"
+
+
+class ConfigSubjectGroup(Base):
+    """
+    Cấu hình Tổ hợp môn xét tuyển (Subject Group Combinations).
+    
+    Stores standardized subject groups for admission scoring:
+    - A00: Toán - Lý - Hóa
+    - A01: Toán - Lý - Anh
+    - D01: Toán - Văn - Anh
+    - D07: Toán - Hóa - Anh
+    
+    Used to dynamically render score input fields on frontend.
+    """
+    __tablename__ = "config_subject_group"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(
+        String(10),
+        unique=True,
+        nullable=False,
+        index=True,
+        comment="Mã tổ hợp (vd: 'A00', 'D01')"
+    )
+    name = Column(
+        String(100),
+        nullable=False,
+        comment="Tên hiển thị (vd: 'Toán - Lý - Hóa')"
+    )
+    subjects = Column(
+        JSON,
+        nullable=False,
+        comment="Danh sách môn học (vd: ['math', 'physics', 'chemistry'])"
+    )
+    display_order = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="Thứ tự hiển thị trong dropdown"
+    )
+    is_active = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        index=True,
+        comment="Soft delete flag"
+    )
+
+    def __repr__(self):
+        return f"<ConfigSubjectGroup {self.code}: {self.name}>"
 

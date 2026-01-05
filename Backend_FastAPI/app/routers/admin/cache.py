@@ -11,13 +11,11 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, Query, HTTPException, Request
 from pydantic import BaseModel
 
-from app.core import deps
+from app.core.deps import CasbinAuth  # Phase 2.2
 from app import models, database
 
 router = APIRouter(prefix="/cache", tags=["Admin - Cache Management"])
 
-# Permission dependency
-PermissionDep = Depends(deps.check_permission)
 
 
 # =============================================================================
@@ -77,7 +75,7 @@ KNOWN_CACHE_PATTERNS = {
 @router.get("/keys", response_model=List[CacheKeyInfo])
 async def list_cache_keys(
     request: Request,
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
     pattern: str = Query("*", description="Key pattern to search (e.g., 'org:*', 'pipeline:*')"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum keys to return"),
 ):
@@ -127,7 +125,7 @@ async def list_cache_keys(
 async def get_cache_value(
     request: Request,
     key: str,
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     Get the value of a specific cache key.
@@ -177,7 +175,7 @@ async def get_cache_value(
 async def delete_cache_key(
     request: Request,
     key: str,
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     Delete a specific cache key.
@@ -206,7 +204,7 @@ async def delete_cache_key(
 async def clear_cache_by_patterns(
     request: Request,  # Required for rate limiter
     body: ClearCacheRequest,  # Renamed from 'request' to avoid conflict
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     Clear cache keys matching specified patterns.
@@ -246,7 +244,7 @@ async def clear_cache_by_patterns(
 @router.get("/stats", response_model=CacheStats)
 async def get_cache_stats(
     request: Request,
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     Get Redis cache statistics.
@@ -270,7 +268,7 @@ async def get_cache_stats(
 @router.get("/patterns")
 async def get_known_patterns(
     request: Request,
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     Get list of known cache key patterns used in this application.
@@ -287,7 +285,7 @@ async def get_known_patterns(
 @router.post("/invalidate/organization")
 async def invalidate_organization_cache(
     request: Request,
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     Invalidate all organization-related cache.
@@ -319,7 +317,7 @@ async def invalidate_organization_cache(
 @router.post("/invalidate/pipeline")
 async def invalidate_pipeline_cache(
     request: Request,
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     Invalidate all pipeline-related cache.
@@ -351,7 +349,7 @@ async def invalidate_pipeline_cache(
 @router.post("/invalidate/config")
 async def invalidate_config_cache(
     request: Request,
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
     unit_id: Optional[int] = Query(None, description="Specific unit ID, or None for all"),
 ):
     """

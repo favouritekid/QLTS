@@ -168,6 +168,7 @@ class User(UserBase):
     unit_id: Optional[int] = None
     skills: Optional[List[str]] = None
     availability_status: Optional[str] = None
+    password_reset_required: Optional[bool] = False  # Security: True when user needs to change password
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -228,6 +229,24 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     username: Optional[str] = None
+
+
+class LoginNotificationData(BaseModel):
+    """
+    R1+R2: Suspicious login notification data included in login response.
+    
+    This eliminates the need for socket-based notification delivery,
+    providing immediate feedback to the user upon login.
+    """
+    type: str = "SUSPICIOUS_LOGIN"
+    login_id: int
+    ip_address: str
+    location: Optional[str] = None
+    device: Optional[str] = None
+    browser: Optional[str] = None
+    os: Optional[str] = None
+    risk_score: float = 0.0
+    anomalies: List[str] = []
 
 
 class ForgotPasswordSchema(BaseModel):

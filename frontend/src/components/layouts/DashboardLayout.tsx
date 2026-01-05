@@ -6,7 +6,9 @@ import { cn } from "@/lib/utils";
 import { AppSidebar } from "./dashboard/AppSidebar";
 import { Header } from "./dashboard/Header";
 import { Main } from "./dashboard/Main";
+import { MobileBottomNav } from "./dashboard/MobileBottomNav";
 import { CommandPalette } from "@/components/common/CommandPalette";
+import { SecurityBanner, useShouldShowSecurityBanner, SECURITY_BANNER_HEIGHT } from "./SecurityBanner";
 import { useEffect } from "react";
 
 export function DashboardLayout({
@@ -15,6 +17,7 @@ export function DashboardLayout({
   children: React.ReactNode;
 }>) {
   const { isSidebarCollapsed, setSidebarCollapsed } = useUIStore();
+  const showSecurityBanner = useShouldShowSecurityBanner();
 
   // ✅ SECURITY FIX: Removed client-side auth guard
   // Authentication is now enforced by server-side middleware
@@ -32,6 +35,10 @@ export function DashboardLayout({
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, [setSidebarCollapsed]);
+
+  // Calculate total top offset: header (56px) + banner if visible
+  const headerHeight = 56; // h-14 = 56px
+  const totalTopOffset = headerHeight + (showSecurityBanner ? SECURITY_BANNER_HEIGHT : 0);
 
   return (
     <>
@@ -59,15 +66,26 @@ export function DashboardLayout({
             !isSidebarCollapsed && "lg:ml-64"
           )}
         >
+          {/* Security Banner - Shows when password change required */}
+          <SecurityBanner />
+
           {/* Header */}
           <Header />
 
-          {/* Main Content - Padding top = chiều cao header (h-14 = 56px) */}
-          <div className="mt-14 flex-1">
+          {/* Main Content - Dynamic padding top based on header + banner */}
+          {/* Added pb-20 on mobile for MobileBottomNav (64px height + safe area) */}
+          <div 
+            className="flex-1 transition-all duration-300 ease-in-out pb-20 lg:pb-0"
+            style={{ marginTop: `${totalTopOffset}px` }}
+          >
             <Main>{children}</Main>
           </div>
         </div>
       </div>
+
+      {/* Mobile Bottom Navigation - Only visible on mobile (< lg) */}
+      <MobileBottomNav />
     </>
   );
 }
+

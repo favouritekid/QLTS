@@ -212,12 +212,14 @@ class OfficerRepository(BaseRepository[models.User]):
                 models.LeadStatusHistory.new_pipeline_stage_id,
                 func.count().label("transition_count")
             )
+            .join(models.Lead, models.LeadStatusHistory.lead_id == models.Lead.id)
             .where(
                 models.LeadStatusHistory.changed_by_user_id == officer_id,
                 models.LeadStatusHistory.changed_at >= since_date,
                 models.LeadStatusHistory.old_pipeline_stage_id.isnot(None),
                 models.LeadStatusHistory.new_pipeline_stage_id.isnot(None),
-                models.LeadStatusHistory.old_pipeline_stage_id != models.LeadStatusHistory.new_pipeline_stage_id
+                models.LeadStatusHistory.old_pipeline_stage_id != models.LeadStatusHistory.new_pipeline_stage_id,
+                models.Lead.deleted_at.is_(None)
             )
             .group_by(
                 models.LeadStatusHistory.old_pipeline_stage_id,
@@ -272,12 +274,14 @@ class OfficerRepository(BaseRepository[models.User]):
         assigned_query = (
             select(
                 func.date(models.AssignmentLog.timestamp).label("day"),
-                func.count(models.AssignmentLog.id).label("count")
+                func.count(func.distinct(models.AssignmentLog.lead_id)).label("count")
             )
+            .join(models.Lead, models.AssignmentLog.lead_id == models.Lead.id)
             .where(
                 models.AssignmentLog.officer_id == officer_id,
                 func.date(models.AssignmentLog.timestamp) >= start_date,
                 func.date(models.AssignmentLog.timestamp) <= end_date,
+                models.Lead.deleted_at.is_(None)
             )
             .group_by(func.date(models.AssignmentLog.timestamp))
         )
@@ -291,12 +295,14 @@ class OfficerRepository(BaseRepository[models.User]):
         consult_query = (
             select(
                 func.date(models.Consultation.consultation_date).label("day"),
-                func.count(models.Consultation.id).label("count")
+                func.count(func.distinct(models.Consultation.lead_id)).label("count")
             )
+            .join(models.Lead, models.Consultation.lead_id == models.Lead.id)
             .where(
                 models.Consultation.officer_id == officer_id,
                 func.date(models.Consultation.consultation_date) >= start_date,
                 func.date(models.Consultation.consultation_date) <= end_date,
+                models.Lead.deleted_at.is_(None)
             )
             .group_by(func.date(models.Consultation.consultation_date))
         )
@@ -310,8 +316,9 @@ class OfficerRepository(BaseRepository[models.User]):
         converted_query = (
             select(
                 func.date(models.LeadStatusHistory.changed_at).label("day"),
-                func.count(models.LeadStatusHistory.id).label("count")
+                func.count(func.distinct(models.LeadStatusHistory.lead_id)).label("count")
             )
+            .join(models.Lead, models.LeadStatusHistory.lead_id == models.Lead.id)
             .join(models.PipelineStage, 
                   models.LeadStatusHistory.new_pipeline_stage_id == models.PipelineStage.id)
             .where(
@@ -319,6 +326,7 @@ class OfficerRepository(BaseRepository[models.User]):
                 func.date(models.LeadStatusHistory.changed_at) >= start_date,
                 func.date(models.LeadStatusHistory.changed_at) <= end_date,
                 models.PipelineStage.is_final_stage == True,
+                models.Lead.deleted_at.is_(None)
             )
             .group_by(func.date(models.LeadStatusHistory.changed_at))
         )
@@ -360,10 +368,12 @@ class OfficerRepository(BaseRepository[models.User]):
                     case((func.date(models.Consultation.consultation_date) == today, 1))
                 ).label("today_count"),
             )
+            .join(models.Lead, models.Consultation.lead_id == models.Lead.id)
             .where(
                 models.Consultation.officer_id == officer_id,
                 func.date(models.Consultation.consultation_date) >= start_date,
                 func.date(models.Consultation.consultation_date) <= end_date,
+                models.Lead.deleted_at.is_(None)
             )
         )
         consult_result = await self.db.execute(consult_query)
@@ -402,6 +412,7 @@ class OfficerRepository(BaseRepository[models.User]):
                 models.Lead.assigned_officer_id == officer_id,
                 func.date(models.Lead.created_at) >= start_date,
                 func.date(models.Lead.created_at) <= end_date,
+                models.Lead.deleted_at.is_(None)
             )
         )
         lead_result = await self.db.execute(lead_query)
@@ -622,18 +633,22 @@ class OfficerRepository(BaseRepository[models.User]):
     async def get_team_averages(
         self,
         unit_id: Optional[int],
-        days: int = 30,
+        start_date: date,
+        end_date: date,
     ) -> Dict[str, float]:
         """
         Get team average consultations and conversions.
         
         Args:
             unit_id: Filter by unit (None = all officers)
-            days: Number of days to average over
+            start_date: Start date for calculation
+            end_date: End date for calculation
         """
-        since_date = datetime.now(timezone.utc) - timedelta(days=days)
+        # Calculate number of days for averaging
+        days = (end_date - start_date).days + 1
+        if days < 1: days = 1
         
-        # Build conditions
+        # Build conditions for officers
         conditions = [
             models.User.role == "officer",
             models.User.status == "active",
@@ -646,9 +661,23 @@ class OfficerRepository(BaseRepository[models.User]):
         officer_count = (await self.db.execute(officer_count_query)).scalar() or 1
         
         # Total consultations
-        consult_conditions = [func.date(models.Consultation.consultation_date) >= since_date.date()]
+        # JOIN with Lead to filter soft-deleted leads
+        consult_conditions = [
+            func.date(models.Consultation.consultation_date) >= start_date,
+            func.date(models.Consultation.consultation_date) <= end_date,
+            models.Lead.deleted_at.is_(None) # Exclude consultations of deleted leads
+        ]
+        
         if unit_id:
             consult_conditions.append(
+                models.Consultation.officer_id.in_(
+                    select(models.User.id).where(*conditions)
+                )
+            )
+        else:
+             # FIX: Ensure we only count consults from officers matching the "conditions" (Active Officers)
+             # This aligns the numerator (consults by active officers) with the denominator (count of active officers)
+             consult_conditions.append(
                 models.Consultation.officer_id.in_(
                     select(models.User.id).where(*conditions)
                 )
@@ -656,6 +685,7 @@ class OfficerRepository(BaseRepository[models.User]):
         
         consult_query = (
             select(func.count(models.Consultation.id))
+            .join(models.Lead, models.Consultation.lead_id == models.Lead.id)
             .where(*consult_conditions)
         )
         total_consultations = (await self.db.execute(consult_query)).scalar() or 0
@@ -753,10 +783,12 @@ class OfficerRepository(BaseRepository[models.User]):
                     case((func.date(models.Consultation.consultation_date) == today, 1))
                 ).label("today_count"),
             )
+            .join(models.Lead, models.Consultation.lead_id == models.Lead.id)
             .where(
                 models.Consultation.officer_id.in_(officer_ids),
                 func.date(models.Consultation.consultation_date) >= start_date,
                 func.date(models.Consultation.consultation_date) <= end_date,
+                models.Lead.deleted_at.is_(None)
             )
         )
         consult_result = await self.db.execute(consult_query)
@@ -791,6 +823,7 @@ class OfficerRepository(BaseRepository[models.User]):
                 models.Lead.assigned_officer_id.in_(officer_ids),
                 func.date(models.Lead.created_at) >= start_date,
                 func.date(models.Lead.created_at) <= end_date,
+                models.Lead.deleted_at.is_(None)
             )
         )
         lead_result = await self.db.execute(lead_query)

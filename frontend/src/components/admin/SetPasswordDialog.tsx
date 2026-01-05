@@ -64,6 +64,7 @@ export function SetPasswordDialog({ open, onOpenChange, user }: SetPasswordDialo
       new_password: "",
       confirm_password: "",
     },
+    mode: "onChange", // ✅ FIX: Realtime validation
   });
 
   async function onSubmit(values: SetPasswordFormValues) {

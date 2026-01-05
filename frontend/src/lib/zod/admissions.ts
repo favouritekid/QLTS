@@ -47,6 +47,7 @@ export const familyMemberSchema = z.object({
       "Số điện thoại phải bắt đầu bằng 0 và có 10-11 chữ số"
     )
     .trim(),
+  is_primary_guardian: z.boolean().optional(),
 })
 
 export type FamilyMember = z.infer<typeof familyMemberSchema>
@@ -78,6 +79,11 @@ export const academicRecordSchema = z
       .max(10, "GPA không được quá 10")
       .optional()
       .nullable(),
+    graduation_type: z
+      .string()
+      .trim()
+      .optional()
+      .nullable(),
   })
   .refine((data) => data.year_to >= data.year_from, {
     message: "Năm kết thúc phải lớn hơn hoặc bằng năm bắt đầu",
@@ -89,12 +95,39 @@ export type AcademicRecord = z.infer<typeof academicRecordSchema>
 /**
  * Admission Score Schema
  * Stored in admission_profile.admission_scores JSONB object
+ * 
+ * Structure:
+ * - selected_criterion_id: ID of the selected admission method
+ * - selected_group: Subject group code (e.g., "A00", "D01")
+ * - gpa: GPA score (for học bạ method)
+ * - subject_scores: Dynamic object with subject scores (e.g., math: 8.5)
+ * - total_score: Auto-calculated total of subject scores
+ * - average_score: Auto-calculated average
  */
 export const admissionScoreSchema = z.object({
+  // Method selection
+  selected_criterion_id: z.string().optional().nullable(),
+  selected_group: z.string().optional().nullable(),
+  
+  // GPA-based method
   gpa: z
     .number()
     .min(0, "GPA phải từ 0 trở lên")
-    .max(10, "GPA không được quá 10"),
+    .max(10, "GPA không được quá 10")
+    .optional()
+    .nullable(),
+  
+  // Exam-based method - Dynamic subject scores
+  subject_scores: z.record(
+    z.string(),
+    z.number().min(0).max(10).optional().nullable()
+  ).optional().nullable(),
+  
+  // Auto-calculated values
+  total_score: z.number().optional().nullable(),
+  average_score: z.number().optional().nullable(),
+  
+  // Legacy fields for backward compatibility
   math_score: z
     .number()
     .min(0, "Điểm Toán phải từ 0 trở lên")
@@ -132,6 +165,7 @@ export const documentItemSchema = z.object({
     .min(1, "Tên tài liệu không được để trống")
     .max(255, "Tên tài liệu không được quá 255 ký tự")
     .trim(),
+  is_mandatory: z.boolean().optional(),
   status: z.enum(["missing", "uploaded", "verified", "rejected"]),
   file_path: z
     .string()
@@ -140,7 +174,6 @@ export const documentItemSchema = z.object({
     .optional(),
   uploaded_at: z
     .string()
-    .datetime()
     .nullable()
     .optional(),
 })
@@ -169,15 +202,48 @@ export type AdmissionProfileCreate = z.infer<
 /**
  * Update Admission Profile Schema
  * Used for PUT /api/admissions/{id}
- * All fields are optional (partial update)
+ * All fields are optional (partial update) except version
  */
 export const admissionProfileUpdateSchema = z.object({
+  // Version for optimistic locking (set via defaultValues)
+  version: z.number().int().min(1).optional(),
+
+  // Personal Info Fields
+  full_name: z.string().max(255).optional().nullable(),
+  phone: z
+    .string()
+    .regex(/^0\d{9,10}$/, "Số điện thoại không hợp lệ")
+    .optional()
+    .nullable()
+    .or(z.literal("")),
+  email: z.string().email("Email không hợp lệ").max(255).optional().nullable().or(z.literal("")),
+  dob: z.string().datetime({ offset: true }).optional().nullable(),
+  gender: z.string().max(50).optional().nullable(),
+  social_insurance_number: z.string().max(50).optional().nullable(),
+  nationality: z.string().max(100).optional().nullable(),
+  ethnicity: z.string().max(100).optional().nullable(),
+  religion: z.string().max(100).optional().nullable(),
+  disability_type: z.string().max(100).optional().nullable(),
+  permanent_province: z.string().max(100).optional().nullable(),
+  permanent_district: z.string().max(100).optional().nullable(),
+  permanent_ward: z.string().max(100).optional().nullable(),
+  place_of_birth: z.string().max(255).optional().nullable(),
+  native_place: z.string().max(255).optional().nullable(),
+  
+  // Political Info Dates
+  union_entry_date: z.string().datetime({ offset: true }).optional().nullable(),
+  party_entry_date: z.string().datetime({ offset: true }).optional().nullable(),
+  party_official_entry_date: z.string().datetime({ offset: true }).optional().nullable(),
+
+  // Identity
   citizen_id: z
     .string()
     .regex(/^\d{12}$/, "CCCD/CMND phải là 12 chữ số")
-    .trim()
     .optional()
-    .nullable(),
+    .nullable()
+    .or(z.literal("")), // Allow empty string for drafts
+
+  // JSONB Arrays
   family_info: z.array(familyMemberSchema).optional().nullable(),
   academic_history: z.array(academicRecordSchema).optional().nullable(),
   admission_scores: admissionScoreSchema.optional().nullable(),
@@ -195,8 +261,28 @@ export type AdmissionProfileUpdate = z.infer<
 export const admissionProfileResponseSchema = z.object({
   id: z.number(),
   lead_id: z.number(),
-  citizen_id: z.string().nullable(),
+  citizen_id: z.string().optional().nullable(),
+  // Personal Info Extensions
+  full_name: z.string().nullable(),
+  dob: z.string().datetime({ offset: true }).nullable(), // Backend returns ISO string
+  gender: z.string().nullable(),
+  email: z.string().nullable(),
+  phone: z.string().nullable(),
+  social_insurance_number: z.string().nullable(),
+  nationality: z.string().nullable(),
+  ethnicity: z.string().nullable(),
+  religion: z.string().nullable(),
+  disability_type: z.string().nullable(),
+  permanent_province: z.string().nullable(),
+  permanent_district: z.string().nullable(),
+  permanent_ward: z.string().nullable(),
+  place_of_birth: z.string().nullable(),
+  native_place: z.string().nullable(),
+  union_entry_date: z.string().datetime({ offset: true }).nullable(),
+  party_entry_date: z.string().datetime({ offset: true }).nullable(),
+  party_official_entry_date: z.string().datetime({ offset: true }).nullable(),
   status: z.enum(["draft", "approved", "rejected", "enrolled"]),
+  version: z.number().int().optional(), // Optimistic locking
   applied_rules: z.record(z.string(), z.any()), // JSONB object
   family_info: z.array(familyMemberSchema).default([]),
   academic_history: z.array(academicRecordSchema).default([]),

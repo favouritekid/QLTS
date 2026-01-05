@@ -2873,6 +2873,56 @@ async def bulk_assign_leads(
     }
 
 
+async def bulk_update_pipeline_stage(
+    db: AsyncSession,
+    lead_ids: List[int],
+    pipeline_stage_id: str,
+    updated_by: models.User
+) -> dict:
+    """
+    Bulk update pipeline_stage_id for multiple leads (Admin only).
+    
+    ✅ PHASE 8: Replaces db.get() in router with Repository pattern.
+
+    Args:
+        db: Database session
+        lead_ids: List of Lead IDs to update
+        pipeline_stage_id: New pipeline stage ID
+        updated_by: User performing the update
+
+    Returns:
+        dict: {
+            "message": str,
+            "updated_count": int
+        }
+
+    Business Rules:
+    - Only Admin can perform bulk updates
+    - Uses LeadRepository for data access
+    - Single UPDATE query for efficiency
+    """
+    # Admin-only check
+    if updated_by.role != UserRole.ADMIN:
+        raise PermissionDeniedError("Only Admin can bulk update pipeline stage")
+    
+    # Use LeadRepository for data access
+    repo = LeadRepository(db)
+    updated_count = await repo.bulk_update_pipeline_stage(lead_ids, pipeline_stage_id)
+    
+    log.info(
+        "Bulk pipeline stage update completed",
+        total_requested=len(lead_ids),
+        updated_count=updated_count,
+        pipeline_stage_id=pipeline_stage_id,
+        updated_by_id=updated_by.id
+    )
+    
+    return {
+        "message": f"Updated {updated_count} leads",
+        "updated_count": updated_count
+    }
+
+
 # =============================================================================
 # DELETE LEAD (SOFT DELETE)
 # =============================================================================

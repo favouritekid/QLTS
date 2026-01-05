@@ -166,8 +166,54 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
                 </label>
                 <Select
                   defaultValue="all"
-                  onValueChange={() => {
-                    // TODO: Implement date range logic
+                  onValueChange={(value) => {
+                    // ✅ TECHNICAL DEBT FIX: Implement date range logic
+                    const getDateRange = (option: string): { date_from?: string; date_to?: string } => {
+                      const now = new Date();
+                      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                      
+                      switch (option) {
+                        case "today":
+                          return {
+                            date_from: today.toISOString(),
+                            date_to: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1).toISOString(),
+                          };
+                        case "week": {
+                          const weekStart = new Date(today);
+                          weekStart.setDate(today.getDate() - today.getDay()); // Start of week (Sunday)
+                          const weekEnd = new Date(weekStart);
+                          weekEnd.setDate(weekStart.getDate() + 6);
+                          return {
+                            date_from: weekStart.toISOString(),
+                            date_to: weekEnd.toISOString(),
+                          };
+                        }
+                        case "month": {
+                          const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+                          const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+                          return {
+                            date_from: monthStart.toISOString(),
+                            date_to: monthEnd.toISOString(),
+                          };
+                        }
+                        case "year": {
+                          const yearStart = new Date(today.getFullYear(), 0, 1);
+                          const yearEnd = new Date(today.getFullYear(), 11, 31);
+                          return {
+                            date_from: yearStart.toISOString(),
+                            date_to: yearEnd.toISOString(),
+                          };
+                        }
+                        default:
+                          return { date_from: undefined, date_to: undefined };
+                      }
+                    };
+                    
+                    const dateRange = getDateRange(value);
+                    setFilters((prev) => ({
+                      ...prev,
+                      ...dateRange,
+                    }));
                   }}
                 >
                   <SelectTrigger>

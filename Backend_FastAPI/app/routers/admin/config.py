@@ -25,7 +25,8 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models, schemas
-from app.core import deps
+from app.core import deps  # For get_organizational_unit_for_user, get_user_managed_units
+from app.core.deps import CasbinAuth  # Phase 2.2
 from app.core.constants import UserRole
 from app.services import config_service
 
@@ -34,8 +35,6 @@ log = structlog.get_logger(__name__)
 # Router definition
 router = APIRouter(tags=["Admin - Config"])
 
-# Permission dependency
-PermissionDep = Depends(deps.check_permission)
 
 
 # ============================================================================
@@ -52,7 +51,7 @@ async def get_assignment_config_route(
     request: Request,
     unit: models.OrganizationUnit = Depends(deps.get_organizational_unit_for_user),
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin/Manager) Get assignment config for an organizational unit.
@@ -80,7 +79,7 @@ async def update_assignment_config_route(
     config_in: schemas.AssignmentConfig,
     unit: models.OrganizationUnit = Depends(deps.get_organizational_unit_for_user),
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin/Manager) Update assignment config for an organizational unit.
@@ -120,7 +119,7 @@ async def update_assignment_config_route(
 async def get_all_skill_rules_route(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Lấy tất cả các quy tắc kỹ năng."""
     return await config_service.get_all_skill_rules(db)
@@ -136,7 +135,7 @@ async def create_new_skill_rule_route(
     request: Request,
     rule_in: schemas.SkillRuleCreate,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Tạo một quy tắc kỹ năng mới."""
     rule, callback = await config_service.create_skill_rule(db, rule_in)
@@ -154,7 +153,7 @@ async def delete_skill_rule_route(
     request: Request,
     rule_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Xoá một quy tắc kỹ năng."""
     _, callback = await config_service.delete_skill_rule(db, rule_id)
@@ -174,7 +173,7 @@ async def get_distribution_stats(
     request: Request,
     offering_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Get distribution statistics for a Program Offering.
@@ -233,7 +232,7 @@ async def get_distribution_stats(
 async def list_distribution_rules(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin/Manager) List distribution rules.
@@ -264,7 +263,7 @@ async def create_distribution_rule(
     request: Request,
     rule_in: schemas.DistributionRuleCreate,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Create a new distribution rule.
@@ -297,7 +296,7 @@ async def update_distribution_rule(
     request: Request,
     rule_in: schemas.DistributionRuleUpdate,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
     rule: models.OfferingDistributionConfig = deps.DistributionRuleAccessDep,
 ):
     """
@@ -334,7 +333,7 @@ async def update_distribution_rule(
 async def delete_distribution_rule(
     request: Request,  # Required for rate limiter
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
     rule: models.OfferingDistributionConfig = deps.DistributionRuleAccessDep,
 ):
     """
@@ -367,7 +366,7 @@ async def list_degree_levels(
     request: Request,
     active_only: bool = True,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) List all degree levels.
@@ -388,7 +387,7 @@ async def create_degree_level(
     request: Request,
     level_in: schemas.ConfigDegreeLevelCreate,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Create a new degree level."""
     level, callback = await config_service.create_degree_level(db, level_in)
@@ -407,7 +406,7 @@ async def update_degree_level(
     level_id: int,
     level_in: schemas.ConfigDegreeLevelUpdate,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Update a degree level."""
     level, callback = await config_service.update_degree_level(db, level_id, level_in)
@@ -425,7 +424,7 @@ async def delete_degree_level(
     request: Request,
     level_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Delete a degree level (soft delete)."""
     _, callback = await config_service.delete_degree_level(db, level_id)
@@ -448,7 +447,7 @@ async def list_offering_types(
     request: Request,
     active_only: bool = True,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) List all offering types.
@@ -469,7 +468,7 @@ async def create_offering_type(
     request: Request,
     type_in: schemas.ConfigOfferingTypeCreate,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Create a new offering type."""
     offering_type, callback = await config_service.create_offering_type(db, type_in)
@@ -488,7 +487,7 @@ async def update_offering_type(
     type_id: int,
     type_in: schemas.ConfigOfferingTypeUpdate,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Update an offering type."""
     offering_type, callback = await config_service.update_offering_type(db, type_id, type_in)
@@ -506,7 +505,7 @@ async def delete_offering_type(
     request: Request,
     type_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Delete an offering type (soft delete)."""
     _, callback = await config_service.delete_offering_type(db, type_id)
@@ -529,7 +528,7 @@ async def list_document_types(
     request: Request,
     active_only: bool = True,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) List all document types.
@@ -550,7 +549,7 @@ async def create_document_type(
     request: Request,
     type_in: schemas.ConfigDocumentTypeCreate,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Create a new document type."""
     doc_type, callback = await config_service.create_document_type(db, type_in)
@@ -569,7 +568,7 @@ async def update_document_type(
     type_id: int,
     type_in: schemas.ConfigDocumentTypeUpdate,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Update a document type."""
     doc_type, callback = await config_service.update_document_type(db, type_id, type_in)
@@ -587,7 +586,7 @@ async def delete_document_type(
     request: Request,
     type_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Delete a document type (soft delete)."""
     _, callback = await config_service.delete_document_type(db, type_id)

@@ -1,5 +1,5 @@
 # app/routers/users.py
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
 from .. import models, schemas
 from ..core import deps
@@ -12,7 +12,7 @@ router = APIRouter(tags=["Users"])
 @router.get("/me", response_model=schemas.User)
 async def read_users_me(
     request: Request,
-    current_user: models.User = deps.CurrentUser
+    current_user: models.User = Depends(deps.get_current_active_user)
 ):
     """
     Lấy thông tin của chính người dùng đang đăng nhập.

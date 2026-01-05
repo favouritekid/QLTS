@@ -18,12 +18,12 @@ Endpoints:
 - POST /api/admissions/{id}/enroll - Enroll student (ACID transaction)
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
 from .. import database, models, schemas
-from ..core import deps
+from ..core.deps import CasbinAuth  # ✅ Phase 2.2: Use standard alias
 from ..services import admission_service
 from ..services.notification_dispatcher import dispatch
 from ..core.events import SystemEvents
@@ -38,13 +38,50 @@ log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/admissions", tags=["Admissions"])
 
-# Dependencies
-PermissionDep = Depends(deps.check_permission)
-
 
 # ==============================================================================
 # ENDPOINTS
 # ==============================================================================
+
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
+@router.get(
+    "",
+    response_model=list[schemas.AdmissionProfileResponse],
+    summary="List admission profiles",
+)
+async def list_admission_profiles(
+    request: Request,
+    status: str | None = None,
+    skip: int = 0,
+    limit: int = 50,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    List AdmissionProfiles accessible to current user.
+
+    **Security:**
+    - Admin: Can see all profiles
+    - Officer: Only profiles where lead.unit_id == user.unit_id
+
+    **Query Parameters:**
+    - status: Filter by status (draft, approved, rejected, enrolled)
+    - skip: Pagination offset (default: 0)
+    - limit: Page size (default: 50, max: 100)
+
+    **Returns:**
+    - List of AdmissionProfiles with relationships
+    """
+    profiles = await admission_service.get_profiles(
+        db=db,
+        skip=skip,
+        limit=limit,
+        status_filter=status,
+        current_user=current_user,
+    )
+    
+    return profiles
+
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post(
@@ -57,7 +94,7 @@ async def create_admission_profile(
     request: Request,
     data: schemas.AdmissionProfileCreate,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Create new AdmissionProfile for a Lead.
@@ -144,7 +181,7 @@ async def get_admission_profile(
     request: Request,
     profile_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Get AdmissionProfile by ID.
@@ -191,7 +228,7 @@ async def update_admission_profile(
     profile_id: int,
     data: schemas.AdmissionProfileUpdate,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Update AdmissionProfile (only when status='draft').
@@ -259,7 +296,7 @@ async def submit_admission_profile(
     request: Request,
     profile_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Submit AdmissionProfile for auto-evaluation.
@@ -337,6 +374,46 @@ async def submit_admission_profile(
         )
 
 
+@limiter.limit(RateLimits.DATA_WRITE)
+@router.post(
+    "/{profile_id}/documents/{doc_code}/upload",
+    response_model=schemas.DocumentUploadResponse,
+    summary="Upload admission document",
+    status_code=status.HTTP_200_OK,
+)
+async def upload_document(
+    request: Request,
+    profile_id: int,
+    doc_code: str,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    Upload a document for an admission profile.
+    
+    File will be saved and the checklist item status updated to 'uploaded'.
+    """
+    try:
+        updated_doc, post_commit = await admission_service.upload_document(
+            db=db,
+            profile_id=profile_id,
+            doc_code=doc_code,
+            file=file,
+            current_user=current_user,
+        )
+        await db.commit()
+        await post_commit()
+        return updated_doc
+
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except PermissionDeniedError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post(
     "/{profile_id}/enroll",
@@ -348,7 +425,7 @@ async def enroll_student(
     request: Request,  # Required for rate limiter
     profile_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Enroll student (create Student + StudentDocument records).
@@ -428,5 +505,64 @@ async def enroll_student(
     except ConflictError as e:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
+            detail=str(e),
+        )
+
+
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.delete(
+    "/{profile_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete admission profile (draft only)",
+)
+async def delete_admission_profile(
+    request: Request,
+    profile_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    Delete AdmissionProfile (only when status='draft').
+
+    **Security:**
+    - IDOR: Only accessible to users in same unit (unless admin)
+    - State Locking: Only draft profiles can be deleted
+
+    **Errors:**
+    - 404: Profile not found
+    - 403: User doesn't have access to this profile
+    - 400: Profile is not in draft status
+    """
+    try:
+        await admission_service.delete_profile(
+            db=db,
+            profile_id=profile_id,
+            current_user=current_user,
+        )
+
+        # Transaction commit
+        await db.commit()
+
+        log.info(
+            "Admission profile deleted via API",
+            profile_id=profile_id,
+            user_id=current_user.id,
+        )
+
+        return None
+
+    except ResourceNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    except PermissionDeniedError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e),
+        )
+    except BadRequest as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )

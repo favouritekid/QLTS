@@ -358,6 +358,10 @@ async def connect(sid, environ, auth):
                 token_source=token_source,  # ✅ Log source for monitoring
                 token=sanitize_token(token),  # ✅ Log an toàn
             )
+            
+            # R1+R2: Pending login notifications are now handled via Client-Pull model
+            # Client emits "get_pending_login_notifications" after registering listeners
+            # See: @sio.event get_pending_login_notifications() handler below
 
         except Exception as e:
             log.error(
@@ -426,6 +430,11 @@ async def ping(sid):
     async with track_event_latency("ping"):
         socket_events_received_total.labels(event_type="ping").inc()
         await sio.emit("pong", to=sid)  # Pong vẫn không cần metric emit
+
+
+# R1+R2: get_pending_login_notifications handler REMOVED
+# Login notification is now included directly in the login API response
+# See: auth.py login_for_access_token() - login_notification_data field
 
 
 # ✅ CẢI TIẾN: Vấn đề #6 - Thêm event handler cho acknowledgment

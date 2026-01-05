@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
 from .. import database, models, schemas
-from ..core import deps
+from app.core.deps import CasbinAuth, get_notification_rule_for_admin  # Phase 2.2
 from ..core.event_metadata import get_all_events_metadata
 from ..services import notification_rule_crud_service
 from ..utils.exceptions import BadRequest
@@ -27,7 +27,6 @@ log = structlog.get_logger(__name__)
 router = APIRouter(prefix="/notification-rules", tags=["Notification Rules (Admin)"])
 
 # Admin-only permission dependency
-AdminPermissionDep = Depends(deps.check_permission)
 
 
 # =============================================================================
@@ -59,7 +58,7 @@ class MetadataResponse(BaseModel):
 @router.get("/metadata", response_model=MetadataResponse)
 async def get_notification_metadata(
     request: Request,
-    current_admin: models.User = AdminPermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     ✅ NOTIFICATION 2.0 - PHASE 2: Get metadata for notification rule builder.
@@ -142,7 +141,7 @@ async def get_notification_metadata(
 async def list_notification_rules(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = AdminPermissionDep,
+    current_admin: models.User = CasbinAuth,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     event: Optional[str] = Query(None, description="Filter by event type"),
@@ -189,8 +188,8 @@ async def list_notification_rules(
 @router.get("/{rule_id}", response_model=schemas.NotificationRule)
 async def get_notification_rule(
     request: Request,
-    rule: models.NotificationRule = Depends(deps.get_notification_rule_for_admin),
-    current_admin: models.User = AdminPermissionDep,
+    rule: models.NotificationRule = Depends(get_notification_rule_for_admin),
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Get a specific notification rule by ID.
@@ -214,7 +213,7 @@ async def create_notification_rule(
     request: Request,
     rule_data: schemas.NotificationRuleCreate,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = AdminPermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Create a new notification rule.
@@ -258,9 +257,9 @@ async def create_notification_rule(
 async def update_notification_rule(
     request: Request,
     rule_update: schemas.NotificationRuleUpdate,
-    rule: models.NotificationRule = Depends(deps.get_notification_rule_for_admin),
+    rule: models.NotificationRule = Depends(get_notification_rule_for_admin),
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = AdminPermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Update an existing notification rule.
@@ -290,9 +289,9 @@ async def update_notification_rule(
 @router.patch("/{rule_id}/toggle", response_model=schemas.NotificationRule)
 async def toggle_notification_rule(
     request: Request,
-    rule: models.NotificationRule = Depends(deps.get_notification_rule_for_admin),
+    rule: models.NotificationRule = Depends(get_notification_rule_for_admin),
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = AdminPermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Toggle enabled/disabled status of a notification rule.
@@ -319,9 +318,9 @@ async def toggle_notification_rule(
 @router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_notification_rule(
     request: Request,
-    rule: models.NotificationRule = Depends(deps.get_notification_rule_for_admin),
+    rule: models.NotificationRule = Depends(get_notification_rule_for_admin),
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = AdminPermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Delete a notification rule.

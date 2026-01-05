@@ -214,7 +214,7 @@ export function useRecentPages(maxItems: number = MAX_RECENT_ITEMS): UseRecentPa
         }
       });
     });
-  }, [pathname, maxItems]);
+  }, [pathname, maxItems, isHydrated]);
 
   /**
    * Clear all recent pages

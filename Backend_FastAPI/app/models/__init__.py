@@ -9,6 +9,8 @@ from .config import (
     ConfigDegreeLevel,
     ConfigDocumentType,
     ConfigOfferingType,
+    ConfigSubjectGroup,  # Phase 6: Admission Scoring
+    ConfigSystemCategory,
     KpiConfig,
     KpiMonthlySnapshot,
     KpiTarget,
@@ -24,6 +26,21 @@ from .lead_history import LeadStatusHistory
 # Admission models (NEW: Replacement for Application)
 from .admission import AdmissionProfile
 from .student import Student, StudentDocument
+
+# Admission Config Domain (Phase 1: Relational admission system)
+from .admission_config import (
+    Subject,
+    SubjectGroup,
+    SubjectGroupSubject,
+    AdmissionMethod,
+    AdmissionCriteria,
+    CriteriaSubjectGroup,
+    OfferingAdmissionConfig,
+    DocumentGroup,
+    DocumentGroupItem,
+    ProfileSubjectScore,
+    ProfileDocument,
+)
 
 # Notification models
 from .notification import Notification, NotificationAction, NotificationRule, NotificationTemplate
@@ -64,6 +81,8 @@ __all__ = [
     "ConfigDegreeLevel",
     "ConfigDocumentType",
     "ConfigOfferingType",
+    "ConfigSubjectGroup",  # Phase 6: Admission Scoring
+    "ConfigSystemCategory",
     "KpiConfig",
     "KpiMonthlySnapshot",
     "KpiTarget",

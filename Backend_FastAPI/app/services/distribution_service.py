@@ -376,16 +376,30 @@ async def get_distribution_stats(db: AsyncSession, offering_id: int) -> dict:
 
         # Calculate next unit
         next_unit_id = None
+        next_unit_name = None
         if cursor_value is not None and weighted_units:
             next_index = cursor_value % len(weighted_units)
             next_unit_id = weighted_units[next_index]
+            # Lookup name from config_details
+            for cfg in config_details:
+                if cfg["unit_id"] == next_unit_id:
+                    next_unit_name = cfg["unit_name"]
+                    break
+        elif weighted_units:
+            # First lead goes to index 0
+            next_unit_id = weighted_units[0]
+            for cfg in config_details:
+                if cfg["unit_id"] == next_unit_id:
+                    next_unit_name = cfg["unit_name"]
+                    break
 
         return {
             "offering_id": offering_id,
             "cursor_value": cursor_value,
             "configs": config_details,
             "total_slots": len(weighted_units),
-            "next_unit_id": next_unit_id
+            "next_unit_id": next_unit_id,
+            "next_unit_name": next_unit_name  # ✅ PHASE 8: Added for router use
         }
 
     except Exception as e:

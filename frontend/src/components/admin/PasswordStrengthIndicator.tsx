@@ -34,14 +34,17 @@ export function PasswordStrengthIndicator({
     let color = "bg-red-500";
 
     if (score >= 80) {
-      label = "Strong";
+      label = "Mạnh";
       color = "bg-green-500";
     } else if (score >= 60) {
-      label = "Good";
+      label = "Tốt";
       color = "bg-yellow-500";
     } else if (score >= 40) {
-      label = "Fair";
+      label = "Trung bình";
       color = "bg-orange-500";
+    } else {
+      label = "Yếu";
+      color = "bg-red-500";
     }
 
     return { score, label, color, checks };
@@ -52,7 +55,7 @@ export function PasswordStrengthIndicator({
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium">Password Strength:</span>
+        <span className="text-sm font-medium">Độ mạnh mật khẩu:</span>
         <span className={`text-sm font-semibold ${strength.color.replace("bg-", "text-")}`}>
           {strength.label}
         </span>
@@ -61,12 +64,12 @@ export function PasswordStrengthIndicator({
 
       {showRequirements && (
         <div className="space-y-1 pt-2">
-          <p className="text-xs text-muted-foreground">Password must contain:</p>
-          <RequirementItem met={strength.checks.length} text="At least 8 characters" />
-          <RequirementItem met={strength.checks.uppercase} text="One uppercase letter (A-Z)" />
-          <RequirementItem met={strength.checks.lowercase} text="One lowercase letter (a-z)" />
-          <RequirementItem met={strength.checks.number} text="One number (0-9)" />
-          <RequirementItem met={strength.checks.special} text="One special character (@$!%*?&)" />
+          <p className="text-xs text-muted-foreground">Mật khẩu phải chứa:</p>
+          <RequirementItem met={strength.checks.length} text="Ít nhất 8 ký tự" />
+          <RequirementItem met={strength.checks.uppercase} text="Một chữ cái viết hoa (A-Z)" />
+          <RequirementItem met={strength.checks.lowercase} text="Một chữ cái viết thường (a-z)" />
+          <RequirementItem met={strength.checks.number} text="Một số (0-9)" />
+          <RequirementItem met={strength.checks.special} text="Một ký tự đặc biệt (@$!%*?&)" />
         </div>
       )}
     </div>

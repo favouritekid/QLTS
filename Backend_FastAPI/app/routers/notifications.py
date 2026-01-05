@@ -6,14 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, models, schemas
-from ..core import deps
+from ..core.deps import CasbinAuth  # ✅ Phase 2.2: Use standard alias
 from ..services import notification_service
 from ..socket_manager import sio
 from app.core.rate_limits import limiter, RateLimits
 
 log = structlog.get_logger(__name__)
 router = APIRouter(tags=["Notifications"])
-PermissionDep = Depends(deps.check_permission)
 
 
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
@@ -21,7 +20,7 @@ PermissionDep = Depends(deps.check_permission)
 async def get_my_notifications(
     request: Request,  # ✅ Required for rate limiter
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     unread_only: bool = Query(False),
@@ -55,7 +54,7 @@ async def mark_notifications_as_read(
     request: Request,  # Required for rate limiter (SlowAPI requires this name)
     body: schemas.MarkAsReadRequest,  # Renamed from 'request' to avoid conflict
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """Mark specific notifications as read."""
     count, callback = await notification_service.mark_as_read(
@@ -74,7 +73,7 @@ async def mark_notifications_as_read(
 async def mark_all_notifications_as_read(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """Mark all notifications as read for the current user."""
     count, callback = await notification_service.mark_all_as_read(
@@ -93,7 +92,7 @@ async def delete_notification(
     request: Request,
     notification_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """Delete a notification."""
     deleted, callback = await notification_service.delete_notification(
@@ -112,6 +111,32 @@ async def delete_notification(
     await callback()
 
     return None
+
+
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.delete("/bulk", status_code=status.HTTP_200_OK)
+async def bulk_delete_notifications(
+    request: Request,
+    body: schemas.BulkDeleteRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    Delete multiple notifications at once.
+
+    ✅ TECHNICAL DEBT FIX: Replaces frontend loop-based single deletes.
+    Performance: O(1) API call vs O(n) calls.
+    """
+    deleted_count, callback = await notification_service.bulk_delete_notifications(
+        db=db,
+        user_id=current_user.id,
+        notification_ids=body.notification_ids,
+    )
+
+    await db.commit()
+    await callback()
+
+    return {"deleted": deleted_count}
 
 
 # Helper function to send real-time notification via WebSocket

@@ -27,8 +27,12 @@ from app.services import kpi_service
 
 router = APIRouter(prefix="/api/admin/kpi-config", tags=["Admin - KPI Configuration"])
 
-# Permission dependency for Casbin RBAC
-PermissionDep = Depends(deps.check_permission)
+# ============================================================================
+# SECURITY GATEWAY DEPENDENCIES (Phase 6 Refactor)
+# ============================================================================
+# These replace inline role checks per MASTER_ARCHITECTURE.md Section 0.2
+AdminDep = Depends(deps.require_admin)
+AdminOrManagerDep = Depends(deps.require_admin_or_manager)
 
 
 # =============================================================================
@@ -103,15 +107,12 @@ class KpiTargetResponse(KpiTargetBase):
 )
 async def list_kpi_configs(
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, PermissionDep],
+    current_user: Annotated[models.User, AdminOrManagerDep],  # ✅ Security Gateway
     kpi_code: Optional[str] = None,
     unit_id: Optional[int] = None,
     is_active: bool = True,
 ):
-    """List KPI configurations with optional filters. Admin only."""
-    if current_user.role not in ("admin", "manager"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
+    """List KPI configurations with optional filters. Admin/Manager only."""
     return await kpi_service.list_kpi_configs(
         db, kpi_code=kpi_code, unit_id=unit_id, is_active=is_active
     )
@@ -125,12 +126,10 @@ async def list_kpi_configs(
 )
 async def create_kpi_config(
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, PermissionDep],
+    current_user: Annotated[models.User, AdminDep],  # ✅ Security Gateway
     data: KpiConfigCreate,
 ):
     """Create a new KPI configuration. Admin only."""
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
     
     try:
         config, callback = await kpi_service.create_kpi_config(
@@ -158,12 +157,10 @@ async def create_kpi_config(
 async def update_kpi_config(
     config_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, PermissionDep],
+    current_user: Annotated[models.User, AdminDep],  # ✅ Security Gateway
     data: KpiConfigUpdate,
 ):
     """Update an existing KPI configuration. Admin only."""
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
     
     try:
         config, callback = await kpi_service.update_kpi_config(
@@ -189,11 +186,9 @@ async def update_kpi_config(
 async def delete_kpi_config(
     config_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, PermissionDep],
+    current_user: Annotated[models.User, AdminDep],  # ✅ Security Gateway
 ):
     """Delete a KPI configuration (soft delete). Admin only."""
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
     
     try:
         config, callback = await kpi_service.delete_kpi_config(
@@ -216,16 +211,14 @@ async def delete_kpi_config(
 )
 async def list_kpi_targets(
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, PermissionDep],
+    current_user: Annotated[models.User, AdminOrManagerDep],  # ✅ Security Gateway
     fiscal_year: Optional[int] = None,
     kpi_code: Optional[str] = None,
+    is_active: bool = True,
 ):
     """List annual KPI targets. Admin/Manager only."""
-    if current_user.role not in ("admin", "manager"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
     return await kpi_service.list_kpi_targets(
-        db, fiscal_year=fiscal_year, kpi_code=kpi_code
+        db, fiscal_year=fiscal_year, kpi_code=kpi_code, is_active=is_active
     )
 
 
@@ -237,25 +230,137 @@ async def list_kpi_targets(
 )
 async def create_kpi_target(
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, PermissionDep],
+    current_user: Annotated[models.User, AdminDep],  # ✅ Security Gateway
     data: KpiTargetCreate,
 ):
     """Create an annual KPI target for tracking YTD progress. Admin only."""
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
     
-    target, callback = await kpi_service.create_kpi_target(
-        db,
-        kpi_code=data.kpi_code,
-        annual_target=data.annual_target,
-        fiscal_year=data.fiscal_year,
-        unit_id=data.unit_id,
-        officer_id=data.officer_id,
-        created_by=current_user,
-    )
-    await db.commit()
-    await db.refresh(target)
-    await callback()
+    try:
+        target, callback = await kpi_service.create_kpi_target(
+            db,
+            kpi_code=data.kpi_code,
+            annual_target=data.annual_target,
+            fiscal_year=data.fiscal_year,
+            unit_id=data.unit_id,
+            officer_id=data.officer_id,
+            created_by=current_user,
+        )
+        await db.commit()
+        await db.refresh(target)
+        await callback()
+        return target
+    except kpi_service.DuplicateTargetError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class KpiTargetUpdate(BaseModel):
+    """Update annual KPI target."""
+    annual_target: Optional[int] = Field(None, ge=0)
+    is_active: Optional[bool] = None
+
+
+@router.put(
+    "/targets/{target_id}",
+    response_model=KpiTargetResponse,
+    summary="Update annual KPI target"
+)
+async def update_kpi_target(
+    target_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[models.User, AdminDep],  # ✅ Security Gateway
+    data: KpiTargetUpdate,
+):
+    """Update an existing annual KPI target. Admin only."""
     
-    return target
+    try:
+        target, callback = await kpi_service.update_kpi_target(
+            db,
+            target_id=target_id,
+            annual_target=data.annual_target,
+            is_active=data.is_active,
+            updated_by=current_user,
+        )
+        await db.commit()
+        await db.refresh(target)
+        await callback()
+        return target
+    except kpi_service.TargetNotFoundError:
+        raise HTTPException(status_code=404, detail="Target not found")
+
+
+@router.delete(
+    "/targets/{target_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete annual KPI target"
+)
+async def delete_kpi_target(
+    target_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[models.User, AdminDep],  # ✅ Security Gateway
+):
+    """Delete an annual KPI target (soft delete). Admin only."""
+    
+    try:
+        target, callback = await kpi_service.delete_kpi_target(
+            db, target_id=target_id, deleted_by=current_user
+        )
+        await db.commit()
+        await callback()
+    except kpi_service.TargetNotFoundError:
+        raise HTTPException(status_code=404, detail="Target not found")
+
+
+class SyncYTDResponse(BaseModel):
+    """Response for YTD sync endpoint."""
+    target_id: int
+    officer_id: int
+    kpi_code: str
+    fiscal_year: int
+    achieved_ytd: int
+    message: str
+
+
+@router.post(
+    "/targets/{target_id}/sync",
+    response_model=SyncYTDResponse,
+    summary="Sync YTD for a specific target"
+)
+async def sync_target_ytd(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    # ✅ Phase 2.3: Use dependency for IDOR protection (replaces db.get)
+    target: Annotated[models.KpiTarget, Depends(deps.get_kpi_target_for_admin)],
+):
+    """
+    Manually trigger YTD sync for a specific annual target.
+    
+    This recalculates achieved_ytd from actual lead data using:
+    - PipelineStage.is_final_stage == True
+    - ConsultationStatus.outcome_type == 'positive'
+    
+    Admin/Manager only (enforced by get_kpi_target_for_admin dependency).
+    """
+    
+    # Sync YTD for the officer
+    if target.officer_id:
+        synced = await kpi_service.sync_officer_ytd(
+            db, officer_id=target.officer_id, fiscal_year=target.fiscal_year
+        )
+        await db.commit()
+        await db.refresh(target)
+        
+        return SyncYTDResponse(
+            target_id=target.id,
+            officer_id=target.officer_id,
+            kpi_code=target.kpi_code,
+            fiscal_year=target.fiscal_year,
+            achieved_ytd=target.achieved_ytd,
+            message=f"Đã đồng bộ YTD: {synced.get(target.kpi_code, 0)} {target.kpi_code}"
+        )
+    else:
+        # For global/unit targets, sync all officers and aggregate
+        # TODO: Implement aggregation for unit/global targets
+        raise HTTPException(
+            status_code=400, 
+            detail="Sync only supported for officer-level targets. Unit/Global targets aggregate automatically."
+        )
 

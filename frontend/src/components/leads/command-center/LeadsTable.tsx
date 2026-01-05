@@ -43,6 +43,7 @@ import {
   SearchX,
   ChevronRight,
   GripVertical,
+  Zap,
 } from "lucide-react";
 import {
   Table,
@@ -62,6 +63,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { Lead } from "@/types/lead.types";
 import { LEAD_SOURCE_OPTIONS } from "@/constants";
@@ -160,48 +167,63 @@ export function LeadsTable({
   const tableContainerRef = useRef<HTMLDivElement>(null);
   
   // ✅ Sorting state with localStorage persistence and default urgency sort
-  const [sorting, setSorting] = React.useState<SortingState>(() => {
-    if (typeof window === "undefined") return DEFAULT_SORTING;
-    try {
-      const saved = localStorage.getItem(SORTING_STORAGE_KEY);
-      return saved ? JSON.parse(saved) : DEFAULT_SORTING;
-    } catch {
-      return DEFAULT_SORTING;
-    }
-  });
+  const [sorting, setSorting] = React.useState<SortingState>(DEFAULT_SORTING);
   const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
   const [columnResizeMode] = React.useState<ColumnResizeMode>("onChange");
   const [focusedRowIndex, setFocusedRowIndex] = React.useState<number>(-1);
   
-  // Load persisted states
-  const [densityMode, setDensityMode] = React.useState<DensityMode>(() => {
-    if (typeof window === "undefined") return 'regular';
-    const saved = localStorage.getItem(DENSITY_MODE_STORAGE_KEY);
-    return (saved as DensityMode) || 'regular';
-  });
-  
-  const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>(() => {
-    if (typeof window === "undefined") return {};
-    try {
-      const saved = localStorage.getItem(COLUMN_VISIBILITY_STORAGE_KEY);
-      return saved ? JSON.parse(saved) : {};
-    } catch {
-      return {};
+  // Load persisted states - START with defaults, then hydrate from localStorage
+  const [densityMode, setDensityMode] = React.useState<DensityMode>('regular');
+  // Default: hide phone column for privacy protection
+  const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({ phone: false });
+  const [isHydrated, setIsHydrated] = React.useState(false);
+
+  // Hydrate from localStorage after mount to avoid SSR mismatch
+  useEffect(() => {
+    const savedDensity = localStorage.getItem(DENSITY_MODE_STORAGE_KEY);
+    if (savedDensity && ['condensed', 'regular', 'relaxed'].includes(savedDensity)) {
+      setDensityMode(savedDensity as DensityMode);
     }
-  });
+    
+    try {
+      const savedVisibility = localStorage.getItem(COLUMN_VISIBILITY_STORAGE_KEY);
+      if (savedVisibility) {
+        const parsed = JSON.parse(savedVisibility);
+        // Merge with defaults (user preferences override defaults)
+        setColumnVisibility({ phone: false, ...parsed });
+      }
+    } catch {
+      // Ignore parse errors
+    }
+
+    try {
+      const savedSorting = localStorage.getItem(SORTING_STORAGE_KEY);
+      if (savedSorting) {
+        setSorting(JSON.parse(savedSorting));
+      }
+    } catch {
+      // Ignore parse errors
+    }
+    
+    setIsHydrated(true);
+  }, []);
 
   const totalPages = Math.ceil(totalCount / pageSize);
   const densityConfig = DENSITY_CONFIG[densityMode];
 
-  // Persist density mode
+  // Persist density mode (only after hydration)
   useEffect(() => {
-    localStorage.setItem(DENSITY_MODE_STORAGE_KEY, densityMode);
-  }, [densityMode]);
+    if (isHydrated) {
+      localStorage.setItem(DENSITY_MODE_STORAGE_KEY, densityMode);
+    }
+  }, [densityMode, isHydrated]);
 
-  // Persist column visibility
+  // Persist column visibility (only after hydration)
   useEffect(() => {
-    localStorage.setItem(COLUMN_VISIBILITY_STORAGE_KEY, JSON.stringify(columnVisibility));
-  }, [columnVisibility]);
+    if (isHydrated) {
+      localStorage.setItem(COLUMN_VISIBILITY_STORAGE_KEY, JSON.stringify(columnVisibility));
+    }
+  }, [columnVisibility, isHydrated]);
 
   // ✅ Persist sorting preference
   useEffect(() => {
@@ -293,12 +315,12 @@ export function LeadsTable({
           const source = row.original.source;
           if (!source) return <span className="text-muted-foreground">—</span>;
           return (
-            <Badge variant="outline" className="text-xs font-normal">
+            <Badge variant="outline" className="text-[10px] h-5 px-2 font-normal">
               {getSourceLabel(source)}
             </Badge>
           );
         },
-        size: 100,
+        size: 90,
       }),
 
       // Pipeline Stage column
@@ -310,7 +332,7 @@ export function LeadsTable({
           const color = STAGE_COLORS[stage.id] || "#6B7280";
           return (
             <Badge
-              className="text-xs font-normal"
+              className="text-[10px] h-5 px-2 font-normal whitespace-nowrap"
               style={{
                 backgroundColor: `${color}20`,
                 color: color,
@@ -321,7 +343,7 @@ export function LeadsTable({
             </Badge>
           );
         },
-        size: 120,
+        size: 110,
       }),
 
       // Consultation Status column - text color from status.color
@@ -333,15 +355,14 @@ export function LeadsTable({
           return (
             <Badge
               variant="secondary"
-              className="text-xs font-normal"
+              className="text-[10px] h-5 px-2 font-medium whitespace-nowrap"
+              style={{ color: status.color || status.color_code || "inherit" }}
             >
-              <span style={{ color: status.color || "inherit" }}>
-                {status.name}
-              </span>
+              {status.name}
             </Badge>
           );
         },
-        size: 130,
+        size: 110,
       }),
 
       // Officer column
@@ -430,25 +451,30 @@ export function LeadsTable({
       // Urgency Score column (Lead Insights Upgrade)
       columnHelper.accessor("cached_urgency_score", {
         header: ({ column }) => (
-          <Button
-            variant="ghost"
-            className="-ml-3 h-8 font-medium"
-            onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-          >
-            Khẩn cấp
-            {column.getIsSorted() === "asc" ? (
-              <ArrowUp className="ml-1 h-3.5 w-3.5" />
-            ) : column.getIsSorted() === "desc" ? (
-              <ArrowDown className="ml-1 h-3.5 w-3.5" />
-            ) : (
-              <ArrowUpDown className="ml-1 h-3.5 w-3.5 opacity-50" />
-            )}
-          </Button>
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  className="-ml-3 h-8 w-8 p-0"
+                  onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
+                >
+                  <Zap className="h-4 w-4 text-amber-500" />
+                  {column.getIsSorted() === "asc" ? (
+                    <ArrowUp className="ml-0.5 h-3 w-3" />
+                  ) : column.getIsSorted() === "desc" ? (
+                    <ArrowDown className="ml-0.5 h-3 w-3" />
+                  ) : null}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Độ khẩn cấp</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         ),
         cell: ({ row }) => (
           <UrgencyBadge score={row.original.cached_urgency_score} showLabel={false} />
         ),
-        size: 80,
+        size: 50,
       }),
 
       // Actions column

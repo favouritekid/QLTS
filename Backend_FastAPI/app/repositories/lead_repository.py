@@ -819,6 +819,40 @@ class LeadRepository(BaseRepository[models.Lead]):
         result = await self.db.execute(stmt)
         return result.scalars().all()
 
+    async def bulk_update_pipeline_stage(
+        self,
+        lead_ids: List[int],
+        pipeline_stage_id: str
+    ) -> int:
+        """
+        Bulk update pipeline_stage_id for multiple leads.
+        
+        ✅ PHASE 8: Replaces db.get() in router bulk_update_stage.
+        Uses UPDATE ... WHERE id IN (...) for efficiency.
+        
+        Args:
+            lead_ids: List of Lead IDs to update
+            pipeline_stage_id: New pipeline stage ID
+            
+        Returns:
+            Number of leads updated
+        """
+        from sqlalchemy import update
+        
+        if not lead_ids:
+            return 0
+            
+        stmt = (
+            update(models.Lead)
+            .where(
+                models.Lead.id.in_(lead_ids),
+                models.Lead.deleted_at.is_(None)
+            )
+            .values(pipeline_stage_id=pipeline_stage_id)
+        )
+        result = await self.db.execute(stmt)
+        return result.rowcount
+
     # =========================================================================
     # CONSULTATION METHODS (for response serialization)
     # =========================================================================
@@ -968,4 +1002,81 @@ class LeadRepository(BaseRepository[models.Lead]):
         )
         result = await self.db.execute(query)
         return result.scalar() or 0
+
+    # =========================================================================
+    # ✅ RECOMMENDATION ENGINE: Methods for KPI recommendations
+    # =========================================================================
+
+    async def count_hot_leads_needing_attention(
+        self,
+        officer_id: int,
+        days_threshold: int = 3
+    ) -> int:
+        """
+        Count hot leads that haven't been contacted in X days.
+        
+        ✅ ARCHITECTURE COMPLIANT: Replaces direct query in recommendation_engine.
+        
+        Args:
+            officer_id: Officer ID
+            days_threshold: Days since last contact
+            
+        Returns:
+            Count of hot leads needing attention
+        """
+        from datetime import timedelta
+        
+        threshold_date = datetime.now(timezone.utc) - timedelta(days=days_threshold)
+        
+        query = (
+            select(func.count(models.Lead.id))
+            .where(
+                models.Lead.assigned_officer_id == officer_id,
+                models.Lead.is_hot_lead == True,
+                models.Lead.deleted_at.is_(None),
+                models.Lead.last_consultation_at < threshold_date,
+            )
+        )
+        result = await self.db.execute(query)
+        return result.scalar() or 0
+
+    async def count_stale_leads(
+        self,
+        officer_id: int,
+        days_threshold: int = 14
+    ) -> int:
+        """
+        Count leads with no activity in X days (non-final status only).
+        
+        ✅ ARCHITECTURE COMPLIANT: Replaces direct query in recommendation_engine.
+        
+        Args:
+            officer_id: Officer ID
+            days_threshold: Days of inactivity
+            
+        Returns:
+            Count of stale leads
+        """
+        from datetime import timedelta
+        
+        threshold_date = datetime.now(timezone.utc) - timedelta(days=days_threshold)
+        
+        query = (
+            select(func.count(models.Lead.id))
+            .join(
+                models.ConsultationStatus,
+                models.Lead.consultation_status_id == models.ConsultationStatus.id,
+                isouter=True
+            )
+            .where(
+                models.Lead.assigned_officer_id == officer_id,
+                models.Lead.deleted_at.is_(None),
+                models.Lead.updated_at < threshold_date,
+                # Only non-final status leads are considered stale
+                models.ConsultationStatus.is_final_status == False,
+            )
+        )
+        result = await self.db.execute(query)
+        return result.scalar() or 0
+
 

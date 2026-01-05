@@ -159,8 +159,13 @@ async function fetchDashboard(filters: DashboardFilters): Promise<EnhancedOffice
   return response.data;
 }
 
-async function fetchTeamStats(): Promise<TeamStats> {
-  const response = await api.get("/api/officer/team-stats");
+async function fetchTeamStats(startDate?: string, endDate?: string): Promise<TeamStats> {
+  const params = new URLSearchParams();
+  if (startDate) params.append("start_date", startDate);
+  if (endDate) params.append("end_date", endDate);
+  
+  const url = `/api/officer/team-stats${params.toString() ? `?${params.toString()}` : ""}`;
+  const response = await api.get(url);
   return response.data;
 }
 
@@ -199,10 +204,10 @@ export function useDashboardStats(options?: UseDashboardStatsOptions) {
     staleTime: 30000,
   });
 
-  // Fetch team stats (no date filter needed)
+  // Fetch team stats (with date filter)
   const teamStatsQuery = useQuery({
-    queryKey: ["officer", "team-stats"],
-    queryFn: fetchTeamStats,
+    queryKey: ["officer", "team-stats", startDate, endDate],
+    queryFn: () => fetchTeamStats(startDate, endDate),
     staleTime: 300000,
   });
 

@@ -19,7 +19,7 @@ from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, models, schemas, security
-from ..celery_utils import send_login_alert_email_task
+# PHASE 1: Removed send_login_alert_email_task (now in login_history_service)
 from ..config import settings
 from ..core import deps
 from ..utils.exceptions import (  # ✅ PHASE 1: Import custom exceptions
@@ -38,7 +38,7 @@ from ..core.rate_limits import limiter, RateLimits  # ✅ MIGRATED: Use new rate
 from ..services import session_service, user_service
 from ..services import login_history_service  # Security: Persistent login audit trail
 from ..services import notification_dispatcher  # Security: Suspicious login alerts
-from ..services.anomaly_detection import AnomalyDetector
+# PHASE 1: Removed AnomalyDetector import (detection now in login_history_service)
 from ..utils.exceptions import InvalidToken
 from ..core.events import SystemEvents  # Security: Event registry
 
@@ -235,6 +235,7 @@ async def login_for_access_token(
         raise HTTPException(status_code=500, detail="Could not process session")
 
     # (Giữ nguyên logic tạo session)
+    post_commit_callbacks = []
     try:
         from datetime import datetime, timedelta, timezone
 
@@ -243,7 +244,7 @@ async def login_for_access_token(
         expires_at = datetime.now(timezone.utc) + timedelta(
             days=settings.REFRESH_TOKEN_EXPIRE_DAYS
         )
-        session = await session_service.create_session(
+        session, session_callback = await session_service.create_session(
             db=db,
             user_id=user.id,
             refresh_jti=refresh_jti,
@@ -251,52 +252,11 @@ async def login_for_access_token(
             user_agent_string=user_agent_string,
             expires_at=expires_at,
         )
-        detector = AnomalyDetector(db)
-        anomalies = await detector.analyze_login(
-            user_id=user.id,
-            ip_address=ip_address,
-            device_type=session.device_type,
-            browser=session.browser,
-            os=session.os,
-            country=session.country,
-            city=session.city,
-            login_time=session.created_at,
-        )
-        if anomalies["is_suspicious"]:
-            session.is_suspicious = True
-            db.add(session)
-            try:
-                # Format location from session data
-                location_parts = []
-                if session.city:
-                    location_parts.append(session.city)
-                if session.country:
-                    location_parts.append(session.country)
-                location = ", ".join(location_parts) if location_parts else None
+        if session_callback:
+            post_commit_callbacks.append(session_callback)
 
-                send_login_alert_email_task.delay(
-                    email_to=user.email,
-                    username=user.username,
-                    ip_address=ip_address or "Unknown",
-                    user_agent=user_agent_string or "Unknown",
-                    device_type=session.device_type or "Unknown",
-                    browser=session.browser or "Unknown",
-                    os=session.os or "Unknown",
-                    anomalies=anomalies,
-                    location=location,
-                )
-                log.info(
-                    "Login alert email queued for suspicious activity",
-                    user_id=user.id,
-                    ip_address=ip_address,
-                    anomalies=anomalies,
-                )
-            except Exception as email_error:
-                log.warning(
-                    "Failed to queue login alert email",
-                    user_id=user.id,
-                    error=str(email_error),
-                )
+        # PHASE 1 MERGE: AnomalyDetector removed - detection now in login_history_service
+        # session.is_suspicious will be synced from login_record after record_login() call below
     except Exception as session_error:
         log.error(
             "Failed to create session tracking record",
@@ -311,13 +271,15 @@ async def login_for_access_token(
     # ✅ PHASE 1: Record login history for persistent audit trail
     # Unlike UserSession (which is revoked on logout), LoginHistory is permanent
     # for security auditing and suspicious login detection
-    post_commit_callbacks = []
+    
+    login_notification_data = None  # R1+R2: Will be set if login is suspicious
     
     # Add record_login callback if provided
     if "login_history_callback" in locals() and login_history_callback:
         post_commit_callbacks.append(login_history_callback)
         
     try:
+        # PHASE 1 MERGE: Pass email/username for consolidated email alert (replaces AnomalyDetector email)
         login_record, login_history_callback = await login_history_service.record_login(
             db=db,
             user_id=user.id,
@@ -325,6 +287,9 @@ async def login_for_access_token(
             user_agent=user_agent_string,
             country=session.country if 'session' in dir() else None,
             city=session.city if 'session' in dir() else None,
+            email_to=user.email,  # Phase 1: For email alert
+            username=user.username,  # Phase 1: For email personalization
+            refresh_jti=refresh_jti,  # R1+R2 FIX: For pending notification storage
         )
         if login_history_callback:
             post_commit_callbacks.append(login_history_callback)
@@ -338,6 +303,30 @@ async def login_for_access_token(
                 is_new_location=login_record.is_new_location,
                 risk_score=login_record.risk_score,
             )
+            # R1+R2: Build notification data for immediate response
+            anomalies = []
+            if login_record.is_new_ip:
+                anomalies.append("new_ip")
+            if login_record.is_new_device:
+                anomalies.append("new_device")
+            if login_record.is_new_location:
+                anomalies.append("new_location")
+            
+            login_notification_data = {
+                "type": "SUSPICIOUS_LOGIN",
+                "login_id": login_record.id,
+                "ip_address": ip_address or "unknown",
+                "location": f"{login_record.city or ''}, {login_record.country or ''}".strip(", ") or None,
+                "device": f"{login_record.browser or ''} on {login_record.os or ''}".strip() or None,
+                "browser": login_record.browser,
+                "os": login_record.os,
+                "risk_score": login_record.risk_score,
+                "anomalies": anomalies,
+            }
+            # PHASE 1: Sync is_suspicious to UserSession for consistency
+            if 'session' in dir() and session:
+                session.is_suspicious = True
+                db.add(session)
             # ✅ PHASE 3: Dispatch notification for suspicious login
             anomalies = []
             if login_record.is_new_ip:
@@ -348,7 +337,7 @@ async def login_for_access_token(
                 anomalies.append("new_location")
             
             try:
-                _, notif_callback = await notification_dispatcher.dispatch(
+                notification_ids, notif_callback = await notification_dispatcher.dispatch(
                     db=db,
                     event=SystemEvents.SUSPICIOUS_LOGIN,
                     payload={
@@ -365,7 +354,10 @@ async def login_for_access_token(
                 )
                 if notif_callback:
                     post_commit_callbacks.append(notif_callback)
-                log.info("Suspicious login notification dispatched", user_id=user.id)
+                # R1+R2: Add notification_id to login_notification_data for frontend markAsRead
+                if notification_ids and len(notification_ids) > 0:
+                    login_notification_data["notification_id"] = notification_ids[0]
+                log.info("Suspicious login notification dispatched", user_id=user.id, notification_id=notification_ids[0] if notification_ids else None)
             except Exception as notif_error:
                 log.error(
                     "Failed to dispatch suspicious login notification",
@@ -420,7 +412,11 @@ async def login_for_access_token(
                 "email": user.email,
                 "full_name": user.full_name,
                 "role": user.role,
+                "status": user.status,
+                "password_reset_required": user.password_reset_required,  # Security: For banner display
             },
+            # R1+R2: Include suspicious login notification in response (optional field)
+            "login_notification": login_notification_data,
         },
         status_code=200,
     )
@@ -511,13 +507,15 @@ async def logout(
     if refresh_jti:
         # ✅ PHASE 2: Use session_service instead of direct SQL
         try:
-            revoked = await session_service.revoke_session_by_jti(
+            revoked, callback = await session_service.revoke_session_by_jti(
                 db=db,
                 refresh_jti=refresh_jti,
                 user_id=current_user.id
             )
             if revoked:
                 await db.commit()
+                if callback:
+                    await callback()
                 log.info(
                     "Session revoked on logout",
                     user_id=current_user.id,
@@ -706,6 +704,12 @@ async def perform_change_password(
         old_password=password_data.old_password,
         new_password=password_data.new_password,
     )
+
+    # C2 SECURITY FIX: Clear password_reset_required flag after password change
+    if hasattr(current_user, 'password_reset_required') and current_user.password_reset_required:
+        current_user.password_reset_required = False
+        db.add(current_user)
+        log.info("Cleared password_reset_required flag", user_id=current_user.id)
 
     # ✅ FIX: Commit the password change to DB
     await db.commit()

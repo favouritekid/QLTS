@@ -583,6 +583,17 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
     # ACADEMIC INFO METHODS (Sprint 3 - Final)
     # =========================================================================
 
+    async def get_academic_info_by_id(
+        self,
+        academic_info_id: int
+    ) -> Optional[models.OfferingAcademicInfo]:
+        """Get academic info by ID."""
+        query = select(models.OfferingAcademicInfo).where(
+            models.OfferingAcademicInfo.id == academic_info_id
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
     async def get_academic_info_by_offering_and_year(
         self,
         offering_id: int,

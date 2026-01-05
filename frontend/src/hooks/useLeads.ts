@@ -463,7 +463,7 @@ export function useBulkUpdateLeadsStage() {
       return await leadsApi.bulkUpdateLeadsStage(data);
     },
 
-    onSuccess: async (result) => {
+    onSuccess: async () => {
       // Force refetch leads list queries immediately (matches useLeads queryKey)
       await queryClient.refetchQueries({ queryKey: leadsKeys.lists() });
       queryClient.invalidateQueries({ queryKey: ["pipeline"] });
@@ -507,7 +507,7 @@ export function useBulkDeleteLeads() {
       return await leadsApi.bulkDeleteLeads(data);
     },
 
-    onSuccess: async (result) => {
+    onSuccess: async () => {
       // Force refetch leads list queries immediately (matches useLeads queryKey)
       await queryClient.refetchQueries({ queryKey: leadsKeys.lists() });
       queryClient.invalidateQueries({ queryKey: ["pipeline"] });

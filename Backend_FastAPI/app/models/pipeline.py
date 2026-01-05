@@ -109,6 +109,13 @@ class ConsultationStatus(Base):
         server_default="true",
         comment="False nếu chỉ ghi nhận activity, không thay đổi pipeline progression"
     )
+    counts_for_kpi = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="true",
+        comment="True nếu status được đếm vào KPI enrollments (VD: False cho 'Đã rút học phí')"
+    )
 
     # Relationships
     stage = relationship("PipelineStage", back_populates="statuses")

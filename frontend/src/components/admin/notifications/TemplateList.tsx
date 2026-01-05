@@ -56,6 +56,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 
+import { Pagination } from "@/components/common/table/Pagination";
+
 import {
   useNotificationTemplates,
   useDeleteNotificationTemplate,
@@ -78,7 +80,8 @@ interface TemplateListProps {
 }
 
 export function TemplateList({ initialData }: TemplateListProps) {
-  const [page] = useState(1); // TODO: Implement pagination
+  const [page, setPage] = useState(1); // ✅ TECHNICAL DEBT FIX: Implement pagination
+  const [pageSize, setPageSize] = useState(10);
   const [category, setCategory] = useState<string>("all");
   const [isSystem, setIsSystem] = useState<string>("all");
   const [search, setSearch] = useState("");
@@ -90,7 +93,7 @@ export function TemplateList({ initialData }: TemplateListProps) {
   const { data, isLoading, error } = useNotificationTemplates(
     {
       page,
-      page_size: 50,
+      page_size: pageSize,
       category: category === "all" ? undefined : category,
       is_system: isSystem === "all" ? undefined : isSystem === "true",
       search: search || undefined,
@@ -357,6 +360,20 @@ export function TemplateList({ initialData }: TemplateListProps) {
                 ))}
               </TableBody>
             </Table>
+          )}
+
+          {/* Pagination */}
+          {!isLoading && !error && data && data.total_count > 0 && (
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={data.total_count}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+              showPageSizeSelector={true}
+              pageSizeOptions={[10, 20, 50]}
+              isLoading={isLoading}
+            />
           )}
         </CardContent>
       </Card>

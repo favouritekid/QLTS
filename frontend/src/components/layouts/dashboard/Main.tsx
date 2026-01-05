@@ -2,7 +2,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import React from "react";
+import React, { Suspense } from "react";
 import { Breadcrumbs } from "@/components/common/Breadcrumbs";
 
 export function Main({ children, className }: { children: React.ReactNode; className?: string }) {
@@ -20,8 +20,10 @@ export function Main({ children, className }: { children: React.ReactNode; class
     >
       {/* Container với max-width và spacing */}
       <div className="mx-auto w-full max-w-[1600px] space-y-4">
-        {/* Breadcrumbs Navigation */}
-        <Breadcrumbs className="mb-2" />
+        {/* Breadcrumbs Navigation - wrapped in Suspense for prerender compat */}
+        <Suspense fallback={<div className="h-6 mb-2" />}>
+          <Breadcrumbs className="mb-2" />
+        </Suspense>
 
         {/* Page Content */}
         {children}

@@ -19,6 +19,7 @@ import type {
 } from "@/types/api.types";
 import { useEffect } from "react";
 import { AxiosError } from "axios";
+import { triggerBannerCheck } from "@/components/layouts/SecurityBanner";
 
 /**
  * ✅ PHASE 1 - WEEK 3 - DAY 2: Added initialData support for SSR
@@ -66,11 +67,50 @@ export function useAuth(options?: UseAuthOptions) {
       // ✅ SECURITY FIX: Token is now in httpOnly cookie (set by backend)
       // We only need to store user info in Zustand
 
-      const { user } = loginResponse;
+      const { user, login_notification } = loginResponse;
 
       setAuth(user); // No longer pass token
 
+      // Trigger security banner check immediately after login
+      // This ensures banner appears without requiring page refresh
+      triggerBannerCheck(user.password_reset_required);
+
       toast.success("Login successful!");
+
+      // R1+R2: Show suspicious login warning immediately (no socket needed)
+      if (login_notification) {
+        const locationInfo = login_notification.location || "Unknown location";
+        const deviceInfo = login_notification.device || "Unknown device";
+        
+        toast.warning(
+          `⚠️ Phát hiện đăng nhập đáng ngờ\nIP: ${login_notification.ip_address} - ${locationInfo}\n${deviceInfo}`,
+          { 
+            duration: 15000,  // 15 giây - quan trọng, cần user đọc
+            id: `suspicious-login-${login_notification.login_id}`,  // Unique ID để tránh trùng lắp
+            action: {
+              label: "Xem chi tiết",
+              onClick: async () => {
+                // R1+R2: Mark notification as read BEFORE navigating (updates bell icon)
+                if (login_notification.notification_id) {
+                  try {
+                    await api.post(API_ENDPOINTS.NOTIFICATIONS.MARK_AS_READ, {
+                      notification_ids: [login_notification.notification_id],
+                    });
+                    // Refresh notifications to update badge count
+                    queryClient.invalidateQueries({ queryKey: ["notifications"] });
+                    console.log("[useAuth] Marked suspicious login notification as read:", login_notification.notification_id);
+                  } catch (err) {
+                    console.error("[useAuth] Failed to mark notification as read:", err);
+                  }
+                }
+                router.push("/settings/login-history");
+              },
+            },
+          }
+        );
+        
+        console.log("[useAuth] Suspicious login detected:", login_notification);
+      }
 
       // ✅ PHASE 7: Role-based redirect
       // Officers go to /dashboard/officer, others go to /dashboard

@@ -44,6 +44,18 @@ class RequiredDocument(BaseModel):
     label: str = Field(..., min_length=1, max_length=200, description="Document label (e.g., 'Học bạ THPT')")
 
 
+class SubjectGroupResponse(BaseModel):
+    """Schema for config_subject_group API response."""
+    id: int
+    code: str = Field(..., description="Mã tổ hợp (e.g., 'A00', 'D01')")
+    name: str = Field(..., description="Tên tổ hợp (e.g., 'Toán, Vật lí, Hóa học')")
+    subjects: List[str] = Field(default=[], description="Danh sách môn học")
+    display_order: int = Field(default=0)
+    is_active: bool = Field(default=True)
+    
+    model_config = ConfigDict(from_attributes=True)
+
+
 class AdmissionCriterion(BaseModel):
     """Schema validation cho admission_criteria JSON field"""
     id: str = Field(..., description="Unique ID (e.g., 'hocba_2025')")

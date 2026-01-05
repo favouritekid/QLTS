@@ -18,7 +18,6 @@ import {
   Mail,
   Video,
   User,
-  MapPin, // Icon for Current Location
   CheckCircle2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -317,12 +316,6 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
     const currentStatusObj = statuses.find(s => s.id === currentStatusId);
     const currentStageOrder = currentStatusObj?.stage?.order ?? -1;
     const currentStageId = currentStatusObj?.stage_id;
-
-    console.log("QuickConsultationSection - Grouping Debug:", {
-      currentStatusId,
-      currentStageOrder,
-      totalStatuses: statuses.length
-    });
 
     const displayStatuses = statuses.filter(s => {
       if (s.is_universal) {

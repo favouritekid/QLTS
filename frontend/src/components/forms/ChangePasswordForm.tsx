@@ -7,7 +7,9 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { AlertTriangle } from "lucide-react";
+import { useSearchParams } from "next/navigation";
+import { AlertTriangle, ShieldAlert } from "lucide-react";
+import { PasswordStrengthIndicator } from "@/components/admin/PasswordStrengthIndicator";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -49,6 +51,11 @@ const changePasswordSchema = z
       .regex(/[^A-Za-z0-9]/, { message: "Phải chứa ký tự đặc biệt" }),
     confirm_new_password: z.string().min(1, { message: "Vui lòng xác nhận mật khẩu" }),
   })
+  // ✅ SECURITY: Ensure new password is different from old password
+  .refine((data) => data.new_password !== data.old_password, {
+    message: "Mật khẩu mới phải khác mật khẩu hiện tại",
+    path: ["new_password"],
+  })
   .refine((data) => data.new_password === data.confirm_new_password, {
     message: "Mật khẩu mới không khớp",
     path: ["confirm_new_password"],
@@ -60,6 +67,10 @@ export function ChangePasswordForm() {
   const { changePassword, isLoading: isChangingPassword } = useAuth();
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [pendingData, setPendingData] = useState<ChangePasswordFormValues | null>(null);
+  
+  // C2 SECURITY FIX: Check if user was forced to change password
+  const searchParams = useSearchParams();
+  const isForced = searchParams.get("forced") === "true";
 
   // Fetch active sessions count
   const { data: sessionsData, isLoading: isLoadingSessions } = useQuery({
@@ -75,9 +86,11 @@ export function ChangePasswordForm() {
   const form = useForm<ChangePasswordFormValues>({
     resolver: zodResolver(changePasswordSchema),
     defaultValues: { old_password: "", new_password: "", confirm_new_password: "" },
-    mode: "onTouched",
-    reValidateMode: "onChange",
+    mode: "onChange", // ✅ FIX: Changed from onTouched to onChange for realtime validation
   });
+
+  // Watch new_password for strength indicator
+  const newPassword = form.watch("new_password");
 
   function onSubmit(values: ChangePasswordFormValues) {
     // Show confirmation dialog instead of submitting directly
@@ -110,6 +123,23 @@ export function ChangePasswordForm() {
   return (
     <div className="w-full max-w-xl space-y-4">
       <h2 className="text-xl font-semibold">Đổi Mật Khẩu</h2>
+
+      {/* C2 SECURITY FIX: Forced password change warning */}
+      {isForced && (
+        <Alert className="border-red-500 bg-red-50">
+          <ShieldAlert className="h-5 w-5 text-red-600" />
+          <AlertTitle className="text-red-800">Yêu cầu Đổi Mật Khẩu</AlertTitle>
+          <AlertDescription className="text-red-700">
+            <p>
+              Tài khoản của bạn đã được đánh dấu cần <strong>đổi mật khẩu ngay lập tức</strong>.
+              Điều này có thể do bạn đã báo cáo một đăng nhập đáng ngờ.
+            </p>
+            <p className="mt-2 text-sm">
+              Vui lòng đổi mật khẩu để tiếp tục sử dụng hệ thống.
+            </p>
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Security Warning Alert */}
       <Alert variant="destructive">
@@ -173,6 +203,8 @@ export function ChangePasswordForm() {
                     {...field}
                   />
                 </FormControl>
+                {/* ✅ UX FIX: Show password strength indicator */}
+                {newPassword && <PasswordStrengthIndicator password={newPassword} />}
                 <FormMessage />
               </FormItem>
             )}

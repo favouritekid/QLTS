@@ -20,6 +20,11 @@ from .config import (
     SkillRule,
     SkillRuleBase,
     SkillRuleCreate,
+    # System Category
+    SystemCategory,
+    SystemCategoryBase,
+    SystemCategoryCreate,
+    SystemCategoryUpdate,
 )
 
 # --- 2. Từ organization.py (Depends on: config) ---
@@ -77,6 +82,8 @@ from .organization import (
     DistributionRuleCreate,
     DistributionRuleUpdate,
     DistributionRuleResponse,
+    # Subject Group schemas (Phase 6: Dynamic Admission Scoring)
+    SubjectGroupResponse,
 )
 
 # --- 3. Từ pipeline.py (Depends on: config, organization) ---
@@ -139,6 +146,8 @@ from .admission import (
     AdmissionProfileResponse,
     AdmissionSubmitResponse,
     EnrollStudentResponse,
+    # Document upload
+    DocumentUploadResponse,
     # Student schemas
     StudentDocumentResponse,
     StudentResponse,
@@ -220,6 +229,7 @@ from .notification import (
     NotificationCreate,
     NotificationsPage,
     MarkAsReadRequest,
+    BulkDeleteRequest,  # ✅ TECHNICAL DEBT FIX: Bulk delete schema
     # ✅ NOTIFICATION 2.0: Notification Action schemas
     NotificationAction,
     NotificationActionCreate,

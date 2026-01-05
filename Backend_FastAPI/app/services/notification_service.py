@@ -377,3 +377,42 @@ async def delete_notification(
         )
 
     return True, _post_commit
+
+
+async def bulk_delete_notifications(
+    db: AsyncSession,
+    user_id: int,
+    notification_ids: List[int],
+) -> Tuple[int, Callable]:
+    """
+    Delete multiple notifications at once.
+
+    ✅ TECHNICAL DEBT FIX: Single bulk operation instead of multiple single deletes.
+
+    IMPORTANT: This function does NOT commit the transaction.
+    Router must call db.commit() and then execute the returned callback.
+
+    Returns:
+        Tuple of (deleted_count, post_commit_callback)
+    """
+    if not notification_ids:
+        async def _empty_callback():
+            pass
+        return 0, _empty_callback
+
+    repo = NotificationRepository(db)
+    deleted_count = await repo.bulk_delete_for_user(user_id, notification_ids)
+
+    # ✅ Create post-commit callback
+    async def _post_commit():
+        """Execute after router commits the transaction."""
+        # Invalidate cache after successful bulk delete
+        await invalidate_user_inbox_cache(user_id)
+        log.info(
+            "Bulk notifications deleted and cache invalidated",
+            user_id=user_id,
+            requested_count=len(notification_ids),
+            deleted_count=deleted_count
+        )
+
+    return deleted_count, _post_commit
