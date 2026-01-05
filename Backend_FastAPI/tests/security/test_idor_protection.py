@@ -75,8 +75,8 @@ class TestGetNotificationForUser:
         notification = create_mock_notification(notification_id=1, user_id=100)  # Same owner
         db = create_mock_db()
 
-        # Mock repository
-        with patch("app.core.deps.NotificationRepository") as MockRepo:
+        # Mock repository - patch at source module where NotificationRepository is defined
+        with patch("app.repositories.notification_repository.NotificationRepository") as MockRepo:
             mock_repo_instance = AsyncMock()
             mock_repo_instance.get.return_value = notification
             MockRepo.return_value = mock_repo_instance
@@ -97,8 +97,8 @@ class TestGetNotificationForUser:
         other_user_notification = create_mock_notification(notification_id=1, user_id=200)  # Different owner
         db = create_mock_db()
 
-        # Mock repository
-        with patch("app.core.deps.NotificationRepository") as MockRepo:
+        # Mock repository - patch at source module where NotificationRepository is defined
+        with patch("app.repositories.notification_repository.NotificationRepository") as MockRepo:
             mock_repo_instance = AsyncMock()
             mock_repo_instance.get.return_value = other_user_notification
             MockRepo.return_value = mock_repo_instance
@@ -121,7 +121,7 @@ class TestGetNotificationForUser:
         officer_notification = create_mock_notification(notification_id=1, user_id=100)  # Officer's notification
         db = create_mock_db()
 
-        with patch("app.core.deps.NotificationRepository") as MockRepo:
+        with patch("app.repositories.notification_repository.NotificationRepository") as MockRepo:
             mock_repo_instance = AsyncMock()
             mock_repo_instance.get.return_value = officer_notification
             MockRepo.return_value = mock_repo_instance
@@ -143,7 +143,7 @@ class TestGetNotificationForUser:
         other_user_notification = create_mock_notification(notification_id=1, user_id=999)  # Different owner
         db = create_mock_db()
 
-        with patch("app.core.deps.NotificationRepository") as MockRepo:
+        with patch("app.repositories.notification_repository.NotificationRepository") as MockRepo:
             mock_repo_instance = AsyncMock()
             mock_repo_instance.get.return_value = other_user_notification
             MockRepo.return_value = mock_repo_instance
@@ -164,7 +164,7 @@ class TestGetNotificationForUser:
         user = create_mock_user(role=UserRole.OFFICER, user_id=100)
         db = create_mock_db()
 
-        with patch("app.core.deps.NotificationRepository") as MockRepo:
+        with patch("app.repositories.notification_repository.NotificationRepository") as MockRepo:
             mock_repo_instance = AsyncMock()
             mock_repo_instance.get.return_value = None  # Notification doesn't exist
             MockRepo.return_value = mock_repo_instance
@@ -196,7 +196,7 @@ class TestIDORReturns404Not403:
         victim_notification = create_mock_notification(notification_id=1, user_id=200)
         db = create_mock_db()
 
-        with patch("app.core.deps.NotificationRepository") as MockRepo:
+        with patch("app.repositories.notification_repository.NotificationRepository") as MockRepo:
             mock_repo_instance = AsyncMock()
             mock_repo_instance.get.return_value = victim_notification
             MockRepo.return_value = mock_repo_instance
@@ -219,7 +219,7 @@ class TestIDORReturns404Not403:
         victim_notification = create_mock_notification(notification_id=1, user_id=200)
         db = create_mock_db()
 
-        with patch("app.core.deps.NotificationRepository") as MockRepo:
+        with patch("app.repositories.notification_repository.NotificationRepository") as MockRepo:
             mock_repo_instance = AsyncMock()
             mock_repo_instance.get.return_value = victim_notification
             MockRepo.return_value = mock_repo_instance
@@ -262,7 +262,7 @@ class TestNotificationDeleteIDOR:
         user_b_notification = create_mock_notification(notification_id=1, user_id=200)  # User B's
         db = create_mock_db()
 
-        with patch("app.core.deps.NotificationRepository") as MockRepo:
+        with patch("app.repositories.notification_repository.NotificationRepository") as MockRepo:
             mock_repo_instance = AsyncMock()
             mock_repo_instance.get.return_value = user_b_notification
             MockRepo.return_value = mock_repo_instance
