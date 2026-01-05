@@ -89,29 +89,12 @@ async def get_distribution_preview(
     """
     stats = await distribution_service.get_distribution_stats(db, offering_id)
 
-    # Enhance response with unit name for next_unit
-    next_unit_name = None
-    if stats.get("next_unit_id"):
-        unit = await db.get(models.OrganizationUnit, stats["next_unit_id"])
-        next_unit_name = unit.name if unit else "Unknown"
-
-    # If no cursor yet (first lead), calculate which unit would get it
-    if stats.get("next_unit_id") is None and stats.get("configs"):
-        # First lead goes to first slot (index 0)
-        # Build weighted list and get first unit
-        weighted_units = []
-        for config in stats["configs"]:
-            weighted_units.extend([config["unit_id"]] * config["weight"])
-        if weighted_units:
-            stats["next_unit_id"] = weighted_units[0]
-            unit = await db.get(models.OrganizationUnit, stats["next_unit_id"])
-            next_unit_name = unit.name if unit else "Unknown"
-
+    # ✅ PHASE 8: next_unit_name now comes from service (no db.get() in router)
     return {
         "offering_id": offering_id,
         "has_config": len(stats.get("configs", [])) > 0,
         "next_unit_id": stats.get("next_unit_id"),
-        "next_unit_name": next_unit_name,
+        "next_unit_name": stats.get("next_unit_name"),  # ✅ From service
         "configs": stats.get("configs", []),
         "total_slots": stats.get("total_slots", 0),
         "cursor_position": stats.get("cursor_value"),
@@ -500,8 +483,10 @@ async def update_a_consultation(
 
     This prevents Officers from breaking the consultation chain by editing historical consultations.
     """
-    # Get old status before update
-    consultation = await db.get(models.Consultation, consultation_id)
+    # ✅ PHASE 8: Use LeadRepository instead of db.get()
+    from ..repositories import LeadRepository
+    repo = LeadRepository(db)
+    consultation = await repo.get_consultation_with_status_stage(consultation_id)
     old_status_id = consultation.consultation_status_id if consultation else None
 
     result = await lead_service.update_consultation(

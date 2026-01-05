@@ -815,9 +815,12 @@ async def update_existing_user(
         update_dict["max_capacity"] = max_capacity
 
     # Handle unit_id assignment - validate unit exists
+    # ✅ PHASE 8: Use OrganizationRepository instead of db.get()
     if unit_id is not None:
         if unit_id > 0:  # Assigning to a unit
-            unit = await db.get(models.OrganizationUnit, unit_id)
+            from app.repositories.organization_repository import OrganizationRepository
+            org_repo = OrganizationRepository(db)
+            unit = await org_repo.get_by_id_full(unit_id)
             if not unit:
                 raise ResourceNotFoundError(
                     detail=f"Organization unit with id {unit_id} not found."
