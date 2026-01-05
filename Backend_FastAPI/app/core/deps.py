@@ -45,15 +45,22 @@ __all__ = [
     "get_application_for_user",
     "get_notification_template_for_admin",
     "get_notification_rule_for_admin",
+    "get_kpi_target_for_admin",  # Phase 2.3
     "get_officer_dashboard_scope",
     "get_criteria_access",
     "get_config_filter",
-    "get_lead_list_filter",  # Phase 2
+    "get_lead_list_filter",  # Phase 2.1
     "verify_user_management_permission",
     
     # Data Classes
     "OfficerDashboardScope",
-    "LeadListFilter",  # Phase 2
+    "LeadListFilter",
+    
+    # Standard Aliases (Phase 2.2)
+    "CasbinAuth",
+    "RequireAdmin",
+    "RequireManager",
+    "RequireStaff",
 ]
 
 # ✅ SECURITY FIX: Keep OAuth2 scheme for backwards compatibility, but make it optional
@@ -1334,6 +1341,21 @@ AdminManagerRequired = Depends(require_roles(["admin", "manager"]))
 
 # DEPRECATED: Use Depends(require_any_staff) instead
 OfficerRequired = Depends(require_roles(["officer", "admin", "manager"]))
+
+
+# ============================================================================
+# STANDARD ALIASES (AUTHORIZATION_GUIDELINES.md v1.0)
+# ============================================================================
+# These are the recommended pre-wrapped Depends for router use.
+# Usage: current_user: models.User = CasbinAuth
+
+# Casbin RBAC - checks (user, path, method) against policy
+CasbinAuth = Depends(check_permission)
+
+# Role-based shortcuts (for when Casbin is overkill)
+RequireAdmin = Depends(require_admin)
+RequireManager = Depends(require_admin_or_manager)
+RequireStaff = Depends(require_any_staff)
 
 
 async def get_config_filter(
