@@ -1,17 +1,20 @@
 # app/routers/security.py
 """
-✅ PATTERN A COMPLIANT - Security Router
+✅ PHASE 7 COMPLIANT - Security Router
 
 Endpoints for login security features:
 - Login history viewing
 - Confirm suspicious login ("This was me")
 - Secure account ("This wasn't me")
 - Trusted device management
+
+✅ PHASE 7: Removed generic except Exception per MASTER_ARCHITECTURE.
+Global exception handlers in middleware/exception_handlers.py handle all errors.
 """
 from typing import List, Optional
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -204,35 +207,27 @@ async def confirm_login(
     Optionally adds the device to trusted list so future logins
     from this device won't trigger alerts.
     """
-    try:
-        login, callback = await login_history_service.confirm_login(
-            db=db,
-            user_id=current_user.id,
-            login_id=request_obj.login_id,
-            trust_device=request_obj.trust_device,
-        )
-        
-        await db.commit()
-        await callback()
-        
-        log.info(
-            "User confirmed suspicious login",
-            user_id=current_user.id,
-            login_id=request_obj.login_id,
-            device_trusted=request_obj.trust_device,
-        )
-        
-        return ConfirmLoginResponse(
-            message="Login confirmed successfully",
-            device_trusted=request_obj.trust_device and login.browser is not None,
-        )
-        
-    except ResourceNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        await db.rollback()
-        log.error("Failed to confirm login", error=str(e))
-        raise HTTPException(status_code=500, detail="Failed to confirm login")
+    login, callback = await login_history_service.confirm_login(
+        db=db,
+        user_id=current_user.id,
+        login_id=request_obj.login_id,
+        trust_device=request_obj.trust_device,
+    )
+    
+    await db.commit()
+    await callback()
+    
+    log.info(
+        "User confirmed suspicious login",
+        user_id=current_user.id,
+        login_id=request_obj.login_id,
+        device_trusted=request_obj.trust_device,
+    )
+    
+    return ConfirmLoginResponse(
+        message="Login confirmed successfully",
+        device_trusted=request_obj.trust_device and login.browser is not None,
+    )
 
 
 @router.post("/secure-account", response_model=SecureAccountResponse)
@@ -255,75 +250,66 @@ async def secure_account(
     from fastapi import Cookie
     from ..services.auth_service import decode_token
     from ..repositories.session_repository import SessionRepository
+    from ..services import session_service
     
+    login, callback = await login_history_service.secure_account(
+        db=db,
+        user_id=current_user.id,
+        login_id=login_id,
+    )
+    
+    # R7 FIX: Get current session ID to exclude from revocation
+    # This prevents user from being logged out when securing their account
+    current_session_id = None
     try:
-        from ..services import session_service
-        
-        login, callback = await login_history_service.secure_account(
-            db=db,
-            user_id=current_user.id,
-            login_id=login_id,
-        )
-        
-        # R7 FIX: Get current session ID to exclude from revocation
-        # This prevents user from being logged out when securing their account
-        current_session_id = None
-        try:
-            # Get refresh_token from cookie (manual extraction since we're mid-function)
-            refresh_token = request.cookies.get("refresh_token")
-            if refresh_token:
-                payload = decode_token(refresh_token)
-                jti = payload.get("jti")  # refresh token's own JTI
-                if jti:
-                    session_repo = SessionRepository(db)
-                    current_session = await session_repo.get_by_jti(jti)
-                    if current_session and current_session.user_id == current_user.id:
-                        current_session_id = current_session.id
-                        log.info(
-                            "R7: Will preserve current session during secure_account",
-                            session_id=current_session_id,
-                            user_id=current_user.id
-                        )
-        except Exception as e:
-            # If we can't get session, continue anyway (user will be logged out - acceptable fallback)
-            log.warning("R7: Could not get current session, will revoke all", error=str(e))
-        
-        # Revoke all sessions EXCEPT current (R7 FIX)
-        sessions_revoked, revoke_callback = await session_service.revoke_all_other_sessions(
-            db=db,
-            user_id=current_user.id,
-            except_session_id=current_session_id  # R7: Preserve current session
-        )
-        
-        # Remove all trusted devices
-        trusted_repo = TrustedDeviceRepository(db)
-        await trusted_repo.remove_all_devices(current_user.id)
-        
-        await db.commit()
-        await callback()
-        if revoke_callback:
-            await revoke_callback()
-        
-        log.warning(
-            "User secured account after suspicious login",
-            user_id=current_user.id,
-            login_id=login_id,
-            sessions_revoked=sessions_revoked,
-            current_session_preserved=current_session_id is not None,
-        )
-        
-        # R7: Update message to reflect user stays logged in
-        return SecureAccountResponse(
-            message="Account secured. Please change your password.",
-            sessions_revoked=sessions_revoked,
-        )
-        
-    except ResourceNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        # Get refresh_token from cookie (manual extraction since we're mid-function)
+        refresh_token = request.cookies.get("refresh_token")
+        if refresh_token:
+            payload = decode_token(refresh_token)
+            jti = payload.get("jti")  # refresh token's own JTI
+            if jti:
+                session_repo = SessionRepository(db)
+                current_session = await session_repo.get_by_jti(jti)
+                if current_session and current_session.user_id == current_user.id:
+                    current_session_id = current_session.id
+                    log.info(
+                        "R7: Will preserve current session during secure_account",
+                        session_id=current_session_id,
+                        user_id=current_user.id
+                    )
     except Exception as e:
-        await db.rollback()
-        log.error("Failed to secure account", error=str(e))
-        raise HTTPException(status_code=500, detail="Failed to secure account")
+        # If we can't get session, continue anyway (user will be logged out - acceptable fallback)
+        log.warning("R7: Could not get current session, will revoke all", error=str(e))
+    
+    # Revoke all sessions EXCEPT current (R7 FIX)
+    sessions_revoked, revoke_callback = await session_service.revoke_all_other_sessions(
+        db=db,
+        user_id=current_user.id,
+        except_session_id=current_session_id  # R7: Preserve current session
+    )
+    
+    # Remove all trusted devices
+    trusted_repo = TrustedDeviceRepository(db)
+    await trusted_repo.remove_all_devices(current_user.id)
+    
+    await db.commit()
+    await callback()
+    if revoke_callback:
+        await revoke_callback()
+    
+    log.warning(
+        "User secured account after suspicious login",
+        user_id=current_user.id,
+        login_id=login_id,
+        sessions_revoked=sessions_revoked,
+        current_session_preserved=current_session_id is not None,
+    )
+    
+    # R7: Update message to reflect user stays logged in
+    return SecureAccountResponse(
+        message="Account secured. Please change your password.",
+        sessions_revoked=sessions_revoked,
+    )
 
 
 # =============================================================================
