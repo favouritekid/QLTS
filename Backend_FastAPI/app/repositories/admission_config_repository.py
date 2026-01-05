@@ -36,11 +36,13 @@ from app.models.admission_config import (
 LoadLevel = Literal["light", "with_groups", "full"]
 
 
-class AdmissionConfigRepository:
+from app.repositories.base import BaseRepository
+
+class AdmissionConfigRepository(BaseRepository[AdmissionCriteria]):
     """Repository for Admission Config entities (read-only)."""
 
     def __init__(self, db: AsyncSession):
-        self.db = db
+        super().__init__(db, AdmissionCriteria)
 
     # =========================================================================
     # SUBJECTS

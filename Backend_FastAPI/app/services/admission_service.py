@@ -298,6 +298,52 @@ async def create_profile(
     return new_profile
 
 
+
+async def get_profiles(
+    db: AsyncSession,
+    skip: int,
+    limit: int,
+    status_filter: Optional[str],
+    current_user: models.User,
+) -> List[models.AdmissionProfile]:
+    """
+    Get filtered list of admission profiles.
+
+    Security:
+    - IDOR: Automatically filters by unit_id for non-admin users.
+
+    Args:
+        db: Database session
+        skip: Pagination offset
+        limit: Page size
+        status_filter: Optional status filter
+        current_user: Current authenticated user
+
+    Returns:
+        List of AdmissionProfile
+    """
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
+
+    # Build filters
+    filters = {}
+    if status_filter:
+        filters["status"] = status_filter
+
+    # IDOR: Pass unit_id to repository for non-admin users (DB-level filter)
+    unit_filter = None if current_user.role == UserRole.ADMIN else current_user.unit_id
+
+    # Get profiles using repository
+    profiles = await admission_repo.get_filtered(
+        skip=skip,
+        limit=min(limit, 100),
+        unit_id=unit_filter,
+        **filters
+    )
+
+    return profiles
+
+
 async def get_profile(
     db: AsyncSession,
     profile_id: int,
