@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, models, schemas
-from ..core.deps import CasbinAuth  # ✅ Phase 2.2: Use standard alias
+from ..core.deps import CasbinAuth, get_notification_for_user  # ✅ Phase 2.2: IDOR protection
 from ..services import notification_service
 from ..socket_manager import sio
 from app.core.rate_limits import limiter, RateLimits
@@ -90,25 +90,24 @@ async def mark_all_notifications_as_read(
 @router.delete("/{notification_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_notification(
     request: Request,
-    notification_id: int,
+    # ✅ IDOR Protection: Dependency verifies ownership before access
+    # Returns 404 if notification doesn't exist OR user doesn't own it
+    notification: models.Notification = Depends(get_notification_for_user),
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = CasbinAuth,
 ):
-    """Delete a notification."""
-    deleted, callback = await notification_service.delete_notification(
-        db=db,
-        user_id=current_user.id,
-        notification_id=notification_id,
-    )
+    """
+    Delete a notification.
 
-    if not deleted:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Notification not found",
-        )
+    **Security:**
+    - IDOR protected via `get_notification_for_user` dependency
+    - Only notification owner (or admin) can delete
+    - Returns 404 for non-existent OR unauthorized access (prevents inference)
 
+    Reference: AUTHORIZATION_DECISIONS.md Decision 2 & 5
+    """
+    # Notification already validated by dependency - safe to delete
+    await db.delete(notification)
     await db.commit()
-    await callback()
 
     return None
 

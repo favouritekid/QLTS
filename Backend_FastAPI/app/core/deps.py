@@ -777,6 +777,96 @@ async def get_application_for_user(
     )
 
 
+async def get_notification_for_user(
+    notification_id: int = Path(..., description="ID of the Notification"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user),
+) -> models.Notification:
+    """
+    Verify ownership and retrieve a notification.
+
+    **Security Levels:**
+    - **Admin**: Can access all notifications (for debugging/support)
+    - **Manager/Officer/User**: Can only access their own notifications
+
+    **IDOR Prevention:**
+    This dependency prevents Insecure Direct Object Reference attacks by verifying
+    that the current user owns the notification before access.
+
+    **Important Security Note:**
+    Returns 404 (not 403) when user doesn't own the notification.
+    This prevents inference attacks where attacker can enumerate existing IDs.
+
+    Args:
+        notification_id: ID of the notification to access
+        db: Database session (injected)
+        current_user: Current authenticated user (injected)
+
+    Returns:
+        Notification model if access is permitted
+
+    Raises:
+        ResourceNotFoundError: If notification doesn't exist OR user doesn't own it
+
+    Example:
+        ```python
+        @router.delete("/notifications/{notification_id}")
+        async def delete_notification(
+            notification: models.Notification = Depends(get_notification_for_user)
+        ):
+            # notification is guaranteed to be owned by current user
+            await db.delete(notification)
+        ```
+
+    Reference: AUTHORIZATION_DECISIONS.md Decision 2 & 5
+    """
+    from ..repositories.notification_repository import NotificationRepository
+
+    repo = NotificationRepository(db)
+    notification = await repo.get(notification_id)
+
+    # Notification not found
+    if not notification:
+        log.debug(
+            "Notification not found",
+            notification_id=notification_id,
+            user_id=current_user.id
+        )
+        raise ResourceNotFoundError(
+            detail="Notification not found"
+        )
+
+    # ADMIN: Full access (for debugging/support purposes)
+    if current_user.role == UserRole.ADMIN:
+        log.debug(
+            "Admin accessing notification",
+            notification_id=notification_id,
+            admin_id=current_user.id,
+            notification_owner=notification.user_id
+        )
+        return notification
+
+    # ALL OTHER ROLES: Must own the notification
+    if notification.user_id == current_user.id:
+        return notification
+
+    # IDOR ATTEMPT: User trying to access someone else's notification
+    # Return 404 (not 403) to prevent inference attack
+    log.warning(
+        "IDOR attempt detected: User trying to access another user's notification",
+        notification_id=notification_id,
+        notification_owner_id=notification.user_id,
+        attacker_id=current_user.id,
+        attacker_username=current_user.username,
+        attacker_role=current_user.role
+    )
+
+    # Return 404 to hide existence of notification (security best practice)
+    raise ResourceNotFoundError(
+        detail="Notification not found"
+    )
+
+
 async def get_user_managed_units(
     db: AsyncSession,
     user_id: int
