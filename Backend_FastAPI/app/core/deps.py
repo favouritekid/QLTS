@@ -1432,3 +1432,32 @@ async def get_lead_list_filter(
         requesting_user=current_user,
         is_forced_officer_filter=False
     )
+
+
+async def get_kpi_target_for_admin(
+    target_id: int = Path(..., description="ID of the KPI Target"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(require_admin_or_manager),
+) -> models.KpiTarget:
+    """
+    Fetch KPI Target with admin/manager authorization.
+    
+    This dependency replaces direct db.get() in router per
+    AUTHORIZATION_GUIDELINES.md Section 4 (IDOR Protection).
+    
+    Args:
+        target_id: ID of the KPI Target to fetch
+        
+    Returns:
+        KpiTarget if found and active
+        
+    Raises:
+        ResourceNotFoundError: If target not found or inactive
+    """
+    from ..models.config import KpiTarget
+    
+    target = await db.get(KpiTarget, target_id)
+    if not target or not target.is_active:
+        raise ResourceNotFoundError(detail="KPI Target not found")
+    return target
+

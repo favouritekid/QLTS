@@ -326,9 +326,9 @@ class SyncYTDResponse(BaseModel):
     summary="Sync YTD for a specific target"
 )
 async def sync_target_ytd(
-    target_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, AdminOrManagerDep],  # ✅ Security Gateway
+    # ✅ Phase 2.3: Use dependency for IDOR protection (replaces db.get)
+    target: Annotated[models.KpiTarget, Depends(deps.get_kpi_target_for_admin)],
 ):
     """
     Manually trigger YTD sync for a specific annual target.
@@ -337,13 +337,8 @@ async def sync_target_ytd(
     - PipelineStage.is_final_stage == True
     - ConsultationStatus.outcome_type == 'positive'
     
-    Admin/Manager only.
+    Admin/Manager only (enforced by get_kpi_target_for_admin dependency).
     """
-    
-    # Get target record
-    target = await db.get(models.KpiTarget, target_id)
-    if not target or not target.is_active:
-        raise HTTPException(status_code=404, detail="Target not found")
     
     # Sync YTD for the officer
     if target.officer_id:
