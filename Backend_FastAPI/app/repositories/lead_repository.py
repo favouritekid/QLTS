@@ -819,6 +819,40 @@ class LeadRepository(BaseRepository[models.Lead]):
         result = await self.db.execute(stmt)
         return result.scalars().all()
 
+    async def bulk_update_pipeline_stage(
+        self,
+        lead_ids: List[int],
+        pipeline_stage_id: str
+    ) -> int:
+        """
+        Bulk update pipeline_stage_id for multiple leads.
+        
+        ✅ PHASE 8: Replaces db.get() in router bulk_update_stage.
+        Uses UPDATE ... WHERE id IN (...) for efficiency.
+        
+        Args:
+            lead_ids: List of Lead IDs to update
+            pipeline_stage_id: New pipeline stage ID
+            
+        Returns:
+            Number of leads updated
+        """
+        from sqlalchemy import update
+        
+        if not lead_ids:
+            return 0
+            
+        stmt = (
+            update(models.Lead)
+            .where(
+                models.Lead.id.in_(lead_ids),
+                models.Lead.deleted_at.is_(None)
+            )
+            .values(pipeline_stage_id=pipeline_stage_id)
+        )
+        result = await self.db.execute(stmt)
+        return result.rowcount
+
     # =========================================================================
     # CONSULTATION METHODS (for response serialization)
     # =========================================================================

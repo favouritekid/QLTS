@@ -966,24 +966,22 @@ async def bulk_update_leads_stage(
 ):
     """
     (Admin only) Bulk update pipeline stage for multiple leads.
+    
+    ✅ PHASE 8: Uses lead_service.bulk_update_pipeline_stage (Repository pattern).
 
     **Request Body:**
     ```json
     {"lead_ids": [1, 2, 3], "pipeline_stage_id": "stage_2"}
     ```
     """
-    updated_count = 0
-    for lead_id in bulk_data.lead_ids:
-        try:
-            lead = await db.get(models.Lead, lead_id)
-            if lead and not lead.deleted_at:
-                lead.pipeline_stage_id = bulk_data.pipeline_stage_id
-                updated_count += 1
-        except Exception as e:
-            log.warning(f"Failed to update lead {lead_id}: {e}")
-
+    result = await lead_service.bulk_update_pipeline_stage(
+        db,
+        lead_ids=bulk_data.lead_ids,
+        pipeline_stage_id=bulk_data.pipeline_stage_id,
+        updated_by=current_user
+    )
     await db.commit()
-    return {"message": f"Updated {updated_count} leads", "updated_count": updated_count}
+    return result
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
