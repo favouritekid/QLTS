@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, models, schemas
-from app.core.deps import CasbinAuth  # Phase 2.2
+from app.core.deps import CasbinAuth, get_notification_template_for_admin  # Phase 2.2
 from ..services import notification_template_service
 from ..utils.exceptions import BadRequest, PermissionDeniedError, ResourceNotFoundError
 
@@ -94,7 +94,7 @@ async def list_notification_templates(
 @router.get("/{template_id}", response_model=schemas.NotificationTemplate)
 async def get_notification_template(
     request: Request,
-    template: models.NotificationTemplate = Depends(deps.get_notification_template_for_admin),
+    template: models.NotificationTemplate = Depends(get_notification_template_for_admin),
     current_admin: models.User = CasbinAuth,
 ):
     """
@@ -163,7 +163,7 @@ async def create_notification_template(
 async def update_notification_template(
     request: Request,
     template_update: schemas.NotificationTemplateUpdate,
-    template: models.NotificationTemplate = Depends(deps.get_notification_template_for_admin),
+    template: models.NotificationTemplate = Depends(get_notification_template_for_admin),
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = CasbinAuth,
 ):
@@ -202,7 +202,7 @@ async def update_notification_template(
 @router.delete("/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_notification_template(
     request: Request,
-    template: models.NotificationTemplate = Depends(deps.get_notification_template_for_admin),
+    template: models.NotificationTemplate = Depends(get_notification_template_for_admin),
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = CasbinAuth,
 ):

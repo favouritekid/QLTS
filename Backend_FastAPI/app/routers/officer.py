@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models, schemas
 from ..database import get_db
-from ..core.deps import CasbinAuth, OfficerDashboardScope  # ✅ Phase 2.2
+from ..core.deps import CasbinAuth, OfficerDashboardScope, get_officer_dashboard_scope  # ✅ Phase 2.2
 from ..services import officer_service
 from app.core.rate_limits import limiter, RateLimits
 
@@ -76,7 +76,7 @@ async def get_enhanced_dashboard(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
     # ✅ Phase 6: Security Gateway handles ALL role/scope validation
-    scope_params: Annotated[OfficerDashboardScope, Depends(deps.get_officer_dashboard_scope)],
+    scope_params: Annotated[OfficerDashboardScope, Depends(get_officer_dashboard_scope)],
     start_date: str = None,  # ISO format YYYY-MM-DD
     end_date: str = None,    # ISO format YYYY-MM-DD
 ):
@@ -135,7 +135,7 @@ async def get_enhanced_dashboard(
 async def get_leaderboard(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, PermissionDep]
+    current_user: Annotated[models.User, CasbinAuth]
 ):
     """
     Weekly leaderboard showing top officers by consultations.
@@ -163,7 +163,7 @@ async def get_leaderboard(
 async def get_team_stats(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, PermissionDep],
+    current_user: Annotated[models.User, CasbinAuth],
     days: int = 30,
     start_date: str = None, # ISO format YYYY-MM-DD
     end_date: str = None,   # ISO format YYYY-MM-DD
@@ -209,7 +209,7 @@ async def get_team_stats(
 async def get_upcoming_activities(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, PermissionDep],
+    current_user: Annotated[models.User, CasbinAuth],
     month: int = None,
     year: int = None
 ):
@@ -249,7 +249,7 @@ async def get_upcoming_activities(
 async def get_recommendations(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, PermissionDep],
+    current_user: Annotated[models.User, CasbinAuth],
     limit: int = 5,
 ):
     """

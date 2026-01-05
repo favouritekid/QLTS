@@ -14,8 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
 from .. import database, models, schemas
-from ..core import deps  # Keep for get_application_for_user
-from ..core.deps import CasbinAuth  # ✅ Phase 2.2: Use standard alias
+from ..core.deps import CasbinAuth, get_application_for_user  # ✅ Phase 2.2
 from ..services import application_service
 from ..services.notification_dispatcher import dispatch  # ✅ NOTIFICATION 2.0
 from ..core.events import SystemEvents  # ✅ NOTIFICATION 2.0
@@ -85,7 +84,7 @@ async def create_application_for_lead(
 )
 async def get_application(
     request: Request,
-    application: models.Application = Depends(deps.get_application_for_user),
+    application: models.Application = Depends(get_application_for_user),
 ):
     """
     Lấy thông tin chi tiết của Application theo ID.
@@ -120,7 +119,7 @@ async def get_application(
 async def update_application(
     request: Request,
     update_data: schemas.ApplicationUpdate,
-    application: models.Application = Depends(deps.get_application_for_user),
+    application: models.Application = Depends(get_application_for_user),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
 ):
@@ -177,7 +176,7 @@ async def update_application(
 )
 async def delete_application(
     request: Request,
-    application: models.Application = Depends(deps.get_application_for_user),
+    application: models.Application = Depends(get_application_for_user),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
 ):

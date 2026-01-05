@@ -25,6 +25,7 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models, schemas
+from app.core import deps  # For get_organizational_unit_for_user, get_user_managed_units
 from app.core.deps import CasbinAuth  # Phase 2.2
 from app.core.constants import UserRole
 from app.services import config_service

@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
 from .. import database, models, schemas
-from app.core.deps import CasbinAuth  # Phase 2.2
+from app.core.deps import CasbinAuth, get_notification_rule_for_admin  # Phase 2.2
 from ..core.event_metadata import get_all_events_metadata
 from ..services import notification_rule_crud_service
 from ..utils.exceptions import BadRequest
@@ -188,7 +188,7 @@ async def list_notification_rules(
 @router.get("/{rule_id}", response_model=schemas.NotificationRule)
 async def get_notification_rule(
     request: Request,
-    rule: models.NotificationRule = Depends(deps.get_notification_rule_for_admin),
+    rule: models.NotificationRule = Depends(get_notification_rule_for_admin),
     current_admin: models.User = CasbinAuth,
 ):
     """
@@ -257,7 +257,7 @@ async def create_notification_rule(
 async def update_notification_rule(
     request: Request,
     rule_update: schemas.NotificationRuleUpdate,
-    rule: models.NotificationRule = Depends(deps.get_notification_rule_for_admin),
+    rule: models.NotificationRule = Depends(get_notification_rule_for_admin),
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = CasbinAuth,
 ):
@@ -289,7 +289,7 @@ async def update_notification_rule(
 @router.patch("/{rule_id}/toggle", response_model=schemas.NotificationRule)
 async def toggle_notification_rule(
     request: Request,
-    rule: models.NotificationRule = Depends(deps.get_notification_rule_for_admin),
+    rule: models.NotificationRule = Depends(get_notification_rule_for_admin),
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = CasbinAuth,
 ):
@@ -318,7 +318,7 @@ async def toggle_notification_rule(
 @router.delete("/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_notification_rule(
     request: Request,
-    rule: models.NotificationRule = Depends(deps.get_notification_rule_for_admin),
+    rule: models.NotificationRule = Depends(get_notification_rule_for_admin),
     db: AsyncSession = Depends(database.get_db),
     current_admin: models.User = CasbinAuth,
 ):

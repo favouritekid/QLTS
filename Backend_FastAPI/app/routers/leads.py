@@ -9,8 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
 from .. import database, models, schemas
-from ..core.deps import CasbinAuth, LeadListFilter  # ✅ Phase 2.2: Use standard alias
-from ..core import deps  # Keep for LeadAccessDep
+from ..core.deps import CasbinAuth, LeadListFilter, get_lead_for_user, get_lead_list_filter  # ✅ Phase 2.2
 from ..services import distribution_service, insights_service, lead_service
 from ..services.notification_dispatcher import dispatch  # ✅ NOTIFICATION 2.0
 from ..core.events import SystemEvents  # ✅ NOTIFICATION 2.0
@@ -21,7 +20,7 @@ log = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["Leads"])
 
-LeadAccessDep = Depends(deps.get_lead_for_user)
+LeadAccessDep = Depends(get_lead_for_user)
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
@@ -135,7 +134,7 @@ async def get_all_leads(
         None, description="Filter by assigned officer ID(s) (comma-separated, e.g. '1,2,3'). Note: Officers can only see their own leads."
     ),
     # ✅ Phase 2: Inject LeadListFilter for role-based filtering
-    lead_filter: LeadListFilter = Depends(deps.get_lead_list_filter),
+    lead_filter: LeadListFilter = Depends(get_lead_list_filter),
     offering_id: Optional[str] = Query(
         None, description="Filter by program offering ID(s) (comma-separated, e.g. '1,2,3')"
     ),

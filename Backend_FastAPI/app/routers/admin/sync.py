@@ -32,7 +32,7 @@ router = APIRouter(prefix="/sync", tags=["Admin - Sync (Aliases)"])
 async def get_sync_status_alias(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep
+    current_admin: models.User = CasbinAuth
 ):
     """
     (Admin only) Alias for /api/admin/users/sync/status

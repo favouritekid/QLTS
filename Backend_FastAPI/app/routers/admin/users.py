@@ -451,7 +451,7 @@ async def bulk_user_action(
 async def get_sync_status(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep
+    current_admin: models.User = CasbinAuth
 ):
     """
     (Admin only) Kiểm tra tình trạng đồng bộ giữa DB (user.role) và Casbin (grouping policies).

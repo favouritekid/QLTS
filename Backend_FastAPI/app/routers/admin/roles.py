@@ -134,7 +134,7 @@ async def emit_policy_update(operation: str, data: dict):
 @limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
 @router.get("/policies", response_model=List[List[str]])
 async def get_all_policies(
-    request: Request, current_admin: models.User = PermissionDep
+    request: Request, current_admin: models.User = CasbinAuth
 ):
     """(Admin only) Lấy tất cả các chính sách (policies) hiện có."""
     # SỬA: Type hint thành AsyncEnforcer
