@@ -1,5 +1,5 @@
 from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models, schemas
@@ -10,56 +10,57 @@ from app.core.rate_limits import limiter, RateLimits
 
 router = APIRouter(prefix="/officer", tags=["Officer Dashboard"])
 
+
+# =============================================================================
+# PHASE 7: Remove generic except Exception per MASTER_ARCHITECTURE
+# Global exception handlers in middleware/exception_handlers.py handle all errors
+# =============================================================================
+
+
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get(
     "/stats",
-    response_model=schemas.OfficerDashboardStats, # ✅ Validate Output
+    response_model=schemas.OfficerDashboardStats,
     summary="Get officer dashboard statistics"
 )
 async def get_officer_stats(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
-    # ✅ Auto-check quyền truy cập vào URL /api/officer/stats
     current_user: Annotated[models.User, CasbinAuth]
 ):
-    try:
-        stats = await officer_service.get_officer_dashboard_stats(
-            db=db, officer_id=current_user.id
-        )
-        return stats
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    """Get basic stats for the current officer's dashboard."""
+    stats = await officer_service.get_officer_dashboard_stats(
+        db=db, officer_id=current_user.id
+    )
+    return stats
+
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post(
     "/availability",
-    response_model=schemas.AvailabilityResponse, # ✅ Validate Output
+    response_model=schemas.AvailabilityResponse,
     summary="Update availability status"
 )
 async def update_availability(
     request: Request,
-    status_data: schemas.AvailabilityUpdate, # ✅ Validate Input bằng Pydantic
+    status_data: schemas.AvailabilityUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[models.User, CasbinAuth]
 ):
-    try:
-        updated_user, callback = await officer_service.update_officer_availability(
-            db=db,
-            officer_id=current_user.id,
-            availability_status=status_data.availability_status
-        )
-        await db.commit()
-        await callback()
+    """Update officer's availability status."""
+    updated_user, callback = await officer_service.update_officer_availability(
+        db=db,
+        officer_id=current_user.id,
+        availability_status=status_data.availability_status
+    )
+    await db.commit()
+    await callback()
 
-        return {
-            "status": "success",
-            "availability_status": updated_user.availability_status,
-            "user_id": updated_user.id
-        }
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "status": "success",
+        "availability_status": updated_user.availability_status,
+        "user_id": updated_user.id
+    }
 
 
 # =============================================================================
@@ -75,10 +76,9 @@ async def update_availability(
 async def get_enhanced_dashboard(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
-    # ✅ Phase 6: Security Gateway handles ALL role/scope validation
     scope_params: Annotated[OfficerDashboardScope, Depends(get_officer_dashboard_scope)],
-    start_date: str = None,  # ISO format YYYY-MM-DD
-    end_date: str = None,    # ISO format YYYY-MM-DD
+    start_date: str = None,
+    end_date: str = None,
 ):
     """
     Enhanced officer dashboard with role-based scoping.
@@ -92,34 +92,25 @@ async def get_enhanced_dashboard(
     All role-based access control is handled by deps.get_officer_dashboard_scope.
     Router receives pre-validated parameters.
     """
-    # ==========================================================================
-    # Fetch dashboard data based on validated scope
-    # ==========================================================================
-    try:
-        if scope_params.scope == "personal":
-            # Personal dashboard: single officer
-            target_id = scope_params.officer_id if scope_params.officer_id else scope_params.requesting_user.id
-            stats = await officer_service.get_enhanced_dashboard_stats(
-                db=db, 
-                officer_id=target_id,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        else:
-            # Team or Organization scope: aggregated dashboard
-            stats = await officer_service.get_aggregated_dashboard_stats(
-                db=db,
-                scope=scope_params.scope,
-                requesting_user=scope_params.requesting_user,
-                officer_id=scope_params.officer_id,
-                unit_id=scope_params.unit_id,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        return stats
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
+    if scope_params.scope == "personal":
+        target_id = scope_params.officer_id if scope_params.officer_id else scope_params.requesting_user.id
+        stats = await officer_service.get_enhanced_dashboard_stats(
+            db=db, 
+            officer_id=target_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    else:
+        stats = await officer_service.get_aggregated_dashboard_stats(
+            db=db,
+            scope=scope_params.scope,
+            requesting_user=scope_params.requesting_user,
+            officer_id=scope_params.officer_id,
+            unit_id=scope_params.unit_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    return stats
 
 
 # =============================================================================
@@ -137,17 +128,11 @@ async def get_leaderboard(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[models.User, CasbinAuth]
 ):
-    """
-    Weekly leaderboard showing top officers by consultations.
-    Includes current user's rank even if not in top 5.
-    """
-    try:
-        leaderboard = await officer_service.get_weekly_leaderboard(
-            db=db, officer_id=current_user.id
-        )
-        return leaderboard
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    """Weekly leaderboard showing top officers by consultations."""
+    leaderboard = await officer_service.get_weekly_leaderboard(
+        db=db, officer_id=current_user.id
+    )
+    return leaderboard
 
 
 # =============================================================================
@@ -165,13 +150,10 @@ async def get_team_stats(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[models.User, CasbinAuth],
     days: int = 30,
-    start_date: str = None, # ISO format YYYY-MM-DD
-    end_date: str = None,   # ISO format YYYY-MM-DD
+    start_date: str = None,
+    end_date: str = None,
 ):
-    """
-    Get team average statistics for performance comparison.
-    Shows team averages for consultations and conversions.
-    """
+    """Get team average statistics for performance comparison."""
     from datetime import date
     
     parsed_start = None
@@ -182,19 +164,16 @@ async def get_team_stats(
             parsed_start = date.fromisoformat(start_date)
             parsed_end = date.fromisoformat(end_date)
         except ValueError:
-            pass # Fallback to days param
+            pass  # Fallback to days param
             
-    try:
-        stats = await officer_service.get_team_stats(
-            db=db, 
-            officer_id=current_user.id, 
-            days=days,
-            start_date=parsed_start,
-            end_date=parsed_end
-        )
-        return stats
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    stats = await officer_service.get_team_stats(
+        db=db, 
+        officer_id=current_user.id, 
+        days=days,
+        start_date=parsed_start,
+        end_date=parsed_end
+    )
+    return stats
 
 
 # =============================================================================
@@ -213,28 +192,21 @@ async def get_upcoming_activities(
     month: int = None,
     year: int = None
 ):
-    """
-    Get leads with scheduled follow-ups (next_activity_at) for the given month.
-    Returns activities list and dates with activities for calendar highlighting.
-    """
+    """Get leads with scheduled follow-ups for the given month."""
     from datetime import datetime
     
-    # Default to current month if not specified
     if month is None or year is None:
         now = datetime.now()
         month = month or now.month
         year = year or now.year
     
-    try:
-        result = await officer_service.get_upcoming_activities(
-            db=db,
-            officer_id=current_user.id,
-            month=month,
-            year=year
-        )
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    result = await officer_service.get_upcoming_activities(
+        db=db,
+        officer_id=current_user.id,
+        month=month,
+        year=year
+    )
+    return result
 
 
 # =============================================================================
@@ -266,12 +238,9 @@ async def get_recommendations(
     """
     from app.services.recommendation_engine import get_officer_recommendations
     
-    try:
-        recommendations = await get_officer_recommendations(
-            db=db,
-            officer_id=current_user.id,
-            limit=limit,
-        )
-        return {"recommendations": recommendations, "count": len(recommendations)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    recommendations = await get_officer_recommendations(
+        db=db,
+        officer_id=current_user.id,
+        limit=limit,
+    )
+    return {"recommendations": recommendations, "count": len(recommendations)}
