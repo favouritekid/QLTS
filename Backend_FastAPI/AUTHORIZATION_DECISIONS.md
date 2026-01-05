@@ -170,6 +170,126 @@ role:admin
 
 ---
 
+## Decision 10: Admission State ≠ Authorization
+
+| Field | Value |
+|-------|-------|
+| **Quyết định** | Casbin chỉ quyết định CÓ ĐƯỢC GỌI API không, KHÔNG quyết định state transition |
+| **Lý do** | Admission state là business logic, phụ thuộc thời gian, dữ liệu, và nghiệp vụ |
+| **Hệ quả** | State transition được enforce ở Service layer (AdmissionStateMachine) |
+| **Ngày** | 2026-01-05 |
+| **Người quyết định** | Architecture Team |
+
+**Phân tách trách nhiệm:**
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Request Flow                           │
+├─────────────────────────────────────────────────────────────┤
+│  1. Casbin: "User có quyền gọi POST /admissions/submit?"    │
+│     → YES/NO (chỉ check role + endpoint)                    │
+│                                                             │
+│  2. Service: "Profile này CÓ THỂ submit không?"             │
+│     → Check state machine (DRAFT → SUBMITTED)               │
+│     → Check business rules (documents đủ? deadline?)        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Anti-pattern cần tránh:**
+```python
+# ❌ SAI - Nhét state vào Casbin
+enforcer.add_policy("role:officer", "/admissions/*/submit", "POST", "state:draft")
+
+# ✅ ĐÚNG - Casbin check role, Service check state
+# Router: CasbinAuth (role check)
+# Service: state_machine.can_transition(profile, "SUBMITTED")
+```
+
+---
+
+## Decision 11: OVERRIDDEN Là Trạng Thái Ngoại Lệ Có Audit
+
+| Field | Value |
+|-------|-------|
+| **Quyết định** | OVERRIDDEN chỉ dùng cho trường hợp phá rule có chủ đích |
+| **Constraint** | Admin-only, bắt buộc reason, audit log |
+| **Rủi ro** | Lạm dụng override → bypass toàn bộ business rule |
+| **Mitigation** | 1. Log mọi override action<br>2. Review định kỳ override rate<br>3. Alert nếu override > 5% admissions |
+| **Ngày** | 2026-01-05 |
+| **Người quyết định** | Business + Security Team |
+| **Review trigger** | Nếu override rate > 5% trong 1 tháng |
+
+**Use cases hợp lệ:**
+- Hồ sơ đặc biệt được ban giám đốc approve
+- Trường hợp khẩn cấp cần xử lý ngoài quy trình
+- Fix lỗi dữ liệu do bug hệ thống
+
+**Use cases KHÔNG hợp lệ:**
+- Bỏ qua bước kiểm tra vì "gấp"
+- Tạo admission không qua flow chuẩn
+- Bypass document requirements vì "khách VIP"
+
+---
+
+## Decision 12: Policy Change Không Áp Dụng Retroactively
+
+| Field | Value |
+|-------|-------|
+| **Quyết định** | Policy change chỉ áp dụng cho request/data MỚI, không thay đổi kết quả đã xử lý |
+| **Lý do** | 1. Tránh thay đổi kết quả đã hoàn thành<br>2. Đảm bảo audit trail chính xác<br>3. Tránh drama "sao hôm qua được mà hôm nay không?" |
+| **Exception** | Admin override có audit trail rõ ràng |
+| **Ngày** | 2026-01-05 |
+| **Người quyết định** | Architecture Team |
+| **Review trigger** | Khi có major policy change giữa mùa tuyển sinh |
+
+**Ví dụ thực tế:**
+
+| Scenario | Cách xử lý |
+|----------|-----------|
+| Thêm permission mới cho Manager | Manager có thể dùng ngay cho request mới |
+| Bỏ permission của Officer | Officer không gọi được API đó nữa, nhưng data cũ giữ nguyên |
+| Đổi admission rule giữa mùa | Profile cũ xử lý theo rule cũ, profile mới theo rule mới |
+
+**Anti-pattern:**
+```python
+# ❌ SAI - Apply policy change cho dữ liệu cũ
+async def apply_new_policy_retroactively():
+    all_profiles = await get_all_profiles()
+    for profile in all_profiles:
+        profile.status = recalculate_with_new_rules(profile)  # Drama!
+
+# ✅ ĐÚNG - Chỉ apply cho dữ liệu mới
+# New policy effective from: 2026-01-05
+# Profiles created before: use old rules
+# Profiles created after: use new rules
+```
+
+---
+
+## Decision 13: Audit Log Retention Policy
+
+| Field | Value |
+|-------|-------|
+| **Quyết định** | Authorization audit logs giữ tối thiểu 2 năm |
+| **Lý do** | 1. Compliance requirement<br>2. Security investigation<br>3. Legal disputes có thể kéo dài |
+| **Scope** | Tất cả: login, permission change, override, sensitive actions |
+| **Access** | Admin-only, với audit cho việc xem log |
+| **Ngày** | 2026-01-05 |
+| **Người quyết định** | Security + Legal Team |
+
+**Logs cần giữ:**
+- Login/logout events
+- Permission denied events (potential attacks)
+- Policy changes (who, when, what)
+- Override actions (with reason)
+- Sensitive data access (PII)
+
+**Storage:**
+- Hot storage (searchable): 90 days
+- Cold storage (archive): 2 years
+- Deletion: After 2 years, with deletion log
+
+---
+
 ## Template Cho Decision Mới
 
 ```markdown
@@ -195,6 +315,7 @@ role:admin
 | 2026-01-05 | 1-9 | Initial decisions documented | Security Audit |
 | 2026-01-05 | 7 | Implemented via migration - manager wildcard removed | Phase 3 |
 | 2026-01-05 | 9 | Implemented via migration `p3a1b2c3d4e5` | Phase 3 |
+| 2026-01-05 | 10-13 | Added state/auth separation, override, retroactive, audit retention | Senior Review |
 
 ---
 
