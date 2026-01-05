@@ -48,10 +48,12 @@ __all__ = [
     "get_officer_dashboard_scope",
     "get_criteria_access",
     "get_config_filter",
+    "get_lead_list_filter",  # Phase 2
     "verify_user_management_permission",
     
     # Data Classes
     "OfficerDashboardScope",
+    "LeadListFilter",  # Phase 2
 ]
 
 # ✅ SECURITY FIX: Keep OAuth2 scheme for backwards compatibility, but make it optional
@@ -1355,3 +1357,78 @@ DistributionRuleAccessDep = Depends(get_distribution_rule_for_user)
 OrgUnitAccessDep = Depends(get_organizational_unit_for_user)
 
 
+# =============================================================================
+# PHASE 2: CONTEXT FILTERING DEPENDENCIES
+# =============================================================================
+
+
+class LeadListFilter:
+    """
+    Data class containing role-enforced filter parameters for lead listing.
+    
+    Returned by get_lead_list_filter dependency to provide pre-validated,
+    role-enforced filtering parameters per AUTHORIZATION_GUIDELINES.md Section 5.
+    """
+    def __init__(
+        self,
+        assigned_officer_id: str | None,
+        unit_id: int | None,
+        requesting_user: models.User,
+        is_forced_officer_filter: bool = False
+    ):
+        self.assigned_officer_id = assigned_officer_id
+        self.unit_id = unit_id
+        self.requesting_user = requesting_user
+        self.is_forced_officer_filter = is_forced_officer_filter
+
+
+async def get_lead_list_filter(
+    assigned_officer_id: str | None = None,
+    unit_id: int | None = None,
+    current_user: models.User = Depends(get_current_active_user),
+) -> LeadListFilter:
+    """
+    Security Gateway for Lead listing with role-based filtering.
+    
+    Enforces role-based visibility rules:
+    - Officers: Can ONLY see their assigned leads (forced filter)
+    - Managers: Can filter by officers in their unit
+    - Admins: Full access to all filters
+    
+    This dependency REPLACES inline role checks in router per
+    AUTHORIZATION_GUIDELINES.md Section 5 (Context Filtering).
+    
+    Args:
+        assigned_officer_id: Optional officer filter (ignored for non-admins)
+        unit_id: Optional unit filter
+        
+    Returns:
+        LeadListFilter with validated/sanitized parameters
+    """
+    user_role = current_user.role
+    
+    # === OFFICER: Force their own ID, ignore any passed filter ===
+    if user_role == UserRole.OFFICER:
+        return LeadListFilter(
+            assigned_officer_id=str(current_user.id),  # Force own ID
+            unit_id=None,  # Officers cannot filter by unit
+            requesting_user=current_user,
+            is_forced_officer_filter=True
+        )
+    
+    # === MANAGER: Can filter by officers, force own unit ===
+    if user_role == UserRole.MANAGER:
+        return LeadListFilter(
+            assigned_officer_id=assigned_officer_id,
+            unit_id=current_user.unit_id,  # Force manager's unit
+            requesting_user=current_user,
+            is_forced_officer_filter=False
+        )
+    
+    # === ADMIN: Full access ===
+    return LeadListFilter(
+        assigned_officer_id=assigned_officer_id,
+        unit_id=unit_id,
+        requesting_user=current_user,
+        is_forced_officer_filter=False
+    )

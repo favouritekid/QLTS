@@ -23,6 +23,9 @@ router = APIRouter(tags=["Leads"])
 PermissionDep = Depends(deps.check_permission)
 LeadAccessDep = Depends(deps.get_lead_for_user)
 
+# ✅ Phase 2: Import for type hints
+from ..core.deps import LeadListFilter
+
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post("", response_model=schemas.Lead, status_code=status.HTTP_201_CREATED)
@@ -132,9 +135,10 @@ async def get_all_leads(
         None, description="Filter by status (comma-separated)"
     ),
     assigned_officer_id: Optional[str] = Query(
-        None, description="Filter by assigned officer ID(s) (comma-separated, e.g. '1,2,3')"
+        None, description="Filter by assigned officer ID(s) (comma-separated, e.g. '1,2,3'). Note: Officers can only see their own leads."
     ),
-    unit_id: Optional[int] = Query(None, description="Filter by organization unit ID"),
+    # ✅ Phase 2: Inject LeadListFilter for role-based filtering
+    lead_filter: LeadListFilter = Depends(deps.get_lead_list_filter),
     offering_id: Optional[str] = Query(
         None, description="Filter by program offering ID(s) (comma-separated, e.g. '1,2,3')"
     ),
@@ -171,12 +175,10 @@ async def get_all_leads(
     """
     skip = (page - 1) * page_size
 
-    # === ROLE-BASED FILTERING ===
-    # Officers can only see their assigned leads
-    effective_officer_id = assigned_officer_id
-    if current_user.role == UserRole.OFFICER:
-        # Force filter by current officer, ignore any passed assigned_officer_id
-        effective_officer_id = str(current_user.id)
+    # ✅ Phase 2: Use role-enforced filter from dependency
+    # Officers are forced to see only their leads, managers see only their unit
+    effective_officer_id = lead_filter.assigned_officer_id
+    effective_unit_id = lead_filter.unit_id
 
     total, leads = await lead_service.get_leads(
         db,
@@ -184,8 +186,8 @@ async def get_all_leads(
         limit=page_size,
         # === ⭐️ TRUYỀN THAM SỐ VÀO SERVICE ===
         status=status,
-        assigned_officer_id=effective_officer_id,  # Now a string (comma-separated for multi)
-        unit_id=unit_id,
+        assigned_officer_id=effective_officer_id,  # Now role-enforced via dependency
+        unit_id=effective_unit_id,  # ✅ Phase 2: Also role-enforced
         offering_id=offering_id,  # Now a string (comma-separated for multi)
         source=source,
         search=search,
