@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, models, schemas
-from ..core import deps
+from ..core.deps import CasbinAuth  # ✅ Phase 2.2: Use standard alias
 from ..core.event_groups import (
     NotificationEventGroup,
     NotificationChannel,
@@ -26,7 +26,6 @@ from ..services import notification_preference_service
 
 log = structlog.get_logger(__name__)
 router = APIRouter(tags=["Notification Preferences"])
-PermissionDep = Depends(deps.check_permission)
 
 
 # =============================================================================
@@ -72,7 +71,7 @@ class UpdateGroupPreferenceRequest(BaseModel):
 async def get_notification_preferences(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """Get user's notification preferences."""
     # ✅ TRANSACTION FIX: Unpack tuple from service
@@ -96,7 +95,7 @@ async def update_notification_preferences(
     request: Request,
     preference_update: schemas.NotificationPreferenceUpdate,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """Update user's notification preferences."""
     # ✅ TRANSACTION FIX: Unpack tuple from service
@@ -129,7 +128,7 @@ async def update_notification_preferences(
 async def get_event_group_preferences(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Get user's notification preferences organized by event groups.
@@ -167,7 +166,7 @@ async def update_event_group_preference(
     request: Request,
     body: UpdateGroupPreferenceRequest,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Update a single event group/channel preference.
@@ -236,7 +235,7 @@ async def update_event_group_preference(
 @router.get("/event-groups/metadata", response_model=List[EventGroupInfo])
 async def get_event_groups_metadata(
     request: Request,
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Get metadata for all available event groups.

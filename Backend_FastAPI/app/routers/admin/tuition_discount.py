@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models, schemas
-from app.core import deps
+from app.core.deps import CasbinAuth  # Phase 2.2
 from app.services import tuition_discount_service
 
 log = structlog.get_logger(__name__)
@@ -22,8 +22,6 @@ log = structlog.get_logger(__name__)
 # Router definition
 router = APIRouter(tags=["Admin - Tuition Discount Policy"])
 
-# Permission dependency
-PermissionDep = Depends(deps.check_permission)
 
 
 # =============================================================================
@@ -43,7 +41,7 @@ async def list_policies(
     is_active: Optional[bool] = Query(None, description="Lọc theo trạng thái"),
     include_expired: bool = Query(False, description="Bao gồm chính sách hết hạn"),
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Lấy danh sách chính sách ưu đãi học phí với phân trang.
@@ -95,7 +93,7 @@ async def get_policy(
     request: Request,
     policy_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """Lấy chi tiết một chính sách ưu đãi theo ID."""
     policy = await tuition_discount_service.get_policy_by_id(db, policy_id)
@@ -126,7 +124,7 @@ async def create_policy(
     request: Request,
     policy_data: schemas.TuitionDiscountPolicyCreate,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Tạo chính sách ưu đãi học phí mới.
@@ -183,7 +181,7 @@ async def update_policy(
     policy_id: int,
     policy_data: schemas.TuitionDiscountPolicyUpdate,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """Cập nhật thông tin chính sách ưu đãi."""
     policy, callback = await tuition_discount_service.update_policy(
@@ -222,7 +220,7 @@ async def delete_policy(
     policy_id: int,
     hard_delete: bool = Query(False, description="Xóa vĩnh viễn (mặc định: soft delete)"),
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Xóa chính sách ưu đãi.
@@ -258,7 +256,7 @@ async def calculate_discount(
     request: Request,  # Required for rate limiter
     body: schemas.DiscountCalculationRequest,  # Renamed from 'request' to avoid conflict
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Tính toán ưu đãi học phí cho sinh viên dựa trên các điều kiện.

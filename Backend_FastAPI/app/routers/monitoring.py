@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models
 from app.celery_utils import celery_app
-from app.core import deps
+from app.core.deps import CasbinAuth  # ✅ Phase 2.2: Use standard alias
 from app.database import redis_client, safe_redis_ping, safe_redis_lrange
 from app.services.notification_service import INBOX_CACHE_KEY_PREFIX
 from app.socket_manager import sio
@@ -29,9 +29,6 @@ from app.socket_manager import sio
 log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/monitoring", tags=["System Monitoring"])
-
-# Permission dependency - Admin only
-PermissionDep = Depends(deps.check_permission)
 
 
 # ============================================================================
@@ -43,7 +40,7 @@ PermissionDep = Depends(deps.check_permission)
 @router.get("/celery/workers")
 async def get_celery_workers(
     request: Request,
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Get information about active Celery workers.
@@ -101,7 +98,7 @@ async def get_celery_workers(
 @router.get("/celery/tasks")
 async def get_celery_tasks(
     request: Request,
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Get information about Celery tasks.
@@ -169,7 +166,7 @@ async def get_celery_tasks(
 @router.get("/celery/stats")
 async def get_celery_stats(
     request: Request,
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Get Celery statistics and configuration.
@@ -229,7 +226,7 @@ async def get_celery_stats(
 @router.get("/redis/info")
 async def get_redis_info(
     request: Request,
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Get Redis server information and statistics.
@@ -307,7 +304,7 @@ async def get_redis_info(
 @router.get("/socket/connections")
 async def get_socket_connections(
     request: Request,
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Get active Socket.IO connections.
@@ -359,7 +356,7 @@ async def get_socket_connections(
 async def get_notification_metrics(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     ✅ PHASE 1.3.1: Get comprehensive notification system metrics.
@@ -543,7 +540,7 @@ async def get_notification_metrics(
 async def get_system_overview(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Get comprehensive system health overview.

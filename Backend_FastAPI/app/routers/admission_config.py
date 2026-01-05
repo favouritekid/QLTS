@@ -13,7 +13,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_current_active_user
+from app.core.deps import get_current_active_user, get_criteria_access, get_config_filter, get_admission_config_repo
+from app.models.admission_config.criteria import AdmissionCriteria
 from app.database import get_db
 from app.models import User
 from app.repositories.admission_config_repository import AdmissionConfigRepository
@@ -41,12 +42,10 @@ router = APIRouter(prefix="/admission-config", tags=["Admission Config"])
 
 @router.get("/subjects", response_model=SubjectListResponse)
 async def get_subjects(
-    active_only: bool = True,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    active_only: bool = Depends(get_config_filter),
+    repo: AdmissionConfigRepository = Depends(get_admission_config_repo),
 ):
     """Get all subjects."""
-    repo = AdmissionConfigRepository(db)
     subjects = await repo.get_subjects(active_only=active_only)
     
     return SubjectListResponse(
@@ -58,11 +57,10 @@ async def get_subjects(
 @router.get("/subjects/{code}", response_model=SubjectResponse)
 async def get_subject_by_code(
     code: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    repo: AdmissionConfigRepository = Depends(get_admission_config_repo),
+    # current_user unused
 ):
     """Get subject by code."""
-    repo = AdmissionConfigRepository(db)
     subject = await repo.get_subject_by_code(code)
     
     if not subject:
@@ -80,12 +78,10 @@ async def get_subject_by_code(
 
 @router.get("/subject-groups", response_model=SubjectGroupListResponse)
 async def get_subject_groups(
-    active_only: bool = True,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    active_only: bool = Depends(get_config_filter),
+    repo: AdmissionConfigRepository = Depends(get_admission_config_repo),
 ):
     """Get all subject groups with their subjects."""
-    repo = AdmissionConfigRepository(db)
     groups = await repo.get_subject_groups(with_subjects=True, active_only=active_only)
     
     response_groups = []
@@ -116,11 +112,9 @@ async def get_subject_groups(
 @router.get("/subject-groups/{code}", response_model=SubjectGroupResponse)
 async def get_subject_group_by_code(
     code: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    repo: AdmissionConfigRepository = Depends(get_admission_config_repo),
 ):
     """Get subject group by code with subjects."""
-    repo = AdmissionConfigRepository(db)
     group = await repo.get_subject_group_by_code(code, with_subjects=True)
     
     if not group:
@@ -153,12 +147,10 @@ async def get_subject_group_by_code(
 
 @router.get("/methods", response_model=AdmissionMethodListResponse)
 async def get_admission_methods(
-    active_only: bool = True,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    active_only: bool = Depends(get_config_filter),
+    repo: AdmissionConfigRepository = Depends(get_admission_config_repo),
 ):
     """Get all admission methods."""
-    repo = AdmissionConfigRepository(db)
     methods = await repo.get_admission_methods(active_only=active_only)
     
     return AdmissionMethodListResponse(
@@ -170,11 +162,10 @@ async def get_admission_methods(
 @router.get("/methods/{code}", response_model=AdmissionMethodResponse)
 async def get_method_by_code(
     code: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    repo: AdmissionConfigRepository = Depends(get_admission_config_repo),
+    # current_user unused
 ):
     """Get admission method by code."""
-    repo = AdmissionConfigRepository(db)
     method = await repo.get_method_by_code(code)
     
     if not method:
@@ -193,12 +184,10 @@ async def get_method_by_code(
 @router.get("/criteria", response_model=AdmissionCriteriaListResponse)
 async def get_all_criteria(
     method_code: Optional[str] = None,
-    active_only: bool = True,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    active_only: bool = Depends(get_config_filter),
+    repo: AdmissionConfigRepository = Depends(get_admission_config_repo),
 ):
     """Get all admission criteria, optionally filtered by method."""
-    repo = AdmissionConfigRepository(db)
     
     if method_code:
         criteria_list = await repo.get_criteria_by_method(
@@ -245,19 +234,24 @@ async def get_all_criteria(
 
 @router.get("/criteria/{code}", response_model=AdmissionCriteriaResponse)
 async def get_criteria_by_code(
-    code: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    # ✅ FIX: Use Dependency Injection for Authz (Repo + Logic)
+    # This automatically handles fetching AND 404/403 (IDOR protection)
+    criteria: AdmissionCriteria = Depends(get_criteria_access),
 ):
-    """Get single criteria by code."""
-    repo = AdmissionConfigRepository(db)
-    c = await repo.get_criteria_by_code(code, load_level="with_groups")
+    """
+    Get single criteria by code.
     
-    if not c:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Criteria '{code}' not found"
-        )
+    Security:
+    - Public: Can only view ACTIVE criteria (enforced by Dependency)
+    - Admin: Can view INACTIVE (draft) criteria (enforced by Dependency)
+    """
+    # Criteria is already fetched and authorized by dependency
+    c = criteria
+    
+    # Reload with full groups (Dependency uses 'with_groups' by default but let's be safe)
+    # Actually dependency returns model directly. If we need more data we might need to lazy load or fetch again?
+    # The dependency loaded "with_groups" so we are good.
+
     
     allowed_groups = [m.subject_group.code for m in c.subject_group_mappings]
     
@@ -287,7 +281,7 @@ async def get_criteria_by_code(
 @router.post("/scoring/preview", response_model=ScoringPreviewResponse)
 async def preview_scoring(
     request: ScoringPreviewRequest,
-    db: AsyncSession = Depends(get_db),
+    repo: AdmissionConfigRepository = Depends(get_admission_config_repo),
     current_user: User = Depends(get_current_active_user),
 ):
     """
@@ -296,13 +290,29 @@ async def preview_scoring(
     Use this to test score calculation before profile submission.
     Returns pass/fail, scores, and transparency metadata.
     """
-    repo = AdmissionConfigRepository(db)
     
     # Get criteria (need full depth for scoring)
+    # ✅ FIX: Manual check because input is in Body (can't use Path dependency)
     criteria = await repo.get_criteria_by_code(
         request.criteria_code,
         load_level="full"
     )
+    
+    if not criteria:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Criteria '{request.criteria_code}' not found"
+        )
+
+    # Authorization Check: Viewing inactive data requires Admin/Manager role
+    if not criteria.is_active:
+        if current_user.role not in ["admin", "manager"]:
+             # IDOR Protection: Pretend it doesn't exist
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Criteria '{request.criteria_code}' not found"
+            )
+
     if not criteria:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
 from .. import database, models, schemas
-from ..core import deps
+from ..core.deps import CasbinAuth  # ✅ Phase 2.2: Use standard alias
 from ..services import admission_service
 from ..services.notification_dispatcher import dispatch
 from ..core.events import SystemEvents
@@ -37,9 +37,6 @@ from ..utils.exceptions import (
 log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/admissions", tags=["Admissions"])
-
-# Dependencies
-PermissionDep = Depends(deps.check_permission)
 
 
 # ==============================================================================
@@ -58,7 +55,7 @@ async def list_admission_profiles(
     skip: int = 0,
     limit: int = 50,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     List AdmissionProfiles accessible to current user.
@@ -75,25 +72,12 @@ async def list_admission_profiles(
     **Returns:**
     - List of AdmissionProfiles with relationships
     """
-    from app.repositories import AdmissionRepository
-    from app.core.constants import UserRole
-    
-    admission_repo = AdmissionRepository(db)
-    
-    # Build filters
-    filters = {}
-    if status:
-        filters["status"] = status
-    
-    # IDOR: Pass unit_id to repository for non-admin users (DB-level filter)
-    unit_filter = None if current_user.role == UserRole.ADMIN else current_user.unit_id
-    
-    # Get profiles using repository (IDOR filtering done at DB level)
-    profiles = await admission_repo.get_filtered(
+    profiles = await admission_service.get_profiles(
+        db=db,
         skip=skip,
-        limit=min(limit, 100),
-        unit_id=unit_filter,
-        **filters
+        limit=limit,
+        status_filter=status,
+        current_user=current_user,
     )
     
     return profiles
@@ -110,7 +94,7 @@ async def create_admission_profile(
     request: Request,
     data: schemas.AdmissionProfileCreate,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Create new AdmissionProfile for a Lead.
@@ -197,7 +181,7 @@ async def get_admission_profile(
     request: Request,
     profile_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Get AdmissionProfile by ID.
@@ -244,7 +228,7 @@ async def update_admission_profile(
     profile_id: int,
     data: schemas.AdmissionProfileUpdate,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Update AdmissionProfile (only when status='draft').
@@ -312,7 +296,7 @@ async def submit_admission_profile(
     request: Request,
     profile_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Submit AdmissionProfile for auto-evaluation.
@@ -403,7 +387,7 @@ async def upload_document(
     doc_code: str,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Upload a document for an admission profile.
@@ -441,7 +425,7 @@ async def enroll_student(
     request: Request,  # Required for rate limiter
     profile_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Enroll student (create Student + StudentDocument records).
@@ -535,7 +519,7 @@ async def delete_admission_profile(
     request: Request,
     profile_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Delete AdmissionProfile (only when status='draft').

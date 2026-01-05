@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, models, schemas
-from ..core import deps
+from app.core.deps import CasbinAuth  # Phase 2.2
 from ..services import notification_template_service
 from ..utils.exceptions import BadRequest, PermissionDeniedError, ResourceNotFoundError
 
@@ -24,7 +24,6 @@ log = structlog.get_logger(__name__)
 router = APIRouter(prefix="/notification-templates", tags=["Notification Templates (Admin)"])
 
 # Admin-only permission dependency
-AdminPermissionDep = Depends(deps.check_permission)
 
 
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
@@ -32,7 +31,7 @@ AdminPermissionDep = Depends(deps.check_permission)
 async def list_notification_templates(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = AdminPermissionDep,
+    current_admin: models.User = CasbinAuth,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     category: Optional[str] = Query(None, description="Filter by category"),
@@ -96,7 +95,7 @@ async def list_notification_templates(
 async def get_notification_template(
     request: Request,
     template: models.NotificationTemplate = Depends(deps.get_notification_template_for_admin),
-    current_admin: models.User = AdminPermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Get a specific notification template by ID.
@@ -120,7 +119,7 @@ async def create_notification_template(
     request: Request,
     template_data: schemas.NotificationTemplateCreate,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = AdminPermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Create a new notification template.
@@ -166,7 +165,7 @@ async def update_notification_template(
     template_update: schemas.NotificationTemplateUpdate,
     template: models.NotificationTemplate = Depends(deps.get_notification_template_for_admin),
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = AdminPermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Update an existing notification template.
@@ -205,7 +204,7 @@ async def delete_notification_template(
     request: Request,
     template: models.NotificationTemplate = Depends(deps.get_notification_template_for_admin),
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = AdminPermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Delete a notification template.

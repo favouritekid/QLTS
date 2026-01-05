@@ -5,13 +5,11 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import database, models, schemas
-from ..core import deps
+from ..core.deps import CasbinAuth  # ✅ Phase 2.2: Use standard alias
 from ..services import pipeline_service
 from app.core.rate_limits import limiter, RateLimits
 
 router = APIRouter(tags=["Pipeline"])
-
-PermissionDep = Depends(deps.check_permission)
 
 
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
@@ -19,7 +17,7 @@ PermissionDep = Depends(deps.check_permission)
 async def get_pipeline_stages(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """Lấy danh sách tất cả các giai đoạn Pipeline (chỉ đọc)."""
     stages = await pipeline_service.get_all_pipeline_stages(db)
@@ -32,7 +30,7 @@ async def get_full_pipeline(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
     # <<< SỬA Ở ĐÂY: Đổi dependency để kiểm tra quyền >>>
-    current_user: models.User = PermissionDep,  # Yêu cầu Casbin check
+    current_user: models.User = CasbinAuth,  # Yêu cầu Casbin check
     # Hoặc dùng: current_user: models.User = deps.OfficerRequired, # Nếu chỉ officer trở lên
 ):
     """Lấy toàn bộ cấu trúc Pipeline (Stages và Statuses)."""
@@ -47,7 +45,7 @@ async def get_allowed_next_statuses(
     request: Request,
     current_status_id: str | None = None,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Lấy danh sách các trạng thái được phép chuyển đến từ trạng thái hiện tại.

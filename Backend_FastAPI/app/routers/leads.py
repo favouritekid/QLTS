@@ -9,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
 from .. import database, models, schemas
-from ..core import deps
+from ..core.deps import CasbinAuth, LeadListFilter  # ✅ Phase 2.2: Use standard alias
+from ..core import deps  # Keep for LeadAccessDep
 from ..services import distribution_service, insights_service, lead_service
 from ..services.notification_dispatcher import dispatch  # ✅ NOTIFICATION 2.0
 from ..core.events import SystemEvents  # ✅ NOTIFICATION 2.0
@@ -20,11 +21,7 @@ log = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["Leads"])
 
-PermissionDep = Depends(deps.check_permission)
 LeadAccessDep = Depends(deps.get_lead_for_user)
-
-# ✅ Phase 2: Import for type hints
-from ..core.deps import LeadListFilter
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
@@ -33,7 +30,7 @@ async def create_new_lead(
     request: Request,
     lead_in: schemas.LeadCreate,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Tạo một Lead mới.
@@ -55,7 +52,7 @@ async def create_new_lead(
 async def get_my_reassign_quota(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Get current user's remaining reassign quota.
@@ -76,7 +73,7 @@ async def get_distribution_preview(
     request: Request,
     offering_id: int = Query(..., description="Offering ID to preview distribution"),
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Preview which unit will receive the next lead based on distribution config.
@@ -127,7 +124,7 @@ async def get_distribution_preview(
 async def get_all_leads(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
     # === ⭐️ THÊM CÁC THAM SỐ QUERY ===
@@ -221,7 +218,7 @@ async def update_existing_lead(
     lead_in: schemas.LeadUpdate,
     lead: models.Lead = LeadAccessDep,
     # Lấy current_user từ Casbin check hoặc get_current_user
-    current_user: models.User = PermissionDep,  # <<< LẤY USER TỪ DEPENDENCY
+    current_user: models.User = CasbinAuth,  # <<< LẤY USER TỪ DEPENDENCY
     db: AsyncSession = Depends(database.get_db),
 ):
     """Cập nhật một Lead (chỉ Admin/Manager)."""
@@ -322,7 +319,7 @@ async def delete_lead(
     request: Request,
     lead_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     (Admin only) Soft delete a Lead.
@@ -374,7 +371,7 @@ async def add_new_consultation(
     request: Request,
     consultation_in: schemas.ConsultationCreate,
     lead: models.Lead = LeadAccessDep,  # <-- THAY ĐỔI (IDOR Check)
-    current_user: models.User = PermissionDep,  # <-- THAY ĐỔI (Casbin Check)
+    current_user: models.User = CasbinAuth,  # <-- THAY ĐỔI (Casbin Check)
     db: AsyncSession = Depends(database.get_db),
 ):
     """Thêm một ghi chú tư vấn mới cho Lead (Đã xác thực 2 lớp)."""
@@ -420,7 +417,7 @@ async def assign_lead_manually(
     request: Request,
     assign_data: schemas.AssignLead,
     lead: models.Lead = LeadAccessDep,  # <-- THAY ĐỔI (IDOR Check)
-    current_user: models.User = PermissionDep,  # <-- THAY ĐỔI (Casbin Check)
+    current_user: models.User = CasbinAuth,  # <-- THAY ĐỔI (Casbin Check)
     db: AsyncSession = Depends(database.get_db),
 ):
     """(Admin/Manager only) Gán thủ công một Lead (Đã xác thực 2 lớp)."""
@@ -441,7 +438,7 @@ async def perform_lead_action(
     request: Request,
     action_data: schemas.LeadAction,
     lead: models.Lead = LeadAccessDep,  # <-- THAY ĐỔI (IDOR Check)
-    current_user: models.User = PermissionDep,  # <-- THAY ĐỔI (Casbin Check)
+    current_user: models.User = CasbinAuth,  # <-- THAY ĐỔI (Casbin Check)
     db: AsyncSession = Depends(database.get_db),
 ):
     """Xử lý hành động (reject/reassign) của Officer (Đã xác thực 2 lớp)."""
@@ -486,7 +483,7 @@ async def update_a_consultation(
     consultation_id: int,
     consultation_in: schemas.ConsultationUpdate,
     lead: models.Lead = LeadAccessDep,  # <-- IDOR Check
-    current_user: models.User = PermissionDep,  # <-- Casbin Check
+    current_user: models.User = CasbinAuth,  # <-- Casbin Check
     db: AsyncSession = Depends(database.get_db),
 ):
     """
@@ -547,7 +544,7 @@ async def delete_a_consultation(
     request: Request,
     consultation_id: int,
     lead: models.Lead = LeadAccessDep,  # <-- THAY ĐỔI (IDOR Check)
-    current_user: models.User = PermissionDep,  # <-- THAY ĐỔI (Casbin Check)
+    current_user: models.User = CasbinAuth,  # <-- THAY ĐỔI (Casbin Check)
     db: AsyncSession = Depends(database.get_db),
 ):
     """
@@ -591,7 +588,7 @@ async def delete_a_consultation(
 async def export_leads(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
     format: str = Query("csv", description="Export format (csv or xlsx)"),
     # Apply same filters as get_all_leads
     status: Optional[str] = Query(
@@ -772,7 +769,7 @@ async def export_leads(
 async def download_import_template(
     request: Request,
     format: str = Query("csv", description="Template format (csv or xlsx)"),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Download CSV/Excel template for lead import.
@@ -910,7 +907,7 @@ async def bulk_assign_leads(
     bulk_assign_data: schemas.BulkAssignLeadsSchema,
     officer_id: int = Query(..., description="Officer ID to assign leads to"),
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     (Admin/Manager only) Bulk assign multiple leads to a single officer.
@@ -966,7 +963,7 @@ async def bulk_update_leads_stage(
     request: Request,
     bulk_data: schemas.BulkUpdateStageSchema,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     (Admin only) Bulk update pipeline stage for multiple leads.
@@ -996,7 +993,7 @@ async def bulk_delete_leads(
     request: Request,
     bulk_data: schemas.BulkDeleteSchema,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     (Admin only) Bulk soft delete multiple leads.
@@ -1027,7 +1024,7 @@ async def officer_import_leads(
         ..., description="CSV or Excel file containing lead data (.csv, .xlsx)"
     ),
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Import leads từ file CSV hoặc Excel (cho Officer/Admin/Manager).

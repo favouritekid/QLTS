@@ -4,17 +4,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models, schemas
 from ..database import get_db
-from ..core import deps # ✅ Import module deps chuẩn
+from ..core.deps import CasbinAuth, OfficerDashboardScope  # ✅ Phase 2.2
 from ..services import officer_service
 from app.core.rate_limits import limiter, RateLimits
 
 router = APIRouter(prefix="/officer", tags=["Officer Dashboard"])
-
-# ✅ Chuẩn hóa Permission Dependency (Giống admin.py)
-PermissionDep = Depends(deps.check_permission)
-
-# ✅ Phase 6: Import OfficerDashboardScope for type hints
-from ..core.deps import OfficerDashboardScope
 
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get(
@@ -26,7 +20,7 @@ async def get_officer_stats(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
     # ✅ Auto-check quyền truy cập vào URL /api/officer/stats
-    current_user: Annotated[models.User, PermissionDep]
+    current_user: Annotated[models.User, CasbinAuth]
 ):
     try:
         stats = await officer_service.get_officer_dashboard_stats(
@@ -46,7 +40,7 @@ async def update_availability(
     request: Request,
     status_data: schemas.AvailabilityUpdate, # ✅ Validate Input bằng Pydantic
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, PermissionDep]
+    current_user: Annotated[models.User, CasbinAuth]
 ):
     try:
         updated_user, callback = await officer_service.update_officer_availability(

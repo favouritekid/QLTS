@@ -14,7 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
 from .. import database, models, schemas
-from ..core import deps
+from ..core import deps  # Keep for get_application_for_user
+from ..core.deps import CasbinAuth  # ✅ Phase 2.2: Use standard alias
 from ..services import application_service
 from ..services.notification_dispatcher import dispatch  # ✅ NOTIFICATION 2.0
 from ..core.events import SystemEvents  # ✅ NOTIFICATION 2.0
@@ -23,8 +24,6 @@ from ..utils.exceptions import ResourceNotFoundError, BadRequest
 log = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["Applications"])
-
-PermissionDep = Depends(deps.check_permission)
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
@@ -38,7 +37,7 @@ async def create_application_for_lead(
     request: Request,
     lead_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Tạo Application (Hồ sơ Tuyển sinh) mới cho Lead.
@@ -123,7 +122,7 @@ async def update_application(
     update_data: schemas.ApplicationUpdate,
     application: models.Application = Depends(deps.get_application_for_user),
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Cập nhật thông tin Application (Hồ sơ Tuyển sinh).
@@ -180,7 +179,7 @@ async def delete_application(
     request: Request,
     application: models.Application = Depends(deps.get_application_for_user),
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
 ):
     """
     Soft delete Application.

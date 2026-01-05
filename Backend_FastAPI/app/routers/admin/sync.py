@@ -20,10 +20,8 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models, schemas
-from app.core import deps
+from app.core.deps import CasbinAuth  # Phase 2.2
 
-# Permission dependency
-PermissionDep = Depends(deps.check_permission)
 
 # Router definition
 router = APIRouter(prefix="/sync", tags=["Admin - Sync (Aliases)"])
@@ -57,7 +55,7 @@ async def sync_users_alias(
     request: Request,
     sync_request: schemas.SyncUsersRequest,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """
     (Admin only) Alias for /api/admin/users/sync

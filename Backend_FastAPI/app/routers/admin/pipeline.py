@@ -29,7 +29,7 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import database, models, schemas
-from app.core import deps
+from app.core.deps import CasbinAuth  # Phase 2.2
 from app.services import lead_service, pipeline_service
 from app.utils.exceptions import BadRequest, ResourceNotFoundError
 
@@ -38,8 +38,6 @@ log = structlog.get_logger(__name__)
 # Router definition
 router = APIRouter(tags=["Admin - Pipeline Management"])
 
-# Permission dependency
-PermissionDep = Depends(deps.check_permission)
 
 
 # ============================================================================
@@ -55,7 +53,7 @@ PermissionDep = Depends(deps.check_permission)
 async def get_all_pipeline_stages_list(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Lấy danh sách tất cả Giai đoạn (Stages) trong Pipeline."""
     # Gọi service function đã có (trả về List[dict] từ cache/DB)
@@ -74,7 +72,7 @@ async def create_new_pipeline_stage(
     request: Request,
     stage_in: schemas.PipelineStageCreate,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Tạo một Giai đoạn (Stage) mới trong Pipeline."""
     stage, callback = await pipeline_service.create_pipeline_stage(db, stage_in, current_user=current_admin)
@@ -112,7 +110,7 @@ async def get_pipeline_stage_details(
     request: Request,
     stage_id: str,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Lấy chi tiết một Giai đoạn (Stage)."""
     return await pipeline_service.get_pipeline_stage(db, stage_id)
@@ -128,7 +126,7 @@ async def update_existing_pipeline_stage(
     stage_id: str,
     stage_in: schemas.PipelineStageUpdate,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Cập nhật một Giai đoạn (Stage)."""
     stage, callback = await pipeline_service.update_pipeline_stage(db, stage_id, stage_in, current_user=current_admin)
@@ -166,7 +164,7 @@ async def delete_existing_pipeline_stage(
     request: Request,
     stage_id: str,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Xoá một Giai đoạn (Stage). (Chỉ thành công nếu không có Status nào liên kết)"""
     _, callback = await pipeline_service.delete_pipeline_stage(db, stage_id, current_user=current_admin)
@@ -208,7 +206,7 @@ async def delete_existing_pipeline_stage(
 async def get_all_consultation_statuses_list(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Lấy danh sách tất cả Trạng thái tư vấn (Consultation Statuses)."""
     # Gọi service function đã có (trả về List[dict] từ cache/DB)
@@ -227,7 +225,7 @@ async def create_new_consultation_status(
     request: Request,
     status_in: schemas.ConsultationStatusCreate,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Tạo một Trạng thái tư vấn (Status) mới."""
     consultation_status, callback = await pipeline_service.create_consultation_status(db, status_in, current_user=current_admin)
@@ -265,7 +263,7 @@ async def get_consultation_status_details(
     request: Request,
     status_id: str,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Lấy chi tiết một Trạng thái tư vấn (Status)."""
     return await pipeline_service.get_consultation_status(db, status_id)
@@ -281,7 +279,7 @@ async def update_existing_consultation_status(
     status_id: str,
     status_in: schemas.ConsultationStatusUpdate,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Cập nhật một Trạng thái tư vấn (Status)."""
     consultation_status, callback = await pipeline_service.update_consultation_status(db, status_id, status_in, current_user=current_admin)
@@ -319,7 +317,7 @@ async def delete_existing_consultation_status(
     request: Request,
     status_id: str,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Xoá một Trạng thái tư vấn (Status). (Chỉ thành công nếu không có Lead nào sử dụng)"""
     _, callback = await pipeline_service.delete_consultation_status(db, status_id, current_user=current_admin)
@@ -361,7 +359,7 @@ async def delete_existing_consultation_status(
 async def get_all_allowed_transitions(
     request: Request,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Lấy danh sách tất cả Allowed Transitions (workflow rules)."""
     transitions = await pipeline_service.get_all_allowed_transitions(db)
@@ -378,7 +376,7 @@ async def create_new_allowed_transition(
     request: Request,
     transition_in: schemas.AllowedTransitionCreate,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Tạo một Allowed Transition mới."""
     transition, callback = await pipeline_service.create_allowed_transition(db, transition_in, current_user=current_admin)
@@ -396,7 +394,7 @@ async def delete_existing_allowed_transition(
     request: Request,
     transition_id: int,
     db: AsyncSession = Depends(database.get_db),
-    current_admin: models.User = PermissionDep,
+    current_admin: models.User = CasbinAuth,
 ):
     """(Admin only) Xoá một Allowed Transition."""
     _, callback = await pipeline_service.delete_allowed_transition(db, transition_id, current_user=current_admin)
@@ -420,7 +418,7 @@ async def delete_existing_allowed_transition(
 async def admin_revert_lead_status(
     request: Request,
     lead_id: int,
-    current_user: models.User = PermissionDep,
+    current_user: models.User = CasbinAuth,
     reason: Optional[str] = Body(
         None, embed=True, description="Reason for reverting the status"
     ),
