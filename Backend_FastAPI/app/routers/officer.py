@@ -13,6 +13,9 @@ router = APIRouter(prefix="/officer", tags=["Officer Dashboard"])
 # ✅ Chuẩn hóa Permission Dependency (Giống admin.py)
 PermissionDep = Depends(deps.check_permission)
 
+# ✅ Phase 6: Import OfficerDashboardScope for type hints
+from ..core.deps import OfficerDashboardScope
+
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get(
     "/stats",
@@ -78,98 +81,30 @@ async def update_availability(
 async def get_enhanced_dashboard(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, PermissionDep],
+    # ✅ Phase 6: Security Gateway handles ALL role/scope validation
+    scope_params: Annotated[OfficerDashboardScope, Depends(deps.get_officer_dashboard_scope)],
     start_date: str = None,  # ISO format YYYY-MM-DD
     end_date: str = None,    # ISO format YYYY-MM-DD
-    # Phase 2: Scope and filter parameters
-    scope: str = "personal",  # "personal", "team", "organization"
-    officer_id: int = None,   # Filter to specific officer (manager/admin only)
-    unit_id: int = None,      # Filter to specific unit (admin only)
 ):
     """
     Enhanced officer dashboard with role-based scoping.
     
-    **Scope options:**
+    **Scope options (enforced by Security Gateway):**
     - `personal`: Own data only (default for officers)
     - `team`: All officers in same unit (managers)
     - `organization`: All officers (admins)
     
-    **Filters:**
-    - `officer_id`: View specific officer's dashboard (requires manager/admin role)
-    - `unit_id`: Filter by unit (requires admin role)
-    
     **Security:**
-    - Officers can only use scope="personal" and cannot filter
-    - Managers can use scope="team" and filter officers in their unit
-    - Admins can use any scope and any filters
+    All role-based access control is handled by deps.get_officer_dashboard_scope.
+    Router receives pre-validated parameters.
     """
     # ==========================================================================
-    # SECURITY: Role-based permission validation
-    # ==========================================================================
-    user_role = current_user.role
-    
-    # Validate scope parameter
-    if scope not in ("personal", "team", "organization"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid scope: {scope}. Must be 'personal', 'team', or 'organization'"
-        )
-    
-    # Officers: Can only view personal data
-    if user_role == "officer":
-        if scope != "personal":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Officers can only view personal dashboard"
-            )
-        if officer_id is not None and officer_id != current_user.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Officers cannot view other officers' data"
-            )
-        if unit_id is not None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Officers cannot filter by unit"
-            )
-        # Force personal scope
-        scope = "personal"
-        officer_id = current_user.id
-    
-    # Managers: Can view team or drill down to specific officer in their unit
-    elif user_role == "manager":
-        if scope == "organization":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Managers cannot view organization-wide data"
-            )
-        if unit_id is not None and unit_id != current_user.unit_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Managers cannot view data from other units"
-            )
-        # Force manager's unit
-        unit_id = current_user.unit_id
-        
-        # If filtering by officer, validate officer belongs to manager's unit
-        if officer_id is not None:
-            target_officer = await db.get(models.User, officer_id)
-            if not target_officer or target_officer.unit_id != current_user.unit_id:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Officer not found in your unit"
-                )
-    
-    # Admins: Full access (no restrictions)
-    # elif user_role == "admin": pass
-    
-    # ==========================================================================
-    # Fetch dashboard data based on scope
+    # Fetch dashboard data based on validated scope
     # ==========================================================================
     try:
-        if scope == "personal":
+        if scope_params.scope == "personal":
             # Personal dashboard: single officer
-            target_id = officer_id if officer_id else current_user.id
+            target_id = scope_params.officer_id if scope_params.officer_id else scope_params.requesting_user.id
             stats = await officer_service.get_enhanced_dashboard_stats(
                 db=db, 
                 officer_id=target_id,
@@ -180,10 +115,10 @@ async def get_enhanced_dashboard(
             # Team or Organization scope: aggregated dashboard
             stats = await officer_service.get_aggregated_dashboard_stats(
                 db=db,
-                scope=scope,
-                requesting_user=current_user,
-                officer_id=officer_id,  # Optional: drill down to specific officer
-                unit_id=unit_id,        # Filter by unit (for organization scope)
+                scope=scope_params.scope,
+                requesting_user=scope_params.requesting_user,
+                officer_id=scope_params.officer_id,
+                unit_id=scope_params.unit_id,
                 start_date=start_date,
                 end_date=end_date,
             )

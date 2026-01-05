@@ -5,7 +5,7 @@ import casbin
 import structlog
 
 from .constants import UserRole
-from fastapi import Cookie, Depends, Header, Path, Request
+from fastapi import Cookie, Depends, Header, Path, Request, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,8 +18,41 @@ from ..utils.exceptions import (
     PermissionDeniedError,
     ResourceNotFoundError,
 )
+# ✅ IMPORT REPOSITORY FOR DEPENDENCY
+from ..repositories.admission_config_repository import AdmissionConfigRepository
+
 
 log = structlog.get_logger(__name__)
+
+# =============================================================================
+# MODULE EXPORTS (AUTHORIZATION_GUIDELINES.md v1.0)
+# =============================================================================
+__all__ = [
+    # Authentication (Layer 1)
+    "get_current_user",
+    "get_current_active_user",
+    "require_password_not_forced",
+    
+    # Authorization (Layer 2)
+    "check_permission",
+    "require_admin",
+    "require_admin_or_manager",
+    "require_any_staff",
+    "require_roles",
+    
+    # Resource Access / IDOR (Layer 3)
+    "get_lead_for_user",
+    "get_application_for_user",
+    "get_notification_template_for_admin",
+    "get_notification_rule_for_admin",
+    "get_officer_dashboard_scope",
+    "get_criteria_access",
+    "get_config_filter",
+    "verify_user_management_permission",
+    
+    # Data Classes
+    "OfficerDashboardScope",
+]
 
 # ✅ SECURITY FIX: Keep OAuth2 scheme for backwards compatibility, but make it optional
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
@@ -255,6 +288,19 @@ class PasswordChangeRequired(Exception):
     pass
 
 
+async def get_current_active_user(
+    current_user: models.User = Depends(get_current_user),
+) -> models.User:
+    """
+    Dependency to check if user is active.
+    """
+    if current_user.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user"
+        )
+    return current_user
+
+
 async def require_password_not_forced(
     current_user: models.User = Depends(get_current_user),
 ) -> models.User:
@@ -304,9 +350,17 @@ PasswordSafeDep = Depends(require_password_not_forced)
 
 
 async def check_permission(
-    request: Request, current_user: models.User = Depends(get_current_user)
-):
-    # (Giữ nguyên logic, thêm await cho log)
+    request: Request, 
+    current_user: models.User = Depends(get_current_active_user)  # ✅ PHASE 1 FIX: was get_current_user
+) -> models.User:
+    """
+    Casbin RBAC permission check.
+    
+    ✅ SECURITY FIX (Phase 1): Now uses get_current_active_user to block inactive users.
+    Previously allowed inactive users which was a security vulnerability affecting 18+ files.
+    
+    Checks: (user:id, url_path, http_method) against Casbin policy.
+    """
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
     if not enforcer:
         log.critical("Casbin enforcer not found in app state!")
@@ -333,7 +387,7 @@ async def check_permission(
 def require_roles(required_roles: List[str]):
     # (Giữ nguyên logic)
     async def role_checker(
-        current_user: models.User = Depends(get_current_user),
+        current_user: models.User = Depends(get_current_active_user),
     ) -> models.User:
         if current_user.role not in required_roles:
             from ..utils.exceptions import PermissionDeniedError
@@ -344,6 +398,205 @@ def require_roles(required_roles: List[str]):
         return current_user
 
     return role_checker
+
+
+# =============================================================================
+# PHASE 6: ADMIN/MANAGER ROLE DEPENDENCIES (Security Gateway Compliance)
+# =============================================================================
+
+
+async def require_admin(
+    current_user: models.User = Depends(get_current_active_user),
+) -> models.User:
+    """
+    Dependency that requires the user to have 'admin' role.
+    
+    Use this on endpoints that should ONLY be accessible by admins.
+    
+    Example:
+        @router.post("/config")
+        async def create_config(
+            current_admin: models.User = Depends(require_admin)
+        ):
+            # Guaranteed to be admin
+            ...
+    
+    Raises:
+        PermissionDeniedError: If user is not an admin
+    """
+    if current_user.role != UserRole.ADMIN:
+        raise PermissionDeniedError(
+            detail="Admin access required for this operation."
+        )
+    return current_user
+
+
+async def require_admin_or_manager(
+    current_user: models.User = Depends(get_current_active_user),
+) -> models.User:
+    """
+    Dependency that requires the user to have 'admin' or 'manager' role.
+    
+    Use this on endpoints that should be accessible by admins and managers.
+    
+    Example:
+        @router.get("/reports")
+        async def get_reports(
+            current_user: models.User = Depends(require_admin_or_manager)
+        ):
+            # Guaranteed to be admin or manager
+            ...
+    
+    Raises:
+        PermissionDeniedError: If user is not an admin or manager
+    """
+    if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER]:
+        raise PermissionDeniedError(
+            detail="Admin or Manager access required for this operation."
+        )
+    return current_user
+
+
+async def require_any_staff(
+    current_user: models.User = Depends(get_current_active_user),
+) -> models.User:
+    """
+    Dependency that requires the user to be any staff role (admin, manager, or officer).
+    
+    Use this on endpoints accessible by all authenticated staff members.
+    
+    Example:
+        @router.get("/team-data")
+        async def get_team_data(
+            current_user: models.User = Depends(require_any_staff)
+        ):
+            # Guaranteed to be admin, manager, or officer
+            ...
+    
+    Raises:
+        PermissionDeniedError: If user is not a staff member
+    """
+    if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER, UserRole.OFFICER]:
+        raise PermissionDeniedError(
+            detail="Staff access required for this operation."
+        )
+    return current_user
+
+
+class OfficerDashboardScope:
+    """
+    Data class containing validated scope parameters for officer dashboard.
+    
+    This is returned by get_officer_dashboard_scope dependency to provide
+    pre-validated, role-enforced filtering parameters.
+    """
+    def __init__(
+        self,
+        scope: str,
+        officer_id: int | None,
+        unit_id: int | None,
+        requesting_user: models.User
+    ):
+        self.scope = scope
+        self.officer_id = officer_id
+        self.unit_id = unit_id
+        self.requesting_user = requesting_user
+
+
+async def get_officer_dashboard_scope(
+    scope: str = "personal",
+    officer_id: int | None = None,
+    unit_id: int | None = None,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user),
+) -> OfficerDashboardScope:
+    """
+    Security Gateway for Officer Dashboard scoping.
+    
+    Enforces role-based access to dashboard data:
+    - Officers: Can only view personal data
+    - Managers: Can view team data (their unit only)
+    - Admins: Full access to all scopes and filters
+    
+    This dependency REPLACES inline role checks in router with centralized
+    security logic per MASTER_ARCHITECTURE.md Section 0.2.
+    
+    Args:
+        scope: "personal", "team", or "organization"
+        officer_id: Optional officer filter (requires manager/admin)
+        unit_id: Optional unit filter (requires admin)
+        
+    Returns:
+        OfficerDashboardScope with validated/sanitized parameters
+        
+    Raises:
+        HTTPException 400: Invalid scope value
+        PermissionDeniedError: Scope/filter not allowed for user's role
+    """
+    # Validate scope value
+    if scope not in ("personal", "team", "organization"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid scope: {scope}. Must be 'personal', 'team', or 'organization'"
+        )
+    
+    user_role = current_user.role
+    
+    # === OFFICER: Personal data only ===
+    if user_role == UserRole.OFFICER:
+        if scope != "personal":
+            raise PermissionDeniedError(
+                detail="Officers can only view personal dashboard"
+            )
+        if officer_id is not None and officer_id != current_user.id:
+            raise PermissionDeniedError(
+                detail="Officers cannot view other officers' data"
+            )
+        if unit_id is not None:
+            raise PermissionDeniedError(
+                detail="Officers cannot filter by unit"
+            )
+        # Force personal scope
+        return OfficerDashboardScope(
+            scope="personal",
+            officer_id=current_user.id,
+            unit_id=None,
+            requesting_user=current_user
+        )
+    
+    # === MANAGER: Team or personal, own unit only ===
+    if user_role == UserRole.MANAGER:
+        if scope == "organization":
+            raise PermissionDeniedError(
+                detail="Managers cannot view organization-wide data"
+            )
+        if unit_id is not None and unit_id != current_user.unit_id:
+            raise PermissionDeniedError(
+                detail="Managers cannot view data from other units"
+            )
+        
+        # If filtering by officer, validate officer belongs to manager's unit
+        if officer_id is not None:
+            target_officer = await db.get(models.User, officer_id)
+            if not target_officer or target_officer.unit_id != current_user.unit_id:
+                raise PermissionDeniedError(
+                    detail="Officer not found in your unit"
+                )
+        
+        return OfficerDashboardScope(
+            scope=scope,
+            officer_id=officer_id,
+            unit_id=current_user.unit_id,  # Always force manager's unit
+            requesting_user=current_user
+        )
+    
+    # === ADMIN: Full access ===
+    return OfficerDashboardScope(
+        scope=scope,
+        officer_id=officer_id,
+        unit_id=unit_id,
+        requesting_user=current_user
+    )
 
 
 async def get_lead_for_user(
@@ -1017,17 +1270,88 @@ async def get_notification_rule_for_admin(
     return rule
 
 
-# ============================================================================
-# DEPENDENCY SHORTCUTS
-# ============================================================================
 
-# (Giữ nguyên các dependency shortcuts)
+async def get_admission_config_repo(
+    db: AsyncSession = Depends(database.get_db)
+) -> AdmissionConfigRepository:
+    """Dependency for AdmissionConfigRepository."""
+    return AdmissionConfigRepository(db)
+
+
+async def get_criteria_access(
+    criteria_code: str = Path(..., description="Criteria Code"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user),
+) -> models.AdmissionCriteria:
+    """
+    Get Admission Criteria with IDOR & RBAC protection.
+    
+    Rules:
+    - Active criteria: Accessible by all active users.
+    - Inactive (Draft): Accessible ONLY by Admin/Manager.
+    
+    Raises 404 if not found OR if user lacks permission to view inactive data.
+    """
+    repo = AdmissionConfigRepository(db)
+    # Fetch WITHOUT active filter (Repo is dumb)
+    criteria = await repo.get_criteria_by_code(criteria_code, load_level="with_groups")
+    
+    if not criteria:
+        raise ResourceNotFoundError(detail=f"Criteria '{criteria_code}' not found")
+
+    # Authorization Logic (Smart Dependency)
+    if not criteria.is_active:
+        if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER]:
+            # IDOR Protection: Pretend it doesn't exist
+            # Log for security monitoring
+            log.warning(
+                "Unauthorized access attempt to inactive criteria",
+                user_id=current_user.id,
+                criteria_code=criteria.code
+            )
+            raise ResourceNotFoundError(detail=f"Criteria '{criteria_code}' not found")
+            
+    return criteria
+
+
+
+# ============================================================================
+# DEPENDENCY SHORTCUTS (LEGACY - DEPRECATED)
+# ============================================================================
+# ⚠️ DEPRECATED: These aliases will be removed in next major version.
+# Use the direct async functions instead per AUTHORIZATION_GUIDELINES.md
+
+# DEPRECATED: Use Depends(get_current_user) directly
 CurrentUser = Depends(get_current_user)
+
+# DEPRECATED: Use Depends(require_admin) instead
 AdminRequired = Depends(require_roles(["admin"]))
+
+# DEPRECATED: Use Depends(require_admin_or_manager) instead
 AdminManagerRequired = Depends(require_roles(["admin", "manager"]))
+
+# DEPRECATED: Use Depends(require_any_staff) instead
 OfficerRequired = Depends(require_roles(["officer", "admin", "manager"]))
+
+
+async def get_config_filter(
+    active_only: bool = True,
+    current_user: models.User = Depends(get_current_active_user),
+) -> bool:
+    """
+    Enforce active_only=True for non-admin users.
+
+    Security:
+    - Admin/Manager: Can set active_only=False to see draft/inactive items.
+    - Others: Forced to view active_only=True.
+    """
+    if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER]:
+        return True  # Force active only
+    return active_only
+
 
 # NEW: Ownership verification shortcuts for IDOR prevention
 DistributionRuleAccessDep = Depends(get_distribution_rule_for_user)
 OrgUnitAccessDep = Depends(get_organizational_unit_for_user)
+
 

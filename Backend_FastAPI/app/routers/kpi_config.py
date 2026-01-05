@@ -27,8 +27,12 @@ from app.services import kpi_service
 
 router = APIRouter(prefix="/api/admin/kpi-config", tags=["Admin - KPI Configuration"])
 
-# Permission dependency for Casbin RBAC
-PermissionDep = Depends(deps.check_permission)
+# ============================================================================
+# SECURITY GATEWAY DEPENDENCIES (Phase 6 Refactor)
+# ============================================================================
+# These replace inline role checks per MASTER_ARCHITECTURE.md Section 0.2
+AdminDep = Depends(deps.require_admin)
+AdminOrManagerDep = Depends(deps.require_admin_or_manager)
 
 
 # =============================================================================
@@ -103,15 +107,12 @@ class KpiTargetResponse(KpiTargetBase):
 )
 async def list_kpi_configs(
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, PermissionDep],
+    current_user: Annotated[models.User, AdminOrManagerDep],  # ✅ Security Gateway
     kpi_code: Optional[str] = None,
     unit_id: Optional[int] = None,
     is_active: bool = True,
 ):
-    """List KPI configurations with optional filters. Admin only."""
-    if current_user.role not in ("admin", "manager"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
+    """List KPI configurations with optional filters. Admin/Manager only."""
     return await kpi_service.list_kpi_configs(
         db, kpi_code=kpi_code, unit_id=unit_id, is_active=is_active
     )
@@ -125,12 +126,10 @@ async def list_kpi_configs(
 )
 async def create_kpi_config(
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, PermissionDep],
+    current_user: Annotated[models.User, AdminDep],  # ✅ Security Gateway
     data: KpiConfigCreate,
 ):
     """Create a new KPI configuration. Admin only."""
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
     
     try:
         config, callback = await kpi_service.create_kpi_config(
@@ -158,12 +157,10 @@ async def create_kpi_config(
 async def update_kpi_config(
     config_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, PermissionDep],
+    current_user: Annotated[models.User, AdminDep],  # ✅ Security Gateway
     data: KpiConfigUpdate,
 ):
     """Update an existing KPI configuration. Admin only."""
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
     
     try:
         config, callback = await kpi_service.update_kpi_config(
@@ -189,11 +186,9 @@ async def update_kpi_config(
 async def delete_kpi_config(
     config_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, PermissionDep],
+    current_user: Annotated[models.User, AdminDep],  # ✅ Security Gateway
 ):
     """Delete a KPI configuration (soft delete). Admin only."""
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
     
     try:
         config, callback = await kpi_service.delete_kpi_config(
@@ -216,15 +211,12 @@ async def delete_kpi_config(
 )
 async def list_kpi_targets(
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, PermissionDep],
+    current_user: Annotated[models.User, AdminOrManagerDep],  # ✅ Security Gateway
     fiscal_year: Optional[int] = None,
     kpi_code: Optional[str] = None,
     is_active: bool = True,
 ):
     """List annual KPI targets. Admin/Manager only."""
-    if current_user.role not in ("admin", "manager"):
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
     return await kpi_service.list_kpi_targets(
         db, fiscal_year=fiscal_year, kpi_code=kpi_code, is_active=is_active
     )
@@ -238,12 +230,10 @@ async def list_kpi_targets(
 )
 async def create_kpi_target(
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, PermissionDep],
+    current_user: Annotated[models.User, AdminDep],  # ✅ Security Gateway
     data: KpiTargetCreate,
 ):
     """Create an annual KPI target for tracking YTD progress. Admin only."""
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
     
     try:
         target, callback = await kpi_service.create_kpi_target(
@@ -277,12 +267,10 @@ class KpiTargetUpdate(BaseModel):
 async def update_kpi_target(
     target_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, PermissionDep],
+    current_user: Annotated[models.User, AdminDep],  # ✅ Security Gateway
     data: KpiTargetUpdate,
 ):
     """Update an existing annual KPI target. Admin only."""
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
     
     try:
         target, callback = await kpi_service.update_kpi_target(
@@ -308,11 +296,9 @@ async def update_kpi_target(
 async def delete_kpi_target(
     target_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, PermissionDep],
+    current_user: Annotated[models.User, AdminDep],  # ✅ Security Gateway
 ):
     """Delete an annual KPI target (soft delete). Admin only."""
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
     
     try:
         target, callback = await kpi_service.delete_kpi_target(
@@ -342,7 +328,7 @@ class SyncYTDResponse(BaseModel):
 async def sync_target_ytd(
     target_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[models.User, PermissionDep],
+    current_user: Annotated[models.User, AdminOrManagerDep],  # ✅ Security Gateway
 ):
     """
     Manually trigger YTD sync for a specific annual target.
@@ -353,8 +339,6 @@ async def sync_target_ytd(
     
     Admin/Manager only.
     """
-    if current_user.role not in ("admin", "manager"):
-        raise HTTPException(status_code=403, detail="Admin access required")
     
     # Get target record
     target = await db.get(models.KpiTarget, target_id)
