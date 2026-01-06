@@ -1,8 +1,8 @@
 # KẾ HOẠCH THỰC HIỆN CẢI TIẾN HỆ THỐNG PHÂN QUYỀN
 
-> **Phiên bản:** 2.0
+> **Phiên bản:** 3.0
 > **Ngày tạo:** 2026-01-05
-> **Cập nhật:** 2026-01-05 (thêm Guardrails, Policy Drift Detection)
+> **Cập nhật:** 2026-01-06 (thêm Phase 6: Template Tracking, Testing Guide)
 > **Dựa trên:** Authorization Audit Report, AUTHORIZATION_GUIDELINES.md, MASTER_ARCHITECTURE.md
 
 ---
@@ -691,6 +691,276 @@ async def test_notification_delete_idor(test_client, user_a, user_b):
 
 ---
 
+## PHASE 6: TEMPLATE TRACKING & AUDIT TRAIL (Ưu tiên: HIGH) ✅ COMPLETED
+
+> **Ngày hoàn thành:** 2026-01-06
+> **Commit:** `cf6187a`
+
+### 6.1. Vấn đề đã giải quyết
+
+Trước Phase 6, hệ thống có 4 vấn đề kiến trúc:
+
+| # | Vấn đề | Giải pháp |
+|---|--------|-----------|
+| 1 | **ONE-WAY SYNC** - Template → DB, không có ngược lại | ✅ Drift detection API |
+| 2 | **NO TEMPLATE TRACKING** - casbin_rule không biết policy từ đâu | ✅ Thêm cột template_id, applied_at, applied_by |
+| 3 | **TEMPLATE ≠ ACTUAL** - Không biết DB có khớp template không | ✅ Drift detection methods |
+| 4 | **DOUBLE SOURCE OF TRUTH** - main.py có hardcoded fallback | ✅ Đã xóa, fail-fast trong production |
+
+### 6.2. Migration `p6a1b2c3d4e5_add_template_tracking_columns.py`
+
+**Thêm 3 cột vào `casbin_rule`:**
+
+```sql
+ALTER TABLE casbin_rule
+ADD COLUMN template_id VARCHAR(50),    -- Template nào apply policy này
+ADD COLUMN applied_at TIMESTAMP,        -- Thời điểm apply
+ADD COLUMN applied_by INTEGER;          -- User ID apply
+
+CREATE INDEX ix_casbin_rule_template_id ON casbin_rule(template_id);
+```
+
+**Backfill cho policies có sẵn:**
+```sql
+UPDATE casbin_rule SET template_id = '_legacy', applied_at = NOW()
+WHERE template_id IS NULL;
+```
+
+### 6.3. Template Tracking Values
+
+| `template_id` | Ý nghĩa |
+|---------------|---------|
+| `officer` | Policy từ OFFICER_TEMPLATE |
+| `manager` | Policy từ MANAGER_TEMPLATE |
+| `admin` | Policy từ ADMIN_TEMPLATE |
+| `basic_user` | Policy từ BASIC_USER_TEMPLATE |
+| `_legacy` | Policy có trước migration (backfilled) |
+| `_feature:<id>` | Policy từ feature toggle |
+| `NULL` | Manual operation (không qua template) |
+
+### 6.4. Service Updates
+
+**`casbin_service.py` changes:**
+
+```python
+# add_policies_batch() - nhận thêm tracking params
+async def add_policies_batch(
+    self,
+    policies: List[Tuple[str, str, str]],
+    validate: bool = True,
+    template_id: Optional[str] = None,   # NEW
+    applied_by: Optional[int] = None     # NEW
+) -> dict:
+
+# _update_template_tracking() - update tracking columns
+async def _update_template_tracking(
+    self,
+    policies: List[Tuple[str, str, str]],
+    template_id: str,
+    applied_by: Optional[int] = None
+) -> None:
+
+# apply_template_to_role() - pass template_id
+async def apply_template_to_role(
+    self,
+    template_id: str,
+    role: str,
+    validate: bool = True,
+    applied_by: Optional[int] = None    # NEW
+) -> dict:
+
+# refresh_role_from_template() - pass applied_by
+async def refresh_role_from_template(
+    self,
+    role: str,
+    template_id: str,
+    force: bool = False,
+    applied_by: Optional[int] = None    # NEW
+) -> dict:
+```
+
+### 6.5. Checklist Phase 6
+
+- [x] Migration `p6a1b2c3d4e5` đã tạo
+- [x] `add_policies_batch()` đã update với template_id, applied_by
+- [x] `_update_template_tracking()` method đã thêm
+- [x] `apply_template_to_role()` đã pass template_id
+- [x] `refresh_role_from_template()` đã pass applied_by
+- [x] Endpoints `/templates/apply`, `/refresh-from-template` đã update
+- [x] Batch add và feature toggle đã track đúng
+
+---
+
+## PHASE 7: TESTING GUIDE (Ưu tiên: CRITICAL)
+
+### 7.1. Chạy Migration
+
+```bash
+cd Backend_FastAPI
+
+# Xem migration history
+alembic history
+
+# Chạy tất cả migrations
+alembic upgrade head
+
+# Hoặc chạy từng migration
+alembic upgrade p6a1b2c3d4e5
+```
+
+### 7.2. Verify Migration
+
+```bash
+# Kết nối DB và kiểm tra cột mới
+psql -U postgres -d qlts
+
+# Check columns exist
+\d casbin_rule
+
+# Check backfill
+SELECT template_id, COUNT(*) FROM casbin_rule GROUP BY template_id;
+
+# Expected output:
+#  template_id | count
+# -------------+-------
+#  _legacy     |   xxx
+```
+
+### 7.3. Test Drift Detection API
+
+```bash
+# Start server
+uvicorn app.main:app --reload
+
+# Login as admin để lấy token
+TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"xxx"}' | jq -r '.access_token')
+
+# Check drift for all roles
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/api/admin/roles/drift/all | jq
+
+# Expected output (nếu không có drift):
+# {
+#   "total_roles_checked": 4,
+#   "roles_with_drift": 0,
+#   "summary": {
+#     "health_status": "HEALTHY"
+#   }
+# }
+
+# Check drift for specific role
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/api/admin/roles/role:officer/drift | jq
+```
+
+### 7.4. Test Template Application với Tracking
+
+```bash
+# Apply template (sẽ track template_id và applied_by)
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  http://localhost:8000/api/admin/roles/templates/apply \
+  -d '{"template_id":"officer","role":"role:test_officer","run_validation":true}' | jq
+
+# Verify trong DB
+psql -U postgres -d qlts -c "
+  SELECT v0, v1, v2, template_id, applied_at, applied_by
+  FROM casbin_rule
+  WHERE v0 = 'role:test_officer'
+  LIMIT 5;
+"
+
+# Expected: template_id = 'officer', applied_at và applied_by có giá trị
+```
+
+### 7.5. Test Refresh from Template
+
+```bash
+# Tạo policy manual (sẽ không có template_id)
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  http://localhost:8000/api/admin/roles/role:test_officer/policies \
+  -d '{"object":"/api/test","action":"GET"}' | jq
+
+# Check drift (sẽ báo có extra policy)
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/api/admin/roles/role:test_officer/drift | jq
+
+# Refresh để sync lại với template
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8000/api/admin/roles/role:test_officer/refresh-from-template?force=true" | jq
+
+# Check drift lại (expected: no drift)
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/api/admin/roles/role:test_officer/drift | jq
+```
+
+### 7.6. Run Automated Tests
+
+```bash
+# Run authorization tests
+pytest tests/security/test_authorization_deps.py -v
+
+# Run IDOR tests
+pytest tests/security/test_idor_protection.py -v
+
+# Run all security tests
+pytest tests/security/ -v
+
+# Run with coverage
+pytest tests/security/ --cov=app.services.casbin_service --cov-report=term-missing
+```
+
+### 7.7. Manual Testing Checklist
+
+| Test | Expected | Pass? |
+|------|----------|-------|
+| `GET /drift/all` returns healthy | `health_status: HEALTHY` | ☐ |
+| Apply template creates policies with template_id | DB shows template_id = '<name>' | ☐ |
+| Manual add leaves template_id NULL | DB shows template_id = NULL | ☐ |
+| Drift detection finds extra/missing policies | Shows in `extra_policies`, `missing_policies` | ☐ |
+| Refresh removes extra, adds missing | After refresh, drift = 0 | ☐ |
+| Feature toggle uses `_feature:<id>` | DB shows `template_id = '_feature:xxx'` | ☐ |
+
+### 7.8. Troubleshooting
+
+**Migration fails:**
+```bash
+# Check current revision
+alembic current
+
+# Check migration chain
+alembic history --verbose
+
+# Nếu cần rollback
+alembic downgrade p5a1b2c3d4e5
+```
+
+**Drift detection shows unexpected results:**
+```bash
+# Compare template vs DB manually
+python -c "
+from app.casbin_config.policy_templates import apply_template
+policies = apply_template('officer', 'role:officer')
+for p in policies:
+    print(f\"{p['subject']} {p['object']} {p['action']}\")
+"
+
+# Compare với DB
+psql -c "SELECT v0, v1, v2 FROM casbin_rule WHERE v0 = 'role:officer' AND ptype = 'p' ORDER BY v1, v2"
+```
+
+**Policies không được track:**
+```bash
+# Check xem endpoint có pass applied_by không
+# Xem log
+tail -f logs/app.log | grep "template_id"
+```
+
+---
+
 ## TIMELINE CẬP NHẬT
 
 ### Sprint 0 (Tuần 0 - LÀM NGAY)
@@ -766,6 +1036,16 @@ async def test_notification_delete_idor(test_client, user_a, user_b):
 - [x] IDOR test đã viết (`tests/security/test_idor_protection.py`)
 - [x] **CI gate workflow đã tạo** (`.github/workflows/authorization-check.yml`)
 - [x] `check_router_auth.py` verified 209 endpoints
+
+### Phase 6: Template Tracking ✅ COMPLETED (2026-01-06)
+- [x] Migration `p6a1b2c3d4e5` thêm cột template_id, applied_at, applied_by
+- [x] Backfill policies có sẵn với `template_id='_legacy'`
+- [x] `add_policies_batch()` track template_id và applied_by
+- [x] `apply_template_to_role()` pass template_id cho tracking
+- [x] `refresh_role_from_template()` pass applied_by cho audit
+- [x] Endpoints đã update: `/templates/apply`, `/refresh-from-template`
+- [x] Batch add uses `template_id=None` (manual)
+- [x] Feature toggle uses `template_id='_feature:<id>'`
 
 ---
 

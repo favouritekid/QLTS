@@ -346,6 +346,24 @@ POST /api/admin/roles/sync-all-from-templates
 - Sau incident investigation
 - Scheduled monthly audit
 
+**🆕 Template Tracking (2026-01-06):**
+
+Migration `p6a1b2c3d4e5` thêm tracking columns vào `casbin_rule`:
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| `template_id` | VARCHAR(50) | Template nào apply policy này |
+| `applied_at` | TIMESTAMP | Thời điểm apply |
+| `applied_by` | INTEGER | User ID apply |
+
+**Template ID values:**
+| Value | Meaning |
+|-------|---------|
+| `officer`, `manager`, etc. | Policy từ named template |
+| `_legacy` | Backfilled từ policies có trước migration |
+| `_feature:<id>` | Policy từ feature toggle |
+| `NULL` | Manual operation |
+
 ---
 
 ## Template Cho Decision Mới
