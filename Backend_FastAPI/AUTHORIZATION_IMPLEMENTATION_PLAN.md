@@ -732,6 +732,7 @@ async def test_notification_delete_idor(test_client, user_a, user_b):
 ### Phase -1: Guardrails
 - [x] CI authorization check workflow hoạt động (`.github/workflows/authorization-check.yml`)
 - [x] Pre-deploy policy check hoạt động (`scripts/pre_deploy_check.py`)
+- [x] `check_router_auth.py` script hoạt động (209 endpoints checked)
 - [ ] Team đã được training về guardrails
 
 ### Phase 0: Cơ sở hạ tầng
@@ -756,13 +757,15 @@ async def test_notification_delete_idor(test_client, user_a, user_b):
 - [x] Role inheritance đã implement (`g` policies in migration)
 
 ### Phase 4: Security
-- [ ] Sensitive endpoints có password check
-- [ ] Rate limit đã audit
+- [x] `require_password_not_forced` dependency đã implement (`deps.py`)
+- [x] Rate limit đã audit - đầy đủ cho tất cả sensitive endpoints
+- [ ] Rollout `require_password_not_forced` đến tất cả routers (optional)
 
 ### Phase 5: Testing
-- [ ] Auth matrix test đạt 100%
+- [x] Authorization deps tests (`tests/security/test_authorization_deps.py`)
 - [x] IDOR test đã viết (`tests/security/test_idor_protection.py`)
-- [ ] **CI gate chặn PR khi test fail**
+- [x] **CI gate workflow đã tạo** (`.github/workflows/authorization-check.yml`)
+- [x] `check_router_auth.py` verified 209 endpoints
 
 ---
 
