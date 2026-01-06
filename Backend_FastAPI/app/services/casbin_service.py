@@ -391,10 +391,13 @@ class CasbinPolicyService:
                         "action": action,
                     }
                 )
-            await self.db.commit()
+            # IMPORTANT: Service NEVER commits - router is responsible for commit
+            # We use flush to make changes visible in the transaction
+            await self.db.flush()
         except Exception as e:
             # Non-critical: don't fail if tracking update fails
-            # Just log and continue
+            # This can happen if tracking columns don't exist (e.g., migration not applied)
+            # Just log and continue - the policy was already added by enforcer
             pass
 
     async def remove_policies_batch(

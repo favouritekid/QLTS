@@ -204,6 +204,13 @@ class Settings(BaseSettings):
         default=None, validation_alias="DEV_GEOIP_TEST_IP"
     )
 
+    # -- Casbin Auto-Sync Templates --
+    # If True, automatically sync casbin policies from templates on startup
+    # Only applies in development mode; production always requires manual sync for safety
+    AUTO_SYNC_TEMPLATES: bool = Field(
+        default=False, validation_alias="AUTO_SYNC_TEMPLATES"
+    )
+
     # === Pydantic Settings Configuration ===
     model_config = ConfigDict(
         # Đường dẫn tới file .env cần tải (chỉ tải nếu tồn tại)

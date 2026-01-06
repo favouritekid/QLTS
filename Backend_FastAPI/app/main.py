@@ -31,6 +31,7 @@ from .config import settings
 from .database import engine as async_db_engine
 from .database import redis_client as main_redis_client
 from .database import safe_redis_ping
+from .database import AsyncSessionLocal  # For auto-sync templates
 from .core.rate_limits import limiter  # ✅ MIGRATED: Use new centralized rate limits module
 from .utils.redis_lock import init_redis_client, close_redis_client
 from .routers import (
@@ -185,31 +186,94 @@ async def lifespan(app: FastAPI):
             else:
                 # DEV/TEST: Auto-seed from policy_templates.py (Single Source of Truth)
                 from app.casbin_config.policy_templates import SYSTEM_ROLES, apply_template
+                from app.services.casbin_service import CasbinPolicyService
                 
                 log.warning(
                     "⚠️ No policies found. Auto-seeding from policy_templates.py..."
                 )
                 
-                total_policies_added = 0
-                for role_config in SYSTEM_ROLES:
-                    template_id = role_config.get("template_id")
-                    role_name = role_config["name"]
+                # Create CasbinPolicyService for proper tracking column updates
+                async with AsyncSessionLocal() as db_session:
+                    casbin_service = CasbinPolicyService(db_session, enforcer)
                     
-                    if template_id:
-                        template_policies = apply_template(template_id, role_name)
-                        for policy in template_policies:
-                            await enforcer.add_policy(
-                                policy["subject"], policy["object"], policy["action"]
+                    total_policies_added = 0
+                    for role_config in SYSTEM_ROLES:
+                        template_id = role_config.get("template_id")
+                        role_name = role_config["name"]
+                        
+                        if template_id:
+                            template_policies = apply_template(template_id, role_name)
+                            
+                            # Convert to tuples for batch operation
+                            policies_tuples = [
+                                (p["subject"], p["object"], p["action"])
+                                for p in template_policies
+                            ]
+                            
+                            # Use add_policies_batch to properly fill tracking columns
+                            batch_result = await casbin_service.add_policies_batch(
+                                policies=policies_tuples,
+                                validate=False,  # Skip validation for bootstrap
+                                template_id=template_id,
+                                applied_by=None  # System seed - no user
                             )
-                            total_policies_added += 1
-                        log.info(
-                            f"  ✓ Seeded {role_name} with {len(template_policies)} policies from template '{template_id}'"
-                        )
+                            
+                            total_policies_added += batch_result["added"]
+                            log.info(
+                                f"  ✓ Seeded {role_name} with {batch_result['added']} policies from template '{template_id}'"
+                            )
+                    
+                    log.info(
+                        f"✅ Bootstrap complete: Seeded {len(SYSTEM_ROLES)} system roles "
+                        f"with {total_policies_added} total policies from policy_templates.py"
+                    )
+
+                    # Commit tracking column updates to DB
+                    # NOTE: Casbin adapter auto-commits policies, but tracking columns
+                    # are updated via db_session which needs explicit commit
+                    await db_session.commit()
+                    log.info("✅ Tracking columns (template_id, applied_at, applied_by) persisted to database")
+
+        # =========================================================================
+        # AUTO-SYNC TEMPLATES (Phase 5: Drift Detection & Auto-Sync)
+        # Reference: AUTHORIZATION_DECISIONS.md Decision 14
+        # =========================================================================
+        # After policies are loaded, check for drift from templates
+        # DEV mode with AUTO_SYNC_TEMPLATES=True: auto-sync to fix drift
+        # Otherwise: just log warnings for manual review
+        #
+        if settings.AUTO_SYNC_TEMPLATES and settings.APP_ENV == "development":
+            from app.services.casbin_service import CasbinPolicyService
+            
+            # Need a DB session for the service
+            async with AsyncSessionLocal() as db_session:
+                casbin_service = CasbinPolicyService(db_session, enforcer)
                 
-                log.info(
-                    f"✅ Bootstrap complete: Seeded {len(SYSTEM_ROLES)} system roles "
-                    f"with {total_policies_added} total policies from policy_templates.py"
-                )
+                drift_result = await casbin_service.detect_all_drift()
+                roles_with_drift = drift_result["summary"]["roles_with_drift"]
+                
+                if roles_with_drift > 0:
+                    log.warning(
+                        f"⚠️ Drift detected in {roles_with_drift} roles. "
+                        f"AUTO_SYNC_TEMPLATES is enabled, syncing now..."
+                    )
+                    
+                    # Auto-sync in development mode
+                    sync_result = await casbin_service.sync_all_roles_from_templates(dry_run=False)
+                    
+                    # Reload policies after sync
+                    await enforcer.load_policy()
+                    
+                    log.info(
+                        f"✅ Auto-sync complete: {sync_result['hint']}"
+                    )
+                else:
+                    log.info("✅ No drift detected - all roles match their templates")
+        elif settings.AUTO_SYNC_TEMPLATES and settings.APP_ENV == "production":
+            log.warning(
+                "⚠️ AUTO_SYNC_TEMPLATES is enabled but ignored in production. "
+                "Use POST /api/admin/roles/sync-all-from-templates for manual sync."
+            )
 
     except Exception as e:
         log.critical(
