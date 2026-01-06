@@ -23,7 +23,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
 from .. import database, models, schemas
-from ..core.deps import CasbinAuth  # ✅ Phase 2.2: Use standard alias
+from ..core.deps import (
+    CasbinAuth,  # ✅ Phase 2.2: Use standard alias
+    get_admission_for_manager,
+    get_admission_for_user,
+    get_admission_for_owner,
+)
 from ..services import admission_service
 from ..services.notification_dispatcher import dispatch
 from ..core.events import SystemEvents
@@ -566,3 +571,417 @@ async def delete_admission_profile(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
+
+
+# ==============================================================================
+# STATE MACHINE ENDPOINTS (ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md)
+# ==============================================================================
+
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.post(
+    "/{profile_id}/approve",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Approve admission profile (Manager/Admin)",
+)
+async def approve_admission(
+    request: Request,
+    profile_id: int,
+    data: schemas.ApproveRequest,
+    current_user: models.User = CasbinAuth,  # Layer 2: RBAC (Manager/Admin)
+    profile: models.AdmissionProfile = Depends(get_admission_for_manager),  # Layer 3: IDOR
+    db: AsyncSession = Depends(database.get_db),
+):
+    """
+    Approve admission profile - Manager/Admin action.
+
+    **Architecture Compliance** (ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.1.3):
+    - Layer 1: Rate limiting (200 req/hour)
+    - Layer 2: RBAC via CasbinAuth (Manager/Admin only)
+    - Layer 3: IDOR via get_admission_for_manager (unit check)
+    - Layer 4: Service layer handles business logic
+
+    **State Transition:**
+    - From: SUBMITTED or RESUBMITTED
+    - To: APPROVED
+
+    **Validation:**
+    - State transition via validate_transition()
+    - Optimistic locking via version check
+
+    **Request Body:**
+    - notes: Optional approval notes (sanitized for XSS)
+    - version: Optional version for optimistic locking
+
+    **Returns:**
+    - Updated AdmissionProfile with status='approved'
+
+    **Errors:**
+    - 400: Invalid state transition or version mismatch
+    - 404: Profile not found (or IDOR protection)
+    """
+    try:
+        # 1. DELEGATE to Service
+        result, callback = await admission_service.approve_profile(
+            db=db,
+            profile=profile,
+            approver=current_user,
+            data=data.model_dump(),
+        )
+
+        # 2. COMMIT Transaction
+        await db.commit()
+        await db.refresh(result)
+
+        # 3. POST-COMMIT Side Effects
+        await callback()
+
+        # 4. RETURN Pydantic Model
+        return result
+
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.post(
+    "/{profile_id}/reject",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Reject admission profile (Manager/Admin)",
+)
+async def reject_admission(
+    request: Request,
+    profile_id: int,
+    data: schemas.RejectRequest,
+    current_user: models.User = CasbinAuth,  # Layer 2: RBAC (Manager/Admin)
+    profile: models.AdmissionProfile = Depends(get_admission_for_manager),  # Layer 3: IDOR
+    db: AsyncSession = Depends(database.get_db),
+):
+    """
+    Reject admission profile - Manager/Admin action.
+
+    **Architecture Compliance** (ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.1.3):
+    - Layer 1: Rate limiting (200 req/hour)
+    - Layer 2: RBAC via CasbinAuth (Manager/Admin only)
+    - Layer 3: IDOR via get_admission_for_manager (unit check)
+    - Layer 4: Service layer handles business logic
+
+    **State Transition:**
+    - From: SUBMITTED or RESUBMITTED
+    - To: REJECTED
+
+    **Validation:**
+    - State transition via validate_transition()
+    - Optimistic locking via version check
+    - Rejection reason required (min 10 chars, XSS sanitized)
+
+    **Request Body:**
+    - reason: Rejection reason (REQUIRED, min 10 chars, max 1000)
+    - version: Optional version for optimistic locking
+
+    **Returns:**
+    - Updated AdmissionProfile with status='rejected'
+
+    **Errors:**
+    - 400: Invalid state transition, version mismatch, or invalid reason
+    - 404: Profile not found (or IDOR protection)
+    """
+    try:
+        # 1. DELEGATE to Service
+        result, callback = await admission_service.reject_profile(
+            db=db,
+            profile=profile,
+            rejector=current_user,
+            data=data.model_dump(),
+        )
+
+        # 2. COMMIT Transaction
+        await db.commit()
+        await db.refresh(result)
+
+        # 3. POST-COMMIT Side Effects
+        await callback()
+
+        # 4. RETURN Pydantic Model
+        return result
+
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.post(
+    "/{profile_id}/resubmit",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Resubmit admission profile after rejection (Officer)",
+)
+async def resubmit_admission(
+    request: Request,
+    profile_id: int,
+    data: schemas.ResubmitRequest,
+    current_user: models.User = CasbinAuth,  # Layer 2: RBAC (Officer/Admin)
+    profile: models.AdmissionProfile = Depends(get_admission_for_user),  # Layer 3: IDOR
+    db: AsyncSession = Depends(database.get_db),
+):
+    """
+    Resubmit admission profile after rejection - Officer action.
+
+    **Architecture Compliance** (ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.2.1):
+    - Layer 1: Rate limiting (200 req/hour)
+    - Layer 2: RBAC via CasbinAuth (Officer/Manager/Admin)
+    - Layer 3: IDOR via get_admission_for_user (assigned officer check)
+    - Layer 4: Service layer handles business logic
+
+    **State Transition:**
+    - From: REJECTED
+    - To: RESUBMITTED
+
+    **Validation:**
+    - State transition via validate_transition()
+    - Optimistic locking via version check
+    - Resubmit notes required (min 10 chars, XSS sanitized)
+
+    **Request Body:**
+    - notes: Resubmission notes explaining what was fixed (REQUIRED, min 10 chars)
+    - version: Optional version for optimistic locking
+
+    **Returns:**
+    - Updated AdmissionProfile with status='resubmitted'
+
+    **Errors:**
+    - 400: Invalid state transition, version mismatch, or invalid notes
+    - 404: Profile not found (or IDOR protection)
+    """
+    try:
+        # 1. DELEGATE to Service
+        result, callback = await admission_service.resubmit_profile(
+            db=db,
+            profile=profile,
+            officer=current_user,
+            data=data.model_dump(),
+        )
+
+        # 2. COMMIT Transaction
+        await db.commit()
+        await db.refresh(result)
+
+        # 3. POST-COMMIT Side Effects
+        await callback()
+
+        # 4. RETURN Pydantic Model
+        return result
+
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.post(
+    "/{profile_id}/confirm",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Confirm enrollment intent (Applicant)",
+)
+async def confirm_enrollment(
+    request: Request,
+    profile_id: int,
+    data: schemas.ConfirmRequest,
+    current_user: models.User = CasbinAuth,  # Layer 2: RBAC (User/Admin)
+    profile: models.AdmissionProfile = Depends(get_admission_for_owner),  # Layer 3: IDOR (SELF check)
+    db: AsyncSession = Depends(database.get_db),
+):
+    """
+    Confirm enrollment intent - Applicant action (SELF only).
+
+    **Architecture Compliance** (ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.3.1):
+    - Layer 1: Rate limiting (200 req/hour)
+    - Layer 2: RBAC via CasbinAuth (User role)
+    - Layer 3: IDOR via get_admission_for_owner (SELF check: lead.user_id == current_user.id)
+    - Layer 4: Service layer handles business logic
+
+    **State Transition:**
+    - From: APPROVED
+    - To: CONFIRMED
+
+    **Validation:**
+    - State transition via validate_transition()
+    - Optimistic locking via version check
+    - SELF check: Only the applicant (lead.user_id) can confirm
+
+    **Request Body:**
+    - version: Optional version for optimistic locking
+
+    **Returns:**
+    - Updated AdmissionProfile with status='confirmed'
+
+    **Errors:**
+    - 400: Invalid state transition or version mismatch
+    - 404: Profile not found (or IDOR protection - not the applicant)
+    """
+    try:
+        # 1. DELEGATE to Service
+        result, callback = await admission_service.confirm_enrollment(
+            db=db,
+            profile=profile,
+            applicant=current_user,
+            data=data.model_dump(),
+        )
+
+        # 2. COMMIT Transaction
+        await db.commit()
+        await db.refresh(result)
+
+        # 3. POST-COMMIT Side Effects
+        await callback()
+
+        # 4. RETURN Pydantic Model
+        return result
+
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.post(
+    "/{profile_id}/override",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Override normal flow (Admin only - AUDIT LOGGED)",
+)
+async def override_admission(
+    request: Request,
+    profile_id: int,
+    data: schemas.OverrideRequest,
+    current_user: models.User = CasbinAuth,  # Layer 2: RBAC (Admin only)
+    profile: models.AdmissionProfile = Depends(get_admission_for_manager),  # Layer 3: IDOR
+    db: AsyncSession = Depends(database.get_db),
+):
+    """
+    Override normal admission flow - Admin action (AUDIT LOGGED).
+
+    **Architecture Compliance** (ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.4.1):
+    - Layer 1: Rate limiting (200 req/hour)
+    - Layer 2: RBAC via CasbinAuth (Admin only)
+    - Layer 3: IDOR via get_admission_for_manager
+    - Layer 4: Service layer handles business logic + AUDIT LOGGING
+
+    **State Transition:**
+    - From: APPROVED
+    - To: OVERRIDDEN
+
+    **Validation:**
+    - State transition via validate_transition()
+    - Optimistic locking via version check
+    - Override reason required (min 10 chars)
+
+    **AUDIT LOGGING** (per AUTHORIZATION_DECISIONS.md Decision 11):
+    - All override actions logged with: admin_id, admin_email, reason, bypass_rules, timestamp
+    - Log level: WARNING (for security monitoring)
+
+    **Request Body:**
+    - reason: Override reason (REQUIRED, min 10 chars, max 1000)
+    - bypass_rules: List of rules bypassed (optional, for documentation)
+    - version: Optional version for optimistic locking
+
+    **Returns:**
+    - Updated AdmissionProfile with status='overridden'
+
+    **Errors:**
+    - 400: Invalid state transition, version mismatch, or invalid reason
+    - 404: Profile not found (or IDOR protection)
+    """
+    try:
+        # 1. DELEGATE to Service (includes AUDIT LOGGING)
+        result, callback = await admission_service.override_profile(
+            db=db,
+            profile=profile,
+            admin=current_user,
+            data=data.model_dump(),
+        )
+
+        # 2. COMMIT Transaction
+        await db.commit()
+        await db.refresh(result)
+
+        # 3. POST-COMMIT Side Effects
+        await callback()
+
+        # 4. RETURN Pydantic Model
+        return result
+
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.post(
+    "/{profile_id}/finalize",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Finalize to enrolled (Admin only)",
+)
+async def finalize_enrollment(
+    request: Request,
+    profile_id: int,
+    data: schemas.FinalizeRequest,
+    current_user: models.User = CasbinAuth,  # Layer 2: RBAC (Admin only)
+    profile: models.AdmissionProfile = Depends(get_admission_for_manager),  # Layer 3: IDOR
+    db: AsyncSession = Depends(database.get_db),
+):
+    """
+    Finalize enrollment to ENROLLED status - Admin action.
+
+    **Architecture Compliance** (ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.4.2):
+    - Layer 1: Rate limiting (200 req/hour)
+    - Layer 2: RBAC via CasbinAuth (Admin only)
+    - Layer 3: IDOR via get_admission_for_manager
+    - Layer 4: Service layer handles business logic
+
+    **State Transition:**
+    - From: CONFIRMED or OVERRIDDEN
+    - To: ENROLLED (FINAL STATE - no further transitions)
+
+    **Validation:**
+    - State transition via validate_transition()
+    - Optimistic locking via version check
+    - Final state enforcement (no transitions from ENROLLED)
+
+    **Request Body:**
+    - version: Optional version for optimistic locking
+
+    **Returns:**
+    - Updated AdmissionProfile with status='enrolled'
+
+    **Errors:**
+    - 400: Invalid state transition or version mismatch
+    - 404: Profile not found (or IDOR protection)
+    """
+    try:
+        # 1. DELEGATE to Service
+        result, callback = await admission_service.finalize_profile(
+            db=db,
+            profile=profile,
+            admin=current_user,
+            data=data.model_dump(),
+        )
+
+        # 2. COMMIT Transaction
+        await db.commit()
+        await db.refresh(result)
+
+        # 3. POST-COMMIT Side Effects
+        await callback()
+
+        # 4. RETURN Pydantic Model
+        return result
+
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
