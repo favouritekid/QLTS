@@ -802,6 +802,7 @@ async def apply_template_to_role(
         template_req.template_id,
         template_req.role,
         validate=template_req.run_validation,
+        applied_by=current_admin.id,
     )
 
     # Log activity
@@ -876,10 +877,12 @@ async def add_policies_batch(
 
         return result
 
-    # Actually add policies
+    # Actually add policies (manual batch, no template)
     result = await casbin_service.add_policies_batch(
         policies_tuples,
-        validate=batch_req.run_validation
+        validate=batch_req.run_validation,
+        template_id=None,  # Manual batch operation
+        applied_by=current_admin.id
     )
 
     # Log activity for each added policy
@@ -1433,8 +1436,13 @@ async def toggle_role_feature(
 
     # Add or remove policies based on enabled flag
     if request_data.enabled:
-        # Enable feature: add all policies
-        result = await casbin_service.add_policies_batch(policies_tuples, validate=True)
+        # Enable feature: add all policies (track as feature-based)
+        result = await casbin_service.add_policies_batch(
+            policies_tuples,
+            validate=True,
+            template_id=f"_feature:{request_data.feature_id}",
+            applied_by=current_admin.id
+        )
 
         # Log activity
         await activity_service.log_activity(
@@ -1574,7 +1582,7 @@ async def refresh_role_from_template_endpoint(
     casbin_service = CasbinPolicyService(db=db, enforcer=enforcer)
 
     result = await casbin_service.refresh_role_from_template(
-        role_name, template_id, force=force
+        role_name, template_id, force=force, applied_by=current_admin.id
     )
 
     if result.get("success"):

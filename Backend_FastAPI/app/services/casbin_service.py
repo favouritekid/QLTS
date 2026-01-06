@@ -12,9 +12,10 @@ This service provides high-level operations for managing Casbin policies with:
 from typing import List, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
+from datetime import datetime
 
 import casbin
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..casbin_config.policy_templates import (
@@ -288,14 +289,18 @@ class CasbinPolicyService:
     async def add_policies_batch(
         self,
         policies: List[Tuple[str, str, str]],
-        validate: bool = True
+        validate: bool = True,
+        template_id: Optional[str] = None,
+        applied_by: Optional[int] = None
     ) -> dict:
         """
-        Add multiple policies in a batch with validation.
+        Add multiple policies in a batch with validation and template tracking.
 
         Args:
             policies: List of (subject, object, action) tuples
             validate: Whether to validate before adding
+            template_id: Template ID for tracking (optional)
+            applied_by: User ID who applied this (optional)
 
         Returns:
             Dictionary with:
@@ -308,6 +313,7 @@ class CasbinPolicyService:
         skipped = 0
         errors = []
         warnings = []
+        added_policies = []  # Track which policies were added for template tracking
 
         for subject, obj, action in policies:
             # Validate if requested
@@ -325,11 +331,16 @@ class CasbinPolicyService:
                 success = await self.enforcer.add_policy(subject, obj, action)
                 if success:
                     added += 1
+                    added_policies.append((subject, obj, action))
                 else:
                     skipped += 1
                     warnings.append(f"Policy already exists: {subject} {obj} {action}")
             except Exception as e:
                 errors.append(f"Failed to add policy {subject} {obj} {action}: {str(e)}")
+
+        # Update template tracking for added policies
+        if added_policies and template_id:
+            await self._update_template_tracking(added_policies, template_id, applied_by)
 
         return {
             "added": added,
@@ -337,6 +348,54 @@ class CasbinPolicyService:
             "errors": errors,
             "warnings": warnings,
         }
+
+    async def _update_template_tracking(
+        self,
+        policies: List[Tuple[str, str, str]],
+        template_id: str,
+        applied_by: Optional[int] = None
+    ) -> None:
+        """
+        Update template tracking columns for policies.
+
+        This is called after policies are added via enforcer to set:
+        - template_id: Which template this policy came from
+        - applied_at: When this policy was applied
+        - applied_by: User ID who applied this policy
+
+        Args:
+            policies: List of (subject, object, action) tuples
+            template_id: Template identifier
+            applied_by: User ID (optional)
+        """
+        try:
+            for subject, obj, action in policies:
+                await self.db.execute(
+                    text("""
+                        UPDATE casbin_rule
+                        SET template_id = :template_id,
+                            applied_at = :applied_at,
+                            applied_by = :applied_by
+                        WHERE ptype = 'p'
+                          AND v0 = :subject
+                          AND v1 = :obj
+                          AND v2 = :action
+                          AND template_id IS NULL
+                    """),
+                    {
+                        "template_id": template_id,
+                        "applied_at": datetime.utcnow(),
+                        "applied_by": applied_by,
+                        "subject": subject,
+                        "obj": obj,
+                        "action": action,
+                    }
+                )
+            await self.db.commit()
+        except Exception as e:
+            # Non-critical: don't fail if tracking update fails
+            # Just log and continue
+            pass
 
     async def remove_policies_batch(
         self,
@@ -397,7 +456,8 @@ class CasbinPolicyService:
         self,
         template_id: str,
         role: str,
-        validate: bool = True
+        validate: bool = True,
+        applied_by: Optional[int] = None
     ) -> dict:
         """
         Apply a policy template to a role.
@@ -406,6 +466,7 @@ class CasbinPolicyService:
             template_id: Template identifier (e.g., "officer")
             role: Role name (e.g., "role:custom")
             validate: Whether to validate before applying
+            applied_by: User ID who applied this template (for audit trail)
 
         Returns:
             Dictionary with application results
@@ -420,8 +481,13 @@ class CasbinPolicyService:
                 for p in template_policies
             ]
 
-            # Apply batch
-            result = await self.add_policies_batch(policies_tuples, validate=validate)
+            # Apply batch with template tracking
+            result = await self.add_policies_batch(
+                policies_tuples,
+                validate=validate,
+                template_id=template_id,
+                applied_by=applied_by
+            )
 
             return {
                 **result,
@@ -629,7 +695,8 @@ class CasbinPolicyService:
         self,
         role: str,
         template_id: str,
-        force: bool = False
+        force: bool = False,
+        applied_by: Optional[int] = None
     ) -> dict:
         """
         Force reset role to match template exactly.
@@ -643,6 +710,7 @@ class CasbinPolicyService:
             role: Role name (e.g., "role:officer")
             template_id: Template identifier (e.g., "officer")
             force: Must be True to execute (safety check)
+            applied_by: User ID who triggered this refresh (for audit trail)
 
         Returns:
             Dictionary with operation results
@@ -680,8 +748,10 @@ class CasbinPolicyService:
                 if success:
                     removed += 1
 
-            # Apply template fresh
-            result = await self.apply_template_to_role(template_id, role, validate=False)
+            # Apply template fresh (with template tracking)
+            result = await self.apply_template_to_role(
+                template_id, role, validate=False, applied_by=applied_by
+            )
 
             return {
                 "success": True,
