@@ -204,6 +204,11 @@ enforcer.add_policy("role:officer", "/admissions/*/submit", "POST", "state:draft
 # Service: state_machine.can_transition(profile, "SUBMITTED")
 ```
 
+**🔴 FIX Applied (2026-01-06):**
+- REMOVED: Officer `/api/admissions/{id}/enroll` permission from `policy_templates.py`
+- Enroll is now ADMIN-ONLY with break-glass audit
+- Migration: `p4fix_sync_policies_with_matrix.py`
+
 ---
 
 ## Decision 11: OVERRIDDEN Là Trạng Thái Ngoại Lệ Có Audit

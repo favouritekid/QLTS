@@ -42,8 +42,16 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         # Lead access
         {"subject": "{role}", "object": "/api/leads", "action": "GET"},
         {"subject": "{role}", "object": "/api/leads/{lead_id}", "action": "GET"},
-        {"subject": "{role}", "object": "/api/leads/{lead_id}/consultations", "action": "POST"},
+        {"subject": "{role}", "object": "/api/leads/{lead_id}/consultations", "action": "GET"},  # List consultations
+        {"subject": "{role}", "object": "/api/leads/{lead_id}/consultations", "action": "POST"},  # Create consultation
+        {"subject": "{role}", "object": "/api/leads/{lead_id}/consultations/{consultation_id}", "action": "PUT"},  # Update
+        {"subject": "{role}", "object": "/api/leads/{lead_id}/consultations/{consultation_id}", "action": "DELETE"},  # Delete own
         {"subject": "{role}", "object": "/api/leads/{lead_id}/action", "action": "POST"},
+        {"subject": "{role}", "object": "/api/leads/{lead_id}/timeline", "action": "GET"},  # Lead timeline
+        {"subject": "{role}", "object": "/api/leads/{lead_id}/insights", "action": "GET"},  # Lead insights
+        {"subject": "{role}", "object": "/api/leads/my/reassign-quota", "action": "GET"},  # Reassign quota
+        {"subject": "{role}", "object": "/api/leads/import/template", "action": "GET"},  # Import template
+        {"subject": "{role}", "object": "/api/leads/import", "action": "POST"},  # Import leads
         # Pipeline access (for consultation statuses in QuickDisposition)
         {"subject": "{role}", "object": "/api/pipeline/stages", "action": "GET"},
         {"subject": "{role}", "object": "/api/pipeline/all", "action": "GET"},
@@ -62,8 +70,14 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/admissions/{profile_id}", "action": "GET"},   # Read profile
         {"subject": "{role}", "object": "/api/admissions/{profile_id}", "action": "PUT"},   # Update profile
         {"subject": "{role}", "object": "/api/admissions/{profile_id}/submit", "action": "POST"},  # Submit
-        {"subject": "{role}", "object": "/api/admissions/{profile_id}/enroll", "action": "POST"},  # Enroll
+        # REMOVED: enroll is ADMIN-ONLY per Decision 10 (Admission State ≠ Authorization)
+        # {"subject": "{role}", "object": "/api/admissions/{profile_id}/enroll", "action": "POST"},
         {"subject": "{role}", "object": "/api/admissions/{profile_id}/documents/{doc_code}/upload", "action": "POST"},  # Upload doc
+        # Admission config (read-only lookup data)
+        {"subject": "{role}", "object": "/api/admission-config/subjects", "action": "GET"},
+        {"subject": "{role}", "object": "/api/admission-config/methods", "action": "GET"},
+        {"subject": "{role}", "object": "/api/admission-config/criteria", "action": "GET"},
+        {"subject": "{role}", "object": "/api/admission-config/criteria/{criteria_code}", "action": "GET"},
         # Profile access
         {"subject": "{role}", "object": "/api/profile", "action": "GET"},
         {"subject": "{role}", "object": "/api/profile", "action": "PUT"},
@@ -96,6 +110,13 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/leads/{lead_id}/applications", "action": "POST"},
         {"subject": "{role}", "object": "/api/leads/export/csv", "action": "GET"},
         {"subject": "{role}", "object": "/api/leads/export/excel", "action": "GET"},
+        # Bulk operations (manager-specific)
+        {"subject": "{role}", "object": "/api/leads/bulk-assign", "action": "POST"},  # Bulk assign
+        {"subject": "{role}", "object": "/api/leads/distribution-preview", "action": "GET"},  # Preview distribution
+        {"subject": "{role}", "object": "/api/leads/import/template", "action": "GET"},  # Import template
+        {"subject": "{role}", "object": "/api/leads/import", "action": "POST"},  # Import leads
+        # Admission management (can override decisions)
+        {"subject": "{role}", "object": "/api/admissions/{profile_id}/override", "action": "POST"},  # Override decision
     ]
 }
 
@@ -167,15 +188,32 @@ USER_MANAGER_TEMPLATE: PolicyTemplate = {
 
 BASIC_USER_TEMPLATE: PolicyTemplate = {
     "display_name": "Basic User",
-    "description": "Minimal permissions: profile and notifications only",
+    "description": "Minimal permissions: profile, notifications, sessions, security",
     "category": "core",
     "policies": [
+        # Profile access (SELF only - IDOR protected)
         {"subject": "{role}", "object": "/api/profile", "action": "GET"},
         {"subject": "{role}", "object": "/api/profile", "action": "PUT"},
+        # Notification access (SELF only - IDOR protected)
         {"subject": "{role}", "object": "/api/notifications", "action": "GET"},
         {"subject": "{role}", "object": "/api/notifications/mark-as-read", "action": "POST"},
         {"subject": "{role}", "object": "/api/notifications/mark-all-as-read", "action": "POST"},
         {"subject": "{role}", "object": "/api/notifications/{notification_id}", "action": "DELETE"},
+        # Notification preferences (SELF only)
+        {"subject": "{role}", "object": "/api/notification-preferences", "action": "GET"},
+        {"subject": "{role}", "object": "/api/notification-preferences", "action": "PUT"},
+        {"subject": "{role}", "object": "/api/notification-preferences/{channel}", "action": "PUT"},
+        # Sessions (SELF only - manage own sessions)
+        {"subject": "{role}", "object": "/api/sessions", "action": "GET"},
+        {"subject": "{role}", "object": "/api/sessions/{session_id}", "action": "DELETE"},
+        {"subject": "{role}", "object": "/api/sessions/revoke-all", "action": "POST"},
+        # Security (SELF only - security settings)
+        {"subject": "{role}", "object": "/api/security/login-history", "action": "GET"},
+        {"subject": "{role}", "object": "/api/security/active-sessions", "action": "GET"},
+        {"subject": "{role}", "object": "/api/security/not-me", "action": "POST"},
+        # Admission config (read-only lookup data for all users)
+        {"subject": "{role}", "object": "/api/admission-config/subjects", "action": "GET"},
+        {"subject": "{role}", "object": "/api/admission-config/methods", "action": "GET"},
     ]
 }
 
