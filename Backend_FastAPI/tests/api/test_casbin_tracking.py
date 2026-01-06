@@ -35,16 +35,39 @@ log = logging.getLogger(__name__)
 # ============================================================================
 
 async def get_casbin_rule_with_tracking(ptype: str, v0: str, v1: str, v2: str):
-    """Get casbin rule including tracking columns."""
+    """Get casbin rule including tracking columns using raw SQL."""
     async with AsyncSessionLocal() as session:
-        query = select(CasbinRule).where(
-            CasbinRule.ptype == ptype,
-            CasbinRule.v0 == v0,
-            CasbinRule.v1 == v1,
-            CasbinRule.v2 == v2
+        # Use raw SQL to query tracking columns that aren't in CasbinRule model
+        result = await session.execute(
+            text("""
+                SELECT id, ptype, v0, v1, v2, v3, v4, v5,
+                       template_id, applied_at, applied_by
+                FROM casbin_rule
+                WHERE ptype = :ptype AND v0 = :v0 AND v1 = :v1 AND v2 = :v2
+                LIMIT 1
+            """),
+            {"ptype": ptype, "v0": v0, "v1": v1, "v2": v2}
         )
-        result = await session.execute(query)
-        return result.scalar_one_or_none()
+        row = result.fetchone()
+        if row is None:
+            return None
+
+        # Return a simple object with tracking attributes
+        class CasbinRuleWithTracking:
+            def __init__(self, row):
+                self.id = row[0]
+                self.ptype = row[1]
+                self.v0 = row[2]
+                self.v1 = row[3]
+                self.v2 = row[4]
+                self.v3 = row[5]
+                self.v4 = row[6]
+                self.v5 = row[7]
+                self.template_id = row[8]
+                self.applied_at = row[9]
+                self.applied_by = row[10]
+
+        return CasbinRuleWithTracking(row)
 
 
 async def cleanup_test_policy(v0: str, v1: str, v2: str):
@@ -65,7 +88,6 @@ async def cleanup_test_policy(v0: str, v1: str, v2: str):
 # ============================================================================
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="Requires migration p6a1b2c3d4e5 - tracking columns not in test DB")
 async def test_policy_tracking_columns_filled_on_create(
     client: AsyncClient,
     admin_token_headers: dict,

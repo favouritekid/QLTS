@@ -12,7 +12,7 @@ This service provides high-level operations for managing Casbin policies with:
 from typing import List, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, timezone
 
 import casbin
 from sqlalchemy import select, text
@@ -363,42 +363,56 @@ class CasbinPolicyService:
         - applied_at: When this policy was applied
         - applied_by: User ID who applied this policy
 
+        IMPORTANT: We use AsyncSessionLocal instead of self.db because:
+        - Casbin enforcer.add_policy() uses its own adapter with its own session
+        - The DI session (self.db) is in a different transaction and can't see
+          the row that enforcer committed
+        - We need a fresh session that starts AFTER enforcer's commit
+
         Args:
             policies: List of (subject, object, action) tuples
             template_id: Template identifier
             applied_by: User ID (optional)
         """
+        from app.database import AsyncSessionLocal
+        import logging
+        log = logging.getLogger(__name__)
+        
         try:
-            for subject, obj, action in policies:
-                await self.db.execute(
-                    text("""
-                        UPDATE casbin_rule
-                        SET template_id = :template_id,
-                            applied_at = :applied_at,
-                            applied_by = :applied_by
-                        WHERE ptype = 'p'
-                          AND v0 = :subject
-                          AND v1 = :obj
-                          AND v2 = :action
-                          AND template_id IS NULL
-                    """),
-                    {
-                        "template_id": template_id,
-                        "applied_at": datetime.utcnow(),
-                        "applied_by": applied_by,
-                        "subject": subject,
-                        "obj": obj,
-                        "action": action,
-                    }
-                )
-            # IMPORTANT: Service NEVER commits - router is responsible for commit
-            # We use flush to make changes visible in the transaction
-            await self.db.flush()
+            # Use a fresh session to see the rows committed by enforcer
+            async with AsyncSessionLocal() as fresh_session:
+                for subject, obj, action in policies:
+                    result = await fresh_session.execute(
+                        text("""
+                            UPDATE casbin_rule
+                            SET template_id = :template_id,
+                                applied_at = :applied_at,
+                                applied_by = :applied_by
+                            WHERE ptype = 'p'
+                              AND v0 = :subject
+                              AND v1 = :obj
+                              AND v2 = :action
+                              AND template_id IS NULL
+                        """),
+                        {
+                            "template_id": template_id,
+                            "applied_at": datetime.utcnow(),  # Must be offset-naive for asyncpg
+                            "applied_by": applied_by,
+                            "subject": subject,
+                            "obj": obj,
+                            "action": action,
+                        }
+                    )
+                    log.info(f"Tracking UPDATE for {subject} {obj} {action}: rowcount={result.rowcount}")
+                
+                # Commit the tracking update
+                await fresh_session.commit()
+                log.info(f"✅ Tracking columns committed for {len(policies)} policies")
         except Exception as e:
             # Non-critical: don't fail if tracking update fails
             # This can happen if tracking columns don't exist (e.g., migration not applied)
             # Just log and continue - the policy was already added by enforcer
-            pass
+            log.warning(f"⚠️ Failed to update tracking columns: {e}")
 
     async def remove_policies_batch(
         self,
