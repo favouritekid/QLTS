@@ -1089,6 +1089,499 @@ async def enroll_student(
 # DELETE PROFILE
 # ==============================================================================
 
+# ==============================================================================
+# STATE MACHINE TRANSITIONS (Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md)
+# ==============================================================================
+
+async def approve_profile(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    approver: models.User,
+    data: Dict[str, Any],
+) -> tuple[models.AdmissionProfile, Any]:
+    """
+    Approve admission profile (Manager/Admin action).
+
+    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.1:
+    - Transition: SUBMITTED/RESUBMITTED → APPROVED
+    - State validation via admission_state_machine module
+    - Version checking for optimistic locking
+    - Returns (result, post_commit_callback) pattern
+
+    Architecture Compliance:
+    - No HTTPException (use Domain Exceptions)
+    - No Request/Response imports
+    - Return callback for side effects
+    - Router calls db.commit()
+
+    Args:
+        db: Database session
+        profile: AdmissionProfile (from IDOR dependency)
+        approver: User performing approval
+        data: ApproveRequest data (notes)
+
+    Returns:
+        Tuple of (updated_profile, post_commit_callback)
+
+    Raises:
+        BadRequest: Invalid state transition
+        ConflictError: Version mismatch
+    """
+    from .admission_state_machine import validate_transition
+
+    # STATE VALIDATION (Business Rule)
+    try:
+        validate_transition(profile.status, "approved")
+    except ValueError as e:
+        log.warning(
+            "Invalid state transition for approve",
+            profile_id=profile.id,
+            current_status=profile.status,
+            error=str(e),
+        )
+        raise BadRequest(str(e))
+
+    # VERSION CHECK (Optimistic Locking)
+    if "version" in data and data["version"] != profile.version:
+        raise ConflictError(
+            f"Profile was modified by another user. "
+            f"Expected version {data['version']}, but current version is {profile.version}. "
+            "Please refresh and try again."
+        )
+
+    # STATE CHANGE
+    profile.status = "approved"
+    profile.approved_at = datetime.now(timezone.utc)
+    profile.approved_by_id = approver.id
+    profile.approval_notes = data.get("notes")
+    profile.version += 1
+    profile.updated_at = datetime.now(timezone.utc)
+
+    await db.flush()  # Flush, don't commit! Router commits.
+
+    log.info(
+        "Admission profile approved",
+        profile_id=profile.id,
+        approver_id=approver.id,
+        previous_status=profile.status,
+        citizen_id=profile.citizen_id,
+    )
+
+    # PREPARE POST-COMMIT CALLBACK
+    async def post_commit():
+        """Side effects after transaction commit (notifications, etc.)."""
+        # TODO: Send notification to applicant
+        log.info(
+            "Post-commit: Profile approved notification",
+            profile_id=profile.id,
+        )
+
+    return profile, post_commit
+
+
+async def reject_profile(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    rejector: models.User,
+    data: Dict[str, Any],
+) -> tuple[models.AdmissionProfile, Any]:
+    """
+    Reject admission profile (Manager/Admin action).
+
+    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.1:
+    - Transition: SUBMITTED/RESUBMITTED → REJECTED
+    - Reason is MANDATORY (validated in schema, min 10 chars)
+    - State validation via admission_state_machine module
+    - Returns (result, post_commit_callback) pattern
+
+    Args:
+        db: Database session
+        profile: AdmissionProfile (from IDOR dependency)
+        rejector: User performing rejection
+        data: RejectRequest data (reason - required)
+
+    Returns:
+        Tuple of (updated_profile, post_commit_callback)
+
+    Raises:
+        BadRequest: Invalid state transition or missing reason
+        ConflictError: Version mismatch
+    """
+    from .admission_state_machine import validate_transition
+
+    # STATE VALIDATION
+    try:
+        validate_transition(profile.status, "rejected")
+    except ValueError as e:
+        log.warning(
+            "Invalid state transition for reject",
+            profile_id=profile.id,
+            current_status=profile.status,
+            error=str(e),
+        )
+        raise BadRequest(str(e))
+
+    # BUSINESS RULE: Reason is mandatory (already validated by schema)
+    if not data.get("reason"):
+        raise BadRequest("Rejection reason is required (min 10 characters)")
+
+    # VERSION CHECK
+    if "version" in data and data["version"] != profile.version:
+        raise ConflictError(
+            f"Profile was modified by another user. "
+            f"Expected version {data['version']}, but current version is {profile.version}. "
+            "Please refresh and try again."
+        )
+
+    # STATE CHANGE
+    profile.status = "rejected"
+    profile.rejected_at = datetime.now(timezone.utc)
+    profile.rejected_by_id = rejector.id
+    profile.rejection_reason = data["reason"]
+    profile.version += 1
+    profile.updated_at = datetime.now(timezone.utc)
+
+    await db.flush()
+
+    log.info(
+        "Admission profile rejected",
+        profile_id=profile.id,
+        rejector_id=rejector.id,
+        reason_length=len(data["reason"]),
+    )
+
+    # POST-COMMIT CALLBACK
+    async def post_commit():
+        """Side effects after transaction commit."""
+        log.info(
+            "Post-commit: Profile rejected notification",
+            profile_id=profile.id,
+        )
+
+    return profile, post_commit
+
+
+async def resubmit_profile(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    officer: models.User,
+    data: Dict[str, Any],
+) -> tuple[models.AdmissionProfile, Any]:
+    """
+    Resubmit rejected profile (Officer action).
+
+    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.2:
+    - Transition: REJECTED → RESUBMITTED
+    - Officer fixes issues and resubmits for Manager review
+    - Optional notes about what was fixed
+
+    Args:
+        db: Database session
+        profile: AdmissionProfile (from IDOR dependency)
+        officer: User performing resubmit
+        data: ResubmitRequest data (notes)
+
+    Returns:
+        Tuple of (updated_profile, post_commit_callback)
+
+    Raises:
+        BadRequest: Invalid state transition
+        ConflictError: Version mismatch
+    """
+    from .admission_state_machine import validate_transition
+
+    # STATE VALIDATION
+    try:
+        validate_transition(profile.status, "resubmitted")
+    except ValueError as e:
+        log.warning(
+            "Invalid state transition for resubmit",
+            profile_id=profile.id,
+            current_status=profile.status,
+            error=str(e),
+        )
+        raise BadRequest(str(e))
+
+    # VERSION CHECK
+    if "version" in data and data["version"] != profile.version:
+        raise ConflictError(
+            f"Profile was modified by another user. "
+            f"Expected version {data['version']}, but current version is {profile.version}. "
+            "Please refresh and try again."
+        )
+
+    # STATE CHANGE
+    profile.status = "resubmitted"
+    profile.resubmitted_at = datetime.now(timezone.utc)
+    profile.resubmitted_by_id = officer.id
+    profile.resubmit_notes = data.get("notes")
+    profile.version += 1
+    profile.updated_at = datetime.now(timezone.utc)
+
+    await db.flush()
+
+    log.info(
+        "Admission profile resubmitted",
+        profile_id=profile.id,
+        officer_id=officer.id,
+    )
+
+    # POST-COMMIT CALLBACK
+    async def post_commit():
+        """Side effects after transaction commit."""
+        log.info(
+            "Post-commit: Profile resubmitted notification",
+            profile_id=profile.id,
+        )
+
+    return profile, post_commit
+
+
+async def confirm_enrollment(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    applicant: models.User,
+    data: Dict[str, Any],
+) -> tuple[models.AdmissionProfile, Any]:
+    """
+    Confirm enrollment intent (Applicant/User SELF action).
+
+    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.3:
+    - Transition: APPROVED → CONFIRMED
+    - SELF check enforced by get_admission_for_owner dependency
+    - Applicant confirms they want to enroll
+
+    Args:
+        db: Database session
+        profile: AdmissionProfile (from IDOR dependency with SELF check)
+        applicant: User performing confirmation (must be profile owner)
+        data: ConfirmRequest data (empty)
+
+    Returns:
+        Tuple of (updated_profile, post_commit_callback)
+
+    Raises:
+        BadRequest: Invalid state transition
+        ConflictError: Version mismatch
+    """
+    from .admission_state_machine import validate_transition
+
+    # STATE VALIDATION
+    try:
+        validate_transition(profile.status, "confirmed")
+    except ValueError as e:
+        log.warning(
+            "Invalid state transition for confirm",
+            profile_id=profile.id,
+            current_status=profile.status,
+            error=str(e),
+        )
+        raise BadRequest(str(e))
+
+    # VERSION CHECK
+    if "version" in data and data["version"] != profile.version:
+        raise ConflictError(
+            f"Profile was modified by another user. "
+            f"Expected version {data['version']}, but current version is {profile.version}. "
+            "Please refresh and try again."
+        )
+
+    # STATE CHANGE
+    profile.status = "confirmed"
+    profile.confirmed_at = datetime.now(timezone.utc)
+    profile.confirmed_by_id = applicant.id
+    profile.version += 1
+    profile.updated_at = datetime.now(timezone.utc)
+
+    await db.flush()
+
+    log.info(
+        "Admission profile confirmed by applicant",
+        profile_id=profile.id,
+        applicant_id=applicant.id,
+    )
+
+    # POST-COMMIT CALLBACK
+    async def post_commit():
+        """Side effects after transaction commit."""
+        log.info(
+            "Post-commit: Enrollment confirmed notification",
+            profile_id=profile.id,
+        )
+
+    return profile, post_commit
+
+
+async def override_profile(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    admin: models.User,
+    data: Dict[str, Any],
+) -> tuple[models.AdmissionProfile, Any]:
+    """
+    Override normal flow (Admin only, with audit).
+
+    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.4:
+    - Transition: APPROVED → OVERRIDDEN
+    - Admin only (enforced by router)
+    - Reason MANDATORY (min 10 chars, for audit)
+    - Full audit logging required
+
+    Args:
+        db: Database session
+        profile: AdmissionProfile
+        admin: Admin user performing override
+        data: OverrideRequest data (reason, bypass_rules)
+
+    Returns:
+        Tuple of (updated_profile, post_commit_callback)
+
+    Raises:
+        BadRequest: Invalid state transition or missing reason
+        ConflictError: Version mismatch
+    """
+    from .admission_state_machine import validate_transition
+
+    # STATE VALIDATION
+    try:
+        validate_transition(profile.status, "overridden")
+    except ValueError as e:
+        log.warning(
+            "Invalid state transition for override",
+            profile_id=profile.id,
+            current_status=profile.status,
+            error=str(e),
+        )
+        raise BadRequest(str(e))
+
+    # BUSINESS RULE: Reason is mandatory (already validated by schema)
+    if not data.get("reason"):
+        raise BadRequest("Override reason is required (min 10 characters)")
+
+    # VERSION CHECK
+    if "version" in data and data["version"] != profile.version:
+        raise ConflictError(
+            f"Profile was modified by another user. "
+            f"Expected version {data['version']}, but current version is {profile.version}. "
+            "Please refresh and try again."
+        )
+
+    # STATE CHANGE
+    profile.status = "overridden"
+    profile.overridden_at = datetime.now(timezone.utc)
+    profile.overridden_by_id = admin.id
+    profile.override_reason = data["reason"]
+    profile.version += 1
+    profile.updated_at = datetime.now(timezone.utc)
+
+    await db.flush()
+
+    # AUDIT LOG (per AUTHORIZATION_DECISIONS.md Decision 11)
+    # TODO: Implement proper audit log table
+    log.warning(
+        "AUDIT: Admin override action",
+        profile_id=profile.id,
+        admin_id=admin.id,
+        admin_email=admin.email,
+        reason=data["reason"],
+        bypass_rules=data.get("bypass_rules", []),
+        timestamp=datetime.now(timezone.utc).isoformat(),
+    )
+
+    # POST-COMMIT CALLBACK
+    async def post_commit():
+        """Side effects after transaction commit."""
+        # TODO: Send audit alert to compliance team
+        log.info(
+            "Post-commit: Override audit notification sent",
+            profile_id=profile.id,
+        )
+
+    return profile, post_commit
+
+
+async def finalize_profile(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    admin: models.User,
+    data: Dict[str, Any],
+) -> tuple[models.AdmissionProfile, Any]:
+    """
+    Finalize enrollment (Admin only, creates Student record).
+
+    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.4:
+    - Transition: OVERRIDDEN/CONFIRMED → ENROLLED
+    - Admin only (enforced by router)
+    - Triggers student record creation (delegates to enroll_student)
+
+    Args:
+        db: Database session
+        profile: AdmissionProfile
+        admin: Admin user performing finalization
+        data: FinalizeRequest data (empty)
+
+    Returns:
+        Tuple of (updated_profile, post_commit_callback)
+
+    Raises:
+        BadRequest: Invalid state transition
+        ConflictError: Version mismatch or enrollment conflict
+    """
+    from .admission_state_machine import validate_transition
+
+    # STATE VALIDATION
+    try:
+        validate_transition(profile.status, "enrolled")
+    except ValueError as e:
+        log.warning(
+            "Invalid state transition for finalize",
+            profile_id=profile.id,
+            current_status=profile.status,
+            error=str(e),
+        )
+        raise BadRequest(str(e))
+
+    # VERSION CHECK
+    if "version" in data and data["version"] != profile.version:
+        raise ConflictError(
+            f"Profile was modified by another user. "
+            f"Expected version {data['version']}, but current version is {profile.version}. "
+            "Please refresh and try again."
+        )
+
+    # DELEGATE TO EXISTING ENROLL_STUDENT FUNCTION
+    # This function already handles:
+    # - Student code generation with Redis lock
+    # - Student record creation
+    # - StudentDocument creation
+    # - Lead status update
+    # - ACID transaction with savepoint
+    enrollment_result = await enroll_student(db, profile.id, admin)
+
+    log.info(
+        "Admission profile finalized (enrolled)",
+        profile_id=profile.id,
+        admin_id=admin.id,
+        student_code=enrollment_result["student_code"],
+    )
+
+    # Reload profile to get updated status
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
+    profile = await admission_repo.reload_profile_with_lead(profile.id)
+
+    # POST-COMMIT CALLBACK
+    async def post_commit():
+        """Side effects after transaction commit."""
+        log.info(
+            "Post-commit: Enrollment finalized notification",
+            profile_id=profile.id,
+            student_code=enrollment_result["student_code"],
+        )
+
+    return profile, post_commit
+
+
 async def delete_profile(
     db: AsyncSession,
     profile_id: int,
@@ -1118,33 +1611,33 @@ async def delete_profile(
         BadRequest: Status is not 'draft'
     """
     from app.repositories import AdmissionRepository
-    
+
     admission_repo = AdmissionRepository(db)
-    
+
     # Get profile with lead (for IDOR check)
     profile = await admission_repo.get_profile_by_id_with_lead(profile_id)
-    
+
     if not profile:
         raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
-    
+
     # IDOR check
     _check_admin_or_unit_access(profile, current_user)
-    
+
     # State check: Only draft profiles can be deleted
     if profile.status != "draft":
         raise BadRequest(
             f"Cannot delete profile with status '{profile.status}'. "
             "Only draft profiles can be deleted."
         )
-    
+
     # Delete the profile
     await db.delete(profile)
     await db.flush()
-    
+
     log.info(
         "Admission profile deleted",
         profile_id=profile_id,
         user_id=current_user.id,
     )
-    
+
     return True

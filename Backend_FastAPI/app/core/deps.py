@@ -32,14 +32,14 @@ __all__ = [
     "get_current_user",
     "get_current_active_user",
     "require_password_not_forced",
-    
+
     # Authorization (Layer 2)
     "check_permission",
     "require_admin",
     "require_admin_or_manager",
     "require_any_staff",
     "require_roles",
-    
+
     # Resource Access / IDOR (Layer 3)
     "get_lead_for_user",
     "get_application_for_user",
@@ -52,11 +52,16 @@ __all__ = [
     "get_lead_list_filter",  # Phase 2.1
     "verify_criteria_visibility",  # Phase 6.5
     "verify_user_management_permission",
-    
+
+    # Admission State Machine IDOR (State Machine Implementation)
+    "get_admission_for_manager",  # Manager approve/reject
+    "get_admission_for_user",  # Officer resubmit
+    "get_admission_for_owner",  # Applicant confirm (SELF check)
+
     # Data Classes
     "OfficerDashboardScope",
     "LeadListFilter",
-    
+
     # Standard Aliases (Phase 2.2)
     "CasbinAuth",
     "RequireAdmin",
@@ -1578,23 +1583,187 @@ async def get_kpi_target_for_admin(
 ) -> models.KpiTarget:
     """
     Fetch KPI Target with admin/manager authorization.
-    
+
     This dependency replaces direct db.get() in router per
     AUTHORIZATION_GUIDELINES.md Section 4 (IDOR Protection).
-    
+
     Args:
         target_id: ID of the KPI Target to fetch
-        
+
     Returns:
         KpiTarget if found and active
-        
+
     Raises:
         ResourceNotFoundError: If target not found or inactive
     """
     from ..models.config import KpiTarget
-    
+
     target = await db.get(KpiTarget, target_id)
     if not target or not target.is_active:
         raise ResourceNotFoundError(detail="KPI Target not found")
     return target
+
+
+# =============================================================================
+# ADMISSION STATE MACHINE IDOR DEPENDENCIES
+# Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Sections 2.2 and 3
+# =============================================================================
+
+async def get_admission_for_manager(
+    profile_id: int = Path(..., description="Admission Profile ID"),
+    current_user: models.User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(database.get_db),
+) -> models.AdmissionProfile:
+    """
+    IDOR Protection for Manager actions (approve/reject).
+
+    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.1.3:
+    - Admin: Can access all profiles
+    - Manager: Can access profiles where lead.unit_id == user.unit_id
+    - Return 404 (not 403) for unauthorized access
+
+    Used by:
+    - POST /admissions/{id}/approve
+    - POST /admissions/{id}/reject
+
+    Args:
+        profile_id: Admission profile ID
+        current_user: Current authenticated user
+        db: Database session
+
+    Returns:
+        AdmissionProfile with lead relationship loaded
+
+    Raises:
+        ResourceNotFoundError: Profile not found OR unauthorized (fake 404)
+    """
+    from ..repositories import AdmissionRepository
+
+    repo = AdmissionRepository(db)
+    profile = await repo.get_profile_by_id_with_lead(profile_id)
+
+    if not profile:
+        raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
+
+    # IDOR CHECK
+    if current_user.role != UserRole.ADMIN:
+        if not profile.lead or profile.lead.unit_id != current_user.unit_id:
+            # Fake 404 to prevent information leakage
+            log.warning(
+                "IDOR attempt: Manager tried to access profile from different unit",
+                user_id=current_user.id,
+                user_unit_id=current_user.unit_id,
+                profile_id=profile_id,
+                profile_unit_id=profile.lead.unit_id if profile.lead else None,
+            )
+            raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
+
+    return profile
+
+
+async def get_admission_for_user(
+    profile_id: int = Path(..., description="Admission Profile ID"),
+    current_user: models.User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(database.get_db),
+) -> models.AdmissionProfile:
+    """
+    IDOR Protection for Officer/Manager actions (resubmit, update).
+
+    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.2:
+    - Admin: Can access all profiles
+    - Officer: Can access profiles where lead.unit_id == user.unit_id
+    - Manager: Can access profiles where lead.unit_id == user.unit_id
+    - Return 404 (not 403) for unauthorized access
+
+    Used by:
+    - POST /admissions/{id}/resubmit
+
+    Args:
+        profile_id: Admission profile ID
+        current_user: Current authenticated user
+        db: Database session
+
+    Returns:
+        AdmissionProfile with lead relationship loaded
+
+    Raises:
+        ResourceNotFoundError: Profile not found OR unauthorized (fake 404)
+    """
+    from ..repositories import AdmissionRepository
+
+    repo = AdmissionRepository(db)
+    profile = await repo.get_profile_by_id_with_lead(profile_id)
+
+    if not profile:
+        raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
+
+    # IDOR CHECK
+    if current_user.role != UserRole.ADMIN:
+        if not profile.lead or profile.lead.unit_id != current_user.unit_id:
+            # Fake 404 to prevent information leakage
+            log.warning(
+                "IDOR attempt: User tried to access profile from different unit",
+                user_id=current_user.id,
+                user_unit_id=current_user.unit_id,
+                profile_id=profile_id,
+                profile_unit_id=profile.lead.unit_id if profile.lead else None,
+            )
+            raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
+
+    return profile
+
+
+async def get_admission_for_owner(
+    profile_id: int = Path(..., description="Admission Profile ID"),
+    current_user: models.User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(database.get_db),
+) -> models.AdmissionProfile:
+    """
+    IDOR Protection for OWNER-ONLY actions (confirm enrollment).
+
+    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.3.2:
+    - SELF check: Only the profile owner (applicant) can confirm
+    - Owner identified by lead.user_id (NOT assigned_officer_id!)
+    - Admin can also confirm as override
+
+    ⚠️ FIXED (Review 2026-01-06):
+    - OLD (BUG): assigned_officer_id check (wrong! that's the officer managing the lead)
+    - NEW (CORRECT): lead.user_id check (actual applicant identity)
+
+    Used by:
+    - POST /admissions/{id}/confirm
+
+    Args:
+        profile_id: Admission profile ID
+        current_user: Current authenticated user
+        db: Database session
+
+    Returns:
+        AdmissionProfile with lead relationship loaded
+
+    Raises:
+        ResourceNotFoundError: Profile not found OR unauthorized (fake 404)
+    """
+    from ..repositories import AdmissionRepository
+
+    repo = AdmissionRepository(db)
+    profile = await repo.get_profile_by_id_with_lead(profile_id)
+
+    if not profile:
+        raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
+
+    # SELF CHECK - Must be profile OWNER (applicant)
+    # NOT assigned_officer_id (that's the officer managing the lead!)
+    if current_user.role != UserRole.ADMIN:
+        if not profile.lead or profile.lead.user_id != current_user.id:
+            # Fake 404 to prevent information leakage (IDOR protection)
+            log.warning(
+                "IDOR attempt: User tried to confirm profile they don't own",
+                user_id=current_user.id,
+                profile_id=profile_id,
+                profile_owner_id=profile.lead.user_id if profile.lead else None,
+            )
+            raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
+
+    return profile
 

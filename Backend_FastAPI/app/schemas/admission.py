@@ -538,6 +538,131 @@ class StudentResponse(BaseModel):
 
 
 # ==============================================================================
+# STATE TRANSITION SCHEMAS (State Machine)
+# ==============================================================================
+
+class ApproveRequest(BaseModel):
+    """
+    Schema for approve action (Manager/Admin).
+
+    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.1:
+    - Transition: SUBMITTED/RESUBMITTED → APPROVED
+    - Requires Manager or Admin role
+    - Optional approval notes
+    """
+    notes: Optional[str] = Field(
+        None,
+        max_length=1000,
+        description="Optional approval notes/comments"
+    )
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
+class RejectRequest(BaseModel):
+    """
+    Schema for reject action (Manager/Admin).
+
+    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.1:
+    - Transition: SUBMITTED/RESUBMITTED → REJECTED
+    - Requires Manager or Admin role
+    - Reason is MANDATORY (min 10 chars)
+    """
+    reason: str = Field(
+        ...,
+        min_length=10,
+        max_length=1000,
+        description="Rejection reason (min 10 chars, required)"
+    )
+
+    @field_validator('reason')
+    @classmethod
+    def sanitize_reason(cls, v: str) -> str:
+        """XSS Prevention: Escape HTML entities."""
+        return html.escape(v.strip())
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
+class ResubmitRequest(BaseModel):
+    """
+    Schema for resubmit action (Officer).
+
+    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.2:
+    - Transition: REJECTED → RESUBMITTED
+    - Requires Officer or higher role
+    - Optional notes about what was fixed
+    """
+    notes: Optional[str] = Field(
+        None,
+        max_length=1000,
+        description="Optional notes about what was fixed/updated"
+    )
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
+class ConfirmRequest(BaseModel):
+    """
+    Schema for confirm action (Applicant/User).
+
+    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.3:
+    - Transition: APPROVED → CONFIRMED
+    - SELF check required (lead.user_id == current_user.id)
+    - Admin can also confirm
+    """
+    # No fields required - simple confirmation
+    pass
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
+class OverrideRequest(BaseModel):
+    """
+    Schema for override action (Admin only).
+
+    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.4:
+    - Transition: APPROVED → OVERRIDDEN
+    - Admin only
+    - Reason MANDATORY (audit requirement)
+    - Full audit logging required
+    """
+    reason: str = Field(
+        ...,
+        min_length=10,
+        max_length=1000,
+        description="Override reason (min 10 chars, required for audit)"
+    )
+    bypass_rules: List[str] = Field(
+        default_factory=list,
+        description="List of rules bypassed (e.g., ['min_gpa', 'missing_documents'])"
+    )
+
+    @field_validator('reason')
+    @classmethod
+    def sanitize_reason(cls, v: str) -> str:
+        """XSS Prevention: Escape HTML entities."""
+        return html.escape(v.strip())
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
+class FinalizeRequest(BaseModel):
+    """
+    Schema for finalize action (Admin only).
+
+    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.4:
+    - Transition: OVERRIDDEN/CONFIRMED → ENROLLED
+    - Admin only
+    - Creates Student record
+    """
+    # No fields required - triggers enrollment
+    pass
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
+# ==============================================================================
 # EXPORT ALL
 # ==============================================================================
 
@@ -553,6 +678,13 @@ __all__ = [
     "AdmissionProfileResponse",
     "AdmissionSubmitResponse",
     "EnrollStudentResponse",
+    # State transition schemas
+    "ApproveRequest",
+    "RejectRequest",
+    "ResubmitRequest",
+    "ConfirmRequest",
+    "OverrideRequest",
+    "FinalizeRequest",
     # Student schemas
     "StudentDocumentResponse",
     "StudentResponse",
