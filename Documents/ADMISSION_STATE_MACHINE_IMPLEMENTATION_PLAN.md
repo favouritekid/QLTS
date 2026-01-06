@@ -1,10 +1,10 @@
 # 📋 ADMISSION STATE MACHINE - IMPLEMENTATION PLAN
 
-> **Version:** 3.0  
-> **Created:** 2026-01-06  
-> **Updated:** 2026-01-06 (Final improvements + Phase 0 JSONB Refactor)  
-> **Author:** Architecture Team  
-> **Status:** ✅ PRODUCTION-READY FOR MVP  
+> **Version:** 3.1
+> **Created:** 2026-01-06
+> **Updated:** 2026-01-06 (Enhanced checklists + Complete acceptance criteria)
+> **Author:** Architecture Team
+> **Status:** ✅ PRODUCTION-READY FOR MVP
 > **Compliance:** MASTER_ARCHITECTURE.md v3.0 + AUTHORIZATION_GUIDELINES.md v1.0
 
 ---
@@ -897,8 +897,22 @@ async def test_approve_already_approved():
 
 ### 4.1 Router Checklist (per MASTER_ARCHITECTURE Part 3)
 
-| Endpoint | response_model | Depends() | No if/else | db.commit() | deps.py check |
-|----------|:--------------:|:---------:|:----------:|:-----------:|:-------------:|
+| Endpoint | response_model | Depends() | No if/else | db.commit() | callback() | Request param |
+|----------|:--------------:|:---------:|:----------:|:-----------:|:----------:|:-------------:|
+| approve | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| reject | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| resubmit | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| confirm | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| override | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| finalize | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+> **callback()**: Router MUST call `await callback()` after `db.commit()` for side effects (notifications, etc.)
+> **Request param**: Router MUST have `request: Request` for logging/audit context
+
+### 4.2 Service Checklist (per MASTER_ARCHITECTURE Part 1.3)
+
+| Endpoint | No HTTPException | No db.commit() | Version check | ALLOWED_TRANSITIONS | Returns callback |
+|----------|:----------------:|:--------------:|:-------------:|:-------------------:|:----------------:|
 | approve | ✅ | ✅ | ✅ | ✅ | ✅ |
 | reject | ✅ | ✅ | ✅ | ✅ | ✅ |
 | resubmit | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -906,16 +920,9 @@ async def test_approve_already_approved():
 | override | ✅ | ✅ | ✅ | ✅ | ✅ |
 | finalize | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-### 4.2 Service Checklist
-
-| Endpoint | No HTTPException | Uses Repo | Returns callback | Domain Exceptions |
-|----------|:----------------:|:---------:|:----------------:|:-----------------:|
-| approve | ✅ | ✅ | ✅ | ✅ |
-| reject | ✅ | ✅ | ✅ | ✅ |
-| resubmit | ✅ | ✅ | ✅ | ✅ |
-| confirm | ✅ | ✅ | ✅ | ✅ |
-| override | ✅ | ✅ | ✅ | ✅ |
-| finalize | ✅ | ✅ | ✅ | ✅ |
+> **No db.commit()**: Service MUST NOT call commit - Router responsibility
+> **Version check**: Service MUST check `profile.version == expected_version` and increment on write
+> **ALLOWED_TRANSITIONS**: Service MUST use state machine map for validation, not hardcoded if/else
 
 ### 4.3 Security Checklist (per AUTHORIZATION_GUIDELINES Part 10)
 
@@ -927,6 +934,56 @@ async def test_approve_already_approved():
 | confirm | ✅ | CasbinAuth | get_admission_for_owner | ✅ |
 | override | ✅ | require_admin | Direct | N/A |
 | finalize | ✅ | require_admin | Direct | N/A |
+
+### 4.4 Repository Checklist (per MASTER_ARCHITECTURE Part 1.4)
+
+| Method | Inherits BaseRepository | selectinload | Returns None | No Exception |
+|--------|:-----------------------:|:------------:|:------------:|:------------:|
+| get_with_lead | ✅ | ✅ | ✅ | ✅ |
+| get_by_citizen_id | ✅ | ✅ | ✅ | ✅ |
+| get_with_scores | ✅ | ✅ | ✅ | ✅ |
+| get_with_documents | ✅ | ✅ | ✅ | ✅ |
+
+> **selectinload**: Use `selectinload(AdmissionProfile.lead)` to avoid N+1 queries
+> **Returns None**: Repository returns `None` for not found, NOT raise exception
+> **No Exception**: Repository NEVER raises business exceptions - that's Service layer
+
+### 4.5 Migration Checklist (per AUTHORIZATION_IMPLEMENTATION_PLAN Phase 3)
+
+| Item | Required | Notes |
+|------|:--------:|-------|
+| Admin wildcard check BEFORE | ✅ | `SELECT COUNT(*) WHERE v0='role:admin' AND v1='/*'` |
+| Admin wildcard check AFTER | ✅ | Same query after migration |
+| downgrade() function exists | ✅ | Must be able to rollback |
+| Idempotent INSERT | ✅ | `WHERE NOT EXISTS (SELECT 1 ...)` |
+| Policy template_id tracking | ✅ | Use appropriate template_id value |
+
+```python
+# Migration safety template
+def upgrade():
+    # 1. Safety check BEFORE
+    result = conn.execute(text("SELECT COUNT(*) FROM casbin_rule WHERE v0='role:admin' AND v1='/*'"))
+    if result.scalar() == 0:
+        raise Exception("🚨 ABORT: Admin wildcard missing BEFORE migration")
+
+    # 2. Migration logic here...
+
+    # 3. Safety check AFTER
+    result = conn.execute(text("SELECT COUNT(*) FROM casbin_rule WHERE v0='role:admin' AND v1='/*'"))
+    if result.scalar() == 0:
+        raise Exception("🚨 ABORT: Admin wildcard missing AFTER migration")
+```
+
+### 4.6 Schema Checklist
+
+| Schema | Required Fields | Validation | Notes |
+|--------|:---------------:|:----------:|-------|
+| ApproveRequest | notes (optional) | - | Can include approval notes |
+| RejectRequest | reason (required) | min_length=10 | Must explain rejection |
+| ResubmitRequest | updated_fields | - | What was fixed |
+| ConfirmRequest | - | - | Simple confirmation |
+| OverrideRequest | reason (required) | min_length=10 | Audit trail mandatory |
+| FinalizeRequest | - | - | Admin confirmation |
 
 ---
 
@@ -961,27 +1018,64 @@ Week 2:
 
 ## 7. ACCEPTANCE CRITERIA
 
-### Phase 1
+### Phase 0: JSONB Refactor
+- [ ] `admission_scores` column removed from model
+- [ ] `documents_checklist` column removed from model
+- [ ] All service methods use `ProfileSubjectScore` relationship
+- [ ] All service methods use `ProfileDocument` relationship
+- [ ] Schemas updated for relational responses
+- [ ] `selectinload` configured for relationships
+- [ ] Migration executed successfully
+- [ ] No grep results for `admission_scores` or `documents_checklist` (except comments)
+- [ ] All existing tests pass
+
+### Phase 1: Core Approval Flow
 - [ ] Manager can approve → status = APPROVED
 - [ ] Manager can reject → status = REJECTED with reason
 - [ ] Non-manager cannot approve/reject → 403
-- [ ] **Complies with ROUTER CHECKLIST**
-- [ ] **Complies with SECURITY CHECKLIST**
+- [ ] Approved profile has `approved_at`, `approved_by_id` set
+- [ ] Rejected profile has `rejected_at`, `rejection_reason` set
+- [ ] Version mismatch returns 409 Conflict
+- [ ] Callback executed after commit (notification prepared)
+- [ ] Error message: "Cannot approve/reject profile in {status} status"
+- [ ] **Complies with ROUTER CHECKLIST (4.1)**
+- [ ] **Complies with SERVICE CHECKLIST (4.2)**
+- [ ] **Complies with SECURITY CHECKLIST (4.3)**
 
-### Phase 2
+### Phase 2: Recovery Flow
 - [ ] Officer can resubmit → status = RESUBMITTED
-- [ ] Cannot resubmit non-REJECTED → 400
-- [ ] **IDOR: Officer only sees their unit's profiles**
+- [ ] Cannot resubmit non-REJECTED → 400 with clear error message
+- [ ] Error message: "Cannot resubmit profile in {status} status"
+- [ ] `resubmitted_at` timestamp set
+- [ ] Version check enforced
+- [ ] **IDOR: Officer only sees their unit's profiles (404 for others)**
 
-### Phase 3
+### Phase 3: User Confirmation
 - [ ] Owner can confirm → status = CONFIRMED
-- [ ] Non-owner cannot confirm → 404 (not 403!)
-- [ ] **SELF check enforced in dependency**
+- [ ] Non-owner cannot confirm → **404 (not 403!)**
+- [ ] Can only confirm APPROVED profiles
+- [ ] `confirmed_at`, `confirmed_by_id` set
+- [ ] Version check enforced
+- [ ] **SELF check enforced via `lead.user_id` (not assigned_officer_id)**
 
-### Phase 4
+### Phase 4: Exception Handling
 - [ ] Admin can override → status = OVERRIDDEN
-- [ ] Override requires reason → 400 if missing
-- [ ] **Full audit trail logged**
+- [ ] Admin can finalize → status = ENROLLED
+- [ ] Override requires reason → 400 if missing or < 10 chars
+- [ ] Finalize only from OVERRIDDEN or CONFIRMED state
+- [ ] Student record created on ENROLLED
+- [ ] **Full audit trail logged** (actor, profile, reason, timestamp, bypassed_rules)
+- [ ] Audit log queryable for compliance
+
+### Phase 5: Migration & Testing
+- [ ] Migration has admin wildcard safety checks (BEFORE + AFTER)
+- [ ] Migration has downgrade() function
+- [ ] Policies use template_id tracking
+- [ ] All unit tests pass (state transitions)
+- [ ] All integration tests pass (full workflow)
+- [ ] IDOR tests pass (404 not 403)
+- [ ] Race condition test pass (concurrent approve/reject)
+- [ ] Replay attack test pass (double approval blocked)
 
 ---
 
