@@ -70,14 +70,14 @@ def upgrade():
     ]
 
     for v0, v1, v2 in user_policies:
-        op.execute(text(f"""
+        conn.execute(text("""
             INSERT INTO casbin_rule (ptype, v0, v1, v2)
             SELECT 'p', :v0, :v1, :v2
             WHERE NOT EXISTS (
                 SELECT 1 FROM casbin_rule
                 WHERE ptype = 'p' AND v0 = :v0 AND v1 = :v1 AND v2 = :v2
             )
-        """), {"v0": v0, "v1": v1, "v2": v2})
+        """).bindparams(v0=v0, v1=v1, v2=v2))
 
     # ========== ADD OFFICER POLICIES ==========
     officer_policies = [
@@ -100,14 +100,14 @@ def upgrade():
     ]
 
     for v0, v1, v2 in officer_policies:
-        op.execute(text(f"""
+        conn.execute(text("""
             INSERT INTO casbin_rule (ptype, v0, v1, v2)
             SELECT 'p', :v0, :v1, :v2
             WHERE NOT EXISTS (
                 SELECT 1 FROM casbin_rule
                 WHERE ptype = 'p' AND v0 = :v0 AND v1 = :v1 AND v2 = :v2
             )
-        """), {"v0": v0, "v1": v1, "v2": v2})
+        """).bindparams(v0=v0, v1=v1, v2=v2))
 
     # ========== ADD MANAGER POLICIES ==========
     manager_policies = [
@@ -121,14 +121,14 @@ def upgrade():
     ]
 
     for v0, v1, v2 in manager_policies:
-        op.execute(text(f"""
+        conn.execute(text("""
             INSERT INTO casbin_rule (ptype, v0, v1, v2)
             SELECT 'p', :v0, :v1, :v2
             WHERE NOT EXISTS (
                 SELECT 1 FROM casbin_rule
                 WHERE ptype = 'p' AND v0 = :v0 AND v1 = :v1 AND v2 = :v2
             )
-        """), {"v0": v0, "v1": v1, "v2": v2})
+        """).bindparams(v0=v0, v1=v1, v2=v2))
 
     # ========== SAFETY CHECK AFTER ==========
     result = conn.execute(text("""
@@ -192,10 +192,10 @@ def downgrade():
     ]
 
     for v0, v1, v2 in policies_to_remove:
-        op.execute(text(f"""
+        conn.execute(text("""
             DELETE FROM casbin_rule
             WHERE ptype = 'p' AND v0 = :v0 AND v1 = :v1 AND v2 = :v2
-        """), {"v0": v0, "v1": v1, "v2": v2})
+        """).bindparams(v0=v0, v1=v1, v2=v2))
 
     # Restore officer enroll (SECURITY WARNING)
     op.execute(text("""
