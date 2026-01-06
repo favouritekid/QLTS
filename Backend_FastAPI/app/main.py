@@ -157,116 +157,39 @@ async def lifespan(app: FastAPI):
         fastapi_app.state.enforcer = enforcer
         log.info("✅ Casbin AsyncEnforcer initialized and policies loaded.")
 
-        # ✅ DEPRECATED: Default policies are now managed via Alembic migration
-        # Migration: i4j5k6l7m8n9_add_default_casbin_policies.py
+        # =========================================================================
+        # POLICY INITIALIZATION (Phase 4 Fix)
+        # Reference: AUTHORIZATION_DECISIONS.md Decision 14
+        # =========================================================================
         #
-        # This fallback logic is kept for backward compatibility only.
-        # If this runs, it means the migration hasn't been executed yet.
+        # ❌ DEPRECATED: Hardcoded fallback policies have been REMOVED
+        # Policies are now SINGLE SOURCE OF TRUTH from:
+        #   1. policy_templates.py (definition)
+        #   2. Alembic migrations (seeding)
+        #   3. casbin_rule table (runtime)
+        #
+        # If no policies exist:
+        #   - PRODUCTION: Fail-fast (don't start with broken auth)
+        #   - DEV/TEST: Add admin wildcard only (minimal bootstrap)
+        #
         if not enforcer.get_policy():
-            log.warning(
-                "⚠️ No Casbin policies found! Adding default policies as FALLBACK. "
-                "This should NOT happen in production if migrations are run correctly. "
-                "Please run: alembic upgrade head"
-            )
-            # Admin policies (explicit paths due to keyMatch4 limitations)
-            await enforcer.add_policy("role:admin", "/*", ".*")
-            await enforcer.add_policy("role:admin", "/api/*", ".*")
-            await enforcer.add_policy("role:admin", "/api/admin/*", ".*")
-            await enforcer.add_policy("role:admin", "/api/admin/users/*", ".*")
-            await enforcer.add_policy("role:admin", "/api/admin/roles/*", ".*")
-            await enforcer.add_policy("role:admin", "/api/admin/policies/*", ".*")
-
-            # ← PHASE 3 & 4: Very explicit sync endpoints (new paths to avoid route conflicts)
-            await enforcer.add_policy("role:admin", "/api/admin/sync/status", "GET")
-            await enforcer.add_policy("role:admin", "/api/admin/sync/users", "POST")
-            await enforcer.add_policy("role:admin", "/api/admin/sync/*", ".*")
-            await enforcer.add_policy("role:admin", "/api/admin/roles", "GET")
-            await enforcer.add_policy("role:admin", "/api/admin/policies", "GET")
-            await enforcer.add_policy("role:admin", "/api/admin/policies/statistics", "GET")
-            await enforcer.add_policy("role:admin", "/api/admin/policies/suggestions", "GET")
-
-            await enforcer.add_policy("role:manager", "/api/admin/users", ".*")
-            await enforcer.add_policy("role:manager", "/api/leads/*", ".*")
-            await enforcer.add_policy("role:manager", "/api/leads", "GET")
-            await enforcer.add_policy("role:officer", "/api/leads", "GET")
-            await enforcer.add_policy("role:officer", "/api/leads/{lead_id}", "GET")
-            await enforcer.add_policy(
-                "role:officer", "/api/leads/{lead_id}/consultations", "POST"
-            )
-            await enforcer.add_policy(
-                "role:officer", "/api/leads/{lead_id}/action", "POST"
-            )
-            await enforcer.add_policy("role:user", "/api/profile", "GET")
-            await enforcer.add_policy("role:user", "/api/profile", "PUT")
-            await enforcer.add_policy("role:officer", "/api/profile", "GET")
-            await enforcer.add_policy("role:officer", "/api/profile", "PUT")
-            await enforcer.add_policy("role:manager", "/api/profile", "GET")
-            await enforcer.add_policy("role:manager", "/api/profile", "PUT")
-
-            # Notification policies - all authenticated users can access their own notifications
-            await enforcer.add_policy("role:user", "/api/notifications", "GET")
-            await enforcer.add_policy("role:user", "/api/notifications/mark-as-read", "POST")
-            await enforcer.add_policy("role:user", "/api/notifications/mark-all-as-read", "POST")
-            await enforcer.add_policy("role:user", "/api/notifications/{notification_id}", "DELETE")
-            await enforcer.add_policy("role:officer", "/api/notifications", "GET")
-            await enforcer.add_policy("role:officer", "/api/notifications/mark-as-read", "POST")
-            await enforcer.add_policy("role:officer", "/api/notifications/mark-all-as-read", "POST")
-            await enforcer.add_policy("role:officer", "/api/notifications/{notification_id}", "DELETE")
-            await enforcer.add_policy("role:manager", "/api/notifications", "GET")
-            await enforcer.add_policy("role:manager", "/api/notifications/mark-as-read", "POST")
-            await enforcer.add_policy("role:manager", "/api/notifications/mark-all-as-read", "POST")
-            await enforcer.add_policy("role:manager", "/api/notifications/{notification_id}", "DELETE")
-
-            # ✅ PHASE 2.2: Notification Rules (Admin-only) - Visual notification management
-            await enforcer.add_policy("role:admin", "/api/notification-rules", "GET")
-            await enforcer.add_policy("role:admin", "/api/notification-rules", "POST")
-            await enforcer.add_policy("role:admin", "/api/notification-rules/{rule_id}", "GET")
-            await enforcer.add_policy("role:admin", "/api/notification-rules/{rule_id}", "PUT")
-            await enforcer.add_policy("role:admin", "/api/notification-rules/{rule_id}", "DELETE")
-            await enforcer.add_policy("role:admin", "/api/notification-rules/{rule_id}/toggle", "PATCH")
-
-            # ✅ PHASE 3.1: Notification Templates (Admin-only) - Reusable template management
-            await enforcer.add_policy("role:admin", "/api/notification-templates", "GET")
-            await enforcer.add_policy("role:admin", "/api/notification-templates", "POST")
-            await enforcer.add_policy("role:admin", "/api/notification-templates/{template_id}", "GET")
-            await enforcer.add_policy("role:admin", "/api/notification-templates/{template_id}", "PUT")
-            await enforcer.add_policy("role:admin", "/api/notification-templates/{template_id}", "DELETE")
-
-            # ✅ SECURITY FIX: Organization policies - all authenticated users can read, admin can write
-            # READ operations - accessible by all authenticated users
-            await enforcer.add_policy("role:user", "/api/organization-units", "GET")
-            await enforcer.add_policy("role:user", "/api/organization-units/tree-with-aggregation", "GET")
-            await enforcer.add_policy("role:user", "/api/programs", "GET")
-            await enforcer.add_policy("role:user", "/api/programs/{program_id}/offerings", "GET")
-            await enforcer.add_policy("role:user", "/api/offerings/{offering_id}/academic-info", "GET")
-            await enforcer.add_policy("role:user", "/api/offerings/{offering_id}/academic-info/{year}", "GET")
-            await enforcer.add_policy("role:user", "/api/offerings/{offering_id}/academic-info/current", "GET")
-
-            await enforcer.add_policy("role:officer", "/api/organization-units", "GET")
-            await enforcer.add_policy("role:officer", "/api/organization-units/tree-with-aggregation", "GET")
-            await enforcer.add_policy("role:officer", "/api/programs", "GET")
-            await enforcer.add_policy("role:officer", "/api/programs/{program_id}/offerings", "GET")
-            await enforcer.add_policy("role:officer", "/api/program-offerings", "GET")
-            await enforcer.add_policy("role:officer", "/api/offerings/{offering_id}/academic-info", "GET")
-            await enforcer.add_policy("role:officer", "/api/offerings/{offering_id}/academic-info/{year}", "GET")
-            await enforcer.add_policy("role:officer", "/api/offerings/{offering_id}/academic-info/current", "GET")
-            await enforcer.add_policy("role:officer", "/api/leads/import", "POST")
-
-            await enforcer.add_policy("role:manager", "/api/organization-units", "GET")
-            await enforcer.add_policy("role:manager", "/api/organization-units/tree-with-aggregation", "GET")
-            await enforcer.add_policy("role:manager", "/api/programs", "GET")
-            await enforcer.add_policy("role:manager", "/api/programs/{program_id}/offerings", "GET")
-            await enforcer.add_policy("role:manager", "/api/program-offerings", "GET")
-            await enforcer.add_policy("role:manager", "/api/offerings/{offering_id}/academic-info", "GET")
-            await enforcer.add_policy("role:manager", "/api/offerings/{offering_id}/academic-info/{year}", "GET")
-            await enforcer.add_policy("role:manager", "/api/offerings/{offering_id}/academic-info/current", "GET")
-
-            # WRITE operations - admin only (CREATE/UPDATE/DELETE academic info)
-            await enforcer.add_policy("role:admin", "/api/offerings/{offering_id}/academic-info", "POST")
-            await enforcer.add_policy("role:admin", "/api/academic-info/{academic_info_id}", "PATCH")
-            await enforcer.add_policy("role:admin", "/api/academic-info/{academic_info_id}", "DELETE")
-
-            log.warning("⚠️ Fallback default policies added. Please run migrations!")
+            if settings.APP_ENV == "production":
+                log.critical(
+                    "🚨 CRITICAL: No Casbin policies found in production! "
+                    "This means migrations haven't been run. "
+                    "Run: alembic upgrade head"
+                )
+                raise RuntimeError(
+                    "Casbin policies not initialized. Run migrations: alembic upgrade head"
+                )
+            else:
+                # DEV/TEST: Only add critical admin wildcard for bootstrap
+                log.warning(
+                    "⚠️ No policies found. Adding minimal bootstrap (admin wildcard only). "
+                    "For full policies, run: alembic upgrade head"
+                )
+                await enforcer.add_policy("role:admin", "/*", ".*")
+                log.info("✅ Bootstrap complete: Admin wildcard policy added.")
 
     except Exception as e:
         log.critical(

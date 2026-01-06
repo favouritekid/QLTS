@@ -508,3 +508,247 @@ class CasbinPolicyService:
                 allowed_subjects.append(role)
 
         return sorted(list(set(allowed_subjects)))
+
+    # =========================================================================
+    # TEMPLATE DRIFT DETECTION & SYNC (Phase 4 Fix)
+    # Reference: AUTHORIZATION_DECISIONS.md Decision 14
+    # =========================================================================
+
+    async def detect_template_drift(self, role: str, template_id: str) -> dict:
+        """
+        Detect drift between template definition and actual DB policies.
+
+        This is critical for audit and production maintenance.
+        Drift can occur when:
+        - Policies are added via UI without template
+        - Policies are deleted manually
+        - Template is updated but DB not synced
+
+        Args:
+            role: Role name (e.g., "role:officer")
+            template_id: Template identifier (e.g., "officer")
+
+        Returns:
+            Dictionary with:
+            - has_drift: True if template != DB
+            - missing_in_db: Policies in template but not in DB
+            - extra_in_db: Policies in DB but not in template
+            - drift_percentage: How much drift (0-100%)
+            - template_count: Number of policies in template
+            - db_count: Number of policies in DB for this role
+        """
+        try:
+            # Get template policies
+            template_policies = apply_template(template_id, role)
+            template_set = set(
+                (p["subject"], p["object"], p["action"])
+                for p in template_policies
+            )
+
+            # Get DB policies for this role
+            all_policies = self.enforcer.get_policy()
+            db_policies_for_role = [
+                (p[0], p[1], p[2])
+                for p in all_policies
+                if p[0] == role
+            ]
+            db_set = set(db_policies_for_role)
+
+            # Calculate drift
+            missing_in_db = template_set - db_set
+            extra_in_db = db_set - template_set
+
+            total_unique = len(template_set | db_set)
+            drift_count = len(missing_in_db) + len(extra_in_db)
+            drift_percentage = (drift_count / total_unique * 100) if total_unique > 0 else 0
+
+            return {
+                "has_drift": bool(missing_in_db or extra_in_db),
+                "missing_in_db": [
+                    {"subject": s, "object": o, "action": a}
+                    for s, o, a in missing_in_db
+                ],
+                "extra_in_db": [
+                    {"subject": s, "object": o, "action": a}
+                    for s, o, a in extra_in_db
+                ],
+                "drift_percentage": round(drift_percentage, 2),
+                "template_count": len(template_set),
+                "db_count": len(db_set),
+                "role": role,
+                "template_id": template_id,
+            }
+
+        except KeyError:
+            return {
+                "has_drift": True,
+                "error": f"Template not found: {template_id}",
+                "missing_in_db": [],
+                "extra_in_db": [],
+                "drift_percentage": 100.0,
+                "template_count": 0,
+                "db_count": 0,
+                "role": role,
+                "template_id": template_id,
+            }
+
+    async def detect_all_drift(self) -> dict:
+        """
+        Detect drift for all system roles.
+
+        Returns:
+            Dictionary with drift status for each role and overall health.
+        """
+        results = {}
+        total_drift = 0
+        roles_with_drift = 0
+
+        for system_role in SYSTEM_ROLES:
+            role_name = system_role["name"]
+            template_id = system_role.get("template_id")
+
+            if template_id:
+                drift = await self.detect_template_drift(role_name, template_id)
+                results[role_name] = drift
+
+                if drift["has_drift"]:
+                    roles_with_drift += 1
+                    total_drift += drift["drift_percentage"]
+
+        return {
+            "roles": results,
+            "summary": {
+                "total_roles_checked": len(results),
+                "roles_with_drift": roles_with_drift,
+                "average_drift_percentage": round(total_drift / len(results), 2) if results else 0,
+                "health_status": "HEALTHY" if roles_with_drift == 0 else "DRIFT_DETECTED",
+            }
+        }
+
+    async def refresh_role_from_template(
+        self,
+        role: str,
+        template_id: str,
+        force: bool = False
+    ) -> dict:
+        """
+        Force reset role to match template exactly.
+
+        WARNING: This will:
+        - Remove ALL current policies for the role
+        - Apply fresh policies from template
+        - Any manual additions will be LOST
+
+        Args:
+            role: Role name (e.g., "role:officer")
+            template_id: Template identifier (e.g., "officer")
+            force: Must be True to execute (safety check)
+
+        Returns:
+            Dictionary with operation results
+        """
+        if not force:
+            return {
+                "success": False,
+                "error": "Safety check: Set force=True to confirm destructive operation",
+                "hint": "This will remove ALL current policies for the role and apply template fresh",
+            }
+
+        # Prevent refresh of admin role without extra safety
+        if role == "role:admin" and not is_system_role(role):
+            return {
+                "success": False,
+                "error": "Cannot refresh admin role - too dangerous",
+            }
+
+        try:
+            # Get current policies before delete (for audit log)
+            all_policies = self.enforcer.get_policy()
+            current_policies = [p for p in all_policies if p[0] == role]
+            current_count = len(current_policies)
+
+            # Remove all policies for this role
+            removed = 0
+            for policy in current_policies:
+                subject, obj, action = policy[0], policy[1], policy[2]
+
+                # Skip critical policies
+                if is_critical_policy(subject, obj, action):
+                    continue
+
+                success = await self.enforcer.remove_policy(subject, obj, action)
+                if success:
+                    removed += 1
+
+            # Apply template fresh
+            result = await self.apply_template_to_role(template_id, role, validate=False)
+
+            return {
+                "success": True,
+                "role": role,
+                "template_id": template_id,
+                "policies_removed": removed,
+                "policies_before": current_count,
+                "policies_added": result.get("added", 0),
+                "policies_after": result.get("added", 0),
+                "warnings": result.get("warnings", []),
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "role": role,
+                "template_id": template_id,
+            }
+
+    async def sync_all_roles_from_templates(self, dry_run: bool = True) -> dict:
+        """
+        Sync all system roles to match their templates.
+
+        Args:
+            dry_run: If True, only report what would change (default: True)
+
+        Returns:
+            Dictionary with sync results for each role
+        """
+        results = {}
+
+        for system_role in SYSTEM_ROLES:
+            role_name = system_role["name"]
+            template_id = system_role.get("template_id")
+
+            if not template_id:
+                results[role_name] = {"skipped": True, "reason": "No template defined"}
+                continue
+
+            # Skip admin to prevent lockout
+            if role_name == "role:admin":
+                results[role_name] = {"skipped": True, "reason": "Admin role not synced for safety"}
+                continue
+
+            # Detect drift first
+            drift = await self.detect_template_drift(role_name, template_id)
+
+            if not drift["has_drift"]:
+                results[role_name] = {"skipped": True, "reason": "No drift detected"}
+                continue
+
+            if dry_run:
+                results[role_name] = {
+                    "dry_run": True,
+                    "would_remove": len(drift["extra_in_db"]),
+                    "would_add": len(drift["missing_in_db"]),
+                    "drift": drift,
+                }
+            else:
+                sync_result = await self.refresh_role_from_template(
+                    role_name, template_id, force=True
+                )
+                results[role_name] = sync_result
+
+        return {
+            "dry_run": dry_run,
+            "results": results,
+            "hint": "Set dry_run=False to apply changes" if dry_run else "Changes applied",
+        }

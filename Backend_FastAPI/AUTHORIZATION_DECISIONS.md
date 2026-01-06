@@ -295,6 +295,59 @@ async def apply_new_policy_retroactively():
 
 ---
 
+## Decision 14: Template Single Source of Truth & Drift Detection
+
+| Field | Value |
+|-------|-------|
+| **Quyết định** | `policy_templates.py` là SOURCE OF TRUTH duy nhất cho policy definitions |
+| **Lý do** | Tránh double source of truth, conflict giữa code và DB |
+| **Hệ quả** | 1. Hardcoded fallback trong main.py đã bị XÓA<br>2. Drift detection endpoints đã được thêm<br>3. Template refresh endpoint cho sync |
+| **Ngày** | 2026-01-06 |
+| **Người quyết định** | Architecture Team |
+
+**Kiến trúc Policy Lifecycle:**
+```
+┌──────────────────────┐
+│  policy_templates.py │  ← SOURCE OF TRUTH
+│  (Static Python dict)│
+└──────────┬───────────┘
+           │ apply_template()
+           ↓
+┌──────────────────────┐
+│  Alembic Migration   │  ← SEEDING
+│  (Version controlled)│
+└──────────┬───────────┘
+           │ INSERT INTO casbin_rule
+           ↓
+┌──────────────────────┐
+│  casbin_rule Table   │  ← RUNTIME
+│  (PostgreSQL)        │
+└──────────────────────┘
+```
+
+**Drift Detection API:**
+```bash
+# Check drift for all roles
+GET /api/admin/roles/drift/all
+
+# Check drift for specific role
+GET /api/admin/roles/{role_name}/drift
+
+# Force sync role to template
+POST /api/admin/roles/{role_name}/refresh-from-template?force=true
+
+# Sync all roles (dry_run=true by default)
+POST /api/admin/roles/sync-all-from-templates
+```
+
+**Khi nào cần sync:**
+- Sau khi update policy_templates.py
+- Khi drift detection shows > 0%
+- Sau incident investigation
+- Scheduled monthly audit
+
+---
+
 ## Template Cho Decision Mới
 
 ```markdown

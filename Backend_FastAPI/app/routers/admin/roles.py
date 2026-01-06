@@ -1476,4 +1476,158 @@ async def toggle_role_feature(
     return result
 
 
+# =============================================================================
+# TEMPLATE DRIFT DETECTION & SYNC (Phase 4 Fix)
+# Reference: AUTHORIZATION_DECISIONS.md Decision 14
+# =============================================================================
+
+
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
+@router.get("/drift/all")
+async def get_all_drift_status(
+    request: Request,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = CasbinAuth,
+):
+    """
+    (Admin only) Get drift status for all system roles.
+
+    Drift detection compares template definitions (policy_templates.py)
+    with actual policies in database (casbin_rule table).
+
+    Returns:
+        Dictionary with drift status for each role and overall health.
+    """
+    from app.services.casbin_service import CasbinPolicyService
+
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+    casbin_service = CasbinPolicyService(db=db, enforcer=enforcer)
+
+    return await casbin_service.detect_all_drift()
+
+
+@limiter.limit(RateLimits.ADMIN_READ)  # 300/hour
+@router.get("/{role_name}/drift")
+async def get_role_drift_status(
+    request: Request,
+    role_name: str,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = CasbinAuth,
+):
+    """
+    (Admin only) Get drift status for a specific role.
+
+    Compares template definition with actual DB policies.
+    """
+    from app.services.casbin_service import CasbinPolicyService
+    from app.casbin_config.policy_templates import SYSTEM_ROLES
+
+    # Find template_id for this role
+    template_id = None
+    for system_role in SYSTEM_ROLES:
+        if system_role["name"] == role_name:
+            template_id = system_role.get("template_id")
+            break
+
+    if not template_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No template defined for role: {role_name}"
+        )
+
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+    casbin_service = CasbinPolicyService(db=db, enforcer=enforcer)
+
+    return await casbin_service.detect_template_drift(role_name, template_id)
+
+
+@limiter.limit(RateLimits.ADMIN_WRITE)  # 100/hour
+@router.post("/{role_name}/refresh-from-template")
+async def refresh_role_from_template_endpoint(
+    request: Request,
+    role_name: str,
+    force: bool = False,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = CasbinAuth,
+):
+    """
+    (Admin only) Force reset role to match template exactly.
+
+    ⚠️ WARNING: Destructive operation! Set force=True to confirm.
+    """
+    from app.services.casbin_service import CasbinPolicyService
+    from app.casbin_config.policy_templates import SYSTEM_ROLES
+
+    template_id = None
+    for system_role in SYSTEM_ROLES:
+        if system_role["name"] == role_name:
+            template_id = system_role.get("template_id")
+            break
+
+    if not template_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No template defined for role: {role_name}"
+        )
+
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+    casbin_service = CasbinPolicyService(db=db, enforcer=enforcer)
+
+    result = await casbin_service.refresh_role_from_template(
+        role_name, template_id, force=force
+    )
+
+    if result.get("success"):
+        await activity_service.log_activity(
+            db=db,
+            actor_id=current_admin.id,
+            action="refresh_role_from_template",
+            description=f"Refreshed {role_name} from template {template_id}",
+            resource_type="casbin_policy",
+            resource_id=None,
+            changes={
+                "role": role_name,
+                "template_id": template_id,
+                "policies_removed": result.get("policies_removed"),
+                "policies_added": result.get("policies_added"),
+            }
+        )
+
+    return result
+
+
+@limiter.limit(RateLimits.ADMIN_BULK)  # 10/hour - Dangerous operation
+@router.post("/sync-all-from-templates")
+async def sync_all_roles_from_templates_endpoint(
+    request: Request,
+    dry_run: bool = True,
+    db: AsyncSession = Depends(database.get_db),
+    current_admin: models.User = CasbinAuth,
+):
+    """
+    (Admin only) Sync all system roles to match their templates.
+
+    ⚠️ WARNING: With dry_run=False, this is VERY destructive!
+    """
+    from app.services.casbin_service import CasbinPolicyService
+
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+    casbin_service = CasbinPolicyService(db=db, enforcer=enforcer)
+
+    result = await casbin_service.sync_all_roles_from_templates(dry_run=dry_run)
+
+    if not dry_run:
+        await activity_service.log_activity(
+            db=db,
+            actor_id=current_admin.id,
+            action="sync_all_roles_from_templates",
+            description="Synced all system roles from templates",
+            resource_type="casbin_policy",
+            resource_id=None,
+            changes={"results": result}
+        )
+
+    return result
+
+
 
