@@ -158,7 +158,7 @@ async def add_new_policy(
     (Admin only) Add a new policy with validation, logging, and event consistency.
 
     **Event Flow (Transaction Safety):**
-    1. Add policy to Casbin
+    1. Add policy via CasbinPolicyService (with template tracking)
     2. Log activity to DB
     3. COMMIT transaction ← CRITICAL CHECKPOINT
     4. Emit socket event (error isolated)
@@ -169,15 +169,26 @@ async def add_new_policy(
     - ✓ Role: Admin only (Casbin)
     - ✓ Transaction: Commit before emit
     - ✓ Error Isolation: Socket failures don't crash API
+    - ✓ Template Tracking: Policies marked with template_id='_manual'
     """
-    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+    from app.services.casbin_service import CasbinPolicyService
 
-    # 1. Add policy to Casbin
-    added = await enforcer.add_policy(
-        policy_in.subject, policy_in.object, policy_in.action
+    enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
+    casbin_service = CasbinPolicyService(db, enforcer)
+
+    # 1. Add policy via service (with template tracking)
+    result = await casbin_service.add_policies_batch(
+        policies=[(policy_in.subject, policy_in.object, policy_in.action)],
+        validate=True,
+        template_id="_manual",  # Mark as manually added via UI
+        applied_by=current_admin.id,
     )
-    if not added:
-        raise DuplicateResourceError("Policy already exists.")
+
+    if result["added"] == 0:
+        if result["skipped"] > 0:
+            raise DuplicateResourceError("Policy already exists.")
+        if result["errors"]:
+            raise DuplicateResourceError(result["errors"][0])
 
     # 2. Log activity to DB
     await log_admin_activity(

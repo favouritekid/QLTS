@@ -646,6 +646,34 @@ class CasbinPolicyService:
             }
 
         except KeyError:
+            # Handle special template IDs gracefully
+            if template_id == "_legacy":
+                # Legacy policies have no template to compare - not an error
+                return {
+                    "has_drift": False,
+                    "info": "Legacy policies - no template to compare. Consider migrating to a proper template.",
+                    "missing_in_db": [],
+                    "extra_in_db": [],
+                    "drift_percentage": 0,
+                    "template_count": 0,
+                    "db_count": 0,
+                    "role": role,
+                    "template_id": template_id,
+                }
+            elif template_id == "_manual":
+                # Manual policies are intentionally outside templates
+                return {
+                    "has_drift": False,
+                    "info": "Manual policies - added via UI, not linked to any template.",
+                    "missing_in_db": [],
+                    "extra_in_db": [],
+                    "drift_percentage": 0,
+                    "template_count": 0,
+                    "db_count": 0,
+                    "role": role,
+                    "template_id": template_id,
+                }
+            # Unknown template - actual error
             return {
                 "has_drift": True,
                 "error": f"Template not found: {template_id}",

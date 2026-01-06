@@ -183,13 +183,33 @@ async def lifespan(app: FastAPI):
                     "Casbin policies not initialized. Run migrations: alembic upgrade head"
                 )
             else:
-                # DEV/TEST: Only add critical admin wildcard for bootstrap
+                # DEV/TEST: Auto-seed from policy_templates.py (Single Source of Truth)
+                from app.casbin_config.policy_templates import SYSTEM_ROLES, apply_template
+                
                 log.warning(
-                    "⚠️ No policies found. Adding minimal bootstrap (admin wildcard only). "
-                    "For full policies, run: alembic upgrade head"
+                    "⚠️ No policies found. Auto-seeding from policy_templates.py..."
                 )
-                await enforcer.add_policy("role:admin", "/*", ".*")
-                log.info("✅ Bootstrap complete: Admin wildcard policy added.")
+                
+                total_policies_added = 0
+                for role_config in SYSTEM_ROLES:
+                    template_id = role_config.get("template_id")
+                    role_name = role_config["name"]
+                    
+                    if template_id:
+                        template_policies = apply_template(template_id, role_name)
+                        for policy in template_policies:
+                            await enforcer.add_policy(
+                                policy["subject"], policy["object"], policy["action"]
+                            )
+                            total_policies_added += 1
+                        log.info(
+                            f"  ✓ Seeded {role_name} with {len(template_policies)} policies from template '{template_id}'"
+                        )
+                
+                log.info(
+                    f"✅ Bootstrap complete: Seeded {len(SYSTEM_ROLES)} system roles "
+                    f"with {total_policies_added} total policies from policy_templates.py"
+                )
 
     except Exception as e:
         log.critical(
