@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wsl bash -c \"cd /mnt/d/QLTS/Backend_FastAPI && wc -l app/core/deps.py\")",
+      "Bash(wsl bash:*)"
+    ]
+  }
+}

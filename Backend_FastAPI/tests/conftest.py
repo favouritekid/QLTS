@@ -376,6 +376,23 @@ async def setup_test_database(manage_engine):
         if CasbinBase:
             await conn.run_sync(CasbinBase.metadata.create_all)
 
+            # Add tracking columns to casbin_rule (Phase 6 migration columns)
+            # This allows testing tracking functionality without running full migrations
+            try:
+                await conn.execute(text("""
+                    ALTER TABLE casbin_rule
+                    ADD COLUMN IF NOT EXISTS template_id VARCHAR(50),
+                    ADD COLUMN IF NOT EXISTS applied_at TIMESTAMP,
+                    ADD COLUMN IF NOT EXISTS applied_by INTEGER
+                """))
+                await conn.execute(text("""
+                    CREATE INDEX IF NOT EXISTS ix_casbin_rule_template_id
+                    ON casbin_rule(template_id)
+                """))
+                log.info("✅ Added tracking columns to casbin_rule for testing")
+            except Exception as e:
+                log.warning(f"Could not add tracking columns (may already exist): {e}")
+
     log.info("--- [FUNCTION SETUP] Test database setup complete ---")
     yield
 

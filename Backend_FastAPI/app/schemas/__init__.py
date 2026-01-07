@@ -151,6 +151,18 @@ from .admission import (
     # Student schemas
     StudentDocumentResponse,
     StudentResponse,
+    # State transition schemas (State Machine)
+    ApproveRequest,
+    RejectRequest,
+    ResubmitRequest,
+    ConfirmRequest,
+    OverrideRequest,
+    FinalizeRequest,
+    # Confirmation token schemas (Magic Link)
+    ConfirmTokenVerifyRequest,
+    ConfirmTokenResponse,
+    ConfirmTokenInfoResponse,
+    SendConfirmationResponse,
 )
 
 # --- Từ permissions.py ---

@@ -408,7 +408,15 @@ class AdmissionProfileResponse(BaseModel):
     union_entry_date: Optional[datetime] = None
     party_entry_date: Optional[datetime] = None
     party_official_entry_date: Optional[datetime] = None
-    
+
+    # ✅ FIX #6: Audit trail fields (approve/reject tracking)
+    approved_at: Optional[datetime] = None
+    approved_by_id: Optional[int] = None
+    approval_notes: Optional[str] = None
+    rejected_at: Optional[datetime] = None
+    rejected_by_id: Optional[int] = None
+    rejection_reason: Optional[str] = None
+
     # JSONB Fields
     family_info: List[FamilyMemberSchema] = []
     academic_history: List[AcademicRecordSchema] = []
@@ -451,16 +459,23 @@ class AdmissionSubmitResponse(BaseModel):
     """
     Schema for submit endpoint response.
 
-    Success (200):
-    - status: "approved"
-    - message: Success message
+    ✅ CRITICAL FIX #1: Updated to match state machine flow
+    - draft → submitted (validation pass)
+    - draft → draft (validation fail - user fixes errors)
 
-    Failure (400):
-    - errors: List of validation error messages
+    Success (200):
+    - status: "submitted" (wait for Manager approval)
+    - message: Success message
+    - validation_errors: null
+
+    Validation Failed (200):
+    - status: "draft" (user needs to fix errors)
+    - message: null
+    - validation_errors: List of error messages
     """
-    status: Optional[Literal["approved", "rejected"]] = None
+    status: Optional[Literal["draft", "submitted"]] = None  # ✅ FIX: Match state machine
     message: Optional[str] = None
-    errors: Optional[List[str]] = None
+    validation_errors: Optional[List[str]] = None  # ✅ FIX: Renamed from "errors"
 
     model_config = ConfigDict(
         str_strip_whitespace=True,
@@ -554,20 +569,25 @@ class ApproveRequest(BaseModel):
     """
     Schema for approve action (Manager/Admin).
 
+    ✅ CRITICAL FIX #4: Made version REQUIRED for optimistic locking
+    Without version check: 2 managers can approve/reject same profile simultaneously
+    With version check: Second request fails with 409 Conflict
+
     Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.1:
     - Transition: SUBMITTED/RESUBMITTED → APPROVED
     - Requires Manager or Admin role
     - Optional approval notes
-    - Optional version for optimistic locking
+    - REQUIRED version for optimistic locking (CRITICAL FIX #4)
     """
     notes: Optional[str] = Field(
         None,
         max_length=1000,
         description="Optional approval notes/comments"
     )
-    version: Optional[int] = Field(
-        None,
-        description="Version for optimistic locking (prevents concurrent updates)"
+    version: int = Field(  # ✅ CRITICAL FIX #4: Now REQUIRED (was Optional)
+        ...,
+        ge=1,
+        description="REQUIRED: Current profile version for optimistic locking (prevents race conditions)"
     )
 
     model_config = ConfigDict(str_strip_whitespace=True)
@@ -577,11 +597,13 @@ class RejectRequest(BaseModel):
     """
     Schema for reject action (Manager/Admin).
 
+    ✅ CRITICAL FIX #4: Made version REQUIRED for optimistic locking
+
     Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.1:
     - Transition: SUBMITTED/RESUBMITTED → REJECTED
     - Requires Manager or Admin role
     - Reason is MANDATORY (min 10 chars)
-    - Optional version for optimistic locking
+    - REQUIRED version for optimistic locking (CRITICAL FIX #4)
     """
     reason: str = Field(
         ...,
@@ -589,9 +611,10 @@ class RejectRequest(BaseModel):
         max_length=1000,
         description="Rejection reason (min 10 chars, required)"
     )
-    version: Optional[int] = Field(
-        None,
-        description="Version for optimistic locking (prevents concurrent updates)"
+    version: int = Field(  # ✅ CRITICAL FIX #4: Now REQUIRED (was Optional)
+        ...,
+        ge=1,
+        description="REQUIRED: Current profile version for optimistic locking (prevents race conditions)"
     )
 
     @field_validator('reason')

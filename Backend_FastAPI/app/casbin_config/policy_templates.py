@@ -70,6 +70,8 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/admissions/{profile_id}", "action": "GET"},   # Read profile
         {"subject": "{role}", "object": "/api/admissions/{profile_id}", "action": "PUT"},   # Update profile
         {"subject": "{role}", "object": "/api/admissions/{profile_id}/submit", "action": "POST"},  # Submit
+        {"subject": "{role}", "object": "/api/admissions/{profile_id}/resubmit", "action": "POST"},  # Resubmit after rejection
+        {"subject": "{role}", "object": "/api/admissions/{profile_id}/send-confirmation", "action": "POST"},  # Send magic link
         # REMOVED: enroll is ADMIN-ONLY per Decision 10 (Admission State ≠ Authorization)
         # {"subject": "{role}", "object": "/api/admissions/{profile_id}/enroll", "action": "POST"},
         {"subject": "{role}", "object": "/api/admissions/{profile_id}/documents/{doc_code}/upload", "action": "POST"},  # Upload doc
@@ -115,8 +117,11 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/leads/distribution-preview", "action": "GET"},  # Preview distribution
         {"subject": "{role}", "object": "/api/leads/import/template", "action": "GET"},  # Import template
         {"subject": "{role}", "object": "/api/leads/import", "action": "POST"},  # Import leads
-        # Admission management (can override decisions)
+        # Admission State Machine (ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md)
+        {"subject": "{role}", "object": "/api/admissions/{profile_id}/approve", "action": "POST"},  # Approve profile
+        {"subject": "{role}", "object": "/api/admissions/{profile_id}/reject", "action": "POST"},  # Reject profile
         {"subject": "{role}", "object": "/api/admissions/{profile_id}/override", "action": "POST"},  # Override decision
+        {"subject": "{role}", "object": "/api/admissions/{profile_id}/send-confirmation", "action": "POST"},  # Send magic link
     ]
 }
 
@@ -214,6 +219,8 @@ BASIC_USER_TEMPLATE: PolicyTemplate = {
         # Admission config (read-only lookup data for all users)
         {"subject": "{role}", "object": "/api/admission-config/subjects", "action": "GET"},
         {"subject": "{role}", "object": "/api/admission-config/methods", "action": "GET"},
+        # NOTE: Admission confirmation is now PUBLIC via magic link
+        # POST /api/admissions/confirm/{token} - no auth required (token + CCCD = auth)
     ]
 }
 

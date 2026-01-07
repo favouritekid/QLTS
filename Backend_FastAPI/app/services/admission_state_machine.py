@@ -82,8 +82,8 @@ def can_transition(current: str, target: str) -> bool:
         current_status = AdmissionStatus(current)
         target_status = AdmissionStatus(target)
         return target_status in ALLOWED_TRANSITIONS.get(current_status, set())
-    except ValueError:
-        # Invalid status string
+    except (ValueError, TypeError, AttributeError):
+        # Invalid status string, None, or non-string type
         return False
 
 
@@ -108,7 +108,7 @@ def get_allowed_transitions(current: str) -> Set[str]:
     try:
         current_status = AdmissionStatus(current)
         return {s.value for s in ALLOWED_TRANSITIONS.get(current_status, set())}
-    except ValueError:
+    except (ValueError, TypeError, AttributeError):
         return set()
 
 
@@ -131,7 +131,7 @@ def is_final_state(status: str) -> bool:
     try:
         status_enum = AdmissionStatus(status)
         return len(ALLOWED_TRANSITIONS.get(status_enum, set())) == 0
-    except ValueError:
+    except (ValueError, TypeError, AttributeError):
         return False
 
 

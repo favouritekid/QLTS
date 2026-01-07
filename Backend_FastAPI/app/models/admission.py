@@ -171,9 +171,47 @@ class AdmissionProfile(Base):
     )
 
     # =========================================================================
-    # ANALYTICS FIELDS (Confirmation Tracking)
+    # ANALYTICS FIELDS (State Transition Tracking)
     # =========================================================================
-    
+
+    # ✅ FIX #6: Approval tracking (for audit trail)
+    approved_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+        comment="Timestamp when profile was approved by Manager/Admin"
+    )
+    approved_by_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="User ID who approved the profile (Manager/Admin)"
+    )
+    approval_notes: Mapped[str] = mapped_column(
+        String(1000),
+        nullable=True,
+        comment="Optional approval notes from Manager/Admin"
+    )
+
+    # ✅ FIX #6: Rejection tracking (for audit trail)
+    rejected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+        comment="Timestamp when profile was rejected by Manager/Admin"
+    )
+    rejected_by_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="User ID who rejected the profile (Manager/Admin)"
+    )
+    rejection_reason: Mapped[str] = mapped_column(
+        String(1000),
+        nullable=True,
+        comment="Rejection reason (required when rejecting)"
+    )
+
     # Confirmation tracking for statistics/reporting
     confirmed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -201,7 +239,21 @@ class AdmissionProfile(Base):
         uselist=False,  # One-to-one
         cascade="all, delete-orphan"
     )
-    
+
+    # ✅ FIX #6: Audit trail relationships
+    approved_by: Mapped["User"] = relationship(
+        "User",
+        foreign_keys=[approved_by_id],
+        lazy="select",
+        uselist=False
+    )
+    rejected_by: Mapped["User"] = relationship(
+        "User",
+        foreign_keys=[rejected_by_id],
+        lazy="select",
+        uselist=False
+    )
+
     # ✅ Phase 1: FK Traceability - link to source config
     offering_admission_config: Mapped["OfferingAdmissionConfig"] = relationship(
         "OfferingAdmissionConfig",

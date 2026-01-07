@@ -1617,6 +1617,11 @@ async def get_admission_for_manager(
     """
     IDOR Protection for Manager actions (approve/reject).
 
+    ✅ CRITICAL FIX #2: Added SELECT FOR UPDATE lock to prevent race conditions
+    Scenario: 2 managers approve/reject same profile simultaneously
+    Without lock: Both pass state check, last write wins (inconsistent state)
+    With lock: Second request waits, then fails state validation
+
     Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.1.3:
     - Admin: Can access all profiles
     - Manager: Can access profiles where lead.unit_id == user.unit_id
@@ -1632,20 +1637,28 @@ async def get_admission_for_manager(
         db: Database session
 
     Returns:
-        AdmissionProfile with lead relationship loaded
+        AdmissionProfile with lead relationship loaded (LOCKED)
 
     Raises:
         ResourceNotFoundError: Profile not found OR unauthorized (fake 404)
     """
-    from ..repositories import AdmissionRepository
+    from sqlalchemy import select
+    from sqlalchemy.orm import joinedload
 
-    repo = AdmissionRepository(db)
-    profile = await repo.get_profile_by_id_with_lead(profile_id)
+    # ✅ CRITICAL FIX #2: Acquire row lock for state-changing operations
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(joinedload(models.AdmissionProfile.lead))
+        .with_for_update()  # ✅ CRITICAL: Prevent concurrent approve/reject
+    )
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
 
     if not profile:
         raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
 
-    # IDOR CHECK
+    # IDOR CHECK (after lock acquired)
     if current_user.role != UserRole.ADMIN:
         if not profile.lead or profile.lead.unit_id != current_user.unit_id:
             # Fake 404 to prevent information leakage
@@ -1669,6 +1682,9 @@ async def get_admission_for_user(
     """
     IDOR Protection for Officer/Manager actions (resubmit, update).
 
+    ✅ CRITICAL FIX #2: Added SELECT FOR UPDATE lock
+    Prevents race conditions in resubmit operations
+
     Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.2:
     - Admin: Can access all profiles
     - Officer: Can access profiles where lead.unit_id == user.unit_id
@@ -1684,15 +1700,23 @@ async def get_admission_for_user(
         db: Database session
 
     Returns:
-        AdmissionProfile with lead relationship loaded
+        AdmissionProfile with lead relationship loaded (LOCKED)
 
     Raises:
         ResourceNotFoundError: Profile not found OR unauthorized (fake 404)
     """
-    from ..repositories import AdmissionRepository
+    from sqlalchemy import select
+    from sqlalchemy.orm import joinedload
 
-    repo = AdmissionRepository(db)
-    profile = await repo.get_profile_by_id_with_lead(profile_id)
+    # ✅ CRITICAL FIX #2: Acquire row lock for resubmit
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(joinedload(models.AdmissionProfile.lead))
+        .with_for_update()
+    )
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
 
     if not profile:
         raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
@@ -1713,57 +1737,26 @@ async def get_admission_for_user(
     return profile
 
 
-async def get_admission_for_owner(
-    profile_id: int = Path(..., description="Admission Profile ID"),
-    current_user: models.User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(database.get_db),
-) -> models.AdmissionProfile:
-    """
-    IDOR Protection for OWNER-ONLY actions (confirm enrollment).
-
-    Per ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.3.2:
-    - SELF check: Only the profile owner (applicant) can confirm
-    - Owner identified by lead.user_id (NOT assigned_officer_id!)
-    - Admin can also confirm as override
-
-    ⚠️ FIXED (Review 2026-01-06):
-    - OLD (BUG): assigned_officer_id check (wrong! that's the officer managing the lead)
-    - NEW (CORRECT): lead.user_id check (actual applicant identity)
-
-    Used by:
-    - POST /admissions/{id}/confirm
-
-    Args:
-        profile_id: Admission profile ID
-        current_user: Current authenticated user
-        db: Database session
-
-    Returns:
-        AdmissionProfile with lead relationship loaded
-
-    Raises:
-        ResourceNotFoundError: Profile not found OR unauthorized (fake 404)
-    """
-    from ..repositories import AdmissionRepository
-
-    repo = AdmissionRepository(db)
-    profile = await repo.get_profile_by_id_with_lead(profile_id)
-
-    if not profile:
-        raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
-
-    # SELF CHECK - Must be profile OWNER (applicant)
-    # NOT assigned_officer_id (that's the officer managing the lead!)
-    if current_user.role != UserRole.ADMIN:
-        if not profile.lead or profile.lead.user_id != current_user.id:
-            # Fake 404 to prevent information leakage (IDOR protection)
-            log.warning(
-                "IDOR attempt: User tried to confirm profile they don't own",
-                user_id=current_user.id,
-                profile_id=profile_id,
-                profile_owner_id=profile.lead.user_id if profile.lead else None,
-            )
-            raise ResourceNotFoundError(detail=f"Admission profile {profile_id} not found")
-
-    return profile
-
+# ==============================================================================
+# DEPRECATED: get_admission_for_owner
+# ==============================================================================
+# 
+# This dependency was designed for user-based confirmation with Lead.user_id.
+# However, the Lead model doesn't have a user_id field, so this check is broken.
+# 
+# REPLACED BY: Token-based confirmation flow (Magic Link)
+# - POST /api/admissions/confirm/{token} (public endpoint)
+# - Uses AdmissionConfirmationToken + CCCD verification
+# 
+# See: implementation_plan.md (Magic Link + CCCD Verification)
+# 
+# async def get_admission_for_owner(
+#     profile_id: int = Path(..., description="Admission Profile ID"),
+#     current_user: models.User = Depends(get_current_active_user),
+#     db: AsyncSession = Depends(database.get_db),
+# ) -> models.AdmissionProfile:
+#     """DEPRECATED: Use token-based confirmation instead."""
+#     raise NotImplementedError(
+#         "get_admission_for_owner is deprecated. "
+#         "Use token-based confirmation: POST /api/admissions/confirm/{token}"
+#     )

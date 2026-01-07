@@ -211,6 +211,18 @@ class Settings(BaseSettings):
         default=False, validation_alias="AUTO_SYNC_TEMPLATES"
     )
 
+    # -- Admission Confirmation Settings --
+    # Magic link token expiration and CCCD verification
+    ADMISSION_CONFIRM_TOKEN_EXPIRE_DAYS: int = Field(
+        default=7, validation_alias="ADMISSION_CONFIRM_TOKEN_EXPIRE_DAYS"
+    )  # Token expires after N days
+    ADMISSION_CONFIRM_MAX_ATTEMPTS: int = Field(
+        default=5, validation_alias="ADMISSION_CONFIRM_MAX_ATTEMPTS"
+    )  # Lock token after N failed CCCD attempts
+    ADMISSION_CONFIRM_CCCD_DIGITS: int = Field(
+        default=4, validation_alias="ADMISSION_CONFIRM_CCCD_DIGITS"
+    )  # Last N digits to verify
+
     # === Pydantic Settings Configuration ===
     model_config = ConfigDict(
         # Đường dẫn tới file .env cần tải (chỉ tải nếu tồn tại)

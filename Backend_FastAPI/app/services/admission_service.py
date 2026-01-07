@@ -176,15 +176,7 @@ async def create_profile(
         )
 
     admission_rules = lead.offering.admission_rules or {}
-    if not admission_rules:
-        log.warning(
-            "ProgramOffering has no admission_rules configured",
-            offering_id=lead.offering_id,
-        )
-        # Don't raise error - we can still create profile with empty rules
-        # This allows for profiles to be created before rules are fully configured
-        admission_rules = {}
-    
+
     # Step 5.1: Phase 6 - Include admission_criteria from OfferingAcademicInfo
     # OfferingAcademicInfo contains year-specific criteria (Level 3)
     # ⚠️ Use repository method to avoid MissingGreenlet (lazy loading in async)
@@ -216,6 +208,35 @@ async def create_profile(
         **admission_rules,
         "criteria": criteria,  # New: dynamic admission methods
     }
+
+    # ✅ HIGH PRIORITY FIX #8: Reject profiles with completely empty applied_rules
+    # Empty rules means no admission method, mandatory docs, or scoring criteria
+    # This prevents creating profiles that cannot be validated or scored
+    # Check if rules dict is empty OR all values are empty/None/[]
+    has_content = False
+    if applied_rules:
+        for key, value in applied_rules.items():
+            if value:  # Not None, not empty list, not empty string
+                if isinstance(value, (list, dict)):
+                    if len(value) > 0:  # Has items
+                        has_content = True
+                        break
+                else:
+                    has_content = True
+                    break
+
+    if not has_content:
+        log.error(
+            "Cannot create admission profile: No admission rules configured",
+            offering_id=lead.offering_id,
+            admission_rules=admission_rules,
+            criteria=criteria,
+        )
+        raise BadRequest(
+            f"Cannot create admission profile: Program offering {lead.offering_id} "
+            "has no admission rules configured. Please configure admission rules "
+            "(admission_method, mandatory_docs, etc.) or admission criteria before creating profiles."
+        )
 
     # Step 6: Collect mandatory document codes
     mandatory_docs = applied_rules.get("mandatory_docs", [])
@@ -602,9 +623,26 @@ async def submit_and_evaluate(
         PermissionDeniedError: User doesn't have access
         BadRequest: Status is not 'draft'
     """
-    # Get profile with IDOR check
-    profile = await get_profile(db, profile_id, current_user)
-    
+    # ✅ CRITICAL FIX #2: Add pessimistic lock to prevent race conditions
+    # Scenario: 2 officers submit same profile simultaneously
+    # Without lock: Both pass status check, both update to "submitted"
+    # With lock: Second request waits, then fails status check
+    from sqlalchemy import select
+
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .with_for_update()  # ✅ CRITICAL: Acquire row lock
+    )
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+
+    if not profile:
+        raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
+
+    # IDOR check (after lock acquired)
+    _check_admin_or_unit_access(profile, current_user)
+
     # Initialize repository for document/citizen_id checks
     from app.repositories import AdmissionRepository
     admission_repo = AdmissionRepository(db)
@@ -690,15 +728,15 @@ async def submit_and_evaluate(
                 f"(Mã SV: {existing_student.student_code})"
             )
 
-    # Decision: Approve or Reject
+    # ✅ CRITICAL FIX #1: Submit should transition to SUBMITTED, not APPROVED/REJECTED
+    # Per ADMISSION_STATE_MACHINE: draft → submitted (wait for Manager approval)
+    # Validation errors should NOT change status - stay in draft for user to fix
     if errors:
-        # Reject
-        profile.status = "rejected"
-        profile.version += 1  # Increment version on status change
-        await db.flush()
+        # Keep in draft - user needs to fix validation errors
+        await db.flush()  # No status change
 
         log.warning(
-            "Admission profile rejected",
+            "Admission profile submission failed - validation errors",
             profile_id=profile_id,
             user_id=current_user.id,
             errors_count=len(errors),
@@ -706,28 +744,27 @@ async def submit_and_evaluate(
         )
 
         return {
-            "status": "rejected",
+            "status": "draft",  # ✅ FIX: Stay in draft, not "rejected"
             "message": None,
-            "errors": errors,
+            "validation_errors": errors,  # ✅ FIX: Match schema field name
         }
     else:
-        # Approve
-        profile.status = "approved"
+        # ✅ FIX: Submit validation passed → Move to SUBMITTED (not APPROVED)
+        profile.status = "submitted"  # ✅ CRITICAL FIX: submitted, not approved
         profile.version += 1  # Increment version on status change
         await db.flush()
 
-        # TODO (Phase 2): Log GPA from ProfileSubjectScore table
         log.info(
-            "Admission profile approved",
+            "Admission profile submitted successfully",
             profile_id=profile_id,
             user_id=current_user.id,
             citizen_id=profile.citizen_id,
         )
 
         return {
-            "status": "approved",
-            "message": "Hồ sơ đã được duyệt tự động. Bạn có thể tiến hành nhập học.",
-            "errors": None,
+            "status": "submitted",  # ✅ FIX: submitted status
+            "message": "Hồ sơ đã được nộp thành công. Chờ phê duyệt từ Manager.",
+            "validation_errors": None,  # ✅ FIX: Match schema field name
         }
 
 
@@ -911,10 +948,26 @@ async def enroll_student(
     """
     # Initialize repository
     from app.repositories import AdmissionRepository
+    from sqlalchemy import select
     admission_repo = AdmissionRepository(db)
 
-    # Get profile with IDOR check
-    profile = await get_profile(db, profile_id, current_user)
+    # ✅ CRITICAL FIX #2 & #3: Acquire row lock and check state atomically
+    # Scenario: Admin enrolls profile while Lead confirms via magic link
+    # Without lock: Both can modify status simultaneously
+    # With lock: Operations are serialized
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .with_for_update()  # ✅ CRITICAL: Lock row for enrollment
+    )
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+
+    if not profile:
+        raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
+
+    # IDOR check (after lock acquired)
+    _check_admin_or_unit_access(profile, current_user)
 
     # Must be in approved or confirmed status
     # 'confirmed' = Lead confirmed via magic link, ready to enroll
@@ -922,6 +975,59 @@ async def enroll_student(
         raise BadRequest(
             f"Cannot enroll student with profile status '{profile.status}'. "
             "Only approved, confirmed, or overridden profiles can be enrolled."
+        )
+
+    # ✅ HIGH PRIORITY FIX #7: Idempotency check - return existing student if already enrolled
+    # Prevents duplicate student creation if endpoint is called multiple times
+    # This can happen if:
+    # - Client retries on network timeout
+    # - Multiple admins click "Enroll" simultaneously (despite lock, status is already 'enrolled')
+    # - Background job + manual action race
+    if profile.status == "enrolled":
+        # Profile already enrolled - return existing student (idempotent operation)
+        if profile.student:
+            log.info(
+                "Idempotent enroll: Profile already enrolled, returning existing student",
+                profile_id=profile_id,
+                student_id=profile.student.id,
+                student_code=profile.student.student_code,
+            )
+            return {
+                "student_id": profile.student.id,
+                "student_code": profile.student.student_code,
+                "enrollment_date": profile.student.enrollment_date,
+            }
+        else:
+            # Data inconsistency: status is 'enrolled' but no student record exists
+            log.error(
+                "CRITICAL: Profile status is 'enrolled' but no student record found",
+                profile_id=profile_id,
+                status=profile.status,
+            )
+            raise ConflictError(
+                f"Data inconsistency: Profile {profile_id} is marked as enrolled "
+                "but has no associated student record. Please contact system administrator."
+            )
+
+    # ✅ CRITICAL FIX #3: Final citizen_id duplicate check INSIDE transaction
+    # Prevents race condition where 2 enrolls pass validation check but both create Student
+    # Check must be AFTER acquiring lock but BEFORE creating Student record
+    if not profile.citizen_id:
+        raise BadRequest("Cannot enroll: Profile has no citizen_id")
+
+    duplicate_student = await admission_repo.check_citizen_id_enrolled(profile.citizen_id)
+    if duplicate_student:
+        log.error(
+            "CRITICAL: Citizen ID duplicate detected at enrollment time",
+            profile_id=profile_id,
+            citizen_id=profile.citizen_id,
+            existing_student_code=duplicate_student.student_code,
+            existing_student_id=duplicate_student.id,
+        )
+        raise ConflictError(
+            f"Cannot enroll: Citizen ID {profile.citizen_id} is already enrolled "
+            f"as student {duplicate_student.student_code}. "
+            "This profile may have been enrolled through a different process."
         )
 
     # ACID Transaction with Savepoint
@@ -1101,9 +1207,17 @@ async def approve_profile(
         )
         raise BadRequest(str(e))
 
-    # VERSION CHECK (Optimistic Locking)
-    # Only check if version is explicitly provided (not None)
-    if data.get("version") is not None and data["version"] != profile.version:
+    # ✅ CRITICAL FIX #4: VERSION CHECK (Optimistic Locking) - Now REQUIRED
+    # Version is now mandatory in ApproveRequest schema (no longer optional)
+    # This prevents race conditions where 2 managers approve/reject simultaneously
+    if data["version"] != profile.version:
+        log.warning(
+            "Optimistic locking conflict: Version mismatch",
+            profile_id=profile.id,
+            expected_version=data["version"],
+            actual_version=profile.version,
+            user_id=approver.id,
+        )
         raise ConflictError(
             f"Profile was modified by another user. "
             f"Expected version {data['version']}, but current version is {profile.version}. "
@@ -1186,8 +1300,15 @@ async def reject_profile(
     if not data.get("reason"):
         raise BadRequest("Rejection reason is required (min 10 characters)")
 
-    # VERSION CHECK
-    if data.get("version") is not None and data["version"] != profile.version:
+    # ✅ CRITICAL FIX #4: VERSION CHECK - Now REQUIRED (no longer optional)
+    if data["version"] != profile.version:
+        log.warning(
+            "Optimistic locking conflict: Version mismatch in reject",
+            profile_id=profile.id,
+            expected_version=data["version"],
+            actual_version=profile.version,
+            user_id=rejector.id,
+        )
         raise ConflictError(
             f"Profile was modified by another user. "
             f"Expected version {data['version']}, but current version is {profile.version}. "

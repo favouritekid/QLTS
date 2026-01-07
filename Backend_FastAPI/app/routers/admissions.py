@@ -27,7 +27,7 @@ from ..core.deps import (
     CasbinAuth,  # ✅ Phase 2.2: Use standard alias
     get_admission_for_manager,
     get_admission_for_user,
-    get_admission_for_owner,
+    # get_admission_for_owner - DEPRECATED: Replaced by token-based confirmation
 )
 from ..services import admission_service
 from ..services.notification_dispatcher import dispatch
@@ -780,71 +780,18 @@ async def resubmit_admission(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
 
-@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
-@router.post(
-    "/{profile_id}/confirm",
-    response_model=schemas.AdmissionProfileResponse,
-    summary="Confirm enrollment intent (Applicant)",
-)
-async def confirm_enrollment(
-    request: Request,
-    profile_id: int,
-    data: schemas.ConfirmRequest,
-    current_user: models.User = CasbinAuth,  # Layer 2: RBAC (User/Admin)
-    profile: models.AdmissionProfile = Depends(get_admission_for_owner),  # Layer 3: IDOR (SELF check)
-    db: AsyncSession = Depends(database.get_db),
-):
-    """
-    Confirm enrollment intent - Applicant action (SELF only).
-
-    **Architecture Compliance** (ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md Section 3.3.1):
-    - Layer 1: Rate limiting (200 req/hour)
-    - Layer 2: RBAC via CasbinAuth (User role)
-    - Layer 3: IDOR via get_admission_for_owner (SELF check: lead.user_id == current_user.id)
-    - Layer 4: Service layer handles business logic
-
-    **State Transition:**
-    - From: APPROVED
-    - To: CONFIRMED
-
-    **Validation:**
-    - State transition via validate_transition()
-    - Optimistic locking via version check
-    - SELF check: Only the applicant (lead.user_id) can confirm
-
-    **Request Body:**
-    - version: Optional version for optimistic locking
-
-    **Returns:**
-    - Updated AdmissionProfile with status='confirmed'
-
-    **Errors:**
-    - 400: Invalid state transition or version mismatch
-    - 404: Profile not found (or IDOR protection - not the applicant)
-    """
-    try:
-        # 1. DELEGATE to Service
-        result, callback = await admission_service.confirm_enrollment(
-            db=db,
-            profile=profile,
-            applicant=current_user,
-            data=data.model_dump(),
-        )
-
-        # 2. COMMIT Transaction
-        await db.commit()
-        await db.refresh(result)
-
-        # 3. POST-COMMIT Side Effects
-        await callback()
-
-        # 4. RETURN Pydantic Model
-        return result
-
-    except BadRequest as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    except ConflictError as e:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+# ==============================================================================
+# DEPRECATED: confirm_enrollment endpoint
+# ==============================================================================
+# 
+# The old /{profile_id}/confirm endpoint has been REMOVED.
+# Confirmation is now done via Magic Link + CCCD verification:
+# 
+# - GET /api/admissions/confirm/{token}  (public - get token info)
+# - POST /api/admissions/confirm/{token} (public - verify CCCD & confirm)
+# 
+# See: implementation_plan.md (Magic Link + CCCD Verification)
+#
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
@@ -985,3 +932,160 @@ async def finalize_enrollment(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except ConflictError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+
+# ==============================================================================
+# MAGIC LINK CONFIRMATION ENDPOINTS (PUBLIC - No Auth)
+# ==============================================================================
+
+
+@router.get(
+    "/confirm/{token}",
+    response_model=schemas.ConfirmTokenInfoResponse,
+    summary="Get confirmation token info",
+    description="""
+    Get token info to display confirmation form.
+    
+    **PUBLIC ENDPOINT** - No authentication required.
+    Token itself serves as the authentication.
+    
+    **Returns:**
+    - Lead name (for "Xin chào, [Tên]...")
+    - Token validity status (valid, expired, locked, already_used)
+    - Attempts remaining
+    """,
+)
+async def get_confirm_token_info(
+    token: str,
+    db: AsyncSession = Depends(database.get_db),
+):
+    """Get token info for frontend to display confirmation form."""
+    try:
+        token_info = await admission_service.get_token_info(db, token)
+        return token_info
+    
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@router.post(
+    "/confirm/{token}",
+    response_model=schemas.ConfirmTokenResponse,
+    summary="Confirm admission via magic link",
+    description="""
+    Lead confirms enrollment via magic link + CCCD verification.
+    
+    **PUBLIC ENDPOINT** - No authentication required.
+    Security via: Token + CCCD verification + Rate limiting.
+    
+    **Workflow:**
+    1. Lead clicks link in email: /confirm/{token}
+    2. Frontend calls GET /confirm/{token} to get form info
+    3. Lead enters last 4 digits of CCCD
+    4. Frontend calls POST /confirm/{token} with CCCD digits
+    5. If correct → Profile status changes to 'confirmed'
+    
+    **Security:**
+    - Token is 256-bit random (impossible to guess)
+    - CCCD verification prevents unauthorized confirmation
+    - Max 5 attempts before token is locked
+    - Rate limited: 200/hour globally + 100/day per IP (brute-force protection)
+    """,
+)
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour global limit
+@limiter.limit(  # ✅ FIX #6: IP-based rate limit (brute-force protection)
+    "100/day",
+    key_func=lambda r: r.client.host if r.client else "unknown"
+)
+async def confirm_admission_by_token(
+    request: Request,
+    token: str,
+    verify_data: schemas.ConfirmTokenVerifyRequest,
+    db: AsyncSession = Depends(database.get_db),
+):
+    """Confirm admission via magic link + CCCD verification."""
+    try:
+        # 1. DELEGATE to Service
+        profile, callback = await admission_service.verify_and_confirm(
+            db=db,
+            token_value=token,
+            last_digits=verify_data.last_digits_citizen_id,
+        )
+        
+        # 2. COMMIT Transaction
+        await db.commit()
+        await db.refresh(profile)
+        
+        # 3. POST-COMMIT Side Effects
+        await callback()
+        
+        # 4. RETURN Response
+        return schemas.ConfirmTokenResponse(
+            message="Xác nhận nhập học thành công!",
+            profile_id=profile.id,
+            status=profile.status,
+            confirmed_at=profile.confirmed_at,
+        )
+    
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except BadRequest as e:
+        # IMPORTANT: Commit to persist attempt_count/locked_at changes
+        await db.commit()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+# ==============================================================================
+# SEND CONFIRMATION LINK (Manager/Officer action)
+# ==============================================================================
+
+
+@router.post(
+    "/{profile_id}/send-confirmation",
+    response_model=schemas.SendConfirmationResponse,
+    summary="Send confirmation link to Lead",
+    description="""
+    Generate and send confirmation link to Lead.
+    
+    **Called by:** Officer/Manager after profile is approved.
+    **Action:** Creates token, sends email/SMS with magic link.
+    
+    **Permissions:**
+    - Officer: Can send for profiles in their unit
+    - Manager: Can send for profiles in their unit
+    - Admin: Can send for any profile
+    """,
+)
+@limiter.limit(RateLimits.DATA_WRITE)
+async def send_confirmation_link(
+    request: Request,
+    profile_id: int,
+    current_user: models.User = CasbinAuth,
+    profile: models.AdmissionProfile = Depends(get_admission_for_manager),
+    db: AsyncSession = Depends(database.get_db),
+):
+    """Generate and send confirmation link to Lead."""
+    try:
+        # 1. DELEGATE to Service
+        token_obj, callback = await admission_service.generate_confirmation_token(
+            db=db,
+            profile=profile,
+        )
+        
+        # 2. COMMIT Transaction
+        await db.commit()
+        
+        # 3. POST-COMMIT Side Effects (send email)
+        await callback()
+        
+        # 4. RETURN Response
+        lead = profile.lead
+        return schemas.SendConfirmationResponse(
+            message="Đường link xác nhận đã được gửi thành công!",
+            token_expires_at=token_obj.expires_at,
+            sent_to_email=lead.email if lead else None,
+            sent_to_phone=lead.phone if lead else None,
+        )
+    
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
