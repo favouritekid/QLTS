@@ -36,9 +36,14 @@ class AdmissionProfile(Base):
     Security:
     - IDOR: Service checks lead.unit_id == current_user.unit_id
     - Snapshot: applied_rules never changes after creation
-    - Unique: citizen_id prevents duplicate enrollment
+    - Unique: (citizen_id, academic_year) prevents duplicate enrollment per year
     """
     __tablename__ = "admission_profile"
+    
+    # ✅ Composite Unique Constraints
+    __table_args__ = (
+        UniqueConstraint('citizen_id', 'academic_year', name='uq_citizen_academic_year'),
+    )
 
     # Primary Key
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -63,12 +68,23 @@ class AdmissionProfile(Base):
         comment="Source config (audit/debug/report)"
     )
 
-    # Applicant Identity (Must be unique across system)
+    # ✅ Academic Year (for multi-year admission support)
+    # Allows same citizen to apply in different years
+    # Copied from OfferingAcademicInfo at profile creation time (snapshot pattern)
+    academic_year: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        index=True,
+        comment="Academic year (e.g., 2025, 2026) - snapshotted at creation"
+    )
+
+    # Applicant Identity (Unique per academic year)
+    # ✅ CHANGED: From UNIQUE(citizen_id) to UNIQUE(citizen_id, academic_year)
+    # This allows same person to apply in different years
     citizen_id: Mapped[str] = mapped_column(
         String(12),
         nullable=True,  # Can be null during draft, required for submit
-        unique=True,  # Prevent duplicate enrollment with same citizen ID
-        index=True,
+        index=True,  # Removed unique=True, composite constraint in __table_args__
         comment="CCCD/CMND number (12 digits)"
     )
 

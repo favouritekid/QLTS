@@ -249,9 +249,28 @@ async def create_profile(
             if doc_code and doc_code not in mandatory_docs:
                 mandatory_docs.append(doc_code)
 
-    # Step 7: Create AdmissionProfile
+    # Step 7: Determine academic_year from OfferingAcademicInfo
+    # Use the published academic_info's year, or fallback to current year
+    academic_year = datetime.now(timezone.utc).year  # Default fallback
+    if academic_info_list:
+        published_info = next(
+            (info for info in academic_info_list if info.is_published),
+            academic_info_list[0] if academic_info_list else None
+        )
+        if published_info:
+            academic_year = published_info.academic_year
+    
+    log.info(
+        "Determined academic_year for profile",
+        lead_id=lead_id,
+        academic_year=academic_year,
+        offering_id=lead.offering_id,
+    )
+    
+    # Step 8: Create AdmissionProfile
     new_profile = models.AdmissionProfile(
         lead_id=lead_id,
+        academic_year=academic_year,  # ✅ NEW: Snapshot academic year
         status="draft",
         applied_rules=applied_rules,  # Snapshot (immutable) with criteria
         family_info=[],
@@ -457,7 +476,45 @@ async def update_profile(
     # Update fields (only non-None values from schema)
     # Update fields (only non-None values from schema)
     if "citizen_id" in data and data["citizen_id"] is not None:
-        profile.citizen_id = data["citizen_id"]
+        new_citizen_id = data["citizen_id"]
+
+        # ✅ Validate citizen_id uniqueness within same academic_year (if changed)
+        if new_citizen_id != profile.citizen_id:
+            # Check if new citizen_id already exists in same year
+            duplicate_profile = await admission_repo.check_citizen_id_exists(
+                citizen_id=new_citizen_id,
+                academic_year=profile.academic_year,
+                exclude_profile_id=profile.id
+            )
+
+            if duplicate_profile:
+                log.warning(
+                    "Cannot update citizen_id: Duplicate in same academic year",
+                    profile_id=profile.id,
+                    new_citizen_id=new_citizen_id,
+                    academic_year=profile.academic_year,
+                    duplicate_profile_id=duplicate_profile.id,
+                )
+                raise ConflictError(
+                    f"CCCD {new_citizen_id} đã được sử dụng bởi hồ sơ khác "
+                    f"trong năm {profile.academic_year} (ID: {duplicate_profile.id})"
+                )
+
+            # Check if already enrolled as student
+            existing_student = await admission_repo.check_citizen_id_enrolled(new_citizen_id)
+            if existing_student:
+                log.warning(
+                    "Cannot update citizen_id: Already enrolled as student",
+                    profile_id=profile.id,
+                    new_citizen_id=new_citizen_id,
+                    student_code=existing_student.student_code,
+                )
+                raise ConflictError(
+                    f"CCCD {new_citizen_id} đã được sử dụng bởi học viên "
+                    f"(Mã SV: {existing_student.student_code})"
+                )
+
+        profile.citizen_id = new_citizen_id
 
     # ✅ Sync with Lead: Full Name
     if "full_name" in data and data["full_name"] is not None:
@@ -708,15 +765,17 @@ async def submit_and_evaluate(
     if not profile.citizen_id:
         errors.append("Số CCCD/CMND chưa được nhập (citizen_id is null)")
     else:
-        # Check in admission_profile table (other profiles)
+        # Check in admission_profile table (other profiles IN THE SAME YEAR)
         duplicate_profile = await admission_repo.check_citizen_id_exists(
-            profile.citizen_id, exclude_profile_id=profile.id
+            citizen_id=profile.citizen_id,
+            academic_year=profile.academic_year,  # ✅ UPDATED: Filter by year
+            exclude_profile_id=profile.id
         )
 
         if duplicate_profile:
             errors.append(
                 f"CCCD {profile.citizen_id} đã được sử dụng bởi hồ sơ khác "
-                f"(ID: {duplicate_profile.id})"
+                f"trong năm {profile.academic_year} (ID: {duplicate_profile.id})"
             )
 
         # Check in student table (already enrolled students)

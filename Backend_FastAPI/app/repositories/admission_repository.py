@@ -173,15 +173,18 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
     async def check_citizen_id_exists(
         self,
         citizen_id: str,
+        academic_year: int,
         exclude_profile_id: Optional[int] = None
     ) -> Optional[models.AdmissionProfile]:
         """
-        Check if citizen_id is already used by another profile.
+        Check if citizen_id is already used by another profile IN THE SAME YEAR.
         
-        ✅ SPRINT 6: For submit_and_evaluate validation.
+        ✅ UPDATED: Now filters by academic_year to allow same citizen
+        to apply in different years.
         
         Args:
             citizen_id: Citizen ID to check
+            academic_year: Academic year to check within
             exclude_profile_id: Profile ID to exclude (current profile)
             
         Returns:
@@ -189,6 +192,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         """
         stmt = select(models.AdmissionProfile).where(
             models.AdmissionProfile.citizen_id == citizen_id,
+            models.AdmissionProfile.academic_year == academic_year,
         )
         if exclude_profile_id:
             stmt = stmt.where(models.AdmissionProfile.id != exclude_profile_id)

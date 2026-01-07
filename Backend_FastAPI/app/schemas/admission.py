@@ -375,6 +375,7 @@ class AdmissionProfileResponse(BaseModel):
     lead_id: int
     status: str
     version: int
+    academic_year: int  # ✅ NEW: Academic year (e.g., 2025, 2026)
     applied_rules: dict
     created_at: datetime
     updated_at: datetime
