@@ -15,6 +15,7 @@ Architecture:
 """
 
 from datetime import datetime, timezone
+from typing import List, Optional
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, Mapped, mapped_column
@@ -153,24 +154,6 @@ class AdmissionProfile(Base):
         comment="Array of academic records (schools attended)"
     )
 
-    # Admission Scores (Single object)
-    # Structure: {gpa, math_score, literature_score, ...}
-    admission_scores: Mapped[dict] = mapped_column(
-        JSONB,
-        nullable=True,
-        comment="Scores for admission evaluation"
-    )
-
-    # Documents Checklist (Array of DocumentItem objects)
-    # Structure: [{code, label, status, file_path, uploaded_at}, ...]
-    # Status values: 'missing', 'uploaded', 'verified', 'rejected'
-    documents_checklist: Mapped[list] = mapped_column(
-        JSONB,
-        nullable=True,
-        default=list,
-        comment="Array of required documents with upload status"
-    )
-
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -185,6 +168,23 @@ class AdmissionProfile(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
         comment="Last update time (UTC)"
+    )
+
+    # =========================================================================
+    # ANALYTICS FIELDS (Confirmation Tracking)
+    # =========================================================================
+    
+    # Confirmation tracking for statistics/reporting
+    confirmed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,  # Index for fast date range queries
+        comment="Timestamp when lead confirmed enrollment"
+    )
+    confirmed_via: Mapped[str] = mapped_column(
+        String(20),
+        nullable=True,
+        comment="Confirmation method: 'magic_link', 'admin_override', 'officer'"
     )
 
     # Relationships (Eager Loading to Prevent N+1 Queries)
@@ -209,19 +209,111 @@ class AdmissionProfile(Base):
     )
     
     # ✅ Phase 1: Relational data (replaces JSON fields)
-    subject_scores: Mapped[list] = relationship(
+    subject_scores: Mapped[List["ProfileSubjectScore"]] = relationship(
         "ProfileSubjectScore",
         back_populates="profile",
         cascade="all, delete-orphan",
         lazy="selectin"
     )
-    documents: Mapped[list] = relationship(
+    documents: Mapped[List["ProfileDocument"]] = relationship(
         "ProfileDocument",
         back_populates="profile",
         cascade="all, delete-orphan",
         lazy="selectin"
     )
+    
+    # Magic Link Confirmation Token
+    confirmation_token: Mapped["AdmissionConfirmationToken"] = relationship(
+        "AdmissionConfirmationToken",
+        back_populates="profile",
+        uselist=False,
+        cascade="all, delete-orphan"
+    )
 
     def __repr__(self):
         return f"<AdmissionProfile {self.id}: Lead {self.lead_id}, Status: {self.status}>"
 
+
+class AdmissionConfirmationToken(Base):
+    """
+    Magic link token for admission confirmation.
+    
+    Security Features:
+    - Token is URL-safe random string (256-bit entropy)
+    - One-time use (confirmed_at marks as used)
+    - Expires after configurable days (default: 7)
+    - CCCD verification required (last 4 digits)
+    - Max attempts before lockout (default: 5)
+    
+    Workflow:
+    1. Profile approved → Generate token → Send email with link
+    2. Lead clicks link → Enter last 4 CCCD digits
+    3. If correct → Confirm profile, mark token used
+    4. If wrong → Increment attempts, lock if exceeded
+    """
+    __tablename__ = "admission_confirmation_token"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    
+    # Link to AdmissionProfile (one token per profile)
+    profile_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("admission_profile.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,  # One active token per profile
+        index=True
+    )
+    
+    # The actual token value (sent in email link)
+    token: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        unique=True,
+        index=True,
+        comment="URL-safe random token (256-bit)"
+    )
+    
+    # Token expiration
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        comment="Token expiration timestamp"
+    )
+    
+    # Confirmation timestamp (null = not used yet)
+    confirmed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When confirmation was completed"
+    )
+    
+    # CCCD verification attempts
+    attempt_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="Failed CCCD verification attempts"
+    )
+    
+    # Lock timestamp (null = not locked)
+    locked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Locked after max failed attempts"
+    )
+    
+    # Creation timestamp
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc)
+    )
+
+    # Relationship back to profile
+    profile: Mapped["AdmissionProfile"] = relationship(
+        "AdmissionProfile",
+        back_populates="confirmation_token"
+    )
+
+    def __repr__(self):
+        return f"<AdmissionConfirmationToken {self.id}: Profile {self.profile_id}, Used: {self.confirmed_at is not None}>"

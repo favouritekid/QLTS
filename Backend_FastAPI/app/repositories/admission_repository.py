@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
 from app import models
+from app.models import ProfileSubjectScore
 from app.repositories.base import BaseRepository
 
 
@@ -59,6 +60,8 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             .options(
                 joinedload(models.AdmissionProfile.lead),
                 selectinload(models.AdmissionProfile.student),
+                selectinload(models.AdmissionProfile.subject_scores).selectinload(ProfileSubjectScore.subject),
+                selectinload(models.AdmissionProfile.documents),
             )
             .offset(skip)
             .limit(limit)
@@ -128,6 +131,8 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             .options(
                 joinedload(models.AdmissionProfile.lead),
                 selectinload(models.AdmissionProfile.student),
+                selectinload(models.AdmissionProfile.subject_scores).selectinload(ProfileSubjectScore.subject),
+                selectinload(models.AdmissionProfile.documents),
             )
         )
         result = await self.db.execute(stmt)
@@ -154,6 +159,8 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             .options(
                 joinedload(models.AdmissionProfile.lead),
                 selectinload(models.AdmissionProfile.student),  # Prevent MissingGreenlet
+                selectinload(models.AdmissionProfile.subject_scores).selectinload(ProfileSubjectScore.subject),
+                selectinload(models.AdmissionProfile.documents),
             )
         )
         result = await self.db.execute(stmt)
@@ -232,3 +239,369 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none() is not None
+
+    # =========================================================================
+    # DOCUMENT MANAGEMENT METHODS (JSONB → Relational Migration)
+    # =========================================================================
+
+    async def initialize_documents_for_profile(
+        self,
+        profile_id: int,
+        document_type_codes: List[str]
+    ) -> List[models.ProfileDocument]:
+        """
+        Initialize ProfileDocument records for a new admission profile.
+
+        Replaces: _generate_documents_checklist() JSONB generation
+
+        Args:
+            profile_id: AdmissionProfile ID
+            document_type_codes: List of document type codes (e.g., ["HOC_BA", "CCCD"])
+
+        Returns:
+            List of created ProfileDocument records with status="missing"
+        """
+        # Fetch document types by codes
+        stmt = select(models.ConfigDocumentType).where(
+            models.ConfigDocumentType.code.in_(document_type_codes)
+        )
+        result = await self.db.execute(stmt)
+        doc_types = list(result.scalars().all())
+
+        # Create ProfileDocument records
+        created_docs = []
+        for doc_type in doc_types:
+            doc = models.ProfileDocument(
+                profile_id=profile_id,
+                document_type_id=doc_type.id,
+                status="missing",
+                file_path=None,
+                uploaded_at=None,
+            )
+            self.db.add(doc)
+            created_docs.append(doc)
+
+        await self.db.flush()  # Get IDs without committing
+        return created_docs
+
+    async def get_document_by_type(
+        self,
+        profile_id: int,
+        document_type_code: str
+    ) -> Optional[models.ProfileDocument]:
+        """
+        Get ProfileDocument by profile_id and document type code.
+
+        Replaces: JSONB checklist filtering in upload_document()
+
+        Args:
+            profile_id: AdmissionProfile ID
+            document_type_code: Document type code (e.g., "HOC_BA")
+
+        Returns:
+            ProfileDocument record or None
+        """
+        stmt = (
+            select(models.ProfileDocument)
+            .join(models.ConfigDocumentType)
+            .where(
+                models.ProfileDocument.profile_id == profile_id,
+                models.ConfigDocumentType.code == document_type_code,
+            )
+            .options(joinedload(models.ProfileDocument.document_type))
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def update_document_status(
+        self,
+        profile_id: int,
+        document_type_code: str,
+        status: str,
+        file_path: Optional[str] = None,
+        uploaded_at: Optional[str] = None,
+    ) -> Optional[models.ProfileDocument]:
+        """
+        Update ProfileDocument status and file metadata.
+
+        Replaces: JSONB checklist mutation with flag_modified() in upload_document()
+
+        Args:
+            profile_id: AdmissionProfile ID
+            document_type_code: Document type code
+            status: New status (missing | uploaded | verified | rejected)
+            file_path: File path (if uploaded)
+            uploaded_at: Upload timestamp (if uploaded)
+
+        Returns:
+            Updated ProfileDocument or None if not found
+        """
+        doc = await self.get_document_by_type(profile_id, document_type_code)
+        if not doc:
+            return None
+
+        doc.status = status
+        if file_path:
+            doc.file_path = file_path
+        if uploaded_at:
+            doc.uploaded_at = uploaded_at
+
+        return doc
+
+    async def get_uploaded_documents(
+        self,
+        profile_id: int
+    ) -> List[models.ProfileDocument]:
+        """
+        Get all uploaded documents for a profile.
+
+        Replaces: JSONB checklist filtering in enroll_student()
+
+        Args:
+            profile_id: AdmissionProfile ID
+
+        Returns:
+            List of ProfileDocument with status="uploaded" and file_path not null
+        """
+        stmt = (
+            select(models.ProfileDocument)
+            .where(
+                models.ProfileDocument.profile_id == profile_id,
+                models.ProfileDocument.status == "uploaded",
+                models.ProfileDocument.file_path.isnot(None),
+            )
+            .options(joinedload(models.ProfileDocument.document_type))
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    # =========================================================================
+    # CONFIRMATION TOKEN METHODS (Magic Link)
+    # =========================================================================
+
+    async def create_confirmation_token(
+        self,
+        profile_id: int,
+        token: str,
+        expires_at,
+    ) -> models.AdmissionConfirmationToken:
+        """
+        Create a new confirmation token for a profile.
+        
+        Invalidates any existing token for the same profile first.
+        
+        Args:
+            profile_id: AdmissionProfile ID
+            token: URL-safe random token string
+            expires_at: Token expiration timestamp
+            
+        Returns:
+            Created AdmissionConfirmationToken
+        """
+        # Delete any existing token for this profile
+        await self.invalidate_existing_tokens(profile_id)
+        
+        # Create new token
+        token_obj = models.AdmissionConfirmationToken(
+            profile_id=profile_id,
+            token=token,
+            expires_at=expires_at,
+        )
+        self.db.add(token_obj)
+        await self.db.flush()
+        return token_obj
+
+    async def get_token_by_value(
+        self,
+        token: str
+    ) -> Optional[models.AdmissionConfirmationToken]:
+        """
+        Get confirmation token with profile and lead relationships loaded.
+        
+        Args:
+            token: Token string from URL
+            
+        Returns:
+            AdmissionConfirmationToken with profile.lead loaded, or None
+        """
+        stmt = (
+            select(models.AdmissionConfirmationToken)
+            .where(models.AdmissionConfirmationToken.token == token)
+            .options(
+                joinedload(models.AdmissionConfirmationToken.profile)
+                .joinedload(models.AdmissionProfile.lead)
+            )
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def increment_token_attempts(
+        self,
+        token_obj: models.AdmissionConfirmationToken,
+        max_attempts: int = 5
+    ) -> None:
+        """
+        Increment failed CCCD verification attempt count.
+        
+        Locks token if max attempts exceeded.
+        
+        Args:
+            token_obj: Token to update
+            max_attempts: Max attempts before locking (from config)
+        """
+        from datetime import datetime, timezone
+        
+        token_obj.attempt_count += 1
+        if token_obj.attempt_count >= max_attempts:
+            token_obj.locked_at = datetime.now(timezone.utc)
+        await self.db.flush()
+
+    async def mark_token_confirmed(
+        self,
+        token_obj: models.AdmissionConfirmationToken,
+        confirmed_via: str = "magic_link"
+    ) -> None:
+        """
+        Mark token as used and update profile status to confirmed.
+        
+        Args:
+            token_obj: Token to mark as confirmed
+            confirmed_via: Confirmation method (for analytics)
+        """
+        from datetime import datetime, timezone
+        
+        now = datetime.now(timezone.utc)
+        
+        # Mark token as used
+        token_obj.confirmed_at = now
+        
+        # Update profile status and analytics fields
+        profile = token_obj.profile
+        profile.status = "confirmed"
+        profile.confirmed_at = now
+        profile.confirmed_via = confirmed_via
+        
+        await self.db.flush()
+
+    async def invalidate_existing_tokens(
+        self,
+        profile_id: int
+    ) -> None:
+        """
+        Delete any existing tokens for a profile.
+        
+        Called before creating a new token (for resend functionality).
+        
+        Args:
+            profile_id: AdmissionProfile ID
+        """
+        from sqlalchemy import delete
+        
+        stmt = delete(models.AdmissionConfirmationToken).where(
+            models.AdmissionConfirmationToken.profile_id == profile_id
+        )
+        await self.db.execute(stmt)
+        await self.db.flush()
+    async def get_profile_scores(self, profile_id: int) -> list:
+        """
+        Get all subject scores for a profile.
+        
+        Args:
+            profile_id: AdmissionProfile ID
+            
+        Returns:
+            List of ProfileSubjectScore
+        """
+        from app.models.admission_config.profile_data import ProfileSubjectScore
+        from sqlalchemy.orm import selectinload
+        
+        result = await self.db.execute(
+            select(ProfileSubjectScore)
+            .options(selectinload(ProfileSubjectScore.subject))
+            .where(ProfileSubjectScore.profile_id == profile_id)
+        )
+        return result.scalars().all()
+
+    async def update_profile_scores(
+        self, 
+        profile_id: int, 
+        subject_scores: dict[str, float]
+    ) -> list:
+        """
+        Update subject scores for a profile (Bulk Upsert).
+
+        Strategy:
+        1. Resolve subject codes to IDs
+        2. Bulk update/insert into ProfileSubjectScore
+        
+        Args:
+            profile_id: AdmissionProfile ID
+            subject_scores: Dict of {subject_code: score}
+        """
+        from app.models.admission_config.profile_data import ProfileSubjectScore
+        from app.models.admission_config.subject import Subject
+        from sqlalchemy import delete, select
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        if not subject_scores:
+            return []
+
+        # 1. Resolve Subject Codes -> IDs
+        # TODO: Caching mechanism for Subject IDs if performance needed
+        stmt = select(Subject.id, Subject.code).where(
+            Subject.code.in_(subject_scores.keys())
+        )
+        result = await self.db.execute(stmt)
+        subjects = result.all() # [(id, code), ...]
+        
+        subject_map = {row.code: row.id for row in subjects}
+        
+        # Check for invalid codes
+        invalid_codes = set(subject_scores.keys()) - set(subject_map.keys())
+        if invalid_codes:
+            # We silently ignore invalid codes or could raise error
+            # For now, let's ignore to be robust, but log warning in service
+            pass
+
+        # 2. Sync Strategy: Delete scores NOT in the new list
+        # This prevents "orphaned" scores if applicant changes subject group (e.g., A00 -> D01)
+        valid_subject_ids = list(subject_map.values())
+        
+        if valid_subject_ids:
+            delete_stmt = delete(ProfileSubjectScore).where(
+                ProfileSubjectScore.profile_id == profile_id,
+                ProfileSubjectScore.subject_id.notin_(valid_subject_ids)
+            )
+        else:
+            # If no valid subjects provided but function called (and not None), clear all scores
+            delete_stmt = delete(ProfileSubjectScore).where(
+                ProfileSubjectScore.profile_id == profile_id
+            )
+            
+        await self.db.execute(delete_stmt)
+
+        # 3. Prepare Data for Upsert
+        upsert_data = []
+        for code, score in subject_scores.items():
+            if code in subject_map:
+                upsert_data.append({
+                    "profile_id": profile_id,
+                    "subject_id": subject_map[code],
+                    "score": score,
+                })
+        
+        if not upsert_data:
+            return []
+
+        # 4. Execute Upsert (PostgreSQL specific)
+        # INSERT ... ON CONFLICT (profile_id, subject_id) DO UPDATE SET score = EXCLUDED.score
+        stmt = pg_insert(ProfileSubjectScore).values(upsert_data)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=['profile_id', 'subject_id'], # uq_profile_subject_score
+            set_=dict(score=stmt.excluded.score)
+        )
+        
+        await self.db.execute(stmt)
+        
+        # Return updated scores
+        return await self.get_profile_scores(profile_id)

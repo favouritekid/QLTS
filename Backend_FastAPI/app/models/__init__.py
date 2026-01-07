@@ -24,7 +24,7 @@ from .lead import Application, AssignmentLog, Consultation, CRMInteraction, Lead
 from .lead_history import LeadStatusHistory
 
 # Admission models (NEW: Replacement for Application)
-from .admission import AdmissionProfile
+from .admission import AdmissionProfile, AdmissionConfirmationToken
 from .student import Student, StudentDocument
 
 # Admission Config Domain (Phase 1: Relational admission system)
@@ -98,8 +98,11 @@ __all__ = [
     "LeadStatusHistory",
     # Admission (NEW)
     "AdmissionProfile",
+    "AdmissionConfirmationToken",
     "Student",
     "StudentDocument",
+    "ProfileSubjectScore",
+    "ProfileDocument",
     # Notification
     "Notification",
     "NotificationRule",

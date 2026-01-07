@@ -164,6 +164,16 @@ class AdmissionScoreSchema(BaseModel):
         None,
         description="Subject scores keyed by subject code (e.g., 'math', 'physics')"
     )
+
+    @field_validator('subject_scores')
+    @classmethod
+    def validate_scores(cls, v: Optional[Dict[str, Optional[float]]]) -> Optional[Dict[str, Optional[float]]]:
+        if not v:
+            return v
+        for code, score in v.items():
+            if score is not None and (score < 0 or score > 10):
+                raise ValueError(f"Score for {code} must be between 0 and 10")
+        return v
     
     # Legacy fields (kept for backward compatibility)
     math_score: Optional[float] = Field(None, ge=0.0, le=10.0)
@@ -249,7 +259,7 @@ class AdmissionProfileCreate(BaseModel):
 
     Only requires lead_id. All other fields are populated by service:
     - applied_rules: Snapshot from ProgramOffering.admission_rules
-    - documents_checklist: Auto-generated from applied_rules.mandatory_docs
+    - ProfileDocument records: Auto-generated from applied_rules.mandatory_docs
     - status: Default = 'draft'
     """
     lead_id: int = Field(
@@ -268,9 +278,8 @@ class AdmissionProfileUpdate(BaseModel):
     Security:
     - All text fields sanitized via field validators
     - citizen_id format validated (12 digits)
-    - GPA validated via nested schemas
     - Optimistic locking via version field (required)
-    - Array size limits: family_info max 10, documents_checklist max 50
+    - Array size limits: family_info max 10, academic_history max 20
     """
     version: int = Field(
         ...,
@@ -323,14 +332,11 @@ class AdmissionProfileUpdate(BaseModel):
         max_length=20,
         description="Array of academic records (schools attended, max 20)"
     )
+
+    # Phase 6: Admission Scores
     admission_scores: Optional[AdmissionScoreSchema] = Field(
         None,
-        description="Admission scores (GPA, subject scores)"
-    )
-    documents_checklist: Optional[List[DocumentItemSchema]] = Field(
-        None,
-        max_length=50,
-        description="Document upload checklist (max 50)"
+        description="Admission scores (GPA or subject scores) for dynamic scoring"
     )
 
     # Field validators to convert empty strings to None (for pattern fields)
@@ -392,6 +398,11 @@ class AdmissionProfileResponse(BaseModel):
     permanent_ward: Optional[str] = None
     place_of_birth: Optional[str] = None
     native_place: Optional[str] = None
+
+    # Scores (Dynamic Calculation)
+    admission_scores: Optional[AdmissionScoreSchema] = None
+    total_score: Optional[float] = None
+    average_score: Optional[float] = None
     
     # Political Dates
     union_entry_date: Optional[datetime] = None
@@ -401,8 +412,6 @@ class AdmissionProfileResponse(BaseModel):
     # JSONB Fields
     family_info: List[FamilyMemberSchema] = []
     academic_history: List[AcademicRecordSchema] = []
-    admission_scores: Optional[AdmissionScoreSchema] = None
-    documents_checklist: List[DocumentItemSchema] = []
 
     # Nested relationships (using forward refs for circular import avoidance)
     lead: Optional["LeadShallowForAdmission"] = None
@@ -549,11 +558,16 @@ class ApproveRequest(BaseModel):
     - Transition: SUBMITTED/RESUBMITTED → APPROVED
     - Requires Manager or Admin role
     - Optional approval notes
+    - Optional version for optimistic locking
     """
     notes: Optional[str] = Field(
         None,
         max_length=1000,
         description="Optional approval notes/comments"
+    )
+    version: Optional[int] = Field(
+        None,
+        description="Version for optimistic locking (prevents concurrent updates)"
     )
 
     model_config = ConfigDict(str_strip_whitespace=True)
@@ -567,12 +581,17 @@ class RejectRequest(BaseModel):
     - Transition: SUBMITTED/RESUBMITTED → REJECTED
     - Requires Manager or Admin role
     - Reason is MANDATORY (min 10 chars)
+    - Optional version for optimistic locking
     """
     reason: str = Field(
         ...,
         min_length=10,
         max_length=1000,
         description="Rejection reason (min 10 chars, required)"
+    )
+    version: Optional[int] = Field(
+        None,
+        description="Version for optimistic locking (prevents concurrent updates)"
     )
 
     @field_validator('reason')
@@ -666,6 +685,68 @@ class FinalizeRequest(BaseModel):
 # EXPORT ALL
 # ==============================================================================
 
+# ==============================================================================
+# CONFIRMATION TOKEN SCHEMAS (Magic Link)
+# ==============================================================================
+
+
+class ConfirmTokenVerifyRequest(BaseModel):
+    """
+    Request body for token-based confirmation.
+    
+    Security:
+    - Pattern validation for exactly 4 digits
+    - Used with magic link token for CCCD verification
+    """
+    last_digits_citizen_id: str = Field(
+        ...,
+        min_length=4,
+        max_length=4,
+        pattern=r"^\d{4}$",
+        description="Last 4 digits of CCCD/CMND"
+    )
+    
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
+class ConfirmTokenResponse(BaseModel):
+    """Response after successful token-based confirmation."""
+    message: str
+    profile_id: int
+    status: str
+    confirmed_at: datetime
+    
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ConfirmTokenInfoResponse(BaseModel):
+    """
+    Info about token (for frontend to show confirmation form).
+    
+    Used by GET /confirm/{token} to display:
+    - Lead name ("Xin chào, [Tên]...")
+    - Token status (valid, expired, locked)
+    - Attempts remaining
+    """
+    valid: bool
+    expired: bool
+    locked: bool
+    already_used: bool
+    attempts_remaining: int
+    profile_name: str = Field(description="Lead's full_name for display")
+    expires_at: Optional[datetime] = None
+    
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SendConfirmationResponse(BaseModel):
+    """Response after sending confirmation link."""
+    message: str
+    token_expires_at: datetime
+    sent_to_email: Optional[str] = None
+    sent_to_phone: Optional[str] = None
+
+
 __all__ = [
     # Nested schemas
     "FamilyMemberSchema",
@@ -689,4 +770,9 @@ __all__ = [
     "StudentDocumentResponse",
     "StudentResponse",
     "DocumentUploadResponse",
+    # Confirmation token schemas (Magic Link)
+    "ConfirmTokenVerifyRequest",
+    "ConfirmTokenResponse",
+    "ConfirmTokenInfoResponse",
+    "SendConfirmationResponse",
 ]
