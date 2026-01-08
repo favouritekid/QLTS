@@ -1643,13 +1643,15 @@ async def get_admission_for_manager(
         ResourceNotFoundError: Profile not found OR unauthorized (fake 404)
     """
     from sqlalchemy import select
-    from sqlalchemy.orm import joinedload
+    from sqlalchemy.orm import selectinload  # Use selectinload to avoid LEFT JOIN
 
     # ✅ CRITICAL FIX #2: Acquire row lock for state-changing operations
+    # Use selectinload (separate query) instead of joinedload (LEFT JOIN)
+    # to avoid PostgreSQL "FOR UPDATE cannot be applied to nullable side of outer join"
     stmt = (
         select(models.AdmissionProfile)
         .where(models.AdmissionProfile.id == profile_id)
-        .options(joinedload(models.AdmissionProfile.lead))
+        .options(selectinload(models.AdmissionProfile.lead))
         .with_for_update()  # ✅ CRITICAL: Prevent concurrent approve/reject
     )
     result = await db.execute(stmt)
@@ -1706,13 +1708,15 @@ async def get_admission_for_user(
         ResourceNotFoundError: Profile not found OR unauthorized (fake 404)
     """
     from sqlalchemy import select
-    from sqlalchemy.orm import joinedload
+    from sqlalchemy.orm import selectinload  # Use selectinload to avoid LEFT JOIN
 
     # ✅ CRITICAL FIX #2: Acquire row lock for resubmit
+    # Use selectinload (separate query) instead of joinedload (LEFT JOIN)
+    # to avoid PostgreSQL "FOR UPDATE cannot be applied to nullable side of outer join"
     stmt = (
         select(models.AdmissionProfile)
         .where(models.AdmissionProfile.id == profile_id)
-        .options(joinedload(models.AdmissionProfile.lead))
+        .options(selectinload(models.AdmissionProfile.lead))
         .with_for_update()
     )
     result = await db.execute(stmt)

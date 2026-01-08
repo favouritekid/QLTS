@@ -216,14 +216,26 @@ async def create_profile(
     has_content = False
     if applied_rules:
         for key, value in applied_rules.items():
-            if value:  # Not None, not empty list, not empty string
-                if isinstance(value, (list, dict)):
-                    if len(value) > 0:  # Has items
-                        has_content = True
-                        break
-                else:
+            # ✅ FIX: Check value is not None and not empty collection
+            # `if value:` is wrong because 0 and False are falsy but valid
+            if value is None:
+                continue
+            if isinstance(value, (list, dict)):
+                if len(value) > 0:  # Has items
                     has_content = True
                     break
+            elif isinstance(value, (int, float)):
+                # Numeric values like min_gpa=0 are valid content
+                has_content = True
+                break
+            elif isinstance(value, str):
+                if len(value) > 0:  # Non-empty string
+                    has_content = True
+                    break
+            else:
+                # Other types (bool, etc.) - consider as content if not None
+                has_content = True
+                break
 
     if not has_content:
         log.error(
@@ -685,10 +697,13 @@ async def submit_and_evaluate(
     # Without lock: Both pass status check, both update to "submitted"
     # With lock: Second request waits, then fails status check
     from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
 
+    # Use selectinload to avoid "FOR UPDATE cannot be applied to nullable side of outer join"
     stmt = (
         select(models.AdmissionProfile)
         .where(models.AdmissionProfile.id == profile_id)
+        .options(selectinload(models.AdmissionProfile.lead))  # ✅ Eager load Lead
         .with_for_update()  # ✅ CRITICAL: Acquire row lock
     )
     result = await db.execute(stmt)
@@ -1014,9 +1029,13 @@ async def enroll_student(
     # Scenario: Admin enrolls profile while Lead confirms via magic link
     # Without lock: Both can modify status simultaneously
     # With lock: Operations are serialized
+    from sqlalchemy.orm import selectinload
+    
+    # Use selectinload to avoid "FOR UPDATE cannot be applied to nullable side of outer join"
     stmt = (
         select(models.AdmissionProfile)
         .where(models.AdmissionProfile.id == profile_id)
+        .options(selectinload(models.AdmissionProfile.lead))  # ✅ Eager load Lead
         .with_for_update()  # ✅ CRITICAL: Lock row for enrollment
     )
     result = await db.execute(stmt)
@@ -1028,15 +1047,8 @@ async def enroll_student(
     # IDOR check (after lock acquired)
     _check_admin_or_unit_access(profile, current_user)
 
-    # Must be in approved or confirmed status
-    # 'confirmed' = Lead confirmed via magic link, ready to enroll
-    if profile.status not in ("approved", "confirmed", "overridden"):
-        raise BadRequest(
-            f"Cannot enroll student with profile status '{profile.status}'. "
-            "Only approved, confirmed, or overridden profiles can be enrolled."
-        )
-
     # ✅ HIGH PRIORITY FIX #7: Idempotency check - return existing student if already enrolled
+    # MUST be BEFORE status check to handle idempotent requests correctly
     # Prevents duplicate student creation if endpoint is called multiple times
     # This can happen if:
     # - Client retries on network timeout
@@ -1067,6 +1079,14 @@ async def enroll_student(
                 f"Data inconsistency: Profile {profile_id} is marked as enrolled "
                 "but has no associated student record. Please contact system administrator."
             )
+
+    # Must be in approved or confirmed status
+    # 'confirmed' = Lead confirmed via magic link, ready to enroll
+    if profile.status not in ("approved", "confirmed", "overridden"):
+        raise BadRequest(
+            f"Cannot enroll student with profile status '{profile.status}'. "
+            "Only approved, confirmed, or overridden profiles can be enrolled."
+        )
 
     # ✅ CRITICAL FIX #3: Final citizen_id duplicate check INSIDE transaction
     # Prevents race condition where 2 enrolls pass validation check but both create Student

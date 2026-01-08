@@ -253,7 +253,8 @@ class AdmissionProfile(Base):
         "Student",
         back_populates="admission_profile",
         uselist=False,  # One-to-one
-        cascade="all, delete-orphan"
+        cascade="all, delete-orphan",
+        lazy="selectin",  # ✅ FIX: Eager load to prevent MissingGreenlet in async
     )
 
     # ✅ FIX #6: Audit trail relationships
