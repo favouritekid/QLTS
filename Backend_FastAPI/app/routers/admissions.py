@@ -44,6 +44,11 @@ log = structlog.get_logger(__name__)
 router = APIRouter(prefix="/admissions", tags=["Admissions"])
 
 
+def get_client_ip(request: Request) -> str:
+    """Helper for rate limiting key generation."""
+    return request.client.host if request.client else "unknown"
+
+
 # ==============================================================================
 # ENDPOINTS
 # ==============================================================================
@@ -995,7 +1000,7 @@ async def get_confirm_token_info(
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour global limit
 @limiter.limit(  # ✅ FIX #6: IP-based rate limit (brute-force protection)
     "100/day",
-    key_func=lambda r: r.client.host if r.client else "unknown"
+    key_func=get_client_ip
 )
 async def confirm_admission_by_token(
     request: Request,

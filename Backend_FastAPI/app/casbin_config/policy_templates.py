@@ -41,14 +41,14 @@ OFFICER_TEMPLATE: PolicyTemplate = {
     "policies": [
         # Lead access
         {"subject": "{role}", "object": "/api/leads", "action": "GET"},
-        {"subject": "{role}", "object": "/api/leads/{lead_id}", "action": "GET"},
-        {"subject": "{role}", "object": "/api/leads/{lead_id}/consultations", "action": "GET"},  # List consultations
-        {"subject": "{role}", "object": "/api/leads/{lead_id}/consultations", "action": "POST"},  # Create consultation
-        {"subject": "{role}", "object": "/api/leads/{lead_id}/consultations/{consultation_id}", "action": "PUT"},  # Update
-        {"subject": "{role}", "object": "/api/leads/{lead_id}/consultations/{consultation_id}", "action": "DELETE"},  # Delete own
-        {"subject": "{role}", "object": "/api/leads/{lead_id}/action", "action": "POST"},
-        {"subject": "{role}", "object": "/api/leads/{lead_id}/timeline", "action": "GET"},  # Lead timeline
-        {"subject": "{role}", "object": "/api/leads/{lead_id}/insights", "action": "GET"},  # Lead insights
+        {"subject": "{role}", "object": "/api/leads/{id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/leads/{id}/consultations", "action": "GET"},  # List consultations
+        {"subject": "{role}", "object": "/api/leads/{id}/consultations", "action": "POST"},  # Create consultation
+        {"subject": "{role}", "object": "/api/leads/{id}/consultations/{consultation_id}", "action": "PUT"},  # Update
+        {"subject": "{role}", "object": "/api/leads/{id}/consultations/{consultation_id}", "action": "DELETE"},  # Delete own
+        {"subject": "{role}", "object": "/api/leads/{id}/action", "action": "POST"},
+        {"subject": "{role}", "object": "/api/leads/{id}/timeline", "action": "GET"},  # Lead timeline
+        {"subject": "{role}", "object": "/api/leads/{id}/insights", "action": "GET"},  # Lead insights
         {"subject": "{role}", "object": "/api/leads/my/reassign-quota", "action": "GET"},  # Reassign quota
         {"subject": "{role}", "object": "/api/leads/import/template", "action": "GET"},  # Import template
         {"subject": "{role}", "object": "/api/leads/import", "action": "POST"},  # Import leads
@@ -67,14 +67,14 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         # Admissions access (Admission Profile workflow)
         {"subject": "{role}", "object": "/api/admissions", "action": "GET"},   # List profiles
         {"subject": "{role}", "object": "/api/admissions", "action": "POST"},  # Create profile
-        {"subject": "{role}", "object": "/api/admissions/{profile_id}", "action": "GET"},   # Read profile
-        {"subject": "{role}", "object": "/api/admissions/{profile_id}", "action": "PUT"},   # Update profile
-        {"subject": "{role}", "object": "/api/admissions/{profile_id}/submit", "action": "POST"},  # Submit
-        {"subject": "{role}", "object": "/api/admissions/{profile_id}/resubmit", "action": "POST"},  # Resubmit after rejection
-        {"subject": "{role}", "object": "/api/admissions/{profile_id}/send-confirmation", "action": "POST"},  # Send magic link
+        {"subject": "{role}", "object": "/api/admissions/{id}", "action": "GET"},   # Read profile
+        {"subject": "{role}", "object": "/api/admissions/{id}", "action": "PUT"},   # Update profile
+        {"subject": "{role}", "object": "/api/admissions/{id}/submit", "action": "POST"},  # Submit
+        {"subject": "{role}", "object": "/api/admissions/{id}/resubmit", "action": "POST"},  # Resubmit after rejection
+        {"subject": "{role}", "object": "/api/admissions/{id}/send-confirmation", "action": "POST"},  # Send magic link
         # REMOVED: enroll is ADMIN-ONLY per Decision 10 (Admission State ≠ Authorization)
-        # {"subject": "{role}", "object": "/api/admissions/{profile_id}/enroll", "action": "POST"},
-        {"subject": "{role}", "object": "/api/admissions/{profile_id}/documents/{doc_code}/upload", "action": "POST"},  # Upload doc
+        # {"subject": "{role}", "object": "/api/admissions/{id}/enroll", "action": "POST"},
+        {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/upload", "action": "POST"},  # Upload doc
         # Admission config (read-only lookup data)
         {"subject": "{role}", "object": "/api/admission-config/subjects", "action": "GET"},
         {"subject": "{role}", "object": "/api/admission-config/methods", "action": "GET"},
@@ -105,11 +105,11 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         # Manager CANNOT: Delete leads (requires admin) - Security Decision #3
         {"subject": "{role}", "object": "/api/leads", "action": "GET"},
         {"subject": "{role}", "object": "/api/leads", "action": "POST"},
-        {"subject": "{role}", "object": "/api/leads/{lead_id}", "action": "GET"},
-        {"subject": "{role}", "object": "/api/leads/{lead_id}", "action": "PUT"},
-        {"subject": "{role}", "object": "/api/leads/{lead_id}/assign", "action": "POST"},
-        {"subject": "{role}", "object": "/api/leads/{lead_id}/applications", "action": "GET"},
-        {"subject": "{role}", "object": "/api/leads/{lead_id}/applications", "action": "POST"},
+        {"subject": "{role}", "object": "/api/leads/{id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/leads/{id}", "action": "PUT"},
+        {"subject": "{role}", "object": "/api/leads/{id}/assign", "action": "POST"},
+        {"subject": "{role}", "object": "/api/leads/{id}/applications", "action": "GET"},
+        {"subject": "{role}", "object": "/api/leads/{id}/applications", "action": "POST"},
         {"subject": "{role}", "object": "/api/leads/export/csv", "action": "GET"},
         {"subject": "{role}", "object": "/api/leads/export/excel", "action": "GET"},
         # Bulk operations (manager-specific)
@@ -118,10 +118,10 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/leads/import/template", "action": "GET"},  # Import template
         {"subject": "{role}", "object": "/api/leads/import", "action": "POST"},  # Import leads
         # Admission State Machine (ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md)
-        {"subject": "{role}", "object": "/api/admissions/{profile_id}/approve", "action": "POST"},  # Approve profile
-        {"subject": "{role}", "object": "/api/admissions/{profile_id}/reject", "action": "POST"},  # Reject profile
-        {"subject": "{role}", "object": "/api/admissions/{profile_id}/override", "action": "POST"},  # Override decision
-        {"subject": "{role}", "object": "/api/admissions/{profile_id}/send-confirmation", "action": "POST"},  # Send magic link
+        {"subject": "{role}", "object": "/api/admissions/{id}/approve", "action": "POST"},  # Approve profile
+        {"subject": "{role}", "object": "/api/admissions/{id}/reject", "action": "POST"},  # Reject profile
+        {"subject": "{role}", "object": "/api/admissions/{id}/override", "action": "POST"},  # Override decision
+        {"subject": "{role}", "object": "/api/admissions/{id}/send-confirmation", "action": "POST"},  # Send magic link
     ]
 }
 
@@ -166,7 +166,7 @@ LEAD_VIEWER_TEMPLATE: PolicyTemplate = {
     "category": "custom",
     "policies": [
         {"subject": "{role}", "object": "/api/leads", "action": "GET"},
-        {"subject": "{role}", "object": "/api/leads/{lead_id}", "action": "GET"},
+        {"subject": "{role}", "object": "/api/leads/{id}", "action": "GET"},
         # Profile access
         {"subject": "{role}", "object": "/api/profile", "action": "GET"},
         {"subject": "{role}", "object": "/api/profile", "action": "PUT"},
@@ -187,7 +187,7 @@ USER_MANAGER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/notifications", "action": "GET"},
         {"subject": "{role}", "object": "/api/notifications/mark-as-read", "action": "POST"},
         {"subject": "{role}", "object": "/api/notifications/mark-all-as-read", "action": "POST"},
-        {"subject": "{role}", "object": "/api/notifications/{notification_id}", "action": "DELETE"},
+        {"subject": "{role}", "object": "/api/notifications/{id}", "action": "DELETE"},
     ]
 }
 
@@ -203,14 +203,14 @@ BASIC_USER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/notifications", "action": "GET"},
         {"subject": "{role}", "object": "/api/notifications/mark-as-read", "action": "POST"},
         {"subject": "{role}", "object": "/api/notifications/mark-all-as-read", "action": "POST"},
-        {"subject": "{role}", "object": "/api/notifications/{notification_id}", "action": "DELETE"},
+        {"subject": "{role}", "object": "/api/notifications/{id}", "action": "DELETE"},
         # Notification preferences (SELF only)
         {"subject": "{role}", "object": "/api/notification-preferences", "action": "GET"},
         {"subject": "{role}", "object": "/api/notification-preferences", "action": "PUT"},
         {"subject": "{role}", "object": "/api/notification-preferences/{channel}", "action": "PUT"},
         # Sessions (SELF only - manage own sessions)
         {"subject": "{role}", "object": "/api/sessions", "action": "GET"},
-        {"subject": "{role}", "object": "/api/sessions/{session_id}", "action": "DELETE"},
+        {"subject": "{role}", "object": "/api/sessions/{id}", "action": "DELETE"},
         {"subject": "{role}", "object": "/api/sessions/revoke-all", "action": "POST"},
         # Security (SELF only - security settings)
         {"subject": "{role}", "object": "/api/security/login-history", "action": "GET"},
@@ -376,14 +376,14 @@ FEATURE_MAP: Dict[str, FeatureDefinition] = {
         "display_name": "Xem Leads",
         "policies": [
             {"subject": "{role}", "object": "/api/leads", "action": "GET"},
-            {"subject": "{role}", "object": "/api/leads/{lead_id}", "action": "GET"},
+            {"subject": "{role}", "object": "/api/leads/{id}", "action": "GET"},
         ]
     },
     "edit_leads": {
         "display_name": "Sửa Leads",
         "policies": [
-            {"subject": "{role}", "object": "/api/leads/{lead_id}", "action": "PUT"},
-            {"subject": "{role}", "object": "/api/leads/{lead_id}", "action": "PATCH"},
+            {"subject": "{role}", "object": "/api/leads/{id}", "action": "PUT"},
+            {"subject": "{role}", "object": "/api/leads/{id}", "action": "PATCH"},
         ]
     },
     "create_leads": {
@@ -395,7 +395,7 @@ FEATURE_MAP: Dict[str, FeatureDefinition] = {
     "delete_leads": {
         "display_name": "Xóa Leads",
         "policies": [
-            {"subject": "{role}", "object": "/api/leads/{lead_id}", "action": "DELETE"},
+            {"subject": "{role}", "object": "/api/leads/{id}", "action": "DELETE"},
         ]
     },
     "manage_users": {

@@ -52,6 +52,7 @@ async def create_admission_profile(
                 citizen_id=citizen_id,
                 version=1,
                 applied_rules={"min_gpa": 6.0, "mandatory_docs": []},
+                academic_year=2025,  # FIXED: Required field
             )
             session.add(profile)
             await session.flush()

@@ -228,6 +228,33 @@ async def lifespan(app: FastAPI):
                         f"with {total_policies_added} total policies from policy_templates.py"
                     )
 
+                    # =========================================================================
+                    # FIX: SEED ROLE INHERITANCE (g-policies) - Missing in previous versions
+                    # =========================================================================
+                    # Standard hierarchy: User <- Officer <- Manager <- Admin
+                    role_inheritance = [
+                        ("g", "role:officer", "role:user"),    # Officer inherits from User
+                        ("g", "role:manager", "role:officer"), # Manager inherits from Officer
+                        ("g", "role:admin", "role:manager"),   # Admin inherits from Manager
+                    ]
+                    
+                    from sqlalchemy import text
+                    
+                    # Insert 'g' policies directly to ensure they exist
+                    # We mark them with template_id='_system_inheritance' to distinguish from legacy
+                    for ptype, child, parent in role_inheritance:
+                        await db_session.execute(text("""
+                            INSERT INTO casbin_rule (ptype, v0, v1, template_id, applied_at)
+                            SELECT CAST(:ptype AS VARCHAR), CAST(:child AS VARCHAR), CAST(:parent AS VARCHAR), '_system_inheritance', NOW()
+                            WHERE NOT EXISTS (
+                                SELECT 1 FROM casbin_rule 
+                                WHERE ptype = CAST(:ptype AS VARCHAR) AND v0 = CAST(:child AS VARCHAR) AND v1 = CAST(:parent AS VARCHAR)
+                            )
+                        """), {"ptype": ptype, "child": child, "parent": parent})
+                        
+                    log.info(f"  ✓ Seeded {len(role_inheritance)} role inheritance rules")
+
+
                     # Commit tracking column updates to DB
                     # NOTE: Casbin adapter auto-commits policies, but tracking columns
                     # are updated via db_session which needs explicit commit

@@ -49,7 +49,7 @@ mock_consultations_data = [
         "id": 1,
         "lead_id": 1,
         "method": "meeting",
-        "outcome": "successful",
+        # "outcome": "successful",  # Removed invalid field
         "duration_minutes": 35,
         "consultation_date": datetime.now(timezone.utc) - timedelta(days=2),
         "officer_id": 1,
@@ -60,7 +60,7 @@ mock_consultations_data = [
         "id": 2,
         "lead_id": 1,
         "method": "call",
-        "outcome": "follow-up",
+        # "outcome": "follow-up",  # Removed invalid field
         "duration_minutes": 12,
         "consultation_date": datetime.now(timezone.utc) - timedelta(days=10),
         "officer_id": 1,
@@ -71,7 +71,7 @@ mock_consultations_data = [
         "id": 3,
         "lead_id": 1,
         "method": "email",
-        "outcome": "failed",
+        # "outcome": "failed",  # Removed invalid field
         "duration_minutes": None,
         "consultation_date": datetime.now(timezone.utc) - timedelta(days=20),
         "officer_id": 1,
