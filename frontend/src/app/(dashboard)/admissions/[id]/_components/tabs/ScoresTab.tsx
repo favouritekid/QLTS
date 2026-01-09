@@ -28,6 +28,11 @@ interface ScoresTabProps {
   appliedRules?: {
     criteria?: AdmissionCriterion[]
   } | null
+  // Phase 7: Backend-computed scores (source of truth)
+  profile?: {
+    total_score?: number | null
+    average_score?: number | null
+  }
 }
 
 // Vietnamese labels for subject codes
@@ -56,7 +61,7 @@ const SUBJECT_LABELS: Record<string, string> = {
 }
 
 
-export function ScoresTab({ form, isEditable, minGpa, appliedRules }: ScoresTabProps) {
+export function ScoresTab({ form, isEditable, minGpa, appliedRules, profile }: ScoresTabProps) {
   // Get admission criteria from applied_rules
   const criteria = appliedRules?.criteria || []
   
@@ -107,8 +112,10 @@ export function ScoresTab({ form, isEditable, minGpa, appliedRules }: ScoresTabP
     return selectedGroupDetails?.subjects || []
   }, [selectedGroupDetails])
   
-  // Calculate total score from subject scores
-  const totalScore = useMemo(() => {
+  // =========================================================================
+  // Calculate scores for real-time preview (UX only - backend is source of truth)
+  // =========================================================================
+  const localTotalScore = useMemo(() => {
     if (!subjectScoresData || typeof subjectScoresData !== 'object') return 0
     return Object.values(subjectScoresData as Record<string, number>).reduce(
       (sum, score) => sum + (typeof score === 'number' ? score : 0),
@@ -116,7 +123,12 @@ export function ScoresTab({ form, isEditable, minGpa, appliedRules }: ScoresTabP
     )
   }, [subjectScoresData])
   
-  const averageScore = subjects.length > 0 ? totalScore / subjects.length : 0
+  // Phase 7: Prefer backend-computed scores (source of truth) with local fallback for preview
+  const totalScore = profile?.total_score ?? localTotalScore
+  const averageScore = profile?.average_score ?? (subjects.length > 0 ? localTotalScore / subjects.length : 0)
+  
+  // Show preview indicator if we're showing local calculation
+  const isPreview = !profile?.total_score && localTotalScore > 0
   
   // Initialize subject_scores when group changes
   useEffect(() => {
@@ -365,7 +377,12 @@ export function ScoresTab({ form, isEditable, minGpa, appliedRules }: ScoresTabP
                     {/* Auto-calculated Total */}
                     <div className="pt-4 border-t">
                       <div className="flex justify-between items-center text-sm">
-                        <span className="font-medium">Tổng điểm:</span>
+                        <span className="font-medium">
+                          Tổng điểm:
+                          {isPreview && (
+                            <span className="text-xs text-muted-foreground ml-1">(preview)</span>
+                          )}
+                        </span>
                         <span className="text-lg font-bold text-primary">
                           {totalScore.toFixed(1)} / 30
                         </span>

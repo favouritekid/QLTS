@@ -1,14 +1,23 @@
 "use client"
 
+/**
+ * Phase 7: Permission-Based Rendering (ADR-FE-002)
+ * 
+ * Button visibility is now controlled by backend permissions via can() pattern.
+ * - ❌ FORBIDDEN: {isDraft && <Button />}
+ * - ✅ REQUIRED: {can('submit') && <Button />}
+ */
+
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Loader2, Save, Send, GraduationCap, ClipboardCheck, Lock } from "lucide-react"
+import { Loader2, Save, Send, GraduationCap, ClipboardCheck, Lock, CheckCircle, XCircle } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { usePermissions } from "@/hooks/usePermissions"
+import { getStatusConfig } from "@/lib/status-config"
+import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
 interface AdmissionActionsProps {
-  status: string
-  isDraft: boolean
-  isApproved: boolean
+  profile: AdmissionProfileResponse
   isSaving: boolean
   isSubmitting: boolean
   isEnrolling: boolean
@@ -16,13 +25,15 @@ interface AdmissionActionsProps {
   onSubmit: () => void
   onEnroll: () => void
   onCheckCondition?: () => void
-  isEligible?: boolean
+  // Optional: For Manager actions
+  onApprove?: () => void
+  onReject?: () => void
+  isApproving?: boolean
+  isRejecting?: boolean
 }
 
 export function AdmissionActions({
-  status,
-  isDraft,
-  isApproved,
+  profile,
   isSaving,
   isSubmitting,
   isEnrolling,
@@ -30,70 +41,112 @@ export function AdmissionActions({
   onSubmit,
   onEnroll,
   onCheckCondition,
-  isEligible = false
+  onApprove,
+  onReject,
+  isApproving = false,
+  isRejecting = false,
 }: AdmissionActionsProps) {
+  // =========================================================================
+  // Phase 7: Permission-Based Button Visibility
+  // =========================================================================
+  const { can } = usePermissions(profile)
+  const statusConfig = getStatusConfig(profile.status)
+  
+  // Check eligibility from backend (not local calculation)
+  const isEligible = profile.eligibility_status === 'eligible'
   
   return (
     <div className="fixed bottom-0 left-0 lg:left-64 right-0 border-t bg-background p-4 z-40 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
-        <div className="container max-w-7xl mx-auto flex items-center justify-between">
-            <div className="flex items-center gap-4">
-                <span className="text-sm font-medium text-muted-foreground hidden sm:inline-block">
-                    Trạng thái: 
-                </span>
-                <StatusBadge status={status} />
-            </div>
-
-            <div className="flex items-center gap-3">
-                 {isDraft && (
-                    <>
-                        <Button variant="outline" onClick={onSave} disabled={isSaving}>
-                            {isSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-                            Lưu nháp
-                        </Button>
-                        
-                        <Button variant="secondary" onClick={onCheckCondition}>
-                            <ClipboardCheck className="w-4 h-4 mr-2" />
-                            Kiểm tra điều kiện
-                        </Button>
-
-                        <Button 
-                            onClick={onSubmit} 
-                            disabled={isSubmitting || !isEligible}
-                            className={cn(!isEligible && "opacity-80")}
-                        >
-                            {isSubmitting ? (
-                                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                            ) : !isEligible ? (
-                                <Lock className="w-4 h-4 mr-2" />
-                            ) : (
-                                <Send className="w-4 h-4 mr-2" />
-                            )}
-                            Nộp hồ sơ
-                        </Button>
-                    </>
-                 )}
-
-                 {isApproved && (
-                     <Button onClick={onEnroll} disabled={isEnrolling} className="bg-blue-600 hover:bg-blue-700">
-                        {isEnrolling ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <GraduationCap className="w-4 h-4 mr-2" />}
-                        Xác nhận nhập học
-                     </Button>
-                 )}
-            </div>
+      <div className="container max-w-7xl mx-auto flex items-center justify-between">
+        {/* Status Badge */}
+        <div className="flex items-center gap-4">
+          <span className="text-sm font-medium text-muted-foreground hidden sm:inline-block">
+            Trạng thái: 
+          </span>
+          <StatusBadge status={profile.status} config={statusConfig} />
         </div>
+
+        {/* Action Buttons - Permission Controlled */}
+        <div className="flex items-center gap-3">
+          {/* Save Draft - can('save') */}
+          {can('save') && (
+            <Button variant="outline" onClick={onSave} disabled={isSaving}>
+              {isSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+              Lưu nháp
+            </Button>
+          )}
+          
+          {/* Check Condition - can('submit') */}
+          {can('submit') && (
+            <Button variant="secondary" onClick={onCheckCondition}>
+              <ClipboardCheck className="w-4 h-4 mr-2" />
+              Kiểm tra điều kiện
+            </Button>
+          )}
+
+          {/* Submit - can('submit') && isEligible */}
+          {can('submit') && (
+            <Button 
+              onClick={onSubmit} 
+              disabled={isSubmitting || !isEligible}
+              className={cn(!isEligible && "opacity-80")}
+            >
+              {isSubmitting ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : !isEligible ? (
+                <Lock className="w-4 h-4 mr-2" />
+              ) : (
+                <Send className="w-4 h-4 mr-2" />
+              )}
+              Nộp hồ sơ
+            </Button>
+          )}
+
+          {/* Approve - can('approve') - Manager only */}
+          {can('approve') && onApprove && (
+            <Button 
+              onClick={onApprove} 
+              disabled={isApproving}
+              className="bg-green-600 hover:bg-green-700"
+            >
+              {isApproving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle className="w-4 h-4 mr-2" />}
+              Phê duyệt
+            </Button>
+          )}
+
+          {/* Reject - can('reject') - Manager only */}
+          {can('reject') && onReject && (
+            <Button 
+              onClick={onReject} 
+              disabled={isRejecting}
+              variant="destructive"
+            >
+              {isRejecting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <XCircle className="w-4 h-4 mr-2" />}
+              Từ chối
+            </Button>
+          )}
+
+          {/* Enroll - can('enroll') */}
+          {can('enroll') && (
+            <Button onClick={onEnroll} disabled={isEnrolling} className="bg-blue-600 hover:bg-blue-700">
+              {isEnrolling ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <GraduationCap className="w-4 h-4 mr-2" />}
+              Xác nhận nhập học
+            </Button>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
 
-function StatusBadge({ status }: { status: string }) {
-    const map: Record<string, { label: string, className: string }> = {
-        draft: { label: "Nháp", className: "bg-gray-100 text-gray-700" },
-        submitted: { label: "Chờ duyệt", className: "bg-yellow-100 text-yellow-700" },
-        approved: { label: "Đã duyệt", className: "bg-green-100 text-green-700" },
-        rejected: { label: "Từ chối", className: "bg-red-100 text-red-700" },
-        enrolled: { label: "Đã nhập học", className: "bg-blue-100 text-blue-700" },
-    }
-    const info = map[status] || { label: status, className: "bg-gray-100" }
+/**
+ * StatusBadge - Uses status-config for consistent styling
+ */
+interface StatusBadgeProps {
+  status: string
+  config: ReturnType<typeof getStatusConfig>
+}
 
-    return <Badge className={info.className}>{info.label}</Badge>
+function StatusBadge({ status, config }: StatusBadgeProps) {
+  return <Badge className={config.badgeColor}>{config.label}</Badge>
 }

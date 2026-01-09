@@ -257,6 +257,9 @@ export type AdmissionProfileUpdate = z.infer<
 /**
  * Admission Profile Response Schema
  * Used for API responses (GET, POST, PUT)
+ * 
+ * Phase 7: Added permissions, eligibility_status, validation_errors, 
+ * available_actions, completion_percent for Frontend Thin Client compliance.
  */
 export const admissionProfileResponseSchema = z.object({
   id: z.number(),
@@ -281,8 +284,10 @@ export const admissionProfileResponseSchema = z.object({
   union_entry_date: z.string().datetime({ offset: true }).nullable(),
   party_entry_date: z.string().datetime({ offset: true }).nullable(),
   party_official_entry_date: z.string().datetime({ offset: true }).nullable(),
-  status: z.enum(["draft", "approved", "rejected", "enrolled"]),
+  // Status (extended for async-first workflow)
+  status: z.enum(["draft", "submitted", "resubmitted", "approved", "rejected", "confirmed", "enrolled"]),
   version: z.number().int().optional(), // Optimistic locking
+  academic_year: z.number().int().optional(), // Academic year
   applied_rules: z.record(z.string(), z.any()), // JSONB object
   family_info: z.array(familyMemberSchema).default([]),
   academic_history: z.array(academicRecordSchema).default([]),
@@ -293,6 +298,29 @@ export const admissionProfileResponseSchema = z.object({
   // Nested relationships (optional)
   lead: z.any().optional().nullable(),
   student: z.any().optional().nullable(),
+  
+  // =========================================================================
+  // Phase 7: Frontend Thin Client Fields (computed by backend)
+  // =========================================================================
+  
+  // Permission flags (from backend Casbin + status)
+  permissions: z.record(z.string(), z.boolean()).default({}),
+  
+  // Eligibility status (backend-computed)
+  eligibility_status: z.enum(["eligible", "ineligible", "pending"]).default("pending"),
+  
+  // Validation errors (reasons for ineligibility)
+  validation_errors: z.array(z.string()).default([]),
+  
+  // Available workflow actions
+  available_actions: z.array(z.string()).default([]),
+  
+  // Profile completion percentage (0-100)
+  completion_percent: z.number().int().min(0).max(100).default(0),
+  
+  // Computed scores (backend-calculated)
+  total_score: z.number().optional().nullable(),
+  average_score: z.number().optional().nullable(),
 })
 
 export type AdmissionProfileResponse = z.infer<
@@ -302,11 +330,16 @@ export type AdmissionProfileResponse = z.infer<
 /**
  * Submit Response Schema
  * Used for POST /api/admissions/{id}/submit response
+ * 
+ * Phase 7: Updated for async-first workflow (ADR-FE-003)
+ * - May return intermediate statuses (submitted, resubmitted)
+ * - Includes validation_errors from backend
  */
 export const admissionSubmitResponseSchema = z.object({
-  status: z.enum(["approved", "rejected"]).nullable(),
+  status: z.enum(["draft", "submitted", "resubmitted", "approved", "rejected"]).nullable(),
   message: z.string().nullable(),
   errors: z.array(z.string()).nullable(),
+  validation_errors: z.array(z.string()).default([]),
 })
 
 export type AdmissionSubmitResponse = z.infer<
@@ -435,17 +468,23 @@ export function validatePhoneNumber(phone: string): boolean {
 
 /**
  * Get status badge color
+ * Phase 7: Updated to handle async-first workflow statuses
  */
 export function getStatusColor(
-  status: "draft" | "approved" | "rejected" | "enrolled"
+  status: "draft" | "submitted" | "resubmitted" | "approved" | "rejected" | "confirmed" | "enrolled"
 ): string {
   switch (status) {
     case "draft":
       return "bg-gray-100 text-gray-800"
+    case "submitted":
+    case "resubmitted":
+      return "bg-yellow-100 text-yellow-800"
     case "approved":
       return "bg-green-100 text-green-800"
     case "rejected":
       return "bg-red-100 text-red-800"
+    case "confirmed":
+      return "bg-emerald-100 text-emerald-800"
     case "enrolled":
       return "bg-blue-100 text-blue-800"
     default:
@@ -455,17 +494,24 @@ export function getStatusColor(
 
 /**
  * Get status label (Vietnamese)
+ * Phase 7: Updated to handle async-first workflow statuses
  */
 export function getStatusLabel(
-  status: "draft" | "approved" | "rejected" | "enrolled"
+  status: "draft" | "submitted" | "resubmitted" | "approved" | "rejected" | "confirmed" | "enrolled"
 ): string {
   switch (status) {
     case "draft":
       return "Nháp"
+    case "submitted":
+      return "Chờ duyệt"
+    case "resubmitted":
+      return "Nộp lại"
     case "approved":
       return "Đã duyệt"
     case "rejected":
       return "Từ chối"
+    case "confirmed":
+      return "Đã xác nhận"
     case "enrolled":
       return "Đã nhập học"
     default:

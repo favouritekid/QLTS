@@ -38,17 +38,11 @@ export default function CreateAdmissionPage() {
   const handleCreate = async () => {
     if (!leadId) return
     
-    try {
-      const result = await createMutation.mutateAsync({
-        lead_id: parseInt(leadId),
-      })
-      
-      toast.success("Đã tạo hồ sơ tuyển sinh")
-      router.push(`/admissions/${result.id}`)
-    } catch (error: unknown) {
-      const errorMessage = (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail || "Không thể tạo hồ sơ"
-      toast.error(errorMessage)
-    }
+    // Note: useCreateAdmission hook already handles success toast and navigation
+    // Error is also handled via handleApiError() in the hook
+    await createMutation.mutateAsync({
+      lead_id: parseInt(leadId),
+    })
   }
   
   if (!leadId) {

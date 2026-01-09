@@ -1,6 +1,9 @@
 /**
  * TanStack Query Hooks for Admissons
- * Mirrored from useLeads.ts pattern
+ * 
+ * Phase 7: Refactored for Frontend Thin Client compliance
+ * - Uses handleApiError() for centralized error handling (ADR-FE-004)
+ * - Uses getStatusConfig() for async-first workflow (ADR-FE-003)
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -13,7 +16,10 @@ import type {
   AdmissionProfileResponse,
   AdmissionProfileUpdate,
 } from "@/lib/zod/admissions"
-import type { ApiErrorResponse } from "@/types/api.types"
+
+// Phase 7: Architecture Standards
+import { handleApiError, type ApiErrorResponse } from "@/lib/error-handler"
+import { getStatusConfig } from "@/lib/status-config"
 
 // ============================================
 // QUERY KEYS
@@ -61,7 +67,7 @@ export function useGetAdmission(
 }
 
 // ============================================
-// MUTATIONS
+// MUTATIONS (Phase 7: Centralized Error Handling)
 // ============================================
 
 export function useCreateAdmission() {
@@ -76,17 +82,7 @@ export function useCreateAdmission() {
       router.push(`/admissions/${data.id}`)
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
-      const detail = error.response?.data?.detail
-      const message =
-        typeof detail === "string" 
-          ? detail 
-          : Array.isArray(detail)
-            ? detail.map((e: { msg: string }) => e.msg).join(", ")
-            : "Đã có lỗi xảy ra"
-      
-      toast.error("Lỗi tạo hồ sơ", {
-        description: message,
-      })
+      handleApiError(error, { context: "tạo hồ sơ" })
     },
   })
 }
@@ -103,16 +99,11 @@ export function useUpdateAdmission(id: number) {
       queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
-      const detail = error.response?.data?.detail
-      const message =
-        typeof detail === "string"
-          ? detail
-          : Array.isArray(detail)
-            ? detail.map((e: { msg: string }) => e.msg).join(", ")
-            : "Đã có lỗi xảy ra"
-
-      toast.error("Lỗi cập nhật", {
-        description: message,
+      // Phase 7: Use centralized handler with 409 conflict support
+      handleApiError(error, { 
+        queryClient,
+        invalidateKeys: [[...admissionsKeys.detail(id)]],
+        context: "cập nhật hồ sơ"
       })
     },
   })
@@ -124,26 +115,29 @@ export function useSubmitAdmission(id: number) {
   return useMutation({
     mutationFn: () => admissionsApi.submitAdmission(id),
     onSuccess: (data) => {
-      if (data.status === 'approved') {
+      // Phase 7: Use status-config for async-first workflow (ADR-FE-003)
+      // Backend returns new status, we show appropriate message
+      const config = getStatusConfig(data.status ?? 'draft')
+      
+      if (data.status === 'submitted' || data.status === 'resubmitted') {
+        // Async workflow: Profile is pending approval
+        toast.info(config.bannerMessage || "Hồ sơ đã được nộp, đang chờ duyệt")
+      } else if (data.status === 'approved') {
         toast.success("Hồ sơ đã được duyệt")
-      } else {
-        toast.error("Hồ sơ bị từ chối", {
-           description: `${data.errors?.length} lỗi được tìm thấy`
+      } else if (data.validation_errors && data.validation_errors.length > 0) {
+        // Validation failed (still draft)
+        toast.error("Hồ sơ chưa đủ điều kiện", {
+          description: `${data.validation_errors.length} lỗi cần được khắc phục`
         })
       }
+      
       queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
-      const detail = error.response?.data?.detail
-      const message =
-        typeof detail === "string"
-          ? detail
-          : Array.isArray(detail)
-            ? detail.map((e: { msg: string }) => e.msg).join(", ")
-            : "Đã có lỗi xảy ra"
-
-      toast.error("Lỗi nộp hồ sơ", {
-        description: message,
+      handleApiError(error, { 
+        queryClient,
+        invalidateKeys: [[...admissionsKeys.detail(id)]],
+        context: "nộp hồ sơ"
       })
     },
   })
@@ -156,7 +150,9 @@ export function useEnrollStudent(id: number) {
   return useMutation({
     mutationFn: () => admissionsApi.enrollStudent(id),
     onSuccess: (data) => {
-      toast.success("Nhập học thành công")
+      toast.success("Nhập học thành công", {
+        description: `Mã sinh viên: ${data.student_code}`
+      })
       queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
       // Delay navigation
       setTimeout(() => {
@@ -164,16 +160,10 @@ export function useEnrollStudent(id: number) {
       }, 1500)
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
-      const detail = error.response?.data?.detail
-      const message =
-        typeof detail === "string"
-          ? detail
-          : Array.isArray(detail)
-            ? detail.map((e: { msg: string }) => e.msg).join(", ")
-            : "Đã có lỗi xảy ra"
-
-      toast.error("Lỗi nhập học", {
-        description: message,
+      handleApiError(error, { 
+        queryClient,
+        invalidateKeys: [[...admissionsKeys.detail(id)]],
+        context: "nhập học"
       })
     },
   })
@@ -205,12 +195,7 @@ export function useUploadAdmissionDocument(id: number) {
       queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
-        const detail = error.response?.data?.detail
-        const message =
-          typeof detail === "string"
-            ? detail
-            : "Lỗi tải lên tài liệu"
-        toast.error(message)
+      handleApiError(error, { context: "tải lên tài liệu" })
     }
   })
 }
@@ -227,17 +212,7 @@ export function useDeleteAdmission(id: number) {
       router.push("/admissions")
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
-      const detail = error.response?.data?.detail
-      const message =
-        typeof detail === "string"
-          ? detail
-          : Array.isArray(detail)
-            ? detail.map((e: { msg: string }) => e.msg).join(", ")
-            : "Đã có lỗi xảy ra"
-
-      toast.error("Lỗi xóa hồ sơ", {
-        description: message,
-      })
+      handleApiError(error, { context: "xóa hồ sơ" })
     },
   })
 }

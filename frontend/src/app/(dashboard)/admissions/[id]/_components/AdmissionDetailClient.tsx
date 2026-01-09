@@ -1,9 +1,11 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { useForm, FormProvider, useWatch } from "react-hook-form"
+import { useState, useEffect, useMemo } from "react"
+import { useForm, FormProvider } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
-import { Alert, AlertDescription } from "@/components/ui/alert"
+
+// Phase 7: Reusable status banners
+import { StatusBanner, ValidationErrorsBanner, AdmissionPendingBanner } from "@/components/ui/StatusBanner"
 
 import {
   useGetAdmission,
@@ -17,9 +19,12 @@ import {
   type AdmissionProfileUpdate,
 } from "@/lib/zod/admissions"
 
+// Architecture Standards (Phase 7)
+import { usePermissions } from "@/hooks/usePermissions"
+import { getStatusConfig } from "@/lib/status-config"
+
 // Layout & Components
 import { AdmissionLayout } from "./layout/AdmissionLayout"
-import { useAdmissionValidation } from "../_hooks/useAdmissionValidation"
 import { AdmissionActions } from "./AdmissionActions"
 
 // Tabs
@@ -31,12 +36,6 @@ import { DocumentsTab } from "./tabs/DocumentsTab"
 import { TuitionTab } from "./tabs/TuitionTab"
 import { FinalizeTab } from "./tabs/FinalizeTab"
 
-interface SubmitResult {
-  status: "approved" | "rejected" | null
-  message?: string | null
-  errors?: string[] | null
-}
-
 interface AdmissionDetailClientProps {
   profileId: number
   initialData: AdmissionProfileResponse
@@ -46,7 +45,9 @@ export function AdmissionDetailClient({
   profileId,
   initialData,
 }: AdmissionDetailClientProps) {
+  // =========================================================================
   // 1. Data Fetching
+  // =========================================================================
   const { data: profile } = useGetAdmission(profileId, {
     initialData,
     staleTime: 15000, // 15 seconds - auto-refresh when stale
@@ -56,18 +57,70 @@ export function AdmissionDetailClient({
   const submitMutation = useSubmitAdmission(profileId)
   const enrollMutation = useEnrollStudent(profileId)
 
-  const [submitResult, setSubmitResult] = useState<SubmitResult | null>(null)
+  // =========================================================================
+  // 2. Phase 7: Permission-Based Rendering (ADR-FE-002)
+  // =========================================================================
+  const { can } = usePermissions(profile)
   
-  // 2. Navigation State
+  // =========================================================================
+  // 3. Phase 7: Status-Driven UI (ADR-FE-003)
+  // =========================================================================
+  const statusConfig = useMemo(
+    () => getStatusConfig(profile?.status ?? 'draft'),
+    [profile?.status]
+  )
+  
+  // =========================================================================
+  // 4. Phase 7: Backend-Computed Fields (ADR-FE-001)
+  // Read eligibility from backend instead of local calculation
+  // =========================================================================
+  const isEligible = profile?.eligibility_status === 'eligible'
+  const validationErrors = profile?.validation_errors ?? []
+  const completionPercent = profile?.completion_percent ?? 0
+  
+  // Convert validation errors to missingItems format for AdmissionLayout
+  const missingItems = useMemo(() => 
+    validationErrors.map(err => ({
+      code: err, // Use error message as code
+      label: err, // Use error message as label
+      status: "error" as const
+    }))
+  , [validationErrors])
+
+  // Derive step status from backend validation_errors
+  const stepsStatus = useMemo(() => {
+    const status: Record<number, "success" | "warning" | "error" | "locked"> = {
+      1: "success", 2: "success", 3: "success", 
+      4: "success", 5: "success", 6: "success", 7: "locked"
+    }
+    
+    // Simple mapping: if errors related to step, mark as error
+    const hasGpaError = validationErrors.some(e => e.includes("GPA"))
+    const hasDocError = validationErrors.some(e => e.includes("tài liệu"))
+    const hasCccdError = validationErrors.some(e => e.includes("CCCD"))
+    
+    status[1] = hasCccdError ? "error" : "success" // Personal
+    // status[2] = "success" // Family (optional)
+    // status[3] = "success" // Academic (optional)
+    status[4] = hasGpaError ? "error" : "success" // Scores
+    status[5] = hasDocError ? "error" : "success" // Documents
+    // status[6] = "success" // Tuition
+    status[7] = isEligible ? "success" : "locked" // Finalize
+    
+    return status
+  }, [validationErrors, isEligible])
+
+  // =========================================================================
+  // 5. Navigation State
+  // =========================================================================
   const [currentStep, setCurrentStep] = useState(1)
 
-  const isDraft = profile?.status === "draft" || profile?.status === "rejected"
-  const isApproved = profile?.status === "approved"
-  const isEditable = isDraft
-
-  // 3. Form Setup
+  // =========================================================================
+  // 6. Form Setup
+  // =========================================================================
   const form = useForm<AdmissionProfileUpdate>({
     resolver: zodResolver(admissionProfileUpdateSchema),
+    mode: "onBlur", // ADR-FE-001: Validate on blur, not on every change
     defaultValues: {
       citizen_id: profile?.citizen_id || "",
       full_name: profile?.full_name || "",
@@ -96,7 +149,7 @@ export function AdmissionDetailClient({
     },
   })
 
-  // 3.1 Form Reset on Data Update
+  // Form Reset on Data Update
   useEffect(() => {
     if (profile) {
       form.reset({
@@ -128,17 +181,9 @@ export function AdmissionDetailClient({
     }
   }, [profile, form])
 
-  // 4. Real-time Validation Logic (Pipeline Status)
-  const { stepsStatus, isEligible, missingItems, metrics } = useAdmissionValidation(form, profile)
-  
-  // Watch for validation changes to update local step status if needed, 
-  // but strictly speaking dependent components use derived state.
-  // We keep stepsStatus for Layout.
-
-  // Determine global eligibility (already returned by hook)
-  // const isEligible = stepsStatus[7] !== "locked" -> handled by hook
-
-  // 5. Handlers
+  // =========================================================================
+  // 7. Handlers
+  // =========================================================================
   const handleSave = () => {
     const data = form.getValues()
     const payload = {
@@ -150,9 +195,7 @@ export function AdmissionDetailClient({
   }
 
   const handleSubmit = async () => {
-    const result = await submitMutation.mutateAsync()
-    setSubmitResult(result)
-    // On success, maybe redirect or refresh
+    await submitMutation.mutateAsync()
   }
 
   const handleEnroll = () => {
@@ -160,65 +203,56 @@ export function AdmissionDetailClient({
   }
 
   const handleCheckCondition = () => {
-      // Logic to highlight errors
-      // Could scroll to first error step
-      if (stepsStatus[1] === "error") setCurrentStep(1)
-      else if (stepsStatus[2] === "error") setCurrentStep(2)
-      else if (stepsStatus[4] === "error") setCurrentStep(4)
+    // Navigate to first error step
+    if (stepsStatus[1] === "error") setCurrentStep(1)
+    else if (stepsStatus[4] === "error") setCurrentStep(4)
+    else if (stepsStatus[5] === "error") setCurrentStep(5)
   }
 
   if (!profile) return null
 
+  // =========================================================================
+  // 8. Render
+  // =========================================================================
   return (
     <FormProvider {...form}>
-        <AdmissionLayout 
-            profile={profile}
-            currentStep={currentStep}
-            onStepChange={setCurrentStep}
-            stepsStatus={stepsStatus}
-            validation={{ isEligible, missingItems }}
-        >
-            {/* ALERT MESSAGES */}
-            {submitResult && submitResult.status === "rejected" && (
-                <div className="mb-6">
-                    <Alert variant="destructive">
-                    <AlertDescription>
-                        <ul className="list-disc pl-5">
-                        {submitResult.errors?.map((err, idx) => (
-                            <li key={idx}>{err}</li>
-                        ))}
-                        </ul>
-                    </AlertDescription>
-                    </Alert>
-                </div>
-            )}
+      <AdmissionLayout 
+        profile={profile}
+        currentStep={currentStep}
+        onStepChange={setCurrentStep}
+        stepsStatus={stepsStatus}
+        validation={{ isEligible, missingItems }}
+      >
+        {/* Phase 7: Status-Driven Banners */}
+        <StatusBanner status={profile.status} />
+        <AdmissionPendingBanner status={profile.status} />
+        {profile.status === 'draft' && (
+          <ValidationErrorsBanner errors={validationErrors} />
+        )}
 
-            {/* TAB CONTENT */}
-            <div className="bg-white rounded-lg shadow-sm min-h-[500px] p-1">
-                {currentStep === 1 && <PersonalInfoTab profile={profile} form={form as any} isEditable={isEditable} />}
-                {currentStep === 2 && <FamilyTab form={form as any} isEditable={isEditable} />}
-                {currentStep === 3 && <AcademicHistoryTab form={form as any} isEditable={isEditable} />}
-                {currentStep === 4 && <ScoresTab form={form as any} isEditable={isEditable} minGpa={metrics.minGpa} appliedRules={profile.applied_rules} />}
-                {currentStep === 5 && <DocumentsTab profile={profile} isEditable={isEditable} />}
-                {currentStep === 6 && <TuitionTab profile={profile} />}
-                {currentStep === 7 && <FinalizeTab isEligible={isEligible} onSubmit={handleSubmit} isSubmitting={submitMutation.isPending} />}
-            </div>
+        {/* TAB CONTENT */}
+        <div className="bg-white rounded-lg shadow-sm min-h-[500px] p-1">
+          {currentStep === 1 && <PersonalInfoTab profile={profile} form={form as any} isEditable={can('edit')} />}
+          {currentStep === 2 && <FamilyTab form={form as any} isEditable={can('edit')} />}
+          {currentStep === 3 && <AcademicHistoryTab form={form as any} isEditable={can('edit')} />}
+          {currentStep === 4 && <ScoresTab form={form as any} isEditable={can('edit')} minGpa={profile.applied_rules?.min_gpa ?? 0} appliedRules={profile.applied_rules} profile={profile} />}
+          {currentStep === 5 && <DocumentsTab profile={profile} isEditable={can('edit')} />}
+          {currentStep === 6 && <TuitionTab profile={profile} />}
+          {currentStep === 7 && <FinalizeTab isEligible={isEligible} onSubmit={handleSubmit} isSubmitting={submitMutation.isPending} />}
+        </div>
 
-            {/* STICKY ACTIONS */}
-            <AdmissionActions 
-                status={profile.status}
-                isDraft={isDraft}
-                isApproved={isApproved}
-                isSaving={updateMutation.isPending}
-                isSubmitting={submitMutation.isPending}
-                isEnrolling={enrollMutation.isPending}
-                onSave={handleSave}
-                onSubmit={handleSubmit}
-                onEnroll={handleEnroll}
-                onCheckCondition={handleCheckCondition}
-                isEligible={isEligible}
-            />
-        </AdmissionLayout>
+        {/* STICKY ACTIONS (now uses permissions) */}
+        <AdmissionActions 
+          profile={profile}
+          isSaving={updateMutation.isPending}
+          isSubmitting={submitMutation.isPending}
+          isEnrolling={enrollMutation.isPending}
+          onSave={handleSave}
+          onSubmit={handleSubmit}
+          onEnroll={handleEnroll}
+          onCheckCondition={handleCheckCondition}
+        />
+      </AdmissionLayout>
     </FormProvider>
   )
 }
