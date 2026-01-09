@@ -250,37 +250,18 @@ async def get_current_user(
                 raise credentials_exception
 
         # ← PHASE 2: Auto-sync DB role to match Casbin (source of truth)
-        try:
-            enforcer = request.app.state.enforcer
-            casbin_role = await user_service.get_highest_priority_role_from_casbin(
-                enforcer, user.id
-            )
-
-            if user.role != casbin_role:
-                log.warning(
-                    "DB/Casbin role mismatch detected! Auto-syncing DB to Casbin.",
-                    user_id=user.id,
-                    db_role=user.role,
-                    casbin_role=casbin_role
-                )
-                # Update DB to match Casbin (source of truth)
-                user.role = casbin_role
-                db.add(user)
-                await db.commit()
-                await db.refresh(user)
-                log.info(
-                    "DB role auto-synced successfully",
-                    user_id=user.id,
-                    new_role=casbin_role
-                )
-        except Exception as e_sync:
-            # Don't fail auth if sync fails, just log it
-            log.error(
-                "Auto-sync failed, but continuing with authentication",
-                user_id=user.id,
-                error=str(e_sync),
-                exc_info=True
-            )
+        # ⚠️ DISABLED (Phase 7): This was causing issues because:
+        #    - get_highest_priority_role_from_casbin() checks g-rules for user:X
+        #    - If no g-rules exist (which is our case), it returns "user"
+        #    - This overwrites officer/manager roles set in DB!
+        #
+        # Current design: DB role IS the source of truth.
+        # Casbin p-rules are defined for role:X (not user:X).
+        # check_permission() uses role:{user.role} as subject.
+        #
+        # If you need per-user Casbin roles (g-rules), implement:
+        #   1. Create g-rule when user is created/role changed
+        #   2. OR keep DB as source of truth (current approach)
 
         return user
 
@@ -374,14 +355,18 @@ async def check_permission(
     ✅ SECURITY FIX (Phase 1): Now uses get_current_active_user to block inactive users.
     Previously allowed inactive users which was a security vulnerability affecting 18+ files.
     
-    Checks: (user:id, url_path, http_method) against Casbin policy.
+    ✅ FIX (Phase 7): Changed subject from user:X to role:X to match policy definitions.
+    Policies are defined for role:officer, role:manager, etc. not user:1, user:2.
+    
+    Checks: (role:X, url_path, http_method) against Casbin policy.
     """
     enforcer: casbin.AsyncEnforcer = request.app.state.enforcer
     if not enforcer:
         log.critical("Casbin enforcer not found in app state!")
         raise PermissionDeniedError("Permission system is misconfigured.")
 
-    subject = f"user:{current_user.id}"
+    # ✅ FIX: Use role:X instead of user:X to match policy templates
+    subject = f"role:{current_user.role}"
     object_path = request.url.path
     action = request.method
 
@@ -391,6 +376,8 @@ async def check_permission(
             subject=subject,
             object=object_path,
             action=action,
+            user_id=current_user.id,
+            username=current_user.username,
         )
         raise PermissionDeniedError(
             detail="You do not have permission for this action."

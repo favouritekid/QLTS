@@ -134,6 +134,52 @@ class CasbinPolicyService:
         return role_policies
 
     # =========================================================================
+    # USER ROLE ASSIGNMENT (g-rules)
+    # =========================================================================
+
+    async def assign_role_to_user(self, user_id: int, role: str) -> bool:
+        """
+        Assign a role to a user (create g-rule mapping user:ID -> role:NAME).
+
+        Args:
+            user_id: User ID
+            role: Role name (e.g., "officer", "manager") - WITHOUT "role:" prefix
+
+        Returns:
+            True if assignment was created, False if already exists
+        """
+        user_subject = f"user:{user_id}"
+        role_subject = f"role:{role}"
+        return await self.enforcer.add_grouping_policy(user_subject, role_subject)
+
+    async def remove_user_roles(self, user_id: int) -> int:
+        """
+        Remove ALL role assignments for a user.
+
+        Args:
+            user_id: User ID
+
+        Returns:
+            Number of role assignments removed
+        """
+        user_subject = f"user:{user_id}"
+        removed_count = 0
+
+        # Get all grouping policies (g-rules)
+        # We filter manually because get_roles_for_user() might return inherited roles
+        all_grouping = self.enforcer.get_grouping_policy()
+        user_rules = [p for p in all_grouping if p[0] == user_subject]
+
+        for rule in user_rules:
+            # rule is (user_subject, role_subject)
+            role_subject = rule[1]
+            success = await self.enforcer.remove_grouping_policy(user_subject, role_subject)
+            if success:
+                removed_count += 1
+
+        return removed_count
+
+    # =========================================================================
     # POLICY VALIDATION
     # =========================================================================
 
