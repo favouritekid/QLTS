@@ -370,6 +370,13 @@ class AdmissionProfileResponse(BaseModel):
     Schema for AdmissionProfile response (GET, CREATE, UPDATE).
 
     Includes all fields + relationships (lead, student).
+    
+    Phase 7: Frontend Thin Client Compliance
+    - permissions: dict of action permissions (computed from Casbin + status)
+    - eligibility_status: computed eligibility state
+    - validation_errors: list of validation issues
+    - available_actions: list of allowed workflow actions
+    - completion_percent: profile completion percentage
     """
     id: int
     lead_id: int
@@ -425,6 +432,43 @@ class AdmissionProfileResponse(BaseModel):
     # Nested relationships (using forward refs for circular import avoidance)
     lead: Optional["LeadShallowForAdmission"] = None
     student: Optional["StudentShallowForAdmission"] = None
+
+    # =========================================================================
+    # Phase 7: Frontend Thin Client Compliance Fields
+    # =========================================================================
+    
+    # Permission flags (computed from Casbin + status + user context)
+    # Keys: edit, save, submit, approve, reject, enroll, delete
+    permissions: Dict[str, bool] = Field(
+        default_factory=dict,
+        description="Permission flags computed from Casbin policy and status"
+    )
+    
+    # Eligibility status (computed by backend service)
+    eligibility_status: Literal["eligible", "ineligible", "pending"] = Field(
+        default="pending",
+        description="Backend-computed eligibility based on applied_rules"
+    )
+    
+    # Validation errors (reasons why profile is not eligible)
+    validation_errors: List[str] = Field(
+        default_factory=list,
+        description="List of validation issues (e.g., 'CCCD required', 'GPA below threshold')"
+    )
+    
+    # Available workflow actions
+    available_actions: List[str] = Field(
+        default_factory=list,
+        description="List of currently available actions (e.g., ['save', 'submit'])"
+    )
+    
+    # Profile completion percentage (0-100)
+    completion_percent: int = Field(
+        default=0,
+        ge=0,
+        le=100,
+        description="Profile completion percentage (computed by backend)"
+    )
 
     model_config = ConfigDict(
         from_attributes=True,

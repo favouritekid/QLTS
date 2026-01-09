@@ -379,6 +379,29 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
+    async def get_all_documents(
+        self,
+        profile_id: int
+    ) -> List[models.ProfileDocument]:
+        """
+        Get ALL documents for a profile (regardless of status).
+
+        Phase 7: For completion percentage calculation in _compute_frontend_fields
+
+        Args:
+            profile_id: AdmissionProfile ID
+
+        Returns:
+            List of all ProfileDocument for this profile
+        """
+        stmt = (
+            select(models.ProfileDocument)
+            .where(models.ProfileDocument.profile_id == profile_id)
+            .options(joinedload(models.ProfileDocument.document_type))
+        )
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
     # =========================================================================
     # CONFIRMATION TOKEN METHODS (Magic Link)
     # =========================================================================

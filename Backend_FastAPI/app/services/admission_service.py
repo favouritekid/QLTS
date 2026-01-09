@@ -80,6 +80,132 @@ def _check_admin_or_unit_access(
         )
 
 
+def _compute_frontend_fields(
+    profile: models.AdmissionProfile,
+    current_user: models.User,
+    documents: list = None,
+) -> None:
+    """
+    Phase 7: Frontend Thin Client Compliance
+    
+    Compute permissions, eligibility, validation_errors, available_actions, 
+    and completion_percent for AdmissionProfileResponse.
+    
+    These are transient fields (not stored in DB) computed at response time.
+    
+    Args:
+        profile: AdmissionProfile object
+        current_user: Current authenticated user (for role-based permissions)
+        documents: Optional list of ProfileDocument (to avoid re-fetching)
+    """
+    status = profile.status
+    user_role = current_user.role
+    is_admin = user_role == UserRole.ADMIN
+    is_manager = user_role == UserRole.MANAGER
+    is_officer = user_role in [UserRole.OFFICER, UserRole.MANAGER, UserRole.ADMIN]
+    
+    # Check if user owns this profile (for applicant self-actions)
+    is_owner = profile.lead and profile.lead.user_id == current_user.id
+    
+    # =========================================================================
+    # 1. PERMISSIONS (computed from role + status + Casbin-like rules)
+    # =========================================================================
+    permissions = {
+        # Edit/Save: Only in draft/rejected, by owner or officer
+        "edit": status in ["draft", "rejected"] and (is_owner or is_officer),
+        "save": status in ["draft", "rejected"] and (is_owner or is_officer),
+        
+        # Submit: Only draft, by owner or officer
+        "submit": status == "draft" and (is_owner or is_officer),
+        
+        # Approve/Reject: Only submitted/resubmitted, by manager or admin
+        "approve": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
+        "reject": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
+        
+        # Resubmit: Only rejected, by owner or officer
+        "resubmit": status == "rejected" and (is_owner or is_officer),
+        
+        # Enroll: Only approved, by officer or higher
+        "enroll": status == "approved" and is_officer,
+        
+        # Delete: Only draft, by admin
+        "delete": status == "draft" and is_admin,
+        
+        # View: Always (if passed IDOR check)
+        "view": True,
+    }
+    profile.permissions = permissions
+    
+    # =========================================================================
+    # 2. AVAILABLE ACTIONS (list of action names that are currently allowed)
+    # =========================================================================
+    profile.available_actions = [action for action, allowed in permissions.items() if allowed]
+    
+    # =========================================================================
+    # 3. ELIGIBILITY STATUS & VALIDATION ERRORS
+    # =========================================================================
+    validation_errors = []
+    applied_rules = profile.applied_rules or {}
+    
+    # Check GPA/scores
+    min_gpa = float(applied_rules.get("min_gpa", 0))
+    if min_gpa > 0:
+        current_gpa = profile.average_score or 0
+        if current_gpa < min_gpa:
+            validation_errors.append(f"GPA không đạt: {current_gpa:.2f} < {min_gpa}")
+    
+    # Check mandatory documents (if documents provided)
+    mandatory_docs = applied_rules.get("mandatory_docs", [])
+    if documents is not None:
+        uploaded_doc_codes = {
+            doc.document_type.code for doc in documents 
+            if doc.file_path and doc.status in ["uploaded", "verified"]
+        }
+        for doc_code in mandatory_docs:
+            if doc_code not in uploaded_doc_codes:
+                validation_errors.append(f"Thiếu tài liệu bắt buộc: {doc_code}")
+    
+    # Check citizen_id
+    if not profile.citizen_id:
+        validation_errors.append("Chưa nhập số CCCD/CMND")
+    
+    # Determine eligibility status
+    if len(validation_errors) == 0:
+        profile.eligibility_status = "eligible"
+    elif status in ["approved", "enrolled"]:
+        # Already approved, so eligible (even if rules changed)
+        profile.eligibility_status = "eligible"
+    else:
+        profile.eligibility_status = "ineligible"
+    
+    profile.validation_errors = validation_errors
+    
+    # =========================================================================
+    # 4. COMPLETION PERCENT
+    # =========================================================================
+    # Simple calculation based on required fields
+    required_fields = [
+        "full_name", "phone", "email", "dob", "gender", "citizen_id",
+        "nationality", "ethnicity", "permanent_province"
+    ]
+    filled_count = sum(1 for f in required_fields if getattr(profile, f, None))
+    base_completion = int((filled_count / len(required_fields)) * 50)  # 50% for basic info
+    
+    # Add 20% for family info
+    family_completion = 20 if profile.family_info and len(profile.family_info) > 0 else 0
+    
+    # Add 20% for academic history
+    academic_completion = 20 if profile.academic_history and len(profile.academic_history) > 0 else 0
+    
+    # Add 10% for documents
+    doc_completion = 0
+    if documents is not None and mandatory_docs:
+        uploaded_count = sum(1 for doc in documents if doc.file_path)
+        doc_completion = int((uploaded_count / max(len(mandatory_docs), 1)) * 10)
+    
+    profile.completion_percent = min(100, base_completion + family_completion + academic_completion + doc_completion)
+
+
 # ==============================================================================
 # CRUD FUNCTIONS
 # ==============================================================================
@@ -384,7 +510,7 @@ async def get_profile(
         current_user: Current authenticated user
 
     Returns:
-        AdmissionProfile with relationships loaded
+        AdmissionProfile with relationships loaded + computed frontend fields
 
     Raises:
         ResourceNotFoundError: Profile not found
@@ -412,6 +538,13 @@ async def get_profile(
 
     # Calculate totals for response
     _calculate_and_update_totals(profile)
+    
+    # =========================================================================
+    # Phase 7: Compute Frontend Thin Client Fields
+    # =========================================================================
+    # Fetch documents for completion calculation
+    documents = await admission_repo.get_all_documents(profile_id)
+    _compute_frontend_fields(profile, current_user, documents)
 
     return profile
 
