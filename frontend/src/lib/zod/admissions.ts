@@ -166,6 +166,11 @@ export const documentItemSchema = z.object({
     .max(255, "Tên tài liệu không được quá 255 ký tự")
     .trim(),
   is_mandatory: z.boolean().optional(),
+  // Phase 0.9: New document config fields (all optional for form/response compatibility)
+  requires_upload: z.boolean().optional(),
+  submission_format: z.enum(["photo", "certified_copy", "original"]).nullable().optional(),
+  submission_format_confirmed: z.boolean().optional(),
+  // Status and upload info
   status: z.enum(["missing", "uploaded", "verified", "rejected"]),
   file_path: z
     .string()
@@ -176,6 +181,7 @@ export const documentItemSchema = z.object({
     .string()
     .nullable()
     .optional(),
+  rejection_reason: z.string().nullable().optional(),
 })
 
 export type DocumentItem = z.infer<typeof documentItemSchema>
@@ -317,6 +323,29 @@ export const admissionProfileResponseSchema = z.object({
   
   // Profile completion percentage (0-100)
   completion_percent: z.number().int().min(0).max(100).default(0),
+  
+  // Phase 0.9: Validation Summary (Grouped Errors for UX)
+  validation_summary: z.object({
+    gpa: z.object({
+      has_error: z.boolean(),
+      label: z.string(),
+      count: z.number().int()
+    }).optional(),
+    documents: z.object({
+      has_error: z.boolean(),
+      label: z.string(),
+      count: z.number().int()
+    }).optional(),
+    personal: z.object({
+      has_error: z.boolean(),
+      label: z.string(),
+      count: z.number().int()
+    }).optional()
+  }).optional().nullable(),
+  
+  // Phase 0.9: Step Status (Backend computes, FE renders)
+  // Note: Record keys are always strings in JSON, convert on read in component
+  step_status: z.record(z.string(), z.enum(["success", "warning", "error", "locked"])).optional().nullable(),
   
   // Computed scores (backend-calculated)
   total_score: z.number().optional().nullable(),

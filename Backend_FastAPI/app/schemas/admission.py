@@ -14,7 +14,7 @@ Architecture Compliance:
 """
 
 from datetime import datetime
-from typing import List, Optional, Literal, Dict
+from typing import List, Optional, Literal, Dict, Any
 import html
 
 from pydantic import BaseModel, Field, field_validator, ConfigDict
@@ -468,6 +468,24 @@ class AdmissionProfileResponse(BaseModel):
         ge=0,
         le=100,
         description="Profile completion percentage (computed by backend)"
+    )
+    
+    # Validation summary (grouped errors for UX)
+    validation_summary: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Grouped validation errors: {gpa: {has_error, label, count}, documents: {...}, personal: {...}}"
+    )
+    
+    # Step status for sidebar (Architecture Compliant - Backend computes)
+    step_status: Optional[Dict[int, str]] = Field(
+        default=None,
+        description="Step status map: {1: 'error', 2: 'warning', 3: 'success', ...}"
+    )
+    
+    # Documents checklist for frontend display
+    documents_checklist: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="List of required documents with status {code, label, is_mandatory, requires_upload, submission_format, status, file_path, uploaded_at, rejection_reason}"
     )
 
     model_config = ConfigDict(

@@ -57,6 +57,9 @@ __all__ = [
     "get_admission_for_manager",  # Manager approve/reject
     "get_admission_for_user",  # Officer resubmit
     "get_admission_for_owner",  # Applicant confirm (SELF check)
+    
+    # Admission Configuration Console IDOR
+    "get_admission_path_for_user",  # Phase 1: Config Console
 
     # Data Classes
     "OfficerDashboardScope",

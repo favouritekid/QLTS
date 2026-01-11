@@ -13,7 +13,10 @@ interface AdmissionHeaderProps {
 }
 
 export function AdmissionHeader({ profile, validation }: AdmissionHeaderProps) {
-  const { isEligible, missingItems } = validation
+  const { isEligible } = validation
+  
+  // Phase 0.9: Use backend-computed validation_summary for grouped badges
+  const summary = profile?.validation_summary
 
   return (
     <div className="h-16 px-6 flex items-center justify-between">
@@ -44,17 +47,28 @@ export function AdmissionHeader({ profile, validation }: AdmissionHeaderProps) {
         </div>
       </div>
       
-      {/* Quick Status Bar */}
+      {/* Quick Status Bar - Now uses grouped badges from backend validation_summary */}
       <div className="flex items-center gap-2">
-         {/* Badges for critical missing items */}
-         {missingItems.map((item, idx) => (
+         {/* GPA Badge */}
+         {summary?.gpa?.has_error && (
+             <StatusBadge label={summary.gpa.label} status="error" />
+         )}
+         
+         {/* Documents Badge (grouped) */}
+         {summary?.documents?.has_error && (
              <StatusBadge 
-                key={`${item.code}-${idx}`} 
-                label={item.label} 
-                status={item.status} 
+                label={`Thiếu ${summary.documents.count} tài liệu`} 
+                status="error" 
              />
-         ))}
-         {missingItems.length === 0 && (
+         )}
+         
+         {/* Personal Info Badge */}
+         {summary?.personal?.has_error && (
+             <StatusBadge label={summary.personal.label} status="error" />
+         )}
+         
+         {/* All good */}
+         {!summary?.gpa?.has_error && !summary?.documents?.has_error && !summary?.personal?.has_error && (
              <span className="text-sm text-green-600 flex items-center">
                  <CheckCircle2 className="w-4 h-4 mr-1" />
                  Hồ sơ đầy đủ

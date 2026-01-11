@@ -40,6 +40,7 @@ from .admission_config import (
     DocumentGroupItem,
     ProfileSubjectScore,
     ProfileDocument,
+    AdmissionPath,  # Phase 1: Admission Configuration Console
 )
 
 # Notification models
@@ -103,6 +104,7 @@ __all__ = [
     "StudentDocument",
     "ProfileSubjectScore",
     "ProfileDocument",
+    "AdmissionPath",  # Phase 1: Admission Configuration Console
     # Notification
     "Notification",
     "NotificationRule",

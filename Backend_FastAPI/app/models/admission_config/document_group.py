@@ -9,7 +9,7 @@ Tables:
 - DocumentGroupItem: Individual document in a group
 """
 
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, UniqueConstraint, Index
 from sqlalchemy.orm import relationship
 
 from app.models.base import Base
@@ -17,13 +17,19 @@ from app.models.base import Base
 
 class DocumentGroup(Base):
     """
-    Nhóm hồ sơ theo loại hình đào tạo.
+    Nhóm hồ sơ theo loại hình đào tạo VÀ phương thức tuyển sinh.
     
-    Documents depend on offering_type (Chính quy, Liên thông), NOT on program.
+    Documents depend on:
+    - offering_type (Chính quy, Liên thông)
+    - admission_method (optional): NULL = all methods, non-NULL = method-specific
+    
+    Override Rule:
+    - Groups with admission_method_id = NULL apply to ALL methods (shared)
+    - Groups with specific admission_method_id OVERRIDE shared for that method
     
     Example:
-        - offering_type: "chinh_quy" → DocumentGroup: "Hồ sơ chính quy"
-        - offering_type: "lien_thong" → DocumentGroup: "Hồ sơ liên thông"
+        - offering_type: "chinh_quy", method: NULL → Shared documents for all methods
+        - offering_type: "chinh_quy", method: "dgnl" → ĐGNL-specific documents
     """
     __tablename__ = "document_group"
 
@@ -35,12 +41,20 @@ class DocumentGroup(Base):
         index=True,
         comment="Link to offering type (Chính quy, Liên thông)"
     )
+    # NEW: Link to admission method for method-specific document groups
+    admission_method_id = Column(
+        Integer,
+        ForeignKey("admission_method.id", ondelete="SET NULL"),
+        nullable=True,  # NULL = applies to ALL methods (shared)
+        index=True,
+        comment="NULL = all methods, non-NULL = method-specific override"
+    )
     code = Column(
         String(50),
         nullable=False,
         unique=True,
         index=True,
-        comment="Group code: HS_CHINH_QUY, HS_LIEN_THONG"
+        comment="Group code: HS_CHINH_QUY, HS_DGNL"
     )
     name = Column(
         String(255),
@@ -60,11 +74,20 @@ class DocumentGroup(Base):
 
     # Relationships
     offering_type = relationship("ConfigOfferingType", back_populates="document_groups")
+    admission_method = relationship("AdmissionMethod", back_populates="document_groups")
     items = relationship(
         "DocumentGroupItem",
         back_populates="document_group",
         cascade="all, delete-orphan",
         order_by="DocumentGroupItem.display_order"
+    )
+
+    # Index for efficient method-specific queries
+    __table_args__ = (
+        Index(
+            "ix_document_group_offering_method",
+            "offering_type_id", "admission_method_id"
+        ),
     )
 
     def __repr__(self):
@@ -102,6 +125,17 @@ class DocumentGroupItem(Base):
         nullable=False,
         default=True,
         comment="Is this document required?"
+    )
+    requires_upload = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        comment="true=Must upload file, false=Checklist only"
+    )
+    submission_format = Column(
+        String(20),
+        nullable=True,
+        comment="photo | certified_copy | original (NULL if requires_upload=false)"
     )
     display_order = Column(
         Integer,

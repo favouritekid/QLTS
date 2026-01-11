@@ -79,36 +79,36 @@ export function AdmissionDetailClient({
   const completionPercent = profile?.completion_percent ?? 0
   
   // Convert validation errors to missingItems format for AdmissionLayout
+  // Note: missingItems is kept for backward compatibility but Header now uses validation_summary
   const missingItems = useMemo(() => 
     validationErrors.map(err => ({
-      code: err, // Use error message as code
-      label: err, // Use error message as label
+      code: err,
+      label: err,
       status: "error" as const
     }))
   , [validationErrors])
 
-  // Derive step status from backend validation_errors
+  // =========================================================================
+  // Phase 0.9: Read step_status from Backend (Architecture Compliant)
+  // Backend computes, Frontend renders - NO local calculation
+  // =========================================================================
   const stepsStatus = useMemo(() => {
-    const status: Record<number, "success" | "warning" | "error" | "locked"> = {
+    // Read directly from backend step_status
+    const backendStatus = profile?.step_status
+    if (backendStatus) {
+      // Convert string keys from JSON to number keys for component compatibility
+      const converted: Record<number, "success" | "warning" | "error" | "locked"> = {}
+      for (const [key, value] of Object.entries(backendStatus)) {
+        converted[parseInt(key, 10)] = value as "success" | "warning" | "error" | "locked"
+      }
+      return converted
+    }
+    // Fallback for backward compatibility (if backend doesn't return step_status yet)
+    return {
       1: "success", 2: "success", 3: "success", 
       4: "success", 5: "success", 6: "success", 7: "locked"
-    }
-    
-    // Simple mapping: if errors related to step, mark as error
-    const hasGpaError = validationErrors.some(e => e.includes("GPA"))
-    const hasDocError = validationErrors.some(e => e.includes("tài liệu"))
-    const hasCccdError = validationErrors.some(e => e.includes("CCCD"))
-    
-    status[1] = hasCccdError ? "error" : "success" // Personal
-    // status[2] = "success" // Family (optional)
-    // status[3] = "success" // Academic (optional)
-    status[4] = hasGpaError ? "error" : "success" // Scores
-    status[5] = hasDocError ? "error" : "success" // Documents
-    // status[6] = "success" // Tuition
-    status[7] = isEligible ? "success" : "locked" // Finalize
-    
-    return status
-  }, [validationErrors, isEligible])
+    } as Record<number, "success" | "warning" | "error" | "locked">
+  }, [profile?.step_status])
 
   // =========================================================================
   // 5. Navigation State
@@ -226,9 +226,7 @@ export function AdmissionDetailClient({
         {/* Phase 7: Status-Driven Banners */}
         <StatusBanner status={profile.status} />
         <AdmissionPendingBanner status={profile.status} />
-        {profile.status === 'draft' && (
-          <ValidationErrorsBanner errors={validationErrors} />
-        )}
+        {/* Phase 0.9: ValidationErrorsBanner removed - validation shown in Header + Sidebar */}
 
         {/* TAB CONTENT */}
         <div className="bg-white rounded-lg shadow-sm min-h-[500px] p-1">

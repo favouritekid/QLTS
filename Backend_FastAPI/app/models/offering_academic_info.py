@@ -131,6 +131,13 @@ class OfferingAcademicInfo(Base):
         back_populates="academic_info",
         cascade="all, delete-orphan"
     )
+    
+    # ✅ Phase 2: Admission Paths for Configuration Console
+    admission_paths = relationship(
+        "AdmissionPath",
+        back_populates="academic_info",
+        cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         UniqueConstraint('offering_id', 'academic_year', name='uq_offering_academic_year'),

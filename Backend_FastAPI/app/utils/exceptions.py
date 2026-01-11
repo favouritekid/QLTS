@@ -199,6 +199,20 @@ class FileTypeError(FileValidationError):
     error_code = "FILE_TYPE_ERROR"
 
 
+class BusinessRuleViolation(ValidationError):
+    """
+    Business rule violation (HTTP 400).
+    
+    Used when a business rule is violated, such as:
+    - Activating a path without required configuration
+    - Updating an archived record
+    - Invalid state transition
+    """
+
+    detail = "Business rule violation."
+    error_code = "BUSINESS_RULE_VIOLATION"
+
+
 # ============================================================================
 # AUTHENTICATION & AUTHORIZATION EXCEPTIONS (401, 403)
 # ============================================================================

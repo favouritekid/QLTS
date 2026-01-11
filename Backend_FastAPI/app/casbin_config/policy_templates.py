@@ -76,10 +76,13 @@ OFFICER_TEMPLATE: PolicyTemplate = {
         # {"subject": "{role}", "object": "/api/admissions/{id}/enroll", "action": "POST"},
         {"subject": "{role}", "object": "/api/admissions/{id}/documents/{doc_code}/upload", "action": "POST"},  # Upload doc
         # Admission config (read-only lookup data)
+        {"subject": "{role}", "object": "/api/program-offerings", "action": "GET"},  # Dropdown data
         {"subject": "{role}", "object": "/api/admission-config/subjects", "action": "GET"},
         {"subject": "{role}", "object": "/api/admission-config/methods", "action": "GET"},
         {"subject": "{role}", "object": "/api/admission-config/criteria", "action": "GET"},
         {"subject": "{role}", "object": "/api/admission-config/criteria/{criteria_code}", "action": "GET"},
+        # Admission Configuration Console (Phase 1)
+        {"subject": "{role}", "object": "/api/admission-config/years", "action": "GET"},  # Academic years dropdown
         # Profile access
         {"subject": "{role}", "object": "/api/profile", "action": "GET"},
         {"subject": "{role}", "object": "/api/profile", "action": "PUT"},
@@ -122,6 +125,16 @@ MANAGER_TEMPLATE: PolicyTemplate = {
         {"subject": "{role}", "object": "/api/admissions/{id}/reject", "action": "POST"},  # Reject profile
         {"subject": "{role}", "object": "/api/admissions/{id}/override", "action": "POST"},  # Override decision
         {"subject": "{role}", "object": "/api/admissions/{id}/send-confirmation", "action": "POST"},  # Send magic link
+        # Admission Configuration Console (Phase 1: Admission Path Management)
+        # NOTE: Manager can create/edit paths, but ONLY ADMIN can activate/deactivate
+        {"subject": "{role}", "object": "/api/admission-config/years", "action": "GET"},  # Academic years
+        {"subject": "{role}", "object": "/api/admission-config/paths", "action": "GET"},  # List paths
+        {"subject": "{role}", "object": "/api/admission-config/paths", "action": "POST"},  # Create path (draft)
+        {"subject": "{role}", "object": "/api/admission-config/paths/{path_id}", "action": "GET"},  # Get path
+        {"subject": "{role}", "object": "/api/admission-config/paths/{path_id}", "action": "PUT"},  # Update path
+        # REMOVED: activate/deactivate - Admin only (Manager creates, Admin approves)
+        {"subject": "{role}", "object": "/api/admission-config/paths/{path_id}/documents", "action": "GET"},  # Resolved docs
+        {"subject": "{role}", "object": "/api/admission-config/paths/{path_id}/validate-activation", "action": "GET"},  # Validate
     ]
 }
 

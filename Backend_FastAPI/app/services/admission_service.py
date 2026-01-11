@@ -105,11 +105,22 @@ def _compute_frontend_fields(
     is_officer = user_role in [UserRole.OFFICER, UserRole.MANAGER, UserRole.ADMIN]
     
     # Check if user owns this profile (for applicant self-actions)
-    is_owner = profile.lead and profile.lead.user_id == current_user.id
+    # Corrected: Lead uses assigned_officer_id, not user_id
+    is_owner = profile.lead and profile.lead.assigned_officer_id == current_user.id
     
     # =========================================================================
     # 1. PERMISSIONS (computed from role + status + Casbin-like rules)
     # =========================================================================
+    # ARCHITECTURE NOTE:
+    # - permissions: Role-based access control (WHO can do WHAT)
+    # - available_actions: State-based actions (WHAT is currently POSSIBLE)
+    # 
+    # FE Usage:
+    # - permissions → Guard routes, show/hide menu items
+    # - available_actions → Render action buttons
+    #
+    # Example: Admin has permission to delete, but delete is only in available_actions
+    #          when status='draft'. Button should check available_actions, not permissions.
     permissions = {
         # Edit/Save: Only in draft/rejected, by owner or officer
         "edit": status in ["draft", "rejected"] and (is_owner or is_officer),
@@ -149,27 +160,38 @@ def _compute_frontend_fields(
     
     # Check GPA/scores
     min_gpa = float(applied_rules.get("min_gpa", 0))
-    if min_gpa > 0:
-        current_gpa = profile.average_score or 0
-        if current_gpa < min_gpa:
-            validation_errors.append(f"GPA không đạt: {current_gpa:.2f} < {min_gpa}")
+    gpa_error = False
+    current_gpa = profile.average_score or 0
+    if min_gpa > 0 and current_gpa < min_gpa:
+        validation_errors.append(f"GPA không đạt: {current_gpa:.2f} < {min_gpa}")
+        gpa_error = True
     
-    # Check mandatory documents (if documents provided)
-    mandatory_docs = applied_rules.get("mandatory_docs", [])
+    # Check mandatory documents that REQUIRE UPLOAD (NEW: only upload_required_docs)
+    upload_required_docs = applied_rules.get("upload_required_docs", applied_rules.get("mandatory_docs", []))
+    doc_errors = []
+    uploaded_doc_codes = set()
     if documents is not None:
         uploaded_doc_codes = {
             doc.document_type.code for doc in documents 
             if doc.file_path and doc.status in ["uploaded", "verified"]
         }
-        for doc_code in mandatory_docs:
+        for doc_code in upload_required_docs:
             if doc_code not in uploaded_doc_codes:
+                doc_errors.append(doc_code)
                 validation_errors.append(f"Thiếu tài liệu bắt buộc: {doc_code}")
     
     # Check citizen_id
-    if not profile.citizen_id:
+    cccd_error = not profile.citizen_id
+    if cccd_error:
         validation_errors.append("Chưa nhập số CCCD/CMND")
     
     # Determine eligibility status
+    # ARCHITECTURE NOTE:
+    # - eligibility_status: Academic eligibility (GPA, score thresholds) - DOES NOT control UI
+    # - step_status[7]: Workflow UI state (locked/success) - DOES NOT reflect academic status
+    # 
+    # Rule: Submit button uses available_actions, NOT eligibility_status.
+    # A profile with eligibility_status='ineligible' may still be submittable for review.
     if len(validation_errors) == 0:
         profile.eligibility_status = "eligible"
     elif status in ["approved", "enrolled"]:
@@ -181,7 +203,68 @@ def _compute_frontend_fields(
     profile.validation_errors = validation_errors
     
     # =========================================================================
-    # 4. COMPLETION PERCENT
+    # 4. VALIDATION SUMMARY (Grouped Errors for UX)
+    # =========================================================================
+    profile.validation_summary = {
+        "gpa": {
+            "has_error": gpa_error,
+            "label": f"GPA: {current_gpa:.1f}/{min_gpa}" if min_gpa > 0 else "GPA: N/A",
+            "count": 1 if gpa_error else 0
+        },
+        "documents": {
+            "has_error": len(doc_errors) > 0,
+            "label": f"Tài liệu: {len(uploaded_doc_codes)}/{len(upload_required_docs)}",
+            "count": len(doc_errors)
+        },
+        "personal": {
+            "has_error": cccd_error,
+            "label": "Thiếu CCCD/CMND" if cccd_error else "CCCD: OK",
+            "count": 1 if cccd_error else 0
+        }
+    }
+    
+    # =========================================================================
+    # 5. STEP STATUS (Architecture Compliant - Backend computes, FE renders)
+    # =========================================================================
+    # Required personal fields for step 1
+    personal_required = ["full_name", "phone", "citizen_id"]
+    personal_optional = ["email", "dob", "gender", "nationality", "ethnicity"]
+    personal_required_filled = all(getattr(profile, f, None) for f in personal_required)
+    personal_optional_filled = all(getattr(profile, f, None) for f in personal_optional)
+    
+    # Family
+    has_family = profile.family_info and len(profile.family_info) > 0
+    
+    # Academic
+    has_academic = profile.academic_history and len(profile.academic_history) > 0
+    
+    # Scores
+    has_any_scores = bool(profile.subject_scores) if hasattr(profile, 'subject_scores') else False
+    
+    # Documents: Check if all uploaded docs have format confirmed
+    # TODO: Add submission_format_confirmed tracking when ProfileDocument is updated
+    docs_format_confirmed = True  # Placeholder for future enhancement
+    
+    step_status = {
+        # Step 1: Personal Info
+        1: "error" if cccd_error else ("success" if personal_optional_filled else "warning"),
+        # Step 2: Family
+        2: "success" if has_family else "warning",
+        # Step 3: Academic History
+        3: "success" if has_academic else "warning",
+        # Step 4: Scores
+        4: "error" if gpa_error else ("success" if has_any_scores else "warning"),
+        # Step 5: Documents
+        5: "error" if len(doc_errors) > 0 else ("warning" if not docs_format_confirmed else "success"),
+        # Step 6: Tuition (display only)
+        6: "success",
+        # Step 7: Finalize
+        7: "locked" if profile.eligibility_status == "ineligible" else "success",
+    }
+    profile.step_status = step_status
+    
+    # =========================================================================
+    # 6. COMPLETION PERCENT
     # =========================================================================
     # Simple calculation based on required fields
     required_fields = [
@@ -192,18 +275,61 @@ def _compute_frontend_fields(
     base_completion = int((filled_count / len(required_fields)) * 50)  # 50% for basic info
     
     # Add 20% for family info
-    family_completion = 20 if profile.family_info and len(profile.family_info) > 0 else 0
+    family_completion = 20 if has_family else 0
     
     # Add 20% for academic history
-    academic_completion = 20 if profile.academic_history and len(profile.academic_history) > 0 else 0
+    academic_completion = 20 if has_academic else 0
     
     # Add 10% for documents
     doc_completion = 0
-    if documents is not None and mandatory_docs:
-        uploaded_count = sum(1 for doc in documents if doc.file_path)
-        doc_completion = int((uploaded_count / max(len(mandatory_docs), 1)) * 10)
+    if documents is not None and upload_required_docs:
+        uploaded_count = len(uploaded_doc_codes)
+        doc_completion = int((uploaded_count / max(len(upload_required_docs), 1)) * 10)
     
     profile.completion_percent = min(100, base_completion + family_completion + academic_completion + doc_completion)
+    
+    # =========================================================================
+    # 7. DOCUMENTS CHECKLIST (for frontend display)
+    # Build from applied_rules + ProfileDocument data
+    # =========================================================================
+    all_mandatory_docs = applied_rules.get("mandatory_docs", [])
+    doc_configs = applied_rules.get("doc_configs", {})  # {code: {requires_upload, submission_format}}
+    
+    # Create lookup of uploaded documents by code
+    doc_by_code = {}
+    if documents:
+        for doc in documents:
+            if doc.document_type:
+                doc_by_code[doc.document_type.code] = {
+                    "status": doc.status,
+                    "file_path": doc.file_path,
+                    "uploaded_at": doc.uploaded_at.isoformat() if doc.uploaded_at else None,
+                    "rejection_reason": doc.rejection_reason,
+                    # submission_format_confirmed: True if manager verified the format
+                    # Defaults to True for verified status, False otherwise
+                    "submission_format_confirmed": doc.status == "verified"
+                }
+    
+    # Build documents_checklist
+    documents_checklist = []
+    for i, doc_code in enumerate(all_mandatory_docs):
+        config = doc_configs.get(doc_code, {})
+        uploaded_doc = doc_by_code.get(doc_code, {})
+        
+        documents_checklist.append({
+            "code": doc_code,
+            "label": config.get("label", doc_code),
+            "is_mandatory": True,
+            "requires_upload": config.get("requires_upload", True),
+            "submission_format": config.get("submission_format"),
+            "status": uploaded_doc.get("status", "missing"),
+            "file_path": uploaded_doc.get("file_path"),
+            "uploaded_at": uploaded_doc.get("uploaded_at"),
+            "rejection_reason": uploaded_doc.get("rejection_reason"),
+            "submission_format_confirmed": uploaded_doc.get("submission_format_confirmed", False)
+        })
+    
+    profile.documents_checklist = documents_checklist
 
 
 # ==============================================================================

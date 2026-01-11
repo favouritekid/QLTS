@@ -64,9 +64,10 @@ describe("usePermissions Hook", () => {
     })
 
     it("should handle resource without permissions object", () => {
-      const resource = { id: 1, status: "draft" }
+      // Cast to any to test runtime behavior with missing permissions
+      const resource = { id: 1, status: "draft", permissions: {} } as const
 
-      const { result } = renderHook(() => usePermissions(resource))
+      const { result } = renderHook(() => usePermissions(resource as any))
 
       expect(result.current.can("edit")).toBe(false)
     })
