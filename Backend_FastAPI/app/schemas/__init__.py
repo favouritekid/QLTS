@@ -51,7 +51,7 @@ from .organization import (
     OfferingAcademicInfoBase,
     OfferingAcademicInfoCreate,
     OfferingAcademicInfoUpdate,
-    AdmissionCriterion,
+
     ScoringRules,  # Fit Score configuration schema
     # Organization Unit schemas
     OrganizationUnit,

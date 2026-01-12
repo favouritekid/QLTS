@@ -70,6 +70,55 @@ class AdmissionConfigRepository(BaseRepository[AdmissionCriteria]):
         )
         return list(result.scalars().all())
 
+    async def get_subject_by_id(self, subject_id: int) -> Optional[Subject]:
+        """Get subject by ID."""
+        result = await self.db.execute(
+            select(Subject).where(Subject.id == subject_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def create_subject(
+        self,
+        code: str,
+        name_vi: str,
+        display_order: int = 0,
+        is_active: bool = True,
+    ) -> Subject:
+        """Create new Subject."""
+        subject = Subject(
+            code=code,
+            name_vi=name_vi,
+            display_order=display_order,
+            is_active=is_active,
+        )
+        self.db.add(subject)
+        await self.db.flush()
+        return subject
+
+    async def update_subject(
+        self,
+        subject: Subject,
+        **updates
+    ) -> Subject:
+        """Update existing Subject."""
+        for key, value in updates.items():
+            if value is not None and hasattr(subject, key):
+                setattr(subject, key, value)
+        await self.db.flush()
+        return subject
+
+    async def delete_subject(self, subject_id: int) -> bool:
+        """Delete Subject by ID."""
+        result = await self.db.execute(
+            select(Subject).where(Subject.id == subject_id)
+        )
+        subject = result.scalar_one_or_none()
+        if not subject:
+            return False
+        await self.db.delete(subject)
+        await self.db.flush()
+        return True
+
     # =========================================================================
     # SUBJECT GROUPS
     # =========================================================================
@@ -139,6 +188,101 @@ class AdmissionConfigRepository(BaseRepository[AdmissionCriteria]):
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
+    async def get_subject_group_by_id(
+        self,
+        group_id: int,
+        with_subjects: bool = True
+    ) -> Optional[SubjectGroup]:
+        """Get subject group by ID."""
+        query = select(SubjectGroup).where(SubjectGroup.id == group_id)
+        
+        if with_subjects:
+            query = query.options(
+                selectinload(SubjectGroup.subject_mappings)
+                .selectinload(SubjectGroupSubject.subject)
+            )
+        
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
+    async def create_subject_group(
+        self,
+        code: str,
+        name: str,
+        display_order: int = 0,
+        is_active: bool = True,
+    ) -> SubjectGroup:
+        """Create new SubjectGroup."""
+        group = SubjectGroup(
+            code=code,
+            name=name,
+            display_order=display_order,
+            is_active=is_active,
+        )
+        self.db.add(group)
+        await self.db.flush()
+        return group
+
+    async def update_subject_group(
+        self,
+        group: SubjectGroup,
+        **updates
+    ) -> SubjectGroup:
+        """Update existing SubjectGroup."""
+        for key, value in updates.items():
+            if value is not None and hasattr(group, key):
+                setattr(group, key, value)
+        await self.db.flush()
+        return group
+
+    async def delete_subject_group(self, group_id: int) -> bool:
+        """Delete SubjectGroup by ID."""
+        result = await self.db.execute(
+            select(SubjectGroup).where(SubjectGroup.id == group_id)
+        )
+        group = result.scalar_one_or_none()
+        if not group:
+            return False
+        await self.db.delete(group)
+        await self.db.flush()
+        return True
+
+    async def update_subject_group_mappings(
+        self,
+        group_id: int,
+        subject_ids: list[int]
+    ) -> SubjectGroup:
+        """
+        Replace all subject mappings for a group.
+        
+        Args:
+            group_id: SubjectGroup ID
+            subject_ids: List of Subject IDs to link (ordered)
+        
+        Returns:
+            Updated SubjectGroup with new mappings
+        """
+        from sqlalchemy import delete as sql_delete
+        
+        # Remove existing mappings
+        await self.db.execute(
+            sql_delete(SubjectGroupSubject).where(
+                SubjectGroupSubject.subject_group_id == group_id
+            )
+        )
+        
+        # Add new mappings with position
+        for position, subject_id in enumerate(subject_ids, start=1):
+            mapping = SubjectGroupSubject(
+                subject_group_id=group_id,
+                subject_id=subject_id,
+                position=position,
+            )
+            self.db.add(mapping)
+        
+        await self.db.flush()
+        return await self.get_subject_group_by_id(group_id, with_subjects=True)
+
     # =========================================================================
     # ADMISSION METHODS
     # =========================================================================
@@ -160,6 +304,80 @@ class AdmissionConfigRepository(BaseRepository[AdmissionCriteria]):
             select(AdmissionMethod).where(AdmissionMethod.code == code)
         )
         return result.scalar_one_or_none()
+
+    async def get_method_by_id(self, method_id: int) -> Optional[AdmissionMethod]:
+        """Get admission method by ID."""
+        result = await self.db.execute(
+            select(AdmissionMethod).where(AdmissionMethod.id == method_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def create_method(
+        self,
+        code: str,
+        name: str,
+        description: str | None = None,
+        requires_gpa: bool = False,
+        requires_subject_scores: bool = True,
+        display_order: int = 0,
+        is_active: bool = True,
+    ) -> AdmissionMethod:
+        """
+        Create new AdmissionMethod.
+        
+        Raises:
+            IntegrityError if code already exists.
+        """
+        method = AdmissionMethod(
+            code=code,
+            name=name,
+            description=description,
+            requires_gpa=requires_gpa,
+            requires_subject_scores=requires_subject_scores,
+            display_order=display_order,
+            is_active=is_active,
+        )
+        self.db.add(method)
+        await self.db.flush()
+        return method
+
+    async def update_method(
+        self,
+        method: AdmissionMethod,
+        **updates
+    ) -> AdmissionMethod:
+        """
+        Update existing AdmissionMethod.
+        
+        Args:
+            method: The method entity to update
+            **updates: Fields to update (name, description, is_active, etc.)
+        
+        Returns:
+            Updated method entity
+        """
+        for key, value in updates.items():
+            if value is not None and hasattr(method, key):
+                setattr(method, key, value)
+        await self.db.flush()
+        return method
+
+    async def delete_method(self, method_id: int) -> bool:
+        """
+        Delete AdmissionMethod by ID.
+        
+        Returns:
+            True if deleted, False if not found
+        """
+        result = await self.db.execute(
+            select(AdmissionMethod).where(AdmissionMethod.id == method_id)
+        )
+        method = result.scalar_one_or_none()
+        if not method:
+            return False
+        await self.db.delete(method)
+        await self.db.flush()
+        return True
 
     # =========================================================================
     # ADMISSION CRITERIA

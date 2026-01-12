@@ -30,11 +30,17 @@ from app.services.admission_config_service import AdmissionConfigService
 from app.schemas.admission_config import (
     SubjectResponse,
     SubjectListResponse,
+    SubjectCreate,
+    SubjectUpdate,
     SubjectGroupResponse,
     SubjectInGroupResponse,
     SubjectGroupListResponse,
+    SubjectGroupCreate,
+    SubjectGroupUpdate,
     AdmissionMethodResponse,
     AdmissionMethodListResponse,
+    AdmissionMethodCreate,
+    AdmissionMethodUpdate,
     AdmissionCriteriaResponse,
     AdmissionCriteriaListResponse,
     AdmissionCriteriaCreate,
@@ -80,6 +86,83 @@ async def get_subject_by_code(
         )
     
     return SubjectResponse.model_validate(subject)
+
+
+# =============================================================================
+# SUBJECT CRUD (Admin Only)
+# =============================================================================
+
+@router.post("/subjects", response_model=SubjectResponse, status_code=status.HTTP_201_CREATED)
+async def create_subject(
+    data: SubjectCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """Create new subject. Requires: Admin or Manager role."""
+    repo = AdmissionConfigRepository(db)
+    
+    existing = await repo.get_subject_by_code(data.code)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Subject with code '{data.code}' already exists"
+        )
+    
+    subject = await repo.create_subject(
+        code=data.code,
+        name_vi=data.name_vi,
+        display_order=data.display_order,
+        is_active=data.is_active,
+    )
+    await db.commit()
+    return SubjectResponse.model_validate(subject)
+
+
+@router.put("/subjects/{subject_id}", response_model=SubjectResponse)
+async def update_subject(
+    subject_id: int,
+    data: SubjectUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """Update existing subject. Requires: Admin or Manager role."""
+    repo = AdmissionConfigRepository(db)
+    
+    subject = await repo.get_subject_by_id(subject_id)
+    if not subject:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Subject with ID {subject_id} not found"
+        )
+    
+    updated = await repo.update_subject(
+        subject,
+        name_vi=data.name_vi,
+        display_order=data.display_order,
+        is_active=data.is_active,
+    )
+    await db.commit()
+    return SubjectResponse.model_validate(updated)
+
+
+@router.delete("/subjects/{subject_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_subject(
+    subject_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """Delete subject. Requires: Admin or Manager role."""
+    repo = AdmissionConfigRepository(db)
+    
+    deleted = await repo.delete_subject(subject_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Subject with ID {subject_id} not found"
+        )
+    
+    await db.commit()
+    return None
 
 
 # =============================================================================
@@ -152,6 +235,120 @@ async def get_subject_group_by_code(
 
 
 # =============================================================================
+# SUBJECT GROUP CRUD (Admin Only)
+# =============================================================================
+
+def _build_subject_group_response(group) -> SubjectGroupResponse:
+    """Helper to build SubjectGroupResponse from ORM model."""
+    subjects = []
+    for mapping in sorted(group.subject_mappings, key=lambda m: m.position):
+        subjects.append(SubjectInGroupResponse(
+            code=mapping.subject.code,
+            name_vi=mapping.subject.name_vi,
+            position=mapping.position,
+        ))
+    
+    return SubjectGroupResponse(
+        id=group.id,
+        code=group.code,
+        name=group.name,
+        display_order=group.display_order,
+        is_active=group.is_active,
+        subjects=subjects,
+    )
+
+
+@router.post("/subject-groups", response_model=SubjectGroupResponse, status_code=status.HTTP_201_CREATED)
+async def create_subject_group(
+    data: SubjectGroupCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """Create new subject group. Requires: Admin or Manager role."""
+    repo = AdmissionConfigRepository(db)
+    
+    existing = await repo.get_subject_group_by_code(data.code, with_subjects=False)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Subject group with code '{data.code}' already exists"
+        )
+    
+    group = await repo.create_subject_group(
+        code=data.code,
+        name=data.name,
+        display_order=data.display_order,
+        is_active=data.is_active,
+    )
+    
+    # Add subject mappings if provided
+    if data.subject_ids:
+        group = await repo.update_subject_group_mappings(group.id, data.subject_ids)
+    
+    await db.commit()
+    
+    # Reload with subjects
+    group = await repo.get_subject_group_by_id(group.id, with_subjects=True)
+    return _build_subject_group_response(group)
+
+
+@router.put("/subject-groups/{group_id}", response_model=SubjectGroupResponse)
+async def update_subject_group(
+    group_id: int,
+    data: SubjectGroupUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """Update existing subject group. Requires: Admin or Manager role."""
+    repo = AdmissionConfigRepository(db)
+    
+    group = await repo.get_subject_group_by_id(group_id, with_subjects=True)
+    if not group:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Subject group with ID {group_id} not found"
+        )
+    
+    # Update basic fields
+    updated = await repo.update_subject_group(
+        group,
+        name=data.name,
+        display_order=data.display_order,
+        is_active=data.is_active,
+    )
+    
+    # Update subject mappings if provided
+    if data.subject_ids is not None:
+        updated = await repo.update_subject_group_mappings(group_id, data.subject_ids)
+    
+    await db.commit()
+    
+    # Reload with subjects
+    updated = await repo.get_subject_group_by_id(group_id, with_subjects=True)
+    return _build_subject_group_response(updated)
+
+
+@router.delete("/subject-groups/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_subject_group(
+    group_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """Delete subject group. Requires: Admin or Manager role."""
+    repo = AdmissionConfigRepository(db)
+    
+    deleted = await repo.delete_subject_group(group_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Subject group with ID {group_id} not found"
+        )
+    
+    await db.commit()
+    return None
+
+
+# =============================================================================
 # ADMISSION METHODS
 # =============================================================================
 
@@ -185,6 +382,104 @@ async def get_method_by_code(
         )
     
     return AdmissionMethodResponse.model_validate(method)
+
+
+# =============================================================================
+# ADMISSION METHOD CRUD (Admin Only)
+# =============================================================================
+
+@router.post("/methods", response_model=AdmissionMethodResponse, status_code=status.HTTP_201_CREATED)
+async def create_method(
+    data: AdmissionMethodCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """
+    Create new admission method.
+    
+    Requires: Admin or Manager role.
+    """
+    repo = AdmissionConfigRepository(db)
+    
+    # Check if code already exists
+    existing = await repo.get_method_by_code(data.code)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Method with code '{data.code}' already exists"
+        )
+    
+    method = await repo.create_method(
+        code=data.code,
+        name=data.name,
+        description=data.description,
+        requires_gpa=data.requires_gpa,
+        requires_subject_scores=data.requires_subject_scores,
+        display_order=data.display_order,
+        is_active=data.is_active,
+    )
+    await db.commit()
+    
+    return AdmissionMethodResponse.model_validate(method)
+
+
+@router.put("/methods/{method_id}", response_model=AdmissionMethodResponse)
+async def update_method(
+    method_id: int,
+    data: AdmissionMethodUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """
+    Update existing admission method.
+    
+    Requires: Admin or Manager role.
+    """
+    repo = AdmissionConfigRepository(db)
+    
+    method = await repo.get_method_by_id(method_id)
+    if not method:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Method with ID {method_id} not found"
+        )
+    
+    updated = await repo.update_method(
+        method,
+        name=data.name,
+        description=data.description,
+        requires_gpa=data.requires_gpa,
+        requires_subject_scores=data.requires_subject_scores,
+        display_order=data.display_order,
+        is_active=data.is_active,
+    )
+    await db.commit()
+    
+    return AdmissionMethodResponse.model_validate(updated)
+
+
+@router.delete("/methods/{method_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_method(
+    method_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """
+    Delete admission method.
+    
+    Requires: Admin or Manager role.
+    """
+    repo = AdmissionConfigRepository(db)
+    
+    deleted = await repo.delete_method(method_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Method with ID {method_id} not found"
+        )
+    
+    await db.commit()
+    return None
 
 
 # =============================================================================
