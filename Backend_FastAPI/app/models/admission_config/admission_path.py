@@ -21,6 +21,7 @@ from app.models.base import Base
 if TYPE_CHECKING:
     from app.models.offering_academic_info import OfferingAcademicInfo
     from app.models.admission_config.method import AdmissionMethod
+    from app.models.admission_config.criteria import AdmissionCriteria
     from app.models.user import User
 
 
@@ -62,6 +63,15 @@ class AdmissionPath(Base):
         nullable=False,
         index=True,
         comment="Link to admission method (hoc_ba, thpt_qg, dgnl)"
+    )
+    
+    # Criteria (for efficient eager loading - avoids N+1)
+    criteria_id = Column(
+        Integer,
+        ForeignKey("admission_criteria.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="Link to admission criteria (nullable for draft paths)"
     )
     
     # State
@@ -126,6 +136,10 @@ class AdmissionPath(Base):
     admission_method = relationship(
         "AdmissionMethod",
         back_populates="admission_paths"
+    )
+    criteria = relationship(
+        "AdmissionCriteria",
+        foreign_keys="[AdmissionPath.criteria_id]"
     )
     activator = relationship(
         "User",

@@ -87,7 +87,7 @@ async def create_offering_academic_info(offering_id: int, academic_year: int) ->
                 offering_id=offering_id,
                 academic_year=academic_year,
                 is_published=True,
-                admission_criteria=[],
+                # NOTE: admission_criteria JSONB removed - use AdmissionPath API
             )
             session.add(info)
             await session.flush()

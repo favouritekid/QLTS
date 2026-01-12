@@ -60,6 +60,42 @@ export const admissionMethodNestedSchema = z.object({
 
 export type AdmissionMethodNested = z.infer<typeof admissionMethodNestedSchema>
 
+/**
+ * Subject Group (nested in criteria)
+ * Used for LeadApplicationForm score initialization
+ */
+export const subjectGroupNestedSchema = z.object({
+  id: z.number(),
+  code: z.string(),
+  name: z.string(),
+})
+
+export type SubjectGroupNested = z.infer<typeof subjectGroupNestedSchema>
+
+/**
+ * Admission Criteria (nested in path response)
+ * Used by LeadApplicationForm to initialize scores based on criteria
+ */
+export const admissionCriteriaNestedSchema = z.object({
+  id: z.number(),
+  code: z.string(),
+  name: z.string(),
+  
+  // Thresholds
+  min_gpa: z.number().nullable(),
+  min_score: z.number().nullable(),
+  
+  // Rule Engine config
+  required_subject_count: z.number().nullable(),
+  subject_selection_mode: z.string().default("fixed"),
+  scoring_method: z.string().default("sum"),
+  
+  // Subject groups for score initialization
+  subject_groups: z.array(subjectGroupNestedSchema).default([]),
+})
+
+export type AdmissionCriteriaNested = z.infer<typeof admissionCriteriaNestedSchema>
+
 // ==============================================================================
 // ADMISSION PATH SCHEMAS
 // ==============================================================================
@@ -116,6 +152,9 @@ export const admissionPathResponseSchema = z.object({
   // Nested relationships
   academic_info: academicInfoNestedSchema.nullable(),
   admission_method: admissionMethodNestedSchema.nullable(),
+  
+  // Nested criteria (for LeadApplicationForm - GAP-D fix)
+  criteria: admissionCriteriaNestedSchema.nullable().optional(),
   
   // Control fields (FRONTEND_ARCHITECTURE_V3.md compliance)
   available_actions: z.array(z.string()).default([]),

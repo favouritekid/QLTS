@@ -13,12 +13,20 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_current_active_user, get_criteria_access, get_config_filter, get_admission_config_repo, verify_criteria_visibility
+from app.core.deps import (
+    get_current_active_user,
+    get_criteria_access,
+    get_config_filter,
+    get_admission_config_repo,
+    verify_criteria_visibility,
+    require_admin_or_manager,
+)
 from app.models.admission_config.criteria import AdmissionCriteria
 from app.database import get_db
 from app.models import User
 from app.repositories.admission_config_repository import AdmissionConfigRepository
 from app.services.admission_scoring_service import AdmissionScoringService
+from app.services.admission_config_service import AdmissionConfigService
 from app.schemas.admission_config import (
     SubjectResponse,
     SubjectListResponse,
@@ -29,6 +37,8 @@ from app.schemas.admission_config import (
     AdmissionMethodListResponse,
     AdmissionCriteriaResponse,
     AdmissionCriteriaListResponse,
+    AdmissionCriteriaCreate,
+    AdmissionCriteriaUpdate,
     ScoringPreviewRequest,
     ScoringPreviewResponse,
 )
@@ -272,6 +282,128 @@ async def get_criteria_by_code(
         is_active=c.is_active,
         allowed_subject_groups=allowed_groups,
     )
+
+
+# =============================================================================
+# ADMISSION CRITERIA CRUD
+# =============================================================================
+
+@router.post("/criteria", response_model=AdmissionCriteriaResponse, status_code=201)
+async def create_criteria(
+    data: AdmissionCriteriaCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """
+    Create new admission criteria.
+    
+    Requires: Admin or Manager role.
+    """
+    service = AdmissionConfigService(db)
+    criteria, callback = await service.create_criteria(data, current_user)
+    await db.commit()
+    await callback()
+    
+    # Reload with relationships
+    repo = AdmissionConfigRepository(db)
+    criteria = await repo.get_criteria_by_id(criteria.id, load_level="with_groups")
+    
+    allowed_groups = [m.subject_group.code for m in criteria.subject_group_mappings]
+    
+    return AdmissionCriteriaResponse(
+        id=criteria.id,
+        code=criteria.code,
+        name=criteria.name,
+        method_code=criteria.method.code if criteria.method else None,
+        method_name=criteria.method.name if criteria.method else None,
+        min_gpa=criteria.min_gpa,
+        min_score=criteria.min_score,
+        required_subject_count=criteria.required_subject_count,
+        subject_selection_mode=criteria.subject_selection_mode,
+        scoring_method=criteria.scoring_method,
+        max_possible_score=criteria.max_possible_score,
+        min_subject_score=criteria.min_subject_score,
+        conditions=criteria.conditions,
+        is_active=criteria.is_active,
+        allowed_subject_groups=allowed_groups,
+    )
+
+
+@router.put("/criteria/{criteria_id}", response_model=AdmissionCriteriaResponse)
+async def update_criteria(
+    criteria_id: int,
+    data: AdmissionCriteriaUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """
+    Update existing admission criteria.
+    
+    Requires: Admin or Manager role.
+    """
+    repo = AdmissionConfigRepository(db)
+    criteria = await repo.get_criteria_by_id(criteria_id, load_level="with_groups")
+    
+    if not criteria:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Criteria with ID {criteria_id} not found"
+        )
+    
+    service = AdmissionConfigService(db)
+    criteria, callback = await service.update_criteria(criteria, data, current_user)
+    await db.commit()
+    await callback()
+    
+    # Reload with relationships
+    criteria = await repo.get_criteria_by_id(criteria.id, load_level="with_groups")
+    allowed_groups = [m.subject_group.code for m in criteria.subject_group_mappings]
+    
+    return AdmissionCriteriaResponse(
+        id=criteria.id,
+        code=criteria.code,
+        name=criteria.name,
+        method_code=criteria.method.code if criteria.method else None,
+        method_name=criteria.method.name if criteria.method else None,
+        min_gpa=criteria.min_gpa,
+        min_score=criteria.min_score,
+        required_subject_count=criteria.required_subject_count,
+        subject_selection_mode=criteria.subject_selection_mode,
+        scoring_method=criteria.scoring_method,
+        max_possible_score=criteria.max_possible_score,
+        min_subject_score=criteria.min_subject_score,
+        conditions=criteria.conditions,
+        is_active=criteria.is_active,
+        allowed_subject_groups=allowed_groups,
+    )
+
+
+@router.delete("/criteria/{criteria_id}", status_code=204)
+async def delete_criteria(
+    criteria_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """
+    Delete admission criteria.
+    
+    Requires: Admin or Manager role.
+    """
+    repo = AdmissionConfigRepository(db)
+    criteria = await repo.get_criteria_by_id(criteria_id, load_level="light")
+    
+    if not criteria:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Criteria with ID {criteria_id} not found"
+        )
+    
+    service = AdmissionConfigService(db)
+    success, callback = await service.delete_criteria(criteria, current_user)
+    await db.commit()
+    await callback()
+    
+    return None
 
 
 # =============================================================================

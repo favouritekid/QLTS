@@ -57,11 +57,9 @@ class OfferingAcademicInfo(Base):
         index=True,
         comment="Soft delete flag - NEVER hard delete academic info (financial/historical data)"
     )
-    admission_criteria = Column(
-        JSON,
-        nullable=True,
-        comment="Tiêu chí tuyển sinh (JSON)"
-    )
+    # NOTE: admission_criteria JSONB column has been DROPPED
+    # Use relational AdmissionPath.criteria_id for admission criteria data
+
 
     # Tuition discount policies
     applied_discount_policy_ids = Column(

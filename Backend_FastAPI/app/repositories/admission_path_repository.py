@@ -13,7 +13,13 @@ from sqlalchemy import select, func, distinct
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.admission_config import AdmissionPath, DocumentGroup, DocumentGroupItem
+from app.models.admission_config import (
+    AdmissionPath,
+    AdmissionCriteria,
+    CriteriaSubjectGroup,
+    DocumentGroup,
+    DocumentGroupItem,
+)
 from app.models.offering_academic_info import OfferingAcademicInfo
 from app.repositories.base import BaseRepository
 
@@ -54,6 +60,10 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
                 ),
                 selectinload(AdmissionPath.admission_method),
                 selectinload(AdmissionPath.activator),
+                # Eager load criteria with subject groups (N+1 prevention)
+                selectinload(AdmissionPath.criteria).selectinload(
+                    AdmissionCriteria.subject_group_mappings
+                ).selectinload(CriteriaSubjectGroup.subject_group),
             )
         )
         result = await self.db.execute(query)
@@ -123,7 +133,10 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
             )
             .options(
                 selectinload(AdmissionPath.admission_method),
-                selectinload(AdmissionPath.criteria),
+                # Eager load criteria with subject groups (for LeadApplicationForm)
+                selectinload(AdmissionPath.criteria).selectinload(
+                    AdmissionCriteria.subject_group_mappings
+                ).selectinload(CriteriaSubjectGroup.subject_group),
             )
             .order_by(AdmissionPath.display_order, AdmissionPath.id)
         )

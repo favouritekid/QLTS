@@ -195,29 +195,15 @@ async def seed_data():
                         quota = 50 if year == current_year else 60
                         is_published = True if year == current_year else False
 
-                        admission_criteria = {
-                            "criteria": [
-                                {
-                                    "id": f"hocba_{year}",
-                                    "method_name": "Xét tuyển học bạ",
-                                    "subject_groups": ["A00", "A01", "D01"],
-                                    "min_score": 22.0
-                                },
-                                {
-                                    "id": f"thpt_{year}",
-                                    "method_name": "Xét tuyển THPT Quốc gia",
-                                    "subject_groups": ["A00", "A01", "D01"],
-                                    "min_score": 18.0
-                                }
-                            ]
-                        }
+                        # NOTE: admission_criteria JSONB removed
+                        # Use seed_admission_config.py for AdmissionPath relational data
 
                         result = await session.execute(
                             text("""
                                 INSERT INTO offering_academic_info
                                 (offering_id, academic_year, tuition_fee_per_year, annual_admission_quota,
-                                 admission_criteria, is_published, created_at, updated_at)
-                                VALUES (:offering_id, :year, :tuition, :quota, CAST(:criteria AS jsonb), :published, NOW(), NOW())
+                                 is_published, created_at, updated_at)
+                                VALUES (:offering_id, :year, :tuition, :quota, :published, NOW(), NOW())
                                 RETURNING id
                             """),
                             {
@@ -225,7 +211,6 @@ async def seed_data():
                                 "year": year,
                                 "tuition": tuition,
                                 "quota": quota,
-                                "criteria": json.dumps(admission_criteria),
                                 "published": is_published
                             }
                         )

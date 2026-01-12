@@ -367,3 +367,106 @@ class AdmissionPathService:
         """
         can_activate, _ = await self.validate_activation(path)
         return can_activate
+
+    # =========================================================================
+    # COVERAGE MATRIX
+    # =========================================================================
+
+    async def get_coverage_matrix(
+        self,
+        academic_info_id: int
+    ) -> Tuple[dict, PostCommitCallback]:
+        """
+        Get coverage matrix for all paths in an academic_info.
+        
+        Returns matrix showing readiness status of each path:
+        - has_criteria: criteria_id is set
+        - has_documents: document group exists
+        - has_quota: quota > 0
+        - can_activate: all above are true
+        
+        FE uses this to display audit table before bulk activation.
+        """
+        from app.schemas.admission_path import CoverageRow, CoverageMatrixResponse
+        from app.repositories.document_group_repository import DocumentGroupRepository
+        
+        paths = await self.repo.get_paths_by_academic_info(academic_info_id)
+        doc_repo = DocumentGroupRepository(self.db)
+        
+        rows = []
+        paths_ready = 0
+        
+        for path in paths:
+            # Check has_criteria
+            has_criteria = path.criteria_id is not None
+            
+            # Check has_documents (based on offering_type + method)
+            # Need to get offering_type_id from academic_info.offering
+            offering_type_id = None
+            if path.academic_info and path.academic_info.offering:
+                offering_type_id = path.academic_info.offering.offering_type_id
+            
+            has_documents = False
+            if offering_type_id:
+                # Check if method-specific group exists, else check shared
+                method_group = await doc_repo.get_method_specific_group(
+                    offering_type_id, path.admission_method_id
+                )
+                if method_group:
+                    has_documents = True
+                else:
+                    shared_groups = await doc_repo.get_shared_groups(offering_type_id)
+                    has_documents = len(shared_groups) > 0
+            
+            # Check has_quota
+            has_quota = False
+            if path.academic_info:
+                quota = path.academic_info.annual_admission_quota or 0
+                has_quota = quota > 0
+            
+            # Compute can_activate
+            can_activate = has_criteria and has_documents and has_quota
+            
+            # Build validation errors
+            validation_errors = []
+            if not has_criteria:
+                validation_errors.append("Missing criteria configuration")
+            if not has_documents:
+                validation_errors.append("Missing document configuration")
+            if not has_quota:
+                validation_errors.append("Quota is 0 or not set")
+            
+            if can_activate:
+                paths_ready += 1
+            
+            # Get method info
+            method_name = ""
+            method_code = ""
+            if path.admission_method:
+                method_name = path.admission_method.name
+                method_code = path.admission_method.code
+            
+            rows.append(CoverageRow(
+                path_id=path.id,
+                method_name=method_name,
+                method_code=method_code,
+                status=path.status,
+                has_criteria=has_criteria,
+                has_documents=has_documents,
+                has_quota=has_quota,
+                can_activate=can_activate,
+                validation_errors=validation_errors,
+            ))
+        
+        total_paths = len(paths)
+        all_ready = paths_ready == total_paths and total_paths > 0
+        
+        result = CoverageMatrixResponse(
+            academic_info_id=academic_info_id,
+            rows=rows,
+            total_paths=total_paths,
+            paths_ready=paths_ready,
+            all_ready=all_ready,
+        )
+        
+        return result, _noop_callback

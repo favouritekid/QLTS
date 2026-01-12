@@ -126,6 +126,56 @@ class AdmissionCriteriaListResponse(BaseModel):
     total: int
 
 
+class AdmissionCriteriaCreate(BaseModel):
+    """Request schema for creating admission criteria."""
+    method_code: str  # Lookup by code instead of ID
+    code: str
+    name: str
+    
+    # Thresholds (at least one required)
+    min_gpa: Optional[Decimal] = None
+    min_score: Optional[Decimal] = None
+    
+    # Rule Engine config
+    required_subject_count: Optional[int] = None
+    subject_selection_mode: Optional[str] = "fixed"
+    scoring_method: Optional[str] = "sum"
+    max_possible_score: Optional[Decimal] = None
+    min_subject_score: Optional[Decimal] = None
+    
+    # Meta
+    conditions: Optional[str] = None
+    is_active: Optional[bool] = False  # Draft by default
+    policy_version: Optional[str] = "2025.1"
+    
+    # Subject groups to link
+    subject_group_ids: Optional[list[int]] = None
+
+
+class AdmissionCriteriaUpdate(BaseModel):
+    """Request schema for updating admission criteria."""
+    name: Optional[str] = None
+    
+    # Thresholds
+    min_gpa: Optional[Decimal] = None
+    min_score: Optional[Decimal] = None
+    
+    # Rule Engine config
+    required_subject_count: Optional[int] = None
+    subject_selection_mode: Optional[str] = None
+    scoring_method: Optional[str] = None
+    max_possible_score: Optional[Decimal] = None
+    min_subject_score: Optional[Decimal] = None
+    
+    # Meta
+    conditions: Optional[str] = None
+    is_active: Optional[bool] = None
+    policy_version: Optional[str] = None
+    
+    # Subject groups (replace all)
+    subject_group_ids: Optional[list[int]] = None
+
+
 # =============================================================================
 # SCORING PREVIEW SCHEMAS
 # =============================================================================

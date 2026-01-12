@@ -41,6 +41,7 @@ from .routers import (
     applications,
     auth,
     config_data, # ✅ NEW: Dynamic Config Data (Categories, Import)
+    document_groups,  # ✅ PHASE A.3: DocumentGroup CRUD
     kpi_config,  # ✅ PHASE 5: KPI Configuration Admin
     leads,
     monitoring,
@@ -578,6 +579,7 @@ fastapi_app.include_router(applications.router, prefix="/api")
 fastapi_app.include_router(admissions.router, prefix="/api")  # ✅ NEW: Admission Profile workflow
 fastapi_app.include_router(admission_config.router, prefix="/api")  # ✅ PHASE 3: Admission Config + Scoring
 fastapi_app.include_router(admission_paths.router, prefix="/api")  # ✅ PHASE 1: Admission Configuration Console
+fastapi_app.include_router(document_groups.router, prefix="/api")  # ✅ PHASE A.3: DocumentGroup CRUD
 fastapi_app.include_router(config_data.router, prefix="/api") # ✅ NEW: Config Data
 fastapi_app.include_router(pipeline.router, prefix="/api/pipeline")
 fastapi_app.include_router(organization.router, prefix="/api")

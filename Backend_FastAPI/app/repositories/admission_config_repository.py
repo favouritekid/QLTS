@@ -343,3 +343,144 @@ class AdmissionConfigRepository(BaseRepository[AdmissionCriteria]):
         
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
+
+    # =========================================================================
+    # ADMISSION CRITERIA CRUD (Write Operations)
+    # =========================================================================
+
+    async def create_criteria(
+        self,
+        method_id: int,
+        code: str,
+        name: str,
+        min_gpa: float | None = None,
+        min_score: float | None = None,
+        required_subject_count: int | None = None,
+        subject_selection_mode: str = "fixed",
+        scoring_method: str = "sum",
+        max_possible_score: float | None = None,
+        min_subject_score: float | None = None,
+        conditions: str | None = None,
+        is_active: bool = False,  # Draft by default
+        policy_version: str = "2025.1",
+    ) -> AdmissionCriteria:
+        """
+        Create new AdmissionCriteria.
+        
+        Note: Criteria is created as inactive (draft) by default.
+        Caller must set is_active=True or call subsequent update.
+        """
+        criteria = AdmissionCriteria(
+            method_id=method_id,
+            code=code,
+            name=name,
+            min_gpa=min_gpa,
+            min_score=min_score,
+            required_subject_count=required_subject_count,
+            subject_selection_mode=subject_selection_mode,
+            scoring_method=scoring_method,
+            max_possible_score=max_possible_score,
+            min_subject_score=min_subject_score,
+            conditions=conditions,
+            is_active=is_active,
+            policy_version=policy_version,
+        )
+        self.db.add(criteria)
+        await self.db.flush()
+        return criteria
+
+    async def update_criteria(
+        self,
+        criteria: AdmissionCriteria,
+        **updates
+    ) -> AdmissionCriteria:
+        """
+        Update existing AdmissionCriteria.
+        
+        Args:
+            criteria: The criteria entity to update
+            **updates: Fields to update (min_gpa, min_score, is_active, etc.)
+        
+        Returns:
+            Updated criteria entity
+        """
+        allowed_fields = {
+            "name", "min_gpa", "min_score", "required_subject_count",
+            "subject_selection_mode", "scoring_method", "max_possible_score",
+            "min_subject_score", "conditions", "is_active", "policy_version",
+            "effective_from", "effective_to",
+        }
+        
+        for field, value in updates.items():
+            if field in allowed_fields:
+                setattr(criteria, field, value)
+        
+        await self.db.flush()
+        return criteria
+
+    async def delete_criteria(self, criteria_id: int) -> bool:
+        """
+        Delete AdmissionCriteria by ID.
+        
+        Returns:
+            True if deleted, False if not found
+        """
+        criteria = await self.db.get(AdmissionCriteria, criteria_id)
+        if not criteria:
+            return False
+        
+        await self.db.delete(criteria)
+        await self.db.flush()
+        return True
+
+    async def get_criteria_by_id(
+        self,
+        criteria_id: int,
+        load_level: LoadLevel = "with_groups"
+    ) -> AdmissionCriteria | None:
+        """Get single criteria by ID with configurable load level."""
+        query = select(AdmissionCriteria).where(AdmissionCriteria.id == criteria_id)
+        query = self._apply_criteria_load_level(query, load_level)
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+
+    async def add_subject_groups_to_criteria(
+        self,
+        criteria_id: int,
+        subject_group_ids: list[int]
+    ) -> list[CriteriaSubjectGroup]:
+        """
+        Add subject group mappings to criteria.
+        
+        Creates CriteriaSubjectGroup entries linking criteria to allowed groups.
+        """
+        mappings = []
+        for group_id in subject_group_ids:
+            mapping = CriteriaSubjectGroup(
+                criteria_id=criteria_id,
+                subject_group_id=group_id
+            )
+            self.db.add(mapping)
+            mappings.append(mapping)
+        
+        await self.db.flush()
+        return mappings
+
+    async def remove_all_subject_groups_from_criteria(
+        self,
+        criteria_id: int
+    ) -> int:
+        """
+        Remove all subject group mappings from criteria.
+        
+        Returns:
+            Number of mappings removed
+        """
+        from sqlalchemy import delete
+        
+        stmt = delete(CriteriaSubjectGroup).where(
+            CriteriaSubjectGroup.criteria_id == criteria_id
+        )
+        result = await self.db.execute(stmt)
+        await self.db.flush()
+        return result.rowcount

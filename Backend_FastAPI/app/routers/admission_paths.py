@@ -31,12 +31,54 @@ from app.schemas.admission_path import (
     AcademicYearListResponse,
     ResolvedDocumentListResponse,
     ActivationValidationResponse,
+    AdmissionCriteriaNested,
+    SubjectGroupNested,
+    CoverageMatrixResponse,
 )
 from app.services.admission_path_service import AdmissionPathService
 from app.repositories.admission_path_repository import AdmissionPathRepository
 from app.utils.exceptions import ResourceNotFoundError
 
 router = APIRouter(prefix="/admission-config", tags=["Admission Configuration"])
+
+
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+
+def build_criteria_nested(path) -> AdmissionCriteriaNested | None:
+    """
+    Build AdmissionCriteriaNested from ORM model.
+    
+    Extracts subject_groups from the relation chain:
+    AdmissionPath.criteria.subject_group_mappings[].subject_group
+    """
+    if not path.criteria:
+        return None
+    
+    criteria = path.criteria
+    subject_groups = []
+    
+    if hasattr(criteria, 'subject_group_mappings') and criteria.subject_group_mappings:
+        for mapping in criteria.subject_group_mappings:
+            if mapping.subject_group:
+                subject_groups.append(SubjectGroupNested(
+                    id=mapping.subject_group.id,
+                    code=mapping.subject_group.code,
+                    name=mapping.subject_group.name,
+                ))
+    
+    return AdmissionCriteriaNested(
+        id=criteria.id,
+        code=criteria.code,
+        name=criteria.name,
+        min_gpa=criteria.min_gpa,
+        min_score=criteria.min_score,
+        required_subject_count=criteria.required_subject_count,
+        subject_selection_mode=criteria.subject_selection_mode or "fixed",
+        scoring_method=criteria.scoring_method or "sum",
+        subject_groups=subject_groups,
+    )
 
 
 # =============================================================================
@@ -100,6 +142,32 @@ async def get_academic_years(
     )
 
 
+@router.get(
+    "/coverage-matrix",
+    response_model=CoverageMatrixResponse,
+    summary="Get coverage matrix for paths"
+)
+async def get_coverage_matrix(
+    academic_info_id: int = Query(..., description="Academic Info ID"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(check_permission),
+):
+    """
+    Get coverage matrix showing readiness status of all paths.
+    
+    Used by Config Console to audit path configuration before activation.
+    
+    Returns:
+        Matrix with has_criteria, has_documents, has_quota, can_activate per path.
+    """
+    service = AdmissionPathService(db)
+    result, callback = await service.get_coverage_matrix(academic_info_id)
+    await db.commit()
+    await callback()
+    
+    return result
+
+
 # =============================================================================
 # ADMISSION PATH CRUD ENDPOINTS
 # =============================================================================
@@ -125,7 +193,12 @@ async def get_paths_for_offering(
     repo = AdmissionPathRepository(db)
     paths = await repo.get_active_paths_by_offering_id(offering_id)
     
-    items = [AdmissionPathResponse.model_validate(path) for path in paths]
+    # Build response with nested criteria (GAP-D fix for LeadApplicationForm)
+    items = []
+    for path in paths:
+        response = AdmissionPathResponse.model_validate(path)
+        response.criteria = build_criteria_nested(path)
+        items.append(response)
     
     return AdmissionPathListResponse(total=len(items), items=items)
 
@@ -154,6 +227,7 @@ async def list_admission_paths(
     items = []
     for path in paths:
         response = AdmissionPathResponse.model_validate(path)
+        response.criteria = build_criteria_nested(path)  # GAP-D fix
         response.available_actions = service.compute_available_actions(path)
         response.can_edit = service.compute_can_edit(path)
         response.can_activate = await service.compute_can_activate(path)

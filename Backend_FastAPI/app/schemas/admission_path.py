@@ -56,6 +56,43 @@ class UserNested(BaseModel):
     full_name: str
 
 
+class SubjectGroupNested(BaseModel):
+    """Nested subject group info for criteria."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: int
+    code: str
+    name: str
+
+
+class AdmissionCriteriaNested(BaseModel):
+    """
+    Nested criteria info for AdmissionPath response.
+    
+    Used by LeadApplicationForm to initialize subject scores.
+    """
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: int
+    code: str
+    name: str
+    
+    # Thresholds
+    min_gpa: Optional[float] = None
+    min_score: Optional[float] = None
+    
+    # Rule Engine config
+    required_subject_count: Optional[int] = None
+    subject_selection_mode: str = "fixed"
+    scoring_method: str = "sum"
+    
+    # Subject groups for score initialization
+    subject_groups: List[SubjectGroupNested] = Field(
+        default_factory=list,
+        description="Allowed subject groups for this criteria (A00, D01, etc.)"
+    )
+
+
 # =============================================================================
 # REQUEST SCHEMAS
 # =============================================================================
@@ -101,6 +138,9 @@ class AdmissionPathResponse(BaseModel):
     # Relationships
     academic_info: Optional[OfferingAcademicInfoNested] = None
     admission_method: Optional[AdmissionMethodNested] = None
+    
+    # Nested criteria (for LeadApplicationForm - GAP-D fix)
+    criteria: Optional[AdmissionCriteriaNested] = None
     
     # Audit fields
     activated_at: Optional[datetime] = None
@@ -197,23 +237,51 @@ class ActivationRequest(BaseModel):
 # COVERAGE MATRIX SCHEMAS
 # =============================================================================
 
-class CoverageMatrixCell(BaseModel):
-    """Single cell in coverage matrix."""
-    document_type_id: int
-    document_type_code: str
-    status: Literal["required", "optional", "excluded", "not_configured"]
-
-
-class CoverageMatrixRow(BaseModel):
-    """Row in coverage matrix = one AdmissionPath."""
+class CoverageRow(BaseModel):
+    """
+    Single row in coverage matrix = one AdmissionPath.
+    
+    Used by Config Console to show path readiness status.
+    """
     path_id: int
-    path_display_name: str
+    method_name: str
+    method_code: str
     status: AdmissionPathStatus
-    cells: List[CoverageMatrixCell]
+    
+    # Readiness indicators
+    has_criteria: bool = Field(
+        description="Whether criteria_id is set"
+    )
+    has_documents: bool = Field(
+        description="Whether document group exists for method"
+    )
+    has_quota: bool = Field(
+        description="Whether quota > 0"
+    )
+    
+    # Computed from above
+    can_activate: bool = Field(
+        description="has_criteria AND has_documents AND has_quota"
+    )
+    
+    # Validation errors if cannot activate
+    validation_errors: List[str] = Field(default_factory=list)
 
 
 class CoverageMatrixResponse(BaseModel):
-    """Response for coverage matrix view."""
+    """
+    Response for coverage matrix view.
+    
+    Shows all paths for an academic_info with their readiness status.
+    FE uses this to display audit table and bulk activate button.
+    """
     academic_info_id: int
-    columns: List[dict]  # Document types as columns
-    rows: List[CoverageMatrixRow]  # Paths as rows
+    rows: List[CoverageRow]
+    
+    # Summary
+    total_paths: int
+    paths_ready: int
+    all_ready: bool = Field(
+        description="True only if all paths can be activated"
+    )
+
