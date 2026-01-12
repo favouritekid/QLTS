@@ -45,6 +45,19 @@ export async function listAdmissionPaths(
 }
 
 /**
+ * Get ACTIVE admission paths for a ProgramOffering
+ * Used by LeadApplicationForm dropdown
+ */
+export async function getPathsForOffering(
+  offeringId: number
+): Promise<AdmissionPathResponse[]> {
+  const response = await api.get<{ items: AdmissionPathResponse[] }>(
+    `/api/admission-config/paths/for-offering/${offeringId}`
+  )
+  return response.data.items
+}
+
+/**
  * Get single admission path by ID
  */
 export async function getAdmissionPath(pathId: number): Promise<AdmissionPathResponse> {
@@ -162,6 +175,7 @@ export const admissionPathsApi = {
   getAcademicYears,
   // CRUD
   listAdmissionPaths,
+  getPathsForOffering,
   getAdmissionPath,
   createAdmissionPath,
   updateAdmissionPath,

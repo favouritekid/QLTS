@@ -105,6 +105,31 @@ async def get_academic_years(
 # =============================================================================
 
 @router.get(
+    "/paths/for-offering/{offering_id}",
+    response_model=AdmissionPathListResponse,
+    summary="Get active paths for an offering (public)"
+)
+async def get_paths_for_offering(
+    offering_id: int = PathParam(..., description="Program Offering ID"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """
+    Get all ACTIVE admission paths for a ProgramOffering.
+    
+    Used by LeadApplicationForm to populate "Phương thức xét tuyển" dropdown.
+    Returns paths with nested admission_method and criteria.
+    
+    Security: Requires authenticated user (Officer+)
+    """
+    repo = AdmissionPathRepository(db)
+    paths = await repo.get_active_paths_by_offering_id(offering_id)
+    
+    items = [AdmissionPathResponse.model_validate(path) for path in paths]
+    
+    return AdmissionPathListResponse(total=len(items), items=items)
+
+@router.get(
     "/paths",
     response_model=AdmissionPathListResponse,
     summary="List admission paths"

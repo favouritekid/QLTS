@@ -4,7 +4,7 @@ AdmissionProfile Model - Hồ sơ tuyển sinh (Replacement for Application).
 
 Security Features:
 - IDOR Protection: Always check lead.unit_id == current_user.unit_id
-- Snapshot Pattern: applied_rules is immutable after creation (from ProgramOffering.admission_rules)
+- Snapshot Pattern: applied_rules is immutable after creation (from AdmissionPath + DocumentGroup)
 - Unique Constraints: citizen_id, lead_id (prevent duplicate enrollment)
 - State Machine: draft -> approved/rejected -> enrolled
 
@@ -28,7 +28,7 @@ class AdmissionProfile(Base):
     Hồ sơ tuyển sinh (Admission Profile).
 
     Workflow:
-    1. CREATE: Officer creates profile -> snapshot admission_rules from ProgramOffering
+    1. CREATE: Officer creates profile -> snapshot rules from AdmissionPath + DocumentGroup
     2. UPDATE: Officer updates profile (only when status = 'draft')
     3. SUBMIT: System validates against applied_rules -> auto-approve or return errors
     4. ENROLL: System creates Student + StudentDocument (ACID transaction)
@@ -144,7 +144,7 @@ class AdmissionProfile(Base):
     )
 
     # SNAPSHOT PATTERN (Security: Immutable Rules)
-    # This is a snapshot of ProgramOffering.admission_rules AT CREATION TIME
+    # This is a snapshot of AdmissionPath + DocumentGroup rules AT CREATION TIME
     # NEVER query ProgramOffering during submit/evaluate - use this snapshot only
     applied_rules: Mapped[dict] = mapped_column(
         JSONB,

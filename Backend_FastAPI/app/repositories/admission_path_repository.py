@@ -101,6 +101,35 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
         result = await self.db.execute(query)
         return result.scalars().first()
     
+    async def get_active_paths_by_offering_id(
+        self,
+        offering_id: int
+    ) -> List[AdmissionPath]:
+        """
+        Get all ACTIVE paths for a ProgramOffering (across all academic years).
+        
+        Used by LeadApplicationForm dropdown to show available admission methods.
+        
+        Returns:
+            List of active AdmissionPath with method + criteria loaded
+        """
+        query = (
+            select(AdmissionPath)
+            .join(OfferingAcademicInfo)
+            .where(
+                OfferingAcademicInfo.offering_id == offering_id,
+                OfferingAcademicInfo.is_published == True,
+                AdmissionPath.status == "active"
+            )
+            .options(
+                selectinload(AdmissionPath.admission_method),
+                selectinload(AdmissionPath.criteria),
+            )
+            .order_by(AdmissionPath.display_order, AdmissionPath.id)
+        )
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+    
     # =========================================================================
     # ACADEMIC YEAR QUERIES
     # =========================================================================

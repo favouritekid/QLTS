@@ -339,41 +339,52 @@ def _compute_frontend_fields(
 async def create_profile(
     db: AsyncSession,
     lead_id: int,
+    admission_method_id: int,  # NEW: Required parameter for relational lookup
     current_user: models.User,
 ) -> models.AdmissionProfile:
     """
     Create new AdmissionProfile for a Lead.
 
+    REFACTORED (Phase 2): Now uses AdmissionPath (relational) instead of JSONB.
+
     Workflow:
     1. Validate Lead exists and user has access (IDOR check)
-    2. Check Lead has offering_id (required for admission_rules)
+    2. Check Lead has offering_id
     3. Check Lead doesn't already have admission_profile
-    4. Snapshot admission_rules from ProgramOffering
-    5. Initialize ProfileDocument records from mandatory_docs
-    6. Create AdmissionProfile with status='draft'
+    4. Find AdmissionPath for this offering + method
+    5. Resolve documents via DocumentGroup (relational override logic)
+    6. Build applied_rules snapshot from relational data
+    7. Create AdmissionProfile with status='draft'
 
     Security:
     - IDOR: Lead.unit_id must equal current_user.unit_id
-    - Business Rule: Lead.offering_id must not be null
+    - Business Rule: AdmissionPath must exist and be active
     - Uniqueness: Lead can only have one admission_profile
 
     Args:
         db: Database session
         lead_id: Lead ID
+        admission_method_id: Admission method ID (e.g., hoc_ba, thpt)
         current_user: Current authenticated user
 
     Returns:
         Created AdmissionProfile
 
     Raises:
-        ResourceNotFoundError: Lead or ProgramOffering not found
+        ResourceNotFoundError: Lead, ProgramOffering, or AdmissionPath not found
         PermissionDeniedError: User doesn't have access to this lead
-        BadRequest: Lead already has profile, or offering_id is null, or no admission_rules
+        BadRequest: Lead already has profile, or path not active
     """
     # ✅ SPRINT 6: Use Repository for lead lookup
-    from app.repositories import AdmissionRepository
-    admission_repo = AdmissionRepository(db)
+    from app.repositories import AdmissionRepository, OrganizationRepository
+    from app.repositories.admission_path_repository import AdmissionPathRepository
+    from app.services.admission_path_service import AdmissionPathService
     
+    admission_repo = AdmissionRepository(db)
+    org_repo = OrganizationRepository(db)
+    path_repo = AdmissionPathRepository(db)
+    path_service = AdmissionPathService(db)
+
     # Step 1: Get Lead with eager loading (prevent N+1)
     lead = await admission_repo.get_lead_with_offering(lead_id)
 
@@ -416,7 +427,7 @@ async def create_profile(
             f"Lead already has an admission profile (ID: {lead.admission_profile.id})"
         )
 
-    # Step 5: Snapshot admission_rules from ProgramOffering
+    # Step 5: Validate offering exists
     if not lead.offering:
         log.error(
             "ProgramOffering not found (data integrity issue)",
@@ -427,116 +438,136 @@ async def create_profile(
             f"Program offering {lead.offering_id} not found"
         )
 
-    admission_rules = lead.offering.admission_rules or {}
-
-    # Step 5.1: Phase 6 - Include admission_criteria from OfferingAcademicInfo
-    # OfferingAcademicInfo contains year-specific criteria (Level 3)
-    # ⚠️ Use repository method to avoid MissingGreenlet (lazy loading in async)
-    criteria = []
-    from app.repositories import OrganizationRepository
-    org_repo = OrganizationRepository(db)
+    # Step 6: Get published OfferingAcademicInfo for this offering
     academic_info_list = await org_repo.get_academic_info_history(
         lead.offering_id, 
         published_only=False
     )
     
-    if academic_info_list:
-        # Get the first published, or fallback to most recent
-        academic_info = next(
-            (info for info in academic_info_list if info.is_published),
-            academic_info_list[0] if academic_info_list else None
-        )
-        if academic_info and academic_info.admission_criteria:
-            criteria = academic_info.admission_criteria
-            log.info(
-                "Snapshotting admission_criteria from OfferingAcademicInfo",
-                offering_id=lead.offering_id,
-                academic_year=academic_info.academic_year,
-                criteria_count=len(criteria),
-            )
-    
-    # Merge criteria into applied_rules for backward compatibility + new features
-    applied_rules = {
-        **admission_rules,
-        "criteria": criteria,  # New: dynamic admission methods
-    }
-
-    # ✅ HIGH PRIORITY FIX #8: Reject profiles with completely empty applied_rules
-    # Empty rules means no admission method, mandatory docs, or scoring criteria
-    # This prevents creating profiles that cannot be validated or scored
-    # Check if rules dict is empty OR all values are empty/None/[]
-    has_content = False
-    if applied_rules:
-        for key, value in applied_rules.items():
-            # ✅ FIX: Check value is not None and not empty collection
-            # `if value:` is wrong because 0 and False are falsy but valid
-            if value is None:
-                continue
-            if isinstance(value, (list, dict)):
-                if len(value) > 0:  # Has items
-                    has_content = True
-                    break
-            elif isinstance(value, (int, float)):
-                # Numeric values like min_gpa=0 are valid content
-                has_content = True
-                break
-            elif isinstance(value, str):
-                if len(value) > 0:  # Non-empty string
-                    has_content = True
-                    break
-            else:
-                # Other types (bool, etc.) - consider as content if not None
-                has_content = True
-                break
-
-    if not has_content:
-        log.error(
-            "Cannot create admission profile: No admission rules configured",
-            offering_id=lead.offering_id,
-            admission_rules=admission_rules,
-            criteria=criteria,
-        )
-        raise BadRequest(
-            f"Cannot create admission profile: Program offering {lead.offering_id} "
-            "has no admission rules configured. Please configure admission rules "
-            "(admission_method, mandatory_docs, etc.) or admission criteria before creating profiles."
-        )
-
-    # Step 6: Collect mandatory document codes
-    mandatory_docs = applied_rules.get("mandatory_docs", [])
-
-    # Also collect mandatory docs from criteria (if any)
-    for criterion in criteria:
-        required_docs = criterion.get("required_documents", [])
-        for doc in required_docs:
-            doc_code = doc.get("code") if isinstance(doc, dict) else doc
-            if doc_code and doc_code not in mandatory_docs:
-                mandatory_docs.append(doc_code)
-
-    # Step 7: Determine academic_year from OfferingAcademicInfo
-    # Use the published academic_info's year, or fallback to current year
-    academic_year = datetime.now(timezone.utc).year  # Default fallback
-    if academic_info_list:
-        published_info = next(
-            (info for info in academic_info_list if info.is_published),
-            academic_info_list[0] if academic_info_list else None
-        )
-        if published_info:
-            academic_year = published_info.academic_year
-    
-    log.info(
-        "Determined academic_year for profile",
-        lead_id=lead_id,
-        academic_year=academic_year,
-        offering_id=lead.offering_id,
+    academic_info = next(
+        (info for info in academic_info_list if info.is_published),
+        academic_info_list[0] if academic_info_list else None
     )
     
-    # Step 8: Create AdmissionProfile
+    if not academic_info:
+        log.warning(
+            "No academic info found for offering",
+            offering_id=lead.offering_id,
+        )
+        raise BadRequest(
+            f"No published academic info found for offering {lead.offering_id}. "
+            "Please configure academic year info before creating profiles."
+        )
+
+    # Step 7: Find AdmissionPath for this offering + method (NEW: Relational)
+    admission_path = await path_repo.get_path_by_offering_and_method(
+        academic_info_id=academic_info.id,
+        admission_method_id=admission_method_id
+    )
+
+    if not admission_path:
+        log.warning(
+            "No admission path configured for offering + method",
+            academic_info_id=academic_info.id,
+            admission_method_id=admission_method_id,
+        )
+        raise BadRequest(
+            f"No admission path configured for this offering and method (method_id={admission_method_id}). "
+            "Please configure admission paths in the Config Console before creating profiles."
+        )
+
+    if admission_path.status != "active":
+        log.warning(
+            "Admission path is not active",
+            path_id=admission_path.id,
+            path_status=admission_path.status,
+        )
+        raise BadRequest(
+            f"Admission path is not active (status: {admission_path.status}). "
+            "Only active paths can be used for profile creation."
+        )
+
+    # Step 8: Check offering_type_id for document resolution
+    offering_type_id = lead.offering.offering_type_id
+    if not offering_type_id:
+        log.warning(
+            "Program offering has no offering_type_id",
+            offering_id=lead.offering_id,
+        )
+        raise BadRequest(
+            f"Program offering {lead.offering_id} has no offering_type_id configured. "
+            "Please run backfill script or configure offering type."
+        )
+
+    # Step 9: Resolve documents using DocumentGroup (relational override logic)
+    resolved_docs, _ = await path_service.resolve_documents_for_path(
+        path=admission_path,
+        offering_type_id=offering_type_id
+    )
+
+    # Step 10: Build mandatory_docs from resolved documents
+    mandatory_docs = [
+        doc.document_type_code 
+        for doc in resolved_docs 
+        if doc.is_mandatory
+    ]
+
+    # Step 11: Load AdmissionPath with criteria (eager load)
+    full_path = await path_repo.get_by_id_with_relations(admission_path.id)
+    
+    # Step 12: Build applied_rules from relational data (SNAPSHOT)
+    applied_rules = {
+        # From AdmissionCriteria (via AdmissionPath → CriteriaSubjectGroup)
+        "min_gpa": full_path.criteria.min_gpa if full_path and full_path.criteria else None,
+        "min_score": full_path.criteria.min_score if full_path and full_path.criteria else None,
+        
+        # From AdmissionMethod
+        "admission_method": full_path.admission_method.code if full_path and full_path.admission_method else None,
+        "admission_method_id": admission_method_id,
+        
+        # From resolved DocumentGroup
+        "mandatory_docs": mandatory_docs,
+        "doc_configs": {
+            doc.document_type_code: {
+                "requires_upload": doc.requires_upload,
+                "submission_format": doc.submission_format,
+                "is_mandatory": doc.is_mandatory,
+            }
+            for doc in resolved_docs
+        },
+        
+        # Snapshot metadata
+        "snapshot_source": "relational",
+        "admission_path_id": admission_path.id,
+        "academic_info_id": academic_info.id,
+    }
+
+    # Step 13: Validate applied_rules has content
+    if not mandatory_docs and not applied_rules.get("min_gpa") and not applied_rules.get("min_score"):
+        log.warning(
+            "Admission path has no criteria or documents configured",
+            path_id=admission_path.id,
+        )
+        # Allow profile creation but log warning (path might be minimal config)
+
+    # Step 14: Determine academic_year
+    academic_year = academic_info.academic_year
+    
+    log.info(
+        "Creating profile with relational AdmissionPath",
+        lead_id=lead_id,
+        academic_year=academic_year,
+        admission_path_id=admission_path.id,
+        admission_method_id=admission_method_id,
+        mandatory_docs_count=len(mandatory_docs),
+    )
+    
+    # Step 15: Create AdmissionProfile
     new_profile = models.AdmissionProfile(
         lead_id=lead_id,
-        academic_year=academic_year,  # ✅ NEW: Snapshot academic year
+        academic_year=academic_year,
         status="draft",
-        applied_rules=applied_rules,  # Snapshot (immutable) with criteria
+        applied_rules=applied_rules,  # Snapshot from relational data
         family_info=[],
         academic_history=[],
         # Pre-fill from Lead
@@ -548,25 +579,25 @@ async def create_profile(
     db.add(new_profile)
     await db.flush()  # Get ID without committing (router commits)
 
-    # Step 8: Initialize ProfileDocument records (replaces JSONB checklist)
+    # Step 16: Initialize ProfileDocument records
     await admission_repo.initialize_documents_for_profile(
         profile_id=new_profile.id,
         document_type_codes=mandatory_docs
     )
 
-    # ✅ SPRINT 6: Reload with relationships for response
+    # Step 17: Reload with relationships for response
     new_profile = await admission_repo.reload_profile_with_lead(new_profile.id)
 
     # Calculate totals for response
     _calculate_and_update_totals(new_profile)
 
     log.info(
-        "Admission profile created",
+        "Admission profile created (relational flow)",
         profile_id=new_profile.id,
         lead_id=lead_id,
         user_id=current_user.id,
-        snapshot_min_gpa=applied_rules.get("min_gpa"),
-        criteria_count=len(criteria),
+        snapshot_source="relational",
+        admission_path_id=admission_path.id,
         mandatory_docs_count=len(mandatory_docs),
     )
 

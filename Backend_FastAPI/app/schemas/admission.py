@@ -257,15 +257,22 @@ class AdmissionProfileCreate(BaseModel):
     """
     Schema for creating new AdmissionProfile.
 
-    Only requires lead_id. All other fields are populated by service:
-    - applied_rules: Snapshot from ProgramOffering.admission_rules
-    - ProfileDocument records: Auto-generated from applied_rules.mandatory_docs
+    REFACTORED (Phase 2): Now requires admission_method_id for relational lookup.
+    
+    Fields populated by service:
+    - applied_rules: Snapshot from AdmissionPath + AdmissionCriteria
+    - ProfileDocument records: Auto-generated from DocumentGroup resolution
     - status: Default = 'draft'
     """
     lead_id: int = Field(
         ...,
         gt=0,
         description="Lead ID (must exist and belong to current user's unit)"
+    )
+    admission_method_id: int = Field(
+        ...,
+        gt=0,
+        description="Admission method ID (required for AdmissionPath lookup)"
     )
 
     model_config = ConfigDict(str_strip_whitespace=True)

@@ -130,10 +130,11 @@ async def create_admission_profile(
     - 400: Lead already has profile, or no admission_rules configured
     """
     try:
-        # Service layer handles business logic
+        # Service layer handles business logic (REFACTORED: now uses AdmissionPath)
         profile = await admission_service.create_profile(
             db=db,
             lead_id=data.lead_id,
+            admission_method_id=data.admission_method_id,  # NEW: Required for AdmissionPath lookup
             current_user=current_user,
         )
 

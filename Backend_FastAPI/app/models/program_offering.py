@@ -44,12 +44,8 @@ class ProgramOffering(Base):
         comment="Cờ Soft Delete"
     )
 
-    # Admission Rules (for AdmissionProfile snapshot)
-    admission_rules = Column(
-        JSONB,
-        nullable=True,
-        comment="Admission rules JSON: {min_gpa, mandatory_docs[], admission_method}"
-    )
+    # Note: admission_rules JSONB column removed in favor of relational DocumentGroup tables.
+    # See: AdmissionPath → DocumentGroup → DocumentGroupItem for document configuration.
     
     # Fit Score Rules (for Lead scoring)
     scoring_rules = Column(
@@ -66,6 +62,17 @@ class ProgramOffering(Base):
         index=True  # ✅ FIX: Added index
     )
     program = relationship("MajorProgram", back_populates="offerings")
+
+    # NEW: Link to ConfigOfferingType for DocumentGroup resolution
+    # This enables efficient joins instead of string matching on offering_type
+    offering_type_id = Column(
+        Integer,
+        ForeignKey("config_offering_type.id", ondelete="SET NULL"),
+        nullable=True,  # Nullable for backward compatibility during migration
+        index=True,
+        comment="Link to offering type for document group lookup"
+    )
+    offering_type_config = relationship("ConfigOfferingType")
 
     # Liên kết 1-Nhiều đến Cấp 3
     academic_info_history = relationship(

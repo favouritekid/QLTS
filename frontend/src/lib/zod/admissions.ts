@@ -193,12 +193,17 @@ export type DocumentItem = z.infer<typeof documentItemSchema>
 /**
  * Create Admission Profile Schema
  * Used for POST /api/admissions
+ * REFACTORED (Phase 2): Now requires admission_method_id for AdmissionPath lookup
  */
 export const admissionProfileCreateSchema = z.object({
   lead_id: z
     .number()
     .int("Lead ID phải là số nguyên")
     .positive("Lead ID phải là số dương"),
+  admission_method_id: z
+    .number()
+    .int("Admission Method ID phải là số nguyên")
+    .positive("Admission Method ID phải là số dương"),
 })
 
 export type AdmissionProfileCreate = z.infer<
