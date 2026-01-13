@@ -36,7 +36,7 @@ const COLUMNS: CRUDTableColumn<SubjectGroup>[] = [
       return (
         <div className="flex flex-wrap gap-1">
           {item.subjects.slice(0, 3).map((subject) => (
-            <Badge key={subject.id} variant="secondary" className="text-xs">
+            <Badge key={subject.code} variant="secondary" className="text-xs">
               {subject.code}
             </Badge>
           ))}
@@ -133,7 +133,7 @@ export function SubjectGroupTable() {
             <Label className="text-sm font-semibold mb-2 block">Current Subjects:</Label>
             <div className="flex flex-wrap gap-2">
               {item.subjects.map((subject) => (
-                <Badge key={subject.id} variant="secondary">
+                <Badge key={subject.code} variant="secondary">
                   {subject.position}. {subject.name_vi}
                 </Badge>
               ))}

@@ -195,7 +195,6 @@ export interface SubjectGroup extends BaseEntity {
 }
 
 export interface SubjectInGroup {
-  id: number;
   code: string;
   name_vi: string;
   position: number;
