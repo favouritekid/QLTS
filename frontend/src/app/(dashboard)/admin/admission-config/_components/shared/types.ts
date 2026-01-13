@@ -47,6 +47,7 @@ export interface BaseFormData {
   requires_gpa?: boolean;
   requires_subject_scores?: boolean;
   organization_unit_id?: number | null;
+  unit_id?: number | null;
   major_program_id?: number | null;
   offering_type_id?: number | null;
   offering_id?: number | null;
@@ -54,6 +55,7 @@ export interface BaseFormData {
   tuition_fee_per_year?: number;
   annual_admission_quota?: number;
   is_published?: boolean;
+  is_heavy?: boolean;
   [key: string]: string | number | boolean | null | undefined;
 }
 
@@ -196,14 +198,18 @@ export interface SubjectInGroup {
 // ============================================
 
 export interface MajorProgram extends BaseEntity {
-  major_code: string;
-  degree_level_id?: number;
-  organization_unit_id?: number;
+  major_code?: string; // Keep for backward compatibility if needed, but prefer code
+  degree_level: string;
+  unit_id: number;
+  is_heavy: boolean;
+  offerings?: ProgramOffering[];
 }
 
 export interface ProgramOffering extends BaseEntity {
   major_program_id: number;
   offering_type_id: number;
+  offering_type: string;
+  academic_info_history?: OfferingAcademicInfo[];
 }
 
 export interface OfferingAcademicInfo {

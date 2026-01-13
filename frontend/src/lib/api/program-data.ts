@@ -21,7 +21,8 @@ interface MajorProgramCreate {
   major_code: string;
   name: string;
   description?: string;
-  organization_unit_id?: number | null;
+  unit_id: number;
+  is_heavy: boolean;
   display_order?: number;
   is_active?: boolean;
 }
@@ -29,7 +30,8 @@ interface MajorProgramCreate {
 interface MajorProgramUpdate {
   name?: string;
   description?: string;
-  organization_unit_id?: number | null;
+  unit_id?: number;
+  is_heavy?: boolean;
   display_order?: number;
   is_active?: boolean;
 }

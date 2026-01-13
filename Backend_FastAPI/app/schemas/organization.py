@@ -136,9 +136,8 @@ class ProgramOffering(ProgramOfferingBase):
     program_id: int
     # Include program name for display (using forward reference)
     program: Optional["MajorProgramShallow"] = None
-    # ✅ Removed academic_info_history to prevent MissingGreenlet error
-    # Frontend should load academic info on-demand using dedicated endpoints
-    # This avoids loading 30,000+ historical records unnecessarily
+    # Include academic info history for quota calculation
+    academic_info_history: List["OfferingAcademicInfo"] = Field(default_factory=list)
     model_config = ConfigDict(from_attributes=True)
 
 

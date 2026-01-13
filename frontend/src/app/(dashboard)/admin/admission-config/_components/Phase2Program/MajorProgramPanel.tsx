@@ -27,26 +27,6 @@ import type { MajorProgram, CRUDTableColumn, BaseFormData } from "../shared/type
 // CONSTANTS
 // ============================================
 
-const COLUMNS: CRUDTableColumn<MajorProgram>[] = [
-  { key: "major_code", header: "Major Code", width: "150px" },
-  { key: "name", header: "Program Name" },
-  {
-    key: "organization_unit_id",
-    header: "Unit",
-    width: "200px",
-    render: (item) => {
-      if (!item.organization_unit_id) return "—";
-      return <span className="text-sm">Unit #{item.organization_unit_id}</span>;
-    },
-  },
-  { key: "display_order", header: "Order", width: "80px" },
-  { key: "is_active", header: "Status", width: "100px" },
-];
-
-// ============================================
-// COMPONENT
-// ============================================
-
 export function MajorProgramPanel() {
   const { data = [], isLoading } = useMajorPrograms();
   const { data: units = [] } = useOrganizationUnits();
@@ -54,12 +34,72 @@ export function MajorProgramPanel() {
   const updateMutation = useUpdateMajorProgram();
   const deleteMutation = useDeleteMajorProgram();
 
+  const COLUMNS: CRUDTableColumn<MajorProgram>[] = [
+    { 
+      key: "code", 
+      header: "Mã ngành", 
+      width: "120px" 
+    },
+    { key: "degree_level", header: "Trình độ", width: "120px" },
+    { key: "name", header: "Tên chương trình" },
+    {
+      key: "is_heavy",
+      header: "Nặng nhọc/Độc hại",
+      width: "140px",
+      render: (item) => (
+        <span className={item.is_heavy ? "text-amber-600 font-medium" : "text-muted-foreground"}>
+          {item.is_heavy ? "Có" : "Không"}
+        </span>
+      )
+    },
+    {
+      key: "quota",
+      header: "Tổng chỉ tiêu",
+      width: "120px",
+      render: (item) => {
+        const total = item.offerings?.reduce((acc, off) => {
+          const latestInfo = off.academic_info_history?.[0];
+          return acc + (latestInfo?.annual_admission_quota || 0);
+        }, 0) || 0;
+        
+        if (total === 0) return <span className="text-muted-foreground text-xs">—</span>;
+        return <span className="font-medium">{total}</span>;
+      }
+    },
+    {
+      key: "unit_id",
+      header: "Đơn vị quản lý",
+      width: "200px",
+      render: (item) => {
+        const unit = units.find((u: any) => u.id === item.unit_id);
+        if (!unit) return <span className="text-muted-foreground text-xs">—</span>;
+        return <span className="text-sm">{unit.name}</span>;
+      },
+    },
+    { key: "display_order", header: "STT", width: "80px" },
+    { key: "is_active", header: "Trạng thái", width: "100px" },
+  ];
+
   const handleCreate = async (formData: BaseFormData) => {
-    await createMutation.mutateAsync(formData as unknown as Parameters<typeof createMutation.mutateAsync>[0]);
+    // Ensure numeric types
+    const payload = {
+      ...formData,
+      unit_id: parseInt(formData.unit_id?.toString() || "0"),
+      display_order: parseInt(formData.display_order?.toString() || "1"),
+      is_heavy: !!formData.is_heavy,
+      code: formData.code || formData.major_code,
+    };
+    await createMutation.mutateAsync(payload as any);
   };
 
   const handleUpdate = async (id: number, formData: BaseFormData) => {
-    await updateMutation.mutateAsync({ id, data: formData as unknown as Parameters<typeof updateMutation.mutateAsync>[0]["data"] });
+    const payload = {
+      ...formData,
+      unit_id: parseInt(formData.unit_id?.toString() || "0"),
+      display_order: parseInt(formData.display_order?.toString() || "1"),
+      is_heavy: !!formData.is_heavy,
+    };
+    await updateMutation.mutateAsync({ id, data: payload as any });
   };
 
   const handleDelete = async (id: number) => {
@@ -75,59 +115,95 @@ export function MajorProgramPanel() {
     return (
       <div className="space-y-4">
         <div className="space-y-2">
-          <Label htmlFor="major_code">
-            Major Code <span className="text-destructive">*</span>
+          <Label htmlFor="code">
+            Mã ngành <span className="text-destructive">*</span>
           </Label>
           <Input
-            id="major_code"
-            value={formData.major_code || formData.code || ""}
-            onChange={(e) => setFormData({ ...formData, major_code: e.target.value, code: e.target.value })}
-            placeholder="e.g., 6480201, 7340101"
+            id="code"
+            value={formData.code || formData.major_code || ""}
+            onChange={(e) => setFormData({ ...formData, code: e.target.value, major_code: e.target.value })}
+            placeholder="vd: 6480201, 7340101"
             disabled={isEdit}
             required
           />
           <p className="text-xs text-muted-foreground">
-            Official major code from Ministry of Education (cannot be changed after creation)
+            Mã ngành chính thức theo Bộ GD&ĐT (không thể thay đổi sau khi tạo)
           </p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label htmlFor="degree_level">
+              Trình độ đào tạo <span className="text-destructive">*</span>
+            </Label>
+            <Select
+              value={formData.degree_level?.toString() || "Cao đẳng"}
+              onValueChange={(value) => setFormData({ ...formData, degree_level: value })}
+            >
+              <SelectTrigger id="degree_level">
+                <SelectValue placeholder="Chọn trình độ" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="Cao đẳng">Cao đẳng</SelectItem>
+                <SelectItem value="Trung cấp">Trung cấp</SelectItem>
+                <SelectItem value="Sơ cấp">Sơ cấp</SelectItem>
+                <SelectItem value="Đại học">Đại học</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex items-end pb-2">
+            <div className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                id="is_heavy"
+                checked={!!formData.is_heavy}
+                onChange={(e) => setFormData({ ...formData, is_heavy: e.target.checked })}
+                className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+              />
+              <Label htmlFor="is_heavy" className="cursor-pointer">
+                Ngành nặng nhọc, độc hại
+              </Label>
+            </div>
+          </div>
         </div>
 
         <div className="space-y-2">
           <Label htmlFor="name">
-            Program Name <span className="text-destructive">*</span>
+            Tên chương trình <span className="text-destructive">*</span>
           </Label>
           <Input
             id="name"
             value={formData.name || ""}
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-            placeholder="e.g., Cao đẳng Công nghệ Thông tin, Cử nhân Kinh doanh"
+            placeholder="vd: Cao đẳng Công nghệ Thông tin"
             required
           />
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="description">Description</Label>
+          <Label htmlFor="description">Mô tả</Label>
           <Textarea
             id="description"
             value={formData.description || ""}
             onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-            placeholder="Optional description of this major program"
-            rows={3}
+            placeholder="Mô tả ngắn gọn về ngành học"
+            rows={2}
           />
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="organization_unit_id">Organization Unit</Label>
+          <Label htmlFor="unit_id">Đơn vị quản lý <span className="text-destructive">*</span></Label>
           <Select
-            value={formData.organization_unit_id?.toString() || ""}
+            value={formData.unit_id?.toString() || ""}
             onValueChange={(value) =>
-              setFormData({ ...formData, organization_unit_id: parseInt(value) })
+              setFormData({ ...formData, unit_id: parseInt(value) })
             }
           >
-            <SelectTrigger id="organization_unit_id">
-              <SelectValue placeholder="Select unit (optional)" />
+            <SelectTrigger id="unit_id">
+              <SelectValue placeholder="Chọn khoa/bộ môn quản lý" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="0">None</SelectItem>
               {units.map((unit: { id: number; name: string; code: string }) => (
                 <SelectItem key={unit.id} value={unit.id.toString()}>
                   {unit.name} ({unit.code})
@@ -136,12 +212,12 @@ export function MajorProgramPanel() {
             </SelectContent>
           </Select>
           <p className="text-xs text-muted-foreground">
-            The department or faculty that manages this program
+            Khoa hoặc bộ môn trực tiếp quản lý chuyên môn của ngành này
           </p>
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="display_order">Display Order</Label>
+          <Label htmlFor="display_order">Thứ tự hiển thị</Label>
           <Input
             id="display_order"
             type="number"
@@ -157,26 +233,28 @@ export function MajorProgramPanel() {
   };
 
   const initialFormData = () => ({
-    major_code: "",
     code: "",
+    major_code: "",
+    degree_level: "Cao đẳng",
     name: "",
     description: "",
-    organization_unit_id: null,
+    unit_id: null,
+    is_heavy: false,
     display_order: data.length + 1,
   });
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Major Programs</h1>
+        <h1 className="text-3xl font-bold">Chương trình đào tạo</h1>
         <p className="text-muted-foreground mt-2">
-          Manage academic programs and majors (IT, Business, Engineering, etc.)
+          Quản lý danh mục các ngành, nghề đào tạo (CNTT, Kinh tế, Kỹ thuật...)
         </p>
       </div>
 
       <CRUDTable
-        title="Major Program"
-        description="Academic programs offered by your institution"
+        title="Ngành đào tạo"
+        description="Danh sách các ngành đào tạo của nhà trường"
         icon={<GraduationCap className="h-5 w-5 text-primary" />}
         columns={COLUMNS}
         data={data}

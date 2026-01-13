@@ -826,7 +826,9 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
         if not unit_ids:
             return []
         
-        query = select(models.MajorProgram).filter(
+        query = select(models.MajorProgram).options(
+            selectinload(models.MajorProgram.offerings).selectinload(models.ProgramOffering.academic_info_history)
+        ).filter(
             models.MajorProgram.unit_id.in_(unit_ids),
             models.MajorProgram.is_active == True
         )
@@ -861,7 +863,7 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
         """
         # ✅ FIX: Eager load offerings to prevent MissingGreenlet error during response validation
         query = select(models.MajorProgram).options(
-            selectinload(models.MajorProgram.offerings)
+            selectinload(models.MajorProgram.offerings).selectinload(models.ProgramOffering.academic_info_history)
         )
         
         if is_active:
