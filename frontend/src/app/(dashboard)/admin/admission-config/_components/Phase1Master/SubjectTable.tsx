@@ -89,15 +89,7 @@ export function SubjectTable() {
           />
         </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="name_en">Subject Name (English)</Label>
-          <Input
-            id="name_en"
-            value={formData.name_en || ""}
-            onChange={(e) => setFormData({ ...formData, name_en: e.target.value })}
-            placeholder="e.g., Mathematics, Physics, Chemistry"
-          />
-        </div>
+
 
         <div className="space-y-2">
           <Label htmlFor="display_order">Display Order</Label>

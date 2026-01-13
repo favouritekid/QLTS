@@ -113,15 +113,7 @@ export function SubjectGroupTable() {
           />
         </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="description">Description</Label>
-          <Input
-            id="description"
-            value={formData.description || ""}
-            onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-            placeholder="Optional description"
-          />
-        </div>
+
 
         <div className="space-y-2">
           <Label htmlFor="display_order">Display Order</Label>

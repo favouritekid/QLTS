@@ -37,19 +37,19 @@ interface MajorProgramUpdate {
 }
 
 interface ProgramOfferingCreate {
-  code: string;
-  name: string;
-  major_program_id: number;
-  offering_type_id: number;
-  description?: string;
-  display_order?: number;
+  program_id: number;
+  offering_type: string; // Backend expects string name
+  duration_semesters?: number;
+  total_credits?: number;
+  scoring_rules?: any; // Nested JSON
   is_active?: boolean;
 }
 
 interface ProgramOfferingUpdate {
-  name?: string;
-  description?: string;
-  display_order?: number;
+  offering_type?: string; 
+  duration_semesters?: number;
+  total_credits?: number;
+  scoring_rules?: any; // Nested JSON
   is_active?: boolean;
 }
 
@@ -105,7 +105,7 @@ export async function getProgramOfferingsByMajor(majorId: number) {
 }
 
 export async function createProgramOffering(data: ProgramOfferingCreate) {
-  const response = await api.post(`/api/admin/programs/${data.major_program_id}/offerings`, data);
+  const response = await api.post(`/api/admin/programs/${data.program_id}/offerings`, data);
   return response.data;
 }
 

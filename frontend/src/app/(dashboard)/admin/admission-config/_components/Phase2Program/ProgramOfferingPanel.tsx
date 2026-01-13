@@ -29,27 +29,39 @@ import { useOfferingTypes } from "@/hooks/admissions/useMasterData";
 // ============================================
 
 const COLUMNS: CRUDTableColumn<ProgramOffering>[] = [
-  { key: "code", header: "Code", width: "150px" },
-  { key: "name", header: "Offering Name" },
   {
-    key: "major_program_id",
+    key: "program_id",
     header: "Major Program",
     width: "200px",
     render: (item) => {
-      if (!item.major_program_id) return "—";
-      return <span className="text-sm">Major #{item.major_program_id}</span>;
+      if (!item.program_id) return "—";
+      return <span className="text-sm">Major #{item.program_id}</span>;
     },
   },
   {
-    key: "offering_type_id",
+    key: "offering_type",
     header: "Offering Type",
     width: "200px",
     render: (item) => {
-      if (!item.offering_type_id) return "—";
-      return <span className="text-sm">Type #{item.offering_type_id}</span>;
+      return <span className="text-sm">{item.offering_type || "—"}</span>;
     },
   },
-  { key: "display_order", header: "Order", width: "80px" },
+  {
+    key: "duration_semesters",
+    header: "Duration (Semesters)",
+    width: "120px",
+    render: (item) => {
+      return <span className="text-sm">{item.duration_semesters || "—"}</span>;
+    },
+  },
+  {
+    key: "total_credits",
+    header: "Total Credits",
+    width: "120px",
+    render: (item) => {
+      return <span className="text-sm">{item.total_credits || "—"}</span>;
+    },
+  },
   { key: "is_active", header: "Status", width: "100px" },
 ];
 
@@ -67,45 +79,71 @@ export function ProgramOfferingPanel() {
 
   // Enhance columns with actual names from loaded data
   const enhancedColumns: CRUDTableColumn<ProgramOffering>[] = COLUMNS.map((col) => {
-    if (col.key === "major_program_id") {
+    // Handle Major Program (ID Map)
+    if (col.key === "program_id") {
       return {
         ...col,
-        render: (item: ProgramOffering) => {
-          const major = majors.find((m: { id: number; name: string; major_code: string }) => m.id === item.major_program_id);
-          if (!major) return <span className="text-muted-foreground">—</span>;
+        render: (item: any) => {
+          // Use program_id from backend
+          const majorId = item.program_id;
+          const major = majors.find((m: { id: number; name: string; major_code: string }) => m.id === majorId);
+
+          if (!major) {
+             // Try to use nested program name if available
+             if (item.program?.name) return <span className="text-sm text-muted-foreground">{item.program.name}</span>;
+             return <span className="text-muted-foreground">—</span>;
+          }
+
           return (
             <span className="text-sm font-medium">
               {major.name}
-              <span className="text-muted-foreground ml-1">({major.major_code})</span>
+              <span className="text-muted-foreground ml-1">({major.major_code || major.code})</span>
             </span>
           );
         },
       };
     }
-    if (col.key === "offering_type_id") {
-      return {
-        ...col,
-        render: (item: ProgramOffering) => {
-          const type = offeringTypes.find((t: { id: number; name: string; code: string }) => t.id === item.offering_type_id);
-          if (!type) return <span className="text-muted-foreground">—</span>;
-          return (
-            <span className="text-sm">
-              {type.name}
-              <span className="text-muted-foreground ml-1">({type.code})</span>
-            </span>
-          );
-        },
-      };
-    }
+
     return col;
   });
 
   const handleCreate = async (formData: BaseFormData) => {
-    await createMutation.mutateAsync(formData as unknown as Parameters<typeof createMutation.mutateAsync>[0]);
+    // Transform to match backend ProgramOfferingCreate schema
+    const offeringType = offeringTypes.find((t: { id: number; name: string }) => t.id === formData.offering_type_id);
+    if (!offeringType) {
+      throw new Error("Please select a valid offering type");
+    }
+
+    const payload = {
+      program_id: parseInt(formData.program_id?.toString() || "0"),
+      offering_type: offeringType.name, // Backend expects string name, not ID
+      duration_semesters: (formData as any).duration_semesters || undefined,
+      total_credits: (formData as any).total_credits || undefined,
+      is_active: formData.is_active !== undefined ? formData.is_active : true,
+      scoring_rules: (formData as any).scoring_rules || undefined,
+    };
+
+    await createMutation.mutateAsync(payload as any);
   };
 
   const handleUpdate = async (id: number, formData: BaseFormData) => {
-    await updateMutation.mutateAsync({ id, data: formData as unknown as Parameters<typeof updateMutation.mutateAsync>[0]["data"] });
+    // Transform to match backend ProgramOfferingUpdate schema
+    const payload: any = {
+      duration_semesters: (formData as any).duration_semesters || undefined,
+      total_credits: (formData as any).total_credits || undefined,
+      is_active: formData.is_active,
+      scoring_rules: (formData as any).scoring_rules || undefined,
+    };
+
+    // If offering_type_id is provided, convert it to offering_type (string)
+    if (formData.offering_type_id) {
+      const offeringType = offeringTypes.find((t: { id: number; name: string }) => t.id === formData.offering_type_id);
+      if (offeringType) {
+        payload.offering_type = offeringType.name;
+      }
+    }
+
+    await updateMutation.mutateAsync({ id, data: payload });
   };
 
   const handleDelete = async (id: number) => {
@@ -121,33 +159,16 @@ export function ProgramOfferingPanel() {
     return (
       <div className="space-y-4">
         <div className="space-y-2">
-          <Label htmlFor="code">
-            Code <span className="text-destructive">*</span>
-          </Label>
-          <Input
-            id="code"
-            value={formData.code || ""}
-            onChange={(e) => setFormData({ ...formData, code: e.target.value })}
-            placeholder="e.g., IT_CHINH_QUY, BUS_LIEN_THONG"
-            disabled={isEdit}
-            required
-          />
-          <p className="text-xs text-muted-foreground">
-            Unique identifier for this offering (cannot be changed after creation)
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="major_program_id">
+          <Label htmlFor="program_id">
             Major Program <span className="text-destructive">*</span>
           </Label>
           <Select
-            value={formData.major_program_id?.toString() || ""}
+            value={formData.program_id?.toString() || ""}
             onValueChange={(value) =>
-              setFormData({ ...formData, major_program_id: parseInt(value) })
+              setFormData({ ...formData, program_id: parseInt(value) })
             }
           >
-            <SelectTrigger id="major_program_id">
+            <SelectTrigger id="program_id">
               <SelectValue placeholder="Select major program" />
             </SelectTrigger>
             <SelectContent>
@@ -199,56 +220,143 @@ export function ProgramOfferingPanel() {
           </p>
         </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="name">
-            Offering Name <span className="text-destructive">*</span>
-          </Label>
-          <Input
-            id="name"
-            value={formData.name || ""}
-            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-            placeholder="e.g., Công nghệ Thông tin - Chính quy"
-            required
-          />
-          <p className="text-xs text-muted-foreground">
-            Display name for this offering (usually Major + Type combination)
-          </p>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label htmlFor="duration_semesters">Duration (Semesters)</Label>
+            <Input
+              id="duration_semesters"
+              type="number"
+              value={(formData as any).duration_semesters || ""}
+              onChange={(e) =>
+                setFormData({ ...formData, duration_semesters: e.target.value ? parseInt(e.target.value) : undefined } as any)
+              }
+              placeholder="e.g., 6"
+              min={1}
+            />
+            <p className="text-xs text-muted-foreground">
+              Number of semesters for this program
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="total_credits">Total Credits</Label>
+            <Input
+              id="total_credits"
+              type="number"
+              value={(formData as any).total_credits || ""}
+              onChange={(e) =>
+                setFormData({ ...formData, total_credits: e.target.value ? parseInt(e.target.value) : undefined } as any)
+              }
+              placeholder="e.g., 120"
+              min={1}
+            />
+            <p className="text-xs text-muted-foreground">
+              Total credit hours required
+            </p>
+          </div>
         </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="description">Description</Label>
-          <Textarea
-            id="description"
-            value={formData.description || ""}
-            onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-            placeholder="Optional description of this program offering"
-            rows={3}
-          />
-        </div>
+        <div className="border rounded-lg p-4 bg-slate-50 space-y-4">
+          <h3 className="font-medium flex items-center gap-2">
+            Fit Score Configuration (Scoring Rules)
+          </h3>
+          
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="scoring_hot_level">Hot Level</Label>
+              <Select
+                value={(formData as any).scoring_rules?.hot_level?.toString() || "0"}
+                onValueChange={(value) => {
+                  const currentRules = (formData as any).scoring_rules || {};
+                  setFormData({
+                    ...formData,
+                    scoring_rules: { ...currentRules, hot_level: parseInt(value) }
+                  } as any);
+                }}
+              >
+                <SelectTrigger id="scoring_hot_level">
+                  <SelectValue placeholder="Select Hot Level" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="0">Normal (0)</SelectItem>
+                  <SelectItem value="1">Hot (1)</SelectItem>
+                  <SelectItem value="2">Very Hot (2)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="display_order">Display Order</Label>
-          <Input
-            id="display_order"
-            type="number"
-            value={formData.display_order || 1}
-            onChange={(e) =>
-              setFormData({ ...formData, display_order: parseInt(e.target.value) })
-            }
-            min={1}
-          />
+            <div className="space-y-2">
+              <Label htmlFor="scoring_education">Required Education</Label>
+              <Select
+                value={(formData as any).scoring_rules?.required_education || "thpt"}
+                onValueChange={(value) => {
+                  const currentRules = (formData as any).scoring_rules || {};
+                  setFormData({
+                    ...formData,
+                    scoring_rules: { ...currentRules, required_education: value }
+                  } as any);
+                }}
+              >
+                <SelectTrigger id="scoring_education">
+                  <SelectValue placeholder="Select Education" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="thpt">High School (THPT)</SelectItem>
+                  <SelectItem value="cao_dang">College (Cao đẳng)</SelectItem>
+                  <SelectItem value="dai_hoc">University (Đại học)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="scoring_age_min">Min Target Age</Label>
+              <Input
+                id="scoring_age_min"
+                type="number"
+                value={(formData as any).scoring_rules?.target_age_min || ""}
+                onChange={(e) => {
+                   const val = e.target.value ? parseInt(e.target.value) : undefined;
+                   const currentRules = (formData as any).scoring_rules || {};
+                   setFormData({
+                    ...formData,
+                    scoring_rules: { ...currentRules, target_age_min: val }
+                  } as any);
+                }}
+                placeholder="e.g. 18"
+                min={16}
+                max={100}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="scoring_age_max">Max Target Age</Label>
+              <Input
+                id="scoring_age_max"
+                type="number"
+                value={(formData as any).scoring_rules?.target_age_max || ""}
+                onChange={(e) => {
+                   const val = e.target.value ? parseInt(e.target.value) : undefined;
+                   const currentRules = (formData as any).scoring_rules || {};
+                   setFormData({
+                    ...formData,
+                    scoring_rules: { ...currentRules, target_age_max: val }
+                  } as any);
+                }}
+                placeholder="e.g. 35"
+                min={16}
+                max={100}
+              />
+            </div>
+          </div>
         </div>
       </div>
     );
   };
 
   const initialFormData = () => ({
-    code: "",
-    name: "",
-    description: "",
-    major_program_id: null,
+    program_id: null,
     offering_type_id: null,
-    display_order: data.length + 1,
   });
 
   return (

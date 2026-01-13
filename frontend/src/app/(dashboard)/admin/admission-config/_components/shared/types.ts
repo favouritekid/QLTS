@@ -48,7 +48,7 @@ export interface BaseFormData {
   requires_subject_scores?: boolean;
   organization_unit_id?: number | null;
   unit_id?: number | null;
-  major_program_id?: number | null;
+  program_id?: number | null; // Updated from major_program_id to match backend
   offering_type_id?: number | null;
   offering_id?: number | null;
   academic_year?: number;
@@ -56,7 +56,8 @@ export interface BaseFormData {
   annual_admission_quota?: number;
   is_published?: boolean;
   is_heavy?: boolean;
-  [key: string]: string | number | boolean | null | undefined;
+  scoring_rules?: ScoringRules;
+  [key: string]: string | number | boolean | null | undefined | ScoringRules;
 }
 
 // ============================================
@@ -161,9 +162,16 @@ export interface FormFieldConfig {
 // PHASE 1 ENTITY TYPES
 // ============================================
 
-export interface OrganizationUnit extends BaseEntity {
-  unit_type?: string;
+// OrganizationUnit doesn't extend BaseEntity because it lacks code and display_order fields
+export interface OrganizationUnit {
+  id: number;
+  name: string;
+  type: string; // Backend field name is "type" not "unit_type"
+  description?: string | null;
   parent_id?: number | null;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export type OfferingType = BaseEntity;
@@ -174,7 +182,7 @@ export interface AdmissionMethod extends BaseEntity {
 }
 
 export interface DocumentType extends BaseEntity {
-  category?: string;
+  // No additional fields - matches backend ConfigDocumentType
 }
 
 export interface Subject extends BaseEntity {
@@ -197,19 +205,41 @@ export interface SubjectInGroup {
 // PHASE 2 ENTITY TYPES
 // ============================================
 
-export interface MajorProgram extends BaseEntity {
+// MajorProgram doesn't extend BaseEntity because it lacks description and display_order fields
+export interface MajorProgram {
+  id: number;
+  code: string;
   major_code?: string; // Keep for backward compatibility if needed, but prefer code
+  name: string;
   degree_level: string;
   unit_id: number;
+  is_active: boolean;
   is_heavy: boolean;
   offerings?: ProgramOffering[];
+  created_at?: string;
+  updated_at?: string;
 }
 
-export interface ProgramOffering extends BaseEntity {
-  major_program_id: number;
+// ProgramOffering doesn't extend BaseEntity because it lacks code, name, description, display_order fields
+export interface ProgramOffering {
+  id: number;
+  program_id: number;
   offering_type_id: number;
   offering_type: string;
+  duration_semesters?: number;
+  total_credits?: number;
+  scoring_rules?: ScoringRules;
+  is_active: boolean;
   academic_info_history?: OfferingAcademicInfo[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ScoringRules {
+  hot_level?: number; // 0=Normal, 1=Hot, 2=Very Hot
+  target_age_min?: number;
+  target_age_max?: number;
+  required_education?: string; // "thpt", "cao_dang", "dai_hoc"
 }
 
 export interface OfferingAcademicInfo {
@@ -219,6 +249,9 @@ export interface OfferingAcademicInfo {
   tuition_fee_per_year?: number;
   annual_admission_quota?: number;
   is_published: boolean;
+  target_audience?: string;
+  cutoff_score_previous_year?: number;
+  applied_discount_policy_ids?: number[];
   created_at: string;
   updated_at: string;
 }
