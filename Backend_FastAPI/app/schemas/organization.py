@@ -138,6 +138,7 @@ class ProgramOffering(ProgramOfferingBase):
     program: Optional["MajorProgramShallow"] = None
     # Include academic info history for quota calculation
     academic_info_history: List["OfferingAcademicInfo"] = Field(default_factory=list)
+    offering_type_id: Optional[int] = None
     model_config = ConfigDict(from_attributes=True)
 
 

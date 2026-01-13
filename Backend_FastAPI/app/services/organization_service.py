@@ -60,11 +60,15 @@ def create_recursive_unit_loader(depth: int):
     if depth <= 0:
         return selectinload(models.OrganizationUnit.major_programs).selectinload(
             models.MajorProgram.offerings
+        ).selectinload(
+            models.ProgramOffering.academic_info_history
         )  # Base case: just load programs
 
     return selectinload(models.OrganizationUnit.children).options(
         selectinload(models.OrganizationUnit.major_programs).selectinload(
             models.MajorProgram.offerings
+        ).selectinload(
+            models.ProgramOffering.academic_info_history
         ),
         create_recursive_unit_loader(depth - 1)
     )
@@ -777,6 +781,7 @@ async def delete_major_program(
         await _check_unit_access(db, db_program.unit_id, current_user)
 
         program_name = db_program.name
+        program_code = db_program.code
 
         # 2. Thực hiện Soft Delete (Set is_active = False)
 
@@ -794,21 +799,13 @@ async def delete_major_program(
         )
         await db.execute(stmt_offerings)
 
-        # 2c. (Tùy chọn) Nếu muốn xóa mềm cả Level 3 (Academic Info)
-        # Tuy nhiên, logic thường thấy là: Nếu Level 2 Inactive thì Level 3 tự động ẩn.
-        # Nên không nhất thiết phải update Level 3 để tiết kiệm tài nguyên DB.
-
         # ✅ TRANSACTION FIX: Flush instead of commit
         await db.flush()
 
         # ✅ Create post-commit callback
         async def _post_commit():
             """Execute after router commits the transaction."""
-            log.info(
-                "Major program and children soft-deleted successfully",
-                program_id=program_id,
-                program_name=program_name
-            )
+            log.info("Major program deleted", program_id=program_id, name=program_name)
             await invalidate_org_cache()
             await emit_organization_updated(
                 operation="delete",
@@ -816,8 +813,9 @@ async def delete_major_program(
                 resource_id=program_id,
                 resource_name=program_name
             )
-
+            
         return None, _post_commit
+
 
     except Exception as e:
         # ✅ Router will handle rollback
@@ -1670,20 +1668,46 @@ async def get_all_program_offerings(
 ) -> List[models.ProgramOffering]:
     """
     Get all program offerings as flat list for dropdowns.
-    
+
     Uses OrganizationRepository with eager loading for program name display.
-    
+
     Args:
         db: Database session
         is_active: Filter by active status (None = all)
         skip: Offset for pagination
         limit: Maximum results
-        
+
     Returns:
         List of ProgramOffering with program loaded
     """
     repo = OrganizationRepository(db)
     return await repo.get_all_offerings(
+        is_active=is_active,
+        skip=skip,
+        limit=limit
+    )
+
+
+async def get_all_academic_infos(
+    db: AsyncSession,
+    is_active: Optional[bool] = None,
+    skip: int = 0,
+    limit: int = 1000,
+) -> List[models.OfferingAcademicInfo]:
+    """
+    Get all academic infos as flat list for admin panels.
+
+    Args:
+        db: Database session
+        is_active: Filter by active status (None = all, True = not deleted)
+        skip: Offset for pagination
+        limit: Maximum results
+
+    Returns:
+        List of OfferingAcademicInfo
+    """
+    repo = OrganizationRepository(db)
+    return await repo.get_all_academic_infos(
         is_active=is_active,
         skip=skip,
         limit=limit

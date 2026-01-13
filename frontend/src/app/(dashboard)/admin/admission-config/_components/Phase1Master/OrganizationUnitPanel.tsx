@@ -11,6 +11,13 @@ import { Building2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { CRUDTable } from "../shared/CRUDTable";
 import {
   useOrganizationUnits,
@@ -24,11 +31,21 @@ import type { OrganizationUnit, CRUDTableColumn, BaseFormData } from "../shared/
 // CONSTANTS
 // ============================================
 
+// Valid organization unit types from backend
+const ORGANIZATION_UNIT_TYPES = [
+  "Trường",
+  "Phòng ban",
+  "Trung tâm",
+  "Khoa",
+  "Tổ",
+  "Bộ môn",
+];
+
 const COLUMNS: CRUDTableColumn<OrganizationUnit>[] = [
-  { key: "code", header: "Code", width: "120px" },
   { key: "name", header: "Name" },
+  { key: "type", header: "Type", width: "120px" },
+  { key: "parent_id", header: "Parent Unit", width: "150px" },
   { key: "description", header: "Description" },
-  { key: "display_order", header: "Order", width: "80px" },
   { key: "is_active", header: "Status", width: "100px" },
 ];
 
@@ -42,12 +59,45 @@ export function OrganizationUnitPanel() {
   const updateMutation = useUpdateOrganizationUnit();
   const deleteMutation = useDeleteOrganizationUnit();
 
+  // Enhance columns to show parent unit name
+  const enhancedColumns: CRUDTableColumn<OrganizationUnit>[] = COLUMNS.map((col) => {
+    if (col.key === "parent_id") {
+      return {
+        ...col,
+        render: (item: OrganizationUnit) => {
+          if (!item.parent_id) return <span className="text-muted-foreground">—</span>;
+          const parent = data.find((u) => u.id === item.parent_id);
+          return parent ? (
+            <span className="text-sm">{parent.name}</span>
+          ) : (
+            <span className="text-sm text-muted-foreground">Unit #{item.parent_id}</span>
+          );
+        },
+      };
+    }
+    return col;
+  });
+
   const handleCreate = async (formData: BaseFormData) => {
-    await createMutation.mutateAsync(formData as unknown as Parameters<typeof createMutation.mutateAsync>[0]);
+    // Transform formData to match backend OrganizationUnitCreate schema
+    const payload = {
+      name: formData.name,
+      type: (formData as any).type, // Required by backend
+      description: formData.description || null,
+      parent_id: (formData as any).parent_id || null,
+    };
+    await createMutation.mutateAsync(payload as any);
   };
 
   const handleUpdate = async (id: number, formData: BaseFormData) => {
-    await updateMutation.mutateAsync({ id, data: formData as unknown as Parameters<typeof updateMutation.mutateAsync>[0]["data"] });
+    // Transform formData to match backend OrganizationUnitUpdate schema
+    const payload = {
+      name: formData.name,
+      type: (formData as any).type,
+      description: formData.description || null,
+      parent_id: (formData as any).parent_id || null,
+    };
+    await updateMutation.mutateAsync({ id, data: payload as any });
   };
 
   const handleDelete = async (id: number) => {
@@ -63,23 +113,6 @@ export function OrganizationUnitPanel() {
     return (
       <div className="space-y-4">
         <div className="space-y-2">
-          <Label htmlFor="code">
-            Code <span className="text-destructive">*</span>
-          </Label>
-          <Input
-            id="code"
-            value={formData.code || ""}
-            onChange={(e) => setFormData({ ...formData, code: e.target.value })}
-            placeholder="e.g., CNTT, KTCN"
-            disabled={isEdit}
-            required
-          />
-          <p className="text-xs text-muted-foreground">
-            Unique identifier for this unit (cannot be changed after creation)
-          </p>
-        </div>
-
-        <div className="space-y-2">
           <Label htmlFor="name">
             Name <span className="text-destructive">*</span>
           </Label>
@@ -93,6 +126,62 @@ export function OrganizationUnitPanel() {
         </div>
 
         <div className="space-y-2">
+          <Label htmlFor="type">
+            Unit Type <span className="text-destructive">*</span>
+          </Label>
+          <Select
+            value={(formData as any).type || ""}
+            onValueChange={(value) =>
+              setFormData({ ...formData, type: value } as any)
+            }
+          >
+            <SelectTrigger id="type">
+              <SelectValue placeholder="Select unit type" />
+            </SelectTrigger>
+            <SelectContent>
+              {ORGANIZATION_UNIT_TYPES.map((type) => (
+                <SelectItem key={type} value={type}>
+                  {type}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            The type of organizational unit (e.g., Faculty, Department)
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="parent_id">Parent Unit (Optional)</Label>
+          <Select
+            value={(formData as any).parent_id?.toString() || "__none__"}
+            onValueChange={(value) =>
+              setFormData({
+                ...formData,
+                parent_id: value === "__none__" ? null : parseInt(value)
+              } as any)
+            }
+          >
+            <SelectTrigger id="parent_id">
+              <SelectValue placeholder="None (top-level unit)" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">None (top-level unit)</SelectItem>
+              {data
+                .filter((unit) => unit.id !== item?.id) // Prevent self-parenting
+                .map((unit) => (
+                  <SelectItem key={unit.id} value={unit.id.toString()}>
+                    {unit.name} ({unit.type})
+                  </SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            The parent organizational unit (leave empty for top-level units)
+          </p>
+        </div>
+
+        <div className="space-y-2">
           <Label htmlFor="description">Description</Label>
           <Textarea
             id="description"
@@ -102,31 +191,15 @@ export function OrganizationUnitPanel() {
             rows={3}
           />
         </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="display_order">Display Order</Label>
-          <Input
-            id="display_order"
-            type="number"
-            value={formData.display_order || 1}
-            onChange={(e) =>
-              setFormData({ ...formData, display_order: parseInt(e.target.value) })
-            }
-            min={1}
-          />
-          <p className="text-xs text-muted-foreground">
-            Controls the order in which units appear in dropdowns
-          </p>
-        </div>
       </div>
     );
   };
 
-  const initialFormData = () => ({
-    code: "",
+  const initialFormData = (): any => ({
     name: "",
+    type: "", // Required by backend
     description: "",
-    display_order: data.length + 1,
+    parent_id: null,
   });
 
   return (
@@ -142,7 +215,7 @@ export function OrganizationUnitPanel() {
         title="Organization Unit"
         description="Departments, faculties, and other organizational units"
         icon={<Building2 className="h-5 w-5 text-primary" />}
-        columns={COLUMNS}
+        columns={enhancedColumns}
         data={data}
         isLoading={isLoading}
         onCreate={handleCreate}

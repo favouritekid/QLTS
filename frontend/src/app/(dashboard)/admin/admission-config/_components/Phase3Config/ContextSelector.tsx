@@ -51,7 +51,7 @@ export function ContextSelector({ onContextSelected }: ContextSelectorProps) {
   // Filter offerings by selected major
   const filteredOfferings = useMemo(() => {
     if (!selectedMajorId) return [];
-    return offerings.filter((o: ProgramOffering) => o.major_program_id === selectedMajorId);
+    return offerings.filter((o: ProgramOffering) => o.program_id === selectedMajorId);
   }, [offerings, selectedMajorId]);
 
   // Filter academic infos by selected offering and year
@@ -184,7 +184,7 @@ export function ContextSelector({ onContextSelected }: ContextSelectorProps) {
                   majors.map((major: MajorProgram) => (
                     <SelectItem key={major.id} value={major.id.toString()}>
                       {major.name}
-                      <span className="text-muted-foreground ml-2">({major.major_code})</span>
+                      <span className="text-muted-foreground ml-2">({major.code})</span>
                     </SelectItem>
                   ))
                 ) : (

@@ -158,13 +158,15 @@ class BaseRepository(ABC, Generic[ModelType]):
         Raises:
             AttributeError: If model doesn't have deleted_at field
         """
-        if not hasattr(db_obj, 'deleted_at'):
+        if hasattr(db_obj, 'deleted_at'):
+            from datetime import datetime, timezone
+            db_obj.deleted_at = datetime.now(timezone.utc)
+        elif hasattr(db_obj, 'is_active'):
+            db_obj.is_active = False
+        else:
             raise AttributeError(
-                f"{self.model.__name__} doesn't support soft delete (no deleted_at field)"
+                f"{self.model.__name__} doesn't support soft delete (no deleted_at or is_active field)"
             )
-
-        from datetime import datetime, timezone
-        db_obj.deleted_at = datetime.now(timezone.utc)
 
         await self.db.flush()
         await self.db.refresh(db_obj)

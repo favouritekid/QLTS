@@ -27,7 +27,6 @@ import type { OfferingType, CRUDTableColumn, BaseFormData } from "../shared/type
 const COLUMNS: CRUDTableColumn<OfferingType>[] = [
   { key: "code", header: "Code", width: "150px" },
   { key: "name", header: "Name" },
-  { key: "description", header: "Description" },
   { key: "display_order", header: "Order", width: "80px" },
   { key: "is_active", header: "Status", width: "100px" },
 ];
@@ -43,11 +42,25 @@ export function OfferingTypePanel() {
   const deleteMutation = useDeleteOfferingType();
 
   const handleCreate = async (formData: BaseFormData) => {
-    await createMutation.mutateAsync(formData as unknown as Parameters<typeof createMutation.mutateAsync>[0]);
+    // Transform to match backend ConfigOfferingTypeCreate schema
+    const payload = {
+      code: formData.code,
+      name: formData.name,
+      display_order: formData.display_order || 0,
+      is_active: formData.is_active !== undefined ? formData.is_active : true,
+    };
+    await createMutation.mutateAsync(payload as any);
   };
 
   const handleUpdate = async (id: number, formData: BaseFormData) => {
-    await updateMutation.mutateAsync({ id, data: formData as unknown as Parameters<typeof updateMutation.mutateAsync>[0]["data"] });
+    // Transform to match backend ConfigOfferingTypeUpdate schema
+    const payload = {
+      code: formData.code,
+      name: formData.name,
+      display_order: formData.display_order,
+      is_active: formData.is_active,
+    };
+    await updateMutation.mutateAsync({ id, data: payload as any });
   };
 
   const handleDelete = async (id: number) => {
@@ -93,17 +106,6 @@ export function OfferingTypePanel() {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="description">Description</Label>
-          <Textarea
-            id="description"
-            value={formData.description || ""}
-            onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-            placeholder="Optional description of this offering type"
-            rows={3}
-          />
-        </div>
-
-        <div className="space-y-2">
           <Label htmlFor="display_order">Display Order</Label>
           <Input
             id="display_order"
@@ -125,7 +127,6 @@ export function OfferingTypePanel() {
   const initialFormData = () => ({
     code: "",
     name: "",
-    description: "",
     display_order: data.length + 1,
   });
 

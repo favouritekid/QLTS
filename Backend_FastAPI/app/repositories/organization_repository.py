@@ -224,11 +224,25 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
         if not include_inactive:
             query = query.where(models.OrganizationUnit.is_active == True)
 
-        # Eager load children recursively (up to reasonable depth)
+        # Eager load children recursively with major_programs (up to reasonable depth)
+        # ✅ FIX: Load major_programs at each level to prevent MissingGreenlet error
         query = query.options(
+            selectinload(models.OrganizationUnit.major_programs).selectinload(
+                models.MajorProgram.offerings
+            ),
             selectinload(models.OrganizationUnit.children).options(
+                selectinload(models.OrganizationUnit.major_programs).selectinload(
+                    models.MajorProgram.offerings
+                ),
                 selectinload(models.OrganizationUnit.children).options(
-                    selectinload(models.OrganizationUnit.children)
+                    selectinload(models.OrganizationUnit.major_programs).selectinload(
+                        models.MajorProgram.offerings
+                    ),
+                    selectinload(models.OrganizationUnit.children).options(
+                        selectinload(models.OrganizationUnit.major_programs).selectinload(
+                            models.MajorProgram.offerings
+                        )
+                    )
                 )
             )
         )
@@ -669,6 +683,8 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
             .options(
                 selectinload(models.OrganizationUnit.major_programs).selectinload(
                     models.MajorProgram.offerings
+                ).selectinload(
+                    models.ProgramOffering.academic_info_history
                 ),
                 recursive_loader,
                 selectinload(models.OrganizationUnit.parent)
@@ -750,24 +766,33 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
     ) -> List[models.OrganizationUnit]:
         """
         Get organization tree for aggregation (no academic info history).
-        
+
         Used by get_tree_with_aggregation for efficient tree building.
         Academic info is loaded separately for the specific year.
+
+        Returns flat list of ALL units (not just roots) with major_programs loaded.
         """
         query = (
             select(self.model)
             .options(
+                # ✅ FIX: Load major_programs for all units to prevent MissingGreenlet error
                 selectinload(models.OrganizationUnit.major_programs).selectinload(
                     models.MajorProgram.offerings
                 ),
-                selectinload(models.OrganizationUnit.children)
+                # Note: children relationship is loaded but service doesn't use it (builds tree manually)
+                # But if accessed, children should also have major_programs loaded
+                selectinload(models.OrganizationUnit.children).selectinload(
+                    models.OrganizationUnit.major_programs
+                ).selectinload(
+                    models.MajorProgram.offerings
+                )
             )
             .order_by(self.model.name)
         )
-        
+
         if not include_inactive:
             query = query.where(self.model.is_active == True)
-        
+
         result = await self.db.execute(query)
         return list(result.scalars().unique().all())
 
@@ -890,34 +915,70 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
     ) -> List[models.ProgramOffering]:
         """
         Get all program offerings as flat list for dropdowns.
-        
+
         Includes eager loading of parent program for display name.
-        
+
         Args:
             is_active: Filter by active status (None = all)
             skip: Offset for pagination
             limit: Maximum results
-            
+
         Returns:
             List of ProgramOffering with program loaded
         """
         query = (
             select(models.ProgramOffering)
             .options(
-                selectinload(models.ProgramOffering.program)  # Eager load for display
+                selectinload(models.ProgramOffering.program),  # Eager load for display
+                selectinload(models.ProgramOffering.academic_info_history)
             )
         )
-        
+
         if is_active is not None:
             query = query.where(models.ProgramOffering.is_active == is_active)
-        
+
         query = (
             query
             .order_by(models.ProgramOffering.offering_type)
             .offset(skip)
             .limit(limit)
         )
-        
+
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+    async def get_all_academic_infos(
+        self,
+        is_active: Optional[bool] = None,
+        skip: int = 0,
+        limit: int = 1000,
+    ) -> List[models.OfferingAcademicInfo]:
+        """
+        Get all academic infos as flat list for admin panels.
+
+        Args:
+            is_active: Filter by deleted status (None = all, True = not deleted)
+            skip: Offset for pagination
+            limit: Maximum results
+
+        Returns:
+            List of OfferingAcademicInfo
+        """
+        query = select(models.OfferingAcademicInfo)
+
+        if is_active is True:
+            query = query.where(models.OfferingAcademicInfo.is_deleted == False)
+
+        query = (
+            query
+            .order_by(
+                models.OfferingAcademicInfo.academic_year.desc(),
+                models.OfferingAcademicInfo.offering_id
+            )
+            .offset(skip)
+            .limit(limit)
+        )
+
         result = await self.db.execute(query)
         return list(result.scalars().all())
 

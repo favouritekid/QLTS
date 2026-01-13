@@ -221,6 +221,24 @@ async def get_all_program_offerings(
         db, is_active=is_active, skip=skip, limit=limit
     )
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
+@router.get("/offerings/academic-info", response_model=List[schemas.OfferingAcademicInfo])
+async def get_all_academic_infos(
+    request: Request,
+    is_active: Optional[bool] = None,
+    skip: int = 0,
+    limit: int = 1000,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: schemas.User = CasbinAuth,
+):
+    """
+    Lấy danh sách tất cả thông tin học thuật (Flat list).
+    Dùng cho các bảng quản lý Academic Info.
+    """
+    return await organization_service.get_all_academic_infos(
+        db, is_active=is_active, skip=skip, limit=limit
+    )
+
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.patch("/academic-info/{academic_info_id}", response_model=schemas.OfferingAcademicInfo)
 async def update_offering_academic_info(
