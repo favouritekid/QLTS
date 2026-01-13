@@ -40,7 +40,7 @@ export interface BaseFormData {
   name?: string;
   name_vi?: string;
   name_en?: string;
-  major_code?: string;
+  degree_level?: string;
   description?: string;
   display_order?: number;
   is_active?: boolean;
@@ -208,7 +208,6 @@ export interface SubjectInGroup {
 export interface MajorProgram {
   id: number;
   code: string;
-  major_code?: string; // Keep for backward compatibility if needed, but prefer code
   name: string;
   degree_level: string;
   unit_id: number;
@@ -223,12 +222,20 @@ export interface MajorProgram {
 export interface ProgramOffering {
   id: number;
   program_id: number;
-  offering_type_id: number;
+  offering_type_id?: number;
   offering_type: string;
   duration_semesters?: number;
   total_credits?: number;
   scoring_rules?: ScoringRules;
   is_active: boolean;
+  program?: {
+    id: number;
+    name: string;
+    code: string;
+    degree_level: string;
+    is_active: boolean;
+    is_heavy: boolean;
+  };
   academic_info_history?: OfferingAcademicInfo[];
   created_at?: string;
   updated_at?: string;

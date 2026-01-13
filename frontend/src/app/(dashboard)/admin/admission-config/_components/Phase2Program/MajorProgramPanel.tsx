@@ -76,27 +76,30 @@ export function MajorProgramPanel() {
         return <span className="text-sm">{unit.name}</span>;
       },
     },
-    { key: "display_order", header: "STT", width: "80px" },
     { key: "is_active", header: "Trạng thái", width: "100px" },
   ];
 
   const handleCreate = async (formData: BaseFormData) => {
-    // Ensure numeric types
+    // Transform to match backend MajorProgramCreate schema
     const payload = {
-      ...formData,
+      name: formData.name,
+      degree_level: formData.degree_level,
+      code: formData.code,
       unit_id: parseInt(formData.unit_id?.toString() || "0"),
-      display_order: parseInt(formData.display_order?.toString() || "1"),
+      is_active: formData.is_active !== undefined ? formData.is_active : true,
       is_heavy: !!formData.is_heavy,
-      code: formData.code || formData.major_code,
     };
     await createMutation.mutateAsync(payload as any);
   };
 
   const handleUpdate = async (id: number, formData: BaseFormData) => {
+    // Transform to match backend MajorProgramUpdate schema
+    // Note: code is NOT updatable per backend schema
     const payload = {
-      ...formData,
+      name: formData.name,
+      degree_level: formData.degree_level,
       unit_id: parseInt(formData.unit_id?.toString() || "0"),
-      display_order: parseInt(formData.display_order?.toString() || "1"),
+      is_active: formData.is_active,
       is_heavy: !!formData.is_heavy,
     };
     await updateMutation.mutateAsync({ id, data: payload as any });
@@ -120,8 +123,8 @@ export function MajorProgramPanel() {
           </Label>
           <Input
             id="code"
-            value={formData.code || formData.major_code || ""}
-            onChange={(e) => setFormData({ ...formData, code: e.target.value, major_code: e.target.value })}
+            value={formData.code || ""}
+            onChange={(e) => setFormData({ ...formData, code: e.target.value })}
             placeholder="vd: 6480201, 7340101"
             disabled={isEdit}
             required
@@ -182,17 +185,6 @@ export function MajorProgramPanel() {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="description">Mô tả</Label>
-          <Textarea
-            id="description"
-            value={formData.description || ""}
-            onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-            placeholder="Mô tả ngắn gọn về ngành học"
-            rows={2}
-          />
-        </div>
-
-        <div className="space-y-2">
           <Label htmlFor="unit_id">Đơn vị quản lý <span className="text-destructive">*</span></Label>
           <Select
             value={formData.unit_id?.toString() || ""}
@@ -204,9 +196,9 @@ export function MajorProgramPanel() {
               <SelectValue placeholder="Chọn khoa/bộ môn quản lý" />
             </SelectTrigger>
             <SelectContent>
-              {units.map((unit: { id: number; name: string; code: string }) => (
+              {units.map((unit: { id: number; name: string; type: string }) => (
                 <SelectItem key={unit.id} value={unit.id.toString()}>
-                  {unit.name} ({unit.code})
+                  {unit.name} ({unit.type})
                 </SelectItem>
               ))}
             </SelectContent>
@@ -215,32 +207,16 @@ export function MajorProgramPanel() {
             Khoa hoặc bộ môn trực tiếp quản lý chuyên môn của ngành này
           </p>
         </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="display_order">Thứ tự hiển thị</Label>
-          <Input
-            id="display_order"
-            type="number"
-            value={formData.display_order || 1}
-            onChange={(e) =>
-              setFormData({ ...formData, display_order: parseInt(e.target.value) })
-            }
-            min={1}
-          />
-        </div>
       </div>
     );
   };
 
   const initialFormData = () => ({
     code: "",
-    major_code: "",
     degree_level: "Cao đẳng",
     name: "",
-    description: "",
     unit_id: null,
     is_heavy: false,
-    display_order: data.length + 1,
   });
 
   return (

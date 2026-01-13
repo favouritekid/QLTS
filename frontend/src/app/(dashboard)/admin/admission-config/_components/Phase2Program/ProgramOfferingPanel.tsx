@@ -86,7 +86,7 @@ export function ProgramOfferingPanel() {
         render: (item: any) => {
           // Use program_id from backend
           const majorId = item.program_id;
-          const major = majors.find((m: { id: number; name: string; major_code: string }) => m.id === majorId);
+          const major = majors.find((m: { id: number; name: string; code: string }) => m.id === majorId);
 
           if (!major) {
              // Try to use nested program name if available
@@ -97,7 +97,7 @@ export function ProgramOfferingPanel() {
           return (
             <span className="text-sm font-medium">
               {major.name}
-              <span className="text-muted-foreground ml-1">({major.major_code || major.code})</span>
+              <span className="text-muted-foreground ml-1">({major.code})</span>
             </span>
           );
         },
@@ -177,9 +177,9 @@ export function ProgramOfferingPanel() {
                   No major programs available. Please create one first.
                 </div>
               )}
-              {majors.map((major: { id: number; name: string; major_code: string }) => (
+              {majors.map((major: { id: number; name: string; code: string }) => (
                 <SelectItem key={major.id} value={major.id.toString()}>
-                  {major.name} ({major.major_code})
+                  {major.name} ({major.code})
                 </SelectItem>
               ))}
             </SelectContent>

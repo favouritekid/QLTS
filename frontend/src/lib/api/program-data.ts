@@ -18,21 +18,18 @@ import type {
 
 interface MajorProgramCreate {
   code: string;
-  major_code: string;
   name: string;
-  description?: string;
+  degree_level: string;
   unit_id: number;
   is_heavy: boolean;
-  display_order?: number;
   is_active?: boolean;
 }
 
 interface MajorProgramUpdate {
   name?: string;
-  description?: string;
+  degree_level?: string;
   unit_id?: number;
   is_heavy?: boolean;
-  display_order?: number;
   is_active?: boolean;
 }
 
