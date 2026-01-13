@@ -19,7 +19,6 @@ import {
   getCoverageMatrix,
 } from "@/lib/api/admission-paths"
 import type { 
-  AdmissionPathResponse, 
   AdmissionPathCreate, 
   AdmissionPathUpdate,
 } from "@/lib/zod/admission-path"
@@ -116,7 +115,7 @@ export function useCreateAdmissionPath() {
   
   return useMutation({
     mutationFn: (data: AdmissionPathCreate) => createAdmissionPath(data),
-    onSuccess: (newPath) => {
+    onSuccess: (_newPath) => {
       // Invalidate list queries
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.lists() })
     },

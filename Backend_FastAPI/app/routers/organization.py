@@ -60,14 +60,15 @@ async def get_organization_tree_with_aggregation(
 @router.get("/programs", response_model=List[schemas.MajorProgram])
 async def get_filtered_programs(
     request: Request,
-    unitId: int,
+    unitId: Optional[int] = None,
     search: Optional[str] = None,
     db: AsyncSession = Depends(database.get_db),
     current_user: schemas.User = CasbinAuth  # ✅ SECURITY FIX: Casbin RBAC enforcement,
 ):
     """
     Lấy danh sách chương trình đào tạo (MajorProgram - Level 1), lọc theo unitId và tìm kiếm.
-
+    
+    Nếu không có unitId, trả về tất cả chương trình.
     Đây là endpoint mới thay thế cho /majors trong kiến trúc 3-tier.
     """
     return await organization_service.get_programs_by_unit_tree(

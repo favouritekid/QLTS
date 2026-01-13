@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 import { configApi } from "@/lib/api/config";
-import { ConfigSystemCategory } from "@/lib/zod/config";
 
 export const useConfigData = (type: string | null) => {
     return useQuery({

@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useMemo } from "react"
-import { useForm, FormProvider } from "react-hook-form"
+import { useForm, FormProvider, FieldValues, UseFormReturn } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 
 // Phase 7: Reusable status banners
@@ -230,10 +230,10 @@ export function AdmissionDetailClient({
 
         {/* TAB CONTENT */}
         <div className="bg-white rounded-lg shadow-sm min-h-[500px] p-1">
-          {currentStep === 1 && <PersonalInfoTab profile={profile} form={form as any} isEditable={can('edit')} />}
-          {currentStep === 2 && <FamilyTab form={form as any} isEditable={can('edit')} />}
-          {currentStep === 3 && <AcademicHistoryTab form={form as any} isEditable={can('edit')} />}
-          {currentStep === 4 && <ScoresTab form={form as any} isEditable={can('edit')} minGpa={profile.applied_rules?.min_gpa ?? 0} appliedRules={profile.applied_rules} profile={profile} />}
+          {currentStep === 1 && <PersonalInfoTab profile={profile} form={form as unknown as UseFormReturn<FieldValues>} isEditable={can('edit')} />}
+          {currentStep === 2 && <FamilyTab form={form as unknown as UseFormReturn<FieldValues>} isEditable={can('edit')} />}
+          {currentStep === 3 && <AcademicHistoryTab form={form as unknown as UseFormReturn<FieldValues>} isEditable={can('edit')} />}
+          {currentStep === 4 && <ScoresTab form={form as unknown as UseFormReturn<FieldValues>} isEditable={can('edit')} minGpa={profile.applied_rules?.min_gpa ?? 0} appliedRules={profile.applied_rules} profile={profile} />}
           {currentStep === 5 && <DocumentsTab profile={profile} isEditable={can('edit')} />}
           {currentStep === 6 && <TuitionTab profile={profile} />}
           {currentStep === 7 && <FinalizeTab isEligible={isEligible} onSubmit={handleSubmit} isSubmitting={submitMutation.isPending} />}

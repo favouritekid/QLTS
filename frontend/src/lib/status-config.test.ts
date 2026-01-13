@@ -9,7 +9,6 @@ import {
   getStatusConfig, 
   ADMISSION_STATUS_CONFIG, 
   DEFAULT_STATUS_CONFIG,
-  type StatusUIConfig 
 } from "./status-config"
 
 describe("getStatusConfig", () => {

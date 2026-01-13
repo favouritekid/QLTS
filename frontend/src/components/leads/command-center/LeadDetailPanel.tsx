@@ -118,8 +118,10 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
   useEffect(() => {
     if (lead?.last_consultation_at) {
       const days = Math.floor((Date.now() - new Date(lead.last_consultation_at).getTime()) / (1000 * 60 * 60 * 24));
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setDaysSinceContact(days);
     } else {
+       
       setDaysSinceContact(null);
     }
   }, [lead?.last_consultation_at]);

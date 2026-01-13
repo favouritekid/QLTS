@@ -118,14 +118,26 @@ async function serverFetch<T>(
     });
   }
 
-  // Get cookies from incoming request
-  const cookieStore = await cookies();
-  const cookieHeader = cookieStore.toString();
+  // Get explicit headers
+  const providedHeaders = (fetchOptions.headers as Record<string, string>) || {};
+  
+  // Get cookies: Use provided header OR fetch from request (if not provided)
+  let cookieHeader = providedHeaders['Cookie'];
+
+  if (!cookieHeader) {
+    try {
+      const cookieStore = await cookies();
+      cookieHeader = cookieStore.toString();
+    } catch (e) {
+      // Ignore if cookies() fails (e.g., inside "use cache" without explicit header)
+      // The request will likely fail with 401 later, which is expected behavior
+    }
+  }
 
   // Prepare headers
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...(fetchOptions.headers as Record<string, string>),
+    ...providedHeaders,
   };
 
   // Forward authentication cookies
@@ -251,8 +263,16 @@ const admin = {
     /**
      * Get user statistics (admin dashboard)
      */
-    async getStatistics(): Promise<UserStatistics> {
-      return serverFetch<UserStatistics>('/api/admin/users/statistics');
+    /**
+     * Get user statistics (admin dashboard)
+     * @param cookieHeader Optional cookie string for cached contexts
+     */
+    async getStatistics(cookieHeader?: string): Promise<UserStatistics> {
+      const options: FetchOptions = {};
+      if (cookieHeader) {
+        options.headers = { Cookie: cookieHeader };
+      }
+      return serverFetch<UserStatistics>('/api/admin/users/statistics', options);
     },
   },
 
@@ -280,8 +300,12 @@ const admin = {
       include_stats?: boolean;
       date_from?: string;
       date_to?: string;
-    }): Promise<FullPipeline> {
-      return serverFetch<FullPipeline>('/api/pipeline/all', { params });
+    }, cookieHeader?: string): Promise<FullPipeline> {
+      const options: FetchOptions = { params: params as Record<string, unknown> };
+      if (cookieHeader) {
+        options.headers = { Cookie: cookieHeader };
+      }
+      return serverFetch<FullPipeline>('/api/pipeline/all', options);
     },
   },
 

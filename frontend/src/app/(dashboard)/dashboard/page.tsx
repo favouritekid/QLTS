@@ -12,6 +12,7 @@
  */
 
 import { Suspense } from 'react';
+import { cookies } from 'next/headers';
 import { serverApi } from '@/lib/api/server';
 import { getCachedUserStatistics } from '@/lib/api/cached-data';
 import { DashboardClient } from './_components/DashboardClient';
@@ -38,10 +39,12 @@ function DashboardLoading() {
 async function DashboardPageContent() {
   // ✅ Fetch current user on server (user-specific, not cached)
   const initialUser = await serverApi.users.getCurrentUser();
+  const cookieStore = await cookies();
+  const cookieHeader = cookieStore.toString();
 
   // ✅ Conditionally fetch statistics for admin/manager (CACHED)
   const isAdmin = initialUser?.role === "admin" || initialUser?.role === "manager";
-  const initialStats = isAdmin ? await getCachedUserStatistics() : undefined;
+  const initialStats = isAdmin ? await getCachedUserStatistics(cookieHeader) : undefined;
 
   return (
     <DashboardClient

@@ -1,10 +1,11 @@
 // src/lib/error-handler.test.ts
 /**
  * Unit tests for handleApiError function
- * 
+ *
  * Tests the centralized error handling pattern (ADR-FE-004)
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { describe, it, expect, vi, beforeEach } from "vitest"
 import { AxiosError } from "axios"
 import { handleApiError, isErrorType, type ApiErrorResponse } from "./error-handler"
 

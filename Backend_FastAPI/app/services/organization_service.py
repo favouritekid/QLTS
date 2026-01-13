@@ -1632,19 +1632,20 @@ async def get_organization_tree_with_aggregation(
 
 async def get_programs_by_unit_tree(
     db: AsyncSession,
-    unit_id: int,
+    unit_id: Optional[int] = None,
     search_term: Optional[str] = None
 ) -> List[models.MajorProgram]:
     """
     Get all programs belonging to a unit and all its descendants.
+    If unit_id is None, returns ALL programs (flat list).
     
     ✅ SPRINT 3 REFACTORED: Now uses OrganizationRepository for data access.
     """
-    if not unit_id:
-        return []
-
-    # ✅ Use Repository for CTE query and program search
     repo = OrganizationRepository(db)
+
+    # If no unit specified, return ALL programs
+    if not unit_id:
+        return await repo.get_all_major_programs(search_term=search_term)
     
     # Get all related unit IDs using recursive CTE
     all_related_unit_ids = await repo.get_descendant_unit_ids(unit_id)

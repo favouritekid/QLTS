@@ -13,8 +13,8 @@ import type {
   AdmissionPathUpdate,
   ActivationValidationResponse,
   ResolvedDocumentResponse,
-  CoverageMatrixResponse,
 } from '@/lib/zod/admission-path'
+import type { CoverageMatrixResponse } from '@/app/(dashboard)/admin/admission-config/_components/shared/types'
 
 // ============================================
 // ACADEMIC YEARS
@@ -37,8 +37,8 @@ export async function getAcademicYears(): Promise<AcademicYearListResponse> {
  */
 export async function listAdmissionPaths(
   academicInfoId: number
-): Promise<AdmissionPathResponse[]> {
-  const response = await api.get<AdmissionPathResponse[]>('/api/admission-config/paths', {
+): Promise<{ total: number; items: AdmissionPathResponse[] }> {
+  const response = await api.get<{ total: number; items: AdmissionPathResponse[] }>('/api/admission-config/paths', {
     params: { academic_info_id: academicInfoId }
   })
   return response.data
@@ -155,13 +155,13 @@ export async function getPathDocuments(
 // ============================================
 
 /**
- * Get coverage matrix for a specific academic year
+ * Get coverage matrix for a specific academic info
  */
 export async function getCoverageMatrix(
-  academicYear: number
+  academicInfoId: number
 ): Promise<CoverageMatrixResponse> {
   const response = await api.get<CoverageMatrixResponse>('/api/admission-config/coverage-matrix', {
-    params: { academic_year: academicYear }
+    params: { academic_info_id: academicInfoId }
   })
   return response.data
 }

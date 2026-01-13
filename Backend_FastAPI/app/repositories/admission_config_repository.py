@@ -18,7 +18,7 @@ Usage:
 
 from typing import Literal, Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -43,6 +43,34 @@ class AdmissionConfigRepository(BaseRepository[AdmissionCriteria]):
 
     def __init__(self, db: AsyncSession):
         super().__init__(db, AdmissionCriteria)
+
+    async def get_filtered(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+        **filters
+    ) -> tuple[int, list[AdmissionCriteria]]:
+        """
+        Implement abstract method for filtered queries.
+        For Admission Config, we primarily use specific get methods.
+        This generic implementation is minimal to satisfy BaseRepository.
+        """
+        query = select(AdmissionCriteria)
+        
+        # Simple generic filtering
+        for key, value in filters.items():
+            if hasattr(AdmissionCriteria, key) and value is not None:
+                query = query.where(getattr(AdmissionCriteria, key) == value)
+                
+        # Count
+        count_query = select(func.count()).select_from(query.subquery())
+        total = await self.db.scalar(count_query) or 0
+        
+        # Pagination
+        query = query.offset(skip).limit(limit)
+        result = await self.db.execute(query)
+        
+        return total, list(result.scalars().all())
 
     # =========================================================================
     # SUBJECTS

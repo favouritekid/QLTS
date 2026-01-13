@@ -99,22 +99,10 @@ async def create_subject(
     current_user: User = Depends(require_admin_or_manager),
 ):
     """Create new subject. Requires: Admin or Manager role."""
-    repo = AdmissionConfigRepository(db)
-    
-    existing = await repo.get_subject_by_code(data.code)
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Subject with code '{data.code}' already exists"
-        )
-    
-    subject = await repo.create_subject(
-        code=data.code,
-        name_vi=data.name_vi,
-        display_order=data.display_order,
-        is_active=data.is_active,
-    )
+    service = AdmissionConfigService(db)
+    subject, callback = await service.create_subject(data, current_user)
     await db.commit()
+    await callback()
     return SubjectResponse.model_validate(subject)
 
 
@@ -127,7 +115,6 @@ async def update_subject(
 ):
     """Update existing subject. Requires: Admin or Manager role."""
     repo = AdmissionConfigRepository(db)
-    
     subject = await repo.get_subject_by_id(subject_id)
     if not subject:
         raise HTTPException(
@@ -135,13 +122,10 @@ async def update_subject(
             detail=f"Subject with ID {subject_id} not found"
         )
     
-    updated = await repo.update_subject(
-        subject,
-        name_vi=data.name_vi,
-        display_order=data.display_order,
-        is_active=data.is_active,
-    )
+    service = AdmissionConfigService(db)
+    updated, callback = await service.update_subject(subject, data, current_user)
     await db.commit()
+    await callback()
     return SubjectResponse.model_validate(updated)
 
 
@@ -152,16 +136,10 @@ async def delete_subject(
     current_user: User = Depends(require_admin_or_manager),
 ):
     """Delete subject. Requires: Admin or Manager role."""
-    repo = AdmissionConfigRepository(db)
-    
-    deleted = await repo.delete_subject(subject_id)
-    if not deleted:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Subject with ID {subject_id} not found"
-        )
-    
+    service = AdmissionConfigService(db)
+    _, callback = await service.delete_subject(subject_id, current_user)
     await db.commit()
+    await callback()
     return None
 
 
@@ -265,29 +243,13 @@ async def create_subject_group(
     current_user: User = Depends(require_admin_or_manager),
 ):
     """Create new subject group. Requires: Admin or Manager role."""
-    repo = AdmissionConfigRepository(db)
-    
-    existing = await repo.get_subject_group_by_code(data.code, with_subjects=False)
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Subject group with code '{data.code}' already exists"
-        )
-    
-    group = await repo.create_subject_group(
-        code=data.code,
-        name=data.name,
-        display_order=data.display_order,
-        is_active=data.is_active,
-    )
-    
-    # Add subject mappings if provided
-    if data.subject_ids:
-        group = await repo.update_subject_group_mappings(group.id, data.subject_ids)
-    
+    service = AdmissionConfigService(db)
+    group, callback = await service.create_subject_group(data, current_user)
     await db.commit()
+    await callback()
     
-    # Reload with subjects
+    # Reload with subjects for response
+    repo = AdmissionConfigRepository(db)
     group = await repo.get_subject_group_by_id(group.id, with_subjects=True)
     return _build_subject_group_response(group)
 
@@ -301,7 +263,6 @@ async def update_subject_group(
 ):
     """Update existing subject group. Requires: Admin or Manager role."""
     repo = AdmissionConfigRepository(db)
-    
     group = await repo.get_subject_group_by_id(group_id, with_subjects=True)
     if not group:
         raise HTTPException(
@@ -309,19 +270,10 @@ async def update_subject_group(
             detail=f"Subject group with ID {group_id} not found"
         )
     
-    # Update basic fields
-    updated = await repo.update_subject_group(
-        group,
-        name=data.name,
-        display_order=data.display_order,
-        is_active=data.is_active,
-    )
-    
-    # Update subject mappings if provided
-    if data.subject_ids is not None:
-        updated = await repo.update_subject_group_mappings(group_id, data.subject_ids)
-    
+    service = AdmissionConfigService(db)
+    updated, callback = await service.update_subject_group(group, data, current_user)
     await db.commit()
+    await callback()
     
     # Reload with subjects
     updated = await repo.get_subject_group_by_id(group_id, with_subjects=True)
@@ -335,16 +287,10 @@ async def delete_subject_group(
     current_user: User = Depends(require_admin_or_manager),
 ):
     """Delete subject group. Requires: Admin or Manager role."""
-    repo = AdmissionConfigRepository(db)
-    
-    deleted = await repo.delete_subject_group(group_id)
-    if not deleted:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Subject group with ID {group_id} not found"
-        )
-    
+    service = AdmissionConfigService(db)
+    _, callback = await service.delete_subject_group(group_id, current_user)
     await db.commit()
+    await callback()
     return None
 
 
@@ -399,26 +345,10 @@ async def create_method(
     
     Requires: Admin or Manager role.
     """
-    repo = AdmissionConfigRepository(db)
-    
-    # Check if code already exists
-    existing = await repo.get_method_by_code(data.code)
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Method with code '{data.code}' already exists"
-        )
-    
-    method = await repo.create_method(
-        code=data.code,
-        name=data.name,
-        description=data.description,
-        requires_gpa=data.requires_gpa,
-        requires_subject_scores=data.requires_subject_scores,
-        display_order=data.display_order,
-        is_active=data.is_active,
-    )
+    service = AdmissionConfigService(db)
+    method, callback = await service.create_method(data, current_user)
     await db.commit()
+    await callback()
     
     return AdmissionMethodResponse.model_validate(method)
 
@@ -436,7 +366,6 @@ async def update_method(
     Requires: Admin or Manager role.
     """
     repo = AdmissionConfigRepository(db)
-    
     method = await repo.get_method_by_id(method_id)
     if not method:
         raise HTTPException(
@@ -444,16 +373,10 @@ async def update_method(
             detail=f"Method with ID {method_id} not found"
         )
     
-    updated = await repo.update_method(
-        method,
-        name=data.name,
-        description=data.description,
-        requires_gpa=data.requires_gpa,
-        requires_subject_scores=data.requires_subject_scores,
-        display_order=data.display_order,
-        is_active=data.is_active,
-    )
+    service = AdmissionConfigService(db)
+    updated, callback = await service.update_method(method, data, current_user)
     await db.commit()
+    await callback()
     
     return AdmissionMethodResponse.model_validate(updated)
 
@@ -469,16 +392,10 @@ async def delete_method(
     
     Requires: Admin or Manager role.
     """
-    repo = AdmissionConfigRepository(db)
-    
-    deleted = await repo.delete_method(method_id)
-    if not deleted:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Method with ID {method_id} not found"
-        )
-    
+    service = AdmissionConfigService(db)
+    _, callback = await service.delete_method(method_id, current_user)
     await db.commit()
+    await callback()
     return None
 
 

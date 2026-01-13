@@ -8,6 +8,15 @@ import { FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/comp
 import { Plus, Trash2, Users, UserCheck } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 
+interface FamilyMember {
+  id: string;
+  full_name: string;
+  relationship: string;
+  phone: string;
+  occupation: string;
+  is_primary_guardian: boolean;
+}
+
 interface FamilyTabProps {
   form: UseFormReturn<FieldValues>
   isEditable: boolean
@@ -22,8 +31,8 @@ export function FamilyTab({ form, isEditable }: FamilyTabProps) {
   // Helper to get original index
   const getOriginalIndex = (id: string) => fields.findIndex(f => f.id === id)
 
-  const guardians = fields.filter((f: any) => f.is_primary_guardian)
-  const others = fields.filter((f: any) => !f.is_primary_guardian)
+  const guardians = fields.filter((f: Partial<FamilyMember>) => f.is_primary_guardian)
+  const others = fields.filter((f: Partial<FamilyMember>) => !f.is_primary_guardian)
 
   const addMember = (isPrimary: boolean) => {
     append({

@@ -186,3 +186,261 @@ class AdmissionConfigService:
     ) -> AdmissionCriteria | None:
         """Get criteria by ID."""
         return await self.repo.get_criteria_by_id(criteria_id, load_level=load_level)
+
+    # =========================================================================
+    # SUBJECT CRUD (Phase 1 Refactor)
+    # =========================================================================
+
+    async def create_subject(
+        self,
+        data: "SubjectCreate",
+        user: User,
+    ) -> tuple["Subject", Callable[[], Any]]:
+        """
+        Create new Subject.
+        
+        Validation:
+        - code must be unique
+        
+        Returns:
+            Tuple of (created subject, callback)
+        """
+        from app.schemas.admission_config import SubjectCreate
+        from app.models.admission_config import Subject
+        
+        # Check for duplicate code
+        existing = await self.repo.get_subject_by_code(data.code)
+        if existing:
+            raise DuplicateResourceError(f"Subject with code '{data.code}' already exists")
+
+        subject = await self.repo.create_subject(
+            code=data.code,
+            name_vi=data.name_vi,
+            display_order=data.display_order,
+            is_active=data.is_active,
+        )
+
+        return subject, _noop_callback
+
+    async def update_subject(
+        self,
+        subject: "Subject",
+        data: "SubjectUpdate",
+        user: User,
+    ) -> tuple["Subject", Callable[[], Any]]:
+        """
+        Update existing Subject.
+        
+        Returns:
+            Tuple of (updated subject, callback)
+        """
+        updates = {}
+        if data.name_vi is not None:
+            updates["name_vi"] = data.name_vi
+        if data.display_order is not None:
+            updates["display_order"] = data.display_order
+        if data.is_active is not None:
+            updates["is_active"] = data.is_active
+
+        if updates:
+            subject = await self.repo.update_subject(subject, **updates)
+
+        return subject, _noop_callback
+
+    async def delete_subject(
+        self,
+        subject_id: int,
+        user: User,
+    ) -> tuple[bool, Callable[[], Any]]:
+        """
+        Delete Subject by ID.
+        
+        Returns:
+            Tuple of (success, callback)
+        
+        Raises:
+            ResourceNotFoundError if subject not found
+        """
+        success = await self.repo.delete_subject(subject_id)
+        if not success:
+            raise ResourceNotFoundError(f"Subject with ID {subject_id} not found")
+
+        return success, _noop_callback
+
+    # =========================================================================
+    # SUBJECT GROUP CRUD (Phase 1 Refactor)
+    # =========================================================================
+
+    async def create_subject_group(
+        self,
+        data: "SubjectGroupCreate",
+        user: User,
+    ) -> tuple["SubjectGroup", Callable[[], Any]]:
+        """
+        Create new SubjectGroup.
+        
+        Validation:
+        - code must be unique
+        
+        Returns:
+            Tuple of (created group, callback)
+        """
+        from app.schemas.admission_config import SubjectGroupCreate
+        from app.models.admission_config import SubjectGroup
+        
+        # Check for duplicate code
+        existing = await self.repo.get_subject_group_by_code(data.code, with_subjects=False)
+        if existing:
+            raise DuplicateResourceError(f"Subject group with code '{data.code}' already exists")
+
+        group = await self.repo.create_subject_group(
+            code=data.code,
+            name=data.name,
+            display_order=data.display_order,
+            is_active=data.is_active,
+        )
+
+        # Add subject mappings if provided
+        if data.subject_ids:
+            group = await self.repo.update_subject_group_mappings(group.id, data.subject_ids)
+
+        return group, _noop_callback
+
+    async def update_subject_group(
+        self,
+        group: "SubjectGroup",
+        data: "SubjectGroupUpdate",
+        user: User,
+    ) -> tuple["SubjectGroup", Callable[[], Any]]:
+        """
+        Update existing SubjectGroup.
+        
+        Returns:
+            Tuple of (updated group, callback)
+        """
+        updates = {}
+        if data.name is not None:
+            updates["name"] = data.name
+        if data.display_order is not None:
+            updates["display_order"] = data.display_order
+        if data.is_active is not None:
+            updates["is_active"] = data.is_active
+
+        if updates:
+            group = await self.repo.update_subject_group(group, **updates)
+
+        # Update subject mappings if provided
+        if data.subject_ids is not None:
+            group = await self.repo.update_subject_group_mappings(group.id, data.subject_ids)
+
+        return group, _noop_callback
+
+    async def delete_subject_group(
+        self,
+        group_id: int,
+        user: User,
+    ) -> tuple[bool, Callable[[], Any]]:
+        """
+        Delete SubjectGroup by ID.
+        
+        Returns:
+            Tuple of (success, callback)
+        
+        Raises:
+            ResourceNotFoundError if group not found
+        """
+        success = await self.repo.delete_subject_group(group_id)
+        if not success:
+            raise ResourceNotFoundError(f"Subject group with ID {group_id} not found")
+
+        return success, _noop_callback
+
+    # =========================================================================
+    # ADMISSION METHOD CRUD (Phase 1 Refactor)
+    # =========================================================================
+
+    async def create_method(
+        self,
+        data: "AdmissionMethodCreate",
+        user: User,
+    ) -> tuple["AdmissionMethod", Callable[[], Any]]:
+        """
+        Create new AdmissionMethod.
+        
+        Validation:
+        - code must be unique
+        
+        Returns:
+            Tuple of (created method, callback)
+        """
+        from app.schemas.admission_config import AdmissionMethodCreate
+        from app.models.admission_config import AdmissionMethod
+        
+        # Check for duplicate code
+        existing = await self.repo.get_method_by_code(data.code)
+        if existing:
+            raise DuplicateResourceError(f"Method with code '{data.code}' already exists")
+
+        method = await self.repo.create_method(
+            code=data.code,
+            name=data.name,
+            description=data.description,
+            requires_gpa=data.requires_gpa,
+            requires_subject_scores=data.requires_subject_scores,
+            display_order=data.display_order,
+            is_active=data.is_active,
+        )
+
+        return method, _noop_callback
+
+    async def update_method(
+        self,
+        method: "AdmissionMethod",
+        data: "AdmissionMethodUpdate",
+        user: User,
+    ) -> tuple["AdmissionMethod", Callable[[], Any]]:
+        """
+        Update existing AdmissionMethod.
+        
+        Returns:
+            Tuple of (updated method, callback)
+        """
+        updates = {}
+        if data.name is not None:
+            updates["name"] = data.name
+        if data.description is not None:
+            updates["description"] = data.description
+        if data.requires_gpa is not None:
+            updates["requires_gpa"] = data.requires_gpa
+        if data.requires_subject_scores is not None:
+            updates["requires_subject_scores"] = data.requires_subject_scores
+        if data.display_order is not None:
+            updates["display_order"] = data.display_order
+        if data.is_active is not None:
+            updates["is_active"] = data.is_active
+
+        if updates:
+            method = await self.repo.update_method(method, **updates)
+
+        return method, _noop_callback
+
+    async def delete_method(
+        self,
+        method_id: int,
+        user: User,
+    ) -> tuple[bool, Callable[[], Any]]:
+        """
+        Delete AdmissionMethod by ID.
+        
+        Returns:
+            Tuple of (success, callback)
+        
+        Raises:
+            ResourceNotFoundError if method not found
+        """
+        success = await self.repo.delete_method(method_id)
+        if not success:
+            raise ResourceNotFoundError(f"Method with ID {method_id} not found")
+
+        return success, _noop_callback
+

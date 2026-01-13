@@ -90,17 +90,22 @@ export async function deleteAdmission(id: number): Promise<void> {
 /**
  * Upload admission document
  */
+export interface DocumentUploadResponse {
+  file_path: string;
+  uploaded_at: string;
+}
+
 export async function uploadAdmissionDocument(
   id: number,
   docCode: string,
   file: File
-): Promise<any> {
+): Promise<DocumentUploadResponse> {
     const formData = new FormData()
     formData.append("file", file)
-    
+
     // Note: No explicit Content-Type header needed, axios/browser sets it with boundary
-    const response = await api.post(
-        `/api/admissions/${id}/documents/${docCode}/upload`, 
+    const response = await api.post<DocumentUploadResponse>(
+        `/api/admissions/${id}/documents/${docCode}/upload`,
         formData
     )
     return response.data

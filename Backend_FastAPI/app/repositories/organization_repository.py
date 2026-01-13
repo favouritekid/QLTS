@@ -841,6 +841,42 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
         return list(result.scalars().all())
 
     # =========================================================================
+    # MAJOR PROGRAMS (Dropdown / Flat List)
+    # =========================================================================
+
+    async def get_all_major_programs(
+        self,
+        search_term: Optional[str] = None,
+        is_active: bool = True
+    ) -> List[models.MajorProgram]:
+        """
+        Get all major programs (flat list).
+        
+        Args:
+            search_term: Optional search term for name filtering
+            is_active: Filter by active status
+            
+        Returns:
+            List of MajorProgram objects
+        """
+        # ✅ FIX: Eager load offerings to prevent MissingGreenlet error during response validation
+        query = select(models.MajorProgram).options(
+            selectinload(models.MajorProgram.offerings)
+        )
+        
+        if is_active:
+             query = query.where(models.MajorProgram.is_active == True)
+             
+        if search_term:
+            safe_pattern = f"%{search_term.strip()}%"
+            query = query.filter(models.MajorProgram.name.ilike(safe_pattern))
+            
+        query = query.order_by(models.MajorProgram.name)
+        
+        result = await self.db.execute(query)
+        return list(result.scalars().all())
+
+    # =========================================================================
     # PROGRAM OFFERINGS (Dropdown / Flat List)
     # =========================================================================
 
