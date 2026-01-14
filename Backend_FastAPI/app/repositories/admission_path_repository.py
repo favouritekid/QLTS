@@ -21,6 +21,7 @@ from app.models.admission_config import (
     DocumentGroupItem,
 )
 from app.models.offering_academic_info import OfferingAcademicInfo
+from app.models.program_offering import ProgramOffering
 from app.repositories.base import BaseRepository
 
 
@@ -55,9 +56,9 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
             select(AdmissionPath)
             .where(AdmissionPath.id == path_id)
             .options(
-                selectinload(AdmissionPath.academic_info).selectinload(
-                    OfferingAcademicInfo.offering
-                ),
+                selectinload(AdmissionPath.academic_info)
+                .selectinload(OfferingAcademicInfo.offering)
+                .selectinload(ProgramOffering.program),
                 selectinload(AdmissionPath.admission_method),
                 selectinload(AdmissionPath.activator),
                 # Eager load criteria with subject groups (N+1 prevention)
@@ -83,6 +84,9 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
             select(AdmissionPath)
             .where(AdmissionPath.academic_info_id == academic_info_id)
             .options(
+                selectinload(AdmissionPath.academic_info)
+                .selectinload(OfferingAcademicInfo.offering)
+                .selectinload(ProgramOffering.program),
                 selectinload(AdmissionPath.admission_method),
                 selectinload(AdmissionPath.activator),
             )
@@ -132,6 +136,9 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
                 AdmissionPath.status == "active"
             )
             .options(
+                selectinload(AdmissionPath.academic_info)
+                .selectinload(OfferingAcademicInfo.offering)
+                .selectinload(ProgramOffering.program),
                 selectinload(AdmissionPath.admission_method),
                 # Eager load criteria with subject groups (for LeadApplicationForm)
                 selectinload(AdmissionPath.criteria).selectinload(
@@ -261,8 +268,10 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
         
         # Add eager loading
         query = query.options(
+            selectinload(AdmissionPath.academic_info)
+            .selectinload(OfferingAcademicInfo.offering)
+            .selectinload(ProgramOffering.program),
             selectinload(AdmissionPath.admission_method),
-            selectinload(AdmissionPath.academic_info),
         )
         
         # Pagination

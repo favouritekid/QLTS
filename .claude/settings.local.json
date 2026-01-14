@@ -5,7 +5,10 @@
       "Bash(wsl bash:*)",
       "Bash(npm run build:*)",
       "Bash(npm run lint)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(python:*)"
     ]
   }
 }

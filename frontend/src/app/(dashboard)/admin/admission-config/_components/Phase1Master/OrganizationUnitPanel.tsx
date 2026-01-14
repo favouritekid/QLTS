@@ -7,6 +7,7 @@
 
 "use client";
 
+import { useMemo } from "react";
 import { Building2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -59,24 +60,106 @@ export function OrganizationUnitPanel() {
   const updateMutation = useUpdateOrganizationUnit();
   const deleteMutation = useDeleteOrganizationUnit();
 
-  // Enhance columns to show parent unit name
-  const enhancedColumns: CRUDTableColumn<OrganizationUnit>[] = COLUMNS.map((col) => {
-    if (col.key === "parent_id") {
-      return {
-        ...col,
-        render: (item: OrganizationUnit) => {
-          if (!item.parent_id) return <span className="text-muted-foreground">—</span>;
-          const parent = data.find((u) => u.id === item.parent_id);
-          return parent ? (
-            <span className="text-sm">{parent.name}</span>
-          ) : (
-            <span className="text-sm text-muted-foreground">Unit #{item.parent_id}</span>
-          );
-        },
+  // ============================================
+  // HIERARCHY HELPERS
+  // ============================================
+
+  // ============================================
+  // HIERARCHY HELPERS
+  // ============================================
+
+  // Helper to flatten nested tree
+  const flattenTree = (units: OrganizationUnit[]): (OrganizationUnit & { level: number })[] => {
+    const result: (OrganizationUnit & { level: number })[] = [];
+
+    // Sort by name for display consistency
+    const sortedUnits = [...units].sort((a, b) => a.name.localeCompare(b.name));
+
+    sortedUnits.forEach((unit) => {
+      // Add current unit
+      // Since backend returns nested structure, we calculate level during recursive flattening
+      // But for the root call, we need a starting level (0)
+      // Actually, flattening logic needs to carry level.
+      
+      const traverse = (node: OrganizationUnit, level: number) => {
+        result.push({ ...node, level });
+        
+        if (node.children && node.children.length > 0) {
+           // Sort children
+           const sortedChildren = [...node.children].sort((a, b) => a.name.localeCompare(b.name));
+           sortedChildren.forEach(child => traverse(child, level + 1));
+        }
       };
-    }
-    return col;
-  });
+
+      traverse(unit, 0);
+    });
+
+    return result;
+  };
+
+  // Memoize sorted data
+  const sortedData = useMemo(() => flattenTree(data), [data]);
+
+  // Create flat lookup for finding parents
+  const allUnitsFlat = useMemo(() => {
+    const flatten = (units: OrganizationUnit[]): OrganizationUnit[] => {
+      let result: OrganizationUnit[] = [];
+      units.forEach((unit) => {
+        result.push(unit);
+        if (unit.children && unit.children.length > 0) {
+          result = result.concat(flatten(unit.children));
+        }
+      });
+      return result;
+    };
+    return flatten(data);
+  }, [data]);
+
+  // Enhance columns to show parent unit name and indentation
+  const enhancedColumns: CRUDTableColumn<OrganizationUnit & { level: number }>[] = [
+    {
+      key: "name",
+      header: "Name",
+      render: (item: OrganizationUnit) => {
+        // Cast to any to access level added by buildHierarchy
+        const level = (item as any).level || 0;
+        return (
+          <div style={{ paddingLeft: `${level * 24}px` }} className="flex items-center">
+            {level > 0 && <span className="text-muted-foreground mr-2">└─</span>}
+            <span className={level === 0 ? "font-medium" : ""}>{item.name}</span>
+          </div>
+        );
+      },
+    },
+    { key: "type", header: "Type", width: "120px" },
+    {
+      key: "parent_id",
+      header: "Parent Unit",
+      width: "200px",
+      render: (item: OrganizationUnit) => {
+        if (!item.parent_id) return <span className="text-muted-foreground">—</span>;
+        const parent = allUnitsFlat.find((u: OrganizationUnit) => u.id === item.parent_id);
+        return parent ? (
+          <span className="text-sm">{parent.name}</span>
+        ) : (
+          <span className="text-sm text-muted-foreground">Unit #{item.parent_id}</span>
+        );
+      },
+    },
+    { key: "description", header: "Description" },
+    { key: "is_active", header: "Status", width: "100px" },
+  ];
+
+  const mapItemToFormData = (item: OrganizationUnit): BaseFormData => {
+    const formData: any = {
+      name: item.name,
+      description: item.description || "",
+      is_active: item.is_active,
+      type: item.type,
+      parent_id: item.parent_id,
+    };
+    return formData;
+  };
 
   const handleCreate = async (formData: BaseFormData) => {
     // Transform formData to match backend OrganizationUnitCreate schema
@@ -167,8 +250,9 @@ export function OrganizationUnitPanel() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__none__">None (top-level unit)</SelectItem>
-              {data
+              {allUnitsFlat
                 .filter((unit) => unit.id !== item?.id) // Prevent self-parenting
+                .sort((a, b) => a.name.localeCompare(b.name))
                 .map((unit) => (
                   <SelectItem key={unit.id} value={unit.id.toString()}>
                     {unit.name} ({unit.type})
@@ -211,18 +295,19 @@ export function OrganizationUnitPanel() {
         </p>
       </div>
 
-      <CRUDTable
+      <CRUDTable<OrganizationUnit & { level: number }>
         title="Organization Unit"
         description="Departments, faculties, and other organizational units"
         icon={<Building2 className="h-5 w-5 text-primary" />}
         columns={enhancedColumns}
-        data={data}
+        data={sortedData}
         isLoading={isLoading}
         onCreate={handleCreate}
         onUpdate={handleUpdate}
         onDelete={handleDelete}
         renderForm={renderForm}
         initialFormData={initialFormData}
+        mapItemToFormData={mapItemToFormData}
       />
     </div>
   );

@@ -27,7 +27,14 @@ import type { BaseEntity, BaseFormData, CRUDTableColumn } from "./types";
 // TYPES
 // ============================================
 
-interface CRUDTableProps<T extends BaseEntity> {
+// Minimal interface required for CRUD operations
+interface CRUDEntity {
+  id: number;
+  name?: string; // Optional since not all entities have a name field
+  is_active: boolean;
+}
+
+interface CRUDTableProps<T extends CRUDEntity> {
   title: string;
   description: string;
   icon?: React.ReactNode;
@@ -44,6 +51,8 @@ interface CRUDTableProps<T extends BaseEntity> {
     isEdit: boolean
   ) => React.ReactNode;
   initialFormData: () => BaseFormData;
+  // Optional mapper to transform item to form data (useful for complex objects or type conversions)
+  mapItemToFormData?: (item: T) => BaseFormData;
   emptyMessage?: string;
   showActions?: boolean;
   allowCreate?: boolean;
@@ -55,7 +64,7 @@ interface CRUDTableProps<T extends BaseEntity> {
 // COMPONENT
 // ============================================
 
-export function CRUDTable<T extends BaseEntity>({
+export function CRUDTable<T extends CRUDEntity>({
   title,
   description,
   icon,
@@ -67,6 +76,7 @@ export function CRUDTable<T extends BaseEntity>({
   onDelete,
   renderForm,
   initialFormData,
+  mapItemToFormData,
   emptyMessage = "No items configured. Click \"Add New\" to create one.",
   showActions = true,
   allowCreate = true,
@@ -90,18 +100,25 @@ export function CRUDTable<T extends BaseEntity>({
 
   const handleOpenEdit = (item: T) => {
     setEditItem(item);
-    setFormData({
-      code: item.code,
-      name: item.name,
-      description: item.description || "",
-      display_order: item.display_order,
-      is_active: item.is_active,
-    });
+    if (mapItemToFormData) {
+      setFormData(mapItemToFormData(item));
+    } else {
+      // Default mapping for BaseEntity types
+      const baseItem = item as any;
+      setFormData({
+        code: baseItem.code || "",
+        name: baseItem.name || "",
+        description: baseItem.description || "",
+        display_order: baseItem.display_order || 0,
+        is_active: baseItem.is_active,
+      });
+    }
     setDialogOpen(true);
   };
 
-  const handleDelete = async (id: number, name: string) => {
-    if (confirm(`Are you sure you want to delete "${name}"?`)) {
+  const handleDelete = async (id: number, name?: string) => {
+    const itemLabel = name || `item #${id}`;
+    if (confirm(`Are you sure you want to delete "${itemLabel}"?`)) {
       try {
         await onDelete(id);
       } catch (error) {
@@ -220,41 +237,47 @@ export function CRUDTable<T extends BaseEntity>({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {data.map((item) => (
-                  <TableRow key={item.id}>
-                    {columns.map((column) => (
-                      <TableCell key={String(column.key)}>
-                        {renderColumnValue(item, column)}
-                      </TableCell>
-                    ))}
-                    {showActions && (allowEdit || allowDelete) && (
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-2">
-                          {allowEdit && (
-                            <Button
-                              key="edit"
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => handleOpenEdit(item)}
-                            >
-                              <Pencil className="h-4 w-4" />
-                            </Button>
+                {data.map((item) => {
+                  const isGroupHeader = (item as any).isGroupHeader;
+
+                  return (
+                    <TableRow key={item.id} className={isGroupHeader ? "bg-muted/30" : ""}>
+                      {columns.map((column) => (
+                        <TableCell key={String(column.key)}>
+                          {renderColumnValue(item, column)}
+                        </TableCell>
+                      ))}
+                      {showActions && (allowEdit || allowDelete) && (
+                        <TableCell className="text-right">
+                          {!isGroupHeader && (
+                            <div className="flex justify-end gap-2">
+                              {allowEdit && (
+                                <Button
+                                  key="edit"
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => handleOpenEdit(item)}
+                                >
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                              )}
+                              {allowDelete && (
+                                <Button
+                                  key="delete"
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => handleDelete(item.id, item.name)}
+                                >
+                                  <Trash2 className="h-4 w-4 text-destructive" />
+                                </Button>
+                              )}
+                            </div>
                           )}
-                          {allowDelete && (
-                            <Button
-                              key="delete"
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => handleDelete(item.id, item.name)}
-                            >
-                              <Trash2 className="h-4 w-4 text-destructive" />
-                            </Button>
-                          )}
-                        </div>
-                      </TableCell>
-                    )}
-                  </TableRow>
-                ))}
+                        </TableCell>
+                      )}
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           </div>

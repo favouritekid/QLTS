@@ -138,7 +138,7 @@ export function DocumentTypePanel() {
         </p>
       </div>
 
-      <CRUDTable
+      <CRUDTable<DocumentType>
         title="Document Type"
         description="Types of documents required for admission applications"
         icon={<FileText className="h-5 w-5 text-primary" />}

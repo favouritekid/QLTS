@@ -114,6 +114,14 @@ export function SubjectTable() {
     display_order: data.length + 1,
   });
 
+  const mapItemToFormData = (item: Subject) => ({
+    code: item.code,
+    name_vi: item.name_vi,
+    name_en: item.name_en || "",
+    display_order: item.display_order,
+    is_active: item.is_active,
+  });
+
   return (
     <CRUDTable
       title="Subject"
@@ -127,6 +135,7 @@ export function SubjectTable() {
       onDelete={handleDelete}
       renderForm={renderForm}
       initialFormData={initialFormData}
+      mapItemToFormData={mapItemToFormData}
     />
   );
 }

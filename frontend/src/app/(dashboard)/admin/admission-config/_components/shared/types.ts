@@ -172,6 +172,7 @@ export interface OrganizationUnit {
   is_active: boolean;
   created_at?: string;
   updated_at?: string;
+  children?: OrganizationUnit[];
 }
 
 export type OfferingType = BaseEntity;

@@ -16,6 +16,7 @@ from decimal import Decimal
 from typing import Callable, List, Optional, Tuple  # ✅ ADD Callable, Tuple for transaction pattern
 
 import structlog
+from sqlalchemy import update
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from .. import models, schemas
@@ -868,7 +869,7 @@ async def create_program_offering(
         repo = OrganizationRepository(db)
         
         # Verify program exists
-        program = await repo.get_major_program_by_id(offering_in.program_id)
+        program = await repo.get_major_program_by_id_full(offering_in.program_id)
         if not program:
             raise ResourceNotFoundError(
                 detail=f"Major program with id {offering_in.program_id} not found."
@@ -1025,7 +1026,6 @@ async def delete_program_offering(
         db.add(db_offering)
 
         # ✅ CASCADE: Soft delete related academic info
-        from sqlalchemy import update
         stmt_academic = (
             update(models.OfferingAcademicInfo)
             .where(models.OfferingAcademicInfo.offering_id == offering_id)

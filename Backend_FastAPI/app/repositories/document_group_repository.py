@@ -7,8 +7,8 @@ Data access for DocumentGroup entities with:
 - No business logic (pure data access)
 """
 
-from typing import List, Optional
-from sqlalchemy import select, delete
+from typing import List, Optional, Tuple
+from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -201,3 +201,65 @@ class DocumentGroupRepository(BaseRepository[DocumentGroup]):
         result = await self.db.execute(stmt)
         await self.db.flush()
         return result.rowcount
+
+    # =========================================================================
+    # FILTERED QUERIES (Required by BaseRepository)
+    # =========================================================================
+
+    async def get_filtered(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+        **filters
+    ) -> Tuple[int, List[DocumentGroup]]:
+        """
+        Get filtered document groups with pagination.
+
+        Filters:
+            - offering_type_id: int
+            - admission_method_id: int (use None for shared groups)
+            - is_active: bool
+        """
+        query = select(DocumentGroup)
+        count_query = select(func.count()).select_from(DocumentGroup)
+
+        # Apply filters
+        if filters.get("offering_type_id") is not None:
+            query = query.where(
+                DocumentGroup.offering_type_id == filters["offering_type_id"]
+            )
+            count_query = count_query.where(
+                DocumentGroup.offering_type_id == filters["offering_type_id"]
+            )
+
+        if "admission_method_id" in filters:
+            method_id = filters["admission_method_id"]
+            if method_id is None:
+                query = query.where(DocumentGroup.admission_method_id.is_(None))
+                count_query = count_query.where(DocumentGroup.admission_method_id.is_(None))
+            else:
+                query = query.where(DocumentGroup.admission_method_id == method_id)
+                count_query = count_query.where(DocumentGroup.admission_method_id == method_id)
+
+        if filters.get("is_active") is not None:
+            query = query.where(DocumentGroup.is_active == filters["is_active"])
+            count_query = count_query.where(DocumentGroup.is_active == filters["is_active"])
+
+        # Add eager loading
+        query = query.options(
+            selectinload(DocumentGroup.offering_type),
+            selectinload(DocumentGroup.admission_method),
+            selectinload(DocumentGroup.items)
+            .selectinload(DocumentGroupItem.document_type),
+        )
+
+        # Pagination and ordering
+        query = query.offset(skip).limit(limit).order_by(
+            DocumentGroup.code
+        )
+
+        # Execute
+        total = await self.db.execute(count_query)
+        result = await self.db.execute(query)
+
+        return (total.scalar() or 0, list(result.scalars().all()))

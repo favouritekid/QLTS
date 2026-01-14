@@ -216,8 +216,7 @@ export function ContextSelector({ onContextSelected }: ContextSelectorProps) {
                 ) : filteredOfferings.length > 0 ? (
                   filteredOfferings.map((offering: ProgramOffering) => (
                     <SelectItem key={offering.id} value={offering.id.toString()}>
-                      {offering.name}
-                      <span className="text-muted-foreground ml-2">({offering.code})</span>
+                      {offering.program?.name || `Program #${offering.program_id}`} - {offering.offering_type}
                     </SelectItem>
                   ))
                 ) : (

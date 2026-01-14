@@ -359,6 +359,21 @@ export function ProgramOfferingPanel() {
     offering_type_id: null,
   });
 
+  const mapItemToFormData = (item: ProgramOffering): BaseFormData => {
+    // Map ProgramOffering to form data structure
+    // Find the offering_type_id from the offering type name
+    const offeringType = offeringTypes.find((t: { id: number; name: string }) => t.name === item.offering_type);
+
+    return {
+      program_id: item.program_id,
+      offering_type_id: offeringType?.id || null,
+      is_active: item.is_active,
+      duration_semesters: item.duration_semesters,
+      total_credits: item.total_credits,
+      scoring_rules: item.scoring_rules,
+    } as any;
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -382,7 +397,7 @@ export function ProgramOfferingPanel() {
         </div>
       )}
 
-      <CRUDTable
+      <CRUDTable<ProgramOffering>
         title="Program Offering"
         description="Combinations of major programs and offering types"
         icon={<BookOpen className="h-5 w-5 text-primary" />}
@@ -394,6 +409,7 @@ export function ProgramOfferingPanel() {
         onDelete={handleDelete}
         renderForm={renderForm}
         initialFormData={initialFormData}
+        mapItemToFormData={mapItemToFormData}
       />
     </div>
   );

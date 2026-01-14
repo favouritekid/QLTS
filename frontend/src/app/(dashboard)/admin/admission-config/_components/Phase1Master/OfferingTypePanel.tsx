@@ -139,7 +139,7 @@ export function OfferingTypePanel() {
         </p>
       </div>
 
-      <CRUDTable
+      <CRUDTable<OfferingType>
         title="Offering Type"
         description="Types of program offerings (Regular, Part-time, Distance learning)"
         icon={<Layers className="h-5 w-5 text-primary" />}

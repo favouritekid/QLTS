@@ -130,17 +130,17 @@ export async function getAcademicInfoByOffering(offeringId: number) {
 }
 
 export async function createOfferingAcademicInfo(data: AcademicInfoCreate) {
-  const response = await api.post(`/api/admin/offerings/${data.offering_id}/academic-info`, data);
+  const response = await api.post(`/api/offerings/${data.offering_id}/academic-info`, data);
   return response.data;
 }
 
 export async function updateOfferingAcademicInfo(id: number, data: AcademicInfoUpdate) {
-  const response = await api.patch(`/api/admin/academic-info/${id}`, data);
+  const response = await api.patch(`/api/academic-info/${id}`, data);
   return response.data;
 }
 
 export async function deleteOfferingAcademicInfo(id: number) {
-  await api.delete(`/api/admin/academic-info/${id}`);
+  await api.delete(`/api/academic-info/${id}`);
 }
 
 // ============================================

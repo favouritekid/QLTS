@@ -8,6 +8,7 @@
 
 "use client";
 
+import { useMemo } from "react";
 import { GraduationCap } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -34,34 +35,124 @@ export function MajorProgramPanel() {
   const updateMutation = useUpdateMajorProgram();
   const deleteMutation = useDeleteMajorProgram();
 
+  // Group and sort data by degree level
+  const groupedData = useMemo(() => {
+    // Define the order of degree levels
+    const levelOrder = ["Đại học", "Cao đẳng", "Trung cấp", "Sơ cấp"];
+
+    // Group by degree_level
+    const grouped = data.reduce((acc: Record<string, MajorProgram[]>, program: MajorProgram) => {
+      const level = program.degree_level || "Khác";
+      if (!acc[level]) acc[level] = [];
+      acc[level].push(program);
+      return acc;
+    }, {} as Record<string, MajorProgram[]>);
+
+    // Sort programs within each group by name
+    Object.keys(grouped).forEach(level => {
+      grouped[level].sort((a: MajorProgram, b: MajorProgram) => a.name.localeCompare(b.name));
+    });
+
+    // Sort groups by predefined order
+    return levelOrder
+      .filter(level => grouped[level])
+      .map(level => ({ level, programs: grouped[level] }))
+      .concat(
+        Object.keys(grouped)
+          .filter(level => !levelOrder.includes(level))
+          .map(level => ({ level, programs: grouped[level] }))
+      );
+  }, [data]);
+
+  // Flatten grouped data for table display with level markers
+  const flattenedData = useMemo(() => {
+    const result: (MajorProgram & { isGroupHeader?: boolean; groupLevel?: string })[] = [];
+
+    groupedData.forEach((group, groupIndex) => {
+      // Add group header marker with unique ID to avoid key conflicts
+      result.push({
+        id: `header-${groupIndex}` as any, // Unique string-based ID for header
+        code: group.level,
+        name: group.level,
+        degree_level: group.level,
+        unit_id: 0,
+        is_active: true,
+        is_heavy: false,
+        isGroupHeader: true,
+        groupLevel: group.level,
+      } as any);
+
+      // Add programs in this group
+      group.programs.forEach((program: MajorProgram) => {
+        result.push(program);
+      });
+    });
+
+    return result;
+  }, [groupedData]);
+
   const COLUMNS: CRUDTableColumn<MajorProgram>[] = [
-    { 
-      key: "code", 
-      header: "Mã ngành", 
-      width: "120px" 
+    {
+      key: "code",
+      header: "Mã ngành",
+      width: "120px",
+      render: (item: any) => {
+        // Show group header
+        if (item.isGroupHeader) {
+          return (
+            <div className="font-bold text-base text-primary py-1 col-span-full">
+              {item.groupLevel}
+            </div>
+          );
+        }
+        return (
+          <code className="bg-muted rounded px-2 py-1 text-xs font-mono">
+            {item.code}
+          </code>
+        );
+      }
     },
-    { key: "degree_level", header: "Trình độ", width: "120px" },
-    { key: "name", header: "Tên chương trình" },
+    {
+      key: "degree_level",
+      header: "Trình độ",
+      width: "120px",
+      render: (item: any) => {
+        if (item.isGroupHeader) return null;
+        return item.degree_level;
+      }
+    },
+    {
+      key: "name",
+      header: "Tên chương trình",
+      render: (item: any) => {
+        if (item.isGroupHeader) return null;
+        return item.name;
+      }
+    },
     {
       key: "is_heavy",
       header: "Nặng nhọc/Độc hại",
       width: "140px",
-      render: (item) => (
-        <span className={item.is_heavy ? "text-amber-600 font-medium" : "text-muted-foreground"}>
-          {item.is_heavy ? "Có" : "Không"}
-        </span>
-      )
+      render: (item: any) => {
+        if (item.isGroupHeader) return null;
+        return (
+          <span className={item.is_heavy ? "text-amber-600 font-medium" : "text-muted-foreground"}>
+            {item.is_heavy ? "Có" : "Không"}
+          </span>
+        );
+      }
     },
     {
       key: "quota",
       header: "Tổng chỉ tiêu",
       width: "120px",
-      render: (item) => {
-        const total = item.offerings?.reduce((acc, off) => {
+      render: (item: any) => {
+        if (item.isGroupHeader) return null;
+        const total = item.offerings?.reduce((acc: number, off: any) => {
           const latestInfo = off.academic_info_history?.[0];
           return acc + (latestInfo?.annual_admission_quota || 0);
         }, 0) || 0;
-        
+
         if (total === 0) return <span className="text-muted-foreground text-xs">—</span>;
         return <span className="font-medium">{total}</span>;
       }
@@ -70,13 +161,22 @@ export function MajorProgramPanel() {
       key: "unit_id",
       header: "Đơn vị quản lý",
       width: "200px",
-      render: (item) => {
+      render: (item: any) => {
+        if (item.isGroupHeader) return null;
         const unit = units.find((u: any) => u.id === item.unit_id);
         if (!unit) return <span className="text-muted-foreground text-xs">—</span>;
         return <span className="text-sm">{unit.name}</span>;
       },
     },
-    { key: "is_active", header: "Trạng thái", width: "100px" },
+    {
+      key: "is_active",
+      header: "Trạng thái",
+      width: "100px",
+      render: (item: any) => {
+        if (item.isGroupHeader) return null;
+        return item.is_active;
+      }
+    },
   ];
 
   const handleCreate = async (formData: BaseFormData) => {
@@ -219,6 +319,17 @@ export function MajorProgramPanel() {
     is_heavy: false,
   });
 
+  const mapItemToFormData = (item: MajorProgram): BaseFormData => {
+    return {
+      code: item.code,
+      degree_level: item.degree_level,
+      name: item.name,
+      unit_id: item.unit_id,
+      is_heavy: item.is_heavy,
+      is_active: item.is_active,
+    } as any;
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -228,18 +339,19 @@ export function MajorProgramPanel() {
         </p>
       </div>
 
-      <CRUDTable
+      <CRUDTable<MajorProgram>
         title="Ngành đào tạo"
         description="Danh sách các ngành đào tạo của nhà trường"
         icon={<GraduationCap className="h-5 w-5 text-primary" />}
         columns={COLUMNS}
-        data={data}
+        data={flattenedData as any}
         isLoading={isLoading}
         onCreate={handleCreate}
         onUpdate={handleUpdate}
         onDelete={handleDelete}
         renderForm={renderForm}
         initialFormData={initialFormData}
+        mapItemToFormData={mapItemToFormData}
       />
     </div>
   );

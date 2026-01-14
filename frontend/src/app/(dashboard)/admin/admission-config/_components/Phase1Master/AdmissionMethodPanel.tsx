@@ -186,6 +186,18 @@ export function AdmissionMethodPanel() {
     display_order: data.length + 1,
   });
 
+  const mapItemToFormData = (item: AdmissionMethod): BaseFormData => {
+    return {
+      code: item.code,
+      name: item.name,
+      description: item.description || "",
+      display_order: item.display_order,
+      is_active: item.is_active,
+      requires_gpa: item.requires_gpa,
+      requires_subject_scores: item.requires_subject_scores,
+    };
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -195,7 +207,7 @@ export function AdmissionMethodPanel() {
         </p>
       </div>
 
-      <CRUDTable
+      <CRUDTable<AdmissionMethod>
         title="Admission Method"
         description="Ways students can apply for admission"
         icon={<GraduationCap className="h-5 w-5 text-primary" />}
@@ -207,6 +219,7 @@ export function AdmissionMethodPanel() {
         onDelete={handleDelete}
         renderForm={renderForm}
         initialFormData={initialFormData}
+        mapItemToFormData={mapItemToFormData}
       />
     </div>
   );

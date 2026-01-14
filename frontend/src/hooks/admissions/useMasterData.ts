@@ -40,6 +40,7 @@ export function useCreateOrganizationUnit() {
     onSuccess: () => {
       toast.success("Organization unit created successfully");
       queryClient.invalidateQueries({ queryKey: ["organization-units"] });
+      queryClient.invalidateQueries({ queryKey: ["major-programs"] });
     },
     onError: (error: ApiError) => {
       toast.error(error.response?.data?.detail || "Failed to create organization unit");
@@ -56,6 +57,7 @@ export function useUpdateOrganizationUnit() {
     onSuccess: () => {
       toast.success("Organization unit updated successfully");
       queryClient.invalidateQueries({ queryKey: ["organization-units"] });
+      queryClient.invalidateQueries({ queryKey: ["major-programs"] });
     },
     onError: (error: ApiError) => {
       toast.error(error.response?.data?.detail || "Failed to update organization unit");

@@ -63,7 +63,7 @@ export function SubjectGroupAssignment() {
   // Get subjects not in current group
   const availableSubjects = subjects.filter((subject: Subject) => {
     if (!selectedGroup?.subjects) return true;
-    return !selectedGroup.subjects.some((s: SubjectInGroup) => s.id === subject.id);
+    return !selectedGroup.subjects.some((s: SubjectInGroup) => s.code === subject.code);
   });
 
   if (loadingSubjects || loadingGroups) {
@@ -149,29 +149,34 @@ export function SubjectGroupAssignment() {
                 <div className="space-y-2">
                   {selectedGroup.subjects
                     .sort((a: SubjectInGroup, b: SubjectInGroup) => a.position - b.position)
-                    .map((subject: SubjectInGroup) => (
-                      <div
-                        key={subject.id}
-                        className="flex items-center justify-between p-3 border rounded-lg hover:bg-muted/50 transition-colors"
-                      >
-                        <div className="flex items-center gap-3">
-                          <Badge variant="outline" className="w-8 justify-center">
-                            {subject.position}
-                          </Badge>
-                          <div>
-                            <p className="font-medium">{subject.name_vi}</p>
-                            <p className="text-sm text-muted-foreground">{subject.code}</p>
-                          </div>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleRemoveSubject(subject.id)}
+                    .map((subject: SubjectInGroup) => {
+                      // Find the full subject to get its id
+                      const fullSubject = subjects.find((s: Subject) => s.code === subject.code);
+                      return (
+                        <div
+                          key={subject.code}
+                          className="flex items-center justify-between p-3 border rounded-lg hover:bg-muted/50 transition-colors"
                         >
-                          <X className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    ))}
+                          <div className="flex items-center gap-3">
+                            <Badge variant="outline" className="w-8 justify-center">
+                              {subject.position}
+                            </Badge>
+                            <div>
+                              <p className="font-medium">{subject.name_vi}</p>
+                              <p className="text-sm text-muted-foreground">{subject.code}</p>
+                            </div>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => fullSubject && handleRemoveSubject(fullSubject.id)}
+                            disabled={!fullSubject}
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      );
+                    })}
                 </div>
               )}
             </CardContent>

@@ -11,7 +11,7 @@
 
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Calendar, Pencil, Trash2, Plus, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -170,9 +170,30 @@ export function AcademicInfoPanel() {
     await deleteMutation.mutateAsync(id);
   };
 
-  const getOfferingName = (offeringId: number) => {
-    const offering = offerings.find((o: { id: number; name: string }) => o.id === offeringId);
-    return offering ? offering.name : `Offering #${offeringId}`;
+  const getOfferingDisplay = (offeringId: number) => {
+    const offering = offerings.find((o: any) => o.id === offeringId);
+
+    if (!offering) {
+      return {
+        full: `Offering #${offeringId}`,
+        programName: `Offering #${offeringId}`,
+        programCode: undefined,
+        offeringType: "Unknown",
+        degreeLevel: undefined,
+      };
+    }
+
+    const programName = offering.program?.name || `Program #${offering.program_id}`;
+    const offeringType = offering.offering_type;
+    const degreeLevel = offering.program?.degree_level;
+
+    return {
+      full: `${programName} - ${offeringType}`,
+      programName,
+      programCode: offering.program?.code,
+      offeringType,
+      degreeLevel,
+    };
   };
 
   const formatCurrency = (amount: number | undefined) => {
@@ -182,6 +203,25 @@ export function AcademicInfoPanel() {
       currency: "VND",
     }).format(amount);
   };
+
+  // Sort data by program name, then by academic year (descending)
+  const sortedData = useMemo(() => {
+    return [...data].sort((a, b) => {
+      const displayA = getOfferingDisplay(a.offering_id);
+      const displayB = getOfferingDisplay(b.offering_id);
+
+      // First sort by program name
+      const nameCompare = displayA.programName.localeCompare(displayB.programName);
+      if (nameCompare !== 0) return nameCompare;
+
+      // Then by offering type
+      const typeCompare = displayA.offeringType.localeCompare(displayB.offeringType);
+      if (typeCompare !== 0) return typeCompare;
+
+      // Finally by academic year (descending - newest first)
+      return b.academic_year - a.academic_year;
+    });
+  }, [data, offerings]);
 
   return (
     <div className="space-y-6">
@@ -241,58 +281,79 @@ export function AcademicInfoPanel() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Program Offering</TableHead>
-                  <TableHead className="w-32">Academic Year</TableHead>
-                  <TableHead className="w-40">Tuition Fee</TableHead>
-                  <TableHead className="w-32">Quota</TableHead>
-                  <TableHead className="w-28">Published</TableHead>
-                  <TableHead className="w-32 text-right">Actions</TableHead>
+                  <TableHead className="w-32">Program Code</TableHead>
+                  <TableHead>Program Name</TableHead>
+                  <TableHead className="w-32">Degree Level</TableHead>
+                  <TableHead className="w-32">Offering Type</TableHead>
+                  <TableHead className="w-28">Year</TableHead>
+                  <TableHead className="w-36">Tuition Fee</TableHead>
+                  <TableHead className="w-24">Quota</TableHead>
+                  <TableHead className="w-24">Status</TableHead>
+                  <TableHead className="w-28 text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {data.map((item: OfferingAcademicInfo) => (
-                  <TableRow key={item.id}>
-                    <TableCell className="font-medium">
-                      {getOfferingName(item.offering_id)}
+                {sortedData.map((item: OfferingAcademicInfo) => {
+                  const display = getOfferingDisplay(item.offering_id);
+                  return (
+                    <TableRow key={item.id}>
+                      <TableCell>
+                        {display.programCode ? (
+                          <code className="bg-muted rounded px-2 py-1 text-xs font-mono">
+                            {display.programCode}
+                          </code>
+                        ) : (
+                          <span className="text-muted-foreground text-xs">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="font-medium">
+                      {getOfferingDisplay(item.offering_id).full}
                     </TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{item.academic_year}</Badge>
-                    </TableCell>
-                    <TableCell className="text-sm">
-                      {formatCurrency(item.tuition_fee_per_year)}
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm font-medium">
-                        {item.annual_admission_quota || "—"}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      {item.is_published ? (
-                        <Badge className="bg-green-500">Published</Badge>
-                      ) : (
-                        <Badge variant="secondary">Draft</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => openEditDialog(item)}
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleDelete(item.id)}
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                      <TableCell>
+                        <span className="text-sm">{display.degreeLevel || "—"}</span>
+                      </TableCell>
+                      <TableCell>
+                        <span className="text-sm">{display.offeringType}</span>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{item.academic_year}</Badge>
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        {formatCurrency(item.tuition_fee_per_year)}
+                      </TableCell>
+                      <TableCell>
+                        <span className="text-sm font-medium">
+                          {item.annual_admission_quota || "—"}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        {item.is_published ? (
+                          <Badge className="bg-green-500">Published</Badge>
+                        ) : (
+                          <Badge variant="secondary">Draft</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => openEditDialog(item)}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDelete(item.id)}
+                          >
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           )}
@@ -328,11 +389,20 @@ export function AcademicInfoPanel() {
                     <SelectValue placeholder="Select program offering" />
                   </SelectTrigger>
                   <SelectContent>
-                    {offerings.map((offering: { id: number; name: string; code: string }) => (
-                      <SelectItem key={offering.id} value={offering.id.toString()}>
-                        {offering.name} ({offering.code})
-                      </SelectItem>
-                    ))}
+                    {offerings.map((offering: any) => {
+                      const programName = offering.program?.name || `Program #${offering.program_id}`;
+                      const programCode = offering.program?.code || "";
+                      const offeringType = offering.offering_type;
+                      const degreeLevel = offering.program?.degree_level || "";
+
+                      const displayText = `${programName} - ${offeringType}${programCode ? ` (${programCode})` : ""} • ${degreeLevel}`;
+
+                      return (
+                        <SelectItem key={offering.id} value={offering.id.toString()}>
+                          {displayText}
+                        </SelectItem>
+                      );
+                    })}
                   </SelectContent>
                 </Select>
                 {editingItem && (
