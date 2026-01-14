@@ -429,15 +429,17 @@ class AdmissionPathService:
         # Build document map: document_type_id -> (item, source)
         doc_map: dict = {}
         
-        # Step 1: Add shared documents
-        for group in shared_groups:
-            for item in group.items:
-                doc_map[item.document_type_id] = (item, "shared")
-        
-        # Step 2: Override with method-specific documents
-        for group in method_groups:
-            for item in group.items:
-                doc_map[item.document_type_id] = (item, "method_override")
+        if method_groups:
+            # Case 1: Method-specific config exists -> FULL OVERRIDE
+            # We ignore shared groups completely to allow "deleting" default items
+            for group in method_groups:
+                for item in group.items:
+                    doc_map[item.document_type_id] = (item, "method_override")
+        else:
+            # Case 2: No specific config -> Use Shared Defaults
+            for group in shared_groups:
+                for item in group.items:
+                    doc_map[item.document_type_id] = (item, "shared")
         
         # Step 3: Build response
         resolved: List[ResolvedDocumentResponse] = []
