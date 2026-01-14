@@ -430,11 +430,11 @@ class AdmissionPathService:
             # Build validation errors
             validation_errors = []
             if not has_criteria:
-                validation_errors.append("Missing criteria configuration")
+                validation_errors.append("Chưa cấu hình tiêu chí (Criteria)")
             if not has_documents:
-                validation_errors.append("Missing document configuration")
+                validation_errors.append("Chưa cấu hình hồ sơ (Documents)")
             if not has_quota:
-                validation_errors.append("Quota is 0 or not set")
+                validation_errors.append("Chưa thiết lập chỉ tiêu (Quota)")
             
             if can_activate:
                 paths_ready += 1

@@ -25,11 +25,11 @@ import type { DocumentType, CRUDTableColumn, BaseFormData } from "../shared/type
 // ============================================
 
 const COLUMNS: CRUDTableColumn<DocumentType>[] = [
-  { key: "code", header: "Code", width: "150px" },
-  { key: "name", header: "Name" },
-  { key: "description", header: "Description" },
-  { key: "display_order", header: "Order", width: "80px" },
-  { key: "is_active", header: "Status", width: "100px" },
+  { key: "code", header: "Mã", width: "150px" },
+  { key: "name", header: "Tên loại giấy tờ" },
+  { key: "description", header: "Mô tả" },
+  { key: "display_order", header: "Thứ tự", width: "80px" },
+  { key: "is_active", header: "Trạng thái", width: "100px" },
 ];
 
 // ============================================
@@ -64,47 +64,47 @@ export function DocumentTypePanel() {
       <div className="space-y-4">
         <div className="space-y-2">
           <Label htmlFor="code">
-            Code <span className="text-destructive">*</span>
+            Mã loại giấy tờ <span className="text-destructive">*</span>
           </Label>
           <Input
             id="code"
             value={formData.code || ""}
             onChange={(e) => setFormData({ ...formData, code: e.target.value })}
-            placeholder="e.g., hoc_ba_thpt, bang_tn, cccd"
+            placeholder="ví dụ: hoc_ba_thpt, bang_tn, cccd"
             disabled={isEdit}
             required
           />
           <p className="text-xs text-muted-foreground">
-            Unique identifier (cannot be changed after creation)
+            Mã định danh duy nhất (không thể thay đổi sau khi tạo)
           </p>
         </div>
 
         <div className="space-y-2">
           <Label htmlFor="name">
-            Name <span className="text-destructive">*</span>
+            Tên loại giấy tờ <span className="text-destructive">*</span>
           </Label>
           <Input
             id="name"
             value={formData.name || ""}
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-            placeholder="e.g., Học bạ THPT, Bằng tốt nghiệp, CCCD/CMND"
+            placeholder="ví dụ: Học bạ THPT, Bằng tốt nghiệp, CCCD/CMND"
             required
           />
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="description">Description</Label>
+          <Label htmlFor="description">Mô tả</Label>
           <Textarea
             id="description"
             value={formData.description || ""}
             onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-            placeholder="Optional description (e.g., Bản sao học bạ 3 năm THPT)"
+            placeholder="Mô tả tóm tắt (ví dụ: Bản sao học bạ 3 năm THPT)"
             rows={3}
           />
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="display_order">Display Order</Label>
+          <Label htmlFor="display_order">Thứ tự hiển thị</Label>
           <Input
             id="display_order"
             type="number"
@@ -115,7 +115,7 @@ export function DocumentTypePanel() {
             min={1}
           />
           <p className="text-xs text-muted-foreground">
-            Controls the order in document checklists
+            Quy định thứ tự hiển thị trong danh sách hồ sơ
           </p>
         </div>
       </div>
@@ -132,15 +132,15 @@ export function DocumentTypePanel() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Document Types</h1>
+        <h1 className="text-3xl font-bold">Loại Giấy tờ</h1>
         <p className="text-muted-foreground mt-2">
-          Define the types of documents students must submit (Transcripts, ID cards, etc.)
+          Quản lý các loại giấy tờ hồ sơ (Học bạ, Bằng tốt nghiệp...)
         </p>
       </div>
 
       <CRUDTable<DocumentType>
-        title="Document Type"
-        description="Types of documents required for admission applications"
+        title="Loại Giấy tờ"
+        description="Các loại giấy tờ cần thiết cho hồ sơ xét tuyển"
         icon={<FileText className="h-5 w-5 text-primary" />}
         columns={COLUMNS}
         data={data}

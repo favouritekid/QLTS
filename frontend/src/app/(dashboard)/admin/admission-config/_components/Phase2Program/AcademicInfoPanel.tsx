@@ -143,7 +143,7 @@ export function AcademicInfoPanel() {
       } else {
         // Validate required fields
         if (!formData.offering_id) {
-          toast.error("Please select a program offering");
+          toast.error("Vui lòng chọn chương trình tuyển sinh");
           return;
         }
 
@@ -164,7 +164,7 @@ export function AcademicInfoPanel() {
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm("Are you sure you want to delete this academic info? This action cannot be undone.")) {
+    if (!confirm("Bạn có chắc chắn muốn xóa thông tin này? Hành động này không thể hoàn tác.")) {
       return;
     }
     await deleteMutation.mutateAsync(id);
@@ -226,9 +226,9 @@ export function AcademicInfoPanel() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Offering Academic Info</h1>
+        <h1 className="text-3xl font-bold">Thông tin Tuyển sinh chi tiết</h1>
         <p className="text-muted-foreground mt-2">
-          Configure yearly academic details, tuition fees, and admission quotas
+          Cấu hình chi tiết theo năm học (Học phí, Chỉ tiêu...)
         </p>
       </div>
 
@@ -236,10 +236,10 @@ export function AcademicInfoPanel() {
       {offerings.length === 0 && (
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
           <p className="text-sm text-yellow-800 font-medium">
-            Prerequisites Required
+            Yêu cầu dữ liệu
           </p>
           <p className="text-sm text-yellow-700 mt-1">
-            No program offerings found. Please create program offerings first in Phase 2.2.
+            Chưa có chương trình tuyển sinh nào. Vui lòng tạo chương trình trước tại Bước 2.2.
           </p>
         </div>
       )}
@@ -250,15 +250,15 @@ export function AcademicInfoPanel() {
             <div className="flex items-center gap-2">
               <Calendar className="h-5 w-5 text-primary" />
               <div>
-                <CardTitle>Academic Information</CardTitle>
+                <CardTitle>Thông tin chi tiết</CardTitle>
                 <CardDescription>
-                  Yearly configuration for program offerings
+                  Cấu hình theo năm học cho các chương trình
                 </CardDescription>
               </div>
             </div>
             <Button onClick={openCreateDialog} disabled={offerings.length === 0}>
               <Plus className="h-4 w-4 mr-2" />
-              Add New
+              Thêm mới
             </Button>
           </div>
         </CardHeader>
@@ -271,25 +271,25 @@ export function AcademicInfoPanel() {
             <div className="text-center py-12">
               <Calendar className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
               <p className="text-muted-foreground">
-                No academic info configured yet
+                Chưa có thông tin nào được cấu hình
               </p>
               <p className="text-sm text-muted-foreground mt-1">
-                Click &quot;Add New&quot; to configure academic details for a program offering
+                Nhấn &quot;Thêm mới&quot; để tạo cấu hình cho năm học
               </p>
             </div>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-32">Program Code</TableHead>
-                  <TableHead>Program Name</TableHead>
-                  <TableHead className="w-32">Degree Level</TableHead>
-                  <TableHead className="w-32">Offering Type</TableHead>
-                  <TableHead className="w-28">Year</TableHead>
-                  <TableHead className="w-36">Tuition Fee</TableHead>
-                  <TableHead className="w-24">Quota</TableHead>
-                  <TableHead className="w-24">Status</TableHead>
-                  <TableHead className="w-28 text-right">Actions</TableHead>
+                  <TableHead className="w-32">Mã ngành</TableHead>
+                  <TableHead>Tên chương trình</TableHead>
+                  <TableHead className="w-32">Trình độ</TableHead>
+                  <TableHead className="w-32">Hệ</TableHead>
+                  <TableHead className="w-28">Năm học</TableHead>
+                  <TableHead className="w-36">Học phí</TableHead>
+                  <TableHead className="w-24">Chỉ tiêu</TableHead>
+                  <TableHead className="w-24">Trạng thái</TableHead>
+                  <TableHead className="w-28 text-right">Thao tác</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -328,9 +328,9 @@ export function AcademicInfoPanel() {
                       </TableCell>
                       <TableCell>
                         {item.is_published ? (
-                          <Badge className="bg-green-500">Published</Badge>
+                          <Badge className="bg-green-500">Đã công bố</Badge>
                         ) : (
-                          <Badge variant="secondary">Draft</Badge>
+                          <Badge variant="secondary">Nháp</Badge>
                         )}
                       </TableCell>
                       <TableCell className="text-right">
@@ -365,10 +365,10 @@ export function AcademicInfoPanel() {
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>
-              {editingItem ? "Edit Academic Info" : "Create Academic Info"}
+              {editingItem ? "Cập nhật Thông tin" : "Thêm mới Thông tin"}
             </DialogTitle>
             <DialogDescription>
-              Configure academic year details for a program offering
+              Cấu hình chi tiết cho năm học của chương trình tuyển sinh
             </DialogDescription>
           </DialogHeader>
 
@@ -376,7 +376,7 @@ export function AcademicInfoPanel() {
             <div className="space-y-4 py-4">
               <div className="space-y-2">
                 <Label htmlFor="offering_id">
-                  Program Offering <span className="text-destructive">*</span>
+                  Chương trình tuyển sinh <span className="text-destructive">*</span>
                 </Label>
                 <Select
                   value={formData.offering_id?.toString() || ""}
@@ -386,7 +386,7 @@ export function AcademicInfoPanel() {
                   disabled={!!editingItem}
                 >
                   <SelectTrigger id="offering_id">
-                    <SelectValue placeholder="Select program offering" />
+                    <SelectValue placeholder="Chọn chương trình tuyển sinh" />
                   </SelectTrigger>
                   <SelectContent>
                     {offerings.map((offering: any) => {
@@ -407,14 +407,14 @@ export function AcademicInfoPanel() {
                 </Select>
                 {editingItem && (
                   <p className="text-xs text-muted-foreground">
-                    Cannot change offering after creation
+                    Không thể thay đổi chương trình sau khi tạo
                   </p>
                 )}
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="academic_year">
-                  Academic Year <span className="text-destructive">*</span>
+                  Năm học <span className="text-destructive">*</span>
                 </Label>
                 <Input
                   id="academic_year"
@@ -423,7 +423,7 @@ export function AcademicInfoPanel() {
                   onChange={(e) =>
                     setFormData({ ...formData, academic_year: parseInt(e.target.value) })
                   }
-                  placeholder="e.g., 2024"
+                  placeholder="vd: 2024"
                   min={2000}
                   max={2100}
                   disabled={!!editingItem}
@@ -431,14 +431,14 @@ export function AcademicInfoPanel() {
                 />
                 {editingItem && (
                   <p className="text-xs text-muted-foreground">
-                    Cannot change year after creation
+                    Không thể thay đổi năm sau khi tạo
                   </p>
                 )}
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="tuition_fee_per_year">
-                  Tuition Fee per Year (VND)
+                  Học phí / Năm (VND)
                 </Label>
                 <Input
                   id="tuition_fee_per_year"
@@ -454,13 +454,13 @@ export function AcademicInfoPanel() {
                   min={0}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Annual tuition fee in Vietnamese Dong
+                  Mức học phí niêm yết theo năm (VNĐ)
                 </p>
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="annual_admission_quota">
-                  Annual Admission Quota
+                  Chỉ tiêu tuyển sinh
                 </Label>
                 <Input
                   id="annual_admission_quota"
@@ -476,7 +476,7 @@ export function AcademicInfoPanel() {
                   min={0}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Maximum number of students for this academic year
+                  Số lượng sinh viên tối đa cho năm học này
                 </p>
               </div>
 
@@ -492,7 +492,7 @@ export function AcademicInfoPanel() {
                   htmlFor="is_published"
                   className="text-sm font-normal cursor-pointer"
                 >
-                  Publish this academic info (visible to applicants)
+                  Công khai thông tin này (Thí sinh có thể nhìn thấy)
                 </Label>
               </div>
             </div>
@@ -503,7 +503,7 @@ export function AcademicInfoPanel() {
                 variant="outline"
                 onClick={() => setIsDialogOpen(false)}
               >
-                Cancel
+                Hủy
               </Button>
               <Button
                 type="submit"
@@ -515,7 +515,7 @@ export function AcademicInfoPanel() {
                 {(createMutation.isPending || updateMutation.isPending) && (
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                 )}
-                {editingItem ? "Update" : "Create"}
+                {editingItem ? "Cập nhật" : "Thêm mới"}
               </Button>
             </DialogFooter>
           </form>

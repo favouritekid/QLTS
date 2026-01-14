@@ -70,7 +70,7 @@ export function SubjectGroupAssignment() {
     return (
       <Card>
         <CardContent className="py-12">
-          <p className="text-center text-muted-foreground">Loading...</p>
+          <p className="text-center text-muted-foreground">Đang tải...</p>
         </CardContent>
       </Card>
     );
@@ -82,7 +82,7 @@ export function SubjectGroupAssignment() {
         <CardContent className="py-12">
           <div className="text-center">
             <p className="text-muted-foreground mb-4">
-              No subject groups created yet. Create some groups first in the &quot;Subject Groups&quot; tab.
+              Chưa có tổ hợp nào. Hãy tạo tổ hợp mới ở tab &quot;Tổ hợp môn&quot; trước.
             </p>
           </div>
         </CardContent>
@@ -94,9 +94,9 @@ export function SubjectGroupAssignment() {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Select Subject Group</CardTitle>
+          <CardTitle>Chọn Tổ hợp môn</CardTitle>
           <CardDescription>
-            Choose a subject group to manage its subjects
+            Chọn tổ hợp môn để quản lý danh sách môn học
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -105,7 +105,7 @@ export function SubjectGroupAssignment() {
             onValueChange={(value) => setSelectedGroupId(parseInt(value))}
           >
             <SelectTrigger className="w-full">
-              <SelectValue placeholder="Choose a subject group..." />
+              <SelectValue placeholder="Chọn tổ hợp môn..." />
             </SelectTrigger>
             <SelectContent>
               {groups.map((group: SubjectGroup) => (
@@ -115,7 +115,7 @@ export function SubjectGroupAssignment() {
                     <span className="text-muted-foreground">- {group.name}</span>
                     {group.subjects && group.subjects.length > 0 && (
                       <Badge variant="secondary" className="ml-2">
-                        {group.subjects.length} subjects
+                        {group.subjects.length} môn
                       </Badge>
                     )}
                   </div>
@@ -132,18 +132,18 @@ export function SubjectGroupAssignment() {
           <Card>
             <CardHeader>
               <CardTitle>
-                Subjects in {selectedGroup.code}
+                Danh sách môn của tổ hợp {selectedGroup.code}
               </CardTitle>
               <CardDescription>
                 {selectedGroup.subjects && selectedGroup.subjects.length > 0
-                  ? `${selectedGroup.subjects.length} subjects assigned`
-                  : "No subjects assigned yet"}
+                  ? `${selectedGroup.subjects.length} môn đã được gán`
+                  : "Chưa có môn nào được gán"}
               </CardDescription>
             </CardHeader>
             <CardContent>
               {!selectedGroup.subjects || selectedGroup.subjects.length === 0 ? (
                 <p className="text-center text-muted-foreground py-8">
-                  No subjects in this group. Add subjects below.
+                  Tổ hợp này chưa có môn học nào. Thêm môn bên dưới.
                 </p>
               ) : (
                 <div className="space-y-2">
@@ -185,15 +185,15 @@ export function SubjectGroupAssignment() {
           {/* Add Subject */}
           <Card>
             <CardHeader>
-              <CardTitle>Add Subject</CardTitle>
+              <CardTitle>Thêm Môn học</CardTitle>
               <CardDescription>
-                Select a subject to add to this group
+                Chọn môn học để thêm vào tổ hợp này
               </CardDescription>
             </CardHeader>
             <CardContent>
               {availableSubjects.length === 0 ? (
                 <p className="text-center text-muted-foreground py-4">
-                  All subjects have been assigned to this group.
+                  Tất cả môn học đã được thêm vào tổ hợp này.
                 </p>
               ) : (
                 <div className="flex gap-2">
@@ -202,7 +202,7 @@ export function SubjectGroupAssignment() {
                     onValueChange={setSelectedSubjectId}
                   >
                     <SelectTrigger className="flex-1">
-                      <SelectValue placeholder="Choose a subject..." />
+                      <SelectValue placeholder="Chọn môn học..." />
                     </SelectTrigger>
                     <SelectContent>
                       {availableSubjects.map((subject: Subject) => (
@@ -220,7 +220,7 @@ export function SubjectGroupAssignment() {
                     disabled={!selectedSubjectId || addMutation.isPending}
                   >
                     <Plus className="h-4 w-4 mr-2" />
-                    Add
+                    Thêm
                   </Button>
                 </div>
               )}

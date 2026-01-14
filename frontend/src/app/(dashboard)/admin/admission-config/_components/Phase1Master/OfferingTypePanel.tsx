@@ -25,10 +25,10 @@ import type { OfferingType, CRUDTableColumn, BaseFormData } from "../shared/type
 // ============================================
 
 const COLUMNS: CRUDTableColumn<OfferingType>[] = [
-  { key: "code", header: "Code", width: "150px" },
-  { key: "name", header: "Name" },
-  { key: "display_order", header: "Order", width: "80px" },
-  { key: "is_active", header: "Status", width: "100px" },
+  { key: "code", header: "Mã", width: "150px" },
+  { key: "name", header: "Tên loại hình" },
+  { key: "display_order", header: "Thứ tự", width: "80px" },
+  { key: "is_active", header: "Trạng thái", width: "100px" },
 ];
 
 // ============================================
@@ -77,36 +77,36 @@ export function OfferingTypePanel() {
       <div className="space-y-4">
         <div className="space-y-2">
           <Label htmlFor="code">
-            Code <span className="text-destructive">*</span>
+            Mã loại hình <span className="text-destructive">*</span>
           </Label>
           <Input
             id="code"
             value={formData.code || ""}
             onChange={(e) => setFormData({ ...formData, code: e.target.value })}
-            placeholder="e.g., chinh_quy, lien_thong, vlvh"
+            placeholder="ví dụ: chinh_quy, lien_thong, vlvh"
             disabled={isEdit}
             required
           />
           <p className="text-xs text-muted-foreground">
-            Unique identifier (cannot be changed after creation)
+            Mã định danh duy nhất (không thể thay đổi sau khi tạo)
           </p>
         </div>
 
         <div className="space-y-2">
           <Label htmlFor="name">
-            Name <span className="text-destructive">*</span>
+            Tên loại hình <span className="text-destructive">*</span>
           </Label>
           <Input
             id="name"
             value={formData.name || ""}
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-            placeholder="e.g., Chính quy, Liên thông, Vừa làm vừa học"
+            placeholder="ví dụ: Chính quy, Liên thông, Vừa làm vừa học"
             required
           />
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="display_order">Display Order</Label>
+          <Label htmlFor="display_order">Thứ tự hiển thị</Label>
           <Input
             id="display_order"
             type="number"
@@ -117,7 +117,7 @@ export function OfferingTypePanel() {
             min={1}
           />
           <p className="text-xs text-muted-foreground">
-            Controls the order in dropdowns and listings
+            Quy định thứ tự hiển thị trong danh sách và dropdown
           </p>
         </div>
       </div>
@@ -133,15 +133,15 @@ export function OfferingTypePanel() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Offering Types</h1>
+        <h1 className="text-3xl font-bold">Loại hình Đào tạo</h1>
         <p className="text-muted-foreground mt-2">
-          Define the types of program offerings (Regular, Part-time, etc.)
+          Quản lý các loại hình đào tạo (Chính quy, Vừa làm vừa học, Liên thông...)
         </p>
       </div>
 
       <CRUDTable<OfferingType>
-        title="Offering Type"
-        description="Types of program offerings (Regular, Part-time, Distance learning)"
+        title="Loại hình"
+        description="Các hình thức đào tạo của nhà trường"
         icon={<Layers className="h-5 w-5 text-primary" />}
         columns={COLUMNS}
         data={data}

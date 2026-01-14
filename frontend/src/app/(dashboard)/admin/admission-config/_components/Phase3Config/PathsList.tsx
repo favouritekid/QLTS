@@ -64,10 +64,10 @@ export function PathsList({ context, onNavigate, onBack }: PathsListProps) {
     setProcessingPathId(pathId);
     try {
       await activateMutation.mutateAsync(pathId);
-      toast.success("Admission path activated successfully");
+      toast.success("Đã kích hoạt đợt tuyển sinh thành công");
     } catch (error) {
       const axiosError = error as AxiosError<{ detail?: string }>;
-      toast.error(axiosError.response?.data?.detail || "Failed to activate path");
+      toast.error(axiosError.response?.data?.detail || "Kích hoạt thất bại");
     } finally {
       setProcessingPathId(null);
     }
@@ -75,17 +75,17 @@ export function PathsList({ context, onNavigate, onBack }: PathsListProps) {
 
   // Handle deactivate
   const handleDeactivate = async (pathId: number) => {
-    if (!confirm("Are you sure you want to deactivate this admission path?")) {
+    if (!confirm("Bạn có chắc chắn muốn ngưng hoạt động đợt tuyển sinh này?")) {
       return;
     }
 
     setProcessingPathId(pathId);
     try {
       await deactivateMutation.mutateAsync(pathId);
-      toast.success("Admission path deactivated successfully");
+      toast.success("Đã ngưng hoạt động đợt tuyển sinh thành công");
     } catch (error) {
       const axiosError = error as AxiosError<{ detail?: string }>;
-      toast.error(axiosError.response?.data?.detail || "Failed to deactivate path");
+      toast.error(axiosError.response?.data?.detail || "Ngưng hoạt động thất bại");
     } finally {
       setProcessingPathId(null);
     }
@@ -108,21 +108,21 @@ export function PathsList({ context, onNavigate, onBack }: PathsListProps) {
         return (
           <Badge className="bg-green-500">
             <CheckCircle2 className="h-3 w-3 mr-1" />
-            Active
+            Hoạt động
           </Badge>
         );
       case "draft":
         return (
           <Badge variant="secondary">
             <Circle className="h-3 w-3 mr-1" />
-            Draft
+            Nháp
           </Badge>
         );
       case "inactive":
         return (
           <Badge variant="outline">
             <PowerOff className="h-3 w-3 mr-1" />
-            Inactive
+            Ngưng hoạt động
           </Badge>
         );
       default:
@@ -138,21 +138,21 @@ export function PathsList({ context, onNavigate, onBack }: PathsListProps) {
           <div className="flex items-center gap-2 mb-2">
             <Button variant="ghost" size="sm" onClick={onBack}>
               <ChevronLeft className="h-4 w-4 mr-1" />
-              Change Context
+              Đổi Ngữ cảnh
             </Button>
           </div>
-          <h1 className="text-3xl font-bold">Admission Paths</h1>
+          <h1 className="text-3xl font-bold">Các đợt Tuyển sinh</h1>
           <p className="text-muted-foreground mt-2">
-            Academic Year {context.academicYear}
+            Năm học {context.academicYear}
           </p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => onNavigate({ type: "matrix" })}>
-            View Coverage Matrix
+            Xem Ma trận Phủ
           </Button>
           <Button onClick={handleCreateNew}>
             <Plus className="h-4 w-4 mr-2" />
-            Add New Path
+            Thêm Đợt mới
           </Button>
         </div>
       </div>
@@ -160,9 +160,9 @@ export function PathsList({ context, onNavigate, onBack }: PathsListProps) {
       {/* Table */}
       <Card>
         <CardHeader>
-          <CardTitle>Configured Paths</CardTitle>
+          <CardTitle>Danh sách Đợt đã cấu hình</CardTitle>
           <CardDescription>
-            Manage admission methods and their configuration for this offering
+            Quản lý các đợt tuyển sinh và phương thức xét tuyển cho chương trình này
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -173,19 +173,19 @@ export function PathsList({ context, onNavigate, onBack }: PathsListProps) {
           ) : paths.length === 0 ? (
             <div className="text-center py-12">
               <Circle className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-              <p className="text-muted-foreground">No admission paths configured yet</p>
+              <p className="text-muted-foreground">Chưa có đợt tuyển sinh nào được cấu hình</p>
               <p className="text-sm text-muted-foreground mt-1">
-                Click &quot;Add New Path&quot; to create your first admission method
+                Nhấn &quot;Thêm Đợt mới&quot; để tạo đợt xét tuyển đầu tiên
               </p>
             </div>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Admission Method</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Configuration</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead>Phương thức</TableHead>
+                  <TableHead>Trạng thái</TableHead>
+                  <TableHead>Cấu hình</TableHead>
+                  <TableHead className="text-right">Thao tác</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -207,22 +207,22 @@ export function PathsList({ context, onNavigate, onBack }: PathsListProps) {
                         {path.criteria ? (
                           <span className="text-sm text-green-600 flex items-center gap-1">
                             <CheckCircle2 className="h-3 w-3" />
-                            Criteria configured
+                            Đã cấu hình tiêu chí
                           </span>
                         ) : (
                           <span className="text-sm text-muted-foreground flex items-center gap-1">
                             <AlertCircle className="h-3 w-3" />
-                            No criteria
+                            Chưa có tiêu chí
                           </span>
                         )}
                         {path.validation_errors.length === 0 && path.status === "draft" && (
                           <span className="text-sm text-muted-foreground">
-                            Ready to activate
+                            Sẵn sàng kích hoạt
                           </span>
                         )}
                         {path.validation_errors.length > 0 && (
                           <span className="text-sm text-amber-600">
-                            {path.validation_errors.length} issue(s)
+                            {path.validation_errors.length} vấn đề cần xử lý
                           </span>
                         )}
                       </div>
@@ -251,7 +251,7 @@ export function PathsList({ context, onNavigate, onBack }: PathsListProps) {
                             ) : (
                               <>
                                 <Power className="h-4 w-4 mr-1" />
-                                Activate
+                                Kích hoạt
                               </>
                             )}
                           </Button>
@@ -268,7 +268,7 @@ export function PathsList({ context, onNavigate, onBack }: PathsListProps) {
                             ) : (
                               <>
                                 <PowerOff className="h-4 w-4 mr-1" />
-                                Deactivate
+                                Ngưng
                               </>
                             )}
                           </Button>

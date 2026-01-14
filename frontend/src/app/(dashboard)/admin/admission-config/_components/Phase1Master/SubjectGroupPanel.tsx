@@ -27,9 +27,9 @@ export function SubjectGroupPanel() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Subjects & Subject Groups</h1>
+        <h1 className="text-3xl font-bold">Môn học & Tổ hợp xét tuyển</h1>
         <p className="text-muted-foreground mt-2">
-          Manage subjects (Math, Physics, etc.) and subject groups (A00, A01, D01, etc.)
+          Quản lý danh sách môn học và các tổ hợp môn (A00, A01...)
         </p>
       </div>
 
@@ -37,15 +37,15 @@ export function SubjectGroupPanel() {
         <TabsList className="grid w-full grid-cols-3">
           <TabsTrigger value="subjects">
             <BookOpen className="h-4 w-4 mr-2" />
-            Subjects
+            Môn học
           </TabsTrigger>
           <TabsTrigger value="groups">
             <Users className="h-4 w-4 mr-2" />
-            Subject Groups
+            Tổ hợp môn
           </TabsTrigger>
           <TabsTrigger value="assignment">
             <Users className="h-4 w-4 mr-2" />
-            Group Assignment
+            Phân môn vào tổ hợp
           </TabsTrigger>
         </TabsList>
 

@@ -128,22 +128,23 @@ export function ContextSelector({ onContextSelected }: ContextSelectorProps) {
     <div className="flex items-center justify-center min-h-[80vh] p-6">
       <Card className="max-w-3xl w-full">
         <CardHeader>
-          <CardTitle className="text-2xl">Select Configuration Context</CardTitle>
+          <CardTitle className="text-2xl">Chọn Ngữ cảnh Cấu hình</CardTitle>
           <CardDescription>
-            Choose the academic year and program offering you want to configure admission paths for
+            Chọn năm học và chương trình tuyển sinh để cấu hình đợt tuyển sinh
           </CardDescription>
         </CardHeader>
 
         <CardContent className="space-y-6">
           {/* Step 1: Academic Year */}
           <div className="space-y-2">
+
             <Label htmlFor="year" className="text-base font-semibold flex items-center gap-2">
               <Calendar className="h-4 w-4" />
-              Step 1: Select Academic Year
+              Bước 1: Chọn Năm học
             </Label>
             <Select value={selectedYear?.toString() || ""} onValueChange={handleYearChange}>
               <SelectTrigger id="year" className="h-12">
-                <SelectValue placeholder="Choose academic year" />
+                <SelectValue placeholder="Chọn năm học" />
               </SelectTrigger>
               <SelectContent>
                 {loadingYears ? (
@@ -151,12 +152,12 @@ export function ContextSelector({ onContextSelected }: ContextSelectorProps) {
                 ) : yearsData?.years && yearsData.years.length > 0 ? (
                   yearsData.years.map((year: number) => (
                     <SelectItem key={year} value={year.toString()}>
-                      {year} {year === yearsData.current_year && "(Current Year)"}
+                      {year} {year === yearsData.current_year && "(Năm hiện tại)"}
                     </SelectItem>
                   ))
                 ) : (
                   <div className="p-2 text-sm text-muted-foreground">
-                    No academic years available
+                    Không có năm học nào
                   </div>
                 )}
               </SelectContent>
@@ -165,9 +166,10 @@ export function ContextSelector({ onContextSelected }: ContextSelectorProps) {
 
           {/* Step 2: Major Program */}
           <div className="space-y-2">
+
             <Label htmlFor="major" className="text-base font-semibold flex items-center gap-2">
               <GraduationCap className="h-4 w-4" />
-              Step 2: Select Major Program
+              Bước 2: Chọn Ngành đào tạo
             </Label>
             <Select
               value={selectedMajorId?.toString() || ""}
@@ -175,11 +177,11 @@ export function ContextSelector({ onContextSelected }: ContextSelectorProps) {
               disabled={!selectedYear}
             >
               <SelectTrigger id="major" className="h-12">
-                <SelectValue placeholder={selectedYear ? "Choose major program" : "Select year first"} />
+                <SelectValue placeholder={selectedYear ? "Chọn ngành đào tạo" : "Vui lòng chọn năm trước"} />
               </SelectTrigger>
               <SelectContent>
                 {loadingMajors ? (
-                  <div className="p-2 text-sm text-muted-foreground">Loading majors...</div>
+                  <div className="p-2 text-sm text-muted-foreground">Đang tải ngành...</div>
                 ) : majors.length > 0 ? (
                   majors.map((major: MajorProgram) => (
                     <SelectItem key={major.id} value={major.id.toString()}>
@@ -189,7 +191,7 @@ export function ContextSelector({ onContextSelected }: ContextSelectorProps) {
                   ))
                 ) : (
                   <div className="p-2 text-sm text-muted-foreground">
-                    No major programs available
+                    Không có ngành đào tạo nào
                   </div>
                 )}
               </SelectContent>
@@ -198,9 +200,10 @@ export function ContextSelector({ onContextSelected }: ContextSelectorProps) {
 
           {/* Step 3: Program Offering */}
           <div className="space-y-2">
+
             <Label htmlFor="offering" className="text-base font-semibold flex items-center gap-2">
               <BookOpen className="h-4 w-4" />
-              Step 3: Select Program Offering
+              Bước 3: Chọn Chương trình tuyển sinh
             </Label>
             <Select
               value={selectedOfferingId?.toString() || ""}
@@ -208,11 +211,11 @@ export function ContextSelector({ onContextSelected }: ContextSelectorProps) {
               disabled={!selectedMajorId}
             >
               <SelectTrigger id="offering" className="h-12">
-                <SelectValue placeholder={selectedMajorId ? "Choose program offering" : "Select major first"} />
+                <SelectValue placeholder={selectedMajorId ? "Chọn chương trình tuyển sinh" : "Vui lòng chọn ngành trước"} />
               </SelectTrigger>
               <SelectContent>
                 {loadingOfferings ? (
-                  <div className="p-2 text-sm text-muted-foreground">Loading offerings...</div>
+                  <div className="p-2 text-sm text-muted-foreground">Đang tải chương trình...</div>
                 ) : filteredOfferings.length > 0 ? (
                   filteredOfferings.map((offering: ProgramOffering) => (
                     <SelectItem key={offering.id} value={offering.id.toString()}>
@@ -221,7 +224,7 @@ export function ContextSelector({ onContextSelected }: ContextSelectorProps) {
                   ))
                 ) : (
                   <div className="p-2 text-sm text-muted-foreground">
-                    No offerings for this major
+                    Không có chương trình nào cho ngành này
                   </div>
                 )}
               </SelectContent>
@@ -232,15 +235,15 @@ export function ContextSelector({ onContextSelected }: ContextSelectorProps) {
           {selectedOfferingId && selectedYear && (
             <div className="bg-muted rounded-lg p-4">
               {loadingAcademicInfos ? (
-                <p className="text-sm text-muted-foreground">Checking academic info...</p>
+                <p className="text-sm text-muted-foreground">Đang kiểm tra thông tin năm học...</p>
               ) : filteredAcademicInfos.length === 0 ? (
                 <div className="flex items-start gap-3">
                   <AlertCircle className="h-5 w-5 text-destructive mt-0.5" />
                   <div>
-                    <p className="font-medium text-destructive">Academic Info Not Found</p>
+                    <p className="font-medium text-destructive">Không tìm thấy Thông tin Tuyển sinh chi tiết</p>
                     <p className="text-sm text-muted-foreground mt-1">
-                      No academic info exists for this offering in year {selectedYear}.
-                      Please create it in Phase 2.3 first.
+                      Chưa có cấu hình chi tiết cho chương trình này trong năm {selectedYear}.
+                      Vui lòng tạo ở Bước 2.3 trước.
                     </p>
                   </div>
                 </div>
@@ -248,13 +251,13 @@ export function ContextSelector({ onContextSelected }: ContextSelectorProps) {
                 <div className="flex items-start gap-3">
                   <Calendar className="h-5 w-5 text-green-600 mt-0.5" />
                   <div>
-                    <p className="font-medium">Academic Info Found</p>
+                    <p className="font-medium">Đã tìm thấy Thông tin</p>
                     <p className="text-sm text-muted-foreground mt-1">
-                      Quota: {currentAcademicInfo?.annual_admission_quota || "Not set"} students
+                      Chỉ tiêu: {currentAcademicInfo?.annual_admission_quota || "Chưa thiết lập"} sinh viên
                     </p>
                     {currentAcademicInfo?.tuition_fee_per_year && (
                       <p className="text-sm text-muted-foreground">
-                        Tuition: {new Intl.NumberFormat("vi-VN", {
+                        Học phí: {new Intl.NumberFormat("vi-VN", {
                           style: "currency",
                           currency: "VND",
                         }).format(currentAcademicInfo.tuition_fee_per_year)}
@@ -274,7 +277,7 @@ export function ContextSelector({ onContextSelected }: ContextSelectorProps) {
               disabled={!isComplete}
               className="gap-2"
             >
-              Continue to Path Configuration
+              Tiếp tục đến Cấu hình Đợt tuyển sinh
               <ArrowRight className="h-5 w-5" />
             </Button>
           </div>

@@ -43,7 +43,7 @@ export function AdmissionConfigClient() {
       <div className="flex items-center justify-center h-screen">
         <div className="text-center">
           <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4 text-primary" />
-          <p className="text-muted-foreground">Loading admission configuration...</p>
+          <p className="text-muted-foreground">Đang tải cấu hình tuyển sinh...</p>
         </div>
       </div>
     );
@@ -127,7 +127,7 @@ function Phase1Content({ step }: { step: string }) {
       return (
         <div className="space-y-6">
           <div>
-            <h1 className="text-3xl font-bold">Phase 1: Master Data</h1>
+            <h1 className="text-3xl font-bold">Giai đoạn 1: Dữ liệu Danh mục</h1>
             <p className="text-muted-foreground mt-2">
               Unknown step: {step}
             </p>
@@ -149,7 +149,7 @@ function Phase2Content({ step }: { step: string }) {
       return (
         <div className="space-y-6">
           <div>
-            <h1 className="text-3xl font-bold">Phase 2: Academic Programs</h1>
+            <h1 className="text-3xl font-bold">Giai đoạn 2: Chương trình Đào tạo</h1>
             <p className="text-muted-foreground mt-2">
               Unknown step: {step}
             </p>

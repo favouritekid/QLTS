@@ -53,11 +53,11 @@ export function CoverageMatrix({ context, onNavigate }: CoverageMatrixProps) {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "active":
-        return <Badge className="bg-green-500">Active</Badge>;
+        return <Badge className="bg-green-500">Hoạt động</Badge>;
       case "draft":
-        return <Badge variant="secondary">Draft</Badge>;
+        return <Badge variant="secondary">Nháp</Badge>;
       case "inactive":
-        return <Badge variant="outline">Inactive</Badge>;
+        return <Badge variant="outline">Ngưng hoạt động</Badge>;
       default:
         return <Badge variant="outline">{status}</Badge>;
     }
@@ -70,12 +70,12 @@ export function CoverageMatrix({ context, onNavigate }: CoverageMatrixProps) {
         <div className="flex items-center gap-2 mb-2">
           <Button variant="ghost" size="sm" onClick={() => onNavigate({ type: "list" })}>
             <ChevronLeft className="h-4 w-4 mr-1" />
-            Back to Paths List
+            Quay lại Danh sách
           </Button>
         </div>
-        <h1 className="text-3xl font-bold">Coverage Matrix</h1>
+        <h1 className="text-3xl font-bold">Ma trận Phủ</h1>
         <p className="text-muted-foreground mt-2">
-          Audit view of all admission paths for Academic Year {context.academicYear}
+          Kiểm tra tình trạng sẵn sàng của các đợt tuyển sinh cho Năm học {context.academicYear}
         </p>
       </div>
 
@@ -89,18 +89,18 @@ export function CoverageMatrix({ context, onNavigate }: CoverageMatrixProps) {
                   {pathsReady} / {totalPaths}
                 </p>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Paths ready for activation
+                  Đợt sẵn sàng kích hoạt
                 </p>
               </div>
               {allReady ? (
                 <div className="flex items-center gap-2 text-green-600">
                   <CheckCircle2 className="h-6 w-6" />
-                  <span className="font-medium">All paths ready!</span>
+                  <span className="font-medium">Tất cả đã sẵn sàng!</span>
                 </div>
               ) : (
                 <div className="text-amber-600">
-                  <p className="font-medium">{totalPaths - pathsReady} path(s) incomplete</p>
-                  <p className="text-sm">Complete configuration to activate</p>
+                  <p className="font-medium">{totalPaths - pathsReady} đợt chưa hoàn thiện</p>
+                  <p className="text-sm">Hoàn thiện cấu hình để kích hoạt</p>
                 </div>
               )}
             </div>
@@ -111,9 +111,9 @@ export function CoverageMatrix({ context, onNavigate }: CoverageMatrixProps) {
       {/* Matrix Table */}
       <Card>
         <CardHeader>
-          <CardTitle>Configuration Status</CardTitle>
+          <CardTitle>Trạng thái Cấu hình</CardTitle>
           <CardDescription>
-            Check which paths have complete configuration and are ready to activate
+            Kiểm tra đợt nào đã hoàn thiện và sẵn sàng kích hoạt
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -123,9 +123,9 @@ export function CoverageMatrix({ context, onNavigate }: CoverageMatrixProps) {
             </div>
           ) : rows.length === 0 ? (
             <div className="text-center py-12">
-              <p className="text-muted-foreground">No admission paths found</p>
+              <p className="text-muted-foreground">Chưa có đợt tuyển sinh nào</p>
               <p className="text-sm text-muted-foreground mt-1">
-                Create paths in the Paths List view
+                Tạo đợt mới trong danh sách để xem trạng thái
               </p>
             </div>
           ) : (
@@ -133,13 +133,13 @@ export function CoverageMatrix({ context, onNavigate }: CoverageMatrixProps) {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-64">Admission Method</TableHead>
-                    <TableHead className="w-24">Status</TableHead>
-                    <TableHead className="text-center w-32">Criteria</TableHead>
-                    <TableHead className="text-center w-32">Documents</TableHead>
-                    <TableHead className="text-center w-32">Quota</TableHead>
-                    <TableHead className="text-center w-32">Can Activate</TableHead>
-                    <TableHead className="w-48">Issues</TableHead>
+                    <TableHead className="w-64">Phương thức</TableHead>
+                    <TableHead className="w-24">Trạng thái</TableHead>
+                    <TableHead className="text-center w-32">Tiêu chí</TableHead>
+                    <TableHead className="text-center w-32">Hồ sơ</TableHead>
+                    <TableHead className="text-center w-32">Chỉ tiêu</TableHead>
+                    <TableHead className="text-center w-32">Kích hoạt?</TableHead>
+                    <TableHead className="w-48">Vấn đề</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -177,7 +177,7 @@ export function CoverageMatrix({ context, onNavigate }: CoverageMatrixProps) {
                             ))}
                           </ul>
                         ) : (
-                          <span className="text-sm text-green-600">No issues</span>
+                          <span className="text-sm text-green-600">Không có lỗi</span>
                         )}
                       </TableCell>
                     </TableRow>

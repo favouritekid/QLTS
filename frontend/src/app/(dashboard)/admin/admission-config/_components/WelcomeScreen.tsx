@@ -33,9 +33,9 @@ export function WelcomeScreen({ onStart }: WelcomeScreenProps) {
               <GraduationCap className="h-12 w-12 text-primary" />
             </div>
           </div>
-          <CardTitle className="text-3xl">Welcome to Admission Configuration</CardTitle>
+          <CardTitle className="text-3xl">Chào mừng đến với Cấu hình Tuyển sinh</CardTitle>
           <CardDescription className="text-base mt-2">
-            Set up your admission system from scratch in three phases
+            Thiết lập hệ thống tuyển sinh của bạn qua 3 giai đoạn
           </CardDescription>
         </CardHeader>
 
@@ -49,30 +49,30 @@ export function WelcomeScreen({ onStart }: WelcomeScreenProps) {
                 </div>
               </div>
               <div className="flex-1">
-                <h3 className="font-semibold text-lg mb-2">Phase 1: Master Data</h3>
+                <h3 className="font-semibold text-lg mb-2">Giai đoạn 1: Dữ liệu Danh mục</h3>
                 <p className="text-muted-foreground mb-3">
-                  Define the foundation of your admission system. This is done once and rarely changes.
+                  Thiết lập nền tảng cho hệ thống. Thực hiện một lần và ít khi thay đổi.
                 </p>
                 <ul className="space-y-2 text-sm text-muted-foreground">
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="h-4 w-4 text-green-600" />
-                    Organization units (Departments, Faculties)
+                    Đơn vị tổ chức (Khoa, Phòng ban)
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="h-4 w-4 text-green-600" />
-                    Offering types (Regular, Part-time)
+                    Hệ đào tạo (Chính quy, Vừa làm vừa học)
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="h-4 w-4 text-green-600" />
-                    Admission methods (High school GPA, National exam, etc.)
+                    Phương thức xét tuyển (Học bạ, Điểm thi...)
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="h-4 w-4 text-green-600" />
-                    Document types (Transcripts, ID cards, etc.)
+                    Loại giấy tờ (Học bạ, CCCD...)
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="h-4 w-4 text-green-600" />
-                    Subject groups (A00, A01, D01, etc.)
+                    Tổ hợp môn (A00, A01...)
                   </li>
                 </ul>
               </div>
@@ -85,22 +85,22 @@ export function WelcomeScreen({ onStart }: WelcomeScreenProps) {
                 </div>
               </div>
               <div className="flex-1">
-                <h3 className="font-semibold text-lg mb-2">Phase 2: Academic Programs</h3>
+                <h3 className="font-semibold text-lg mb-2">Giai đoạn 2: Chương trình Đào tạo</h3>
                 <p className="text-muted-foreground mb-3">
-                  Set up your programs and offerings. Add new ones each time you introduce a new program.
+                  Thiết lập ngành và chương trình tuyển sinh. Cập nhật khi có ngành mới.
                 </p>
                 <ul className="space-y-2 text-sm text-muted-foreground">
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="h-4 w-4 text-green-600" />
-                    Major programs (IT, Business, etc.)
+                    Ngành đào tạo (CNTT, Kinh tế...)
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="h-4 w-4 text-green-600" />
-                    Program offerings (Regular IT, Part-time IT)
+                    Chương trình tuyển sinh (CNTT Chính quy...)
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="h-4 w-4 text-green-600" />
-                    Academic year information (Quota, Tuition fees)
+                    Thông tin năm học (Chỉ tiêu, Học phí)
                   </li>
                 </ul>
               </div>
@@ -113,26 +113,26 @@ export function WelcomeScreen({ onStart }: WelcomeScreenProps) {
                 </div>
               </div>
               <div className="flex-1">
-                <h3 className="font-semibold text-lg mb-2">Phase 3: Admission Configuration</h3>
+                <h3 className="font-semibold text-lg mb-2">Giai đoạn 3: Cấu hình Tuyển sinh</h3>
                 <p className="text-muted-foreground mb-3">
-                  Configure admission paths for each academic year. This is where you bring it all together.
+                  Cấu hình các đợt tuyển sinh cho năm học. Kết hợp tất cả các thành phần trên.
                 </p>
                 <ul className="space-y-2 text-sm text-muted-foreground">
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="h-4 w-4 text-green-600" />
-                    Define admission criteria for each method
+                    Thiết lập tiêu chí xét tuyển cho từng phương thức
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="h-4 w-4 text-green-600" />
-                    Configure document requirements
+                    Cấu hình yêu cầu hồ sơ giấy tờ
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="h-4 w-4 text-green-600" />
-                    Create admission paths (Method + Criteria + Documents)
+                    Tạo đợt tuyển sinh (Phương thức + Tiêu chí + Hồ sơ)
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className="h-4 w-4 text-green-600" />
-                    Activate paths for student applications
+                    Kích hoạt đợt tuyển sinh cho thí sinh đăng ký
                   </li>
                 </ul>
               </div>
@@ -143,11 +143,11 @@ export function WelcomeScreen({ onStart }: WelcomeScreenProps) {
           <div className="pt-6 border-t">
             <div className="flex flex-col items-center gap-4">
               <p className="text-sm text-muted-foreground text-center max-w-md">
-                The system has detected no master data. Let&apos;s get started by setting up Phase 1.
+                Hệ thống chưa có dữ liệu danh mục. Hãy bắt đầu với Giai đoạn 1.
               </p>
               <Button size="lg" onClick={onStart} className="gap-2">
                 <Rocket className="h-5 w-5" />
-                Start Phase 1 Setup
+                Bắt đầu Thiết lập Giai đoạn 1
               </Button>
             </div>
           </div>

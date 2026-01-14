@@ -23,10 +23,10 @@ import type { Subject, CRUDTableColumn, BaseFormData } from "../shared/types";
 // ============================================
 
 const COLUMNS: CRUDTableColumn<Subject>[] = [
-  { key: "code", header: "Code", width: "120px" },
-  { key: "name_vi", header: "Name (Vietnamese)" },
-  { key: "display_order", header: "Order", width: "80px" },
-  { key: "is_active", header: "Status", width: "100px" },
+  { key: "code", header: "Mã môn", width: "120px" },
+  { key: "name_vi", header: "Tên môn (Tiếng Việt)" },
+  { key: "display_order", header: "Thứ tự", width: "80px" },
+  { key: "is_active", header: "Trạng thái", width: "100px" },
 ];
 
 // ============================================
@@ -61,7 +61,7 @@ export function SubjectTable() {
       <div className="space-y-4">
         <div className="space-y-2">
           <Label htmlFor="code">
-            Subject Code <span className="text-destructive">*</span>
+            Mã môn <span className="text-destructive">*</span>
           </Label>
           <Input
             id="code"
@@ -72,13 +72,13 @@ export function SubjectTable() {
             required
           />
           <p className="text-xs text-muted-foreground">
-            Unique identifier (cannot be changed after creation)
+            Mã định danh duy nhất (không thể thay đổi sau khi tạo)
           </p>
         </div>
 
         <div className="space-y-2">
           <Label htmlFor="name_vi">
-            Subject Name (Vietnamese) <span className="text-destructive">*</span>
+            Tên môn (Tiếng Việt) <span className="text-destructive">*</span>
           </Label>
           <Input
             id="name_vi"
@@ -92,7 +92,7 @@ export function SubjectTable() {
 
 
         <div className="space-y-2">
-          <Label htmlFor="display_order">Display Order</Label>
+          <Label htmlFor="display_order">Thứ tự hiển thị</Label>
           <Input
             id="display_order"
             type="number"
@@ -124,8 +124,8 @@ export function SubjectTable() {
 
   return (
     <CRUDTable
-      title="Subject"
-      description="Individual subjects like Math, Physics, Chemistry, etc."
+      title="Môn học"
+      description="Danh sách các môn học (Toán, Lý, Hóa...)"
       icon={<BookOpen className="h-5 w-5 text-primary" />}
       columns={COLUMNS}
       data={data}

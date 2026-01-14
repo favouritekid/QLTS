@@ -43,11 +43,11 @@ const ORGANIZATION_UNIT_TYPES = [
 ];
 
 const COLUMNS: CRUDTableColumn<OrganizationUnit>[] = [
-  { key: "name", header: "Name" },
-  { key: "type", header: "Type", width: "120px" },
-  { key: "parent_id", header: "Parent Unit", width: "150px" },
-  { key: "description", header: "Description" },
-  { key: "is_active", header: "Status", width: "100px" },
+  { key: "name", header: "Tên đơn vị" },
+  { key: "type", header: "Loại hình", width: "120px" },
+  { key: "parent_id", header: "Đơn vị cấp trên", width: "150px" },
+  { key: "description", header: "Mô tả" },
+  { key: "is_active", header: "Trạng thái", width: "100px" },
 ];
 
 // ============================================
@@ -142,7 +142,7 @@ export function OrganizationUnitPanel() {
         return parent ? (
           <span className="text-sm">{parent.name}</span>
         ) : (
-          <span className="text-sm text-muted-foreground">Unit #{item.parent_id}</span>
+          <span className="text-sm text-muted-foreground">Đơn vị #{item.parent_id}</span>
         );
       },
     },
@@ -197,20 +197,20 @@ export function OrganizationUnitPanel() {
       <div className="space-y-4">
         <div className="space-y-2">
           <Label htmlFor="name">
-            Name <span className="text-destructive">*</span>
+            Tên đơn vị <span className="text-destructive">*</span>
           </Label>
           <Input
             id="name"
             value={formData.name || ""}
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-            placeholder="e.g., Faculty of Information Technology"
+            placeholder="Ví dụ: Khoa Công nghệ Thông tin"
             required
           />
         </div>
 
         <div className="space-y-2">
           <Label htmlFor="type">
-            Unit Type <span className="text-destructive">*</span>
+            Loại hình <span className="text-destructive">*</span>
           </Label>
           <Select
             value={(formData as any).type || ""}
@@ -219,7 +219,7 @@ export function OrganizationUnitPanel() {
             }
           >
             <SelectTrigger id="type">
-              <SelectValue placeholder="Select unit type" />
+              <SelectValue placeholder="Chọn loại đơn vị" />
             </SelectTrigger>
             <SelectContent>
               {ORGANIZATION_UNIT_TYPES.map((type) => (
@@ -230,12 +230,12 @@ export function OrganizationUnitPanel() {
             </SelectContent>
           </Select>
           <p className="text-xs text-muted-foreground">
-            The type of organizational unit (e.g., Faculty, Department)
+            Loại hình tổ chức (ví dụ: Khoa, Phòng ban)
           </p>
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="parent_id">Parent Unit (Optional)</Label>
+          <Label htmlFor="parent_id">Đơn vị cấp trên (Tùy chọn)</Label>
           <Select
             value={(formData as any).parent_id?.toString() || "__none__"}
             onValueChange={(value) =>
@@ -246,10 +246,10 @@ export function OrganizationUnitPanel() {
             }
           >
             <SelectTrigger id="parent_id">
-              <SelectValue placeholder="None (top-level unit)" />
+              <SelectValue placeholder="Không có (Đơn vị cấp cao nhất)" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__none__">None (top-level unit)</SelectItem>
+              <SelectItem value="__none__">Không có (Đơn vị cấp cao nhất)</SelectItem>
               {allUnitsFlat
                 .filter((unit) => unit.id !== item?.id) // Prevent self-parenting
                 .sort((a, b) => a.name.localeCompare(b.name))
@@ -261,17 +261,17 @@ export function OrganizationUnitPanel() {
             </SelectContent>
           </Select>
           <p className="text-xs text-muted-foreground">
-            The parent organizational unit (leave empty for top-level units)
+            Đơn vị cấp trên trực tiếp (để trống nếu là đơn vị cấp cao nhất)
           </p>
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="description">Description</Label>
+          <Label htmlFor="description">Mô tả</Label>
           <Textarea
             id="description"
             value={formData.description || ""}
             onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-            placeholder="Optional description"
+            placeholder="Mô tả tóm tắt về đơn vị"
             rows={3}
           />
         </div>
@@ -289,15 +289,15 @@ export function OrganizationUnitPanel() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Organization Units</h1>
+        <h1 className="text-3xl font-bold">Quản lý Đơn vị Tổ chức</h1>
         <p className="text-muted-foreground mt-2">
-          Manage departments, faculties, and other organizational units
+          Quản lý danh sách các khoa, phòng ban và đơn vị trực thuộc
         </p>
       </div>
 
       <CRUDTable<OrganizationUnit & { level: number }>
-        title="Organization Unit"
-        description="Departments, faculties, and other organizational units"
+        title="Đơn vị"
+        description="Khoa, phòng ban và các đơn vị khác"
         icon={<Building2 className="h-5 w-5 text-primary" />}
         columns={enhancedColumns}
         data={sortedData}

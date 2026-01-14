@@ -13,7 +13,7 @@
 
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -53,19 +53,24 @@ export function PathWizard({ context, pathId, onNavigate }: PathWizardProps) {
   const createMutation = useCreateAdmissionPath();
   const updateMutation = useUpdateAdmissionPath();
 
-  // Initialize form state from path data (edit mode) or defaults (create mode)
-  // Using lazy initialization - the function only runs once on mount
-  // Component remounts when pathId changes (via key prop), so state resets correctly
-  const [displayName, setDisplayName] = useState(() => path?.display_name || "");
-  const [selectedMethodId, setSelectedMethodId] = useState<number | null>(() =>
-    path?.admission_method?.id || null
-  );
-  const [displayOrder, setDisplayOrder] = useState(() => path?.display_order || 1);
+  // Initialize form state
+  const [displayName, setDisplayName] = useState("");
+  const [selectedMethodId, setSelectedMethodId] = useState<number | null>(null);
+  const [displayOrder, setDisplayOrder] = useState(1);
+
+  // Sync form state when path data loads (edit mode)
+  useEffect(() => {
+    if (isEditMode && path) {
+      setDisplayName(path.display_name || "");
+      setSelectedMethodId(path.admission_method?.id || null);
+      setDisplayOrder(path.display_order || 1);
+    }
+  }, [isEditMode, path]);
 
   // Handle save
   const handleSave = async () => {
     if (!selectedMethodId) {
-      toast.error("Please select an admission method");
+      toast.error("Vui lòng chọn phương thức tuyển sinh");
       return;
     }
 
@@ -78,7 +83,7 @@ export function PathWizard({ context, pathId, onNavigate }: PathWizardProps) {
             display_order: displayOrder,
           },
         });
-        toast.success("Admission path updated successfully");
+        toast.success("Cập nhật đợt tuyển sinh thành công");
       } else {
         await createMutation.mutateAsync({
           academic_info_id: context.academicInfoId,
@@ -86,14 +91,14 @@ export function PathWizard({ context, pathId, onNavigate }: PathWizardProps) {
           display_name: displayName || undefined,
           display_order: displayOrder,
         });
-        toast.success("Admission path created successfully");
+        toast.success("Tạo đợt tuyển sinh thành công");
       }
 
       // Navigate back to list
       onNavigate({ type: "list" });
     } catch (error) {
       const axiosError = error as AxiosError<{ detail?: string }>;
-      toast.error(axiosError.response?.data?.detail || "Failed to save admission path");
+      toast.error(axiosError.response?.data?.detail || "Lưu thất bại");
     }
   };
 
@@ -112,23 +117,23 @@ export function PathWizard({ context, pathId, onNavigate }: PathWizardProps) {
         <div className="flex items-center gap-2 mb-2">
           <Button variant="ghost" size="sm" onClick={handleBack}>
             <ChevronLeft className="h-4 w-4 mr-1" />
-            Back to Paths List
+            Quay lại Danh sách
           </Button>
         </div>
         <h1 className="text-3xl font-bold">
-          {isEditMode ? "Edit Admission Path" : "Create Admission Path"}
+          {isEditMode ? "Cập nhật Đợt Tuyển sinh" : "Thêm mới Đợt Tuyển sinh"}
         </h1>
         <p className="text-muted-foreground mt-2">
-          Academic Year {context.academicYear}
+          Năm học {context.academicYear}
         </p>
       </div>
 
       {/* Form Card */}
       <Card>
         <CardHeader>
-          <CardTitle>Basic Information</CardTitle>
+          <CardTitle>Thông tin Cơ bản</CardTitle>
           <CardDescription>
-            Configure the admission method and display settings
+            Cấu hình phương thức và hiển thị
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -141,7 +146,7 @@ export function PathWizard({ context, pathId, onNavigate }: PathWizardProps) {
               {/* Admission Method */}
               <div className="space-y-2">
                 <Label htmlFor="method">
-                  Admission Method <span className="text-destructive">*</span>
+                  Phương thức Tuyển sinh <span className="text-destructive">*</span>
                 </Label>
                 <Select
                   value={selectedMethodId?.toString() || ""}
@@ -149,7 +154,7 @@ export function PathWizard({ context, pathId, onNavigate }: PathWizardProps) {
                   disabled={isEditMode} // Cannot change method in edit mode
                 >
                   <SelectTrigger id="method">
-                    <SelectValue placeholder="Select admission method" />
+                    <SelectValue placeholder="Chọn phương thức" />
                   </SelectTrigger>
                   <SelectContent>
                     {methods.map((method: AdmissionMethod) => (
@@ -162,28 +167,28 @@ export function PathWizard({ context, pathId, onNavigate }: PathWizardProps) {
                 </Select>
                 {isEditMode && (
                   <p className="text-xs text-muted-foreground">
-                    Cannot change admission method after creation
+                    Không thể thay đổi phương thức sau khi tạo
                   </p>
                 )}
               </div>
 
               {/* Display Name */}
               <div className="space-y-2">
-                <Label htmlFor="displayName">Display Name (Optional)</Label>
+                <Label htmlFor="displayName">Tên hiển thị (Tùy chọn)</Label>
                 <Input
                   id="displayName"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder="Leave empty to use method name"
+                  placeholder="Để trống để dùng tên phương thức mặc định"
                 />
                 <p className="text-xs text-muted-foreground">
-                  Custom name for this path (e.g., &quot;Xét học bạ THPT - Khối A&quot;)
+                  Tên hiển thị riêng (vd: &quot;Xét học bạ THPT - Khối A&quot;)
                 </p>
               </div>
 
               {/* Display Order */}
               <div className="space-y-2">
-                <Label htmlFor="displayOrder">Display Order</Label>
+                <Label htmlFor="displayOrder">Thứ tự hiển thị</Label>
                 <Input
                   id="displayOrder"
                   type="number"
@@ -192,37 +197,37 @@ export function PathWizard({ context, pathId, onNavigate }: PathWizardProps) {
                   min={1}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Controls the order shown to applicants
+                  Thứ tự hiển thị cho thí sinh
                 </p>
               </div>
 
               {/* Info Box */}
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                 <p className="text-sm text-blue-900 font-medium mb-2">
-                  After creating this path:
+                  Sau khi tạo đợt tuyển sinh:
                 </p>
                 <ul className="text-sm text-blue-800 space-y-1">
-                  <li>• Configure admission criteria (GPA, subject scores)</li>
-                  <li>• Set up document requirements</li>
-                  <li>• Activate the path to make it available for applications</li>
+                  <li>• Cấu hình tiêu chí xét tuyển (Điểm chuẩn, GPA)</li>
+                  <li>• Cấu hình hồ sơ yêu cầu</li>
+                  <li>• Kích hoạt để nhận hồ sơ</li>
                 </ul>
               </div>
 
               {/* Actions */}
               <div className="flex justify-end gap-2 pt-4">
                 <Button variant="outline" onClick={handleBack} disabled={isSaving}>
-                  Cancel
+                  Hủy
                 </Button>
                 <Button onClick={handleSave} disabled={isSaving}>
                   {isSaving ? (
                     <>
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Saving...
+                      Đang lưu...
                     </>
                   ) : (
                     <>
                       <Save className="h-4 w-4 mr-2" />
-                      {isEditMode ? "Update Path" : "Create Path"}
+                      {isEditMode ? "Cập nhật" : "Tạo Đợt"}
                     </>
                   )}
                 </Button>
@@ -236,20 +241,20 @@ export function PathWizard({ context, pathId, onNavigate }: PathWizardProps) {
       {isEditMode && path && (
         <Card className="border-amber-200 bg-amber-50">
           <CardHeader>
-            <CardTitle className="text-amber-900">Next Steps</CardTitle>
+            <CardTitle className="text-amber-900">Các bước tiếp theo</CardTitle>
             <CardDescription className="text-amber-800">
-              Additional configuration needed before activation
+              Cần cấu hình thêm trước khi kích hoạt
             </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="space-y-2 text-sm text-amber-900">
               {!path.criteria && (
-                <p>• Configure admission criteria (minimum GPA, subject requirements)</p>
+                <p>• Cấu hình tiêu chí xét tuyển (điểm chuẩn, điểm sàn)</p>
               )}
-              <p>• Set up document requirements</p>
+              <p>• Cấu hình danh mục hồ sơ</p>
               {path.validation_errors && path.validation_errors.length > 0 && (
                 <div className="mt-4 space-y-1">
-                  <p className="font-medium">Current issues:</p>
+                  <p className="font-medium">Vấn đề hiện tại:</p>
                   {path.validation_errors.map((error, idx) => (
                     <p key={idx}>• {error}</p>
                   ))}

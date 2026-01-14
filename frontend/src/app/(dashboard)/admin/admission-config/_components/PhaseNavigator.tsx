@@ -42,17 +42,17 @@ interface StepConfig {
 // ============================================
 
 const PHASE1_STEPS: StepConfig[] = [
-  { id: "units", label: "Organization Units" },
-  { id: "offering-types", label: "Offering Types" },
-  { id: "methods", label: "Admission Methods" },
-  { id: "document-types", label: "Document Types" },
-  { id: "subject-groups", label: "Subject Groups" },
+  { id: "units", label: "Đơn vị Tổ chức" },
+  { id: "offering-types", label: "Hệ Đào tạo" },
+  { id: "methods", label: "Phương thức Tuyển sinh" },
+  { id: "document-types", label: "Loại Giấy tờ" },
+  { id: "subject-groups", label: "Tổ hợp môn" },
 ];
 
 const PHASE2_STEPS: StepConfig[] = [
-  { id: "majors", label: "Major Programs" },
-  { id: "offerings", label: "Program Offerings" },
-  { id: "academic-info", label: "Academic Info" },
+  { id: "majors", label: "Ngành Đào tạo" },
+  { id: "offerings", label: "Chương trình Tuyển sinh" },
+  { id: "academic-info", label: "Thông tin chi tiết" },
 ];
 
 // ============================================
@@ -97,17 +97,17 @@ export function PhaseNavigator({
     <div className={cn("w-64 border-r bg-muted/10 p-4 space-y-4", className)}>
       {/* Header */}
       <div className="mb-6">
-        <h2 className="text-lg font-semibold">Admission Config</h2>
-        <p className="text-sm text-muted-foreground">Setup Wizard</p>
+        <h2 className="text-lg font-semibold">Cấu hình Tuyển sinh</h2>
+        <p className="text-sm text-muted-foreground">Trình hướng dẫn thiết lập</p>
       </div>
 
       {/* Phase 1 */}
       <Card className="p-3">
         <div className="flex items-center justify-between mb-2">
-          <h3 className="font-semibold text-sm">Phase 1: Master Data</h3>
+          <h3 className="font-semibold text-sm">Giai đoạn 1: Dữ liệu Danh mục</h3>
           {isPhase1Active && (
             <Badge variant="default" className="text-xs">
-              Active
+              Hoạt động
             </Badge>
           )}
         </div>
@@ -140,10 +140,10 @@ export function PhaseNavigator({
       {/* Phase 2 */}
       <Card className="p-3">
         <div className="flex items-center justify-between mb-2">
-          <h3 className="font-semibold text-sm">Phase 2: Programs</h3>
+          <h3 className="font-semibold text-sm">Giai đoạn 2: Chương trình</h3>
           {isPhase2Active && (
             <Badge variant="default" className="text-xs">
-              Active
+              Hoạt động
             </Badge>
           )}
         </div>
@@ -176,10 +176,10 @@ export function PhaseNavigator({
       {/* Phase 3 */}
       <Card className="p-3">
         <div className="flex items-center justify-between mb-2">
-          <h3 className="font-semibold text-sm">Phase 3: Configuration</h3>
+          <h3 className="font-semibold text-sm">Giai đoạn 3: Cấu hình</h3>
           {isPhase3Active && (
             <Badge variant="default" className="text-xs">
-              Active
+              Hoạt động
             </Badge>
           )}
         </div>
@@ -190,13 +190,13 @@ export function PhaseNavigator({
           onClick={handlePhase3Click}
         >
           <BarChart3 className="h-4 w-4 mr-2" />
-          Admission Paths
+          Đợt Tuyển sinh
         </Button>
       </Card>
 
       {/* Help Text */}
       <div className="text-xs text-muted-foreground px-2">
-        <p>Complete Phase 1 and 2 before configuring admission paths.</p>
+        <p>Hoàn thành Giai đoạn 1 và 2 trước khi cấu hình đợt tuyển sinh.</p>
       </div>
     </div>
   );

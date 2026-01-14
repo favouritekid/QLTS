@@ -48,9 +48,9 @@ export function CRUDDialog({
   isSubmitting,
   children,
   submitLabel,
-  cancelLabel = "Cancel",
+  cancelLabel = "Hủy",
 }: CRUDDialogProps) {
-  const defaultSubmitLabel = isEdit ? "Update" : "Create";
+  const defaultSubmitLabel = isEdit ? "Cập nhật" : "Thêm mới";
 
   return (
     <Dialog open={open} onOpenChange={onClose}>

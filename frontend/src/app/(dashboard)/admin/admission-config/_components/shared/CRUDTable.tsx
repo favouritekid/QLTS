@@ -77,7 +77,7 @@ export function CRUDTable<T extends CRUDEntity>({
   renderForm,
   initialFormData,
   mapItemToFormData,
-  emptyMessage = "No items configured. Click \"Add New\" to create one.",
+  emptyMessage = "Chưa có dữ liệu. Nhấn \"Thêm mới\" để tạo.",
   showActions = true,
   allowCreate = true,
   allowEdit = true,
@@ -118,7 +118,7 @@ export function CRUDTable<T extends CRUDEntity>({
 
   const handleDelete = async (id: number, name?: string) => {
     const itemLabel = name || `item #${id}`;
-    if (confirm(`Are you sure you want to delete "${itemLabel}"?`)) {
+    if (confirm(`Bạn có chắc chắn muốn xóa "${itemLabel}"?`)) {
       try {
         await onDelete(id);
       } catch (error) {
@@ -174,7 +174,7 @@ export function CRUDTable<T extends CRUDEntity>({
       const isActive = value === true || value === 'active';
       return (
         <Badge variant={isActive ? "default" : "secondary"}>
-          {isActive ? "Active" : "Inactive"}
+          {isActive ? "Hoạt động" : "Ngưng hoạt động"}
         </Badge>
       );
     }
@@ -205,7 +205,7 @@ export function CRUDTable<T extends CRUDEntity>({
           {allowCreate && (
             <Button onClick={handleOpenCreate}>
               <Plus className="mr-2 h-4 w-4" />
-              Add New
+              Thêm mới
             </Button>
           )}
         </div>
@@ -232,7 +232,7 @@ export function CRUDTable<T extends CRUDEntity>({
                     </TableHead>
                   ))}
                   {showActions && (allowEdit || allowDelete) && (
-                    <TableHead className="w-[120px] text-right">Actions</TableHead>
+                    <TableHead className="w-[120px] text-right">Thao tác</TableHead>
                   )}
                 </TableRow>
               </TableHeader>

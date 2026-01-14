@@ -31,16 +31,16 @@ import { useOfferingTypes } from "@/hooks/admissions/useMasterData";
 const COLUMNS: CRUDTableColumn<ProgramOffering>[] = [
   {
     key: "program_id",
-    header: "Major Program",
+    header: "Ngành đào tạo",
     width: "200px",
     render: (item) => {
       if (!item.program_id) return "—";
-      return <span className="text-sm">Major #{item.program_id}</span>;
+      return <span className="text-sm">Ngành #{item.program_id}</span>;
     },
   },
   {
     key: "offering_type",
-    header: "Offering Type",
+    header: "Hệ đào tạo",
     width: "200px",
     render: (item) => {
       return <span className="text-sm">{item.offering_type || "—"}</span>;
@@ -48,7 +48,7 @@ const COLUMNS: CRUDTableColumn<ProgramOffering>[] = [
   },
   {
     key: "duration_semesters",
-    header: "Duration (Semesters)",
+    header: "Thời gian (HK)",
     width: "120px",
     render: (item) => {
       return <span className="text-sm">{item.duration_semesters || "—"}</span>;
@@ -56,13 +56,13 @@ const COLUMNS: CRUDTableColumn<ProgramOffering>[] = [
   },
   {
     key: "total_credits",
-    header: "Total Credits",
+    header: "Tổng tín chỉ",
     width: "120px",
     render: (item) => {
       return <span className="text-sm">{item.total_credits || "—"}</span>;
     },
   },
-  { key: "is_active", header: "Status", width: "100px" },
+  { key: "is_active", header: "Trạng thái", width: "100px" },
 ];
 
 // ============================================
@@ -160,7 +160,7 @@ export function ProgramOfferingPanel() {
       <div className="space-y-4">
         <div className="space-y-2">
           <Label htmlFor="program_id">
-            Major Program <span className="text-destructive">*</span>
+            Ngành đào tạo <span className="text-destructive">*</span>
           </Label>
           <Select
             value={formData.program_id?.toString() || ""}
@@ -169,12 +169,12 @@ export function ProgramOfferingPanel() {
             }
           >
             <SelectTrigger id="program_id">
-              <SelectValue placeholder="Select major program" />
+              <SelectValue placeholder="Chọn ngành đào tạo" />
             </SelectTrigger>
             <SelectContent>
               {majors.length === 0 && (
                 <div className="p-2 text-sm text-muted-foreground">
-                  No major programs available. Please create one first.
+                  Chưa có ngành nào. Vui lòng tạo ngành đào tạo trước.
                 </div>
               )}
               {majors.map((major: { id: number; name: string; code: string }) => (
@@ -185,13 +185,13 @@ export function ProgramOfferingPanel() {
             </SelectContent>
           </Select>
           <p className="text-xs text-muted-foreground">
-            The academic program (e.g., IT, Business, Engineering)
+            Chương trình đào tạo (ví dụ: CNTT, Kinh tế)
           </p>
         </div>
 
         <div className="space-y-2">
           <Label htmlFor="offering_type_id">
-            Offering Type <span className="text-destructive">*</span>
+            Hệ đào tạo <span className="text-destructive">*</span>
           </Label>
           <Select
             value={formData.offering_type_id?.toString() || ""}
@@ -200,12 +200,12 @@ export function ProgramOfferingPanel() {
             }
           >
             <SelectTrigger id="offering_type_id">
-              <SelectValue placeholder="Select offering type" />
+              <SelectValue placeholder="Chọn hệ đào tạo" />
             </SelectTrigger>
             <SelectContent>
               {offeringTypes.length === 0 && (
                 <div className="p-2 text-sm text-muted-foreground">
-                  No offering types available. Please create one first.
+                  Chưa có hệ đào tạo nào. Vui lòng tạo hệ đào tạo trước.
                 </div>
               )}
               {offeringTypes.map((type: { id: number; name: string; code: string }) => (
@@ -216,13 +216,13 @@ export function ProgramOfferingPanel() {
             </SelectContent>
           </Select>
           <p className="text-xs text-muted-foreground">
-            The study mode (e.g., Full-time, Part-time, Distance learning)
+            Hình thức đào tạo (Chính quy, Vừa làm vừa học...)
           </p>
         </div>
 
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
-            <Label htmlFor="duration_semesters">Duration (Semesters)</Label>
+            <Label htmlFor="duration_semesters">Thời gian (Học kỳ)</Label>
             <Input
               id="duration_semesters"
               type="number"
@@ -234,12 +234,12 @@ export function ProgramOfferingPanel() {
               min={1}
             />
             <p className="text-xs text-muted-foreground">
-              Number of semesters for this program
+              Số học kỳ dự kiến để hoàn thành
             </p>
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="total_credits">Total Credits</Label>
+            <Label htmlFor="total_credits">Tổng tín chỉ</Label>
             <Input
               id="total_credits"
               type="number"
@@ -247,23 +247,23 @@ export function ProgramOfferingPanel() {
               onChange={(e) =>
                 setFormData({ ...formData, total_credits: e.target.value ? parseInt(e.target.value) : undefined } as any)
               }
-              placeholder="e.g., 120"
+              placeholder="vd: 120"
               min={1}
             />
             <p className="text-xs text-muted-foreground">
-              Total credit hours required
+              Tổng số tín chỉ tích lũy yêu cầu
             </p>
           </div>
         </div>
 
         <div className="border rounded-lg p-4 bg-slate-50 space-y-4">
           <h3 className="font-medium flex items-center gap-2">
-            Fit Score Configuration (Scoring Rules)
+            Cấu hình Xét tuyển (Scoring Rules)
           </h3>
           
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="scoring_hot_level">Hot Level</Label>
+              <Label htmlFor="scoring_hot_level">Mức độ Hot</Label>
               <Select
                 value={(formData as any).scoring_rules?.hot_level?.toString() || "0"}
                 onValueChange={(value) => {
@@ -275,18 +275,18 @@ export function ProgramOfferingPanel() {
                 }}
               >
                 <SelectTrigger id="scoring_hot_level">
-                  <SelectValue placeholder="Select Hot Level" />
+                  <SelectValue placeholder="Chọn mức độ Hot" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="0">Normal (0)</SelectItem>
+                  <SelectItem value="0">Bình thường (0)</SelectItem>
                   <SelectItem value="1">Hot (1)</SelectItem>
-                  <SelectItem value="2">Very Hot (2)</SelectItem>
+                  <SelectItem value="2">Rất Hot (2)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="scoring_education">Required Education</Label>
+              <Label htmlFor="scoring_education">Trình độ văn hóa yêu cầu</Label>
               <Select
                 value={(formData as any).scoring_rules?.required_education || "thpt"}
                 onValueChange={(value) => {
@@ -298,12 +298,12 @@ export function ProgramOfferingPanel() {
                 }}
               >
                 <SelectTrigger id="scoring_education">
-                  <SelectValue placeholder="Select Education" />
+                  <SelectValue placeholder="Chọn trình độ" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="thpt">High School (THPT)</SelectItem>
-                  <SelectItem value="cao_dang">College (Cao đẳng)</SelectItem>
-                  <SelectItem value="dai_hoc">University (Đại học)</SelectItem>
+                  <SelectItem value="thpt">Tốt nghiệp THPT</SelectItem>
+                  <SelectItem value="cao_dang">Tốt nghiệp Cao đẳng</SelectItem>
+                  <SelectItem value="dai_hoc">Tốt nghiệp Đại học</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -311,7 +311,7 @@ export function ProgramOfferingPanel() {
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="scoring_age_min">Min Target Age</Label>
+              <Label htmlFor="scoring_age_min">Độ tuổi tối thiểu</Label>
               <Input
                 id="scoring_age_min"
                 type="number"
@@ -324,13 +324,13 @@ export function ProgramOfferingPanel() {
                     scoring_rules: { ...currentRules, target_age_min: val }
                   } as any);
                 }}
-                placeholder="e.g. 18"
+                placeholder="vd: 18"
                 min={16}
                 max={100}
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="scoring_age_max">Max Target Age</Label>
+              <Label htmlFor="scoring_age_max">Độ tuổi tối đa</Label>
               <Input
                 id="scoring_age_max"
                 type="number"
@@ -343,7 +343,7 @@ export function ProgramOfferingPanel() {
                     scoring_rules: { ...currentRules, target_age_max: val }
                   } as any);
                 }}
-                placeholder="e.g. 35"
+                placeholder="vd: 35"
                 min={16}
                 max={100}
               />
@@ -377,9 +377,9 @@ export function ProgramOfferingPanel() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Program Offerings</h1>
+        <h1 className="text-3xl font-bold">Chương trình Tuyển sinh</h1>
         <p className="text-muted-foreground mt-2">
-          Manage program offerings by combining major programs with offering types
+          Quản lý các chương trình tuyển sinh (kết hợp giữa ngành và hệ đào tạo)
         </p>
       </div>
 
@@ -387,19 +387,19 @@ export function ProgramOfferingPanel() {
       {(majors.length === 0 || offeringTypes.length === 0) && (
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
           <p className="text-sm text-yellow-800 font-medium">
-            Prerequisites Required
+            Yêu cầu dữ liệu
           </p>
           <p className="text-sm text-yellow-700 mt-1">
-            {majors.length === 0 && "No major programs found. Please create major programs first in Phase 2.1."}
-            {majors.length === 0 && offeringTypes.length === 0 && " Also, "}
-            {offeringTypes.length === 0 && "No offering types found. Please create offering types in Phase 1.2."}
+            {majors.length === 0 && "Chưa có Ngành đào tạo. Vui lòng tạo Ngành trước tại Bước 2.1."}
+            {majors.length === 0 && offeringTypes.length === 0 && " Đồng thời, "}
+            {offeringTypes.length === 0 && "Chưa có Hệ đào tạo. Vui lòng tạo Hệ đào tạo trước tại Bước 1.2."}
           </p>
         </div>
       )}
 
       <CRUDTable<ProgramOffering>
-        title="Program Offering"
-        description="Combinations of major programs and offering types"
+        title="Chương trình Tuyển sinh"
+        description="Kết hợp giữa ngành và hệ đào tạo"
         icon={<BookOpen className="h-5 w-5 text-primary" />}
         columns={enhancedColumns}
         data={data}

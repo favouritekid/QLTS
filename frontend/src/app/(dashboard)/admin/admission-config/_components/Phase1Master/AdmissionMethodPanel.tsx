@@ -26,22 +26,22 @@ import type { AdmissionMethod, CRUDTableColumn, BaseFormData } from "../shared/t
 // ============================================
 
 const COLUMNS: CRUDTableColumn<AdmissionMethod>[] = [
-  { key: "code", header: "Code", width: "150px" },
-  { key: "name", header: "Name" },
+  { key: "code", header: "Mã", width: "150px" },
+  { key: "name", header: "Tên phương thức" },
   {
     key: "requires_gpa",
-    header: "Requires GPA",
+    header: "Xét GPA",
     width: "120px",
-    render: (item) => (item.requires_gpa ? "✓ Yes" : "✗ No"),
+    render: (item) => (item.requires_gpa ? "✓ Có" : "✗ Không"),
   },
   {
     key: "requires_subject_scores",
-    header: "Requires Scores",
+    header: "Xét điểm môn",
     width: "140px",
-    render: (item) => (item.requires_subject_scores ? "✓ Yes" : "✗ No"),
+    render: (item) => (item.requires_subject_scores ? "✓ Có" : "✗ Không"),
   },
-  { key: "display_order", header: "Order", width: "80px" },
-  { key: "is_active", header: "Status", width: "100px" },
+  { key: "display_order", header: "Thứ tự", width: "80px" },
+  { key: "is_active", header: "Trạng thái", width: "100px" },
 ];
 
 // ============================================
@@ -76,47 +76,47 @@ export function AdmissionMethodPanel() {
       <div className="space-y-4">
         <div className="space-y-2">
           <Label htmlFor="code">
-            Code <span className="text-destructive">*</span>
+            Mã phương thức <span className="text-destructive">*</span>
           </Label>
           <Input
             id="code"
             value={formData.code || ""}
             onChange={(e) => setFormData({ ...formData, code: e.target.value })}
-            placeholder="e.g., hoc_ba, thpt_qg, dgnl"
+            placeholder="ví dụ: hoc_ba, thpt_qg, dgnl"
             disabled={isEdit}
             required
           />
           <p className="text-xs text-muted-foreground">
-            Unique identifier (cannot be changed after creation)
+            Mã định danh duy nhất (không thể thay đổi sau khi tạo)
           </p>
         </div>
 
         <div className="space-y-2">
           <Label htmlFor="name">
-            Name <span className="text-destructive">*</span>
+            Tên phương thức <span className="text-destructive">*</span>
           </Label>
           <Input
             id="name"
             value={formData.name || ""}
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-            placeholder="e.g., Xét học bạ THPT, Xét điểm thi THPT QG"
+            placeholder="ví dụ: Xét học bạ THPT, Xét điểm thi THPT QG"
             required
           />
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="description">Description</Label>
+          <Label htmlFor="description">Mô tả</Label>
           <Textarea
             id="description"
             value={formData.description || ""}
             onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-            placeholder="Optional description of this admission method"
+            placeholder="Mô tả tóm tắt về phương thức tuyển sinh này"
             rows={3}
           />
         </div>
 
         <div className="space-y-4 border-t pt-4">
-          <Label className="text-base font-semibold">Requirements</Label>
+          <Label className="text-base font-semibold">Cấu hình Yêu cầu</Label>
 
           <div className="flex items-center space-x-2">
             <Checkbox
@@ -131,10 +131,10 @@ export function AdmissionMethodPanel() {
                 htmlFor="requires_gpa"
                 className="text-sm font-normal cursor-pointer"
               >
-                Requires GPA (Grade Point Average)
+                Yêu cầu điểm trung bình (GPA)
               </Label>
               <p className="text-xs text-muted-foreground">
-                Check if this method requires high school GPA scores
+                Chọn nếu phương thức này cần xét điểm GPA học bạ
               </p>
             </div>
           </div>
@@ -152,17 +152,17 @@ export function AdmissionMethodPanel() {
                 htmlFor="requires_subject_scores"
                 className="text-sm font-normal cursor-pointer"
               >
-                Requires Subject Scores
+                Yêu cầu điểm môn học thành phần
               </Label>
               <p className="text-xs text-muted-foreground">
-                Check if this method requires specific subject scores (Math, Physics, etc.)
+                Chọn nếu phương thức này cần xét điểm các môn học cụ thể
               </p>
             </div>
           </div>
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="display_order">Display Order</Label>
+          <Label htmlFor="display_order">Thứ tự hiển thị</Label>
           <Input
             id="display_order"
             type="number"
@@ -201,15 +201,15 @@ export function AdmissionMethodPanel() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Admission Methods</h1>
+        <h1 className="text-3xl font-bold">Phương thức Tuyển sinh</h1>
         <p className="text-muted-foreground mt-2">
-          Define the methods students can use to apply (High school GPA, National exam, etc.)
+          Quản lý các phương thức xét tuyển (Xét học bạ, Điểm thi THPT, Đánh giá năng lực...)
         </p>
       </div>
 
       <CRUDTable<AdmissionMethod>
-        title="Admission Method"
-        description="Ways students can apply for admission"
+        title="Phương thức"
+        description="Các hình thức xét tuyển của nhà trường"
         icon={<GraduationCap className="h-5 w-5 text-primary" />}
         columns={COLUMNS}
         data={data}

@@ -24,14 +24,14 @@ import type { SubjectGroup, CRUDTableColumn, BaseFormData } from "../shared/type
 // ============================================
 
 const COLUMNS: CRUDTableColumn<SubjectGroup>[] = [
-  { key: "code", header: "Code", width: "120px" },
-  { key: "name", header: "Name" },
+  { key: "code", header: "Mã tổ hợp", width: "120px" },
+  { key: "name", header: "Tên tổ hợp" },
   {
     key: "subjects",
-    header: "Subjects",
+    header: "Môn học",
     render: (item) => {
       if (!item.subjects || item.subjects.length === 0) {
-        return <span className="text-muted-foreground text-sm">No subjects assigned</span>;
+        return <span className="text-muted-foreground text-sm">Chưa có môn học</span>;
       }
       return (
         <div className="flex flex-wrap gap-1">
@@ -42,15 +42,15 @@ const COLUMNS: CRUDTableColumn<SubjectGroup>[] = [
           ))}
           {item.subjects.length > 3 && (
             <Badge variant="outline" className="text-xs">
-              +{item.subjects.length - 3} more
+              +{item.subjects.length - 3} môn khác
             </Badge>
           )}
         </div>
       );
     },
   },
-  { key: "display_order", header: "Order", width: "80px" },
-  { key: "is_active", header: "Status", width: "100px" },
+  { key: "display_order", header: "Thứ tự", width: "80px" },
+  { key: "is_active", header: "Trạng thái", width: "100px" },
 ];
 
 // ============================================
@@ -85,7 +85,7 @@ export function SubjectGroupTable() {
       <div className="space-y-4">
         <div className="space-y-2">
           <Label htmlFor="code">
-            Group Code <span className="text-destructive">*</span>
+            Mã tổ hợp <span className="text-destructive">*</span>
           </Label>
           <Input
             id="code"
@@ -96,13 +96,13 @@ export function SubjectGroupTable() {
             required
           />
           <p className="text-xs text-muted-foreground">
-            Unique identifier like A00, A01 (cannot be changed after creation)
+            Mã định danh duy nhất (ví dụ: A00, A01) - không thể thay đổi sau khi tạo
           </p>
         </div>
 
         <div className="space-y-2">
           <Label htmlFor="name">
-            Group Name <span className="text-destructive">*</span>
+            Tên tổ hợp <span className="text-destructive">*</span>
           </Label>
           <Input
             id="name"
@@ -116,7 +116,7 @@ export function SubjectGroupTable() {
 
 
         <div className="space-y-2">
-          <Label htmlFor="display_order">Display Order</Label>
+          <Label htmlFor="display_order">Thứ tự hiển thị</Label>
           <Input
             id="display_order"
             type="number"
@@ -130,7 +130,7 @@ export function SubjectGroupTable() {
 
         {isEdit && item && item.subjects && item.subjects.length > 0 && (
           <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
-            <Label className="text-sm font-semibold mb-2 block">Current Subjects:</Label>
+            <Label className="text-sm font-semibold mb-2 block">Các môn trong tổ hợp:</Label>
             <div className="flex flex-wrap gap-2">
               {item.subjects.map((subject) => (
                 <Badge key={subject.code} variant="secondary">
@@ -139,7 +139,7 @@ export function SubjectGroupTable() {
               ))}
             </div>
             <p className="text-xs text-muted-foreground mt-2">
-              Use the &quot;Group Assignment&quot; tab to add or remove subjects
+              Sử dụng tab &quot;Phân môn vào tổ hợp&quot; để thêm hoặc bớt môn học
             </p>
           </div>
         )}
@@ -156,8 +156,8 @@ export function SubjectGroupTable() {
 
   return (
     <CRUDTable
-      title="Subject Group"
-      description="Groups of subjects like A00 (Math-Physics-Chemistry), D01 (Math-Literature-English)"
+      title="Tổ hợp môn"
+      description="Các tổ hợp môn xét tuyển (A00, A01, D01...)"
       icon={<Users className="h-5 w-5 text-primary" />}
       columns={COLUMNS}
       data={data}
