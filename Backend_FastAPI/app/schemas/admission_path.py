@@ -113,6 +113,27 @@ class AdmissionPathUpdate(BaseModel):
     visibility: Optional[VisibilityStatus] = None
 
 
+class AdmissionCriteriaCreate(BaseModel):
+    """Schema for creating/updating criteria."""
+    min_gpa: Optional[float] = Field(None, ge=0, le=10)
+    min_score: Optional[float] = Field(None, ge=0, le=30)
+    required_subject_count: Optional[int] = Field(None, ge=1)
+    subject_selection_mode: Literal["fixed", "dynamic"] = "fixed"
+    scoring_method: Literal["sum", "avg"] = "sum"
+    subject_groups: List[int] = Field(
+        default_factory=list,
+        description="List of Subject Group IDs"
+    )
+
+
+class AdmissionPathDocumentUpsert(BaseModel):
+    """Schema for updating document requirement."""
+    document_type_id: int
+    is_mandatory: bool = True
+    requires_upload: bool = True
+    display_order: int = 0
+
+
 # =============================================================================
 # RESPONSE SCHEMAS
 # =============================================================================
