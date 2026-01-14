@@ -70,14 +70,17 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
   }, [path.criteria]);
 
   // Filter subject groups based on search query
-  const filteredGroups = subjectGroups.filter((group: any) => {
-    if (!searchQuery) return true;
-    const query = searchQuery.toLowerCase();
-    return (
-      group.code.toLowerCase().includes(query) ||
-      group.name.toLowerCase().includes(query)
-    );
-  });
+  // Filter subject groups based on search query
+  const filteredGroups = Array.isArray(subjectGroups) 
+    ? subjectGroups.filter((group: any) => {
+        if (!searchQuery) return true;
+        const query = searchQuery.toLowerCase();
+        return (
+          (group.code?.toLowerCase() || "").includes(query) ||
+          (group.name?.toLowerCase() || "").includes(query)
+        );
+      })
+    : [];
 
   // Get selected group details for chip display
   const selectedGroupsDetails = subjectGroups.filter((group: any) =>

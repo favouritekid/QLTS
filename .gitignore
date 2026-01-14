@@ -193,6 +193,8 @@ lerna-debug.log*
 *.temp
 .temp/
 .tmp/
+tmpclaude*
+**/tmpclaude*
 
 # Docker
 docker-compose.override.yml

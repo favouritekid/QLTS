@@ -229,7 +229,7 @@ export function ConfigDocuments({ path, onFinish, onBack }: ConfigDocumentsProps
                 ) : (
                   <Archive className="h-4 w-4 mr-2" />
                 )}
-                Hoàn tất Cấu hình
+                Lưu & Tiếp tục
               </Button>
             </div>
           </div>

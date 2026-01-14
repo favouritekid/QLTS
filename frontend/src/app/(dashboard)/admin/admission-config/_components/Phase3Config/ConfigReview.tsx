@@ -209,7 +209,7 @@ export function ConfigReview({ path, onBack, onFinish }: ConfigReviewProps) {
           <div className="flex justify-between items-center">
             <Button variant="outline" onClick={onBack}>
               <ArrowLeft className="h-4 w-4 mr-2" />
-              Quay lại Bước 3
+              Quay lại
             </Button>
             
             <div className="flex gap-2">

@@ -83,9 +83,12 @@ export function PathWizard({ context, pathId, onNavigate, initialStep = 1 }: Pat
 
   // Update URL when step changes
   useEffect(() => {
-    const params = new URLSearchParams(searchParams.toString());
-    params.set('wizardStep', step.toString());
-    router.replace(`?${params.toString()}`, { scroll: false });
+    const currentStep = searchParams.get('wizardStep');
+    if (currentStep !== step.toString()) {
+      const params = new URLSearchParams(searchParams.toString());
+      params.set('wizardStep', step.toString());
+      router.replace(`?${params.toString()}`, { scroll: false });
+    }
   }, [step, searchParams, router]);
 
   // Fetch data
