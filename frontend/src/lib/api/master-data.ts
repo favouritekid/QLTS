@@ -14,6 +14,7 @@ import { api } from "./client";
 import type {
   BaseEntityCreate,
   BaseEntityUpdate,
+  SharedDocumentGroupUpdate,
 } from "@/app/(dashboard)/admin/admission-config/_components/shared/types";
 
 // ============================================
@@ -208,5 +209,19 @@ export async function updateSubjectPosition(groupId: number, subjectId: number, 
     `/api/admission-config/subject-groups/${groupId}/subjects/${subjectId}`,
     { position }
   );
+  return response.data;
+}
+
+// ============================================
+// SHARED DOCUMENT GROUPS
+// ============================================
+
+export async function getSharedDocumentGroup(offeringTypeId: number) {
+  const response = await api.get(`/api/admission-config/document-groups/shared/${offeringTypeId}`);
+  return response.data;
+}
+
+export async function upsertSharedDocumentGroup(offeringTypeId: number, data: SharedDocumentGroupUpdate) {
+  const response = await api.put(`/api/admission-config/document-groups/shared/${offeringTypeId}`, data);
   return response.data;
 }

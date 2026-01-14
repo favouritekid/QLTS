@@ -186,6 +186,36 @@ export interface DocumentType extends BaseEntity {
   // No additional fields - matches backend ConfigDocumentType
 }
 
+export interface DocumentGroupItem {
+  id: number;
+  document_type_id: number;
+  document_type_name: string;
+  is_mandatory: boolean;
+  requires_upload: boolean;
+  submission_format?: string | null;
+  display_order: number;
+}
+
+export interface SharedDocumentGroup {
+  id: number;
+  offering_type_id: number;
+  code: string;
+  name: string;
+  items: DocumentGroupItem[];
+}
+
+export interface DocumentGroupItemCreate {
+  document_type_id: number;
+  is_mandatory?: boolean;
+  requires_upload?: boolean;
+  submission_format?: string | null;
+  display_order?: number;
+}
+
+export interface SharedDocumentGroupUpdate {
+  items: DocumentGroupItemCreate[];
+}
+
 export interface Subject extends BaseEntity {
   name_vi: string;
   name_en?: string;

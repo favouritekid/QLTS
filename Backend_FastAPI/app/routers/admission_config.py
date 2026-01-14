@@ -47,6 +47,9 @@ from app.schemas.admission_config import (
     AdmissionCriteriaUpdate,
     ScoringPreviewRequest,
     ScoringPreviewResponse,
+    SharedDocumentGroupResponse,
+    SharedDocumentGroupUpdate,
+    DocumentGroupItemResponse,
 )
 
 router = APIRouter(prefix="/admission-config", tags=["Admission Config"])
@@ -716,4 +719,75 @@ async def preview_scoring(
         disqualification_codes=result.disqualification_codes,
         snapshot=snapshot,
     )
+
+
+# =============================================================================
+# SHARED DOCUMENT GROUPS (Phase 1)
+# =============================================================================
+
+def _build_doc_group_response(group) -> Optional[SharedDocumentGroupResponse]:
+    if not group:
+        return None
+        
+    items = []
+    # Sort items by display_order
+    # Note: selectinload already orders by display_order if defined in relationship, 
+    # but we double check sort here just in case.
+    sorted_items = sorted(group.items, key=lambda x: x.display_order)
+    
+    for item in sorted_items:
+        items.append(DocumentGroupItemResponse(
+            id=item.id,
+            document_type_id=item.document_type_id,
+            document_type_name=item.document_type.name, # Eager loaded
+            is_mandatory=item.is_mandatory,
+            requires_upload=item.requires_upload,
+            submission_format=item.submission_format,
+            display_order=item.display_order,
+        ))
+        
+    return SharedDocumentGroupResponse(
+        id=group.id,
+        offering_type_id=group.offering_type_id,
+        code=group.code,
+        name=group.name,
+        items=items
+    )
+
+
+@router.get("/document-groups/shared/{offering_type_id}", response_model=Optional[SharedDocumentGroupResponse])
+async def get_shared_document_group(
+    offering_type_id: int,
+    db: AsyncSession = Depends(get_db),
+    # Read access allowed for all
+):
+    """
+    Get shared document group configuration for an Offering Type.
+    """
+    service = AdmissionConfigService(db)
+    group = await service.get_shared_document_group(offering_type_id)
+    
+    if not group:
+        return None
+        
+    return _build_doc_group_response(group)
+
+
+@router.put("/document-groups/shared/{offering_type_id}", response_model=SharedDocumentGroupResponse)
+async def upsert_shared_document_group(
+    offering_type_id: int,
+    data: SharedDocumentGroupUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_or_manager),
+):
+    """
+    Create or Update shared document group configuration.
+    Requires: Admin or Manager role.
+    """
+    service = AdmissionConfigService(db)
+    group, callback = await service.upsert_shared_document_group(offering_type_id, data, current_user)
+    await db.commit()
+    await callback()
+    
+    return _build_doc_group_response(group)
 

@@ -7,6 +7,8 @@
 
 "use client";
 
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SharedDocumentConfigPanel } from "./SharedDocumentConfigPanel";
 import { FileText } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -32,15 +34,13 @@ const COLUMNS: CRUDTableColumn<DocumentType>[] = [
   { key: "is_active", header: "Trạng thái", width: "100px" },
 ];
 
-// ============================================
-// COMPONENT
-// ============================================
-
 export function DocumentTypePanel() {
   const { data = [], isLoading } = useDocumentTypes();
   const createMutation = useCreateDocumentType();
   const updateMutation = useUpdateDocumentType();
   const deleteMutation = useDeleteDocumentType();
+
+  // ... handlers ...
 
   const handleCreate = async (formData: BaseFormData) => {
     await createMutation.mutateAsync(formData as unknown as Parameters<typeof createMutation.mutateAsync>[0]);
@@ -60,6 +60,7 @@ export function DocumentTypePanel() {
     setFormData: (data: BaseFormData) => void,
     isEdit: boolean
   ) => {
+    // ... renderForm content (omitted for brevity, assume keeping existing logic) ...
     return (
       <div className="space-y-4">
         <div className="space-y-2">
@@ -132,25 +133,38 @@ export function DocumentTypePanel() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Loại Giấy tờ</h1>
+        <h1 className="text-3xl font-bold">Quản lý Hồ sơ</h1>
         <p className="text-muted-foreground mt-2">
-          Quản lý các loại giấy tờ hồ sơ (Học bạ, Bằng tốt nghiệp...)
+          Quản lý danh mục loại giấy tờ và cấu hình hồ sơ dùng chung
         </p>
       </div>
 
-      <CRUDTable<DocumentType>
-        title="Loại Giấy tờ"
-        description="Các loại giấy tờ cần thiết cho hồ sơ xét tuyển"
-        icon={<FileText className="h-5 w-5 text-primary" />}
-        columns={COLUMNS}
-        data={data}
-        isLoading={isLoading}
-        onCreate={handleCreate}
-        onUpdate={handleUpdate}
-        onDelete={handleDelete}
-        renderForm={renderForm}
-        initialFormData={initialFormData}
-      />
+      <Tabs defaultValue="types" className="w-full">
+        <TabsList className="mb-4">
+          <TabsTrigger value="types">Danh mục Loại giấy tờ</TabsTrigger>
+          <TabsTrigger value="shared">Cấu hình Hồ sơ chung</TabsTrigger>
+        </TabsList>
+        
+        <TabsContent value="types">
+          <CRUDTable<DocumentType>
+            title="Loại Giấy tờ"
+            description="Các loại giấy tờ cần thiết cho hồ sơ xét tuyển"
+            icon={<FileText className="h-5 w-5 text-primary" />}
+            columns={COLUMNS}
+            data={data}
+            isLoading={isLoading}
+            onCreate={handleCreate}
+            onUpdate={handleUpdate}
+            onDelete={handleDelete}
+            renderForm={renderForm}
+            initialFormData={initialFormData}
+          />
+        </TabsContent>
+        
+        <TabsContent value="shared">
+          <SharedDocumentConfigPanel />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

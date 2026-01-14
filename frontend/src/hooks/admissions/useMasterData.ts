@@ -401,3 +401,31 @@ export function useRemoveSubjectFromGroup() {
     },
   });
 }
+
+// ============================================
+// SHARED DOCUMENT GROUPS
+// ============================================
+
+export function useSharedDocumentGroup(offeringTypeId: number | null) {
+  return useQuery({
+    queryKey: ["shared-document-group", offeringTypeId],
+    queryFn: () => masterDataApi.getSharedDocumentGroup(offeringTypeId!),
+    enabled: !!offeringTypeId, // Only fetch if offeringTypeId is present
+  });
+}
+
+export function useUpsertSharedDocumentGroup() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ offeringTypeId, data }: { offeringTypeId: number; data: import("@/app/(dashboard)/admin/admission-config/_components/shared/types").SharedDocumentGroupUpdate }) =>
+      masterDataApi.upsertSharedDocumentGroup(offeringTypeId, data),
+    onSuccess: (_, variables) => {
+      toast.success("Shared documents configuration saved successfully");
+      queryClient.invalidateQueries({ queryKey: ["shared-document-group", variables.offeringTypeId] });
+    },
+    onError: (error: ApiError) => {
+      toast.error(error.response?.data?.detail || "Failed to save shared documents configuration");
+    },
+  });
+}

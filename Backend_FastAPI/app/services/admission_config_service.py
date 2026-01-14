@@ -12,13 +12,14 @@ Follows MASTER_ARCHITECTURE.md:
 from typing import Callable, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.models import User
 from app.models.admission_config import AdmissionCriteria
 from app.repositories.admission_config_repository import AdmissionConfigRepository
+from app.repositories.document_group_repository import DocumentGroupRepository
 from app.schemas.admission_config import (
     AdmissionCriteriaCreate,
     AdmissionCriteriaUpdate,
+    SharedDocumentGroupUpdate,
 )
 from app.utils.exceptions import (
     ResourceNotFoundError,
@@ -40,11 +41,13 @@ class AdmissionConfigService:
     - AdmissionCriteria CRUD
     - Subject group mappings
     - Validation rules
+    - Shared Document Groups associated with Offering Types
     """
 
     def __init__(self, db: AsyncSession):
         self.db = db
         self.repo = AdmissionConfigRepository(db)
+        self.document_group_repo = DocumentGroupRepository(db)
 
     # =========================================================================
     # CRITERIA CRUD
@@ -443,4 +446,66 @@ class AdmissionConfigService:
             raise ResourceNotFoundError(f"Method with ID {method_id} not found")
 
         return success, _noop_callback
+
+    # =========================================================================
+    # SHARED DOCUMENT GROUPS (Phase 1)
+    # =========================================================================
+
+    async def get_shared_document_group(
+        self,
+        offering_type_id: int,
+    ):
+        """Get shared document group for offering type."""
+        from app.models.admission_config import DocumentGroup
+        groups = await self.document_group_repo.get_shared_groups(offering_type_id)
+        return groups[0] if groups else None
+
+    async def upsert_shared_document_group(
+        self,
+        offering_type_id: int,
+        data: SharedDocumentGroupUpdate,
+        user: User,
+    ) -> tuple["DocumentGroup", Callable[[], Any]]:
+        """
+        Create or Update Shared Document Group for Offering Type.
+        
+        Replaces all items in the group.
+        """
+        # Find existing shared group
+        groups = await self.document_group_repo.get_shared_groups(offering_type_id)
+        group = groups[0] if groups else None
+
+        if not group:
+            # Create new shared group
+            # Generate code/name
+            # Note: offering_type_id is int, we assume it exists. 
+            # Ideally we check offering type existence but we trust FK constraint for now.
+            # Code: SHARED_DOC_{offering_type_id}
+            
+            group = await self.document_group_repo.create_group(
+                offering_type_id=offering_type_id,
+                admission_method_id=None, # Shared
+                code=f"SHARED_DOC_OT_{offering_type_id}",
+                name=f"Hồ sơ chung (OT-{offering_type_id})",
+                description="Cấu hình hồ sơ mặc định cho loại hình đào tạo này",
+                is_active=True
+            )
+        
+        # Replace items
+        await self.document_group_repo.remove_all_items_from_group(group.id)
+        
+        for item in data.items:
+            await self.document_group_repo.add_item_to_group(
+                group_id=group.id,
+                document_type_id=item.document_type_id,
+                is_mandatory=item.is_mandatory,
+                requires_upload=item.requires_upload,
+                submission_format=item.submission_format,
+                display_order=item.display_order,
+            )
+            
+        # Refetch with items
+        updated = await self.document_group_repo.get_by_id_with_items(group.id)
+        return updated, _noop_callback
+
 

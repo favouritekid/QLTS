@@ -272,6 +272,47 @@ class ScoringPreviewResponse(BaseModel):
     failure_reasons: list[str] = []
     disqualification_codes: list[str] = []  # Standardized codes
     
-    # Snapshot (for reference)
-    snapshot: Optional[dict] = None
+# =============================================================================
+# DOCUMENT GROUP SCHEMAS (SHARED)
+# =============================================================================
+
+class DocumentGroupItemResponse(BaseModel):
+    """Document item within a group."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: int
+    document_type_id: int
+    document_type_name: str  # Flattened from relation
+    is_mandatory: bool
+    requires_upload: bool
+    submission_format: Optional[str]
+    display_order: int
+
+
+class SharedDocumentGroupResponse(BaseModel):
+    """Shared document group response."""
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: int
+    offering_type_id: int
+    code: str
+    name: str
+    items: list[DocumentGroupItemResponse] = []
+
+
+class DocumentGroupItemCreate(BaseModel):
+    """Item for creating/updating document group."""
+    document_type_id: int
+    is_mandatory: bool = True
+    requires_upload: bool = True
+    submission_format: Optional[str] = None
+    display_order: int = 0
+
+
+class SharedDocumentGroupUpdate(BaseModel):
+    """
+    Request to update shared documents for an Offering Type.
+    Replaces ALL items in the group.
+    """
+    items: list[DocumentGroupItemCreate]
 
