@@ -9,7 +9,7 @@ FRONTEND_ARCHITECTURE_V3.md Compliance:
 - FE reads these, not computes them
 """
 
-from datetime import datetime
+from datetime import datetime, date
 from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -80,11 +80,19 @@ class AdmissionCriteriaNested(BaseModel):
     # Thresholds
     min_gpa: Optional[float] = None
     min_score: Optional[float] = None
+    min_subject_score: Optional[float] = None
+    max_possible_score: Optional[float] = None
+    conditions: Optional[str] = None
     
     # Rule Engine config
     required_subject_count: Optional[int] = None
     subject_selection_mode: str = "fixed"
     scoring_method: str = "sum"
+
+    # Validity
+    policy_version: Optional[str] = None
+    effective_from: Optional[date] = None
+    effective_to: Optional[date] = None
     
     # Subject groups for score initialization
     subject_groups: List[SubjectGroupNested] = Field(
@@ -116,7 +124,10 @@ class AdmissionPathUpdate(BaseModel):
 class AdmissionCriteriaCreate(BaseModel):
     """Schema for creating/updating criteria."""
     min_gpa: Optional[float] = Field(None, ge=0, le=10)
-    min_score: Optional[float] = Field(None, ge=0, le=30)
+    min_score: Optional[float] = Field(None, ge=0, le=1500)
+    min_subject_score: Optional[float] = Field(None, ge=0, le=10)
+    max_possible_score: Optional[float] = Field(None, ge=0, le=1500)
+    conditions: Optional[str] = None
     required_subject_count: Optional[int] = Field(None, ge=1)
     subject_selection_mode: Literal["fixed", "dynamic"] = "fixed"
     scoring_method: Literal["sum", "avg"] = "sum"
@@ -125,12 +136,18 @@ class AdmissionCriteriaCreate(BaseModel):
         description="List of Subject Group IDs"
     )
 
+    # Validity
+    policy_version: Optional[str] = "2025.1"
+    effective_from: Optional[date] = None
+    effective_to: Optional[date] = None
+
 
 class AdmissionPathDocumentUpsert(BaseModel):
     """Schema for updating document requirement."""
     document_type_id: int
     is_mandatory: bool = True
     requires_upload: bool = True
+    submission_format: Optional[str] = None
     display_order: int = 0
 
 

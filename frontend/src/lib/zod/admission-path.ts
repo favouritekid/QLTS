@@ -84,12 +84,20 @@ export const admissionCriteriaNestedSchema = z.object({
   // Thresholds
   min_gpa: z.number().nullable(),
   min_score: z.number().nullable(),
+  min_subject_score: z.number().nullable(),
+  max_possible_score: z.number().nullable(),
+  conditions: z.string().nullable(),
   
   // Rule Engine config
   required_subject_count: z.number().nullable(),
   subject_selection_mode: z.string().default("fixed"),
   scoring_method: z.string().default("sum"),
   
+  // Validity
+  policy_version: z.string().nullable().optional(),
+  effective_from: z.string().nullable().optional(), // Date string YYYY-MM-DD
+  effective_to: z.string().nullable().optional(),   // Date string YYYY-MM-DD
+
   // Subject groups for score initialization
   subject_groups: z.array(subjectGroupNestedSchema).default([]),
 })
@@ -125,6 +133,41 @@ export const admissionPathUpdateSchema = z.object({
 })
 
 export type AdmissionPathUpdate = z.infer<typeof admissionPathUpdateSchema>
+
+/**
+ * Create/Update Admission Criteria Schema
+ */
+export const admissionCriteriaCreateSchema = z.object({
+  min_gpa: z.number().min(0).max(10).nullable().optional(),
+  min_score: z.number().min(0).max(1500).nullable().optional(),
+  min_subject_score: z.number().min(0).max(10).nullable().optional(),
+  max_possible_score: z.number().min(0).max(1500).nullable().optional(),
+  conditions: z.string().nullable().optional(),
+  required_subject_count: z.number().int().min(1).nullable().optional(),
+  subject_selection_mode: z.enum(["fixed", "dynamic"]).default("fixed"),
+  scoring_method: z.enum(["sum", "avg"]).default("sum"),
+  subject_groups: z.array(z.number().int()).default([]), // List of IDs
+  
+  // Validity
+  policy_version: z.string().default("2025.1"),
+  effective_from: z.string().nullable().optional(),
+  effective_to: z.string().nullable().optional(),
+})
+
+export type AdmissionCriteriaCreate = z.infer<typeof admissionCriteriaCreateSchema>
+
+/**
+ * Update Path Document Schema
+ */
+export const admissionPathDocumentUpsertSchema = z.object({
+  document_type_id: z.number().int(),
+  is_mandatory: z.boolean(),
+  requires_upload: z.boolean(),
+  submission_format: z.string().nullable().optional(),
+  display_order: z.number().int().default(0),
+})
+
+export type AdmissionPathDocumentUpsert = z.infer<typeof admissionPathDocumentUpsertSchema>
 
 /**
  * Admission Path Response Schema

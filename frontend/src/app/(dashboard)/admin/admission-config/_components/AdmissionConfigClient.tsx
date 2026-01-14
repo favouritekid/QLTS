@@ -199,6 +199,7 @@ function Phase3Content({
         context={context}
         pathId={view.pathId}
         onNavigate={handleNavigateView}
+        initialStep={(view.wizardStep as 1 | 2 | 3) || 1}
       />
     );
   }

@@ -89,6 +89,9 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
                 .selectinload(ProgramOffering.program),
                 selectinload(AdmissionPath.admission_method),
                 selectinload(AdmissionPath.activator),
+                selectinload(AdmissionPath.criteria).selectinload(
+                    AdmissionCriteria.subject_group_mappings
+                ).selectinload(CriteriaSubjectGroup.subject_group),
             )
             .order_by(AdmissionPath.display_order, AdmissionPath.id)
         )
@@ -272,6 +275,9 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
             .selectinload(OfferingAcademicInfo.offering)
             .selectinload(ProgramOffering.program),
             selectinload(AdmissionPath.admission_method),
+            selectinload(AdmissionPath.criteria).selectinload(
+                AdmissionCriteria.subject_group_mappings
+            ).selectinload(CriteriaSubjectGroup.subject_group),
         )
         
         # Pagination

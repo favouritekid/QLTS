@@ -11,8 +11,11 @@ import type {
   AdmissionPathCreate,
   AdmissionPathResponse,
   AdmissionPathUpdate,
+  AdmissionCriteriaCreate,
+  AdmissionPathDocumentUpsert,
   ActivationValidationResponse,
   ResolvedDocumentResponse,
+  ResolvedDocumentListResponse,
 } from '@/lib/zod/admission-path'
 import type { CoverageMatrixResponse } from '@/app/(dashboard)/admin/admission-config/_components/shared/types'
 
@@ -90,6 +93,34 @@ export async function updateAdmissionPath(
   return response.data
 }
 
+/**
+ * Update Admission Criteria
+ */
+export async function updateCriteria(
+  pathId: number,
+  data: AdmissionCriteriaCreate
+): Promise<AdmissionPathResponse> {
+  const response = await api.put<AdmissionPathResponse>(
+    `/api/admission-config/paths/${pathId}/criteria`,
+    data
+  )
+  return response.data
+}
+
+/**
+ * Update Path Document Requirements
+ */
+export async function updatePathDocuments(
+  pathId: number,
+  data: AdmissionPathDocumentUpsert[]
+): Promise<ResolvedDocumentListResponse> { // Returns Resolved List
+  const response = await api.put<ResolvedDocumentListResponse>(
+    `/api/admission-config/paths/${pathId}/documents`,
+    data // List[AdmissionPathDocumentUpsert]
+  )
+  return response.data
+}
+
 // ============================================
 // ACTIVATION / DEACTIVATION (Admin only)
 // ============================================
@@ -144,10 +175,10 @@ export async function validatePathActivation(
 export async function getPathDocuments(
   pathId: number
 ): Promise<ResolvedDocumentResponse[]> {
-  const response = await api.get<ResolvedDocumentResponse[]>(
+  const response = await api.get<ResolvedDocumentListResponse>(
     `/api/admission-config/paths/${pathId}/documents`
   )
-  return response.data
+  return response.data.documents
 }
 
 // ============================================
@@ -179,6 +210,8 @@ export const admissionPathsApi = {
   getAdmissionPath,
   createAdmissionPath,
   updateAdmissionPath,
+  updateCriteria,
+  updatePathDocuments,
   // Actions (Admin only)
   activateAdmissionPath,
   deactivateAdmissionPath,

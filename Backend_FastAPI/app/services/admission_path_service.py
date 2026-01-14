@@ -16,12 +16,20 @@ from typing import Callable, Coroutine, List, Optional, Tuple, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.admission_config import AdmissionPath, DocumentGroup
+from app.models.admission_config import (
+    AdmissionPath, 
+    AdmissionCriteria, 
+    CriteriaSubjectGroup,
+    DocumentGroup,
+    DocumentGroupItem,
+)
 from app.models.user import User
 from app.repositories.admission_path_repository import AdmissionPathRepository
 from app.schemas.admission_path import (
     AdmissionPathCreate,
     AdmissionPathUpdate,
+    AdmissionCriteriaCreate,
+    AdmissionPathDocumentUpsert,
     ResolvedDocumentResponse,
 )
 from app.utils.exceptions import (
@@ -160,6 +168,124 @@ class AdmissionPathService:
         path = await self.repo.update(path, update_data)
         
         return path, _noop_callback
+    
+    async def upsert_criteria(
+        self,
+        path: AdmissionPath,
+        data: AdmissionCriteriaCreate,
+        user: User
+    ) -> Tuple[AdmissionPath, PostCommitCallback]:
+        """
+        Create or update admission criteria for a path.
+        """
+        # 1. Update/Create Criteria
+        if path.criteria:
+            # Update existing
+            for field, value in data.model_dump(exclude={"subject_groups"}).items():
+                setattr(path.criteria, field, value)
+            criteria = path.criteria
+        else:
+            # Create new
+            code = f"CRIT_{path.id}_{datetime.now().strftime('%Y%m%d%H%M')}"
+            criteria = AdmissionCriteria(
+                method_id=path.admission_method_id,
+                code=code,
+                name=f"Criteria for Path {path.id}",
+                **data.model_dump(exclude={"subject_groups"})
+            )
+            self.db.add(criteria)
+            await self.db.flush() # Get ID
+            
+            path.criteria_id = criteria.id
+            self.db.add(path)
+        
+        # 2. Update Subject Groups
+        # Clear existing
+        from sqlalchemy import delete
+        await self.db.execute(
+            delete(CriteriaSubjectGroup).where(CriteriaSubjectGroup.criteria_id == criteria.id)
+        )
+        
+        # Add new
+        for group_id in data.subject_groups:
+            self.db.add(CriteriaSubjectGroup(
+                criteria_id=criteria.id,
+                subject_group_id=group_id
+            ))
+            
+        await self.db.flush()
+        return path, _noop_callback
+
+    async def upsert_documents(
+        self,
+        path: AdmissionPath,
+        documents: List[AdmissionPathDocumentUpsert],
+        user: User
+    ) -> Tuple[List[ResolvedDocumentResponse], PostCommitCallback]:
+        """
+        Update document requirements for a path.
+        
+        Logic:
+        1. Find/Create method-specific DocumentGroup for this path's offering_type + method.
+        2. Sync items in that group.
+        """
+        if not path.academic_info or not path.academic_info.offering:
+            # Force load if missing (though repo loads it)
+             path = await self.repo.get_by_id_with_relations(path.id)
+             
+        offering_type_id = path.academic_info.offering.offering_type_id
+        method_id = path.admission_method_id
+        
+        # 1. Find Method-Specific Group
+        # TODO: Move query to repo if complex
+        from sqlalchemy import select
+        stmt = select(DocumentGroup).where(
+            DocumentGroup.offering_type_id == offering_type_id,
+            DocumentGroup.admission_method_id == method_id
+        )
+        result = await self.db.execute(stmt)
+        group = result.scalars().first()
+        
+        if not group:
+            # Create new group override
+            code = f"DOC_{offering_type_id}_{method_id}_{datetime.now().strftime('%M%S')}"
+            group = DocumentGroup(
+                offering_type_id=offering_type_id,
+                admission_method_id=method_id,
+                code=code,
+                name=f"Docs for Method {method_id} (Override)",
+                is_active=True
+            )
+            self.db.add(group)
+            await self.db.flush()
+            
+        # 2. Sync Items
+        # Clear existing
+        from sqlalchemy import delete
+        await self.db.execute(
+            delete(DocumentGroupItem).where(DocumentGroupItem.group_id == group.id)
+        )
+        
+        # Add new
+        for doc in documents:
+            # Default submission_format if requires_upload is True (constraint fix)
+            sub_fmt = doc.submission_format
+            if doc.requires_upload and not sub_fmt:
+                sub_fmt = "photo"
+
+            self.db.add(DocumentGroupItem(
+                group_id=group.id,
+                document_type_id=doc.document_type_id,
+                is_mandatory=doc.is_mandatory,
+                requires_upload=doc.requires_upload,
+                submission_format=sub_fmt,
+                display_order=doc.display_order
+            ))
+            
+        await self.db.flush()
+        
+        # Return resolved list
+        return await self.resolve_documents_for_path(path, offering_type_id)
     
     # =========================================================================
     # ACTIVATION LOGIC

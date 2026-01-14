@@ -15,12 +15,18 @@ import {
   updateAdmissionPath,
   activateAdmissionPath,
   deactivateAdmissionPath,
+
+  updateCriteria,
+  updatePathDocuments,
   getAcademicYears,
   getCoverageMatrix,
+  getPathDocuments,
 } from "@/lib/api/admission-paths"
 import type { 
   AdmissionPathCreate, 
   AdmissionPathUpdate,
+  AdmissionCriteriaCreate,
+  AdmissionPathDocumentUpsert,
 } from "@/lib/zod/admission-path"
 
 // ============================================
@@ -36,6 +42,7 @@ export const admissionPathKeys = {
   detail: (pathId: number) => [...admissionPathKeys.details(), pathId] as const,
   years: () => [...admissionPathKeys.all, "years"] as const,
   coverageMatrix: (academicInfoId: number) => [...admissionPathKeys.all, "coverage-matrix", academicInfoId] as const,
+  documents: (pathId: number) => [...admissionPathKeys.all, "documents", pathId] as const,
 }
 
 // ============================================
@@ -72,12 +79,15 @@ export function useAdmissionPathsByAcademicInfo(academicInfoId: number | undefin
 
 /**
  * Hook to fetch single path by ID.
+ * staleTime: 0 ensures fresh data in wizard edit mode
  */
 export function useAdmissionPath(pathId: number | undefined) {
   return useQuery({
     queryKey: admissionPathKeys.detail(pathId ?? 0),
     queryFn: () => getAdmissionPath(pathId!),
     enabled: !!pathId,
+    staleTime: 0, // Always fetch fresh data for wizard
+    refetchOnMount: true, // Refetch when component mounts
   })
 }
 
@@ -106,6 +116,18 @@ export function useCoverageMatrix(academicInfoId: number | undefined) {
 // ============================================
 // MUTATION HOOKS
 // ============================================
+
+/**
+ * Hook to fetch resolved documents for a path.
+ */
+export function usePathDocuments(pathId: number | undefined) {
+  return useQuery({
+    queryKey: admissionPathKeys.documents(pathId ?? 0),
+    queryFn: () => getPathDocuments(pathId!),
+    enabled: !!pathId,
+    staleTime: 0, // Always fresh for wizard
+  })
+}
 
 /**
  * Hook to create admission path.
@@ -138,6 +160,49 @@ export function useUpdateAdmissionPath() {
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.detail(updatedPath.id) })
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.lists() })
     },
+  })
+}
+
+/**
+ * Hook to update admission criteria.
+ */
+export function useUpdateCriteria() {
+  const queryClient = useQueryClient()
+  
+  return useMutation({
+    mutationFn: ({ pathId, data }: { pathId: number; data: AdmissionCriteriaCreate }) => 
+      updateCriteria(pathId, data),
+    onSuccess: (updatedPath) => {
+      queryClient.invalidateQueries({ queryKey: admissionPathKeys.detail(updatedPath.id) })
+      queryClient.invalidateQueries({ queryKey: admissionPathKeys.lists() })
+      // Update coverage matrix in case it affects readiness
+      queryClient.invalidateQueries({ queryKey: admissionPathKeys.all }) 
+    },
+  })
+}
+
+/**
+ * Hook to update path documents.
+ */
+export function useUpdatePathDocuments() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ pathId, data }: { pathId: number; data: AdmissionPathDocumentUpsert[] }) => {
+      console.log("useUpdatePathDocuments: Mutation called with:", { pathId, data });
+      return updatePathDocuments(pathId, data);
+    },
+    onSuccess: (result, variables) => {
+      console.log("useUpdatePathDocuments: Mutation success:", result);
+      // Invalidate path details (to refresh validation status)
+      queryClient.invalidateQueries({ queryKey: admissionPathKeys.detail(variables.pathId) })
+      // Invalidate documents query for this path
+      queryClient.invalidateQueries({ queryKey: admissionPathKeys.documents(variables.pathId) })
+      queryClient.invalidateQueries({ queryKey: admissionPathKeys.all })
+    },
+    onError: (error) => {
+      console.error("useUpdatePathDocuments: Mutation error:", error);
+    }
   })
 }
 

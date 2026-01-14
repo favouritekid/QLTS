@@ -26,6 +26,8 @@ from app.core.deps import (
 from app.schemas.admission_path import (
     AdmissionPathCreate,
     AdmissionPathUpdate,
+    AdmissionCriteriaCreate,
+    AdmissionPathDocumentUpsert,
     AdmissionPathResponse,
     AdmissionPathListResponse,
     AcademicYearListResponse,
@@ -74,6 +76,9 @@ def build_criteria_nested(path) -> AdmissionCriteriaNested | None:
         name=criteria.name,
         min_gpa=criteria.min_gpa,
         min_score=criteria.min_score,
+        min_subject_score=criteria.min_subject_score,
+        max_possible_score=criteria.max_possible_score,
+        conditions=criteria.conditions,
         required_subject_count=criteria.required_subject_count,
         subject_selection_mode=criteria.subject_selection_mode or "fixed",
         scoring_method=criteria.scoring_method or "sum",
@@ -249,22 +254,23 @@ async def create_admission_path(
 ):
     """
     Create a new admission path (draft status).
-    
+
     Requires: Admin or Manager role
     """
     service = AdmissionPathService(db)
     path, callback = await service.create_path(data, current_user)
     await db.commit()
     await callback()
-    
+
     # Reload with relationships
     path = await AdmissionPathRepository(db).get_by_id_with_relations(path.id)
-    
+
     response = AdmissionPathResponse.model_validate(path)
+    response.criteria = build_criteria_nested(path)  # Include criteria (will be None for new paths)
     response.available_actions = service.compute_available_actions(path)
     response.can_edit = service.compute_can_edit(path)
     response.can_activate = await service.compute_can_activate(path)
-    
+
     return response
 
 
@@ -279,18 +285,19 @@ async def get_admission_path(
 ):
     """
     Get a single admission path by ID.
-    
+
     IDOR: Protected via get_admission_path_for_user dependency.
     """
     service = AdmissionPathService(db)
-    
+
     response = AdmissionPathResponse.model_validate(path)
+    response.criteria = build_criteria_nested(path)  # Include criteria with subject groups
     response.available_actions = service.compute_available_actions(path)
     response.can_edit = service.compute_can_edit(path)
     response.can_activate = await service.compute_can_activate(path)
     can_activate, errors = await service.validate_activation(path)
     response.validation_errors = errors
-    
+
     return response
 
 
@@ -307,11 +314,46 @@ async def update_admission_path(
 ):
     """
     Update an admission path.
-    
+
     IDOR: Protected via get_admission_path_for_user dependency.
     """
     service = AdmissionPathService(db)
     path, callback = await service.update_path(path, data, current_user)
+    await db.commit()
+    await callback()
+
+    # Reload
+    path = await AdmissionPathRepository(db).get_by_id_with_relations(path.id)
+
+    response = AdmissionPathResponse.model_validate(path)
+    response.criteria = build_criteria_nested(path)  # Include criteria with subject groups
+    response.available_actions = service.compute_available_actions(path)
+    response.can_edit = service.compute_can_edit(path)
+    response.can_activate = await service.compute_can_activate(path)
+
+    return response
+
+
+@router.put(
+    "/paths/{path_id}/criteria",
+    response_model=AdmissionPathResponse,
+    summary="Update admission criteria"
+)
+async def update_admission_criteria(
+    data: AdmissionCriteriaCreate,
+    path: models.AdmissionPath = Depends(get_admission_path_for_user),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """
+    Update Admission Criteria (GPA, Scores, Subject Groups).
+    """
+    import structlog
+    logger = structlog.get_logger()
+    logger.info("Updating criteria", path_id=path.id, data=data.model_dump())
+
+    service = AdmissionPathService(db)
+    path, callback = await service.upsert_criteria(path, data, current_user)
     await db.commit()
     await callback()
     
@@ -319,11 +361,44 @@ async def update_admission_path(
     path = await AdmissionPathRepository(db).get_by_id_with_relations(path.id)
     
     response = AdmissionPathResponse.model_validate(path)
+    response.criteria = build_criteria_nested(path)
     response.available_actions = service.compute_available_actions(path)
     response.can_edit = service.compute_can_edit(path)
     response.can_activate = await service.compute_can_activate(path)
     
     return response
+
+
+@router.put(
+    "/paths/{path_id}/documents",
+    response_model=ResolvedDocumentListResponse,
+    summary="Update document requirements"
+)
+async def update_admission_documents(
+    documents: List[AdmissionPathDocumentUpsert],
+    path: models.AdmissionPath = Depends(get_admission_path_for_user),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """
+    Update Document Requirements (Checklist).
+    
+    Overrides default document group for this Method + Offering Type.
+    """
+    service = AdmissionPathService(db)
+    resolved_docs, callback = await service.upsert_documents(path, documents, current_user)
+    await db.commit()
+    await callback()
+    
+    # Need offering_type_id for response
+    offering_type_id = path.academic_info.offering.offering_type_id
+    
+    return ResolvedDocumentListResponse(
+        path_id=path.id,
+        offering_type_id=offering_type_id,
+        admission_method_id=path.admission_method_id,
+        documents=resolved_docs
+    )
 
 
 # =============================================================================
@@ -342,27 +417,28 @@ async def activate_admission_path(
 ):
     """
     Activate an admission path.
-    
+
     Validation:
     - Must have criteria
     - Must have document config
     - Must have quota > 0
-    
+
     IDOR: Protected via get_admission_path_for_user dependency.
     """
     service = AdmissionPathService(db)
     path, callback = await service.activate_path(path, current_user)
     await db.commit()
     await callback()
-    
+
     # Reload
     path = await AdmissionPathRepository(db).get_by_id_with_relations(path.id)
-    
+
     response = AdmissionPathResponse.model_validate(path)
+    response.criteria = build_criteria_nested(path)  # Include criteria with subject groups
     response.available_actions = service.compute_available_actions(path)
     response.can_edit = service.compute_can_edit(path)
     response.can_activate = False  # Already activated
-    
+
     return response
 
 
@@ -378,22 +454,23 @@ async def deactivate_admission_path(
 ):
     """
     Deactivate an active admission path.
-    
+
     IDOR: Protected via get_admission_path_for_user dependency.
     """
     service = AdmissionPathService(db)
     path, callback = await service.deactivate_path(path, current_user)
     await db.commit()
     await callback()
-    
+
     # Reload
     path = await AdmissionPathRepository(db).get_by_id_with_relations(path.id)
-    
+
     response = AdmissionPathResponse.model_validate(path)
+    response.criteria = build_criteria_nested(path)  # Include criteria with subject groups
     response.available_actions = service.compute_available_actions(path)
     response.can_edit = service.compute_can_edit(path)
     response.can_activate = await service.compute_can_activate(path)
-    
+
     return response
 
 
@@ -407,24 +484,26 @@ async def deactivate_admission_path(
     summary="Get resolved documents for path"
 )
 async def get_resolved_documents(
-    offering_type_id: int = Query(..., description="Offering type ID"),
     path: models.AdmissionPath = Depends(get_admission_path_for_user),
     db: AsyncSession = Depends(database.get_db),
 ):
     """
     Get resolved document requirements for a path.
-    
+
     Override Rule:
     - Shared docs (method_id = NULL) apply to all methods
     - Method-specific docs override shared
-    
+
     IDOR: Protected via get_admission_path_for_user dependency.
     """
+    # Get offering_type_id from path
+    offering_type_id = path.academic_info.offering.offering_type_id
+
     service = AdmissionPathService(db)
     documents, callback = await service.resolve_documents_for_path(path, offering_type_id)
     await db.commit()
     await callback()
-    
+
     return ResolvedDocumentListResponse(
         path_id=path.id,
         offering_type_id=offering_type_id,
