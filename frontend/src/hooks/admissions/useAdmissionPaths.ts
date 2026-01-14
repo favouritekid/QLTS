@@ -118,6 +118,8 @@ export function useCreateAdmissionPath() {
     onSuccess: (_newPath) => {
       // Invalidate list queries
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.lists() })
+      // Invalidate academic infos to update admission_status (READY → CONFIGURED)
+      queryClient.invalidateQueries({ queryKey: ["academic-infos"] })
     },
   })
 }
@@ -152,6 +154,8 @@ export function useActivateAdmissionPath() {
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.lists() })
       // Also invalidate forOffering since activated paths appear there
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.all })
+      // Invalidate academic infos to update path_count and admission_status
+      queryClient.invalidateQueries({ queryKey: ["academic-infos"] })
     },
   })
 }
@@ -168,6 +172,8 @@ export function useDeactivateAdmissionPath() {
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.detail(updatedPath.id) })
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.lists() })
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.all })
+      // Invalidate academic infos to update path_count and admission_status
+      queryClient.invalidateQueries({ queryKey: ["academic-infos"] })
     },
   })
 }

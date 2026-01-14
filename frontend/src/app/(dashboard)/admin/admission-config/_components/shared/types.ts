@@ -261,6 +261,9 @@ export interface OfferingAcademicInfo {
   applied_discount_policy_ids?: number[];
   created_at: string;
   updated_at: string;
+  // Computed fields from backend
+  path_count?: number;
+  admission_status?: 'CONFIGURED' | 'READY' | 'NOT_ELIGIBLE';
 }
 
 export interface OfferingAcademicInfoCreate {

@@ -952,9 +952,9 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
         is_active: Optional[bool] = None,
         skip: int = 0,
         limit: int = 1000,
-    ) -> List[models.OfferingAcademicInfo]:
+    ) -> List[Tuple[models.OfferingAcademicInfo, int]]:
         """
-        Get all academic infos as flat list for admin panels.
+        Get all academic infos as flat list with active admission path count.
 
         Args:
             is_active: Filter by deleted status (None = all, True = not deleted)
@@ -962,9 +962,20 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
             limit: Maximum results
 
         Returns:
-            List of OfferingAcademicInfo
+            List of (OfferingAcademicInfo, path_count) tuples
         """
-        query = select(models.OfferingAcademicInfo)
+        query = (
+            select(
+                models.OfferingAcademicInfo,
+                func.count(models.AdmissionPath.id).label("path_count")
+            )
+            .outerjoin(
+                models.AdmissionPath,
+                (models.AdmissionPath.academic_info_id == models.OfferingAcademicInfo.id) &
+                (models.AdmissionPath.status == "active")
+            )
+            .group_by(models.OfferingAcademicInfo.id)
+        )
 
         if is_active is True:
             query = query.where(models.OfferingAcademicInfo.is_deleted == False)
@@ -980,5 +991,5 @@ class OrganizationRepository(BaseRepository[models.OrganizationUnit]):
         )
 
         result = await self.db.execute(query)
-        return list(result.scalars().all())
+        return list(result.all())
 

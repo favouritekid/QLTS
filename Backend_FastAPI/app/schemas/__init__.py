@@ -58,6 +58,7 @@ from .organization import (
     OrganizationUnitCreate,
     OrganizationUnitShallow,
     OrganizationUnitType,
+    AdmissionStatus,
     OrganizationUnitUpdate,
     # Tree with aggregation schemas
     MajorWithStats,

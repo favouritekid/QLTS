@@ -1693,23 +1693,31 @@ async def get_all_academic_infos(
     is_active: Optional[bool] = None,
     skip: int = 0,
     limit: int = 1000,
-) -> List[models.OfferingAcademicInfo]:
-    """
-    Get all academic infos as flat list for admin panels.
-
-    Args:
-        db: Database session
-        is_active: Filter by active status (None = all, True = not deleted)
-        skip: Offset for pagination
-        limit: Maximum results
-
-    Returns:
-        List of OfferingAcademicInfo
-    """
+) -> List[schemas.OfferingAcademicInfo]:
     repo = OrganizationRepository(db)
-    return await repo.get_all_academic_infos(
+    # Receive list of tuples (model, path_count)
+    results = await repo.get_all_academic_infos(
         is_active=is_active,
         skip=skip,
         limit=limit
     )
+
+    response = []
+    for info_model, path_count in results:
+        # Map to Pydantic
+        item = schemas.OfferingAcademicInfo.model_validate(info_model)
+
+        # Populate computed fields
+        item.path_count = path_count
+
+        if path_count > 0:
+            item.admission_status = schemas.AdmissionStatus.CONFIGURED
+        elif (item.annual_admission_quota or 0) > 0:
+            item.admission_status = schemas.AdmissionStatus.READY
+        else:
+            item.admission_status = schemas.AdmissionStatus.NOT_ELIGIBLE
+
+        response.append(item)
+
+    return response
 

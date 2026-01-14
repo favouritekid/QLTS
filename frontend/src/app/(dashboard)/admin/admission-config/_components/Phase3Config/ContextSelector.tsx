@@ -13,7 +13,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { Calendar, GraduationCap, BookOpen, ArrowRight, AlertCircle } from "lucide-react";
+import { Calendar, GraduationCap, BookOpen, ArrowRight, AlertCircle, Check } from "lucide-react";
 import { useAcademicYears } from "@/hooks/admissions/useAdmissionPaths";
 import { useMajorPrograms } from "@/hooks/admissions/useProgramData";
 import { useProgramOfferings, useOfferingAcademicInfos } from "@/hooks/admissions/useProgramData";
@@ -217,11 +217,23 @@ export function ContextSelector({ onContextSelected }: ContextSelectorProps) {
                 {loadingOfferings ? (
                   <div className="p-2 text-sm text-muted-foreground">Đang tải chương trình...</div>
                 ) : filteredOfferings.length > 0 ? (
-                  filteredOfferings.map((offering: ProgramOffering) => (
-                    <SelectItem key={offering.id} value={offering.id.toString()}>
-                      {offering.program?.name || `Program #${offering.program_id}`} - {offering.offering_type}
-                    </SelectItem>
-                  ))
+                  filteredOfferings.map((offering: ProgramOffering) => {
+                    const relevantInfo = offering.academic_info_history?.find(
+                      (info) => info.academic_year === selectedYear
+                    );
+                    const isConfigured = relevantInfo?.admission_status === 'CONFIGURED';
+
+                    return (
+                      <SelectItem key={offering.id} value={offering.id.toString()}>
+                        <div className="flex items-center justify-between w-full gap-2 min-w-[300px]">
+                          <span>
+                            {offering.program?.name || `Program #${offering.program_id}`} - {offering.offering_type}
+                          </span>
+                          {isConfigured && <Check className="h-4 w-4 text-green-500" />}
+                        </div>
+                      </SelectItem>
+                    );
+                  })
                 ) : (
                   <div className="p-2 text-sm text-muted-foreground">
                     Không có chương trình nào cho ngành này

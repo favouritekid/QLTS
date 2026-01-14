@@ -12,7 +12,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { Calendar, Pencil, Trash2, Plus, Loader2 } from "lucide-react";
+import { Calendar, Pencil, Trash2, Plus, Loader2, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,6 +30,7 @@ import {
   useDeleteOfferingAcademicInfo,
 } from "@/hooks/admissions/useProgramData";
 import { useProgramOfferings } from "@/hooks/admissions/useProgramData";
+import { useAdmissionConfigState } from "@/hooks/admissions/useAdmissionConfigState";
 import type {
   OfferingAcademicInfo,
   OfferingAcademicInfoCreate,
@@ -223,6 +224,24 @@ export function AcademicInfoPanel() {
     });
   }, [data, offerings]);
 
+  const { navigate } = useAdmissionConfigState();
+
+  const handleNavigate = (item: OfferingAcademicInfo, action: 'view' | 'add') => {
+    const offering = offerings.find((o: any) => o.id === item.offering_id);
+    if (!offering) return;
+
+    navigate({
+      type: 'phase3',
+      context: {
+        academicYear: item.academic_year,
+        majorProgramId: offering.program_id,
+        offeringId: item.offering_id,
+        academicInfoId: item.id
+      },
+      view: { type: action === 'view' ? 'list' : 'wizard' }
+    });
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -335,6 +354,30 @@ export function AcademicInfoPanel() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-2">
+                          {/* Phase 3 Navigation Actions */}
+                          {item.admission_status === 'CONFIGURED' && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                              onClick={() => handleNavigate(item, 'view')}
+                              title="Xem cấu hình tuyển sinh"
+                            >
+                              <Eye className="h-4 w-4" />
+                            </Button>
+                          )}
+                          {item.admission_status === 'READY' && (
+                             <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-green-600 hover:text-green-700 hover:bg-green-50"
+                              onClick={() => handleNavigate(item, 'add')}
+                              title="Thêm cấu hình tuyển sinh"
+                            >
+                              <Plus className="h-4 w-4" />
+                            </Button>
+                          )}
+
                           <Button
                             variant="ghost"
                             size="sm"

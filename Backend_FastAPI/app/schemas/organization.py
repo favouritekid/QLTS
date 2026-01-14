@@ -34,6 +34,14 @@ class OrganizationUnitType(str, Enum):
         return [item.value for item in cls]
 
 
+class AdmissionStatus(str, Enum):
+    """Trạng thái cấu hình tuyển sinh của một Offering trong năm học"""
+    CONFIGURED = "CONFIGURED"      # Đã có cấu hình (Path count > 0)
+    READY = "READY"                # Chưa có path nhưng đủ chỉ tiêu (Quota > 0)
+    NOT_ELIGIBLE = "NOT_ELIGIBLE"  # Chưa đủ chỉ tiêu
+
+
+
 # =============================================================================
 # SCHEMA VALIDATION CHO JSON (CẤP 3)
 # =============================================================================
@@ -96,6 +104,11 @@ class OfferingAcademicInfo(OfferingAcademicInfoBase):
     updated_at: Optional[datetime] = None
     created_by_user_id: Optional[int] = None
     updated_by_user_id: Optional[int] = None
+    
+    # Computed fields
+    path_count: Optional[int] = Field(default=0, description="Số lượng đợt tuyển sinh")
+    admission_status: Optional[AdmissionStatus] = Field(default=None, description="Trạng thái cấu hình")
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -449,9 +462,10 @@ class ConfigDocumentTypeUpdate(BaseModel):
 class ConfigDocumentType(ConfigDocumentTypeBase):
     """Full schema for document type (includes ID)."""
     id: int = Field(..., description="Primary key")
-
     model_config = ConfigDict(from_attributes=True)
 
+# Resolve forward references
+ProgramOffering.model_rebuild()
 
 # --- Distribution Schemas ---
 class DistributionRuleBase(BaseModel):
@@ -478,6 +492,7 @@ class DistributionRuleResponse(DistributionRuleBase):
     unit_name: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
 
 # Resolve forward references
 ProgramOffering.model_rebuild()

@@ -10,7 +10,7 @@
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+
 import {
   Circle,
   ChevronRight,
@@ -105,11 +105,7 @@ export function PhaseNavigator({
       <Card className="p-3">
         <div className="flex items-center justify-between mb-2">
           <h3 className="font-semibold text-sm">Giai đoạn 1: Dữ liệu Danh mục</h3>
-          {isPhase1Active && (
-            <Badge variant="default" className="text-xs">
-              Hoạt động
-            </Badge>
-          )}
+
         </div>
         <div className="space-y-1">
           {PHASE1_STEPS.map((step) => {
@@ -141,11 +137,7 @@ export function PhaseNavigator({
       <Card className="p-3">
         <div className="flex items-center justify-between mb-2">
           <h3 className="font-semibold text-sm">Giai đoạn 2: Chương trình</h3>
-          {isPhase2Active && (
-            <Badge variant="default" className="text-xs">
-              Hoạt động
-            </Badge>
-          )}
+
         </div>
         <div className="space-y-1">
           {PHASE2_STEPS.map((step) => {
@@ -177,11 +169,7 @@ export function PhaseNavigator({
       <Card className="p-3">
         <div className="flex items-center justify-between mb-2">
           <h3 className="font-semibold text-sm">Giai đoạn 3: Cấu hình</h3>
-          {isPhase3Active && (
-            <Badge variant="default" className="text-xs">
-              Hoạt động
-            </Badge>
-          )}
+
         </div>
         <Button
           variant={isPhase3Active ? "default" : "outline"}
