@@ -24,14 +24,13 @@ Security Features:
 
 import random
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
-
+from typing import List, Optional, Dict, Any, Tuple, Callable
+from decimal import Decimal
 import structlog
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError  # Import IntegrityError
+from sqlalchemy import or_, and_, select, func
+from sqlalchemy.exc import IntegrityError
 
 from app.utils.redis_lock import acquire_redis_lock
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, joinedload
 
@@ -524,8 +523,8 @@ async def create_profile(
     # Step 12: Build applied_rules from relational data (SNAPSHOT)
     applied_rules = {
         # From AdmissionCriteria (via AdmissionPath → CriteriaSubjectGroup)
-        "min_gpa": full_path.criteria.min_gpa if full_path and full_path.criteria else None,
-        "min_score": full_path.criteria.min_score if full_path and full_path.criteria else None,
+        "min_gpa": float(full_path.criteria.min_gpa) if full_path and full_path.criteria and full_path.criteria.min_gpa is not None else None,
+        "min_score": float(full_path.criteria.min_score) if full_path and full_path.criteria and full_path.criteria.min_score is not None else None,
         
         # From AdmissionMethod
         "admission_method": full_path.admission_method.code if full_path and full_path.admission_method else None,
@@ -1033,37 +1032,72 @@ async def submit_and_evaluate(
     mandatory_docs = applied_rules.get("mandatory_docs", [])
     
     # ========================================
-    # Phase 6: Dynamic Admission Scoring Validation
+    # Phase 6: Dynamic Admission Scoring Validation (Refactored)
     # ========================================
-    # ========================================
-    # Phase 6: Dynamic Admission Scoring Validation
-    # ========================================
+
+    # Use AdmissionScoringService for robust validation (Best N, Min Score, etc.)
+    from .admission_scoring_service import AdmissionScoringService, ProfileStatus
+    from app.models.admission_config import AdmissionCriteria, SubjectSelectionMode, ScoringMethod
     
-    # 1. Get Scores from ProfileSubjectScore table
+    # 1. Reconstruct Criteria from Snapshot (applied_rules)
+    # Note: applied_rules is a dict snapshot. We wrap it in a pseudo-model or Dict 
+    # compatible with ScoringService if possible, or construct a temporary Criteria object.
+    # Since Service expects a model, we populate one.
+    
+    snapshot_criteria = models.AdmissionCriteria(
+        code=applied_rules.get("admission_method", {}).get("code", "SNAPSHOT"),
+        min_gpa=float(applied_rules.get("min_gpa", 0)) if applied_rules.get("min_gpa") else None,
+        min_score=float(applied_rules.get("min_score", 0)) if applied_rules.get("min_score") else None,
+        min_subject_score=float(applied_rules.get("min_subject_score", 0)) if applied_rules.get("min_subject_score") else None,
+        required_subject_count=applied_rules.get("required_subject_count"),
+        subject_selection_mode=applied_rules.get("subject_selection_mode", "fixed"),
+        scoring_method=applied_rules.get("scoring_method", "sum"),
+        # subject_group_mappings are tricky from snapshot. 
+        # For Phase 1/2 we assume "fixed" mode or explicit "subject_groups" list in snapshot.
+    )
+
+    # 2. Get Scores
     scores = await admission_repo.get_profile_scores(profile.id)
+    subject_scores_map = {s.subject.code: Decimal(str(s.score)) for s in scores}
     
-    # 2. Calculate GPA & Validate
-    min_gpa = float(applied_rules.get("min_gpa", 0))
+    # 3. Resolve Allowed Subjects
+    # If using "fixed" mode, we need the ordered list of subject codes.
+    # In snapshot, this might be in 'mandatory_subjects' or 'allowed_subjects' list.
+    # For compatibility with legacy snapshot: use all scored subjects as allowed if not restricted.
+    # Ideally, snapshot should contain 'allowed_subject_codes'.
+    allowed_subjects = applied_rules.get("allowed_subject_codes", list(subject_scores_map.keys()))
     
-    if min_gpa > 0:
-        if not scores:
-            errors.append("Chưa nhập điểm môn học nào (yêu cầu xét tuyển)")
-        else:
-            # Simple average calculation for Phase 1
-            # TODO (Phase 2): Implement weighted average based on admission_method criteria
-            total_score = sum(float(s.score) for s in scores)
-            gpa = total_score / len(scores)
+    # 4. Calculate Score using Engine
+    score_result = AdmissionScoringService.calculate_score(
+        criteria=snapshot_criteria,
+        subject_scores=subject_scores_map,
+        allowed_subjects=allowed_subjects,
+    )
+    
+    # 5. Handle Validation Results
+    if score_result.status != ProfileStatus.VALID:
+        # Collect failure reasons
+        for reason in score_result.failure_reasons:
+            errors.append(f"Điểm xét tuyển không đạt: {reason}")
             
-            if gpa < min_gpa:
-                errors.append(f"Điểm trung bình (GPA) không đạt: {gpa:.2f} < {min_gpa}")
-            else:
-                log.info(
-                    "GPA validation passed",
-                    profile_id=profile.id,
-                    gpa=gpa,
-                    min_gpa=min_gpa,
-                    calculated_at=datetime.now(timezone.utc).isoformat()
-                )
+        log.warning(
+            "Scoring validation failed",
+            profile_id=profile.id,
+            reasons=score_result.failure_reasons,
+            disqualification_codes=score_result.disqualification_codes
+        )
+    else:
+        # Valid! Update profile with official calculated metrics
+        # (transient or persistent depending on design - here updating admission_scores JSON)
+        official_gpa = float(score_result.final_score) if score_result.final_score else 0.0
+        
+        # Log success
+        log.info(
+            "Scoring validation passed",
+            profile_id=profile.id,
+            final_score=official_gpa,
+            selected_subjects=score_result.selected_subjects
+        )
 
     # Validation 2: Check mandatory documents (using relational ProfileDocument)
     uploaded_docs = await admission_repo.get_uploaded_documents(profile.id)

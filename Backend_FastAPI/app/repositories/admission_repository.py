@@ -84,6 +84,25 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
     # CREATE PROFILE METHODS
     # =========================================================================
 
+    async def get_profile_by_lead_id(
+        self,
+        lead_id: int
+    ) -> Optional[models.AdmissionProfile]:
+        """
+        Get admission profile by lead ID.
+        
+        Args:
+            lead_id: Lead ID
+            
+        Returns:
+            AdmissionProfile or None
+        """
+        stmt = select(models.AdmissionProfile).where(
+            models.AdmissionProfile.lead_id == lead_id
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def get_lead_with_offering(
         self,
         lead_id: int

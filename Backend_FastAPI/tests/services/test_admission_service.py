@@ -369,6 +369,111 @@ class TestSubmitAndEvaluate:
         # Should have validation errors
         assert data.get("validation_errors") is not None or "validation" in str(data).lower()
 
+    async def test_submit_respects_min_subject_score(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """
+        Submit should FAIL if any subject is below `min_subject_score` (Diểm liệt).
+        """
+        unit_id = seed_lead_dependencies["unit_id"]
+        major_id = seed_lead_dependencies["major_program_id"]
+        
+        # Rules: min_gpa=5.0, min_subject_score=2.0 (Liệt < 2.0)
+        rules = {
+            "min_gpa": 5.0,
+            "min_subject_score": 2.0,
+            "mandatory_docs": []
+        }
+        
+        offering_id = await create_program_offering(major_id, rules)
+        await create_offering_academic_info(offering_id, 2025)
+        
+        lead_id = await create_test_lead(unit_id, offering_id=offering_id)
+        
+        headers = await get_auth_headers(client, officer_user_in_db)
+        
+        # Create profile
+        create_res = await client.post("/api/admissions", json={"lead_id": lead_id}, headers=headers)
+        profile_id = create_res.json()["id"]
+        
+        # Input scores: Avg = 5.0 (Pass min_gpa), but One subject = 1.0 (Fail min_subject)
+        scores_data = {
+            "subject_scores": {"MATH": 9.0, "PHYSICS": 5.0, "CHEMISTRY": 1.0}
+        }
+        
+        # Update scores
+        await client.put(
+            f"/api/admissions/{profile_id}",
+            json={"citizen_id": "777788889999", "admission_scores": scores_data, "version": 1},
+            headers=headers
+        )
+        
+        # Submit -> Should Fail
+        submit_res = await client.post(f"/api/admissions/{profile_id}/submit", headers=headers)
+        data = submit_res.json()
+        
+        # Assertions
+        assert data.get("status") == "draft"
+        errors = str(data.get("validation_errors", []))
+        assert "Điểm xét tuyển không đạt" in errors
+        assert "SUBJECT_BELOW_THRESHOLD" in errors or "dưới điểm liệt" in errors or "thấp hơn" in errors
+
+    async def test_submit_uses_best_n_logic(
+        self,
+        client: AsyncClient,
+        officer_user_in_db: dict,
+        seed_lead_dependencies: dict,
+    ):
+        """
+        Submit should PASS if Best 3 subjects > min_gpa, ignoring low 4th subject.
+        """
+        unit_id = seed_lead_dependencies["unit_id"]
+        major_id = seed_lead_dependencies["major_program_id"]
+        
+        # Rules: Best 3 subjects, min_gpa=8.0
+        rules = {
+            "min_gpa": 8.0,
+            "subject_selection_mode": "best_n",
+            "required_subject_count": 3
+        }
+        
+        offering_id = await create_program_offering(major_id, rules)
+        await create_offering_academic_info(offering_id, 2025)
+        
+        lead_id = await create_test_lead(unit_id, offering_id=offering_id)
+        
+        headers = await get_auth_headers(client, officer_user_in_db)
+        
+        # Create profile
+        create_res = await client.post("/api/admissions", json={"lead_id": lead_id}, headers=headers)
+        profile_id = create_res.json()["id"]
+        
+        # Input: 3 High scores (9,9,9) + 1 Low score (2)
+        # Avg(All) = 7.25 (FAIL)
+        # Avg(Best 3) = 9.0 (PASS)
+        scores_data = {
+            "subject_scores": {"MATH": 9.0, "PHYSICS": 9.0, "ENGLISH": 9.0, "HISTORY": 2.0}
+        }
+        
+        # Update scores
+        await client.put(
+            f"/api/admissions/{profile_id}",
+            json={"citizen_id": "123456789012", "admission_scores": scores_data, "version": 1},
+            headers=headers
+        )
+        
+        # Submit -> Should Pass
+        submit_res = await client.post(f"/api/admissions/{profile_id}/submit", headers=headers)
+        
+        assert submit_res.status_code == 200
+        data = submit_res.json()
+        
+        assert data["status"] == "submitted"
+        assert not data.get("validation_errors")
+
 
 # ==============================================================================
 # TEST: ENROLL STUDENT (IDEMPOTENCY)
