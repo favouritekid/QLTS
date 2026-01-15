@@ -55,10 +55,10 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
       setMaxScore(path.criteria.max_possible_score?.toString() || "");
       setConditions(path.criteria.conditions || "");
       setRequiredSubjectCount(path.criteria.required_subject_count?.toString() || "");
-      
+
       setScoringMethod((path.criteria.scoring_method as "sum" | "avg") || "sum");
       setSelectionMode((path.criteria.subject_selection_mode as "fixed" | "dynamic") || "fixed");
-      
+
       setPolicyVersion(path.criteria.policy_version || "2025.1");
       setEffectiveFrom(path.criteria.effective_from || "");
       setEffectiveTo(path.criteria.effective_to || "");
@@ -67,7 +67,16 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
       const groupIds = path.criteria.subject_groups.map(g => g.id);
       setSelectedGroups(groupIds);
     }
-  }, [path.criteria]);
+  }, [
+    path.criteria,
+    path.criteria?.min_gpa,
+    path.criteria?.min_score,
+    path.criteria?.min_subject_score,
+    path.criteria?.max_possible_score,
+    path.criteria?.scoring_method,
+    path.criteria?.subject_selection_mode,
+    path.updated_at, // Trigger re-sync when path is updated
+  ]);
 
   // Filter subject groups based on search query
   // Filter subject groups based on search query

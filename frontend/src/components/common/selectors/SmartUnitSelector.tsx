@@ -142,10 +142,15 @@ function processUnits(
 
       return true;
     })
-    .map((item) => ({
-      ...item,
-      displayName: `${"└─ ".repeat(item.level)}${item.unit.name}`,
-    }));
+    .map((item) => {
+      // Create proper hierarchical display with indentation
+      const indent = "  ".repeat(item.level); // 2 spaces per level
+      const prefix = item.level > 0 ? "└─ " : "";
+      return {
+        ...item,
+        displayName: `${indent}${prefix}${item.unit.name}`,
+      };
+    });
 }
 
 // =============================================================================

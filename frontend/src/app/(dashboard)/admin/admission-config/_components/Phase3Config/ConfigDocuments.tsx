@@ -6,8 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, ArrowLeft, Archive } from "lucide-react";
+import { Loader2, ArrowLeft, Archive, AlertTriangle, Info } from "lucide-react";
 import { toast } from "sonner";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 import { useUpdatePathDocuments, usePathDocuments } from "@/hooks/admissions/useAdmissionPaths";
 import { useDocumentTypes } from "@/hooks/admissions/useMasterData";
@@ -135,19 +136,42 @@ export function ConfigDocuments({ path, onFinish, onBack }: ConfigDocumentsProps
   // Groupdoc types for easier selection? Or just list?
   // Flat list for now
   
+  // Detachment check: If ANY resolved doc has source="method_override", we are detached.
+  const isDetached = resolvedDocs?.some(doc => doc.source === "method_override");
+
   return (
     <Card>
       <CardHeader>
         <CardTitle>Cấu hình Hồ sơ Yêu cầu</CardTitle>
         <CardDescription>
           Chọn các loại giấy tờ thí sinh cần nộp cho đợt tuyển sinh này.
-          <br/>
-          <span className="text-xs text-muted-foreground">
-            Lưu ý: Cấu hình này sẽ ghi đè cấu hình mặc định của Phương thức nếu có.
-          </span>
         </CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-6">
+        
+        {/* Detachment Warning/Info */}
+        {!isLoading && (
+          <div className="mb-4">
+            {isDetached ? (
+              <Alert variant="info" className="bg-blue-50 text-blue-900 border-blue-200">
+                <Info className="h-4 w-4" />
+                <AlertTitle>Cấu hình riêng biệt (Forked)</AlertTitle>
+                <AlertDescription>
+                  Phương thức này đang sử dụng cấu hình hồ sơ riêng, không còn đồng bộ với cấu hình chung (Shared Defaults).
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <Alert variant="warning" className="bg-yellow-50 text-yellow-900 border-yellow-200">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertTitle>Chú ý: Ghi đè cấu hình chung</AlertTitle>
+                <AlertDescription>
+                  Hiện tại đang sử dụng cấu hình chung. Nếu bạn điều chỉnh và <strong>Lưu</strong>, 
+                  hồ sơ này sẽ tách ra (Fork) và <strong>không còn tự động cập nhật</strong> theo cấu hình chung nữa.
+                </AlertDescription>
+              </Alert>
+            )}
+          </div>
+        )}
         {isLoading ? (
           <div className="flex justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />

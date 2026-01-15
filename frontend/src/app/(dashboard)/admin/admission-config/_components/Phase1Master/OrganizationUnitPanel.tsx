@@ -19,6 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { SmartUnitSelector } from "@/components/common/selectors/SmartUnitSelector";
 import { CRUDTable } from "../shared/CRUDTable";
 import {
   useOrganizationUnits,
@@ -236,30 +237,21 @@ export function OrganizationUnitPanel() {
 
         <div className="space-y-2">
           <Label htmlFor="parent_id">Đơn vị cấp trên (Tùy chọn)</Label>
-          <Select
-            value={(formData as any).parent_id?.toString() || "__none__"}
-            onValueChange={(value) =>
+          <SmartUnitSelector
+            value={(formData as any).parent_id?.toString()}
+            onChange={(value) =>
               setFormData({
                 ...formData,
-                parent_id: value === "__none__" ? null : parseInt(value)
+                parent_id: value ? parseInt(value) : null
               } as any)
             }
-          >
-            <SelectTrigger id="parent_id">
-              <SelectValue placeholder="Không có (Đơn vị cấp cao nhất)" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__none__">Không có (Đơn vị cấp cao nhất)</SelectItem>
-              {allUnitsFlat
-                .filter((unit) => unit.id !== item?.id) // Prevent self-parenting
-                .sort((a, b) => a.name.localeCompare(b.name))
-                .map((unit) => (
-                  <SelectItem key={unit.id} value={unit.id.toString()}>
-                    {unit.name} ({unit.type})
-                  </SelectItem>
-                ))}
-            </SelectContent>
-          </Select>
+            placeholder="Không có (Đơn vị cấp cao nhất)"
+            allowNone={true}
+            noneLabel="Không có (Đơn vị cấp cao nhất)"
+            excludeUnitId={item?.id} // Prevent self-parenting and circular dependencies
+            variant="combobox"
+            activeOnly={false} // Show inactive units for editing existing relationships
+          />
           <p className="text-xs text-muted-foreground">
             Đơn vị cấp trên trực tiếp (để trống nếu là đơn vị cấp cao nhất)
           </p>

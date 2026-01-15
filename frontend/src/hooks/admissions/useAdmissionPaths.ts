@@ -151,13 +151,14 @@ export function useCreateAdmissionPath() {
  */
 export function useUpdateAdmissionPath() {
   const queryClient = useQueryClient()
-  
+
   return useMutation({
-    mutationFn: ({ pathId, data }: { pathId: number; data: AdmissionPathUpdate }) => 
+    mutationFn: ({ pathId, data }: { pathId: number; data: AdmissionPathUpdate }) =>
       updateAdmissionPath(pathId, data),
     onSuccess: (updatedPath) => {
-      // Invalidate specific path and list queries
-      queryClient.invalidateQueries({ queryKey: admissionPathKeys.detail(updatedPath.id) })
+      // Immediately update cache with fresh data to avoid stale prop issue
+      queryClient.setQueryData(admissionPathKeys.detail(updatedPath.id), updatedPath)
+      // Invalidate list queries
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.lists() })
     },
   })
@@ -168,15 +169,17 @@ export function useUpdateAdmissionPath() {
  */
 export function useUpdateCriteria() {
   const queryClient = useQueryClient()
-  
+
   return useMutation({
-    mutationFn: ({ pathId, data }: { pathId: number; data: AdmissionCriteriaCreate }) => 
+    mutationFn: ({ pathId, data }: { pathId: number; data: AdmissionCriteriaCreate }) =>
       updateCriteria(pathId, data),
     onSuccess: (updatedPath) => {
-      queryClient.invalidateQueries({ queryKey: admissionPathKeys.detail(updatedPath.id) })
+      // Immediately update cache with fresh data to avoid stale prop issue
+      queryClient.setQueryData(admissionPathKeys.detail(updatedPath.id), updatedPath)
+      // Invalidate related queries
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.lists() })
       // Update coverage matrix in case it affects readiness
-      queryClient.invalidateQueries({ queryKey: admissionPathKeys.all }) 
+      queryClient.invalidateQueries({ queryKey: admissionPathKeys.all })
     },
   })
 }
@@ -192,12 +195,14 @@ export function useUpdatePathDocuments() {
       console.log("useUpdatePathDocuments: Mutation called with:", { pathId, data });
       return updatePathDocuments(pathId, data);
     },
-    onSuccess: (result, variables) => {
-      console.log("useUpdatePathDocuments: Mutation success:", result);
-      // Invalidate path details (to refresh validation status)
-      queryClient.invalidateQueries({ queryKey: admissionPathKeys.detail(variables.pathId) })
+    onSuccess: (updatedPath, variables) => {
+      console.log("useUpdatePathDocuments: Mutation success:", updatedPath);
+      // Immediately update cache with fresh data to avoid stale prop issue
+      queryClient.setQueryData(admissionPathKeys.detail(variables.pathId), updatedPath)
       // Invalidate documents query for this path
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.documents(variables.pathId) })
+      // Invalidate related queries
+      queryClient.invalidateQueries({ queryKey: admissionPathKeys.lists() })
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.all })
     },
     onError: (error) => {

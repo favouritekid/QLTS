@@ -24,8 +24,6 @@ import {
   useCreateAdmissionPath,
   useUpdateAdmissionPath,
 } from "@/hooks/admissions/useAdmissionPaths";
-import { useQueryClient } from "@tanstack/react-query";
-import { admissionPathKeys } from "@/hooks/admissions/useAdmissionPaths";
 import { useAdmissionMethods } from "@/hooks/admissions/useMasterData";
 import { ConfigCriteria } from "./ConfigCriteria";
 import { ConfigDocuments } from "./ConfigDocuments";
@@ -77,9 +75,6 @@ export function PathWizard({ context, pathId, onNavigate, initialStep = 1 }: Pat
   // Router and params for URL synchronization
   const router = useRouter();
   const searchParams = useSearchParams();
-
-  // Query Client for manual refetching
-  const queryClient = useQueryClient();
 
   // Update URL when step changes
   useEffect(() => {
@@ -149,12 +144,8 @@ export function PathWizard({ context, pathId, onNavigate, initialStep = 1 }: Pat
         toast.success("Tạo đợt tuyển sinh thành công");
       }
 
-      // Refetch path data to get updated information
-      if (savedId) {
-        await queryClient.invalidateQueries({
-          queryKey: admissionPathKeys.detail(savedId)
-        });
-      }
+      // Note: Query cache is automatically updated by mutation hooks via setQueryData
+      // No need for manual invalidation here
 
       // Move to Step 2
       setStep(2);
@@ -300,8 +291,8 @@ export function PathWizard({ context, pathId, onNavigate, initialStep = 1 }: Pat
 
       {step === 2 && path && (
         <ConfigCriteria
-          // FIX: Add key to force re-mount when path/criteria changes
-          key={`step2-${path.updated_at}-${path.criteria?.id || 'no-criteria'}`}
+          // Force re-mount when path/criteria changes with granular dependencies
+          key={`step2-${path.id}-${path.criteria?.id || 'no-criteria'}-${path.criteria?.subject_groups?.length || 0}`}
           path={path}
           onNext={() => setStep(3)}
           onBack={() => setStep(1)}
@@ -309,20 +300,20 @@ export function PathWizard({ context, pathId, onNavigate, initialStep = 1 }: Pat
       )}
 
       {step === 3 && path && (
-        <ConfigDocuments 
-          // FIX: Add key to force re-mount
-          key={`step3-${path.updated_at}`}
-          path={path} 
-          onFinish={() => setStep(4)} 
-          onBack={() => setStep(2)} 
+        <ConfigDocuments
+          // Force re-mount when path changes
+          key={`step3-${path.id}-${path.validation_errors.length}`}
+          path={path}
+          onFinish={() => setStep(4)}
+          onBack={() => setStep(2)}
         />
       )}
 
       {step === 4 && path && (
         // NEW: Review Step
         <div className="animate-in fade-in slide-in-from-right-4 duration-300">
-          <ConfigReview 
-            key={`step4-${path.updated_at}`}
+          <ConfigReview
+            key={`step4-${path.id}-${path.status}-${path.validation_errors.length}`}
             path={path}
             onBack={() => setStep(3)}
             onFinish={handleBackToList}

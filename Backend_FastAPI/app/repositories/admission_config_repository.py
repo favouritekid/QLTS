@@ -30,6 +30,7 @@ from app.models.admission_config import (
     AdmissionCriteria,
     CriteriaSubjectGroup,
     OfferingAdmissionConfig,
+    AdmissionPath,
 )
 
 # Type alias for load depth control
@@ -43,6 +44,49 @@ class AdmissionConfigRepository(BaseRepository[AdmissionCriteria]):
 
     def __init__(self, db: AsyncSession):
         super().__init__(db, AdmissionCriteria)
+
+    # =========================================================================
+    # INTEGRITY CHECKS (Red Team Fix)
+    # =========================================================================
+
+    async def check_subject_usage(self, subject_id: int) -> bool:
+        """
+        Check if Subject is used in any SubjectGroup.
+        Returns True if used, False if safe to delete.
+        """
+        query = select(SubjectGroupSubject).where(SubjectGroupSubject.subject_id == subject_id).limit(1)
+        result = await self.db.execute(query)
+        return result.first() is not None
+
+    async def check_subject_group_usage(self, group_id: int) -> bool:
+        """
+        Check if SubjectGroup is used in any AdmissionCriteria.
+        Returns True if used, False if safe to delete.
+        """
+        query = select(CriteriaSubjectGroup).where(CriteriaSubjectGroup.subject_group_id == group_id).limit(1)
+        result = await self.db.execute(query)
+        return result.first() is not None
+
+    async def check_criteria_usage(self, criteria_id: int) -> bool:
+        """
+        Check if AdmissionCriteria is used in any OfferingAdmissionConfig or AdmissionPath.
+        Returns True if used, False if safe to delete.
+        """
+        # Check OfferingConfig
+        q1 = select(OfferingAdmissionConfig).where(OfferingAdmissionConfig.admission_criteria_id == criteria_id).limit(1)
+        r1 = await self.db.execute(q1)
+        if r1.first():
+            return True
+            
+        # Check AdmissionPath
+        # Note: AdmissionPath links to criteria via relationship, likely criteria_id fk
+        # If model definition is standard:
+        q2 = select(AdmissionPath).where(AdmissionPath.admission_criteria_id == criteria_id).limit(1)
+        r2 = await self.db.execute(q2)
+        if r2.first():
+            return True
+            
+        return False
 
     async def get_filtered(
         self,

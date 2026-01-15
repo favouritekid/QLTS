@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SmartUnitSelector } from "@/components/common/selectors/SmartUnitSelector";
 import { CRUDTable } from "../shared/CRUDTable";
 import {
   useMajorPrograms,
@@ -286,23 +287,16 @@ export function MajorProgramPanel() {
 
         <div className="space-y-2">
           <Label htmlFor="unit_id">Đơn vị quản lý <span className="text-destructive">*</span></Label>
-          <Select
-            value={formData.unit_id?.toString() || ""}
-            onValueChange={(value) =>
-              setFormData({ ...formData, unit_id: parseInt(value) })
+          <SmartUnitSelector
+            value={formData.unit_id?.toString()}
+            onChange={(value) =>
+              setFormData({ ...formData, unit_id: value ? parseInt(value) : null })
             }
-          >
-            <SelectTrigger id="unit_id">
-              <SelectValue placeholder="Chọn khoa/bộ môn quản lý" />
-            </SelectTrigger>
-            <SelectContent>
-              {units.map((unit: { id: number; name: string; type: string }) => (
-                <SelectItem key={unit.id} value={unit.id.toString()}>
-                  {unit.name} ({unit.type})
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            placeholder="Chọn khoa/bộ môn quản lý"
+            variant="combobox"
+            filterTypes={["Khoa", "Bộ môn", "Trung tâm"]} // Only show relevant organizational units
+            activeOnly={true} // Only show active units for assignment
+          />
           <p className="text-xs text-muted-foreground">
             Khoa hoặc bộ môn trực tiếp quản lý chuyên môn của ngành này
           </p>

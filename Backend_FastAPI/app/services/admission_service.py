@@ -28,6 +28,7 @@ from typing import List, Dict, Any, Optional
 
 import structlog
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError  # Import IntegrityError
 
 from app.utils.redis_lock import acquire_redis_lock
 from sqlalchemy.exc import IntegrityError
@@ -402,30 +403,35 @@ async def create_profile(
                 lead_id=lead_id,
                 lead_unit_id=lead.unit_id,
             )
-            raise PermissionDeniedError(
-                "You don't have permission to create admission profile for this lead"
+            # FAKE 404 for security (inference protection)
+            raise ResourceNotFoundError(f"Lead with ID {lead_id} not found")
+
+    # ✅ SPRINT 7 FIX: Concurrency Control
+    # Prevent race conditions where multiple requests create duplicate profiles
+    async with acquire_redis_lock(f"lock:create_profile:{lead_id}", timeout=5):
+        # Double-check inside lock (idempotency)
+        # We need to re-fetch or check relationship if session was refreshed, 
+        # but since we are in same session transaction, checking the validation below is fine 
+        # IF we trust the session sync. 
+        # Better: Re-query specifically for existence check to be safe.
+        
+        existing_profile = await admission_repo.get_profile_by_lead_id(lead_id)
+        if existing_profile:
+             raise ConflictError(f"Lead {lead_id} already has an admission profile")
+
+        # Step 3: Check Lead has offering_id
+        if not lead.offering_id:
+            log.warning(
+                "Lead has no offering_id (required for admission rules)",
+                lead_id=lead_id,
+            )
+            raise BadRequest(
+                "Lead must have a program offering assigned before creating admission profile"
             )
 
-    # Step 3: Check Lead has offering_id
-    if not lead.offering_id:
-        log.warning(
-            "Lead has no offering_id (required for admission rules)",
-            lead_id=lead_id,
-        )
-        raise BadRequest(
-            "Lead must have a program offering assigned before creating admission profile"
-        )
-
-    # Step 4: Check Lead doesn't already have admission_profile
-    if lead.admission_profile:
-        log.warning(
-            "Lead already has admission profile",
-            lead_id=lead_id,
-            existing_profile_id=lead.admission_profile.id,
-        )
-        raise BadRequest(
-            f"Lead already has an admission profile (ID: {lead.admission_profile.id})"
-        )
+        # Step 4: Check Lead check (Redundant with Step 2 re-check but kept for flow)
+        if lead.admission_profile:
+             raise ConflictError(f"Lead {lead_id} already has an admission profile")
 
     # Step 5: Validate offering exists
     if not lead.offering:
@@ -577,7 +583,11 @@ async def create_profile(
     )
 
     db.add(new_profile)
-    await db.flush()  # Get ID without committing (router commits)
+    try:
+        await db.flush()  # Get ID without committing (router commits)
+    except IntegrityError as e:
+        log.error("IntegrityError during profile creation (race condition)", error=str(e))
+        raise ConflictError(f"Lead {lead_id} already has an admission profile (detected at DB layer)")
 
     # Step 16: Initialize ProfileDocument records
     await admission_repo.initialize_documents_for_profile(

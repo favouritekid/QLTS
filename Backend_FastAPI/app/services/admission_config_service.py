@@ -177,7 +177,11 @@ class AdmissionConfigService:
         Returns:
             Tuple of (success, callback)
         """
-        # TODO: Add check for linked AdmissionPaths when that relationship is established
+
+        # PRE-CHECK: Integrity
+        is_used = await self.repo.check_criteria_usage(criteria.id)
+        if is_used:
+            raise BusinessRuleViolation("Cannot delete criteria: It is currently used in active Admission Paths or Offering Configs.")
         
         success = await self.repo.delete_criteria(criteria.id)
         return success, _noop_callback
@@ -264,6 +268,11 @@ class AdmissionConfigService:
         Raises:
             ResourceNotFoundError if subject not found
         """
+        # PRE-CHECK: Integrity
+        is_used = await self.repo.check_subject_usage(subject_id)
+        if is_used:
+            raise BusinessRuleViolation("Cannot delete subject: It is currently used in one or more Subject Groups.")
+
         success = await self.repo.delete_subject(subject_id)
         if not success:
             raise ResourceNotFoundError(f"Subject with ID {subject_id} not found")
@@ -352,6 +361,11 @@ class AdmissionConfigService:
         Raises:
             ResourceNotFoundError if group not found
         """
+        # PRE-CHECK: Integrity
+        is_used = await self.repo.check_subject_group_usage(group_id)
+        if is_used:
+            raise BusinessRuleViolation("Cannot delete subject group: It is currently used in one or more Admission Criteria.")
+
         success = await self.repo.delete_subject_group(group_id)
         if not success:
             raise ResourceNotFoundError(f"Subject group with ID {group_id} not found")
