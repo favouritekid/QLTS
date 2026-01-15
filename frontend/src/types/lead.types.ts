@@ -257,11 +257,19 @@ export interface ConsultationUpdate {
  * Application Status Enum
  */
 export type ApplicationStatus =
+  | "draft" // Nháp
   | "pending" // Chờ xử lý (mặc định)
   | "missing_documents" // Chờ bổ sung (do thiếu/lỗi checklist)
   | "completed" // Đã đủ hồ sơ
   | "passed" // Đạt
-  | "failed"; // Trượt
+  | "failed" // Trượt
+  | "submitted" // Đã nộp
+  | "approved" // Đã duyệt
+  | "rejected" // Từ chối
+  | "resubmitted" // Nộp lại
+  | "confirmed" // Đã xác nhận nhập học
+  | "overridden" // Ngoại lệ
+  | "enrolled"; // Đã nhập học
 
 /**
  * Checklist Item for Application Documents

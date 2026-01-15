@@ -10,7 +10,18 @@
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Loader2, Save, Send, GraduationCap, ClipboardCheck, Lock, CheckCircle, XCircle } from "lucide-react"
+import { Loader2, Save, Send, GraduationCap, ClipboardCheck, Lock, CheckCircle, XCircle, Trash } from "lucide-react"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import { cn } from "@/lib/utils"
 import { usePermissions } from "@/hooks/usePermissions"
 import { getStatusConfig } from "@/lib/status-config"
@@ -27,9 +38,11 @@ interface AdmissionActionsProps {
   onCheckCondition?: () => void
   // Optional: For Manager actions
   onApprove?: () => void
-  onReject?: () => void
   isApproving?: boolean
   isRejecting?: boolean
+  // Delete action
+  onDelete?: () => void
+  isDeleting?: boolean
 }
 
 export function AdmissionActions({
@@ -42,9 +55,12 @@ export function AdmissionActions({
   onEnroll,
   onCheckCondition,
   onApprove,
+
   onReject,
   isApproving = false,
   isRejecting = false,
+  onDelete,
+  isDeleting = false,
 }: AdmissionActionsProps) {
   // =========================================================================
   // Phase 7: Permission-Based Button Visibility
@@ -68,6 +84,32 @@ export function AdmissionActions({
 
         {/* Action Buttons - Permission Controlled */}
         <div className="flex items-center gap-3">
+           {/* DELETE - can('delete') - Critical Action */}
+           {can('delete') && onDelete && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="destructive" disabled={isDeleting}>
+                  {isDeleting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash className="w-4 h-4 mr-2" />}
+                  Xóa
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Bạn có chắc chắn muốn xóa hồ sơ này?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Hành động này không thể hoàn tác. Hồ sơ tuyển sinh sẽ bị xóa vĩnh viễn khỏi hệ thống.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Hủy</AlertDialogCancel>
+                  <AlertDialogAction onClick={onDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                    Xóa hồ sơ
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
+
           {/* Save Draft - can('save') */}
           {can('save') && (
             <Button variant="outline" onClick={onSave} disabled={isSaving}>

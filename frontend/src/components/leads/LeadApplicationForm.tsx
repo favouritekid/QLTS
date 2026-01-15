@@ -4,7 +4,8 @@
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Loader2, Save } from "lucide-react";
+import { Loader2, Save, Trash } from "lucide-react";
+import { useState } from "react";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -26,8 +27,18 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
-import { useUpdateApplication } from "@/hooks/useApplication";
+import { useUpdateApplication, useDeleteApplication } from "@/hooks/useApplication";
 import { useMajorPrograms } from "@/hooks/useOrganization";
 import { useAdmissionPathsForOffering } from "@/hooks/admissions/useAdmissionPaths";
 import { DocumentChecklist } from "./DocumentChecklist";
@@ -39,7 +50,21 @@ const applicationSchema = z.object({
   major_program_id: z.number().nullable(),
   program_offering_id: z.number().nullable(),
   criterion_id: z.string().nullable(),
-  status: z.enum(["pending", "missing_documents", "completed", "passed", "failed"]),
+  status: z.enum([
+    "draft",
+    "pending",
+    "missing_documents",
+    "completed",
+    "passed",
+    "failed",
+    "submitted",
+    "approved",
+    "rejected",
+    "resubmitted",
+    "confirmed",
+    "overridden",
+    "enrolled"
+  ]),
   documents: z.object({
     scores: z.record(z.string(), z.number().nullable()).nullable().optional(),
     checklist: z.array(
@@ -63,6 +88,17 @@ interface LeadApplicationFormProps {
 
 export function LeadApplicationForm({ lead, application }: LeadApplicationFormProps) {
   const updateApplication = useUpdateApplication(application.id);
+  const deleteApplication = useDeleteApplication();
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+
+  const handleDelete = () => {
+    deleteApplication.mutate(
+      { id: application.id, leadId: lead.id },
+      {
+        onSuccess: () => setDeleteDialogOpen(false),
+      }
+    );
+  };
 
   // Fetch major programs for the unit
   const { data: majorPrograms = [], isLoading: majorProgramsLoading } = useMajorPrograms(lead.unit_id);
@@ -384,8 +420,28 @@ export function LeadApplicationForm({ lead, application }: LeadApplicationFormPr
           </Card>
 
           {/* Submit Button */}
-          <div className="flex justify-end">
-            <Button type="submit" disabled={updateApplication.isPending}>
+          {/* Actions */}
+          <div className="flex justify-end gap-2">
+            {application.status === "draft" && (
+              <Button
+                type="button" // Prevent form submission
+                variant="destructive"
+                onClick={() => setDeleteDialogOpen(true)}
+                disabled={updateApplication.isPending || deleteApplication.isPending}
+              >
+                {deleteApplication.isPending ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash className="mr-2 h-4 w-4" />
+                )}
+                Xóa Hồ sơ
+              </Button>
+            )}
+
+            <Button
+              type="submit"
+              disabled={updateApplication.isPending || deleteApplication.isPending}
+            >
               {updateApplication.isPending && (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               )}
@@ -395,6 +451,32 @@ export function LeadApplicationForm({ lead, application }: LeadApplicationFormPr
           </div>
         </form>
       </Form>
+
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Bạn có chắc chắn muốn xóa hồ sơ này?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Hành động này không thể hoàn tác. Hồ sơ tuyển sinh sẽ bị xóa vĩnh viễn và trạng thái Lead sẽ quay về chưa có hồ sơ.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteApplication.isPending}>Hủy</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                handleDelete();
+              }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deleteApplication.isPending}
+            >
+              {deleteApplication.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Xóa
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
     </div>
   );
 }

@@ -12,6 +12,7 @@ import {
   useUpdateAdmission,
   useSubmitAdmission,
   useEnrollStudent,
+  useDeleteAdmission,
 } from "@/hooks/admissions"
 import {
   admissionProfileUpdateSchema,
@@ -56,6 +57,7 @@ export function AdmissionDetailClient({
   const updateMutation = useUpdateAdmission(profileId)
   const submitMutation = useSubmitAdmission(profileId)
   const enrollMutation = useEnrollStudent(profileId)
+  const deleteMutation = useDeleteAdmission(profileId)
 
   // =========================================================================
   // 2. Phase 7: Permission-Based Rendering (ADR-FE-002)
@@ -202,6 +204,11 @@ export function AdmissionDetailClient({
     enrollMutation.mutate()
   }
 
+  // Phase 7: Delete Handler
+  const handleDelete = () => {
+    deleteMutation.mutate()
+  }
+
   const handleCheckCondition = () => {
     // Navigate to first error step
     if (stepsStatus[1] === "error") setCurrentStep(1)
@@ -248,6 +255,8 @@ export function AdmissionDetailClient({
           onSave={handleSave}
           onSubmit={handleSubmit}
           onEnroll={handleEnroll}
+          onDelete={handleDelete}
+          isDeleting={deleteMutation.isPending}
           onCheckCondition={handleCheckCondition}
         />
       </AdmissionLayout>

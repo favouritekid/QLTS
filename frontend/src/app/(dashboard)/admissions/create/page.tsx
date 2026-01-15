@@ -142,6 +142,18 @@ export default function CreateAdmissionPage() {
                   <span>{lead.offering.program.name}</span>
                 </div>
               )}
+              {lead.offering?.program?.degree_level && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Trình độ:</span>
+                  <span>{lead.offering.program.degree_level}</span>
+                </div>
+              )}
+              {lead.offering?.offering_type && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Hình thức đào tạo:</span>
+                  <span>{lead.offering.offering_type}</span>
+                </div>
+              )}
             </div>
           )}
           

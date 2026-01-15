@@ -172,8 +172,9 @@ export const API_ENDPOINTS = {
   // Applications (Hồ sơ Tuyển sinh)
   APPLICATIONS: {
     CREATE: (leadId: number) => `/api/leads/${leadId}/applications`,
-    UPDATE: (applicationId: number) => `/api/applications/${applicationId}`,
-    GET: (applicationId: number) => `/api/applications/${applicationId}`,
+    UPDATE: (applicationId: number) => `/api/admissions/${applicationId}`,
+    GET: (applicationId: number) => `/api/admissions/${applicationId}`,
+    DELETE: (applicationId: number) => `/api/admissions/${applicationId}`,
   },
   // ✅ LOGIN SECURITY: Phase 5 - User Response Flow
   SECURITY: {

@@ -25,4 +25,5 @@ export {
   useUpdateAdmission,
   useSubmitAdmission,
   useEnrollStudent,
+  useDeleteAdmission,
 } from "./useAdmissions"
