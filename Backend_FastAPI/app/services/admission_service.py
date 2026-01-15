@@ -332,6 +332,137 @@ def _compute_frontend_fields(
     profile.documents_checklist = documents_checklist
 
 
+async def _create_admission_milestone_consultation(
+    db: AsyncSession,
+    lead: models.Lead,
+    event: str,
+    actor: models.User,
+    profile_id: Optional[int] = None,
+    student_code: Optional[str] = None,
+    reason: Optional[str] = None,
+) -> None:
+    """
+    Create system consultation record for admission milestone.
+
+    Following the Golden Rule:
+    🔒 No Admission Event may occur without:
+        1. Being tied to a Consultation Status
+        2. Being tied to a Pipeline Stage
+        3. Creating a Consultation record (even if SYSTEM-generated)
+
+    This function:
+    1. Looks up the event projection from ADMISSION_EVENT_PROJECTIONS
+    2. Creates a SYSTEM consultation record
+    3. Updates lead.pipeline_stage_id and lead.consultation_status_id
+    4. Syncs lead.status via sync_lead_status_from_consultation()
+    5. Logs state change to lead_status_history
+
+    Args:
+        db: Database session
+        lead: Lead object to update
+        event: Admission event identifier (e.g., "profile_submitted")
+        actor: User who triggered the event (for audit trail)
+        profile_id: Optional admission profile ID (for note template)
+        student_code: Optional student code (for enrollment event)
+        reason: Optional reason (for rejection/override events)
+
+    Raises:
+        ValueError: If event not found in ADMISSION_EVENT_PROJECTIONS
+
+    Note:
+        - This function does NOT commit - caller must commit
+        - Respects terminal state guard (won't overwrite "converted" unless allowed)
+        - Creates consultation with method="system" for filtering
+    """
+    from ..core.admission_event_mapping import validate_projection
+    from ..core.status_mapping import sync_lead_status_from_consultation
+    from .lead_service import _log_lead_state_change, _get_current_lead_state
+
+    # Get canonical projection for this event
+    projection = validate_projection(event)
+
+    # Terminal state guard: Skip if lead already converted (unless allowed)
+    if projection.skip_if_converted and lead.status == "converted":
+        log.warning(
+            "Skipping admission milestone consultation: lead already converted",
+            lead_id=lead.id,
+            event=event,
+            current_status="converted",
+            attempted_stage=projection.pipeline_stage_id,
+            attempted_status=projection.consultation_status_id,
+        )
+        return
+
+    # Capture old state for history logging
+    old_state = _get_current_lead_state(lead)
+
+    # Load consultation status object for sync
+    consultation_status = await db.get(models.ConsultationStatus, projection.consultation_status_id)
+    if not consultation_status:
+        log.error(
+            "ConsultationStatus not found for admission event",
+            event=event,
+            consultation_status_id=projection.consultation_status_id,
+        )
+        raise ResourceNotFoundError(
+            f"Consultation status {projection.consultation_status_id} not found. "
+            f"Please check consultation_status.csv seeding."
+        )
+
+    # Build consultation note from template
+    note_template = projection.system_note_template
+    note = note_template.format(
+        profile_id=profile_id or "N/A",
+        student_code=student_code or "N/A",
+        reason=reason or "N/A"
+    )
+
+    # Create SYSTEM consultation record
+    system_consultation = models.Consultation(
+        lead_id=lead.id,
+        officer_id=actor.id,
+        consultation_status_id=projection.consultation_status_id,
+        consultation_date=datetime.now(timezone.utc),
+        method="system",  # ✅ Special marker for auto-generated records
+        notes=note,
+        duration_minutes=0,  # System consultations have no duration
+    )
+    db.add(system_consultation)
+
+    # Update lead pipeline (stage + status)
+    lead.consultation_status_id = projection.consultation_status_id
+    lead.pipeline_stage_id = projection.pipeline_stage_id
+
+    # Sync lead.status from consultation_status (Hybrid Approach)
+    sync_lead_status_from_consultation(lead, consultation_status)
+
+    # Update lead timestamp
+    lead.updated_at = datetime.now(timezone.utc)
+
+    # Log state change to lead_status_history
+    new_state = _get_current_lead_state(lead)
+    await _log_lead_state_change(
+        db=db,
+        lead=lead,
+        old_state=old_state,
+        new_state=new_state,
+        changed_by=actor,
+        reason=f"Admission event: {event}",
+    )
+
+    log.info(
+        "Admission milestone consultation created",
+        lead_id=lead.id,
+        event=event,
+        stage_id=projection.pipeline_stage_id,
+        stage_name=projection.stage_name,
+        status_id=projection.consultation_status_id,
+        status_name=projection.consultation_name,
+        profile_id=profile_id,
+        actor_id=actor.id,
+    )
+
+
 # ==============================================================================
 # CRUD FUNCTIONS
 # ==============================================================================
@@ -431,6 +562,36 @@ async def create_profile(
         # Step 4: Check Lead check (Redundant with Step 2 re-check but kept for flow)
         if lead.admission_profile:
              raise ConflictError(f"Lead {lead_id} already has an admission profile")
+
+    # ✅ AUDIT FIX: Parent-child state guard - prevent profile creation for invalid lead states
+    from app.utils.exceptions import BusinessRuleViolation
+
+    INVALID_LEAD_STATUSES_FOR_ADMISSION = frozenset({
+        "rejected",      # Explicitly rejected by officer
+        "unqualified",   # Failed qualification criteria
+        "converted",     # Already enrolled (shouldn't happen, but defensive)
+    })
+
+    if lead.status in INVALID_LEAD_STATUSES_FOR_ADMISSION:
+        log.warning(
+            "Attempt to create admission profile for lead in invalid status",
+            lead_id=lead_id,
+            lead_status=lead.status,
+            user_id=current_user.id,
+        )
+        raise BusinessRuleViolation(
+            f"Cannot create admission profile for lead with status '{lead.status}'. "
+            f"Lead must be in active pipeline (new, assigned, contacted, qualified)."
+        )
+
+    # Warn if lead status is "new" (hasn't been contacted yet)
+    if lead.status == "new":
+        log.warning(
+            "Creating admission profile for uncontacted lead (status=new)",
+            lead_id=lead_id,
+            user_id=current_user.id,
+        )
+        # Allow but log - might be valid for self-service admission
 
     # Step 5: Validate offering exists
     if not lead.offering:
@@ -1160,6 +1321,17 @@ async def submit_and_evaluate(
         # ✅ FIX: Submit validation passed → Move to SUBMITTED (not APPROVED)
         profile.status = "submitted"  # ✅ CRITICAL FIX: submitted, not approved
         profile.version += 1  # Increment version on status change
+
+        # ✅ PIPELINE SYNC: Create system consultation for admission milestone
+        if profile.lead:
+            await _create_admission_milestone_consultation(
+                db=db,
+                lead=profile.lead,
+                event="profile_submitted",
+                actor=current_user,
+                profile_id=profile_id,
+            )
+
         await db.flush()
 
         log.info(
@@ -1517,9 +1689,15 @@ async def enroll_student(
             profile.updated_at = datetime.now(timezone.utc)
             profile.version += 1  # Increment version on enrollment
 
-            # Step 5: Update Lead status
-            profile.lead.status = "converted"
-            profile.lead.updated_at = datetime.now(timezone.utc)
+            # Step 5: ✅ PIPELINE SYNC: Create system consultation for enrollment milestone
+            await _create_admission_milestone_consultation(
+                db=db,
+                lead=profile.lead,
+                event="profile_enrolled",
+                actor=current_user,
+                profile_id=profile_id,
+                student_code=student_code,
+            )
 
             await db.flush()
             # Savepoint auto-commits here if no errors
@@ -1645,6 +1823,16 @@ async def approve_profile(
     profile.version += 1
     profile.updated_at = datetime.now(timezone.utc)
 
+    # ✅ PIPELINE SYNC: Create system consultation for approval milestone
+    if profile.lead:
+        await _create_admission_milestone_consultation(
+            db=db,
+            lead=profile.lead,
+            event="profile_approved",
+            actor=approver,
+            profile_id=profile.id,
+        )
+
     await db.flush()  # Flush, don't commit! Router commits.
 
     log.info(
@@ -1736,6 +1924,17 @@ async def reject_profile(
     profile.version += 1
     profile.updated_at = datetime.now(timezone.utc)
 
+    # ✅ PIPELINE SYNC: Create system consultation for rejection milestone
+    if profile.lead:
+        await _create_admission_milestone_consultation(
+            db=db,
+            lead=profile.lead,
+            event="profile_rejected",
+            actor=rejector,
+            profile_id=profile.id,
+            reason=data["reason"],
+        )
+
     await db.flush()
 
     log.info(
@@ -1813,6 +2012,16 @@ async def resubmit_profile(
     profile.version += 1
     profile.updated_at = datetime.now(timezone.utc)
 
+    # ✅ PIPELINE SYNC: Create system consultation for resubmission milestone
+    if profile.lead:
+        await _create_admission_milestone_consultation(
+            db=db,
+            lead=profile.lead,
+            event="profile_resubmitted",
+            actor=officer,
+            profile_id=profile.id,
+        )
+
     await db.flush()
 
     log.info(
@@ -1887,6 +2096,16 @@ async def confirm_enrollment(
     profile.confirmed_by_id = applicant.id
     profile.version += 1
     profile.updated_at = datetime.now(timezone.utc)
+
+    # ✅ PIPELINE SYNC: Create system consultation for confirmation milestone
+    if profile.lead:
+        await _create_admission_milestone_consultation(
+            db=db,
+            lead=profile.lead,
+            event="profile_confirmed",
+            actor=applicant,
+            profile_id=profile.id,
+        )
 
     await db.flush()
 
@@ -1968,6 +2187,17 @@ async def override_profile(
     profile.override_reason = data["reason"]
     profile.version += 1
     profile.updated_at = datetime.now(timezone.utc)
+
+    # ✅ PIPELINE SYNC: Create system consultation for override milestone
+    if profile.lead:
+        await _create_admission_milestone_consultation(
+            db=db,
+            lead=profile.lead,
+            event="profile_overridden",
+            actor=admin,
+            profile_id=profile.id,
+            reason=data["reason"],
+        )
 
     await db.flush()
 

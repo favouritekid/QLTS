@@ -1,0 +1,329 @@
+
+  You've identified a critical gap in our implementation. We synchronized lead.status but completely ignored lead.pipeline_stage_id and lead.consultation_status_id, which means the consultation pipeline is    
+  frozen while admission progresses.
+
+  ---
+  🔍 CURRENT STATE ANALYSIS
+
+  What We Fixed (Phase 1):
+
+  ✅ lead.status (enum field) - synchronized with admission events
+  ❌ lead.pipeline_stage_id - NOT updated (stuck at stg01 or stg02)
+  ❌ lead.consultation_status_id - NOT updated (stuck at last consultation)
+  ❌ No automatic consultation records created for admission milestones
+
+  Impact:
+
+  1. Officer Confusion: Opening consultation history shows lead stuck at "Đang tư vấn" (stg02) even though student already enrolled
+  2. Broken Pipeline Reports: Leads in stg02 with approved admission profiles
+  3. Missing Audit Trail: No consultation record shows "Đã nộp hồ sơ" milestone
+  4. Stale Dashboards: Pipeline stage distribution doesn't reflect admission progress
+
+  ---
+  📊 STATE TRANSITION MATRIX
+
+  Pipeline Stages & Admission Flow Integration
+  ┌───────┬───────┬────────────────┬───────────────────────┬───────────────────────────────────┬──────────────────────────────────┐
+  │ Stage │  ID   │      Name      │    Admission Phase    │      ConsultationStatus IDs       │        When to Move Here         │
+  ├───────┼───────┼────────────────┼───────────────────────┼───────────────────────────────────┼──────────────────────────────────┤
+  │ 1     │ stg01 │ Chưa tư vấn    │ Pre-admission         │ sts00, sts01, sts02, sts03, sts15 │ Initial lead creation            │
+  ├───────┼───────┼────────────────┼───────────────────────┼───────────────────────────────────┼──────────────────────────────────┤
+  │ 2     │ stg02 │ Đang tư vấn    │ Pre-admission         │ sts04, sts05, sts06               │ Officer contacts lead            │
+  ├───────┼───────┼────────────────┼───────────────────────┼───────────────────────────────────┼──────────────────────────────────┤
+  │ 3     │ stg03 │ Đã nộp hồ sơ   │ ✅ Admission Started  │ sts07, sts08                      │ AdmissionProfile submitted       │
+  ├───────┼───────┼────────────────┼───────────────────────┼───────────────────────────────────┼──────────────────────────────────┤
+  │ 4     │ stg04 │ Chờ nhập học   │ ✅ Admission Approved │ sts09, sts13                      │ AdmissionProfile approved        │
+  ├───────┼───────┼────────────────┼───────────────────────┼───────────────────────────────────┼──────────────────────────────────┤
+  │ 5     │ stg05 │ Đã nộp học phí │ Payment phase         │ sts10                             │ Manual (officer records payment) │
+  ├───────┼───────┼────────────────┼───────────────────────┼───────────────────────────────────┼──────────────────────────────────┤
+  │ 6     │ stg06 │ Đã nhập học    │ ✅ Enrolled           │ sts11                             │ Student enrolled                 │
+  ├───────┼───────┼────────────────┼───────────────────────┼───────────────────────────────────┼──────────────────────────────────┤
+  │ 7     │ stg07 │ Không đi học   │ Dropped               │ sts12, sts14                      │ Student drops out                │
+  └───────┴───────┴────────────────┴───────────────────────┴───────────────────────────────────┴──────────────────────────────────┘
+  ---
+  🎯 ADMISSION-TO-STAGE MAPPING
+
+  Correct Stage Transitions:
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  ADMISSION EVENT          →   STAGE    →  CONSULTATION STATUS   │
+  ├─────────────────────────────────────────────────────────────────┤
+  │  Profile Created          →   stg02    →  (unchanged)           │
+  │  Profile Submitted        →   stg03    →  sts07 (Chờ nhập học)  │
+  │  Profile Approved         →   stg04    →  sts09 (Chờ đóng học)  │
+  │  Profile Confirmed        →   stg04    →  sts09 (no change)     │
+  │  Profile Overridden       →   stg04    →  sts09 (no change)     │
+  │  Student Enrolled         →   stg06    →  sts11 (Đã nhập học)   │ ✅ Already implemented
+  │  Profile Rejected         →   stg02    →  sts04 (Không đồng ý)  │
+  └─────────────────────────────────────────────────────────────────┘
+
+  ---
+  🚨 CURRENT GAPS IDENTIFIED
+
+  Gap #1: Missing Pipeline Stage Updates
+
+  Current Code:
+  # admission_service.py:1167 - submit_and_evaluate()
+  profile.lead.status = "qualified"  # ✅ Updated
+  # ❌ Missing: profile.lead.pipeline_stage_id = "stg03"
+  # ❌ Missing: profile.lead.consultation_status_id = "sts07"
+
+  Gap #2: No Automatic Consultation Records
+
+  When admission events occur, there's no consultation record created to document the milestone. Officers see:
+  Consultation History:
+  - 2026-01-10: "Đồng ý tư vấn" (Officer)
+  - [NOTHING HERE - BLACK HOLE]
+  - Lead status shows "qualified" but no record explaining why
+
+  Gap #3: Stale Stage Data Breaks Reports
+
+  Query: "How many leads are waiting for enrollment (stg04)?"
+  - Expected: All approved profiles
+  - Actual: Zero (leads stuck at stg02)
+
+  ---
+  💡 PROPOSED SOLUTION
+
+  Option A: Pipeline Stage Sync Only (Simple)
+
+  Update pipeline_stage_id and consultation_status_id atomically with lead.status:
+
+  # admission_service.py - submit_and_evaluate()
+  if profile.lead:
+      profile.lead.status = "qualified"
+      profile.lead.pipeline_stage_id = "stg03"  # ✅ NEW
+      profile.lead.consultation_status_id = "sts07"  # ✅ NEW
+      profile.lead.updated_at = datetime.now(timezone.utc)
+
+  Benefits:
+  - ✅ Simple (just 2 extra field updates)
+  - ✅ Immediate sync
+  - ✅ Zero additional queries
+
+  Drawbacks:
+  - ❌ No consultation record (officers can't see timeline)
+  - ❌ Breaking existing consultation workflow (bypasses add_consultation)
+
+  ---
+  Option B: Automatic Consultation Records (Recommended)
+
+  Create "system consultation" records for admission milestones:
+
+  # admission_service.py - submit_and_evaluate()
+  if profile.lead:
+      # Update lead status (existing)
+      profile.lead.status = "qualified"
+      profile.lead.updated_at = datetime.now(timezone.utc)
+
+      # ✅ NEW: Create system consultation record
+      system_consultation = models.Consultation(
+          lead_id=profile.lead_id,
+          officer_id=current_user.id,  # or system user
+          consultation_status_id="sts07",  # Chờ nhập học
+          consultation_date=datetime.now(timezone.utc),
+          method="system",  # Special method for auto-generated
+          notes=f"Hồ sơ xét tuyển đã được nộp (Profile ID: {profile.id})",
+          duration_minutes=0,
+      )
+      db.add(system_consultation)
+
+      # Lead pipeline automatically updated via sync_lead_status_from_consultation()
+      lead.consultation_status_id = "sts07"
+      lead.pipeline_stage_id = "stg03"
+
+  Benefits:
+  - ✅ Full audit trail visible to officers
+  - ✅ Consistent with existing consultation workflow
+  - ✅ Pipeline stage updates via existing sync mechanism
+  - ✅ Officers see "System recorded: Profile submitted at 10:30 AM"
+
+  Drawbacks:
+  - ⚠️ Slightly more complex (creates Consultation record)
+  - ⚠️ Need to handle "system" as consultation method
+
+  ---
+  📋 COMPLETE STATE TRANSITION MATRIX
+
+  Full Lead Lifecycle with Admission Integration
+  ┌────────────────────────┬──────────────────────┬───────────────────┬────────────────────────┬─────────────────────────┬──────────────────────────┐
+  │  Lead Lifecycle Phase  │     lead.status      │ pipeline_stage_id │ consultation_status_id │ AdmissionProfile.status │      Trigger Event       │
+  ├────────────────────────┼──────────────────────┼───────────────────┼────────────────────────┼─────────────────────────┼──────────────────────────┤
+  │ PRE-CONSULTATION       │ new                  │ stg01             │ sts00                  │ null                    │ Lead created             │
+  ├────────────────────────┼──────────────────────┼───────────────────┼────────────────────────┼─────────────────────────┼──────────────────────────┤
+  │ INITIAL CONTACT        │ assigned             │ stg01             │ sts00                  │ null                    │ Lead assigned to officer │
+  ├────────────────────────┼──────────────────────┼───────────────────┼────────────────────────┼─────────────────────────┼──────────────────────────┤
+  │ CONSULTING             │ contacted            │ stg02             │ sts05                  │ null                    │ Officer contacts lead    │
+  ├────────────────────────┼──────────────────────┼───────────────────┼────────────────────────┼─────────────────────────┼──────────────────────────┤
+  │ INTERESTED             │ qualified            │ stg02             │ sts06                  │ null                    │ Lead agrees to consult   │
+  ├────────────────────────┼──────────────────────┼───────────────────┼────────────────────────┼─────────────────────────┼──────────────────────────┤
+  │ PROFILE CREATED        │ qualified            │ stg02             │ sts06                  │ draft                   │ Officer creates profile  │
+  ├────────────────────────┼──────────────────────┼───────────────────┼────────────────────────┼─────────────────────────┼──────────────────────────┤
+  │ 🔄 ADMISSION SUBMITTED │ qualified            │ stg03             │ sts07                  │ submitted               │ Student submits profile  │
+  ├────────────────────────┼──────────────────────┼───────────────────┼────────────────────────┼─────────────────────────┼──────────────────────────┤
+  │ 🔄 ADMISSION APPROVED  │ qualified            │ stg04             │ sts09                  │ approved                │ Manager approves         │
+  ├────────────────────────┼──────────────────────┼───────────────────┼────────────────────────┼─────────────────────────┼──────────────────────────┤
+  │ CONFIRMED ENROLLMENT   │ qualified            │ stg04             │ sts09                  │ confirmed               │ Student confirms         │
+  ├────────────────────────┼──────────────────────┼───────────────────┼────────────────────────┼─────────────────────────┼──────────────────────────┤
+  │ PAYMENT                │ qualified            │ stg05             │ sts10                  │ confirmed               │ Payment recorded         │
+  ├────────────────────────┼──────────────────────┼───────────────────┼────────────────────────┼─────────────────────────┼──────────────────────────┤
+  │ 🔄 ENROLLED            │ converted            │ stg06             │ sts11                  │ enrolled                │ Student enrolled         │
+  ├────────────────────────┼──────────────────────┼───────────────────┼────────────────────────┼─────────────────────────┼──────────────────────────┤
+  │ DROPPED                │ unqualified          │ stg07             │ sts12                  │ enrolled                │ Student drops out        │
+  ├────────────────────────┼──────────────────────┼───────────────────┼────────────────────────┼─────────────────────────┼──────────────────────────┤
+  │ REJECTED               │ rejected/unqualified │ stg02             │ sts04                  │ rejected                │ Profile rejected         │
+  └────────────────────────┴──────────────────────┴───────────────────┴────────────────────────┴─────────────────────────┴──────────────────────────┘
+  ---
+  🎬 RECOMMENDED IMPLEMENTATION PLAN
+
+  Phase 1B: Sync Pipeline Stages with Auto-Consultation
+
+  1. Update submit_and_evaluate():
+
+  # Create system consultation for "Profile Submitted"
+  await _create_admission_milestone_consultation(
+      db=db,
+      lead=profile.lead,
+      stage_id="stg03",
+      status_id="sts07",
+      actor=current_user,
+      event="admission_profile_submitted",
+      profile_id=profile.id,
+  )
+
+  2. Update approve_profile():
+
+  # Create system consultation for "Profile Approved"
+  await _create_admission_milestone_consultation(
+      db=db,
+      lead=profile.lead,
+      stage_id="stg04",
+      status_id="sts09",
+      actor=approver,
+      event="admission_profile_approved",
+      profile_id=profile.id,
+  )
+
+  3. Create Helper Function:
+
+  async def _create_admission_milestone_consultation(
+      db: AsyncSession,
+      lead: models.Lead,
+      stage_id: str,
+      status_id: str,
+      actor: models.User,
+      event: str,
+      profile_id: int,
+  ) -> None:
+      """Create system consultation for admission milestone."""
+
+      # Skip if already at terminal state
+      if lead.status == "converted":
+          return
+
+      consultation = models.Consultation(
+          lead_id=lead.id,
+          officer_id=actor.id,
+          consultation_status_id=status_id,
+          consultation_date=datetime.now(timezone.utc),
+          method="system",
+          notes=f"[Hệ thống] {event} - Profile #{profile_id}",
+          duration_minutes=0,
+      )
+      db.add(consultation)
+
+      # Update lead pipeline (synced via consultation)
+      lead.consultation_status_id = status_id
+      lead.pipeline_stage_id = stage_id
+      sync_lead_status_from_consultation(lead, await db.get(models.ConsultationStatus, status_id))
+
+      log.info(
+          "Admission milestone consultation created",
+          lead_id=lead.id,
+          event=event,
+          stage_id=stage_id,
+          status_id=status_id,
+          profile_id=profile_id,
+      )
+
+  ---
+  ✅ YOUR PROPOSAL: Create Automatic Consultation Records
+
+  Your suggestion is EXCELLENT and matches Option B perfectly.
+
+  What officers will see after implementation:
+
+  Consultation History:
+  ─────────────────────────────────────────────────
+  📞 2026-01-10 09:30  |  Đồng ý tư vấn
+     Officer: Nguyễn Văn A
+     Method: phone
+     Notes: "Học viên đồng ý tìm hiểu thêm"
+
+  🤖 2026-01-12 14:22  |  Chờ nhập học  [SYSTEM]
+     Auto-recorded: Admission profile submitted
+     Profile ID: #789
+
+  🤖 2026-01-15 10:05  |  Chờ đóng học phí  [SYSTEM]
+     Auto-recorded: Admission profile approved
+     Approved by: Manager Trần B
+
+  📞 2026-01-16 11:00  |  Đã nhập học
+     Officer: Nguyễn Văn A
+     Method: in_person
+     Notes: "Học viên đến nhập học, nhận thẻ SV"
+  ─────────────────────────────────────────────────
+
+  ---
+  🎯 FINAL VERDICT
+
+  Your analysis is COMPLETELY CORRECT:
+  1. ✅ Pipeline stages (stg03, stg04, stg06) must be updated with admission events
+  2. ✅ Automatic consultation records make the timeline visible
+  3. ✅ Officers need to see admission progress in consultation history
+  4. ✅ This fixes reporting and prevents confusion
+
+  Shall I implement Option B (Auto-Consultation Records)?
+
+  This will add ~80 lines of code to create system consultation records for:
+  - Profile submitted → stg03 (sts07)
+  - Profile approved → stg04 (sts09)
+  - Student enrolled → stg06 (sts11) - already at correct stage via sync
+
+  Trên đây là các nhận định của bạn, tuy nhiên trong quá trình tìm kiếm mã nguồn và xem xét cách vận hành của hệ thống tôi cần phải xác nhận lại với bạn như sau:
+  1. Nguyên tắc vàng (để làm Single Source of Truth)
+**Không có Admission Event nào được phép xảy ra mà KHÔNG:
++ Gắn với 1 Consultation Status
++ Gắn với 1 Pipeline Stage
++ Có Consultation record (dù là SYSTEM)**
+2. Bảng mapping:
+| Admission Event       | Admission Status | Consultation Status | Consultation Name    | Pipeline Stage | Stage Name     | Auto Consultation Content                        |
+| --------------------- | ---------------- | ------------------- | -------------------- | -------------- | -------------- | ------------------------------------------------ |
+| Lead created          | –                | sts00               | Chưa liên hệ         | stg01          | Chưa tư vấn    | `[SYSTEM] Lead được tạo trên hệ thống`           |
+| Officer contacted     | –                | sts05               | Cân nhắc             | stg02          | Đang tư vấn    | `[SYSTEM] Bắt đầu quá trình tư vấn`              |
+| Lead agrees           | –                | sts06               | Đồng ý tư vấn        | stg02          | Đang tư vấn    | `Học viên đồng ý tìm hiểu chương trình`          |
+| **Profile CREATED**   | draft            | **sts06**           | Đồng ý tư vấn        | **stg02**      | Đang tư vấn    | `[SYSTEM] Hồ sơ xét tuyển được khởi tạo (Draft)` |
+| **Profile SUBMITTED** | submitted        | **sts07**           | Chờ nhập học         | **stg03**      | Đã nộp hồ sơ   | `[SYSTEM] Hồ sơ xét tuyển đã được nộp`           |
+| Profile APPROVED      | approved         | sts09               | Chờ đóng học phí     | stg04          | Chờ nhập học   | `[SYSTEM] Hồ sơ xét tuyển đã được duyệt`         |
+| Fee recorded          | confirmed        | sts10               | Đã nộp học phí       | stg05          | Đã nộp học phí | `Học viên đã hoàn tất học phí`                   |
+| Student ENROLLED      | enrolled         | sts11               | Đã nhập học          | stg06          | Đã nhập học    | `Học viên đã nhập học chính thức`                |
+| Drop / Refund         | –                | sts12 / sts14       | Bỏ học / Rút học phí | stg07          | Không đi học   | `Học viên không tiếp tục theo học`               |
+3. Khuyến nghị kiến trúc (rất đáng làm)
+
+Tạo 1 bảng config duy nhất (hoặc constant):
+
+ADMISSION_EVENT_PROJECTION = {
+  profile_created: { stage: "stg02", status: "sts06" },
+  profile_submitted: { stage: "stg03", status: "sts07" },
+  profile_approved: { stage: "stg04", status: "sts09" },
+  enrolled: { stage: "stg06", status: "sts11" },
+}
+
+🔒 Cấm hardcode stage/status ở service
+🔁 Đổi ở đây → sync toàn hệ thống
+4. Các file tham khảo
+consultation_status.csv
+pipeline_stage.csv
+allowed_transitions.csv
+5. Còn một thiếu xót đó là bảng ghi nhận lịch sử chuyển đổi giữa các stage lead_status_history bảng này cũng cần được cập nhật.
+Hãy rà soát các nội dung liên quan đến lead để có sự điều chỉnh cập nhật phù hợp.

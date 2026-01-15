@@ -195,11 +195,11 @@ export function ConfigReview({ path, onBack, onFinish }: ConfigReviewProps) {
 
         {/* 4. Validation & Actions */}
         <section className="space-y-4 pt-4 border-t">
-          {path.validation_errors.length > 0 && (
+          {(path.validation_errors?.length || 0) > 0 && (
              <div className="bg-destructive/10 text-destructive text-sm p-4 rounded-md">
                <p className="font-semibold mb-1">Không thể kích hoạt do các lỗi sau:</p>
                <ul className="list-disc list-inside">
-                 {path.validation_errors.map((err, idx) => (
+                 {path.validation_errors?.map((err, idx) => (
                    <li key={idx}>{err}</li>
                  ))}
                </ul>

@@ -302,7 +302,7 @@ export function PathWizard({ context, pathId, onNavigate, initialStep = 1 }: Pat
       {step === 3 && path && (
         <ConfigDocuments
           // Force re-mount when path changes
-          key={`step3-${path.id}-${path.validation_errors.length}`}
+          key={`step3-${path.id}-${path.validation_errors?.length || 0}`}
           path={path}
           onFinish={() => setStep(4)}
           onBack={() => setStep(2)}
@@ -313,7 +313,7 @@ export function PathWizard({ context, pathId, onNavigate, initialStep = 1 }: Pat
         // NEW: Review Step
         <div className="animate-in fade-in slide-in-from-right-4 duration-300">
           <ConfigReview
-            key={`step4-${path.id}-${path.status}-${path.validation_errors.length}`}
+            key={`step4-${path.id}-${path.status}-${path.validation_errors?.length || 0}`}
             path={path}
             onBack={() => setStep(3)}
             onFinish={handleBackToList}

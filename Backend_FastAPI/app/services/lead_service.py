@@ -1307,8 +1307,20 @@ async def add_consultation(
             # Lưu trạng thái Lead cũ
             old_state = _get_current_lead_state(lead)
 
+            # ✅ AUDIT FIX: Terminal state guard - prevent overwriting "converted"
+            if lead.status == "converted":
+                log.warning(
+                    "Skipping lead status update: lead already converted (terminal state)",
+                    lead_id=lead_id,
+                    current_status="converted",
+                    attempted_status=new_status.id,
+                    attempted_status_name=new_status.name,
+                    officer_id=officer_id,
+                )
+                # Still create consultation record for history, but don't update lead status
+                # Continue to consultation creation below without status update
             # ✅ NEW: Chỉ cập nhật pipeline nếu status.updates_pipeline = True
-            if new_status.updates_pipeline:
+            elif new_status.updates_pipeline:
                 # Cập nhật trạng thái Lead theo status mới của consultation
                 lead.consultation_status_id = new_status.id
                 lead.pipeline_stage_id = new_status.stage_id
@@ -1911,17 +1923,29 @@ async def update_consultation(
             status_changed = False
             if "status_id" in update_data and update_data["status_id"] != old_consultation_status_id:
                 if is_latest_consultation:
-                    # Đây là consultation mới nhất, cập nhật lead status
-                    new_status = await db.get(
-                        models.ConsultationStatus, update_data["status_id"]
-                    )
-                    if new_status:
-                        lead.consultation_status_id = new_status.id
-                        lead.pipeline_stage_id = new_status.stage_id
-                        # ✅ Sync lead.status từ consultation_status (Hybrid Approach)
-                        sync_lead_status_from_consultation(lead, new_status)
-                        db.add(lead)
-                        status_changed = True
+                    # ✅ AUDIT FIX: Terminal state guard - prevent overwriting "converted"
+                    if lead.status == "converted":
+                        log.warning(
+                            "Skipping lead status update: lead already converted (terminal state)",
+                            lead_id=lead_id,
+                            consultation_id=consultation_id,
+                            current_status="converted",
+                            attempted_status=update_data["status_id"],
+                            user_id=current_user.id,
+                        )
+                        # Skip status update but continue with consultation update
+                    else:
+                        # Đây là consultation mới nhất, cập nhật lead status
+                        new_status = await db.get(
+                            models.ConsultationStatus, update_data["status_id"]
+                        )
+                        if new_status:
+                            lead.consultation_status_id = new_status.id
+                            lead.pipeline_stage_id = new_status.stage_id
+                            # ✅ Sync lead.status từ consultation_status (Hybrid Approach)
+                            sync_lead_status_from_consultation(lead, new_status)
+                            db.add(lead)
+                            status_changed = True
 
                         log.info(
                             "Lead status updated via consultation update",
