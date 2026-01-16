@@ -70,7 +70,10 @@ async function AdmissionDetailPageContent({ profileId }: { profileId: number }) 
   // ✅ Fetch admission profile on server
   const initialData = await serverApi.admissions.getProfile(profileId);
 
-  return <AdmissionDetailClient profileId={profileId} initialData={initialData} />;
+  // Phase 4 Fix: Add key prop to force form remount when ID changes
+  // This ensures clean form state between different profiles
+  // @see ADMISSION_ARCHITECTURE_VIOLATION_REPORT.md Violation #12
+  return <AdmissionDetailClient key={profileId} profileId={profileId} initialData={initialData} />;
 }
 
 /**

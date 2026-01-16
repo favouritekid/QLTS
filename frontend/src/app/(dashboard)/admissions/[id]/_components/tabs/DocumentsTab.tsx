@@ -21,11 +21,18 @@ interface DocumentsTabProps {
 }
 
 // File validation constants
-const ALLOWED_TYPES = ["application/pdf", "image/jpeg", "image/png", "image/jpg"]
-const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB
-const ALLOWED_EXTENSIONS = ".pdf, .jpg, .jpeg, .png"
+// Ticket #4: Strict dynamic config from applied_rules (No Defaults)
 
-const STATUS_CONFIG = {
+/**
+ * Document status configuration
+ * Phase 3 Fix: Added default case for unknown statuses
+ * @see ADMISSION_ARCHITECTURE_VIOLATION_REPORT.md Violation #13
+ */
+const STATUS_CONFIG: Record<string, {
+  label: string
+  color: string
+  icon: typeof AlertCircle
+}> = {
   missing: {
     label: "Chưa có",
     color: "bg-gray-100 text-gray-700",
@@ -48,11 +55,36 @@ const STATUS_CONFIG = {
   },
 }
 
+/**
+ * Get status config with fallback for unknown statuses
+ */
+function getDocStatusConfig(status: string) {
+  return STATUS_CONFIG[status] ?? {
+    label: status,
+    color: "bg-gray-100 text-gray-700",
+    icon: AlertCircle,
+  }
+}
+
 export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
   const documents = profile.documents_checklist || []
   const uploadMutation = useUploadAdmissionDocument(profile.id)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [selectedDocCode, setSelectedDocCode] = useState<string | null>(null)
+
+  // Ticket #4: Dynamic Upload Config
+  // Ticket #4: Dynamic Upload Config (Strict)
+  const uploadConfig = profile.applied_rules.upload_config
+  
+  if (!uploadConfig) {
+      console.error("Missing upload_config in applied_rules (Ticket #4 violation)")
+  }
+
+  const allowedTypes = uploadConfig?.allowed_types || []
+  const maxFileSize = uploadConfig?.max_file_size || 0
+  const allowedExtensionsDisplay = uploadConfig?.allowed_extensions 
+    ? uploadConfig.allowed_extensions.map(ext => `.${ext}`).join(", ")
+    : "N/A"
 
   const handleUploadClick = (code: string) => {
     setSelectedDocCode(code)
@@ -64,11 +96,11 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
 
   const validateFile = (file: File): string | null => {
     // Check file type
-    if (!ALLOWED_TYPES.includes(file.type)) {
-      return `Loại file không hợp lệ. Chỉ chấp nhận: ${ALLOWED_EXTENSIONS}`
+    if (!allowedTypes.includes(file.type)) {
+      return `Loại file không hợp lệ. Chỉ chấp nhận: ${allowedExtensionsDisplay}`
     }
     // Check file size
-    if (file.size > MAX_FILE_SIZE) {
+    if (file.size > maxFileSize) {
       const sizeMB = (file.size / (1024 * 1024)).toFixed(1)
       return `File quá lớn (${sizeMB}MB). Tối đa 10MB.`
     }
@@ -145,7 +177,7 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
         
         {/* File type info */}
         <p className="text-xs text-muted-foreground mt-2">
-          Định dạng: {ALLOWED_EXTENSIONS} • Tối đa 10MB
+          Định dạng: {allowedExtensionsDisplay} • Tối đa {Math.round(maxFileSize / (1024 * 1024))}MB
         </p>
       </CardHeader>
       <CardContent>
@@ -160,7 +192,8 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
         ) : (
           <div className="space-y-3">
             {documents.map((doc, index) => {
-              const config = STATUS_CONFIG[doc.status] || STATUS_CONFIG.missing
+              // Phase 3 Fix: Use function with fallback for unknown statuses
+              const config = getDocStatusConfig(doc.status)
               const StatusIcon = config.icon
               const isUploading = uploadMutation.isPending && selectedDocCode === doc.code
               const hasFile = doc.file_path && (doc.status === "uploaded" || doc.status === "verified")
@@ -241,7 +274,7 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
         ref={fileInputRef} 
         className="hidden" 
         onChange={handleFileChange}
-        accept={ALLOWED_EXTENSIONS}
+        accept={allowedExtensionsDisplay}
       />
     </Card>
   )

@@ -169,6 +169,11 @@ export const documentItemSchema = z.object({
   // Phase 0.9: New document config fields (all optional for form/response compatibility)
   requires_upload: z.boolean().optional(),
   submission_format: z.enum(["photo", "certified_copy", "original"]).nullable().optional(),
+  /**
+   * FE-only state field - tracks user confirmation of submission format.
+   * Backend does not need this field.
+   * @see ADR-FE-005-submission-format-confirmed.md
+   */
   submission_format_confirmed: z.boolean().optional(),
   // Status and upload info
   status: z.enum(["missing", "uploaded", "verified", "rejected"]),
@@ -177,6 +182,11 @@ export const documentItemSchema = z.object({
     .max(512, "Đường dẫn file không được quá 512 ký tự")
     .nullable()
     .optional(),
+  /**
+   * File size in bytes (max 10MB).
+   * Added for BE-FE contract sync per admission.py:229-233
+   */
+  file_size: z.number().int().min(0).max(10485760).nullable().optional(),
   uploaded_at: z
     .string()
     .nullable()
@@ -326,12 +336,20 @@ export const appliedRulesSchema = z.object({
   // =========================================================================
   admission_method: z.string().optional().nullable(), // e.g., "HOC_BA"
   admission_method_id: z.number().int().optional(),
+  // Ticket #3: Explicit method type (Strict)
+  method_type: z.enum(["gpa_only", "subject_based", "combined"]).nullable(),
 
   // =========================================================================
   // GROUP 5: Document Requirements
   // =========================================================================
   mandatory_docs: z.array(z.string()).optional().default([]),
   doc_configs: z.record(z.string(), documentConfigSnapshotSchema).optional().default({}),
+  // Ticket #4: Upload Configuration (Strict)
+  upload_config: z.object({
+    allowed_types: z.array(z.string()),
+    max_file_size: z.number().int(),
+    allowed_extensions: z.array(z.string()),
+  }),
 
   // =========================================================================
   // GROUP 6: Snapshot Metadata
@@ -428,13 +446,30 @@ export const admissionProfileResponseSchema = z.object({
     }).optional()
   }).optional().nullable(),
   
-  // Phase 0.9: Step Status (Backend computes, FE renders)
-  // Note: Record keys are always strings in JSON, convert on read in component
+  /**
+   * Step status for sidebar navigation.
+   * NOTE: Backend returns Dict[int, str] but JSON serializes keys as strings.
+   * Frontend converts parseInt() in AdmissionDetailClient.tsx:102-106
+   * @see FRONTEND_ARCHITECTURE_V3.md Section 0.6
+   */
   step_status: z.record(z.string(), z.enum(["success", "warning", "error", "locked"])).optional().nullable(),
   
   // Computed scores (backend-calculated)
   total_score: z.number().optional().nullable(),
   average_score: z.number().optional().nullable(),
+  
+  // =========================================================================
+  // Audit Trail Fields (BE-FE Contract Sync per admission.py:427-434)
+  // =========================================================================
+  approved_at: z.string().datetime({ offset: true }).nullable().optional(),
+  approved_by_id: z.number().nullable().optional(),
+  approval_notes: z.string().nullable().optional(),
+  rejected_at: z.string().datetime({ offset: true }).nullable().optional(),
+  rejected_by_id: z.number().nullable().optional(),
+  rejection_reason: z.string().nullable().optional(),
+
+  // Ticket #2: Backend-computed qualification status
+  is_qualified: z.boolean().nullable().optional().describe("Whether profile meets admission criteria. Computed by backend."),
 })
 
 export type AdmissionProfileResponse = z.infer<
@@ -445,12 +480,15 @@ export type AdmissionProfileResponse = z.infer<
  * Submit Response Schema
  * Used for POST /api/admissions/{id}/submit response
  * 
- * Phase 7: Updated for async-first workflow (ADR-FE-003)
- * - May return intermediate statuses (submitted, resubmitted)
- * - Includes validation_errors from backend
+ * ✅ FIXED: Match Backend admission.py:546 exactly
+ * Backend only returns: "draft" (validation failed) or "submitted" (success)
+ * Other statuses (approved, rejected) come from separate action endpoints.
+ * 
+ * @see ADMISSION_ARCHITECTURE_VIOLATION_REPORT.md Violation #4
  */
 export const admissionSubmitResponseSchema = z.object({
-  status: z.enum(["draft", "submitted", "resubmitted", "approved", "rejected"]).nullable(),
+  /** Status after submit: "draft" (failed validation) or "submitted" (success) */
+  status: z.enum(["draft", "submitted"]).nullable(),
   message: z.string().nullable(),
   errors: z.array(z.string()).nullable(),
   validation_errors: z.array(z.string()).default([]),
@@ -581,54 +619,49 @@ export function validatePhoneNumber(phone: string): boolean {
 }
 
 /**
- * Get status badge color
- * Phase 7: Updated to handle async-first workflow statuses
+ * Status color mapping
+ * Phase 3 Fix: Use Record with fallback for unknown statuses
+ * @see ADMISSION_ARCHITECTURE_VIOLATION_REPORT.md Violation #5
  */
-export function getStatusColor(
-  status: "draft" | "submitted" | "resubmitted" | "approved" | "rejected" | "confirmed" | "enrolled"
-): string {
-  switch (status) {
-    case "draft":
-      return "bg-gray-100 text-gray-800"
-    case "submitted":
-    case "resubmitted":
-      return "bg-yellow-100 text-yellow-800"
-    case "approved":
-      return "bg-green-100 text-green-800"
-    case "rejected":
-      return "bg-red-100 text-red-800"
-    case "confirmed":
-      return "bg-emerald-100 text-emerald-800"
-    case "enrolled":
-      return "bg-blue-100 text-blue-800"
-    default:
-      return "bg-gray-100 text-gray-800"
-  }
+const STATUS_COLORS: Record<string, string> = {
+  draft: "bg-gray-100 text-gray-800",
+  submitted: "bg-yellow-100 text-yellow-800",
+  resubmitted: "bg-amber-100 text-amber-800",
+  approved: "bg-green-100 text-green-800",
+  rejected: "bg-red-100 text-red-800",
+  confirmed: "bg-emerald-100 text-emerald-800",
+  enrolled: "bg-blue-100 text-blue-800",
+  overridden: "bg-purple-100 text-purple-800",
+}
+
+/**
+ * Get status badge color
+ * Phase 3 Fix: Accepts any string status with fallback for unknown values
+ */
+export function getStatusColor(status: string): string {
+  return STATUS_COLORS[status] ?? "bg-gray-100 text-gray-800"
+}
+
+/**
+ * Status label mapping (Vietnamese)
+ * Phase 3 Fix: Use Record with fallback for unknown statuses
+ */
+const STATUS_LABELS: Record<string, string> = {
+  draft: "Nháp",
+  submitted: "Chờ duyệt",
+  resubmitted: "Nộp lại",
+  approved: "Đã duyệt",
+  rejected: "Từ chối",
+  confirmed: "Đã xác nhận",
+  enrolled: "Đã nhập học",
+  overridden: "Đã override",
 }
 
 /**
  * Get status label (Vietnamese)
- * Phase 7: Updated to handle async-first workflow statuses
+ * Phase 3 Fix: Accepts any string status with fallback
  */
-export function getStatusLabel(
-  status: "draft" | "submitted" | "resubmitted" | "approved" | "rejected" | "confirmed" | "enrolled"
-): string {
-  switch (status) {
-    case "draft":
-      return "Nháp"
-    case "submitted":
-      return "Chờ duyệt"
-    case "resubmitted":
-      return "Nộp lại"
-    case "approved":
-      return "Đã duyệt"
-    case "rejected":
-      return "Từ chối"
-    case "confirmed":
-      return "Đã xác nhận"
-    case "enrolled":
-      return "Đã nhập học"
-    default:
-      return status
-  }
+export function getStatusLabel(status: string): string {
+  return STATUS_LABELS[status] ?? status
 }
+

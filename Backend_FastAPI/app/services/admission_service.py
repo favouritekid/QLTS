@@ -1184,8 +1184,17 @@ async def update_profile(
         
         # Handle subject_scores
         if "subject_scores" in scores_data and scores_data["subject_scores"]:
-            subject_scores = scores_data["subject_scores"]
-            await admission_repo.update_profile_scores(profile.id, subject_scores)
+            raw_scores = scores_data["subject_scores"]
+            
+            # Normalization (Business Logic): 
+            # Ensure subject codes are lowercase and stripped of whitespace
+            normalized_scores = {
+                k.lower().strip(): v 
+                for k, v in raw_scores.items() 
+                if k and v is not None
+            }
+            
+            await admission_repo.update_profile_scores(profile.id, normalized_scores)
             
             # Update snapshot rules/criteria if needed? 
             # No, scores are data, rules are config.
@@ -1207,6 +1216,9 @@ async def update_profile(
     
     # Calculate totals for response using fresh data
     _calculate_and_update_totals(profile, scores=fresh_scores)
+
+    # ✅ Fix: Re-compute validation errors/status with new scores
+    _compute_frontend_fields(profile, current_user)
 
     log.info(
         "Admission profile updated",

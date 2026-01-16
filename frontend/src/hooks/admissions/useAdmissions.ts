@@ -116,18 +116,22 @@ export function useSubmitAdmission(id: number) {
     mutationFn: () => admissionsApi.submitAdmission(id),
     onSuccess: (data) => {
       // Phase 7: Use status-config for async-first workflow (ADR-FE-003)
-      // Backend returns new status, we show appropriate message
-      const config = getStatusConfig(data.status ?? 'draft')
+      // Backend only returns "draft" (validation failed) or "submitted" (success)
+      // Other statuses (approved, rejected) come from separate action endpoints
       
-      if (data.status === 'submitted' || data.status === 'resubmitted') {
-        // Async workflow: Profile is pending approval
+      if (data.status === 'submitted') {
+        // Success: Profile is now pending approval
+        const config = getStatusConfig('submitted')
         toast.info(config.bannerMessage || "Hồ sơ đã được nộp, đang chờ duyệt")
-      } else if (data.status === 'approved') {
-        toast.success("Hồ sơ đã được duyệt")
       } else if (data.validation_errors && data.validation_errors.length > 0) {
-        // Validation failed (still draft)
+        // Validation failed (still draft status)
         toast.error("Hồ sơ chưa đủ điều kiện", {
           description: `${data.validation_errors.length} lỗi cần được khắc phục`
+        })
+      } else if (data.status === 'draft') {
+        // Draft without explicit errors
+        toast.warning("Hồ sơ chưa thể nộp", {
+          description: "Vui lòng kiểm tra lại thông tin"
         })
       }
       

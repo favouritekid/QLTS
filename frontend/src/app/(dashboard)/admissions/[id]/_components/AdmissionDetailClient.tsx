@@ -1,14 +1,15 @@
 "use client"
 
 import { useState, useEffect, useMemo } from "react"
-import { useForm, FormProvider, FieldValues, UseFormReturn } from "react-hook-form"
+import { useForm, FormProvider } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 
 // Phase 7: Reusable status banners
 import { StatusBanner, AdmissionPendingBanner } from "@/components/ui/StatusBanner"
 
+// T3.3 Fix: Use ViewModel hook instead of separate hooks
 import {
-  useGetAdmission,
+  useAdmissionViewModel,
   useUpdateAdmission,
   useSubmitAdmission,
   useEnrollStudent,
@@ -22,7 +23,6 @@ import {
 
 // Architecture Standards (Phase 7)
 import { usePermissions } from "@/hooks/usePermissions"
-import { getStatusConfig } from "@/lib/status-config"
 
 // Layout & Components
 import { AdmissionLayout } from "./layout/AdmissionLayout"
@@ -47,41 +47,34 @@ export function AdmissionDetailClient({
   initialData,
 }: AdmissionDetailClientProps) {
   // =========================================================================
-  // 1. Data Fetching
+  // 1. Data Fetching via ViewModel (T3.3 - Architecture Compliant)
   // =========================================================================
-  const { data: profile } = useGetAdmission(profileId, {
+  const { data: vm, isLoading } = useAdmissionViewModel(profileId, {
     initialData,
     staleTime: 15000, // 15 seconds - auto-refresh when stale
   })
 
+  // Mutations
   const updateMutation = useUpdateAdmission(profileId)
   const submitMutation = useSubmitAdmission(profileId)
   const enrollMutation = useEnrollStudent(profileId)
   const deleteMutation = useDeleteAdmission(profileId)
 
   // =========================================================================
-  // 2. Phase 7: Permission-Based Rendering (ADR-FE-002)
+  // 2. Permission-Based Rendering (from ViewModel)
   // =========================================================================
-  const { can } = usePermissions(profile)
+  // Get raw profile for usePermissions (needs full profile object)
+  const { can } = usePermissions(vm as unknown as AdmissionProfileResponse)
   
   // =========================================================================
-  // 3. Phase 7: Status-Driven UI (ADR-FE-003)
+  // 3. Backend-Computed State (from ViewModel - NO local calculation)
+  // @see FRONTEND_ARCHITECTURE_V3.md Section 2.6
   // =========================================================================
-  const _statusConfig = useMemo(
-    () => getStatusConfig(profile?.status ?? 'draft'),
-    [profile?.status]
-  )
-  
-  // =========================================================================
-  // 4. Phase 7: Backend-Computed Fields (ADR-FE-001)
-  // Read eligibility from backend instead of local calculation
-  // =========================================================================
-  const isEligible = profile?.eligibility_status === 'eligible'
-  const validationErrors = profile?.validation_errors ?? []
-  const _completionPercent = profile?.completion_percent ?? 0
+  const isEligible = vm?.isEligible ?? false
+  const validationErrors = vm?.validationErrors ?? []
+  const stepsStatusRecord = vm?.stepsStatus ?? {}
   
   // Convert validation errors to missingItems format for AdmissionLayout
-  // Note: missingItems is kept for backward compatibility but Header now uses validation_summary
   const missingItems = useMemo(() => 
     validationErrors.map(err => ({
       code: err,
@@ -91,26 +84,10 @@ export function AdmissionDetailClient({
   , [validationErrors])
 
   // =========================================================================
-  // Phase 0.9: Read step_status from Backend (Architecture Compliant)
-  // Backend computes, Frontend renders - NO local calculation
+  // 4. Derived Profile (for component compatibility)
+  // Components like AdmissionLayout, Tabs need full profile object
   // =========================================================================
-  const stepsStatus = useMemo(() => {
-    // Read directly from backend step_status
-    const backendStatus = profile?.step_status
-    if (backendStatus) {
-      // Convert string keys from JSON to number keys for component compatibility
-      const converted: Record<number, "success" | "warning" | "error" | "locked"> = {}
-      for (const [key, value] of Object.entries(backendStatus)) {
-        converted[parseInt(key, 10)] = value as "success" | "warning" | "error" | "locked"
-      }
-      return converted
-    }
-    // Fallback for backward compatibility (if backend doesn't return step_status yet)
-    return {
-      1: "success", 2: "success", 3: "success", 
-      4: "success", 5: "success", 6: "success", 7: "locked"
-    } as Record<number, "success" | "warning" | "error" | "locked">
-  }, [profile?.step_status])
+  const profile = vm as unknown as AdmissionProfileResponse | null
 
   // =========================================================================
   // 5. Navigation State
@@ -124,64 +101,65 @@ export function AdmissionDetailClient({
     resolver: zodResolver(admissionProfileUpdateSchema),
     mode: "onBlur", // ADR-FE-001: Validate on blur, not on every change
     defaultValues: {
-      citizen_id: profile?.citizen_id || "",
-      full_name: profile?.full_name || "",
-      phone: profile?.phone || "",
-      email: profile?.email || "",
-      dob: profile?.dob || undefined,
-      gender: profile?.gender || "",
-      social_insurance_number: profile?.social_insurance_number || "",
-      nationality: profile?.nationality || "",
-      ethnicity: profile?.ethnicity || "",
-      religion: profile?.religion || "",
-      disability_type: profile?.disability_type || "",
-      permanent_province: profile?.permanent_province || "",
-      permanent_district: profile?.permanent_district || "",
-      permanent_ward: profile?.permanent_ward || "",
-      place_of_birth: profile?.place_of_birth || "",
-      native_place: profile?.native_place || "",
-      union_entry_date: profile?.union_entry_date || undefined,
-      party_entry_date: profile?.party_entry_date || undefined,
-      party_official_entry_date: profile?.party_official_entry_date || undefined,
-      family_info: profile?.family_info || [],
-      academic_history: profile?.academic_history || [],
-      admission_scores: profile?.admission_scores || {},
-      documents_checklist: profile?.documents_checklist || [],
-      version: profile?.version ?? 1,
+      citizen_id: vm?.citizen_id || "",
+      full_name: vm?.full_name || "",
+      phone: vm?.phone || "",
+      email: vm?.email || "",
+      dob: vm?.dob || undefined,
+      gender: vm?.gender || "",
+      social_insurance_number: (profile as AdmissionProfileResponse)?.social_insurance_number || "",
+      nationality: (profile as AdmissionProfileResponse)?.nationality || "",
+      ethnicity: (profile as AdmissionProfileResponse)?.ethnicity || "",
+      religion: (profile as AdmissionProfileResponse)?.religion || "",
+      disability_type: (profile as AdmissionProfileResponse)?.disability_type || "",
+      permanent_province: (profile as AdmissionProfileResponse)?.permanent_province || "",
+      permanent_district: (profile as AdmissionProfileResponse)?.permanent_district || "",
+      permanent_ward: (profile as AdmissionProfileResponse)?.permanent_ward || "",
+      place_of_birth: (profile as AdmissionProfileResponse)?.place_of_birth || "",
+      native_place: (profile as AdmissionProfileResponse)?.native_place || "",
+      union_entry_date: (profile as AdmissionProfileResponse)?.union_entry_date || undefined,
+      party_entry_date: (profile as AdmissionProfileResponse)?.party_entry_date || undefined,
+      party_official_entry_date: (profile as AdmissionProfileResponse)?.party_official_entry_date || undefined,
+      family_info: vm?.family_info || [],
+      academic_history: vm?.academic_history || [],
+      admission_scores: vm?.admission_scores || {},
+      documents_checklist: vm?.documents_checklist || [],
+      version: vm?.version ?? 1,
     },
   })
 
   // Form Reset on Data Update
   useEffect(() => {
-    if (profile) {
+    if (vm) {
+      const p = vm as unknown as AdmissionProfileResponse
       form.reset({
-        citizen_id: profile.citizen_id || "",
-        full_name: profile.full_name || "",
-        phone: profile.phone || "",
-        email: profile.email || "",
-        dob: profile.dob || undefined,
-        gender: profile.gender || "",
-        social_insurance_number: profile.social_insurance_number || "",
-        nationality: profile.nationality || "",
-        ethnicity: profile.ethnicity || "",
-        religion: profile.religion || "",
-        disability_type: profile.disability_type || "",
-        permanent_province: profile.permanent_province || "",
-        permanent_district: profile.permanent_district || "",
-        permanent_ward: profile.permanent_ward || "",
-        place_of_birth: profile.place_of_birth || "",
-        native_place: profile.native_place || "",
-        union_entry_date: profile.union_entry_date || undefined,
-        party_entry_date: profile.party_entry_date || undefined,
-        party_official_entry_date: profile.party_official_entry_date || undefined,
-        family_info: profile.family_info || [],
-        academic_history: profile.academic_history || [],
-        admission_scores: profile.admission_scores || {},
-        documents_checklist: profile.documents_checklist || [],
-        version: profile.version ?? 1,
+        citizen_id: vm.citizen_id || "",
+        full_name: vm.full_name || "",
+        phone: vm.phone || "",
+        email: vm.email || "",
+        dob: vm.dob || undefined,
+        gender: vm.gender || "",
+        social_insurance_number: p.social_insurance_number || "",
+        nationality: p.nationality || "",
+        ethnicity: p.ethnicity || "",
+        religion: p.religion || "",
+        disability_type: p.disability_type || "",
+        permanent_province: p.permanent_province || "",
+        permanent_district: p.permanent_district || "",
+        permanent_ward: p.permanent_ward || "",
+        place_of_birth: p.place_of_birth || "",
+        native_place: p.native_place || "",
+        union_entry_date: p.union_entry_date || undefined,
+        party_entry_date: p.party_entry_date || undefined,
+        party_official_entry_date: p.party_official_entry_date || undefined,
+        family_info: vm.family_info || [],
+        academic_history: vm.academic_history || [],
+        admission_scores: vm.admission_scores || {},
+        documents_checklist: vm.documents_checklist || [],
+        version: vm.version ?? 1,
       })
     }
-  }, [profile, form])
+  }, [vm, form])
 
   // =========================================================================
   // 7. Handlers
@@ -191,7 +169,10 @@ export function AdmissionDetailClient({
     const payload = {
       ...data,
       citizen_id: data.citizen_id === "" ? null : data.citizen_id,
-      admission_scores: !data.admission_scores?.gpa ? null : data.admission_scores
+      // Fix: Allow sending admission_scores if either gpa OR subject_scores exist
+      admission_scores: (data.admission_scores?.gpa || Object.keys(data.admission_scores?.subject_scores || {}).length > 0) 
+        ? data.admission_scores 
+        : null
     }
     updateMutation.mutate(payload)
   }
@@ -210,10 +191,10 @@ export function AdmissionDetailClient({
   }
 
   const handleCheckCondition = () => {
-    // Navigate to first error step
-    if (stepsStatus[1] === "error") setCurrentStep(1)
-    else if (stepsStatus[4] === "error") setCurrentStep(4)
-    else if (stepsStatus[5] === "error") setCurrentStep(5)
+    // Navigate to first error step using backend-computed status
+    if (stepsStatusRecord[1] === "error") setCurrentStep(1)
+    else if (stepsStatusRecord[4] === "error") setCurrentStep(4)
+    else if (stepsStatusRecord[5] === "error") setCurrentStep(5)
   }
 
   if (!profile) return null
@@ -227,7 +208,7 @@ export function AdmissionDetailClient({
         profile={profile}
         currentStep={currentStep}
         onStepChange={setCurrentStep}
-        stepsStatus={stepsStatus}
+        stepsStatus={stepsStatusRecord}
         validation={{ isEligible, missingItems }}
       >
         {/* Phase 7: Status-Driven Banners */}
@@ -240,7 +221,7 @@ export function AdmissionDetailClient({
           {currentStep === 1 && <PersonalInfoTab profile={profile} form={form} isEditable={can('edit')} />}
           {currentStep === 2 && <FamilyTab form={form} isEditable={can('edit')} />}
           {currentStep === 3 && <AcademicHistoryTab form={form} isEditable={can('edit')} />}
-          {currentStep === 4 && <ScoresTab form={form} isEditable={can('edit')} minGpa={profile.applied_rules?.min_gpa ?? 0} appliedRules={profile.applied_rules} profile={profile} />}
+          {currentStep === 4 && <ScoresTab form={form} isEditable={can('edit')} appliedRules={profile.applied_rules} profile={profile} />}
           {currentStep === 5 && <DocumentsTab profile={profile} isEditable={can('edit')} />}
           {currentStep === 6 && <TuitionTab profile={profile} />}
           {currentStep === 7 && <FinalizeTab isEligible={isEligible} onSubmit={handleSubmit} isSubmitting={submitMutation.isPending} />}

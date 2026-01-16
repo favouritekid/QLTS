@@ -9,11 +9,14 @@
  * import {
  *   useGetAdmission,
  *   useUpdateAdmission,
- *   useSubmitAdmission
+ *   useAdmissionViewModel,
  * } from "@/hooks/admissions"
  * ```
  */
 
+// ============================================================================
+// QUERY HOOKS (useAdmissions.ts)
+// ============================================================================
 export {
   // Query Keys
   admissionsKeys,
@@ -26,4 +29,26 @@ export {
   useSubmitAdmission,
   useEnrollStudent,
   useDeleteAdmission,
+  useUploadAdmissionDocument,
 } from "./useAdmissions"
+
+// ============================================================================
+// VIEW MODEL HOOKS (Phase 3 - Architecture Compliance)
+// ============================================================================
+export { useAdmissionViewModel } from "./useAdmissionViewModel"
+
+// ============================================================================
+// TYPES
+// ============================================================================
+export type {
+  StepStatus,
+  EligibilityStatus,
+  AdmissionStatus,
+  AdmissionViewStatus,
+  AdmissionAction,
+  DocumentStatus,
+  SubmissionFormat,
+  SubjectScore,
+  ScoringConfig,
+} from "./types"
+

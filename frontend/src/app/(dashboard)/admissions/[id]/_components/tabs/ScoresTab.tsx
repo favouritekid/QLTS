@@ -23,13 +23,15 @@ interface AdmissionCriterion {
 interface ScoresTabProps {
   form: UseFormReturn<AdmissionProfileUpdate>
   isEditable: boolean
-  minGpa: number
+  // minGpa removed - now read from appliedRules.min_gpa (Phase 2 Fix)
   // Updated to match the actual AppliedRules type from backend/zod
   appliedRules?: AppliedRules | null
   // Phase 7: Backend-computed scores (source of truth)
   profile?: {
     total_score?: number | null
     average_score?: number | null
+    // Phase 2 Fix: Read qualification status from backend
+    is_qualified?: boolean | null
   }
 }
 
@@ -59,7 +61,10 @@ const SUBJECT_LABELS: Record<string, string> = {
 }
 
 
-export function ScoresTab({ form, isEditable, minGpa, appliedRules, profile }: ScoresTabProps) {
+export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTabProps) {
+  // Phase 2 Fix: Read minGpa from appliedRules (no prop, no default)
+  // @see ADMISSION_ARCHITECTURE_VIOLATION_REPORT.md Violation #2, #3
+  const minGpa = appliedRules?.min_gpa
   // Construct criteria from appliedRules
   // Since AppliedRules now represents a snapshot for a SINGLE path,
   // we map it to a single criterion for the UI to consume.
@@ -124,22 +129,17 @@ export function ScoresTab({ form, isEditable, minGpa, appliedRules, profile }: S
   }, [selectedGroupDetails])
   
   // =========================================================================
-  // Calculate scores for real-time preview (UX only - backend is source of truth)
+  // Phase 2 Fix: REMOVED local score calculation (Architecture Violation #2)
+  // Backend is source of truth for total_score and average_score
+  // NO fallback to local calculation - if backend doesn't provide, show "—"
+  // @see ADMISSION_ARCHITECTURE_VIOLATION_REPORT.md Violation #2, #6
   // =========================================================================
-  const localTotalScore = useMemo(() => {
-    if (!subjectScoresData || typeof subjectScoresData !== 'object') return 0
-    return Object.values(subjectScoresData as Record<string, number>).reduce(
-      (sum, score) => sum + (typeof score === 'number' ? score : 0),
-      0
-    )
-  }, [subjectScoresData])
+  const totalScore = profile?.total_score ?? null
+  const averageScore = profile?.average_score ?? null
   
-  // Phase 7: Prefer backend-computed scores (source of truth) with local fallback for preview
-  const totalScore = profile?.total_score ?? localTotalScore
-  const _averageScore = profile?.average_score ?? (subjects.length > 0 ? localTotalScore / subjects.length : 0)
-  
-  // Show preview indicator if we're showing local calculation
-  const isPreview = !profile?.total_score && localTotalScore > 0
+  // Preview indicator - shows when data is being input but not yet saved
+  // This is a UX hint only, NOT a calculated value
+  const hasUnsavedInput = subjectScoresData && Object.values(subjectScoresData as Record<string, number>).some(v => v != null)
   
   // Initialize subject_scores when group changes
   useEffect(() => {
@@ -170,23 +170,25 @@ export function ScoresTab({ form, isEditable, minGpa, appliedRules, profile }: S
     }
   }, [selectedCriterionId, availableGroups, form, isEditable])
   
-  // Validation
-  const currentGpa = gpa ? (typeof gpa === 'string' ? parseFloat(gpa) : gpa) : 0
-  const minScore = selectedCriterion?.min_score || 0
+  // Phase 2 Fix: Use type-safe parsing (Violation #9)
+  const currentGpa = typeof gpa === 'number' ? gpa : (gpa ? parseFloat(gpa) : null)
+  const minScore = selectedCriterion?.min_score ?? null
   
-  // Check if this is ONLY a GPA method (no subject groups) or also supports subject-based scoring
-  const isGpaOnlyMethod = (
-    (selectedCriterion?.method_name?.toLowerCase().includes("học bạ") || 
-     selectedCriterion?.method_name?.toLowerCase().includes("gpa")) &&
-    (!selectedCriterion?.subject_groups || selectedCriterion.subject_groups.length === 0)
-  )
+  // Check if this is ONLY a GPA method (no subject groups)
+  // Note: This is a UX derivation (allowed) - determines which UI fields to show
+  // It does NOT determine eligibility - that comes from backend
+  // Check if this is ONLY a GPA method
+  // Ticket #3: Use explicit method_type from applied_rules
+  // STRICT IMPLEMENTATION: No fallback
+  const isGpaOnlyMethod = appliedRules?.method_type === "gpa_only"
   
   // Method supports subject-based scoring if it has subject_groups
   const supportsSubjectScoring = availableGroups.length > 0
   
-  const isQualified = isGpaOnlyMethod 
-    ? currentGpa >= minGpa && currentGpa > 0
-    : totalScore >= minScore && totalScore > 0
+  // Phase 2 Fix: Read qualification from backend (Violation #2)
+  // Backend provides is_qualified - FE does NOT calculate this
+  // If backend doesn't provide, show "pending" state
+  const isQualified = profile?.is_qualified ?? null
   
   // No criteria available
   if (criteria.length === 0) {
@@ -385,17 +387,17 @@ export function ScoresTab({ form, isEditable, minGpa, appliedRules, profile }: S
                       ))}
                     </div>
 
-                    {/* Auto-calculated Total */}
+                    {/* Backend-computed Total (Phase 2 Fix) */}
                     <div className="pt-4 border-t">
                       <div className="flex justify-between items-center text-sm">
                         <span className="font-medium">
                           Tổng điểm:
-                          {isPreview && (
-                            <span className="text-xs text-muted-foreground ml-1">(preview)</span>
+                          {hasUnsavedInput && !totalScore && (
+                            <span className="text-xs text-amber-600 ml-1">(chưa lưu)</span>
                           )}
                         </span>
                         <span className="text-lg font-bold text-primary">
-                          {totalScore.toFixed(1)} / 30
+                          {totalScore !== null ? `${totalScore.toFixed(1)} / 30` : "—"}
                         </span>
                       </div>
                     </div>
@@ -406,10 +408,10 @@ export function ScoresTab({ form, isEditable, minGpa, appliedRules, profile }: S
           </CardContent>
         </Card>
 
-        {/* RIGHT: RESULT PANEL */}
+        {/* RIGHT: RESULT PANEL (Phase 2 Fix: Handle null isQualified) */}
         <Card
           className={
-            !selectedCriterion
+            !selectedCriterion || isQualified === null
               ? "bg-muted/50"
               : isQualified
               ? "bg-green-50 border-green-200"
@@ -420,6 +422,8 @@ export function ScoresTab({ form, isEditable, minGpa, appliedRules, profile }: S
             <CardTitle className="text-base flex items-center gap-2">
               {!selectedCriterion ? (
                 <AlertCircle className="text-muted-foreground" />
+              ) : isQualified === null ? (
+                <AlertCircle className="text-amber-500" />
               ) : isQualified ? (
                 <CheckCircle2 className="text-green-600" />
               ) : (
@@ -456,8 +460,8 @@ export function ScoresTab({ form, isEditable, minGpa, appliedRules, profile }: S
                     <span>Điểm đạt được:</span>
                     <span className="font-medium">
                       {isGpaOnlyMethod
-                    ? currentGpa.toFixed(1)
-                    : totalScore.toFixed(1)}
+                        ? (currentGpa !== null ? currentGpa.toFixed(1) : "—")
+                        : (totalScore !== null ? totalScore.toFixed(1) : "—")}
                     </span>
                   </div>
                 </div>
@@ -465,8 +469,8 @@ export function ScoresTab({ form, isEditable, minGpa, appliedRules, profile }: S
                 <div className="pt-4 border-t border-dashed">
                   <div className="flex justify-between items-center font-semibold">
                     <span>Kết quả:</span>
-                    <span className={isQualified ? "text-green-700" : "text-red-700"}>
-                      {isQualified ? "ĐẠT" : "CHƯA ĐẠT"}
+                    <span className={isQualified === null ? "text-amber-600" : isQualified ? "text-green-700" : "text-red-700"}>
+                      {isQualified === null ? "Đang xử lý..." : isQualified ? "ĐẠT" : "CHƯA ĐẠT"}
                     </span>
                   </div>
                   {!isQualified && (
