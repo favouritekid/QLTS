@@ -19,6 +19,8 @@ from app.models.admission_config import (
     CriteriaSubjectGroup,
     DocumentGroup,
     DocumentGroupItem,
+    SubjectGroup,
+    SubjectGroupSubject,
 )
 from app.models.offering_academic_info import OfferingAcademicInfo
 from app.models.program_offering import ProgramOffering
@@ -61,10 +63,11 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
                 .selectinload(ProgramOffering.program),
                 selectinload(AdmissionPath.admission_method),
                 selectinload(AdmissionPath.activator),
-                # Eager load criteria with subject groups (N+1 prevention)
                 selectinload(AdmissionPath.criteria).selectinload(
                     AdmissionCriteria.subject_group_mappings
-                ).selectinload(CriteriaSubjectGroup.subject_group),
+                ).selectinload(CriteriaSubjectGroup.subject_group)
+                .selectinload(SubjectGroup.subject_mappings)
+                .selectinload(SubjectGroupSubject.subject),
             )
         )
         result = await self.db.execute(query)

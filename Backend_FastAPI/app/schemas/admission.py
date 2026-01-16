@@ -372,6 +372,87 @@ class AdmissionProfileUpdate(BaseModel):
     )
 
 
+# ==============================================================================
+# APPLIED RULES SCHEMA (Ticket #1)
+# ==============================================================================
+
+# Ticket #4: Default Upload Configuration (Shared Constant)
+DEFAULT_UPLOAD_CONFIG = {
+    "allowed_types": ["application/pdf", "image/jpeg", "image/png", "image/jpg"],
+    "max_file_size": 10 * 1024 * 1024,  # 10MB
+    "allowed_extensions": ["pdf", "jpg", "jpeg", "png"]
+}
+
+class DocumentConfigSnapshotSchema(BaseModel):
+    """Snapshot of document configuration."""
+    requires_upload: Optional[bool] = None
+    submission_format: Optional[str] = None
+    is_mandatory: Optional[bool] = None
+    label: Optional[str] = None
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class UploadConfigSchema(BaseModel):
+    """
+    Upload configuration (Ticket #4).
+    Controls frontend file validation rules.
+    """
+    allowed_types: List[str]
+    max_file_size: int
+    allowed_extensions: List[str]
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class AppliedRulesSchema(BaseModel):
+    """
+    Schema for applied_rules snapshot (Ticket #1).
+    BE-FE Contract:
+    - Must handle LEGACY data (defaults required for new fields).
+    - Must correspond to Zod schema strictly.
+    """
+    # Group 1: Basic Criteria
+    min_gpa: Optional[float] = None
+    min_score: Optional[float] = None
+
+    # Group 2: Scoring Configuration
+    subject_selection_mode: Optional[Literal["fixed", "best_n", "any_n"]] = "fixed"
+    scoring_method: Optional[Literal["sum", "average", "weighted"]] = "sum"
+    required_subject_count: Optional[int] = None
+    min_subject_score: Optional[float] = None
+    max_possible_score: Optional[float] = None
+
+    # Group 3: Subject Validation
+    allowed_subject_codes: List[str] = []
+    subject_groups: List[Dict[str, Any]] = []
+
+    # Group 4: Method Metadata
+    admission_method: Optional[str] = None
+    admission_method_id: Optional[int] = None
+    # Ticket #3: Explicit method type
+    # Legacy data fallback: None (Frontend handles nullable)
+    method_type: Optional[Literal["gpa_only", "subject_based", "combined"]] = None
+
+    # Group 5: Document Requirements
+    mandatory_docs: List[str] = []
+    doc_configs: Dict[str, DocumentConfigSnapshotSchema] = {}
+    
+    # Ticket #4: Upload Config
+    # CRITICAL: Must provide default for legacy JSONB data that lacks this field.
+    # Frontend Zod requires this field (non-optional).
+    upload_config: UploadConfigSchema = Field(
+        default_factory=lambda: UploadConfigSchema(**DEFAULT_UPLOAD_CONFIG)
+    )
+
+    # Group 6: Metadata
+    snapshot_source: Optional[str] = None
+    admission_path_id: Optional[int] = None
+    academic_info_id: Optional[int] = None
+
+    model_config = ConfigDict(extra="ignore")
+
+
 class AdmissionProfileResponse(BaseModel):
     """
     Schema for AdmissionProfile response (GET, CREATE, UPDATE).
@@ -390,7 +471,10 @@ class AdmissionProfileResponse(BaseModel):
     status: str
     version: int
     academic_year: int  # ✅ NEW: Academic year (e.g., 2025, 2026)
-    applied_rules: dict
+    
+    # ✅ Ticket #1: Use strict schema
+    applied_rules: AppliedRulesSchema
+    
     created_at: datetime
     updated_at: datetime
     
@@ -431,6 +515,10 @@ class AdmissionProfileResponse(BaseModel):
     rejected_at: Optional[datetime] = None
     rejected_by_id: Optional[int] = None
     rejection_reason: Optional[str] = None
+
+    # ✅ Ticket #2: Qualification Status
+    # Computed by backend: True if all academic criteria met
+    is_qualified: Optional[bool] = None
 
     # JSONB Fields
     family_info: List[FamilyMemberSchema] = []

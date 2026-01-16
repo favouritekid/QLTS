@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, joinedload
 
 from .. import models
+from ..schemas.admission import DEFAULT_UPLOAD_CONFIG
 from ..core.constants import UserRole
 from ..utils.exceptions import (
     ResourceNotFoundError,
@@ -199,6 +200,16 @@ def _compute_frontend_fields(
         profile.eligibility_status = "eligible"
     else:
         profile.eligibility_status = "ineligible"
+    
+    # Ticket #2: Compute is_qualified
+    # True if NO validation errors (academic or otherwise)
+    # Note: validation_errors includes document checks too, which might not strictly 
+    # mean "unqualified" academically, but for "Thin Client", qualified = eligible.
+    profile.is_qualified = (profile.eligibility_status == "eligible" or profile.eligibility_status == "pending") and not gpa_error
+    
+    # Refinement: If status is approved/enrolled, always qualified
+    if status in ["approved", "enrolled"]:
+        profile.is_qualified = True
     
     profile.validation_errors = validation_errors
     
@@ -491,8 +502,9 @@ def _extract_allowed_subject_codes(admission_path) -> List[str]:
     subject_codes = set()
     for mapping in admission_path.criteria.subject_group_mappings:
         if mapping.subject_group:
-            for subject in mapping.subject_group.subjects:
-                subject_codes.add(subject.code)
+            for group_mapping in mapping.subject_group.subject_mappings:
+                if group_mapping.subject:
+                    subject_codes.add(group_mapping.subject.code)
 
     return sorted(list(subject_codes))
 
@@ -537,7 +549,11 @@ def _serialize_subject_groups(admission_path) -> List[Dict[str, Any]]:
             groups.append({
                 "code": mapping.subject_group.code,
                 "name": mapping.subject_group.name,
-                "subjects": [s.code for s in mapping.subject_group.subjects]
+                "subjects": [
+                    m.subject.code 
+                    for m in mapping.subject_group.subject_mappings 
+                    if m.subject
+                ]
             })
 
     return groups
@@ -797,18 +813,20 @@ async def create_profile(
 
         # Original subject groups (for audit trail and fixed mode)
         "subject_groups": _serialize_subject_groups(full_path),
-
+        
         # =========================================================================
-        # GROUP 4: Method & Path Metadata
+        # GROUP 4: Method Metadata (Updated Ticket #3)
         # =========================================================================
-        # From AdmissionMethod
-        "admission_method": full_path.admission_method.code if full_path and full_path.admission_method else None,
+        "admission_method": admission_path.admission_method.code if admission_path.admission_method else None,
         "admission_method_id": admission_method_id,
+        # Ticket #3: Explicit method type derivation
+        # If no subject groups mapped -> "gpa_only" (Hoc ba 3 years)
+        # If subject groups exist -> "subject_based" (Hoc ba 3 semesters / THPT / DGNL)
+        "method_type": "subject_based" if full_path.criteria and full_path.criteria.subject_group_mappings else "gpa_only",
 
         # =========================================================================
-        # GROUP 5: Document Requirements
+        # GROUP 5: Document Requirements (Updated Ticket #4)
         # =========================================================================
-        # From resolved DocumentGroup
         "mandatory_docs": mandatory_docs,
         "doc_configs": {
             doc.document_type_code: {
@@ -818,14 +836,18 @@ async def create_profile(
             }
             for doc in resolved_docs
         },
+        # Ticket #4: Upload Configuration
+        "upload_config": DEFAULT_UPLOAD_CONFIG,
 
         # =========================================================================
-        # GROUP 6: Snapshot Metadata
+        # GROUP 6: Metadata
         # =========================================================================
         "snapshot_source": "relational",
         "admission_path_id": admission_path.id,
         "academic_info_id": academic_info.id,
     }
+
+
 
     # Step 13: Validate applied_rules has content
     if not mandatory_docs and not applied_rules.get("min_gpa") and not applied_rules.get("min_score"):
