@@ -397,7 +397,269 @@ api.interceptors.response.use(
 
 ---
 
-## PART 3: ANTI-PATTERNS (FORBIDDEN)
+### 2.6. Frontend Domain Service Layer (MANDATORY)
+
+> [!CRITICAL]
+> This section formalizes the **Frontend Domain Service Layer**.
+> Its purpose is to **prevent logic leakage into components and useEffect**, and to enforce **Hook safety by architecture, not discipline**.
+
+---
+
+#### 2.6.1. Definition
+
+The **Frontend Domain Service Layer** is a mandatory abstraction responsible for **UX-oriented data shaping** that:
+
+* Is **NOT** business logic
+* Does **NOT** decide correctness
+* Does **NOT** mutate authoritative state
+
+It exists to answer one question:
+
+> **"How should backend data be prepared so UI can render it safely, predictably, and without violating Hooks rules?"**
+
+---
+
+#### 2.6.2. Data Flow Hierarchy
+
+```
+Backend API → React Query Cache → Domain Service (View Model) → Component (Render Only)
+```
+
+- Components **MUST NOT** access React Query directly for complex domains.
+- Components **MUST** consume View Models from Domain Service hooks.
+
+---
+
+#### 2.6.3. State Ownership
+
+| State Type | Owner | Example |
+|------------|-------|---------|
+| Business State | Backend | `status`, `eligibility`, `permissions` |
+| Server Cache | React Query | `useQuery`, `useMutation` |
+| UI State | Component/Context | `isModalOpen`, `currentStep`, `selectedTab` |
+| Form State | React Hook Form | `useForm`, `watch`, `reset` |
+
+---
+
+#### 2.6.4. Responsibilities (What This Layer MAY Do)
+
+This layer MAY:
+
+* Normalize and reshape API responses for rendering
+* Map backend enums → UI labels, colors, icons
+* Group, sort, or filter data for **display only**
+* Derive **UX-only flags** from backend-provided fields
+* Centralize conditional rendering logic based on `status`, `available_actions`, `can_*`
+
+```ts
+// ✅ ALLOWED: UX-only derivation
+const canShowSubmitHint = available_actions.includes("submit");
+const statusLabel = STATUS_LABELS[status] ?? status;
+```
+
+---
+
+#### 2.6.5. Prohibitions (Hard Limits)
+
+This layer **MUST NOT**:
+
+* Calculate eligibility, scores, or thresholds
+* Infer workflow transitions
+* Combine backend states into new pseudo-states
+* Override or default missing backend values with business fallbacks
+* Perform side effects (no toast, no navigation, no mutation)
+* Use `useEffect` to synchronize state
+
+```ts
+// ❌ FORBIDDEN: business inference
+const isEligible = gpa >= minGpa;
+
+// ❌ FORBIDDEN: invented workflow state
+const isPending = status === "submitted" && !approved_at;
+
+// ❌ FORBIDDEN: unsafe type fallback
+const rules = profile?.applied_rules || {}; // Loses type info
+
+// ✅ CORRECT: safe optional chaining
+const minGpa = profile?.applied_rules?.min_gpa ?? 0;
+```
+
+---
+
+#### 2.6.6. Mandatory Implementation Pattern
+
+**Directory Structure:**
+```
+/hooks/[domain]/
+  useDomainViewModel.ts   # Main View Model hook
+  useDomainMutations.ts   # Mutations with callbacks
+  types.ts                # Domain-specific View Model types
+```
+
+**View Model Hook Pattern:**
+```ts
+// hooks/admissions/useAdmissionViewModel.ts
+export function useAdmissionViewModel(id: number) {
+  // 1. Fetch from React Query
+  const query = useGetAdmission(id);
+
+  // 2. Derive View Model with useMemo (NO useEffect!)
+  const viewModel = useMemo(() => {
+    if (!query.data) return null;
+
+    const { status, available_actions, applied_rules, ...rest } = query.data;
+
+    return {
+      // Pass-through fields
+      ...rest,
+      status,
+
+      // UI Labels (mapping)
+      status_label: STATUS_LABELS[status] ?? status,
+      status_color: STATUS_COLORS[status] ?? "gray",
+
+      // Action Flags (from backend permissions)
+      can_edit: available_actions.includes("edit"),
+      can_submit: available_actions.includes("submit"),
+      can_approve: available_actions.includes("approve"),
+
+      // Safe Access (optional chaining, NO fallback objects)
+      min_gpa: applied_rules?.min_gpa,
+      mandatory_docs: applied_rules?.mandatory_docs ?? [],
+    };
+  }, [query.data]);
+
+  return { ...query, data: viewModel };
+}
+```
+
+📌 **Rule:**
+Components **MUST consume the View Model** returned by this layer.
+Components **MUST NOT re-derive logic locally**.
+
+---
+
+#### 2.6.7. Form Integration Pattern
+
+For forms that need to sync with API data:
+
+**Pattern A: Using `reset()` (Controlled Sync)**
+```tsx
+function MyFormComponent({ profileId }: Props) {
+  const { data: profile } = useAdmissionViewModel(profileId);
+
+  const form = useForm<FormSchema>({
+    defaultValues: {} // Empty, will be populated by reset
+  });
+
+  // Reset form when profile changes (single, controlled sync point)
+  useEffect(() => {
+    if (profile) {
+      form.reset({
+        full_name: profile.full_name ?? "",
+        email: profile.email ?? "",
+        // ... other fields
+      });
+    }
+  }, [profile, form.reset]); // form.reset is stable
+
+  return <Form {...form}>...</Form>;
+}
+```
+
+> [!NOTE]
+> This is the **ONLY** approved use of `setState`-like operations in `useEffect`.
+> The `form.reset` call is idempotent and controlled by React Hook Form.
+
+**Pattern B: Using `key` Prop (Preferred for Simple Cases)**
+```tsx
+// ✅ BEST: Component re-mounts when ID changes, no useEffect needed
+<MyFormComponent key={profileId} profileId={profileId} />
+```
+
+---
+
+#### 2.6.8. Derived State Pattern
+
+For UI state that depends on fetched data:
+
+```tsx
+// ❌ FORBIDDEN: setState in useEffect
+const [selections, setSelections] = useState<Record<number, Item>>({});
+
+useEffect(() => {
+  if (apiData?.items) {
+    const map = {};
+    apiData.items.forEach(item => { map[item.id] = item; });
+    setSelections(map); // ❌ Triggers re-render, causes "set-state-in-effect"
+  }
+}, [apiData]);
+
+// ✅ CORRECT: Derive in useMemo
+const selections = useMemo(() => {
+  if (!apiData?.items) return {};
+  const map: Record<number, Item> = {};
+  apiData.items.forEach(item => { map[item.id] = item; });
+  return map;
+}, [apiData?.items]);
+```
+
+---
+
+#### 2.6.9. No Fallback Objects Rule
+
+```tsx
+// ❌ FORBIDDEN: Loses TypeScript type information
+const appliedRules = profile?.applied_rules || {};
+const minGpa = appliedRules.min_gpa; // Error: Property 'min_gpa' does not exist on type '{}'
+
+// ✅ CORRECT: Keep undefined, use optional chaining
+const appliedRules = profile?.applied_rules; // Type: AppliedRules | undefined
+const minGpa = appliedRules?.min_gpa ?? 0; // Type: number
+```
+
+---
+
+#### 2.6.10. Relationship to Other Layers
+
+| Layer                    | Responsibility              |
+| ------------------------ | --------------------------- |
+| Presentation             | Render View Model only      |
+| **Domain Service (2.6)** | Prepare View Model          |
+| State Management         | Cache & fetch server state  |
+| API Client               | HTTP transport & validation |
+| Backend                  | Business truth & decisions  |
+
+This layer is the **only approved place** for UX derivation logic.
+
+---
+
+#### 2.6.11. Hook Safety Guarantees
+
+By construction, this layer:
+
+* ✅ Eliminates `set-state-in-useEffect` lint errors
+* ✅ Makes `exhaustive-deps` naturally correct
+* ✅ Prevents stale closures
+* ✅ Reduces re-render storms
+
+> **If logic fits here, it MUST NOT appear in components or effects.**
+
+---
+
+#### 2.6.12. Review Checklist (Non-Negotiable)
+
+- [ ] Does this logic belong to UX, not correctness?
+- [ ] Is it derived only from backend-provided fields?
+- [ ] Is it implemented without `useEffect` setState (except form.reset)?
+- [ ] Is the component free of conditional business logic?
+- [ ] Are all types explicit (no `any`, no `|| {}` fallbacks)?
+
+**Violation of this section is considered a Frontend Architecture breach.**
+
+---
+
+
 
 ### ❌ The "Thick Validator" Anti-Pattern
 FE calculates eligibility from rules it shouldn't own.

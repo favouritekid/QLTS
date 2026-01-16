@@ -38,7 +38,7 @@ interface ProgramOfferingCreate {
   offering_type: string; // Backend expects string name
   duration_semesters?: number;
   total_credits?: number;
-  scoring_rules?: any; // Nested JSON
+  scoring_rules?: Record<string, unknown>; // Nested JSON
   is_active?: boolean;
 }
 
@@ -46,7 +46,7 @@ interface ProgramOfferingUpdate {
   offering_type?: string; 
   duration_semesters?: number;
   total_credits?: number;
-  scoring_rules?: any; // Nested JSON
+  scoring_rules?: Record<string, unknown>; // Nested JSON
   is_active?: boolean;
 }
 

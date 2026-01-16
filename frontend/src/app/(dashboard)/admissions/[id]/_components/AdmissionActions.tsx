@@ -38,6 +38,7 @@ interface AdmissionActionsProps {
   onCheckCondition?: () => void
   // Optional: For Manager actions
   onApprove?: () => void
+  onReject?: () => void
   isApproving?: boolean
   isRejecting?: boolean
   // Delete action

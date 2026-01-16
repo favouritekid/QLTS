@@ -10,7 +10,6 @@
 import { Layers } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { CRUDTable } from "../shared/CRUDTable";
 import {
   useOfferingTypes,
@@ -19,6 +18,21 @@ import {
   useDeleteOfferingType,
 } from "@/hooks/admissions/useMasterData";
 import type { OfferingType, CRUDTableColumn, BaseFormData } from "../shared/types";
+
+// Payload types for mutations
+interface OfferingTypeCreate {
+  code: string;
+  name: string;
+  display_order: number;
+  is_active: boolean;
+}
+
+interface OfferingTypeUpdate {
+  code?: string;
+  name?: string;
+  display_order?: number;
+  is_active?: boolean;
+}
 
 // ============================================
 // CONSTANTS
@@ -49,7 +63,7 @@ export function OfferingTypePanel() {
       display_order: formData.display_order || 0,
       is_active: formData.is_active !== undefined ? formData.is_active : true,
     };
-    await createMutation.mutateAsync(payload as any);
+    await createMutation.mutateAsync(payload as OfferingTypeCreate);
   };
 
   const handleUpdate = async (id: number, formData: BaseFormData) => {
@@ -60,7 +74,7 @@ export function OfferingTypePanel() {
       display_order: formData.display_order,
       is_active: formData.is_active,
     };
-    await updateMutation.mutateAsync({ id, data: payload as any });
+    await updateMutation.mutateAsync({ id, data: payload as OfferingTypeUpdate });
   };
 
   const handleDelete = async (id: number) => {

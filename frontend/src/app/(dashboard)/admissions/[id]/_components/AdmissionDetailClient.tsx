@@ -5,7 +5,7 @@ import { useForm, FormProvider, FieldValues, UseFormReturn } from "react-hook-fo
 import { zodResolver } from "@hookform/resolvers/zod"
 
 // Phase 7: Reusable status banners
-import { StatusBanner, ValidationErrorsBanner, AdmissionPendingBanner } from "@/components/ui/StatusBanner"
+import { StatusBanner, AdmissionPendingBanner } from "@/components/ui/StatusBanner"
 
 import {
   useGetAdmission,
@@ -67,7 +67,7 @@ export function AdmissionDetailClient({
   // =========================================================================
   // 3. Phase 7: Status-Driven UI (ADR-FE-003)
   // =========================================================================
-  const statusConfig = useMemo(
+  const _statusConfig = useMemo(
     () => getStatusConfig(profile?.status ?? 'draft'),
     [profile?.status]
   )
@@ -78,7 +78,7 @@ export function AdmissionDetailClient({
   // =========================================================================
   const isEligible = profile?.eligibility_status === 'eligible'
   const validationErrors = profile?.validation_errors ?? []
-  const completionPercent = profile?.completion_percent ?? 0
+  const _completionPercent = profile?.completion_percent ?? 0
   
   // Convert validation errors to missingItems format for AdmissionLayout
   // Note: missingItems is kept for backward compatibility but Header now uses validation_summary

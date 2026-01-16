@@ -1,17 +1,24 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2, Save } from "lucide-react";
-import { toast } from "sonner";
 import { useOfferingTypes, useDocumentTypes, useSharedDocumentGroup, useUpsertSharedDocumentGroup } from "@/hooks/admissions/useMasterData";
 import { DocumentType, OfferingType } from "../shared/types";
 
 interface DocSelection {
+  document_type_id: number;
+  is_mandatory: boolean;
+  requires_upload: boolean;
+  submission_format: string | null;
+  display_order: number;
+}
+
+interface SharedDocItem {
   document_type_id: number;
   is_mandatory: boolean;
   requires_upload: boolean;
@@ -35,56 +42,78 @@ export function SharedDocumentConfigPanel() {
   
   const upsertMutation = useUpsertSharedDocumentGroup();
 
-  // Local Selection State
-  const [selections, setSelections] = useState<Record<number, DocSelection>>({});
+  // ✅ Section 2.6.8: Derive initial selections from API data using useMemo
+  const initialSelections = useMemo(() => {
+    if (!sharedGroup?.items) return {};
+    const initialMap: Record<number, DocSelection> = {};
+    sharedGroup.items.forEach((item: SharedDocItem) => {
+      initialMap[item.document_type_id] = {
+        document_type_id: item.document_type_id,
+        is_mandatory: item.is_mandatory,
+        requires_upload: item.requires_upload,
+        submission_format: item.submission_format,
+        display_order: item.display_order
+      };
+    });
+    return initialMap;
+  }, [sharedGroup?.items]);
 
-  // Sync state with fetched data
-  useEffect(() => {
-    if (sharedGroup?.items) {
-      const initialMap: Record<number, DocSelection> = {};
-      sharedGroup.items.forEach((item: any) => {
-        initialMap[item.document_type_id] = {
-          document_type_id: item.document_type_id,
-          is_mandatory: item.is_mandatory,
-          requires_upload: item.requires_upload,
-          submission_format: item.submission_format,
-          display_order: item.display_order
-        };
-      });
-      setSelections(initialMap);
-    } else if (selectedOfferingTypeId && !loadingSharedGroup) {
-      // If loaded but no group exists, reset selections
-      setSelections({});
-    }
-  }, [sharedGroup, selectedOfferingTypeId, loadingSharedGroup]);
+  // Local modifications state - tracks user changes
+  const [modifications, setModifications] = useState<Record<number, DocSelection | null>>({});
+  
+  // Reset modifications when offering type changes
+  const [lastOfferingTypeId, setLastOfferingTypeId] = useState<number | null>(null);
+  if (selectedOfferingTypeId !== lastOfferingTypeId) {
+    setLastOfferingTypeId(selectedOfferingTypeId);
+    setModifications({});
+  }
+
+  // Computed current selections: initial + modifications
+  const selections = useMemo(() => {
+    const result = { ...initialSelections };
+    Object.entries(modifications).forEach(([id, mod]) => {
+      const numId = Number(id);
+      if (mod === null) {
+        delete result[numId];
+      } else if (mod) {
+        result[numId] = mod;
+      }
+    });
+    return result;
+  }, [initialSelections, modifications]);
 
   // Handlers
   const handleSelect = (typeId: number, checked: boolean) => {
     if (checked) {
-      setSelections(prev => ({
+      // Add new or restore from initial
+      const existing = initialSelections[typeId];
+      setModifications(prev => ({
         ...prev,
-        [typeId]: {
+        [typeId]: existing ?? {
           document_type_id: typeId,
           is_mandatory: true,
           requires_upload: true,
           submission_format: null,
-          display_order: Object.keys(prev).length + 1
+          display_order: Object.keys(selections).length + 1
         }
       }));
     } else {
-      setSelections(prev => {
-        const next = { ...prev };
-        delete next[typeId];
-        return next;
-      });
+      // Mark as removed
+      setModifications(prev => ({
+        ...prev,
+        [typeId]: null
+      }));
     }
   };
 
-  const handleUpdate = (typeId: number, field: keyof DocSelection, value: any) => {
-    setSelections(prev => ({
+  const handleUpdate = <K extends keyof DocSelection>(typeId: number, field: K, value: DocSelection[K]) => {
+    const current = selections[typeId];
+    if (!current) return;
+    
+    setModifications(prev => ({
       ...prev,
       [typeId]: {
-        ...prev[typeId],
+        ...current,
         [field]: value
       }
     }));
@@ -100,7 +129,7 @@ export function SharedDocumentConfigPanel() {
         data: { items: payload }
       });
       // Toast handled by hook
-    } catch (error) {
+    } catch {
       // Error handled by hook
     }
   };

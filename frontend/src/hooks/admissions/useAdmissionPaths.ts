@@ -137,7 +137,7 @@ export function useCreateAdmissionPath() {
   
   return useMutation({
     mutationFn: (data: AdmissionPathCreate) => createAdmissionPath(data),
-    onSuccess: (_newPath) => {
+    onSuccess: () => {
       // Invalidate list queries
       queryClient.invalidateQueries({ queryKey: admissionPathKeys.lists() })
       // Invalidate academic infos to update admission_status (READY → CONFIGURED)

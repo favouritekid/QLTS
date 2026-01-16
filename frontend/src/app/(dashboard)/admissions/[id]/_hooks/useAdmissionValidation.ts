@@ -42,9 +42,10 @@ export function useAdmissionValidation(
     const missing: ValidationResult["missingItems"] = []
 
     // --- RULES ---
-    const appliedRules = profile?.applied_rules || {}
-    const minGpa = appliedRules.min_gpa ?? 5.0
-    const mandatoryDocs: string[] = appliedRules.mandatory_docs || []
+    // --- RULES ---
+    const appliedRules = profile?.applied_rules
+    const minGpa = appliedRules?.min_gpa ?? 5.0
+    const mandatoryDocs: string[] = appliedRules?.mandatory_docs || []
 
     // 1. Personal Info
     // Required: full_name, dob, gender, citizen_id

@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import { useUpdateCriteria } from "@/hooks/admissions/useAdmissionPaths";
 import { useSubjectGroups } from "@/hooks/admissions/useMasterData";
 import { AdmissionPathResponse } from "@/lib/zod/admission-path";
+import type { SubjectGroup } from "../shared/types";
 
 interface ConfigCriteriaProps {
   path: AdmissionPathResponse;
@@ -81,7 +82,7 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
   // Filter subject groups based on search query
   // Filter subject groups based on search query
   const filteredGroups = Array.isArray(subjectGroups) 
-    ? subjectGroups.filter((group: any) => {
+    ? subjectGroups.filter((group: SubjectGroup) => {
         if (!searchQuery) return true;
         const query = searchQuery.toLowerCase();
         return (
@@ -92,7 +93,7 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
     : [];
 
   // Get selected group details for chip display
-  const selectedGroupsDetails = subjectGroups.filter((group: any) =>
+  const selectedGroupsDetails = subjectGroups.filter((group: SubjectGroup) =>
     selectedGroups.includes(group.id)
   );
 
@@ -156,17 +157,19 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
       toast.success("Đã lưu tiêu chí xét tuyển thành công");
       // Move to next step after successful save
       onNext();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Failed to save criteria:", error);
-      console.error("Error response:", error?.response?.data);
+      const apiError = error as { response?: { data?: { detail?: unknown } } };
+      console.error("Error response:", apiError?.response?.data);
 
       // Extract validation error details
-      const errorDetail = error?.response?.data?.detail;
+      const errorDetail = apiError?.response?.data?.detail;
       let errorMessage = "Lưu thất bại. Vui lòng kiểm tra lại.";
 
       if (Array.isArray(errorDetail)) {
         // Pydantic validation errors
-        errorMessage = errorDetail.map((e: any) => `${e.loc?.join('.')}: ${e.msg}`).join(", ");
+        interface ValidationError { loc?: string[]; msg?: string }
+        errorMessage = errorDetail.map((e: ValidationError) => `${e.loc?.join('.')}: ${e.msg}`).join(", ");
       } else if (typeof errorDetail === "string") {
         errorMessage = errorDetail;
       }
@@ -328,7 +331,7 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
           {/* Selected Groups as Chips */}
           {selectedGroupsDetails.length > 0 && (
             <div className="flex flex-wrap gap-2 p-3 bg-blue-50 border border-blue-200 rounded-md">
-              {selectedGroupsDetails.map((group: any) => (
+              {selectedGroupsDetails.map((group: SubjectGroup) => (
                 <Badge
                   key={group.id}
                   variant="secondary"
@@ -380,7 +383,7 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
                   Không tìm thấy tổ hợp môn nào phù hợp với "{searchQuery}"
                 </div>
               ) : (
-                filteredGroups.map((group: any) => (
+                filteredGroups.map((group: SubjectGroup) => (
                   <div key={group.id} className="flex items-center space-x-2">
                     <Checkbox
                       id={`group-${group.id}`}

@@ -266,11 +266,91 @@ export type AdmissionProfileUpdate = z.infer<
 >
 
 /**
+ * Subject Group Schema (for applied_rules snapshot)
+ * Preserved from AdmissionPath for audit trail
+ */
+export const subjectGroupSnapshotSchema = z.object({
+  code: z.string(), // e.g., "A00", "D01"
+  name: z.string(), // e.g., "Toán - Lý - Hóa"
+  subjects: z.array(z.string()), // e.g., ["math", "physics", "chemistry"]
+})
+
+export type SubjectGroupSnapshot = z.infer<typeof subjectGroupSnapshotSchema>
+
+/**
+ * Document Config Schema (for applied_rules snapshot)
+ */
+export const documentConfigSnapshotSchema = z.object({
+  requires_upload: z.boolean().optional(),
+  submission_format: z.string().optional().nullable(),
+  is_mandatory: z.boolean().optional(),
+})
+
+export type DocumentConfigSnapshot = z.infer<typeof documentConfigSnapshotSchema>
+
+/**
+ * Applied Rules Schema
+ *
+ * ✅ CRITICAL: Complete snapshot with ALL scoring parameters
+ * Per ADMISSION_PROCESSING_FLOW_ANALYSIS.md Section 6.1
+ *
+ * This schema ensures immutable snapshot compliance:
+ * - All scoring rules frozen at profile creation time
+ * - No dependency on live configuration changes
+ * - Deterministic evaluation guaranteed
+ */
+export const appliedRulesSchema = z.object({
+  // =========================================================================
+  // GROUP 1: Basic Criteria
+  // =========================================================================
+  min_gpa: z.number().optional().nullable(),
+  min_score: z.number().optional().nullable(),
+
+  // =========================================================================
+  // GROUP 2: Scoring Configuration (CRITICAL for deterministic scoring)
+  // =========================================================================
+  subject_selection_mode: z.enum(["fixed", "best_n", "any_n"]).optional(),
+  scoring_method: z.enum(["sum", "average", "weighted"]).optional(),
+  required_subject_count: z.number().int().optional().nullable(),
+  min_subject_score: z.number().optional().nullable(), // Điểm liệt
+  max_possible_score: z.number().optional().nullable(),
+
+  // =========================================================================
+  // GROUP 3: Subject Validation (CRITICAL for input validation)
+  // =========================================================================
+  allowed_subject_codes: z.array(z.string()).optional().default([]), // e.g., ["math", "physics", "chemistry", "english"]
+  subject_groups: z.array(subjectGroupSnapshotSchema).optional().default([]), // Audit trail
+
+  // =========================================================================
+  // GROUP 4: Method & Path Metadata
+  // =========================================================================
+  admission_method: z.string().optional().nullable(), // e.g., "HOC_BA"
+  admission_method_id: z.number().int().optional(),
+
+  // =========================================================================
+  // GROUP 5: Document Requirements
+  // =========================================================================
+  mandatory_docs: z.array(z.string()).optional().default([]),
+  doc_configs: z.record(z.string(), documentConfigSnapshotSchema).optional().default({}),
+
+  // =========================================================================
+  // GROUP 6: Snapshot Metadata
+  // =========================================================================
+  snapshot_source: z.enum(["relational", "jsonb", "migration"]).optional(),
+  admission_path_id: z.number().int().optional(),
+  academic_info_id: z.number().int().optional(),
+})
+
+export type AppliedRules = z.infer<typeof appliedRulesSchema>
+
+/**
  * Admission Profile Response Schema
  * Used for API responses (GET, POST, PUT)
- * 
- * Phase 7: Added permissions, eligibility_status, validation_errors, 
+ *
+ * Phase 7: Added permissions, eligibility_status, validation_errors,
  * available_actions, completion_percent for Frontend Thin Client compliance.
+ *
+ * Phase 8: Updated applied_rules with complete 18-field schema
  */
 export const admissionProfileResponseSchema = z.object({
   id: z.number(),
@@ -299,7 +379,7 @@ export const admissionProfileResponseSchema = z.object({
   status: z.enum(["draft", "submitted", "resubmitted", "approved", "rejected", "confirmed", "enrolled"]),
   version: z.number().int().optional(), // Optimistic locking
   academic_year: z.number().int().optional(), // Academic year
-  applied_rules: z.record(z.string(), z.any()), // JSONB object
+  applied_rules: appliedRulesSchema, // ✅ NEW: Properly typed with 18 fields
   family_info: z.array(familyMemberSchema).default([]),
   academic_history: z.array(academicRecordSchema).default([]),
   admission_scores: admissionScoreSchema.nullable(),

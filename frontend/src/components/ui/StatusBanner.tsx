@@ -21,7 +21,7 @@ import {
   Info,
   Loader2
 } from "lucide-react"
-import { getStatusConfig, type StatusUIConfig } from "@/lib/status-config"
+import { getStatusConfig } from "@/lib/status-config"
 import { cn } from "@/lib/utils"
 
 interface StatusBannerProps {

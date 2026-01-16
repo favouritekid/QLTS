@@ -1947,18 +1947,18 @@ async def update_consultation(
                             db.add(lead)
                             status_changed = True
 
-                        log.info(
-                            "Lead status updated via consultation update",
-                            lead_id=lead_id,
-                            consultation_id=consultation_id,
-                            old_status=old_consultation_status_id,
-                            new_status=new_status.id,
-                        )
-                    else:
-                        log.warning(
-                            f"Status '{update_data['status_id']}' not found",
-                            lead_id=lead_id,
-                        )
+                            log.info(
+                                "Lead status updated via consultation update",
+                                lead_id=lead_id,
+                                consultation_id=consultation_id,
+                                old_status=old_consultation_status_id,
+                                new_status=new_status.id,
+                            )
+                        else:
+                            log.warning(
+                                f"Status '{update_data['status_id']}' not found",
+                                lead_id=lead_id,
+                            )
 
             # Lấy trạng thái mới sau khi cập nhật
             new_state = _get_current_lead_state(lead)

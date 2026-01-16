@@ -128,7 +128,7 @@ async function serverFetch<T>(
     try {
       const cookieStore = await cookies();
       cookieHeader = cookieStore.toString();
-    } catch (e) {
+    } catch {
       // Ignore if cookies() fails (e.g., inside "use cache" without explicit header)
       // The request will likely fail with 401 later, which is expected behavior
     }

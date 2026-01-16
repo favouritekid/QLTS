@@ -34,7 +34,8 @@ import { useAdmissionConfigState } from "@/hooks/admissions/useAdmissionConfigSt
 import type {
   OfferingAcademicInfo,
   OfferingAcademicInfoCreate,
-  OfferingAcademicInfoUpdate
+  OfferingAcademicInfoUpdate,
+  ProgramOffering
 } from "../shared/types";
 
 // ============================================
@@ -172,7 +173,7 @@ export function AcademicInfoPanel() {
   };
 
   const getOfferingDisplay = (offeringId: number) => {
-    const offering = offerings.find((o: any) => o.id === offeringId);
+    const offering = offerings.find((o: ProgramOffering) => o.id === offeringId);
 
     if (!offering) {
       return {
@@ -227,7 +228,7 @@ export function AcademicInfoPanel() {
   const { navigate } = useAdmissionConfigState();
 
   const handleNavigate = (item: OfferingAcademicInfo, action: 'view' | 'add') => {
-    const offering = offerings.find((o: any) => o.id === item.offering_id);
+    const offering = offerings.find((o: ProgramOffering) => o.id === item.offering_id);
     if (!offering) return;
 
     navigate({
@@ -432,7 +433,7 @@ export function AcademicInfoPanel() {
                     <SelectValue placeholder="Chọn chương trình tuyển sinh" />
                   </SelectTrigger>
                   <SelectContent>
-                    {offerings.map((offering: any) => {
+                    {offerings.map((offering: ProgramOffering) => {
                       const programName = offering.program?.name || `Program #${offering.program_id}`;
                       const programCode = offering.program?.code || "";
                       const offeringType = offering.offering_type;

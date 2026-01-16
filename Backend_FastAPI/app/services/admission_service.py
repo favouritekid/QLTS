@@ -463,6 +463,86 @@ async def _create_admission_milestone_consultation(
     )
 
 
+def _extract_allowed_subject_codes(admission_path) -> List[str]:
+    """
+    Extract flat list of all allowed subject codes from criteria's subject groups.
+
+    Critical for applied_rules snapshot to ensure deterministic scoring.
+    Returns sorted list of unique subject codes from ALL linked subject groups.
+
+    Args:
+        admission_path: AdmissionPath object with loaded criteria and subject_group_mappings
+
+    Returns:
+        Sorted list of subject codes (e.g., ["chemistry", "english", "math", "physics"])
+
+    Example:
+        >>> path = get_admission_path_with_relations(path_id=1)
+        >>> _extract_allowed_subject_codes(path)
+        ["chemistry", "english", "literature", "math", "physics"]
+    """
+    if not admission_path or not admission_path.criteria:
+        log.warning(
+            "Cannot extract subject codes: admission_path or criteria is None",
+            path_id=admission_path.id if admission_path else None,
+        )
+        return []
+
+    subject_codes = set()
+    for mapping in admission_path.criteria.subject_group_mappings:
+        if mapping.subject_group:
+            for subject in mapping.subject_group.subjects:
+                subject_codes.add(subject.code)
+
+    return sorted(list(subject_codes))
+
+
+def _serialize_subject_groups(admission_path) -> List[Dict[str, Any]]:
+    """
+    Serialize subject groups for audit trail in applied_rules.
+
+    Preserves the original group structure for compliance and debugging.
+
+    Args:
+        admission_path: AdmissionPath object with loaded criteria and subject_group_mappings
+
+    Returns:
+        List of subject group dictionaries with code, name, and subjects
+
+    Example:
+        >>> _serialize_subject_groups(path)
+        [
+            {
+                "code": "A00",
+                "name": "Toán - Lý - Hóa",
+                "subjects": ["math", "physics", "chemistry"]
+            },
+            {
+                "code": "D01",
+                "name": "Toán - Văn - Anh",
+                "subjects": ["math", "literature", "english"]
+            }
+        ]
+    """
+    if not admission_path or not admission_path.criteria:
+        log.warning(
+            "Cannot serialize subject groups: admission_path or criteria is None",
+            path_id=admission_path.id if admission_path else None,
+        )
+        return []
+
+    groups = []
+    for mapping in admission_path.criteria.subject_group_mappings:
+        if mapping.subject_group:
+            groups.append({
+                "code": mapping.subject_group.code,
+                "name": mapping.subject_group.name,
+                "subjects": [s.code for s in mapping.subject_group.subjects]
+            })
+
+    return groups
+
+
 # ==============================================================================
 # CRUD FUNCTIONS
 # ==============================================================================
@@ -682,15 +762,52 @@ async def create_profile(
     full_path = await path_repo.get_by_id_with_relations(admission_path.id)
     
     # Step 12: Build applied_rules from relational data (SNAPSHOT)
+    # ✅ CRITICAL FIX: Complete snapshot with ALL scoring parameters
+    # Per ADMISSION_PROCESSING_FLOW_ANALYSIS.md Section 6.1
     applied_rules = {
-        # From AdmissionCriteria (via AdmissionPath → CriteriaSubjectGroup)
+        # =========================================================================
+        # GROUP 1: Basic Criteria (from AdmissionCriteria)
+        # =========================================================================
         "min_gpa": float(full_path.criteria.min_gpa) if full_path and full_path.criteria and full_path.criteria.min_gpa is not None else None,
         "min_score": float(full_path.criteria.min_score) if full_path and full_path.criteria and full_path.criteria.min_score is not None else None,
-        
+
+        # =========================================================================
+        # GROUP 2: Scoring Configuration (CRITICAL - was missing!)
+        # =========================================================================
+        # How to select subjects: "fixed" | "best_n" | "any_n"
+        "subject_selection_mode": full_path.criteria.subject_selection_mode if full_path and full_path.criteria else "fixed",
+
+        # How to calculate score: "sum" | "average" | "weighted"
+        "scoring_method": full_path.criteria.scoring_method if full_path and full_path.criteria else "sum",
+
+        # Number of subjects required (1, 2, 3, or None for flexible)
+        "required_subject_count": full_path.criteria.required_subject_count if full_path and full_path.criteria else None,
+
+        # Minimum score per subject (điểm liệt)
+        "min_subject_score": float(full_path.criteria.min_subject_score) if full_path and full_path.criteria and full_path.criteria.min_subject_score is not None else None,
+
+        # Maximum possible score (for display/normalization)
+        "max_possible_score": float(full_path.criteria.max_possible_score) if full_path and full_path.criteria and full_path.criteria.max_possible_score is not None else None,
+
+        # =========================================================================
+        # GROUP 3: Subject Validation (CRITICAL - was missing!)
+        # =========================================================================
+        # Flat list of ALL allowed subject codes (for input validation)
+        "allowed_subject_codes": _extract_allowed_subject_codes(full_path),
+
+        # Original subject groups (for audit trail and fixed mode)
+        "subject_groups": _serialize_subject_groups(full_path),
+
+        # =========================================================================
+        # GROUP 4: Method & Path Metadata
+        # =========================================================================
         # From AdmissionMethod
         "admission_method": full_path.admission_method.code if full_path and full_path.admission_method else None,
         "admission_method_id": admission_method_id,
-        
+
+        # =========================================================================
+        # GROUP 5: Document Requirements
+        # =========================================================================
         # From resolved DocumentGroup
         "mandatory_docs": mandatory_docs,
         "doc_configs": {
@@ -701,8 +818,10 @@ async def create_profile(
             }
             for doc in resolved_docs
         },
-        
-        # Snapshot metadata
+
+        # =========================================================================
+        # GROUP 6: Snapshot Metadata
+        # =========================================================================
         "snapshot_source": "relational",
         "admission_path_id": admission_path.id,
         "academic_info_id": academic_info.id,
@@ -1222,11 +1341,32 @@ async def submit_and_evaluate(
     subject_scores_map = {s.subject.code: Decimal(str(s.score)) for s in scores}
     
     # 3. Resolve Allowed Subjects
-    # If using "fixed" mode, we need the ordered list of subject codes.
-    # In snapshot, this might be in 'mandatory_subjects' or 'allowed_subjects' list.
-    # For compatibility with legacy snapshot: use all scored subjects as allowed if not restricted.
-    # Ideally, snapshot should contain 'allowed_subject_codes'.
-    allowed_subjects = applied_rules.get("allowed_subject_codes", list(subject_scores_map.keys()))
+    # ✅ CRITICAL FIX: Strict validation - require allowed_subject_codes in snapshot
+    # This field is now mandatory (added in create_profile fix)
+    allowed_subjects = applied_rules.get("allowed_subject_codes")
+
+    if not allowed_subjects:
+        # ⚠️ Legacy Profile Compatibility Check
+        # If profile was created before the fix, fallback to all scored subjects
+        # but log a warning for admin attention
+        log.warning(
+            "Profile has incomplete snapshot - missing allowed_subject_codes. "
+            "Using fallback to all scored subjects (legacy compatibility). "
+            "This profile should be recreated for deterministic scoring.",
+            profile_id=profile.id,
+            lead_id=profile.lead_id,
+            snapshot_source=applied_rules.get("snapshot_source"),
+        )
+
+        # TEMPORARY FALLBACK (for legacy profiles only)
+        # New profiles created after this fix will always have allowed_subject_codes
+        allowed_subjects = list(subject_scores_map.keys())
+
+        if not allowed_subjects:
+            raise BadRequest(
+                "Cannot evaluate profile: No subject scores found and snapshot has no subject whitelist. "
+                "Please add subject scores before submitting."
+            )
     
     # 4. Calculate Score using Engine
     score_result = AdmissionScoringService.calculate_score(

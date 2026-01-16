@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -13,7 +13,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useUpdatePathDocuments, usePathDocuments } from "@/hooks/admissions/useAdmissionPaths";
 import { useDocumentTypes } from "@/hooks/admissions/useMasterData";
 import { AdmissionPathResponse } from "@/lib/zod/admission-path";
-import { ResolvedDocumentListResponse } from "@/lib/zod/admission-path";
+import type { DocumentType } from "../shared/types";
 
 interface ConfigDocumentsProps {
   path: AdmissionPathResponse;
@@ -35,57 +35,71 @@ export function ConfigDocuments({ path, onFinish, onBack }: ConfigDocumentsProps
   const { data: resolvedDocs, isLoading: loadingResolved } = usePathDocuments(path.id);
   const updateMutation = useUpdatePathDocuments();
 
-  // Local State
-  const [selections, setSelections] = useState<Record<number, DocSelection>>({});
-
-  // Initialize from resolved docs
-  useEffect(() => {
-    console.log("ConfigDocuments: Resolved docs loaded:", resolvedDocs);
-    if (resolvedDocs) {
-      const initialMap: Record<number, DocSelection> = {};
-      resolvedDocs.forEach((doc) => {
-        initialMap[doc.document_type_id] = {
-          document_type_id: doc.document_type_id,
-          is_mandatory: doc.is_mandatory,
-          requires_upload: doc.requires_upload,
-          submission_format: doc.submission_format,
-          display_order: doc.display_order
-        };
-      });
-      console.log("ConfigDocuments: Initialized selections:", initialMap);
-      setSelections(initialMap);
-    }
+  // ✅ Section 2.6.8: Derive initial selections from API data using useMemo
+  const initialSelections = useMemo(() => {
+    if (!resolvedDocs) return {};
+    const initialMap: Record<number, DocSelection> = {};
+    resolvedDocs.forEach((doc) => {
+      initialMap[doc.document_type_id] = {
+        document_type_id: doc.document_type_id,
+        is_mandatory: doc.is_mandatory,
+        requires_upload: doc.requires_upload,
+        submission_format: doc.submission_format,
+        display_order: doc.display_order
+      };
+    });
+    return initialMap;
   }, [resolvedDocs]);
+
+  // Local modifications state - starts empty, merged with initial on save
+  const [modifications, setModifications] = useState<Record<number, DocSelection | null>>({});
+
+  // Computed current selections: initial + modifications
+  const selections = useMemo(() => {
+    const result = { ...initialSelections };
+    Object.entries(modifications).forEach(([id, mod]) => {
+      const numId = Number(id);
+      if (mod === null) {
+        delete result[numId]; // Removed by user
+      } else if (mod) {
+        result[numId] = mod; // Added or updated by user
+      }
+    });
+    return result;
+  }, [initialSelections, modifications]);
 
   // Handlers
   const handleSelect = (typeId: number, checked: boolean) => {
     if (checked) {
-      // Add default
-      setSelections(prev => ({
+      // Add new or restore from initial
+      const existing = initialSelections[typeId];
+      setModifications(prev => ({
         ...prev,
-        [typeId]: {
+        [typeId]: existing ?? {
           document_type_id: typeId,
           is_mandatory: true,
           requires_upload: true,
           submission_format: null,
-          display_order: Object.keys(prev).length + 1
+          display_order: Object.keys(selections).length + 1
         }
       }));
     } else {
-      // Remove
-      setSelections(prev => {
-        const next = { ...prev };
-        delete next[typeId];
-        return next;
-      });
+      // Mark as removed
+      setModifications(prev => ({
+        ...prev,
+        [typeId]: null
+      }));
     }
   };
 
-  const handleUpdate = (typeId: number, field: keyof DocSelection, value: any) => {
-    setSelections(prev => ({
+  const handleUpdate = <K extends keyof DocSelection>(typeId: number, field: K, value: DocSelection[K]) => {
+    const current = selections[typeId];
+    if (!current) return;
+    
+    setModifications(prev => ({
       ...prev,
       [typeId]: {
-        ...prev[typeId],
+        ...current,
         [field]: value
       }
     }));
@@ -112,16 +126,18 @@ export function ConfigDocuments({ path, onFinish, onBack }: ConfigDocumentsProps
       toast.success(`Đã lưu cấu hình hồ sơ thành công (${selectedCount} loại)`);
       // Move to review step after successful save
       onFinish();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("ConfigDocuments: Save error:", error);
-      console.error("ConfigDocuments: Error response:", error?.response?.data);
+      const apiError = error as { response?: { data?: { detail?: unknown } } };
+      console.error("ConfigDocuments: Error response:", apiError?.response?.data);
 
       // Extract validation error details
-      const errorDetail = error?.response?.data?.detail;
+      const errorDetail = apiError?.response?.data?.detail;
       let errorMessage = "Lưu thất bại. Vui lòng thử lại.";
 
       if (Array.isArray(errorDetail)) {
-        errorMessage = errorDetail.map((e: any) => `${e.loc?.join('.')}: ${e.msg}`).join(", ");
+        interface ValidationError { loc?: string[]; msg?: string }
+        errorMessage = errorDetail.map((e: ValidationError) => `${e.loc?.join('.')}: ${e.msg}`).join(", ");
       } else if (typeof errorDetail === "string") {
         errorMessage = errorDetail;
       }
@@ -153,7 +169,7 @@ export function ConfigDocuments({ path, onFinish, onBack }: ConfigDocumentsProps
         {!isLoading && (
           <div className="mb-4">
             {isDetached ? (
-              <Alert variant="info" className="bg-blue-50 text-blue-900 border-blue-200">
+              <Alert className="bg-blue-50 text-blue-900 border-blue-200">
                 <Info className="h-4 w-4" />
                 <AlertTitle>Cấu hình riêng biệt (Forked)</AlertTitle>
                 <AlertDescription>
@@ -161,7 +177,7 @@ export function ConfigDocuments({ path, onFinish, onBack }: ConfigDocumentsProps
                 </AlertDescription>
               </Alert>
             ) : (
-              <Alert variant="warning" className="bg-yellow-50 text-yellow-900 border-yellow-200">
+              <Alert className="bg-yellow-50 text-yellow-900 border-yellow-200">
                 <AlertTriangle className="h-4 w-4" />
                 <AlertTitle>Chú ý: Ghi đè cấu hình chung</AlertTitle>
                 <AlertDescription>
@@ -187,7 +203,7 @@ export function ConfigDocuments({ path, onFinish, onBack }: ConfigDocumentsProps
               </div>
               
               <div className="max-h-[400px] overflow-y-auto">
-                {allDocTypes.map((type: any) => {
+                {allDocTypes.map((type: DocumentType) => {
                   const isSelected = !!selections[type.id];
                   const current = selections[type.id];
 

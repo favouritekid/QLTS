@@ -1,0 +1,39 @@
+﻿🔍 Architecture Violation Check (FRONTEND_ARCHITECTURE_V3.md)...
+
+📋 Check 1: setState in useEffect...
+❌ Violation: setState inside useEffect
+src/components/leads/command-center/LeadFilterBar.tsx:197:  React.useEffect(() => { setIsMounted(true); }, []);
+
+📋 Check 2: eslint-disable comments...
+❌ Violation: eslint-disable found
+src/components/admin/organization/MajorProgramDialog.tsx:157:        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+src/components/admin/policies/RoleManagement/useRoleManagementForm.ts:86:  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+src/components/admin/UserDialog.tsx:122:  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+src/components/admin/UserDialog.tsx:124:    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+src/components/admin/UserDialog.tsx:175:    // eslint-disable-next-line react-hooks/exhaustive-deps
+src/components/admin/UserDialog.tsx:221:  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+src/components/admin/UserDialog.tsx:298:                    {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+src/components/leads/command-center/LeadDetailPanel.tsx:121:      // eslint-disable-next-line react-hooks/set-state-in-effect
+src/components/leads/LeadApplicationForm.tsx:335:                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+src/components/leads/LeadDialog.tsx:313:      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+
+📋 Check 3: Explicit 'any' type...
+❌ Violation: explicit 'any' in source
+src/components/admin/UserDialog.tsx:222:  function onSubmit(values: any) {
+src/hooks/useLeads.ts:650: * Update a consultation (admin: any, officer: most recent only)
+src/hooks/useLeads.ts:699: * Delete a consultation (admin: any, officer: most recent only)
+src/lib/api/leads.ts:271: * Update consultation (admin: any, officer: most recent only)
+src/lib/api/leads.ts:288: * Delete consultation (admin: any, officer: most recent only)
+   ... Total: 5 occurrences
+
+📋 Check 4: FE business logic inference...
+⚠️ Warning: Potential business state inference
+src/app/(dashboard)/admin/admission-config/_components/Phase3Config/ContextSelector.tsx:224:                    const isConfigured = relevantInfo?.admission_status === 'CONFIGURED';
+src/app/(dashboard)/admissions/[id]/_components/AdmissionActions.tsx:73:  const isEligible = profile.eligibility_status === 'eligible'
+src/app/(dashboard)/admissions/[id]/_components/AdmissionDetailClient.tsx:79:  const isEligible = profile?.eligibility_status === 'eligible'
+src/app/(dashboard)/admissions/[id]/_components/tabs/TuitionTab.tsx:59:  const isEnrolled = profile.status === "enrolled"
+src/components/officer/WorkloadCard.tsx:45:  const isAvailable = optimisticAvailable ?? (statusOverview.availability_status === "available");
+src/components/ui/StatusBanner.tsx:96:  const isPending = status === 'submitted' || status === 'resubmitted'
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+❌ FAILED: 3 violation type(s) found

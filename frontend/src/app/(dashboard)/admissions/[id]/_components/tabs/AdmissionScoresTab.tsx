@@ -1,41 +1,30 @@
 "use client"
 
 /**
- * Admission Scores Tab Component - Phase 6: Dynamic Admission Scoring
- * 
+ * Admission Scores Tab Component - Phase 8: Updated for New Applied Rules Schema
+ *
+ * ✅ UPDATED: Works with flat applied_rules structure (18 fields)
+ * - No more nested criteria array
+ * - Direct access to subject_groups, allowed_subject_codes, scoring_method, etc.
+ * - Fully typed with new AppliedRules schema
+ *
  * Features:
- * 1. Select admission method from applied_rules.criteria
- * 2. Select subject group from method's subject_groups
+ * 1. Display admission method from applied_rules
+ * 2. Select subject group from applied_rules.subject_groups
  * 3. Dynamic score inputs based on selected subject group
+ * 4. Show scoring configuration (method, selection mode, min subject score)
  */
 
-import { useMemo, useEffect, useState } from "react"
+import { useMemo, useEffect } from "react"
 import { UseFormReturn, FieldValues, useWatch } from "react-hook-form"
-import { useQuery } from "@tanstack/react-query"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { FormField, FormItem, FormLabel, FormControl, FormMessage, FormDescription } from "@/components/ui/form"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Calculator, BookOpen, Award, AlertCircle } from "lucide-react"
-import { configApi, type SubjectGroup } from "@/lib/api/config"
-
-interface AdmissionCriterion {
-  id: string
-  method_name: string
-  program_type?: string
-  subject_groups?: string[]
-  min_score?: number
-  required_documents?: { code: string; label: string }[]
-}
-
-interface AppliedRules {
-  criteria?: AdmissionCriterion[]
-  min_gpa?: number
-  mandatory_docs?: string[]
-}
+import { Calculator, BookOpen, AlertCircle, Info } from "lucide-react"
+import type { AppliedRules } from "@/lib/zod/admissions"
 
 interface AdmissionScoresTabProps {
   form: UseFormReturn<FieldValues>
@@ -45,118 +34,127 @@ interface AdmissionScoresTabProps {
 
 export function AdmissionScoresTab({ form, isEditable, appliedRules }: AdmissionScoresTabProps) {
   // Watch form values for reactivity
-  const selectedCriterionId = useWatch({
-    control: form.control,
-    name: "admission_scores.selected_criterion_id",
-  })
-  
   const selectedGroup = useWatch({
     control: form.control,
     name: "admission_scores.selected_group",
   })
-  
+
   const subjectScores = useWatch({
     control: form.control,
     name: "admission_scores.subject_scores",
   })
 
-  // Get criteria from applied_rules
-  const criteria = useMemo(() => {
-    return appliedRules?.criteria || []
+  // ✅ NEW: Extract data from flat applied_rules structure
+  const admissionMethod = appliedRules?.admission_method || "Chưa xác định"
+  const minScore = appliedRules?.min_score
+  const minGpa = appliedRules?.min_gpa
+  const minSubjectScore = appliedRules?.min_subject_score
+  const scoringMethod = appliedRules?.scoring_method || "sum"
+  const subjectSelectionMode = appliedRules?.subject_selection_mode || "fixed"
+  const requiredSubjectCount = appliedRules?.required_subject_count
+  const maxPossibleScore = appliedRules?.max_possible_score
+
+  // ✅ NEW: Get subject groups directly from applied_rules (not from API)
+  const availableSubjectGroups = useMemo(() => {
+    return appliedRules?.subject_groups || []
   }, [appliedRules])
 
-  // Get selected criterion object
-  const selectedCriterion = useMemo(() => {
-    if (!selectedCriterionId || !criteria.length) return null
-    return criteria.find((c) => c.id === selectedCriterionId) || null
-  }, [selectedCriterionId, criteria])
-
-  // Check if selected method is GPA-based
+  // Check if method is GPA-based
   const isGpaMethod = useMemo(() => {
-    if (!selectedCriterion) return false
-    const methodName = selectedCriterion.method_name.toLowerCase()
-    return methodName.includes("học bạ") || 
-           methodName.includes("gpa") || 
-           methodName.includes("điểm trung bình")
-  }, [selectedCriterion])
+    const method = admissionMethod.toLowerCase()
+    return method.includes("học bạ") ||
+           method.includes("gpa") ||
+           method.includes("điểm trung bình")
+  }, [admissionMethod])
 
-  // Get available subject groups for selected method
-  const availableGroups = useMemo(() => {
-    return selectedCriterion?.subject_groups || []
-  }, [selectedCriterion])
-
-  // Fetch all subject groups for lookup
-  const { data: allSubjectGroups, isLoading: isLoadingGroups } = useQuery({
-    queryKey: ["subject-groups"],
-    queryFn: () => configApi.getSubjectGroups(),
-    staleTime: 1000 * 60 * 10,
-  })
-
-  // Get selected subject group details
+  // Get selected subject group details from snapshot
   const selectedGroupDetails = useMemo(() => {
-    if (!selectedGroup || !allSubjectGroups) return null
-    return allSubjectGroups.find((g) => g.code === selectedGroup) || null
-  }, [selectedGroup, allSubjectGroups])
+    if (!selectedGroup || !availableSubjectGroups.length) return null
+    return availableSubjectGroups.find((g) => g.code === selectedGroup) || null
+  }, [selectedGroup, availableSubjectGroups])
 
-  // Calculate total score
+  // Calculate total score based on scoring method
   const totalScore = useMemo(() => {
     if (!subjectScores || typeof subjectScores !== 'object') return 0
-    return Object.values(subjectScores as Record<string, number>).reduce(
-      (sum, score) => sum + (typeof score === 'number' ? score : 0),
-      0
+
+    const scores = Object.values(subjectScores as Record<string, number>).filter(
+      (score) => typeof score === 'number' && !isNaN(score)
     )
-  }, [subjectScores])
+
+    if (scores.length === 0) return 0
+
+    // Apply scoring method from snapshot
+    if (scoringMethod === 'average') {
+      return scores.reduce((sum, score) => sum + score, 0) / scores.length
+    } else if (scoringMethod === 'weighted') {
+      // TODO: Implement weighted scoring with weights from snapshot
+      return scores.reduce((sum, score) => sum + score, 0)
+    } else {
+      // Default: sum
+      return scores.reduce((sum, score) => sum + score, 0)
+    }
+  }, [subjectScores, scoringMethod])
 
   // Initialize subject_scores when group changes
   useEffect(() => {
     if (selectedGroupDetails?.subjects && isEditable) {
       const currentScores = form.getValues("admission_scores.subject_scores") || {}
       const newScores: Record<string, number | null> = {}
-      
+
       selectedGroupDetails.subjects.forEach((subject) => {
         // Preserve existing score if available
         newScores[subject] = currentScores[subject] ?? null
       })
-      
-      form.setValue("admission_scores.subject_scores", newScores, { 
+
+      form.setValue("admission_scores.subject_scores", newScores, {
         shouldDirty: true,
-        shouldValidate: false 
+        shouldValidate: false
       })
     }
   }, [selectedGroupDetails, form, isEditable])
 
-  // Reset selected_group when criterion changes
-  useEffect(() => {
-    if (isEditable && selectedCriterionId) {
-      const currentGroup = form.getValues("admission_scores.selected_group")
-      // Check if current group is valid for new criterion
-      if (currentGroup && !availableGroups.includes(currentGroup)) {
-        form.setValue("admission_scores.selected_group", null, { shouldDirty: true })
-        form.setValue("admission_scores.subject_scores", {}, { shouldDirty: true })
-      }
-    }
-  }, [selectedCriterionId, availableGroups, form, isEditable])
-
-  // No criteria defined - show legacy GPA-only
-  if (!criteria.length) {
+  // ✅ NEW: Show admission method info and scoring config
+  
+  // Case 1: No rules applied at all
+  if (!appliedRules) {
     return (
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg flex items-center gap-2">
-            <Calculator className="h-5 w-5" />
-            Điểm tuyển sinh
+          <CardTitle className="text-lg flex items-center gap-2 text-red-600">
+            <AlertCircle className="h-5 w-5" />
+            Lỗi cấu hình
           </CardTitle>
-          <CardDescription>
-            Chương trình này chưa có phương thức xét tuyển được cấu hình
+          <CardDescription className="text-red-700">
+            Hồ sơ này chưa có thông tin cấu hình xét tuyển (Applied Rules is null). 
+            Vui lòng kiểm tra lại cấu hình đợt tuyển sinh.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    )
+  }
+
+  // Case 2: Method requires subjects but none are configured
+  if (!isGpaMethod && !availableSubjectGroups.length) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2 text-yellow-600">
+            <AlertCircle className="h-5 w-5" />
+            Thiếu cấu hình tổ hợp môn
+          </CardTitle>
+          <CardDescription className="text-yellow-700">
+            Phương thức <strong>{admissionMethod}</strong> chưa được cấu hình tổ hợp môn xét tuyển.
+            Vui lòng liên hệ quản trị viên để cập nhật.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <FormField
+           {/* Fallback GPA Input just in case */}
+           <FormField
             control={form.control}
             name="admission_scores.gpa"
             render={({ field }) => (
               <FormItem className="max-w-xs">
-                <FormLabel>GPA tổng</FormLabel>
+                <FormLabel>GPA tổng (Fallback)</FormLabel>
                 <FormControl>
                   <Input
                     {...field}
@@ -164,17 +162,11 @@ export function AdmissionScoresTab({ form, isEditable, appliedRules }: Admission
                     step="0.1"
                     min={0}
                     max={10}
-                    placeholder="0.0 - 10.0"
                     disabled={!isEditable}
                     value={field.value ?? ""}
                     onChange={(e) => field.onChange(e.target.value ? parseFloat(e.target.value) : null)}
                   />
                 </FormControl>
-                {appliedRules?.min_gpa && (
-                  <FormDescription>
-                    Điểm sàn: {appliedRules.min_gpa}
-                  </FormDescription>
-                )}
                 <FormMessage />
               </FormItem>
             )}
@@ -192,54 +184,62 @@ export function AdmissionScoresTab({ form, isEditable, appliedRules }: Admission
           Điểm xét tuyển
         </CardTitle>
         <CardDescription>
-          Chọn phương thức xét tuyển và nhập điểm theo yêu cầu
+          Phương thức: <strong>{admissionMethod}</strong>
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
-        {/* Step 1: Select Admission Method */}
-        <FormField
-          control={form.control}
-          name="admission_scores.selected_criterion_id"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel className="flex items-center gap-2">
-                <Award className="h-4 w-4" />
-                Phương thức xét tuyển <span className="text-red-500">*</span>
-              </FormLabel>
-              <Select
-                value={field.value || ""}
-                onValueChange={(value) => {
-                  field.onChange(value)
-                }}
-                disabled={!isEditable}
-              >
-                <FormControl>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Chọn phương thức xét tuyển..." />
-                  </SelectTrigger>
-                </FormControl>
-                <SelectContent>
-                  {criteria.map((criterion) => (
-                    <SelectItem key={criterion.id} value={criterion.id}>
-                      <div className="flex items-center gap-2">
-                        <span>{criterion.method_name}</span>
-                        {criterion.min_score && (
-                          <Badge variant="outline" className="text-xs">
-                            Điểm sàn: {criterion.min_score}
-                          </Badge>
-                        )}
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
+        {/* ✅ NEW: Display Scoring Configuration */}
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-2">
+          <div className="flex items-center gap-2 text-sm font-medium text-blue-900">
+            <Info className="h-4 w-4" />
+            Thông tin cấu hình
+          </div>
+          <div className="grid grid-cols-2 gap-4 text-sm">
+            {minGpa && (
+              <div>
+                <span className="text-gray-600">Điểm GPA tối thiểu:</span>{" "}
+                <strong className="text-gray-900">{minGpa}</strong>
+              </div>
+            )}
+            {minScore && (
+              <div>
+                <span className="text-gray-600">Điểm sàn:</span>{" "}
+                <strong className="text-gray-900">{minScore}</strong>
+              </div>
+            )}
+            {minSubjectScore && (
+              <div>
+                <span className="text-gray-600">Điểm liệt (tối thiểu/môn):</span>{" "}
+                <strong className="text-red-600">{minSubjectScore}</strong>
+              </div>
+            )}
+            <div>
+              <span className="text-gray-600">Phương pháp tính điểm:</span>{" "}
+              <strong className="text-gray-900">
+                {scoringMethod === 'sum' && 'Tổng điểm'}
+                {scoringMethod === 'average' && 'Trung bình'}
+                {scoringMethod === 'weighted' && 'Trọng số'}
+              </strong>
+            </div>
+            <div>
+              <span className="text-gray-600">Chế độ chọn môn:</span>{" "}
+              <strong className="text-gray-900">
+                {subjectSelectionMode === 'fixed' && 'Cố định'}
+                {subjectSelectionMode === 'best_n' && `${requiredSubjectCount} môn cao nhất`}
+                {subjectSelectionMode === 'any_n' && `Bất kỳ ${requiredSubjectCount} môn`}
+              </strong>
+            </div>
+            {maxPossibleScore && (
+              <div>
+                <span className="text-gray-600">Điểm tối đa:</span>{" "}
+                <strong className="text-gray-900">{maxPossibleScore}</strong>
+              </div>
+            )}
+          </div>
+        </div>
 
         {/* Show GPA input if GPA-based method */}
-        {selectedCriterion && isGpaMethod && (
+        {isGpaMethod && (
           <FormField
             control={form.control}
             name="admission_scores.gpa"
@@ -259,9 +259,9 @@ export function AdmissionScoresTab({ form, isEditable, appliedRules }: Admission
                     onChange={(e) => field.onChange(e.target.value ? parseFloat(e.target.value) : null)}
                   />
                 </FormControl>
-                {selectedCriterion.min_score && (
+                {minGpa && (
                   <FormDescription>
-                    Điểm sàn của phương thức này: <strong>{selectedCriterion.min_score}</strong>
+                    Điểm GPA tối thiểu: <strong>{minGpa}</strong>
                   </FormDescription>
                 )}
                 <FormMessage />
@@ -270,8 +270,8 @@ export function AdmissionScoresTab({ form, isEditable, appliedRules }: Admission
           />
         )}
 
-        {/* Step 2: Select Subject Group (for exam-based methods) */}
-        {selectedCriterion && !isGpaMethod && availableGroups.length > 0 && (
+        {/* ✅ NEW: Select Subject Group (for exam-based methods) */}
+        {!isGpaMethod && availableSubjectGroups.length > 0 && (
           <FormField
             control={form.control}
             name="admission_scores.selected_group"
@@ -292,27 +292,16 @@ export function AdmissionScoresTab({ form, isEditable, appliedRules }: Admission
                     </SelectTrigger>
                   </FormControl>
                   <SelectContent>
-                    {isLoadingGroups ? (
-                      <div className="p-2">
-                        <Skeleton className="h-6 w-full" />
-                      </div>
-                    ) : (
-                      availableGroups.map((groupCode) => {
-                        const groupInfo = allSubjectGroups?.find((g) => g.code === groupCode)
-                        return (
-                          <SelectItem key={groupCode} value={groupCode}>
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium">{groupCode}</span>
-                              {groupInfo && (
-                                <span className="text-muted-foreground text-sm">
-                                  ({groupInfo.name})
-                                </span>
-                              )}
-                            </div>
-                          </SelectItem>
-                        )
-                      })
-                    )}
+                    {availableSubjectGroups.map((group) => (
+                      <SelectItem key={group.code} value={group.code}>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{group.code}</span>
+                          <span className="text-muted-foreground text-sm">
+                            ({group.name})
+                          </span>
+                        </div>
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
                 <FormMessage />
@@ -321,12 +310,12 @@ export function AdmissionScoresTab({ form, isEditable, appliedRules }: Admission
           />
         )}
 
-        {/* Step 3: Subject Score Inputs */}
-        {selectedCriterion && !isGpaMethod && selectedGroupDetails && (
+        {/* ✅ NEW: Subject Score Inputs */}
+        {!isGpaMethod && selectedGroupDetails && (
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <Label className="text-base font-medium">Điểm từng môn</Label>
-              <Badge variant={totalScore >= (selectedCriterion.min_score || 0) ? "default" : "destructive"}>
+              <Badge variant={totalScore >= (minScore || 0) ? "default" : "destructive"}>
                 Tổng điểm: {totalScore.toFixed(2)}
               </Badge>
             </div>
@@ -363,30 +352,22 @@ export function AdmissionScoresTab({ form, isEditable, appliedRules }: Admission
               ))}
             </div>
 
-            {selectedCriterion.min_score && (
+            {minScore && (
               <div className={`p-3 rounded-lg flex items-start gap-2 ${
-                totalScore >= selectedCriterion.min_score 
+                totalScore >= minScore 
                   ? 'bg-green-50 text-green-800 dark:bg-green-950 dark:text-green-200' 
                   : 'bg-red-50 text-red-800 dark:bg-red-950 dark:text-red-200'
               }`}>
                 <AlertCircle className="h-5 w-5 mt-0.5 shrink-0" />
                 <div className="text-sm">
-                  <strong>Điểm sàn:</strong> {selectedCriterion.min_score}
-                  {totalScore >= selectedCriterion.min_score 
+                  <strong>Điểm sàn:</strong> {minScore}
+                  {totalScore >= minScore 
                     ? ` — Tổng điểm (${totalScore.toFixed(2)}) đạt yêu cầu!`
-                    : ` — Còn thiếu ${(selectedCriterion.min_score - totalScore).toFixed(2)} điểm`
+                    : ` — Còn thiếu ${(minScore - totalScore).toFixed(2)} điểm`
                   }
                 </div>
               </div>
             )}
-          </div>
-        )}
-
-        {/* No subject groups for exam-based method */}
-        {selectedCriterion && !isGpaMethod && availableGroups.length === 0 && (
-          <div className="p-4 bg-yellow-50 dark:bg-yellow-950 rounded-lg text-yellow-800 dark:text-yellow-200 text-sm">
-            <AlertCircle className="h-4 w-4 inline-block mr-2" />
-            Phương thức này chưa có tổ hợp môn xét tuyển. Vui lòng liên hệ quản trị viên.
           </div>
         )}
       </CardContent>

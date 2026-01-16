@@ -3,6 +3,10 @@
  *
  * Phase 1.1: Organization Unit Management
  * CRUD interface for organization units (Departments, Faculties, etc.)
+ * 
+ * Architecture: FRONTEND_ARCHITECTURE_V3.md
+ * - FE renders backend state, NO business logic decisions
+ * - Uses typed payloads instead of `any` casts
  */
 
 "use client";
@@ -27,7 +31,26 @@ import {
   useUpdateOrganizationUnit,
   useDeleteOrganizationUnit,
 } from "@/hooks/admissions/useMasterData";
-import type { OrganizationUnit, CRUDTableColumn, BaseFormData } from "../shared/types";
+import type { 
+  OrganizationUnit, 
+  CRUDTableColumn, 
+  BaseFormData,
+  OrganizationUnitCreate,
+  OrganizationUnitUpdate 
+} from "../shared/types";
+
+// ============================================
+// TYPES
+// ============================================
+
+// Extended form data type for organization units
+interface OrgUnitFormData extends BaseFormData {
+  type?: string;
+  parent_id?: number | null;
+}
+
+// Extended OrganizationUnit with level for tree rendering
+type FlattenedOrgUnit = OrganizationUnit & { level: number };
 
 // ============================================
 // CONSTANTS
@@ -41,14 +64,6 @@ const ORGANIZATION_UNIT_TYPES = [
   "Khoa",
   "Tổ",
   "Bộ môn",
-];
-
-const COLUMNS: CRUDTableColumn<OrganizationUnit>[] = [
-  { key: "name", header: "Tên đơn vị" },
-  { key: "type", header: "Loại hình", width: "120px" },
-  { key: "parent_id", header: "Đơn vị cấp trên", width: "150px" },
-  { key: "description", header: "Mô tả" },
-  { key: "is_active", header: "Trạng thái", width: "100px" },
 ];
 
 // ============================================
@@ -65,23 +80,14 @@ export function OrganizationUnitPanel() {
   // HIERARCHY HELPERS
   // ============================================
 
-  // ============================================
-  // HIERARCHY HELPERS
-  // ============================================
-
   // Helper to flatten nested tree
-  const flattenTree = (units: OrganizationUnit[]): (OrganizationUnit & { level: number })[] => {
-    const result: (OrganizationUnit & { level: number })[] = [];
+  const flattenTree = (units: OrganizationUnit[]): FlattenedOrgUnit[] => {
+    const result: FlattenedOrgUnit[] = [];
 
     // Sort by name for display consistency
     const sortedUnits = [...units].sort((a, b) => a.name.localeCompare(b.name));
 
     sortedUnits.forEach((unit) => {
-      // Add current unit
-      // Since backend returns nested structure, we calculate level during recursive flattening
-      // But for the root call, we need a starting level (0)
-      // Actually, flattening logic needs to carry level.
-      
       const traverse = (node: OrganizationUnit, level: number) => {
         result.push({ ...node, level });
         
@@ -117,13 +123,12 @@ export function OrganizationUnitPanel() {
   }, [data]);
 
   // Enhance columns to show parent unit name and indentation
-  const enhancedColumns: CRUDTableColumn<OrganizationUnit & { level: number }>[] = [
+  const enhancedColumns: CRUDTableColumn<FlattenedOrgUnit>[] = [
     {
       key: "name",
       header: "Name",
-      render: (item: OrganizationUnit) => {
-        // Cast to any to access level added by buildHierarchy
-        const level = (item as any).level || 0;
+      render: (item: FlattenedOrgUnit) => {
+        const level = item.level;
         return (
           <div style={{ paddingLeft: `${level * 24}px` }} className="flex items-center">
             {level > 0 && <span className="text-muted-foreground mr-2">└─</span>}
@@ -137,9 +142,9 @@ export function OrganizationUnitPanel() {
       key: "parent_id",
       header: "Parent Unit",
       width: "200px",
-      render: (item: OrganizationUnit) => {
+      render: (item: FlattenedOrgUnit) => {
         if (!item.parent_id) return <span className="text-muted-foreground">—</span>;
-        const parent = allUnitsFlat.find((u: OrganizationUnit) => u.id === item.parent_id);
+        const parent = allUnitsFlat.find((u) => u.id === item.parent_id);
         return parent ? (
           <span className="text-sm">{parent.name}</span>
         ) : (
@@ -151,37 +156,36 @@ export function OrganizationUnitPanel() {
     { key: "is_active", header: "Status", width: "100px" },
   ];
 
-  const mapItemToFormData = (item: OrganizationUnit): BaseFormData => {
-    const formData: any = {
+  const mapItemToFormData = (item: OrganizationUnit): OrgUnitFormData => {
+    return {
       name: item.name,
       description: item.description || "",
       is_active: item.is_active,
       type: item.type,
       parent_id: item.parent_id,
     };
-    return formData;
   };
 
   const handleCreate = async (formData: BaseFormData) => {
-    // Transform formData to match backend OrganizationUnitCreate schema
-    const payload = {
-      name: formData.name,
-      type: (formData as any).type, // Required by backend
-      description: formData.description || null,
-      parent_id: (formData as any).parent_id || null,
+    const orgFormData = formData as OrgUnitFormData;
+    const payload: OrganizationUnitCreate = {
+      name: orgFormData.name || "",
+      type: orgFormData.type || "",
+      description: orgFormData.description || null,
+      parent_id: orgFormData.parent_id || null,
     };
-    await createMutation.mutateAsync(payload as any);
+    await createMutation.mutateAsync(payload);
   };
 
   const handleUpdate = async (id: number, formData: BaseFormData) => {
-    // Transform formData to match backend OrganizationUnitUpdate schema
-    const payload = {
-      name: formData.name,
-      type: (formData as any).type,
-      description: formData.description || null,
-      parent_id: (formData as any).parent_id || null,
+    const orgFormData = formData as OrgUnitFormData;
+    const payload: OrganizationUnitUpdate = {
+      name: orgFormData.name,
+      type: orgFormData.type,
+      description: orgFormData.description || null,
+      parent_id: orgFormData.parent_id ?? null,
     };
-    await updateMutation.mutateAsync({ id, data: payload as any });
+    await updateMutation.mutateAsync({ id, data: payload });
   };
 
   const handleDelete = async (id: number) => {
@@ -192,8 +196,14 @@ export function OrganizationUnitPanel() {
     item: OrganizationUnit | null,
     formData: BaseFormData,
     setFormData: (data: BaseFormData) => void,
-    isEdit: boolean
+    _isEdit: boolean
   ) => {
+    const orgFormData = formData as OrgUnitFormData;
+    
+    const updateForm = (updates: Partial<OrgUnitFormData>) => {
+      setFormData({ ...orgFormData, ...updates });
+    };
+
     return (
       <div className="space-y-4">
         <div className="space-y-2">
@@ -202,8 +212,8 @@ export function OrganizationUnitPanel() {
           </Label>
           <Input
             id="name"
-            value={formData.name || ""}
-            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+            value={orgFormData.name || ""}
+            onChange={(e) => updateForm({ name: e.target.value })}
             placeholder="Ví dụ: Khoa Công nghệ Thông tin"
             required
           />
@@ -214,10 +224,8 @@ export function OrganizationUnitPanel() {
             Loại hình <span className="text-destructive">*</span>
           </Label>
           <Select
-            value={(formData as any).type || ""}
-            onValueChange={(value) =>
-              setFormData({ ...formData, type: value } as any)
-            }
+            value={orgFormData.type || ""}
+            onValueChange={(value) => updateForm({ type: value })}
           >
             <SelectTrigger id="type">
               <SelectValue placeholder="Chọn loại đơn vị" />
@@ -238,19 +246,14 @@ export function OrganizationUnitPanel() {
         <div className="space-y-2">
           <Label htmlFor="parent_id">Đơn vị cấp trên (Tùy chọn)</Label>
           <SmartUnitSelector
-            value={(formData as any).parent_id?.toString()}
-            onChange={(value) =>
-              setFormData({
-                ...formData,
-                parent_id: value ? parseInt(value) : null
-              } as any)
-            }
+            value={orgFormData.parent_id?.toString()}
+            onChange={(value) => updateForm({ parent_id: value ? parseInt(value) : null })}
             placeholder="Không có (Đơn vị cấp cao nhất)"
             allowNone={true}
             noneLabel="Không có (Đơn vị cấp cao nhất)"
-            excludeUnitId={item?.id} // Prevent self-parenting and circular dependencies
+            excludeUnitId={item?.id}
             variant="combobox"
-            activeOnly={false} // Show inactive units for editing existing relationships
+            activeOnly={false}
           />
           <p className="text-xs text-muted-foreground">
             Đơn vị cấp trên trực tiếp (để trống nếu là đơn vị cấp cao nhất)
@@ -261,8 +264,8 @@ export function OrganizationUnitPanel() {
           <Label htmlFor="description">Mô tả</Label>
           <Textarea
             id="description"
-            value={formData.description || ""}
-            onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+            value={orgFormData.description || ""}
+            onChange={(e) => updateForm({ description: e.target.value })}
             placeholder="Mô tả tóm tắt về đơn vị"
             rows={3}
           />
@@ -271,9 +274,9 @@ export function OrganizationUnitPanel() {
     );
   };
 
-  const initialFormData = (): any => ({
+  const initialFormData = (): OrgUnitFormData => ({
     name: "",
-    type: "", // Required by backend
+    type: "",
     description: "",
     parent_id: null,
   });
@@ -287,7 +290,7 @@ export function OrganizationUnitPanel() {
         </p>
       </div>
 
-      <CRUDTable<OrganizationUnit & { level: number }>
+      <CRUDTable<FlattenedOrgUnit>
         title="Đơn vị"
         description="Khoa, phòng ban và các đơn vị khác"
         icon={<Building2 className="h-5 w-5 text-primary" />}

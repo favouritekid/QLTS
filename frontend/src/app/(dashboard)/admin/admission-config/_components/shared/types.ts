@@ -354,3 +354,143 @@ export interface ApiError {
   detail: string;
   field?: string;
 }
+
+// ============================================
+// CRUD MUTATION PAYLOAD TYPES
+// These types eliminate `as any` casts in admin panels
+// ============================================
+
+// Organization Unit payloads
+export interface OrganizationUnitCreate {
+  name: string;
+  type: string;
+  description?: string | null;
+  parent_id?: number | null;
+}
+
+export interface OrganizationUnitUpdate {
+  name?: string;
+  type?: string;
+  description?: string | null;
+  parent_id?: number | null;
+  is_active?: boolean;
+}
+
+// Offering Type payloads
+export interface OfferingTypeCreate {
+  code: string;
+  name: string;
+  display_order?: number;
+  is_active?: boolean;
+}
+
+export interface OfferingTypeUpdate {
+  code?: string;
+  name?: string;
+  display_order?: number;
+  is_active?: boolean;
+}
+
+// Admission Method payloads
+export interface AdmissionMethodCreate {
+  code: string;
+  name: string;
+  description?: string;
+  requires_gpa?: boolean;
+  requires_subject_scores?: boolean;
+  display_order?: number;
+  is_active?: boolean;
+}
+
+export interface AdmissionMethodUpdate {
+  name?: string;
+  description?: string;
+  requires_gpa?: boolean;
+  requires_subject_scores?: boolean;
+  display_order?: number;
+  is_active?: boolean;
+}
+
+// Document Type payloads
+export interface DocumentTypeCreate {
+  code: string;
+  name: string;
+  description?: string;
+  display_order?: number;
+  is_active?: boolean;
+}
+
+export interface DocumentTypeUpdate {
+  name?: string;
+  description?: string;
+  display_order?: number;
+  is_active?: boolean;
+}
+
+// Subject payloads
+export interface SubjectCreate {
+  code: string;
+  name_vi: string;
+  name_en?: string;
+  display_order?: number;
+  is_active?: boolean;
+}
+
+export interface SubjectUpdate {
+  name_vi?: string;
+  name_en?: string;
+  display_order?: number;
+  is_active?: boolean;
+}
+
+// Subject Group payloads
+export interface SubjectGroupCreate {
+  code: string;
+  name: string;
+  description?: string;
+  display_order?: number;
+  is_active?: boolean;
+}
+
+export interface SubjectGroupUpdate {
+  name?: string;
+  description?: string;
+  display_order?: number;
+  is_active?: boolean;
+}
+
+// Major Program payloads
+export interface MajorProgramCreate {
+  code: string;
+  name: string;
+  degree_level: string;
+  unit_id: number;
+  is_heavy?: boolean;
+  is_active?: boolean;
+}
+
+export interface MajorProgramUpdate {
+  name?: string;
+  degree_level?: string;
+  unit_id?: number;
+  is_heavy?: boolean;
+  is_active?: boolean;
+}
+
+// Program Offering payloads
+export interface ProgramOfferingCreate {
+  program_id: number;
+  offering_type_id: number;
+  duration_semesters?: number;
+  total_credits?: number;
+  scoring_rules?: ScoringRules;
+  is_active?: boolean;
+}
+
+export interface ProgramOfferingUpdate {
+  duration_semesters?: number;
+  total_credits?: number;
+  scoring_rules?: ScoringRules;
+  is_active?: boolean;
+}
+

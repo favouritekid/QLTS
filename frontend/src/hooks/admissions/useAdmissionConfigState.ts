@@ -211,7 +211,7 @@ export function useAdmissionConfigState() {
 
     // Default to welcome
     return { type: "welcome" };
-  }, [searchParams, hasPhase1Data, hasPhase2Data, checkingPhase1, checkingPhase2]);
+  }, [searchParams, hasPhase1Data, checkingPhase1, checkingPhase2]);
 
   // Navigate to a new state
   const navigate = (state: AdmissionConfigState, replace = false) => {

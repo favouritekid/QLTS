@@ -10,9 +10,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton"
 import { Calculator, CheckCircle2, XCircle, AlertCircle, BookOpen } from "lucide-react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { configApi, type SubjectGroup } from "@/lib/api/config"
+import { configApi } from "@/lib/api/config"
+import type { AppliedRules } from "@/lib/zod/admissions"
 
-// Types for admission criteria (from applied_rules snapshot)
+// Internal interface for UI logic compatibility
 interface AdmissionCriterion {
   id: string
   method_name: string
@@ -25,9 +26,8 @@ interface ScoresTabProps {
   form: UseFormReturn<FieldValues>
   isEditable: boolean
   minGpa: number
-  appliedRules?: {
-    criteria?: AdmissionCriterion[]
-  } | null
+  // Updated to match the actual AppliedRules type from backend/zod
+  appliedRules?: AppliedRules | null
   // Phase 7: Backend-computed scores (source of truth)
   profile?: {
     total_score?: number | null
@@ -62,8 +62,21 @@ const SUBJECT_LABELS: Record<string, string> = {
 
 
 export function ScoresTab({ form, isEditable, minGpa, appliedRules, profile }: ScoresTabProps) {
-  // Get admission criteria from applied_rules
-  const criteria = appliedRules?.criteria || []
+  // Construct criteria from appliedRules
+  // Since AppliedRules now represents a snapshot for a SINGLE path,
+  // we map it to a single criterion for the UI to consume.
+  const criteria = useMemo<AdmissionCriterion[]>(() => {
+    if (!appliedRules) return []
+    
+    // Map the single applied rule configuration to a criterion
+    return [{
+      id: appliedRules.admission_method_id?.toString() || "default",
+      method_name: appliedRules.admission_method || "Phương thức xét tuyển",
+      // Map complex SubjectGroupSnapshot to string[] of codes
+      subject_groups: appliedRules.subject_groups?.map(g => g.code) || [],
+      min_score: appliedRules.min_score ?? undefined,
+    }]
+  }, [appliedRules])
   
   // Use useWatch for better reactivity
   const selectedCriterionId = useWatch({
@@ -125,7 +138,7 @@ export function ScoresTab({ form, isEditable, minGpa, appliedRules, profile }: S
   
   // Phase 7: Prefer backend-computed scores (source of truth) with local fallback for preview
   const totalScore = profile?.total_score ?? localTotalScore
-  const averageScore = profile?.average_score ?? (subjects.length > 0 ? localTotalScore / subjects.length : 0)
+  const _averageScore = profile?.average_score ?? (subjects.length > 0 ? localTotalScore / subjects.length : 0)
   
   // Show preview indicator if we're showing local calculation
   const isPreview = !profile?.total_score && localTotalScore > 0
