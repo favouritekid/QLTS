@@ -6,35 +6,21 @@
 
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+// useQuery removed, officerApi removed
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Trophy, Medal, Crown, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { 
+  Crown, 
+  Medal, 
+  TrendingUp, 
+  TrendingDown, 
+  Minus, 
+  Trophy 
+} from "lucide-react";
 import { cn } from "@/lib/utils";
-import { api } from "@/lib/api/client";
 
-interface LeaderboardEntry {
-  rank: number;
-  user_id: number;
-  username: string;
-  full_name: string;
-  consultations: number;
-  is_current_user: boolean;
-  rank_change?: number | null; // +2 = up 2 spots, -1 = down 1, null = new
-}
-
-interface WeeklyLeaderboardData {
-  week_start: string;
-  total_officers: number;
-  current_user_rank: number;
-  leaderboard: LeaderboardEntry[];
-}
-
-async function fetchLeaderboard(): Promise<WeeklyLeaderboardData> {
-  const response = await api.get("/api/officer/leaderboard");
-  return response.data;
-}
+import { useWeeklyLeaderboard } from "@/hooks/officer/useWeeklyLeaderboard";
 
 const getRankIcon = (rank: number) => {
   switch (rank) {
@@ -94,12 +80,7 @@ const getRankBg = (rank: number, isCurrentUser: boolean) => {
 };
 
 export function WeeklyLeaderboard() {
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["officer", "leaderboard"],
-    queryFn: fetchLeaderboard,
-    staleTime: 60000, // 1 minute
-    refetchInterval: 300000, // 5 minutes
-  });
+  const { data, isLoading, error } = useWeeklyLeaderboard();
 
   if (isLoading) {
     return (

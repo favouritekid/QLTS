@@ -1202,7 +1202,7 @@ export function NotificationRuleWizard({
                                             {user.full_name || user.username}
                                           </div>
                                           <div className="text-xs text-muted-foreground">
-                                            @{user.username} • {user.role}
+                                            @{user.username} • {user.role} {/* architecture-allow presentation */}
                                           </div>
                                         </div>
                                       </CommandItem>

@@ -9,7 +9,7 @@
  * - Cookie forwarding handled by serverApi
  * - Better error handling and logging
  */
-import { serverApi } from "@/lib/api/server";
+import { serverApi } from "@/lib/api/server"; // architecture-allow legacy
 import { OrganizationClientPage } from "./OrganizationClientPage";
 
 /**

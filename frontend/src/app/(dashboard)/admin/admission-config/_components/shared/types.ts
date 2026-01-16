@@ -35,30 +35,86 @@ export interface BaseEntityUpdate {
 }
 
 // Form data type for CRUD operations - uses string/number/boolean for form inputs
-export interface BaseFormData {
-  code?: string;
-  name?: string;
-  name_vi?: string;
-  name_en?: string;
-  degree_level?: string;
-  description?: string;
-  display_order?: number;
-  is_active?: boolean;
-  requires_gpa?: boolean;
-  requires_subject_scores?: boolean;
-  organization_unit_id?: number | null;
-  unit_id?: number | null;
-  program_id?: number | null; // Updated from major_program_id to match backend
-  offering_type_id?: number | null;
-  offering_id?: number | null;
-  academic_year?: number;
-  tuition_fee_per_year?: number;
-  annual_admission_quota?: number;
-  is_published?: boolean;
-  is_heavy?: boolean;
-  scoring_rules?: ScoringRules;
-  [key: string]: string | number | boolean | null | undefined | ScoringRules;
+// ============================================
+// DOMAIN FORM TYPES (STRICT)
+// ============================================
+
+export interface OfferingTypeFormValues {
+  code: string;
+  name: string;
+  display_order: number;
+  is_active: boolean;
 }
+
+export interface OrganizationUnitFormValues {
+  name: string;
+  type: string;
+  description: string;
+  parent_id: number | null;
+  is_active: boolean;
+}
+
+export interface AdmissionMethodFormValues {
+  code: string;
+  name: string;
+  description: string;
+  requires_gpa: boolean;
+  requires_subject_scores: boolean;
+  display_order: number;
+  is_active: boolean;
+}
+
+export interface DocumentTypeFormValues {
+  code: string;
+  name: string;
+  description: string;
+  display_order: number;
+  is_active: boolean;
+}
+
+export interface SubjectFormValues {
+  code: string;
+  name_vi: string;
+  name_en: string;
+  display_order: number;
+  is_active: boolean;
+}
+
+export interface SubjectGroupFormValues {
+  code: string;
+  name: string;
+  description: string;
+  display_order: number;
+  is_active: boolean;
+}
+
+export interface MajorProgramFormValues {
+  code: string;
+  name: string;
+  degree_level: string;
+  unit_id: number | null;
+  is_heavy: boolean;
+  is_active: boolean;
+}
+
+export interface ProgramOfferingFormValues {
+  program_id: number | null;
+  offering_type_id: number | null;
+  duration_semesters: number;
+  total_credits: number;
+  scoring_rules: ScoringRules;
+  is_active: boolean;
+}
+
+export interface AcademicInfoFormValues {
+  offering_id: number | null;
+  academic_year: number;
+  tuition_fee_per_year: number;
+  annual_admission_quota: number;
+  is_published: boolean;
+}
+
+
 
 // ============================================
 // STATE MACHINE TYPES
@@ -182,9 +238,8 @@ export interface AdmissionMethod extends BaseEntity {
   requires_subject_scores: boolean;
 }
 
-export interface DocumentType extends BaseEntity {
-  // No additional fields - matches backend ConfigDocumentType
-}
+export type DocumentType = BaseEntity;
+
 
 export interface DocumentGroupItem {
   id: number;
@@ -494,3 +549,18 @@ export interface ProgramOfferingUpdate {
   is_active?: boolean;
 }
 
+
+// Academic Info payloads
+export interface AcademicInfoCreate {
+  offering_id: number;
+  academic_year: number;
+  tuition_fee_per_year?: number;
+  annual_admission_quota?: number;
+  is_published?: boolean;
+}
+
+export interface AcademicInfoUpdate {
+  tuition_fee_per_year?: number;
+  annual_admission_quota?: number;
+  is_published?: boolean;
+}

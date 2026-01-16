@@ -24,7 +24,7 @@ import {
 import { Combobox } from "@/components/ui/combobox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Play, CheckCircle2, XCircle, Info } from "lucide-react";
-import { api } from "@/lib/api/client";
+import { usePermissionSimulation, type SimulationResult } from "@/hooks/policies/usePermissionTools";
 import { usePolicySuggestions } from "@/hooks/usePolicySuggestions";
 import { toast } from "sonner";
 
@@ -36,17 +36,11 @@ const simulateSchema = z.object({
 
 type SimulateFormValues = z.infer<typeof simulateSchema>;
 
-interface SimulationResult {
-  subject: string;
-  object: string;
-  action: string;
-  is_allowed: boolean;
-  message: string;
-}
+// SimulationResult imported from policies.ts
 
 export function PermissionSimulatorTab() {
   const [result, setResult] = useState<SimulationResult | null>(null);
-  const [isSimulating, setIsSimulating] = useState(false);
+  const { mutate: simulate, isPending: isSimulating } = usePermissionSimulation();
   const { data: suggestions } = usePolicySuggestions();
 
   const form = useForm<SimulateFormValues>({
@@ -58,22 +52,16 @@ export function PermissionSimulatorTab() {
     },
   });
 
-  const onSubmit = async (values: SimulateFormValues) => {
-    setIsSimulating(true);
-    try {
-      const response = await api.post<SimulationResult>(
-        "/api/admin/policies/simulate",
-        values
-      );
-
-      setResult(response.data);
-      toast.success("Simulation completed");
-    } catch (error: unknown) {
-      toast.error("Failed to simulate permission");
-      console.error(error);
-    } finally {
-      setIsSimulating(false);
-    }
+  const onSubmit = (values: SimulateFormValues) => {
+    simulate(values, {
+      onSuccess: (data) => {
+        setResult(data);
+        toast.success("Simulation completed");
+      },
+      onError: () => {
+        toast.error("Failed to simulate permission");
+      }
+    });
   };
 
   return (

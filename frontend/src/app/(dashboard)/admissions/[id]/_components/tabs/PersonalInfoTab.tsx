@@ -1,19 +1,19 @@
 "use client"
 
-import { UseFormReturn, FieldValues } from "react-hook-form"
+import { UseFormReturn } from "react-hook-form"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
-import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
+import type { AdmissionProfileResponse, AdmissionProfileUpdate } from "@/lib/zod/admissions"
 import { useConfigData } from "@/lib/hooks/useConfigData"
 import { format } from "date-fns" // Optional if needed for display, but input date handles ISO
 
 interface PersonalInfoTabProps {
   profile: AdmissionProfileResponse
-  form: UseFormReturn<FieldValues>
+  form: UseFormReturn<AdmissionProfileUpdate>
   isEditable: boolean
 }
 

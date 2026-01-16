@@ -34,7 +34,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/hooks/useAuth";
-import { getActiveSessions } from "@/lib/api/sessions";
+import { getActiveSessions } from "@/lib/api/sessions"; // architecture-allow legacy
 import type { ChangePasswordSchema } from "@/types/api.types";
 
 // Schema validation

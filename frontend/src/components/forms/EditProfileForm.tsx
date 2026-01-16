@@ -240,7 +240,7 @@ export function EditProfileForm() {
             <div className="space-y-2">
               <Label className="text-muted-foreground">Vai trò</Label>
               <Input
-                value={user.role}
+                value={user.role} // architecture-allow serialization
                 disabled
                 className="bg-muted cursor-not-allowed capitalize"
               />

@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/table";
 import { Plus, Pencil, Trash2 } from "lucide-react";
 import { CRUDDialog } from "./CRUDDialog";
-import type { BaseEntity, BaseFormData, CRUDTableColumn } from "./types";
+import type { BaseEntity, CRUDTableColumn } from "./types";
 
 // ============================================
 // TYPES
@@ -34,25 +34,28 @@ interface CRUDEntity {
   is_active: boolean;
 }
 
-interface CRUDTableProps<T extends CRUDEntity> {
+interface CRUDTableProps<T extends CRUDEntity, TFormValues> {
   title: string;
   description: string;
   icon?: React.ReactNode;
   columns: CRUDTableColumn<T>[];
   data: T[];
   isLoading: boolean;
-  onCreate: (data: BaseFormData) => Promise<void>;
-  onUpdate: (id: number, data: BaseFormData) => Promise<void>;
-  onDelete: (id: number) => Promise<void>;
+  mapItemToFormData: (item: T) => TFormValues;
+  createMutation?: unknown;
+  updateMutation?: unknown;
+  deleteMutation?: unknown;
+  onCreate?: (data: TFormValues) => Promise<void>;
+  onUpdate?: (id: number, data: TFormValues) => Promise<void>;
+  onDelete?: (id: number, name?: string) => Promise<void>;
   renderForm: (
     item: T | null,
-    formData: BaseFormData,
-    setFormData: (data: BaseFormData) => void,
+    formData: TFormValues,
+    setFormData: (data: TFormValues) => void,
     isEdit: boolean
   ) => React.ReactNode;
-  initialFormData: () => BaseFormData;
-  // Optional mapper to transform item to form data (useful for complex objects or type conversions)
-  mapItemToFormData?: (item: T) => BaseFormData;
+  initialFormData: () => TFormValues;
+  // Fallback defaults if not provided (legacy support removed)
   emptyMessage?: string;
   showActions?: boolean;
   allowCreate?: boolean;
@@ -64,13 +67,16 @@ interface CRUDTableProps<T extends CRUDEntity> {
 // COMPONENT
 // ============================================
 
-export function CRUDTable<T extends CRUDEntity>({
+export function CRUDTable<T extends CRUDEntity, TFormValues>({
   title,
   description,
   icon,
   columns,
   data,
   isLoading,
+  createMutation,
+  updateMutation,
+  deleteMutation,
   onCreate,
   onUpdate,
   onDelete,
@@ -82,10 +88,10 @@ export function CRUDTable<T extends CRUDEntity>({
   allowCreate = true,
   allowEdit = true,
   allowDelete = true,
-}: CRUDTableProps<T>) {
+}: CRUDTableProps<T, TFormValues>) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editItem, setEditItem] = useState<T | null>(null);
-  const [formData, setFormData] = useState<BaseFormData>(initialFormData());
+  const [formData, setFormData] = useState<TFormValues>(initialFormData());
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // ============================================
@@ -100,19 +106,7 @@ export function CRUDTable<T extends CRUDEntity>({
 
   const handleOpenEdit = (item: T) => {
     setEditItem(item);
-    if (mapItemToFormData) {
-      setFormData(mapItemToFormData(item));
-    } else {
-      // Default mapping for BaseEntity types
-      const baseItem = item as any;
-      setFormData({
-        code: baseItem.code || "",
-        name: baseItem.name || "",
-        description: baseItem.description || "",
-        display_order: baseItem.display_order || 0,
-        is_active: baseItem.is_active,
-      });
-    }
+    setFormData(mapItemToFormData(item));
     setDialogOpen(true);
   };
 
@@ -120,7 +114,7 @@ export function CRUDTable<T extends CRUDEntity>({
     const itemLabel = name || `item #${id}`;
     if (confirm(`Bạn có chắc chắn muốn xóa "${itemLabel}"?`)) {
       try {
-        await onDelete(id);
+        if (onDelete) await onDelete(id, name);
       } catch (error) {
         console.error("Delete failed:", error);
       }
@@ -137,9 +131,9 @@ export function CRUDTable<T extends CRUDEntity>({
     setIsSubmitting(true);
     try {
       if (editItem) {
-        await onUpdate(editItem.id, formData);
+        if (onUpdate) await onUpdate(editItem.id, formData);
       } else {
-        await onCreate(formData);
+        if (onCreate) await onCreate(formData);
       }
       handleCloseDialog();
     } catch (error) {
@@ -238,7 +232,7 @@ export function CRUDTable<T extends CRUDEntity>({
               </TableHeader>
               <TableBody>
                 {data.map((item) => {
-                  const isGroupHeader = (item as any).isGroupHeader;
+                  const isGroupHeader = (item as unknown as { isGroupHeader?: boolean }).isGroupHeader;
 
                   return (
                     <TableRow key={item.id} className={isGroupHeader ? "bg-muted/30" : ""}>

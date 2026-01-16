@@ -29,12 +29,12 @@ import { useOrganizationUnits } from "@/hooks/admissions/useMasterData";
 import type { 
   MajorProgram, 
   CRUDTableColumn, 
-  BaseFormData,
   MajorProgramCreate,
   MajorProgramUpdate,
   OrganizationUnit,
   ProgramOffering,
-  OfferingAcademicInfo
+  OfferingAcademicInfo,
+  MajorProgramFormValues
 } from "../shared/types";
 
 // ============================================
@@ -45,14 +45,6 @@ import type {
 interface DisplayMajorProgram extends MajorProgram {
   isGroupHeader?: boolean;
   groupLevel?: string;
-}
-
-// Extended form data type for major programs
-interface MajorProgramFormData extends BaseFormData {
-  code?: string;
-  degree_level?: string;
-  unit_id?: number | null;
-  is_heavy?: boolean;
 }
 
 // ============================================
@@ -226,27 +218,25 @@ export function MajorProgramPanel() {
     },
   ];
 
-  const handleCreate = async (formData: BaseFormData) => {
-    const mpFormData = formData as MajorProgramFormData;
+  const handleCreate = async (formData: MajorProgramFormValues) => {
     const payload: MajorProgramCreate = {
-      code: mpFormData.code || "",
-      name: mpFormData.name || "",
-      degree_level: mpFormData.degree_level || "Cao đẳng",
-      unit_id: mpFormData.unit_id || 0,
-      is_heavy: !!mpFormData.is_heavy,
-      is_active: mpFormData.is_active !== undefined ? mpFormData.is_active : true,
+      code: formData.code,
+      name: formData.name,
+      degree_level: formData.degree_level,
+      unit_id: formData.unit_id || 0,
+      is_heavy: formData.is_heavy,
+      is_active: formData.is_active,
     };
     await createMutation.mutateAsync(payload);
   };
 
-  const handleUpdate = async (id: number, formData: BaseFormData) => {
-    const mpFormData = formData as MajorProgramFormData;
+  const handleUpdate = async (id: number, formData: MajorProgramFormValues) => {
     const payload: MajorProgramUpdate = {
-      name: mpFormData.name,
-      degree_level: mpFormData.degree_level,
-      unit_id: mpFormData.unit_id ?? undefined,
-      is_heavy: mpFormData.is_heavy,
-      is_active: mpFormData.is_active,
+      name: formData.name,
+      degree_level: formData.degree_level,
+      unit_id: formData.unit_id ?? undefined,
+      is_heavy: formData.is_heavy,
+      is_active: formData.is_active,
     };
     await updateMutation.mutateAsync({ id, data: payload });
   };
@@ -257,14 +247,12 @@ export function MajorProgramPanel() {
 
   const renderForm = (
     _item: MajorProgram | null,
-    formData: BaseFormData,
-    setFormData: (data: BaseFormData) => void,
+    formData: MajorProgramFormValues,
+    setFormData: (data: MajorProgramFormValues) => void,
     isEdit: boolean
   ) => {
-    const mpFormData = formData as MajorProgramFormData;
-    
-    const updateForm = (updates: Partial<MajorProgramFormData>) => {
-      setFormData({ ...mpFormData, ...updates });
+    const updateForm = (updates: Partial<MajorProgramFormValues>) => {
+      setFormData({ ...formData, ...updates });
     };
 
     return (
@@ -275,7 +263,7 @@ export function MajorProgramPanel() {
           </Label>
           <Input
             id="code"
-            value={mpFormData.code || ""}
+            value={formData.code || ""}
             onChange={(e) => updateForm({ code: e.target.value })}
             placeholder="vd: 6480201, 7340101"
             disabled={isEdit}
@@ -292,7 +280,7 @@ export function MajorProgramPanel() {
               Trình độ đào tạo <span className="text-destructive">*</span>
             </Label>
             <Select
-              value={mpFormData.degree_level || "Cao đẳng"}
+              value={formData.degree_level || "Cao đẳng"}
               onValueChange={(value) => updateForm({ degree_level: value })}
             >
               <SelectTrigger id="degree_level">
@@ -312,7 +300,7 @@ export function MajorProgramPanel() {
               <input
                 type="checkbox"
                 id="is_heavy"
-                checked={!!mpFormData.is_heavy}
+                checked={formData.is_heavy}
                 onChange={(e) => updateForm({ is_heavy: e.target.checked })}
                 className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
               />
@@ -329,7 +317,7 @@ export function MajorProgramPanel() {
           </Label>
           <Input
             id="name"
-            value={mpFormData.name || ""}
+            value={formData.name || ""}
             onChange={(e) => updateForm({ name: e.target.value })}
             placeholder="vd: Cao đẳng Công nghệ Thông tin"
             required
@@ -339,7 +327,7 @@ export function MajorProgramPanel() {
         <div className="space-y-2">
           <Label htmlFor="unit_id">Đơn vị quản lý <span className="text-destructive">*</span></Label>
           <SmartUnitSelector
-            value={mpFormData.unit_id?.toString()}
+            value={formData.unit_id?.toString()}
             onChange={(value) => updateForm({ unit_id: value ? parseInt(value) : null })}
             placeholder="Chọn khoa/bộ môn quản lý"
             variant="combobox"
@@ -354,15 +342,16 @@ export function MajorProgramPanel() {
     );
   };
 
-  const initialFormData = (): MajorProgramFormData => ({
+  const initialFormData = (): MajorProgramFormValues => ({
     code: "",
     degree_level: "Cao đẳng",
     name: "",
     unit_id: null,
     is_heavy: false,
+    is_active: true,
   });
 
-  const mapItemToFormData = (item: MajorProgram): MajorProgramFormData => {
+  const mapItemToFormData = (item: MajorProgram): MajorProgramFormValues => {
     return {
       code: item.code,
       degree_level: item.degree_level,
@@ -382,7 +371,7 @@ export function MajorProgramPanel() {
         </p>
       </div>
 
-      <CRUDTable<DisplayMajorProgram>
+      <CRUDTable<DisplayMajorProgram, MajorProgramFormValues>
         title="Ngành đào tạo"
         description="Danh sách các ngành đào tạo của nhà trường"
         icon={<GraduationCap className="h-5 w-5 text-primary" />}

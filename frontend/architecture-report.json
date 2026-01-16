@@ -1,0 +1,7 @@
+{
+  "timestamp": "2026-01-16T08:22:17Z",
+  "violations_count": 1,
+  "warnings_count": 1,
+  "failures": [{"rule": "Rule 2.6.13", "message": "Unsafe type casting (as unknown as). STRICTLY FORBIDDEN."}],
+  "warnings": [{"rule": "Rule 0.7", "message": "Potential business logic naming detected in UI components."}]
+}

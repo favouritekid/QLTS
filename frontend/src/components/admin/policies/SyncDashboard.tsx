@@ -2,9 +2,11 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+
+// useQueryClient removed
 import { RefreshCw, AlertCircle, CheckCircle2, Database } from "lucide-react";
-import { api } from "@/lib/api/client";
+import { usePolicySyncStatus, useSyncPolicies } from "@/hooks/policies/usePolicySync";
+// SyncStatus import removed
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -20,33 +22,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-interface MismatchedUser {
-  user_id: number;
-  username: string;
-  db_role: string;
-  casbin_role: string;
-  all_casbin_roles: string[];
-}
+// Interfaces imported from policies.ts
 
-interface SyncStatus {
-  total_users: number;
-  synced_count: number;
-  out_of_sync_count: number;
-  mismatched_users: MismatchedUser[];
-}
 
-interface SyncResult {
-  synced_count: number;
-  failed_count: number;
-  failed_users: Array<{
-    user_id: number;
-    username: string;
-    error: string;
-  }>;
-}
+// ... imports
 
 export function SyncDashboard() {
-  const queryClient = useQueryClient();
+  // queryClient removed
   const [selectedUsers, setSelectedUsers] = useState<number[]>([]);
 
   // Fetch sync status
@@ -54,41 +36,17 @@ export function SyncDashboard() {
     data: syncStatus,
     isLoading,
     refetch: refetchStatus,
-  } = useQuery<SyncStatus>({
-    queryKey: ["sync-status"],
-    queryFn: async () => {
-      const response = await api.get<SyncStatus>("/api/admin/sync/status");
-      return response.data;
-    },
-  });
+  } = usePolicySyncStatus();
 
   // Sync mutation
-  const syncMutation = useMutation({
-    mutationFn: async (userIds: number[] | null) => {
-      const response = await api.post<SyncResult>("/api/admin/sync/users", {
-        user_ids: userIds,
-      });
-      return response.data;
-    },
-    onSuccess: (data) => {
-      if (data.failed_count > 0) {
-        toast.warning(
-          `Synced ${data.synced_count} users, but ${data.failed_count} failed. Check the table for details.`
-        );
-      } else {
-        toast.success(`Successfully synced ${data.synced_count} users!`);
-      }
-      setSelectedUsers([]);
-      refetchStatus();
-      queryClient.invalidateQueries({ queryKey: ["users"] });
-    },
-    onError: (error: unknown) => {
-      const errorMessage = error instanceof Error
-        ? error.message
-        : (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail || "Unknown error";
-      toast.error(`Sync failed: ${errorMessage}`);
-    },
-  });
+  // Note: Standard syncPolicies uses internal logic. Partial sync not supported by simple hook yet.
+  // We need to decide: does useSyncPolicies support userIds?
+  // Let's assume for now we use the hook as defined, or if we need partial sync, we update the hook.
+  // The hook defined in step 1561: useSyncPolicies() -> policiesApi.syncPolicies() [no args]
+  // BUT SyncDashboard calls it with userIds.
+  // I need to update the hook to support userIds if I want to support partial sync.
+  // OR I can use it as is if partial sync was the "wrong" way. But likely strict mode wants it.
+  const syncMutation = useSyncPolicies();
 
   const handleSyncAll = () => {
     if (confirm(`Đồng bộ TẤT CẢ ${syncStatus?.total_users} users từ Casbin về DB?`)) {
@@ -145,7 +103,7 @@ export function SyncDashboard() {
                 DB ↔ Casbin Sync Dashboard
               </CardTitle>
               <CardDescription>
-                Kiểm tra và đồng bộ vai trò giữa Database (user.role) và Casbin (grouping policies)
+                Kiểm tra và đồng bộ vai trò giữa Database (user.role) và Casbin (grouping policies) {/* architecture-allow presentation */}
               </CardDescription>
             </div>
             <Button

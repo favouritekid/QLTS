@@ -1,7 +1,5 @@
-"use client"
-
 import { useMemo, useEffect } from "react"
-import { UseFormReturn, FieldValues, useWatch } from "react-hook-form"
+import { UseFormReturn, useWatch } from "react-hook-form"
 import { useQuery } from "@tanstack/react-query"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -11,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Calculator, CheckCircle2, XCircle, AlertCircle, BookOpen } from "lucide-react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { configApi } from "@/lib/api/config"
-import type { AppliedRules } from "@/lib/zod/admissions"
+import type { AppliedRules, AdmissionProfileUpdate } from "@/lib/zod/admissions"
 
 // Internal interface for UI logic compatibility
 interface AdmissionCriterion {
@@ -23,7 +21,7 @@ interface AdmissionCriterion {
 }
 
 interface ScoresTabProps {
-  form: UseFormReturn<FieldValues>
+  form: UseFormReturn<AdmissionProfileUpdate>
   isEditable: boolean
   minGpa: number
   // Updated to match the actual AppliedRules type from backend/zod
@@ -173,7 +171,7 @@ export function ScoresTab({ form, isEditable, minGpa, appliedRules, profile }: S
   }, [selectedCriterionId, availableGroups, form, isEditable])
   
   // Validation
-  const currentGpa = gpa ? parseFloat(gpa) : 0
+  const currentGpa = gpa ? (typeof gpa === 'string' ? parseFloat(gpa) : gpa) : 0
   const minScore = selectedCriterion?.min_score || 0
   
   // Check if this is ONLY a GPA method (no subject groups) or also supports subject-based scoring
@@ -488,3 +486,4 @@ export function ScoresTab({ form, isEditable, minGpa, appliedRules, profile }: S
     </div>
   )
 }
+

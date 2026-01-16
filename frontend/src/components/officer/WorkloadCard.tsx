@@ -7,13 +7,13 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+// useMutation removed, useQueryClient kept if needed (but hook handles it)
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Briefcase, Users, CircleDot } from "lucide-react";
-import { api } from "@/lib/api/client";
+// officerApi removed
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -28,15 +28,10 @@ interface WorkloadCardProps {
   statusOverview: StatusOverview;
 }
 
-async function updateAvailability(status: string) {
-  const response = await api.post("/api/officer/availability", {
-    availability_status: status,
-  });
-  return response.data;
-}
+import { useOfficerAvailability } from "@/hooks/officer/useOfficerAvailability";
 
 export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
-  const queryClient = useQueryClient();
+
   // Derive isAvailable directly from props - avoids unnecessary sync with useEffect
   // Local state only tracks optimistic update during mutation
   const [optimisticAvailable, setOptimisticAvailable] = useState<boolean | null>(null);
@@ -44,25 +39,19 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
   // Use optimistic state during mutation, otherwise derive from props
   const isAvailable = optimisticAvailable ?? (statusOverview.availability_status === "available");
 
-  const mutation = useMutation({
-    mutationFn: updateAvailability,
-    onSuccess: (data) => {
-      // Clear optimistic state - let props drive the UI
-      setOptimisticAvailable(null);
-      queryClient.invalidateQueries({ queryKey: ["officer", "dashboard"] });
-      toast.success(`Đã cập nhật: ${data.availability_status === "available" ? "Sẵn sàng" : "Bận"}`);
-    },
-    onError: () => {
-      toast.error("Không thể cập nhật trạng thái");
-      // Revert optimistic state
-      setOptimisticAvailable(null);
-    },
-  });
+  const mutation = useOfficerAvailability();
 
   const handleAvailabilityToggle = (checked: boolean) => {
     // Set optimistic state for immediate UI feedback
     setOptimisticAvailable(checked);
-    mutation.mutate(checked ? "available" : "busy");
+    mutation.mutate(checked ? "available" : "busy", {
+      onSuccess: () => {
+        setOptimisticAvailable(null);
+      },
+      onError: () => {
+        setOptimisticAvailable(null);
+      }
+    });
   };
 
   const utilizationPercentage = statusOverview.utilization ?? 0;

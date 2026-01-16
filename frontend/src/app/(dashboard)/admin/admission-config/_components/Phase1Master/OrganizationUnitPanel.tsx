@@ -34,20 +34,14 @@ import {
 import type { 
   OrganizationUnit, 
   CRUDTableColumn, 
-  BaseFormData,
   OrganizationUnitCreate,
-  OrganizationUnitUpdate 
+  OrganizationUnitUpdate,
+  OrganizationUnitFormValues
 } from "../shared/types";
 
 // ============================================
 // TYPES
 // ============================================
-
-// Extended form data type for organization units
-interface OrgUnitFormData extends BaseFormData {
-  type?: string;
-  parent_id?: number | null;
-}
 
 // Extended OrganizationUnit with level for tree rendering
 type FlattenedOrgUnit = OrganizationUnit & { level: number };
@@ -156,34 +150,33 @@ export function OrganizationUnitPanel() {
     { key: "is_active", header: "Status", width: "100px" },
   ];
 
-  const mapItemToFormData = (item: OrganizationUnit): OrgUnitFormData => {
+  const mapItemToFormData = (item: OrganizationUnit): OrganizationUnitFormValues => {
     return {
       name: item.name,
       description: item.description || "",
       is_active: item.is_active,
       type: item.type,
-      parent_id: item.parent_id,
+      parent_id: item.parent_id || null,
     };
   };
 
-  const handleCreate = async (formData: BaseFormData) => {
-    const orgFormData = formData as OrgUnitFormData;
+  const handleCreate = async (formData: OrganizationUnitFormValues) => {
     const payload: OrganizationUnitCreate = {
-      name: orgFormData.name || "",
-      type: orgFormData.type || "",
-      description: orgFormData.description || null,
-      parent_id: orgFormData.parent_id || null,
+      name: formData.name,
+      type: formData.type,
+      description: formData.description || null,
+      parent_id: formData.parent_id || null,
     };
     await createMutation.mutateAsync(payload);
   };
 
-  const handleUpdate = async (id: number, formData: BaseFormData) => {
-    const orgFormData = formData as OrgUnitFormData;
+  const handleUpdate = async (id: number, formData: OrganizationUnitFormValues) => {
     const payload: OrganizationUnitUpdate = {
-      name: orgFormData.name,
-      type: orgFormData.type,
-      description: orgFormData.description || null,
-      parent_id: orgFormData.parent_id ?? null,
+      name: formData.name,
+      type: formData.type,
+      description: formData.description || null,
+      parent_id: formData.parent_id ?? null,
+      is_active: formData.is_active,
     };
     await updateMutation.mutateAsync({ id, data: payload });
   };
@@ -194,14 +187,12 @@ export function OrganizationUnitPanel() {
 
   const renderForm = (
     item: OrganizationUnit | null,
-    formData: BaseFormData,
-    setFormData: (data: BaseFormData) => void,
+    formData: OrganizationUnitFormValues,
+    setFormData: (data: OrganizationUnitFormValues) => void,
     _isEdit: boolean
   ) => {
-    const orgFormData = formData as OrgUnitFormData;
-    
-    const updateForm = (updates: Partial<OrgUnitFormData>) => {
-      setFormData({ ...orgFormData, ...updates });
+    const updateForm = (updates: Partial<OrganizationUnitFormValues>) => {
+      setFormData({ ...formData, ...updates });
     };
 
     return (
@@ -212,7 +203,7 @@ export function OrganizationUnitPanel() {
           </Label>
           <Input
             id="name"
-            value={orgFormData.name || ""}
+            value={formData.name || ""}
             onChange={(e) => updateForm({ name: e.target.value })}
             placeholder="Ví dụ: Khoa Công nghệ Thông tin"
             required
@@ -224,7 +215,7 @@ export function OrganizationUnitPanel() {
             Loại hình <span className="text-destructive">*</span>
           </Label>
           <Select
-            value={orgFormData.type || ""}
+            value={formData.type || ""}
             onValueChange={(value) => updateForm({ type: value })}
           >
             <SelectTrigger id="type">
@@ -246,7 +237,7 @@ export function OrganizationUnitPanel() {
         <div className="space-y-2">
           <Label htmlFor="parent_id">Đơn vị cấp trên (Tùy chọn)</Label>
           <SmartUnitSelector
-            value={orgFormData.parent_id?.toString()}
+            value={formData.parent_id?.toString()}
             onChange={(value) => updateForm({ parent_id: value ? parseInt(value) : null })}
             placeholder="Không có (Đơn vị cấp cao nhất)"
             allowNone={true}
@@ -264,7 +255,7 @@ export function OrganizationUnitPanel() {
           <Label htmlFor="description">Mô tả</Label>
           <Textarea
             id="description"
-            value={orgFormData.description || ""}
+            value={formData.description || ""}
             onChange={(e) => updateForm({ description: e.target.value })}
             placeholder="Mô tả tóm tắt về đơn vị"
             rows={3}
@@ -274,11 +265,12 @@ export function OrganizationUnitPanel() {
     );
   };
 
-  const initialFormData = (): OrgUnitFormData => ({
+  const initialFormData = (): OrganizationUnitFormValues => ({
     name: "",
     type: "",
     description: "",
     parent_id: null,
+    is_active: true,
   });
 
   return (
@@ -290,7 +282,7 @@ export function OrganizationUnitPanel() {
         </p>
       </div>
 
-      <CRUDTable<FlattenedOrgUnit>
+      <CRUDTable<FlattenedOrgUnit, OrganizationUnitFormValues>
         title="Đơn vị"
         description="Khoa, phòng ban và các đơn vị khác"
         icon={<Building2 className="h-5 w-5 text-primary" />}

@@ -19,8 +19,16 @@ import type {
   ConsultationUpdate,
   TimelineItem,
   LeadInsights,
+
   LeadImportResult,
 } from '@/types/lead.types'
+
+export interface ReassignQuota {
+  remaining_today: number;
+  max_per_day: number;
+  used_today: number;
+  reset_time: string;
+}
 
 // ============================================
 // LEAD CRUD OPERATIONS
@@ -121,6 +129,14 @@ export async function assignLead(
   data: AssignLead
 ): Promise<Lead> {
   const response = await api.post<Lead>(`/api/leads/${leadId}/assign`, data)
+  return response.data
+}
+
+/**
+ * Get reassign quota for current user
+ */
+export async function getReassignQuota(): Promise<ReassignQuota> {
+  const response = await api.get<ReassignQuota>('/api/leads/reassign-quota')
   return response.data
 }
 
@@ -268,7 +284,7 @@ export async function addConsultation(
 }
 
 /**
- * Update consultation (admin: any, officer: most recent only)
+ * Update consultation (admin: all, officer: most recent only)
  *
  * @throws {AxiosError} 404 if not found, 403 if no permission
  */
@@ -285,7 +301,7 @@ export async function updateConsultation(
 }
 
 /**
- * Delete consultation (admin: any, officer: most recent only)
+ * Delete consultation (admin: all, officer: most recent only)
  *
  * @throws {AxiosError} 404 if not found, 403 if no permission
  */
@@ -456,6 +472,7 @@ export const leadsApi = {
   // Assignment
   assignLead,
   bulkAssignLeads,
+  getReassignQuota,
   bulkUpdateLeadsStage,
   bulkDeleteLeads,
 

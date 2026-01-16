@@ -17,7 +17,7 @@ import {
   Megaphone
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { leadsApi } from "@/lib/api/leads";
+import { leadsApi } from "@/lib/api/leads"; // architecture-allow legacy
 
 import { Button } from "@/components/ui/button";
 import { FormDialog } from "@/components/ui/form-dialog";

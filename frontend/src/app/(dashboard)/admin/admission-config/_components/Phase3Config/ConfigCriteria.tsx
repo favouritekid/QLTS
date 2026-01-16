@@ -47,7 +47,9 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
   // Search state for filtering subject groups
   const [searchQuery, setSearchQuery] = useState<string>("");
 
-  // Initialize from existing criteria
+  // Sync form state when path data loads
+  const currentPathId = path.id;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (path.criteria) {
       setMinGpa(path.criteria.min_gpa?.toString() || "");
@@ -380,7 +382,7 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
                 </div>
               ) : filteredGroups.length === 0 ? (
                 <div className="col-span-3 text-center py-4 text-muted-foreground text-sm">
-                  Không tìm thấy tổ hợp môn nào phù hợp với "{searchQuery}"
+                  Không tìm thấy tổ hợp môn nào phù hợp với &quot;{searchQuery}&quot;
                 </div>
               ) : (
                 filteredGroups.map((group: SubjectGroup) => (

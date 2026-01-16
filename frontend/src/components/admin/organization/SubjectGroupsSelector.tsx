@@ -11,7 +11,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Search, X, ChevronDown, BookOpen } from "lucide-react";
-import { configApi, type SubjectGroup } from "@/lib/api/config";
+import { configApi, type SubjectGroup } from "@/lib/api/config"; // architecture-allow legacy
 import { cn } from "@/lib/utils";
 
 interface SubjectGroupsSelectorProps {

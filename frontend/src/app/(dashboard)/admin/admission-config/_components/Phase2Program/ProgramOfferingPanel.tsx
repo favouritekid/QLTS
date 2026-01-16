@@ -20,12 +20,12 @@ import { CRUDTable } from "../shared/CRUDTable";
 import type { 
   ProgramOffering, 
   CRUDTableColumn, 
-  BaseFormData,
   ScoringRules,
   MajorProgram,
   OfferingType,
   ProgramOfferingCreate,
-  ProgramOfferingUpdate
+  ProgramOfferingUpdate,
+  ProgramOfferingFormValues
 } from "../shared/types";
 import {
   useProgramOfferings,
@@ -40,14 +40,7 @@ import { useOfferingTypes } from "@/hooks/admissions/useMasterData";
 // TYPES
 // ============================================
 
-// Extended form data type for program offerings
-interface OfferingFormData extends BaseFormData {
-  program_id?: number | null;
-  offering_type_id?: number | null;
-  duration_semesters?: number;
-  total_credits?: number;
-  scoring_rules?: ScoringRules;
-}
+// Use ProgramOfferingFormValues directly
 
 // ============================================
 // CONSTANTS
@@ -129,8 +122,8 @@ export function ProgramOfferingPanel() {
     return col;
   });
 
-  const handleCreate = async (formData: BaseFormData) => {
-    const ofFormData = formData as OfferingFormData;
+  const handleCreate = async (formData: ProgramOfferingFormValues) => {
+    const ofFormData = formData;
     const offeringType = offeringTypes.find((t: OfferingType) => t.id === ofFormData.offering_type_id);
     if (!offeringType) {
       throw new Error("Please select a valid offering type");
@@ -148,8 +141,8 @@ export function ProgramOfferingPanel() {
     await createMutation.mutateAsync(payload);
   };
 
-  const handleUpdate = async (id: number, formData: BaseFormData) => {
-    const ofFormData = formData as OfferingFormData;
+  const handleUpdate = async (id: number, formData: ProgramOfferingFormValues) => {
+    const ofFormData = formData;
     const payload: ProgramOfferingUpdate = {
       duration_semesters: ofFormData.duration_semesters,
       total_credits: ofFormData.total_credits,
@@ -166,13 +159,13 @@ export function ProgramOfferingPanel() {
 
   const renderForm = (
     _item: ProgramOffering | null,
-    formData: BaseFormData,
-    setFormData: (data: BaseFormData) => void,
+    formData: ProgramOfferingFormValues,
+    setFormData: (data: ProgramOfferingFormValues) => void,
     _isEdit: boolean
   ) => {
-    const ofFormData = formData as OfferingFormData;
+    const ofFormData = formData;
     
-    const updateForm = (updates: Partial<OfferingFormData>) => {
+    const updateForm = (updates: Partial<ProgramOfferingFormValues>) => {
       setFormData({ ...ofFormData, ...updates });
     };
 
@@ -351,21 +344,25 @@ export function ProgramOfferingPanel() {
     );
   };
 
-  const initialFormData = (): OfferingFormData => ({
+  const initialFormData = (): ProgramOfferingFormValues => ({
     program_id: null,
     offering_type_id: null,
+    duration_semesters: 8,
+    total_credits: 120,
+    scoring_rules: {},
+    is_active: true,
   });
 
-  const mapItemToFormData = (item: ProgramOffering): OfferingFormData => {
+  const mapItemToFormData = (item: ProgramOffering): ProgramOfferingFormValues => {
     const offeringType = offeringTypes.find((t: OfferingType) => t.name === item.offering_type);
 
     return {
       program_id: item.program_id,
       offering_type_id: offeringType?.id || null,
       is_active: item.is_active,
-      duration_semesters: item.duration_semesters,
-      total_credits: item.total_credits,
-      scoring_rules: item.scoring_rules,
+      duration_semesters: item.duration_semesters || 8,
+      total_credits: item.total_credits || 120,
+      scoring_rules: item.scoring_rules || {},
     };
   };
 
@@ -392,7 +389,7 @@ export function ProgramOfferingPanel() {
         </div>
       )}
 
-      <CRUDTable<ProgramOffering>
+      <CRUDTable<ProgramOffering, ProgramOfferingFormValues>
         title="Chương trình Tuyển sinh"
         description="Kết hợp giữa ngành và hệ đào tạo"
         icon={<BookOpen className="h-5 w-5 text-primary" />}

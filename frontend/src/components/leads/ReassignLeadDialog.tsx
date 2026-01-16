@@ -1,5 +1,7 @@
 "use client";
 
+import type { Lead } from "@/types/lead.types";
+
 import { useState } from "react";
 import {
   Dialog,
@@ -21,11 +23,10 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { AlertCircle, RefreshCcw, Loader2 } from "lucide-react";
-import { usePerformLeadAction } from "@/hooks/useLeads";
+import { usePerformLeadAction, useReassignQuota } from "@/hooks/useLeads";
 import { useAuth } from "@/hooks/useAuth";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api/client";
-import type { Lead } from "@/types/lead.types";
+// useQuery removed
+// leadsApi removed
 
 // ============================================================================
 // CONSTANTS
@@ -59,28 +60,13 @@ interface ReassignLeadDialogProps {
   onSuccess?: () => void;
 }
 
-interface ReassignQuota {
-  allowed: boolean;
-  used: number;
-  limit: number;
-  remaining: number;
-}
+
 
 // ============================================================================
 // HOOKS
 // ============================================================================
 
-function useReassignQuota(enabled: boolean = true) {
-  return useQuery<ReassignQuota>({
-    queryKey: ["reassign-quota"],
-    queryFn: async () => {
-      const response = await api.get<ReassignQuota>("/api/leads/my/reassign-quota");
-      return response.data;
-    },
-    staleTime: 1000 * 60, // 1 minute
-    enabled, // Only fetch when enabled (for officers only)
-  });
-}
+// Local hook removed, using imported one
 
 // ============================================================================
 // COMPONENT
@@ -130,7 +116,7 @@ export function ReassignLeadDialog({
   };
   
   const canSubmit = selectedReason && (selectedReason !== "other" || customReason.trim());
-  const quotaExceeded = !isAdmin && quota && !quota.allowed;
+  const quotaExceeded = !isAdmin && quota && quota.remaining_today <= 0;
   
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -161,8 +147,8 @@ export function ReassignLeadDialog({
               {quotaLoading ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : quota ? (
-                <Badge variant={quota.remaining > 0 ? "secondary" : "destructive"}>
-                  {quota.remaining}/{quota.limit}
+                <Badge variant={quota.remaining_today > 0 ? "secondary" : "destructive"}>
+                  {quota.remaining_today}/{quota.max_per_day}
                 </Badge>
               ) : null}
             </div>

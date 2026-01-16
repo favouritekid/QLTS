@@ -11,7 +11,7 @@
 
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { Calendar, Pencil, Trash2, Plus, Loader2, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -172,7 +172,7 @@ export function AcademicInfoPanel() {
     await deleteMutation.mutateAsync(id);
   };
 
-  const getOfferingDisplay = (offeringId: number) => {
+  const getOfferingDisplay = useCallback((offeringId: number) => {
     const offering = offerings.find((o: ProgramOffering) => o.id === offeringId);
 
     if (!offering) {
@@ -196,7 +196,7 @@ export function AcademicInfoPanel() {
       offeringType,
       degreeLevel,
     };
-  };
+  }, [offerings]);
 
   const formatCurrency = (amount: number | undefined) => {
     if (!amount) return "—";
@@ -223,7 +223,7 @@ export function AcademicInfoPanel() {
       // Finally by academic year (descending - newest first)
       return b.academic_year - a.academic_year;
     });
-  }, [data, offerings]);
+  }, [data, getOfferingDisplay]);
 
   const { navigate } = useAdmissionConfigState();
 

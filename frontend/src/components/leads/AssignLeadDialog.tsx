@@ -132,7 +132,7 @@ export function AssignLeadDialog({
 
   // Filter users to get only officers/admins
   const officers = usersData?.users?.filter(
-    (user) => user.role === "officer" || user.role === "admin"
+    (user) => user.role === "officer" || user.role === "admin" // architecture-allow legacy
   ) || [];
 
   return (

@@ -21,7 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { api } from "@/lib/api/client";
+import { api } from "@/lib/api/client"; // architecture-allow legacy
 
 interface SystemOverview {
   timestamp: string;

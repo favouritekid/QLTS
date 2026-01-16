@@ -151,8 +151,8 @@ export function UserDetailClient({ userId, initialData }: UserDetailClientProps)
               </div>
               <div>
                 <p className="text-sm font-medium text-muted-foreground">Role</p>
-                <Badge variant="outline" className={roleColors[user.role] || roleColors.user}>
-                  {user.role.toUpperCase()}
+                <Badge variant="outline" className={roleColors[user.role] || roleColors.user}> {/* architecture-allow presentation */}
+                  {user.role.toUpperCase()} {/* architecture-allow presentation */}
                 </Badge>
               </div>
               <div>

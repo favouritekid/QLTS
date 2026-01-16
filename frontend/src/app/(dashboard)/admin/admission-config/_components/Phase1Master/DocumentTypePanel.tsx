@@ -20,7 +20,13 @@ import {
   useUpdateDocumentType,
   useDeleteDocumentType,
 } from "@/hooks/admissions/useMasterData";
-import type { DocumentType, CRUDTableColumn, BaseFormData } from "../shared/types";
+import type { 
+  DocumentType, 
+  CRUDTableColumn, 
+  DocumentTypeCreate,
+  DocumentTypeUpdate,
+  DocumentTypeFormValues 
+} from "../shared/types";
 
 // ============================================
 // CONSTANTS
@@ -40,14 +46,25 @@ export function DocumentTypePanel() {
   const updateMutation = useUpdateDocumentType();
   const deleteMutation = useDeleteDocumentType();
 
-  // ... handlers ...
-
-  const handleCreate = async (formData: BaseFormData) => {
-    await createMutation.mutateAsync(formData as unknown as Parameters<typeof createMutation.mutateAsync>[0]);
+  const handleCreate = async (formData: DocumentTypeFormValues) => {
+    const payload: DocumentTypeCreate = {
+      code: formData.code,
+      name: formData.name,
+      description: formData.description,
+      display_order: formData.display_order,
+      is_active: formData.is_active,
+    };
+    await createMutation.mutateAsync(payload);
   };
 
-  const handleUpdate = async (id: number, formData: BaseFormData) => {
-    await updateMutation.mutateAsync({ id, data: formData as unknown as Parameters<typeof updateMutation.mutateAsync>[0]["data"] });
+  const handleUpdate = async (id: number, formData: DocumentTypeFormValues) => {
+    const payload: DocumentTypeUpdate = {
+      name: formData.name,
+      description: formData.description,
+      display_order: formData.display_order,
+      is_active: formData.is_active,
+    };
+    await updateMutation.mutateAsync({ id, data: payload });
   };
 
   const handleDelete = async (id: number) => {
@@ -56,11 +73,10 @@ export function DocumentTypePanel() {
 
   const renderForm = (
     item: DocumentType | null,
-    formData: BaseFormData,
-    setFormData: (data: BaseFormData) => void,
+    formData: DocumentTypeFormValues,
+    setFormData: (data: DocumentTypeFormValues) => void,
     isEdit: boolean
   ) => {
-    // ... renderForm content (omitted for brevity, assume keeping existing logic) ...
     return (
       <div className="space-y-4">
         <div className="space-y-2">
@@ -123,12 +139,23 @@ export function DocumentTypePanel() {
     );
   };
 
-  const initialFormData = () => ({
+  const initialFormData = (): DocumentTypeFormValues => ({
     code: "",
     name: "",
     description: "",
     display_order: data.length + 1,
+    is_active: true,
   });
+
+  const mapItemToFormData = (item: DocumentType): DocumentTypeFormValues => {
+    return {
+      code: item.code,
+      name: item.name,
+      description: item.description || "",
+      display_order: item.display_order,
+      is_active: item.is_active,
+    };
+  };
 
   return (
     <div className="space-y-6">
@@ -146,7 +173,7 @@ export function DocumentTypePanel() {
         </TabsList>
         
         <TabsContent value="types">
-          <CRUDTable<DocumentType>
+          <CRUDTable<DocumentType, DocumentTypeFormValues>
             title="Loại Giấy tờ"
             description="Các loại giấy tờ cần thiết cho hồ sơ xét tuyển"
             icon={<FileText className="h-5 w-5 text-primary" />}
@@ -158,6 +185,7 @@ export function DocumentTypePanel() {
             onDelete={handleDelete}
             renderForm={renderForm}
             initialFormData={initialFormData}
+            mapItemToFormData={mapItemToFormData}
           />
         </TabsContent>
         

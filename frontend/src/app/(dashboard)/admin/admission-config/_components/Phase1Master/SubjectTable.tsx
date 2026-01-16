@@ -16,7 +16,13 @@ import {
   useUpdateSubject,
   useDeleteSubject,
 } from "@/hooks/admissions/useMasterData";
-import type { Subject, CRUDTableColumn, BaseFormData } from "../shared/types";
+import type { 
+  Subject, 
+  CRUDTableColumn, 
+  SubjectCreate,
+  SubjectUpdate,
+  SubjectFormValues 
+} from "../shared/types";
 
 // ============================================
 // CONSTANTS
@@ -39,12 +45,25 @@ export function SubjectTable() {
   const updateMutation = useUpdateSubject();
   const deleteMutation = useDeleteSubject();
 
-  const handleCreate = async (formData: BaseFormData) => {
-    await createMutation.mutateAsync(formData as unknown as Parameters<typeof createMutation.mutateAsync>[0]);
+  const handleCreate = async (formData: SubjectFormValues) => {
+    const payload: SubjectCreate = {
+      code: formData.code,
+      name_vi: formData.name_vi,
+      name_en: formData.name_en,
+      display_order: formData.display_order,
+      is_active: formData.is_active,
+    };
+    await createMutation.mutateAsync(payload);
   };
 
-  const handleUpdate = async (id: number, formData: BaseFormData) => {
-    await updateMutation.mutateAsync({ id, data: formData as unknown as Parameters<typeof updateMutation.mutateAsync>[0]["data"] });
+  const handleUpdate = async (id: number, formData: SubjectFormValues) => {
+    const payload: SubjectUpdate = {
+      name_vi: formData.name_vi,
+      name_en: formData.name_en,
+      display_order: formData.display_order,
+      is_active: formData.is_active,
+    };
+    await updateMutation.mutateAsync({ id, data: payload });
   };
 
   const handleDelete = async (id: number) => {
@@ -53,8 +72,8 @@ export function SubjectTable() {
 
   const renderForm = (
     item: Subject | null,
-    formData: BaseFormData,
-    setFormData: (data: BaseFormData) => void,
+    formData: SubjectFormValues,
+    setFormData: (data: SubjectFormValues) => void,
     isEdit: boolean
   ) => {
     return (
@@ -107,14 +126,15 @@ export function SubjectTable() {
     );
   };
 
-  const initialFormData = () => ({
+  const initialFormData = (): SubjectFormValues => ({
     code: "",
     name_vi: "",
     name_en: "",
     display_order: data.length + 1,
+    is_active: true,
   });
 
-  const mapItemToFormData = (item: Subject) => ({
+  const mapItemToFormData = (item: Subject): SubjectFormValues => ({
     code: item.code,
     name_vi: item.name_vi,
     name_en: item.name_en || "",
@@ -123,7 +143,7 @@ export function SubjectTable() {
   });
 
   return (
-    <CRUDTable
+    <CRUDTable<Subject, SubjectFormValues>
       title="Môn học"
       description="Danh sách các môn học (Toán, Lý, Hóa...)"
       icon={<BookOpen className="h-5 w-5 text-primary" />}

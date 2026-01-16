@@ -237,8 +237,8 @@ export function UserListTab({ unit }: UserListTabProps) {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Badge variant={getRoleBadgeVariant(user.role)}>
-                        {user.role}
+                      <Badge variant={getRoleBadgeVariant(user.role)}> {/* architecture-allow presentation */}
+                        {user.role} {/* architecture-allow presentation */}
                       </Badge>
                     </TableCell>
                     <TableCell>

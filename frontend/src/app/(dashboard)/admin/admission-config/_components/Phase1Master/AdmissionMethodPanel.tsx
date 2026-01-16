@@ -19,7 +19,13 @@ import {
   useUpdateAdmissionMethod,
   useDeleteAdmissionMethod,
 } from "@/hooks/admissions/useMasterData";
-import type { AdmissionMethod, CRUDTableColumn, BaseFormData } from "../shared/types";
+import type { 
+  AdmissionMethod, 
+  CRUDTableColumn, 
+  AdmissionMethodCreate,
+  AdmissionMethodUpdate,
+  AdmissionMethodFormValues 
+} from "../shared/types";
 
 // ============================================
 // CONSTANTS
@@ -54,12 +60,29 @@ export function AdmissionMethodPanel() {
   const updateMutation = useUpdateAdmissionMethod();
   const deleteMutation = useDeleteAdmissionMethod();
 
-  const handleCreate = async (formData: BaseFormData) => {
-    await createMutation.mutateAsync(formData as unknown as Parameters<typeof createMutation.mutateAsync>[0]);
+  const handleCreate = async (formData: AdmissionMethodFormValues) => {
+    const payload: AdmissionMethodCreate = {
+      code: formData.code,
+      name: formData.name,
+      description: formData.description,
+      requires_gpa: formData.requires_gpa,
+      requires_subject_scores: formData.requires_subject_scores,
+      display_order: formData.display_order,
+      is_active: formData.is_active,
+    };
+    await createMutation.mutateAsync(payload);
   };
 
-  const handleUpdate = async (id: number, formData: BaseFormData) => {
-    await updateMutation.mutateAsync({ id, data: formData as unknown as Parameters<typeof updateMutation.mutateAsync>[0]["data"] });
+  const handleUpdate = async (id: number, formData: AdmissionMethodFormValues) => {
+    const payload: AdmissionMethodUpdate = {
+      name: formData.name,
+      description: formData.description,
+      requires_gpa: formData.requires_gpa,
+      requires_subject_scores: formData.requires_subject_scores,
+      display_order: formData.display_order,
+      is_active: formData.is_active,
+    };
+    await updateMutation.mutateAsync({ id, data: payload });
   };
 
   const handleDelete = async (id: number) => {
@@ -68,8 +91,8 @@ export function AdmissionMethodPanel() {
 
   const renderForm = (
     item: AdmissionMethod | null,
-    formData: BaseFormData,
-    setFormData: (data: BaseFormData) => void,
+    formData: AdmissionMethodFormValues,
+    setFormData: (data: AdmissionMethodFormValues) => void,
     isEdit: boolean
   ) => {
     return (
@@ -121,7 +144,7 @@ export function AdmissionMethodPanel() {
           <div className="flex items-center space-x-2">
             <Checkbox
               id="requires_gpa"
-              checked={formData.requires_gpa || false}
+              checked={formData.requires_gpa}
               onCheckedChange={(checked) =>
                 setFormData({ ...formData, requires_gpa: checked === true })
               }
@@ -142,7 +165,7 @@ export function AdmissionMethodPanel() {
           <div className="flex items-center space-x-2">
             <Checkbox
               id="requires_subject_scores"
-              checked={formData.requires_subject_scores || false}
+              checked={formData.requires_subject_scores}
               onCheckedChange={(checked) =>
                 setFormData({ ...formData, requires_subject_scores: checked === true })
               }
@@ -177,16 +200,17 @@ export function AdmissionMethodPanel() {
     );
   };
 
-  const initialFormData = () => ({
+  const initialFormData = (): AdmissionMethodFormValues => ({
     code: "",
     name: "",
     description: "",
     requires_gpa: false,
     requires_subject_scores: false,
     display_order: data.length + 1,
+    is_active: true,
   });
 
-  const mapItemToFormData = (item: AdmissionMethod): BaseFormData => {
+  const mapItemToFormData = (item: AdmissionMethod): AdmissionMethodFormValues => {
     return {
       code: item.code,
       name: item.name,
@@ -207,7 +231,7 @@ export function AdmissionMethodPanel() {
         </p>
       </div>
 
-      <CRUDTable<AdmissionMethod>
+      <CRUDTable<AdmissionMethod, AdmissionMethodFormValues>
         title="Phương thức"
         description="Các hình thức xét tuyển của nhà trường"
         icon={<GraduationCap className="h-5 w-5 text-primary" />}

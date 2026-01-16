@@ -17,7 +17,13 @@ import {
   useUpdateSubjectGroup,
   useDeleteSubjectGroup,
 } from "@/hooks/admissions/useMasterData";
-import type { SubjectGroup, CRUDTableColumn, BaseFormData } from "../shared/types";
+import type { 
+  SubjectGroup, 
+  CRUDTableColumn, 
+  SubjectGroupCreate,
+  SubjectGroupUpdate,
+  SubjectGroupFormValues 
+} from "../shared/types";
 
 // ============================================
 // CONSTANTS
@@ -63,12 +69,25 @@ export function SubjectGroupTable() {
   const updateMutation = useUpdateSubjectGroup();
   const deleteMutation = useDeleteSubjectGroup();
 
-  const handleCreate = async (formData: BaseFormData) => {
-    await createMutation.mutateAsync(formData as unknown as Parameters<typeof createMutation.mutateAsync>[0]);
+  const handleCreate = async (formData: SubjectGroupFormValues) => {
+    const payload: SubjectGroupCreate = {
+      code: formData.code,
+      name: formData.name,
+      description: formData.description,
+      display_order: formData.display_order,
+      is_active: formData.is_active,
+    };
+    await createMutation.mutateAsync(payload);
   };
 
-  const handleUpdate = async (id: number, formData: BaseFormData) => {
-    await updateMutation.mutateAsync({ id, data: formData as unknown as Parameters<typeof updateMutation.mutateAsync>[0]["data"] });
+  const handleUpdate = async (id: number, formData: SubjectGroupFormValues) => {
+    const payload: SubjectGroupUpdate = {
+      name: formData.name,
+      description: formData.description,
+      display_order: formData.display_order,
+      is_active: formData.is_active,
+    };
+    await updateMutation.mutateAsync({ id, data: payload });
   };
 
   const handleDelete = async (id: number) => {
@@ -77,8 +96,8 @@ export function SubjectGroupTable() {
 
   const renderForm = (
     item: SubjectGroup | null,
-    formData: BaseFormData,
-    setFormData: (data: BaseFormData) => void,
+    formData: SubjectGroupFormValues,
+    setFormData: (data: SubjectGroupFormValues) => void,
     isEdit: boolean
   ) => {
     return (
@@ -147,15 +166,26 @@ export function SubjectGroupTable() {
     );
   };
 
-  const initialFormData = () => ({
+  const initialFormData = (): SubjectGroupFormValues => ({
     code: "",
     name: "",
     description: "",
     display_order: data.length + 1,
+    is_active: true,
   });
 
+  const mapItemToFormData = (item: SubjectGroup): SubjectGroupFormValues => {
+    return {
+      code: item.code,
+      name: item.name,
+      description: item.description || "",
+      display_order: item.display_order,
+      is_active: item.is_active,
+    };
+  };
+
   return (
-    <CRUDTable
+    <CRUDTable<SubjectGroup, SubjectGroupFormValues>
       title="Tổ hợp môn"
       description="Các tổ hợp môn xét tuyển (A00, A01, D01...)"
       icon={<Users className="h-5 w-5 text-primary" />}
@@ -167,6 +197,7 @@ export function SubjectGroupTable() {
       onDelete={handleDelete}
       renderForm={renderForm}
       initialFormData={initialFormData}
+      mapItemToFormData={mapItemToFormData}
     />
   );
 }

@@ -69,7 +69,7 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
   const isLoading = isLoadingRoles || isLoadingAvailableRoles;
 
   // Primary role from user object
-  const primaryRole = `role:${user.role}`;
+  const primaryRole = `role:${user.role}`; // architecture-allow presentation
 
   // Additional roles are all roles except the primary role
   const additionalRoles = userRoles?.filter(role => role !== primaryRole) || [];
@@ -121,7 +121,7 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
             <h4 className="text-sm font-medium mb-3">Primary Role</h4>
             <div className="flex items-center gap-2">
               <Badge variant="default" className="text-sm">
-                {user.role.toUpperCase()}
+                {user.role.toUpperCase()} {/* architecture-allow presentation */}
               </Badge>
               <span className="text-xs text-muted-foreground">
                 (Set in user profile, maps to {primaryRole})

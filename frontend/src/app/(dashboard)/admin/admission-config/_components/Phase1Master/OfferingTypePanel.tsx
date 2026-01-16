@@ -17,22 +17,13 @@ import {
   useUpdateOfferingType,
   useDeleteOfferingType,
 } from "@/hooks/admissions/useMasterData";
-import type { OfferingType, CRUDTableColumn, BaseFormData } from "../shared/types";
-
-// Payload types for mutations
-interface OfferingTypeCreate {
-  code: string;
-  name: string;
-  display_order: number;
-  is_active: boolean;
-}
-
-interface OfferingTypeUpdate {
-  code?: string;
-  name?: string;
-  display_order?: number;
-  is_active?: boolean;
-}
+import type { 
+  OfferingType, 
+  CRUDTableColumn, 
+  OfferingTypeCreate,
+  OfferingTypeUpdate,
+  OfferingTypeFormValues 
+} from "../shared/types";
 
 // ============================================
 // CONSTANTS
@@ -55,26 +46,25 @@ export function OfferingTypePanel() {
   const updateMutation = useUpdateOfferingType();
   const deleteMutation = useDeleteOfferingType();
 
-  const handleCreate = async (formData: BaseFormData) => {
+  const handleCreate = async (formData: OfferingTypeFormValues) => {
     // Transform to match backend ConfigOfferingTypeCreate schema
-    const payload = {
+    const payload: OfferingTypeCreate = {
       code: formData.code,
       name: formData.name,
       display_order: formData.display_order || 0,
-      is_active: formData.is_active !== undefined ? formData.is_active : true,
+      is_active: formData.is_active,
     };
-    await createMutation.mutateAsync(payload as OfferingTypeCreate);
+    await createMutation.mutateAsync(payload);
   };
 
-  const handleUpdate = async (id: number, formData: BaseFormData) => {
+  const handleUpdate = async (id: number, formData: OfferingTypeFormValues) => {
     // Transform to match backend ConfigOfferingTypeUpdate schema
-    const payload = {
-      code: formData.code,
+    const payload: OfferingTypeUpdate = {
       name: formData.name,
       display_order: formData.display_order,
       is_active: formData.is_active,
     };
-    await updateMutation.mutateAsync({ id, data: payload as OfferingTypeUpdate });
+    await updateMutation.mutateAsync({ id, data: payload });
   };
 
   const handleDelete = async (id: number) => {
@@ -83,8 +73,8 @@ export function OfferingTypePanel() {
 
   const renderForm = (
     item: OfferingType | null,
-    formData: BaseFormData,
-    setFormData: (data: BaseFormData) => void,
+    formData: OfferingTypeFormValues,
+    setFormData: (data: OfferingTypeFormValues) => void,
     isEdit: boolean
   ) => {
     return (
@@ -138,11 +128,21 @@ export function OfferingTypePanel() {
     );
   };
 
-  const initialFormData = () => ({
+  const initialFormData = (): OfferingTypeFormValues => ({
     code: "",
     name: "",
     display_order: data.length + 1,
+    is_active: true,
   });
+
+  const mapItemToFormData = (item: OfferingType): OfferingTypeFormValues => {
+    return {
+      code: item.code,
+      name: item.name,
+      display_order: item.display_order,
+      is_active: item.is_active,
+    };
+  };
 
   return (
     <div className="space-y-6">
@@ -153,7 +153,7 @@ export function OfferingTypePanel() {
         </p>
       </div>
 
-      <CRUDTable<OfferingType>
+      <CRUDTable<OfferingType, OfferingTypeFormValues>
         title="Loại hình"
         description="Các hình thức đào tạo của nhà trường"
         icon={<Layers className="h-5 w-5 text-primary" />}
@@ -165,6 +165,7 @@ export function OfferingTypePanel() {
         onDelete={handleDelete}
         renderForm={renderForm}
         initialFormData={initialFormData}
+        mapItemToFormData={mapItemToFormData}
       />
     </div>
   );

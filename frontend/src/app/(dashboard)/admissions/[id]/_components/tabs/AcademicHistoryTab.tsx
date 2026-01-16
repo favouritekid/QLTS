@@ -6,16 +6,17 @@
  * Dynamic form for managing school records.
  */
 
-import { useFieldArray, UseFormReturn, FieldValues } from "react-hook-form"
+import { useFieldArray, UseFormReturn } from "react-hook-form"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Plus, Trash2, GraduationCap } from "lucide-react"
+import type { AdmissionProfileUpdate } from "@/lib/zod/admissions"
 
 interface AcademicHistoryTabProps {
-  form: UseFormReturn<FieldValues>
+  form: UseFormReturn<AdmissionProfileUpdate>
   isEditable: boolean
 }
 

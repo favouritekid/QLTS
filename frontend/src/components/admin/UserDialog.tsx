@@ -2,7 +2,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useMemo } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { Camera, Loader2 } from "lucide-react";
@@ -90,6 +90,17 @@ const editUserSchema = z.object({
 type CreateUserFormValues = z.infer<typeof createUserSchema>;
 type EditUserFormValues = z.infer<typeof editUserSchema>;
 
+type UserFormValues = {
+  username?: string;
+  email: string;
+  password?: string;
+  full_name?: string;
+  phone_number?: string;
+  role: string;
+  status: "active" | "pending" | "banned";
+  avatar?: File;
+};
+
 interface UserDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -118,17 +129,15 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
       .sort(); // Sort alphabetically
   }, [rolesData]);
 
-  // Form setup - use conditional type based on mode
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const form = useForm<any>({
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    resolver: zodResolver(isCreate ? createUserSchema : editUserSchema) as any,
+  // Form setup - use unified types to avoid union type issues with react-hook-form
+  const form = useForm<UserFormValues>({
+    resolver: zodResolver(isCreate ? createUserSchema : editUserSchema) as Resolver<UserFormValues>,
     defaultValues: isEdit && user
       ? {
           full_name: user.full_name || "",
           email: user.email,
           phone_number: user.phone_number || "",
-          role: user.role,
+          role: user.role, // architecture-allow serialization
           status: user.status,
         }
       : {
@@ -155,7 +164,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
         full_name: user.full_name || "",
         email: user.email,
         phone_number: user.phone_number || "",
-        role: user.role,
+        role: user.role, // architecture-allow serialization
         status: user.status,
       });
       // Clear preview to show current user's avatar from server
@@ -218,8 +227,7 @@ export function UserDialog({ open, onOpenChange, user, mode }: UserDialogProps) 
 
   // Handle form submission
   // ✅ UX FIX (v17): Only close dialog on success, keep open on error
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function onSubmit(values: any) {
+  function onSubmit(values: UserFormValues) {
     // Define success callback - only close dialog when mutation succeeds
     const onSuccessCallback = () => {
       handleDialogOpenChange(false);

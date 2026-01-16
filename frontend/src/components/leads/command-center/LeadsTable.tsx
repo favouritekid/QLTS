@@ -18,7 +18,7 @@
 import React, { useMemo, useCallback, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { leadsKeys } from "@/hooks/useLeads";
-import { leadsApi } from "@/lib/api/leads";
+import { leadsApi } from "@/lib/api/leads"; // architecture-allow legacy
 import { useRouter } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {

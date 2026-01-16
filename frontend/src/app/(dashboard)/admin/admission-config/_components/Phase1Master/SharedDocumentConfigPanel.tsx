@@ -56,7 +56,7 @@ export function SharedDocumentConfigPanel() {
       };
     });
     return initialMap;
-  }, [sharedGroup?.items]);
+  }, [sharedGroup]);
 
   // Local modifications state - tracks user changes
   const [modifications, setModifications] = useState<Record<number, DocSelection | null>>({});
@@ -221,7 +221,7 @@ export function SharedDocumentConfigPanel() {
                             <Checkbox 
                               checked={current?.is_mandatory || false}
                               disabled={!isSelected}
-                              onCheckedChange={(c) => handleUpdate(type.id, 'is_mandatory', c)}
+                              onCheckedChange={(c) => handleUpdate(type.id, 'is_mandatory', c === true)}
                             />
                           </div>
 
@@ -229,7 +229,7 @@ export function SharedDocumentConfigPanel() {
                             <Checkbox 
                               checked={current?.requires_upload || false}
                               disabled={!isSelected}
-                              onCheckedChange={(c) => handleUpdate(type.id, 'requires_upload', c)}
+                              onCheckedChange={(c) => handleUpdate(type.id, 'requires_upload', c === true)}
                             />
                           </div>
                           

@@ -55,7 +55,7 @@ export function useUpdateMajorProgram() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ id, data }: { id: number; data: BaseEntityUpdate }) =>
+    mutationFn: ({ id, data }: { id: number; data: Parameters<typeof programDataApi.updateMajorProgram>[1] }) =>
       programDataApi.updateMajorProgram(id, data),
     onSuccess: () => {
       toast.success("Major program updated successfully");
@@ -121,7 +121,7 @@ export function useUpdateProgramOffering() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ id, data }: { id: number; data: BaseEntityUpdate }) =>
+    mutationFn: ({ id, data }: { id: number; data: Parameters<typeof programDataApi.updateProgramOffering>[1] }) =>
       programDataApi.updateProgramOffering(id, data),
     onSuccess: () => {
       toast.success("Program offering updated successfully");

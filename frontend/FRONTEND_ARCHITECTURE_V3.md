@@ -659,6 +659,317 @@ By construction, this layer:
 
 ---
 
+## **2.6.13. Domain Mutation Boundary (NON-NEGOTIABLE)**
+
+> [!CRITICAL]
+> This rule exists to **eliminate unsafe type casting**, **false abstraction**, and **cross-domain mutation leakage** that silently breaks Backend contracts.
+
+---
+
+### **2.6.13.1. Core Principle**
+
+> **One Backend Resource = One Mutation Contract = One Payload Type**
+
+Frontend **MUST NOT** reuse mutation hooks, payload types, or handlers across **different backend domains**, even if the UI looks similar.
+
+**UI similarity ≠ Domain equivalence.**
+
+---
+
+### **2.6.13.2. What Constitutes a Domain Boundary**
+
+Two entities are **DIFFERENT DOMAINS** if **ANY** of the following is true:
+
+* Their **create/update payload shape differs**
+* Their **required fields differ**
+* A field has **different semantic meaning**
+* One domain **replaces** a mandatory field of another
+* Backend endpoints differ
+
+```ts
+// ❌ DIFFERENT DOMAINS — cannot share mutation
+BaseEntityCreate {
+  code: string;   // identity
+  name: string;
+}
+
+OrganizationUnitCreate {
+  name: string;
+  type: string;   // classification, NOT identity
+}
+```
+
+Even if both appear in a CRUD table → **domain boundary still applies**.
+
+---
+
+### **2.6.13.3. Hard Prohibitions (Zero Tolerance)**
+
+The following patterns are **STRICTLY FORBIDDEN**:
+
+```ts
+// ❌ Unsafe domain bridging
+payload as unknown as BaseEntityCreate
+
+// ❌ Generic mutation hiding domain mismatch
+useMasterDataCreate<BaseEntityCreate>()
+
+// ❌ Silencing contract errors
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+```
+
+> **Any `as unknown as` used to satisfy a mutation payload is an automatic Architecture Violation.**
+
+---
+
+### **2.6.13.4. Mandatory Patterns**
+
+#### ✅ Pattern A — Dedicated Mutation per Domain (REQUIRED)
+
+```ts
+// hooks/organizationUnits/useCreateOrganizationUnit.ts
+export function useCreateOrganizationUnit() {
+  return useMutation({
+    mutationFn: (payload: OrganizationUnitCreate) =>
+      api.post("/organization-units", payload),
+  });
+}
+```
+
+Each domain **MUST own**:
+
+* Its **payload type**
+* Its **mutation hook**
+* Its **API endpoint**
+
+---
+
+#### ✅ Pattern B — Shared Mutation (RARE, EXPLICIT, DOCUMENTED)
+
+Allowed **ONLY IF** schemas are **structurally identical and version-locked**:
+
+```ts
+type FacultyCreate = BaseEntityCreate;
+type DepartmentCreate = BaseEntityCreate;
+```
+
+And **MUST be documented**:
+
+```ts
+/**
+ * Shared mutation for Faculty & Department
+ * Schema: BaseEntityCreate v1.2
+ * Backend verified identical payload
+ */
+```
+
+If documentation is missing → **forbidden**.
+
+---
+
+### **2.6.13.5. Architectural Rationale**
+
+This rule exists to:
+
+* Kill **false abstraction**
+* Prevent **runtime bugs hidden by casts**
+* Force **backend contract respect**
+* Make TypeScript act as **architecture enforcer**, not annoyance
+
+> **If TypeScript screams, architecture is protecting you.**
+
+---
+
+### **2.6.13.6. Review Checklist (BLOCKING)**
+
+A PR **MUST be rejected** if ANY answer is “No”:
+
+* [ ] Does this mutation target exactly ONE backend resource?
+* [ ] Does the payload type match backend schema 1:1?
+* [ ] Is there ZERO `as unknown as`?
+* [ ] Is the mutation owned by the correct domain folder?
+* [ ] If shared, is identical schema explicitly documented?
+
+---
+
+### **2.6.13.7. Violation Severity**
+
+| Violation                                 | Severity    |
+| ----------------------------------------- | ----------- |
+| `as unknown as` in mutation payload       | 🚨 Critical |
+| Reusing mutation across domains           | 🚨 Critical |
+| Generic BaseEntity mutation misuse        | ⚠️ High     |
+| Suppressing TS instead of fixing contract | 🚨 Critical |
+
+---
+
+> **This rule closes the last escape hatch of “it compiles so it must be fine”.**
+
+---
+
+## **2.6.14. Domain-Specific Form Type Architecture (ANTI–GOD OBJECT RULE)**
+
+> [!CRITICAL]
+> This section **abolishes `BaseFormData`-style God Objects** and enforces **1:1 alignment between UI forms and backend domains**.
+
+---
+
+### **2.6.14.1. Core Principle**
+
+> **One UI Form = One Domain Form Type = One Backend Contract**
+
+Frontend forms **MUST NOT** use shared “catch-all” form interfaces.
+
+If a field does not exist in the UI → **it does not exist in the form type**.
+
+---
+
+### **2.6.14.2. Forbidden Pattern: God Form Object**
+
+```ts
+// ❌ FORBIDDEN — God Object Anti-pattern
+export interface BaseFormData {
+  code?: string;
+  name?: string;
+  name_vi?: string;
+  requires_gpa?: boolean;
+  // ... 50 unrelated fields
+}
+```
+
+Why this is forbidden:
+
+* Hides domain boundaries
+* Encourages unsafe casting
+* Breaks backend sync silently
+* Destroys autocomplete & type safety
+
+---
+
+### **2.6.14.3. Mandatory Pattern: Domain-Specific Form Types**
+
+Each domain **MUST define its own form values**, matching its UI exactly.
+
+```ts
+// ✅ Admission Method
+export interface AdmissionMethodFormValues {
+  code: string;
+  name: string;
+  description: string;
+  display_order: number;
+  is_active: boolean;
+  requires_gpa: boolean;
+  requires_subject_scores: boolean;
+}
+
+// ✅ Organization Unit
+export interface OrganizationUnitFormValues {
+  name: string;
+  type: string;
+  description: string;
+  parent_id: number | null;
+  is_active: boolean;
+}
+
+// ✅ Subject
+export interface SubjectFormValues {
+  code: string;
+  name_vi: string;
+  name_en: string;
+  display_order: number;
+  is_active: boolean;
+}
+```
+
+---
+
+### **2.6.14.4. CRUD Component Generic Contract**
+
+Reusable UI components **MUST be generic over Form Type**, not hardcoded to a base type.
+
+```ts
+export interface CRUDTableProps<TItem, TFormValues> {
+  renderForm: (
+    item: TItem | null,
+    formData: TFormValues,
+    setFormData: (data: TFormValues) => void,
+    isEdit: boolean
+  ) => React.ReactNode;
+
+  initialFormData: () => TFormValues;
+
+  onCreate: (data: TFormValues) => Promise<void>;
+  onUpdate: (id: number, data: TFormValues) => Promise<void>;
+}
+```
+
+📌 **Rule:**
+Generic UI ≠ Generic data contract.
+
+---
+
+### **2.6.14.5. Form → Payload Mapping Rule**
+
+Form values **MUST be explicitly mapped** to backend payloads.
+
+```ts
+const handleCreate = async (formData: AdmissionMethodFormValues) => {
+  const payload: AdmissionMethodCreate = {
+    code: formData.code,
+    name: formData.name,
+    description: formData.description,
+    requires_gpa: formData.requires_gpa,
+    requires_subject_scores: formData.requires_subject_scores,
+    display_order: formData.display_order,
+    is_active: formData.is_active,
+  };
+
+  await createMutation.mutateAsync(payload);
+};
+```
+
+No spreading. No guessing. No casting.
+
+---
+
+### **2.6.14.6. Hard Prohibitions**
+
+```ts
+// ❌ FORBIDDEN
+BaseFormData
+Partial<BaseFormData>
+Record<string, any>
+as unknown as FormType
+```
+
+> **If the compiler allows it but architecture forbids it — architecture wins.**
+
+---
+
+### **2.6.14.7. Benefits (Why This Is Mandatory)**
+
+* ✅ Zero unsafe casting
+* ✅ Domain-pure autocomplete
+* ✅ Backend breaking changes surface immediately
+* ✅ Forms become self-documenting
+* ✅ No more “why does this field exist here?”
+
+---
+
+### **2.6.14.8. Review Checklist (BLOCKING)**
+
+* [ ] Does this form type map 1:1 to UI fields?
+* [ ] Is the form type domain-specific?
+* [ ] Is there ZERO reuse of BaseFormData?
+* [ ] Is payload mapping explicit and type-safe?
+* [ ] Would backend schema change break compile immediately?
+
+---
+
+> **This section permanently kills the “God Object” anti-pattern.**
+> **Any violation requires an ADR. No exceptions.**
+
+---
 
 
 ### ❌ The "Thick Validator" Anti-Pattern

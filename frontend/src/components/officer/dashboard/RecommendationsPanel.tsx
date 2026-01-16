@@ -6,45 +6,31 @@
 
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useOfficerRecommendations, type Recommendation } from "@/hooks/officer/useOfficerRecommendations";
+import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { cn } from "@/lib/utils";
 import {
   Lightbulb,
-  AlertTriangle,
   TrendingUp,
   Clock,
   Flame,
   Trash2,
   PartyPopper,
   Sparkles,
+  AlertTriangle,
   ExternalLink,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { api } from "@/lib/api/client";
-import Link from "next/link";
 
 // =============================================================================
 // TYPES
 // =============================================================================
 
-export interface Recommendation {
-  type: string;
-  priority: "critical" | "high" | "medium" | "low";
-  title: string;
-  message: string;
-  action?: string | null;
-  action_link?: string | null;
-  expected_impact?: string;
-}
-
-interface RecommendationsResponse {
-  recommendations: Recommendation[];
-  count: number;
-}
+// Types are now imported from officer.ts
 
 // =============================================================================
 // PRIORITY CONFIG
@@ -91,10 +77,7 @@ const typeIconMap: Record<string, typeof Lightbulb> = {
 // API
 // =============================================================================
 
-async function fetchRecommendations(limit: number = 5): Promise<RecommendationsResponse> {
-  const response = await api.get(`/api/officer/recommendations?limit=${limit}`);
-  return response.data;
-}
+// fetchRecommendations removed as it is now a hook
 
 // =============================================================================
 // COMPONENT
@@ -108,12 +91,7 @@ interface RecommendationsPanelProps {
 }
 
 export function RecommendationsPanel({ limit = 5, className }: RecommendationsPanelProps) {
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["officer", "recommendations", limit],
-    queryFn: () => fetchRecommendations(limit),
-    staleTime: 60000, // 1 minute
-    refetchInterval: 300000, // 5 minutes
-  });
+  const { data, isLoading, error } = useOfficerRecommendations(limit);
 
   const recommendations = data?.recommendations ?? [];
 

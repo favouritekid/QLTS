@@ -52,7 +52,7 @@ export function useUpdateOrganizationUnit() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ id, data }: { id: number; data: BaseEntityUpdate }) =>
+    mutationFn: ({ id, data }: { id: number; data: Parameters<typeof masterDataApi.updateOrganizationUnit>[1] }) =>
       masterDataApi.updateOrganizationUnit(id, data),
     onSuccess: () => {
       toast.success("Organization unit updated successfully");

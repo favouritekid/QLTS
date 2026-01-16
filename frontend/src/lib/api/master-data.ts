@@ -31,6 +31,22 @@ interface AdmissionMethodUpdate extends BaseEntityUpdate {
   requires_subject_scores?: boolean;
 }
 
+// OrganizationUnit does NOT extend BaseEntity - different domain model
+interface OrganizationUnitCreate {
+  name: string;
+  type: string;
+  description?: string | null;
+  parent_id?: number | null;
+}
+
+interface OrganizationUnitUpdate {
+  name?: string;
+  type?: string;
+  description?: string | null;
+  parent_id?: number | null;
+  is_active?: boolean;
+}
+
 interface SubjectCreate {
   code: string;
   name_vi: string;
@@ -59,12 +75,12 @@ export async function getOrganizationUnits() {
   return response.data;
 }
 
-export async function createOrganizationUnit(data: BaseEntityCreate) {
+export async function createOrganizationUnit(data: OrganizationUnitCreate) {
   const response = await api.post("/api/admin/organization-units", data);
   return response.data;
 }
 
-export async function updateOrganizationUnit(id: number, data: BaseEntityUpdate) {
+export async function updateOrganizationUnit(id: number, data: OrganizationUnitUpdate) {
   const response = await api.put(`/api/admin/organization-units/${id}`, data);
   return response.data;
 }
@@ -225,3 +241,69 @@ export async function upsertSharedDocumentGroup(offeringTypeId: number, data: Sh
   const response = await api.put(`/api/admission-config/document-groups/shared/${offeringTypeId}`, data);
   return response.data;
 }
+
+// ============================================
+// USER ASSIGNMENT (Organizations)
+// ============================================
+
+export async function assignUserToUnit(userId: number, unitId: number) {
+  const response = await api.post(`/api/admin/organization-units/${unitId}/users`, { user_id: userId });
+  return response.data;
+}
+
+export async function unassignUserFromUnit(userId: number, unitId: number) {
+  await api.delete(`/api/admin/organization-units/${unitId}/users/${userId}`);
+}
+
+// ============================================
+// EXPORT API OBJECT
+// ============================================
+
+export const masterDataApi = {
+  // Units
+  getOrganizationUnits,
+  createOrganizationUnit,
+  updateOrganizationUnit,
+  deleteOrganizationUnit,
+  assignUserToUnit,
+  unassignUserFromUnit,
+
+  // Offering Types
+  getOfferingTypes,
+  createOfferingType,
+  updateOfferingType,
+  deleteOfferingType,
+
+  // Admission Methods
+  getAdmissionMethods,
+  createAdmissionMethod,
+  updateAdmissionMethod,
+  deleteAdmissionMethod,
+
+  // Document Types
+  getDocumentTypes,
+  createDocumentType,
+  updateDocumentType,
+  deleteDocumentType,
+  
+  // Subjects
+  getSubjects,
+  createSubject,
+  updateSubject,
+  deleteSubject,
+
+  // Subject Groups
+  getSubjectGroups,
+  createSubjectGroup,
+  updateSubjectGroup,
+  deleteSubjectGroup,
+  addSubjectToGroup,
+  removeSubjectFromGroup,
+  updateSubjectPosition,
+
+  // Shared Document Groups
+  getSharedDocumentGroup,
+  upsertSharedDocumentGroup,
+};
+
+export default masterDataApi;

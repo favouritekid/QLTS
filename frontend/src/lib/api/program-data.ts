@@ -10,59 +10,14 @@
 import { api } from "./client";
 import type {
   OfferingAcademicInfo,
+  MajorProgramCreate,
+  MajorProgramUpdate,
+  ProgramOfferingCreate,
+  ProgramOfferingUpdate,
+  AcademicInfoCreate,
+  AcademicInfoUpdate
 } from "@/app/(dashboard)/admin/admission-config/_components/shared/types";
 
-// ============================================
-// TYPES FOR API
-// ============================================
-
-interface MajorProgramCreate {
-  code: string;
-  name: string;
-  degree_level: string;
-  unit_id: number;
-  is_heavy: boolean;
-  is_active?: boolean;
-}
-
-interface MajorProgramUpdate {
-  name?: string;
-  degree_level?: string;
-  unit_id?: number;
-  is_heavy?: boolean;
-  is_active?: boolean;
-}
-
-interface ProgramOfferingCreate {
-  program_id: number;
-  offering_type: string; // Backend expects string name
-  duration_semesters?: number;
-  total_credits?: number;
-  scoring_rules?: Record<string, unknown>; // Nested JSON
-  is_active?: boolean;
-}
-
-interface ProgramOfferingUpdate {
-  offering_type?: string; 
-  duration_semesters?: number;
-  total_credits?: number;
-  scoring_rules?: Record<string, unknown>; // Nested JSON
-  is_active?: boolean;
-}
-
-interface AcademicInfoCreate {
-  offering_id: number;
-  academic_year: number;
-  tuition_fee_per_year?: number;
-  annual_admission_quota?: number;
-  is_published?: boolean;
-}
-
-interface AcademicInfoUpdate {
-  tuition_fee_per_year?: number;
-  annual_admission_quota?: number;
-  is_published?: boolean;
-}
 
 // ============================================
 // MAJOR PROGRAMS

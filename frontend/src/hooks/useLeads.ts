@@ -97,6 +97,22 @@ export function useLead(
 }
 
 /**
+ * Get lead reassign quota for current user
+ */
+import { type ReassignQuota } from "@/lib/api/leads";
+
+export function useReassignQuota(enabled: boolean = true) {
+  return useQuery<ReassignQuota>({
+    queryKey: ["leads", "reassign-quota"],
+    queryFn: async () => {
+      return leadsApi.getReassignQuota();
+    },
+    staleTime: 1000 * 60, // 1 minute
+    enabled,
+  });
+}
+
+/**
  * Get timeline events for a lead
  *
  * @example
@@ -589,6 +605,8 @@ export function usePerformLeadAction() {
   });
 }
 
+
+
 // =====================================================================
 // MUTATIONS - CONSULTATIONS
 // =====================================================================
@@ -647,7 +665,7 @@ export function useAddConsultation() {
 }
 
 /**
- * Update a consultation (admin: any, officer: most recent only)
+ * Update a consultation (admin: all, officer: most recent only)
  *
  * @example
  * ```tsx
@@ -696,7 +714,7 @@ export function useUpdateConsultation() {
 }
 
 /**
- * Delete a consultation (admin: any, officer: most recent only)
+ * Delete a consultation (admin: all, officer: most recent only)
  *
  * @example
  * ```tsx

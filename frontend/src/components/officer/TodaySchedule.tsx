@@ -8,7 +8,8 @@
 
 import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+// useQuery removed
+
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -20,27 +21,13 @@ import {
   User,
   Calendar
 } from "lucide-react";
-import { api } from "@/lib/api/client";
+import { useOfficerSchedule, type ScheduleActivity } from "@/hooks/officer/useOfficerSchedule";
 
 // =============================================================================
 // TYPES
 // =============================================================================
 
-interface ScheduleActivity {
-  id: number;
-  lead_id: number;
-  lead_name: string;
-  time: string;
-  date: string;
-  day: number;
-}
-
-interface UpcomingActivitiesResponse {
-  activities: ScheduleActivity[];
-  dates_with_activities: number[];
-  month: number;
-  year: number;
-}
+// Types are now imported from officer.ts
 
 interface TodayScheduleProps {
   className?: string;
@@ -207,19 +194,7 @@ export function TodaySchedule({ className }: TodayScheduleProps) {
   const [viewDate, setViewDate] = useState(new Date());
   
   // Fetch upcoming activities for current view month
-  const { data, isLoading } = useQuery<UpcomingActivitiesResponse>({
-    queryKey: ["officer", "upcoming-activities", viewDate.getMonth() + 1, viewDate.getFullYear()],
-    queryFn: async () => {
-      const response = await api.get("/api/officer/upcoming-activities", {
-        params: {
-          month: viewDate.getMonth() + 1, // JS months are 0-indexed
-          year: viewDate.getFullYear(),
-        }
-      });
-      return response.data;
-    },
-    staleTime: 1000 * 60 * 5, // 5 minutes
-  });
+  const { data, isLoading } = useOfficerSchedule(viewDate.getMonth() + 1, viewDate.getFullYear());
   
   // Filter activities for selected date
   // Fix: Compare date strings directly to avoid timezone shift issues
