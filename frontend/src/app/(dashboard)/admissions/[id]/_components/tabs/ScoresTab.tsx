@@ -1,4 +1,4 @@
-import { useMemo, useEffect } from "react"
+import { useMemo, useEffect, useRef } from "react"
 import { UseFormReturn, useWatch } from "react-hook-form"
 import { useQuery } from "@tanstack/react-query"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -32,6 +32,12 @@ interface ScoresTabProps {
     average_score?: number | null
     // Phase 2 Fix: Read qualification status from backend
     is_qualified?: boolean | null
+    // Original backend scores for preservation when switching groups
+    admission_scores?: {
+      subject_scores?: Record<string, number | null>
+    } | null
+    // Backend validation errors (actual reasons for not qualifying)
+    validation_errors?: string[]
   }
 }
 
@@ -97,6 +103,15 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
     name: "admission_scores.gpa",
   })
   
+  // Auto-select criterion if only one option available (profile is created for a single path)
+  useEffect(() => {
+    if (!selectedCriterionId && criteria.length === 1 && isEditable) {
+      form.setValue("admission_scores.selected_criterion_id", criteria[0].id, {
+        shouldDirty: false, // Don't mark as dirty since it's initialization
+      })
+    }
+  }, [selectedCriterionId, criteria, form, isEditable])
+  
   const subjectScoresData = useWatch({
     control: form.control,
     name: "admission_scores.subject_scores",
@@ -116,6 +131,42 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
     queryFn: () => configApi.getSubjectGroups(),
     staleTime: 1000 * 60 * 10, // Cache 10 mins
   })
+  
+  // Auto-select subject group based on:
+  // 1. Only one group available -> auto-select
+  // 2. OR saved scores keys match a specific group -> infer and select
+  useEffect(() => {
+    if (!selectedGroup && selectedCriterion && availableGroups.length > 0 && isEditable && allSubjectGroups) {
+      // Case 1: Only one group available
+      if (availableGroups.length === 1) {
+        form.setValue("admission_scores.selected_group", availableGroups[0], {
+          shouldDirty: false,
+        })
+        return
+      }
+      
+      // Case 2: Infer from saved scores
+      if (subjectScoresData && Object.keys(subjectScoresData as Record<string, unknown>).length > 0) {
+        const savedSubjectCodes = Object.keys(subjectScoresData as Record<string, unknown>)
+        
+        // Find which group contains these subjects
+        for (const groupCode of availableGroups) {
+          const group = allSubjectGroups.find(g => g.code === groupCode)
+          if (group && group.subjects) {
+            // Check if all saved subjects belong to this group
+            const groupSubjects = new Set(group.subjects)
+            const allMatch = savedSubjectCodes.every(code => groupSubjects.has(code))
+            if (allMatch) {
+              form.setValue("admission_scores.selected_group", groupCode, {
+                shouldDirty: false,
+              })
+              return
+            }
+          }
+        }
+      }
+    }
+  }, [selectedGroup, selectedCriterion, availableGroups, subjectScoresData, allSubjectGroups, form, isEditable])
   
   // Get selected subject group details from API
   const selectedGroupDetails = useMemo(() => {
@@ -141,23 +192,83 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
   // This is a UX hint only, NOT a calculated value
   const hasUnsavedInput = subjectScoresData && Object.values(subjectScoresData as Record<string, number>).some(v => v != null)
   
-  // Initialize subject_scores when group changes
+  // P0: Check if data is complete (UX display only - backend is still source of truth)
+  const requiredSubjectCount = appliedRules?.required_subject_count ?? 3
+  const filledSubjectCount = subjectScoresData 
+    ? Object.values(subjectScoresData as Record<string, number | null>).filter(v => v !== null && v !== undefined).length
+    : 0
+  const isDataComplete = filledSubjectCount >= requiredSubjectCount
+  
+  // Track previous group to detect user-initiated changes (vs initial load)
+  const prevGroupRef = useRef<string | null | undefined>(undefined)
+  
+  // Initialize subject_scores when group CHANGES (not on initial load)
+  // IMPORTANT: Load existing saved scores if available (allows switching back to a group)
   useEffect(() => {
     if (selectedGroupDetails?.subjects && isEditable && selectedGroup) {
-      const currentScores = form.getValues("admission_scores.subject_scores") || {}
+      // First render: just store the group, don't reset scores
+      if (prevGroupRef.current === undefined) {
+        prevGroupRef.current = selectedGroup
+        return
+      }
+      
+      // If same group, no action needed
+      if (prevGroupRef.current === selectedGroup) {
+        return
+      }
+      
+      // User explicitly changed group -> prepare scores for new group
+      prevGroupRef.current = selectedGroup
+      
+      // Get ORIGINAL saved scores from BACKEND (profile prop)
+      // IMPORTANT: Use profile.admission_scores (not form state) to preserve data across group switches
+      const backendScores = profile?.admission_scores?.subject_scores || {}
+      const currentFormScores = form.getValues("admission_scores.subject_scores") || {}
+      // Merge: prefer current form value if exists, then fallback to backend
+      const savedScores = { ...backendScores, ...currentFormScores }
+      
       const newScores: Record<string, number | null> = {}
-      
       selectedGroupDetails.subjects.forEach((subject) => {
-        // Preserve existing score if available
-        newScores[subject] = currentScores[subject] ?? null
+        // Check if this subject has a saved score
+        const existingScore = savedScores[subject]
+        if (existingScore !== undefined && existingScore !== null) {
+          // Preserve existing saved score
+          newScores[subject] = existingScore
+        } else {
+          // No saved score for this subject -> null (user needs to input)
+          newScores[subject] = null
+        }
       })
       
-      form.setValue("admission_scores.subject_scores", newScores, { 
-        shouldDirty: true,
-        shouldValidate: false 
-      })
+      
+      // Deep check if newScores is different from current form values to avoid dirtying form unnecessarily
+      // This fixes the issue where "Kết quả: Đang chờ lưu..." persists after save because this effect runs and dirties form
+      const currentValues = form.getValues("admission_scores.subject_scores") || {}
+      
+      let hasChange = false
+      const newKeys = Object.keys(newScores)
+      const currentKeys = Object.keys(currentValues)
+      
+      if (newKeys.length !== currentKeys.length) {
+        hasChange = true
+      } else {
+        for (const key of newKeys) {
+          if (newScores[key] !== currentValues[key]) {
+            hasChange = true
+            break
+          }
+        }
+      }
+      
+      if (hasChange) {
+        form.setValue("admission_scores.subject_scores", newScores, { 
+          shouldDirty: true,
+          shouldValidate: false 
+        })
+      }
     }
-  }, [selectedGroupDetails, selectedGroup, form, isEditable])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedGroupDetails, selectedGroup, form, isEditable]) // Intentionally exclude `profile` - effect only runs on GROUP change
   
   // Reset selected_group when criterion changes and group is no longer valid
   useEffect(() => {
@@ -387,7 +498,7 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
                       ))}
                     </div>
 
-                    {/* Backend-computed Total (Phase 2 Fix) */}
+                    {/* Backend-computed Total (Phase 2 Fix) + P0: Conditional Display */}
                     <div className="pt-4 border-t">
                       <div className="flex justify-between items-center text-sm">
                         <span className="font-medium">
@@ -396,9 +507,18 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
                             <span className="text-xs text-amber-600 ml-1">(chưa lưu)</span>
                           )}
                         </span>
-                        <span className="text-lg font-bold text-primary">
-                          {totalScore !== null ? `${totalScore.toFixed(1)} / 30` : "—"}
-                        </span>
+                        {isDataComplete ? (
+                          <span className="text-lg font-bold text-primary">
+                            {totalScore !== null ? `${totalScore.toFixed(1)} / 30` : "—"}
+                          </span>
+                        ) : (
+                          <span className="text-lg font-bold text-amber-600">
+                            — / 30
+                            <span className="text-xs font-normal ml-1">
+                              (chưa đủ {filledSubjectCount}/{requiredSubjectCount} môn)
+                            </span>
+                          </span>
+                        )}
                       </div>
                     </div>
                   </>
@@ -469,17 +589,28 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
                 <div className="pt-4 border-t border-dashed">
                   <div className="flex justify-between items-center font-semibold">
                     <span>Kết quả:</span>
-                    <span className={isQualified === null ? "text-amber-600" : isQualified ? "text-green-700" : "text-red-700"}>
-                      {isQualified === null ? "Đang xử lý..." : isQualified ? "ĐẠT" : "CHƯA ĐẠT"}
+                    <span className={
+                      isQualified === null 
+                        ? "text-amber-600" 
+                        : isQualified 
+                          ? "text-green-700" 
+                          : "text-red-700"
+                    }>
+                      {isQualified === null 
+                        ? "Đang xử lý..." 
+                        : isQualified 
+                          ? "ĐẠT" 
+                          : "CHƯA ĐẠT"}
                     </span>
                   </div>
-                  {!isQualified && (
-                    <p className="text-xs text-red-600 mt-2">
-                      → Thiếu:{" "}
-                      {isGpaOnlyMethod
-                        ? "GPA thấp hơn điểm chuẩn"
-                        : "Tổng điểm thấp hơn điểm chuẩn"}
-                    </p>
+                  
+                  {/* Show actual validation errors from backend when not qualified */}
+                  {!isQualified && profile?.validation_errors && profile.validation_errors.length > 0 && (
+                    <div className="text-xs text-red-600 mt-2 space-y-1">
+                      {profile.validation_errors.map((err, i) => (
+                        <p key={i}>→ {err}</p>
+                      ))}
+                    </div>
                   )}
                 </div>
               </>

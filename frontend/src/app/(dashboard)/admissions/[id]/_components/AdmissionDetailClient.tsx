@@ -129,6 +129,8 @@ export function AdmissionDetailClient({
   })
 
   // Form Reset on Data Update
+  // CRITICAL: Use vm.version as dependency to detect server-side changes
+  // vm.version is incremented by backend on each successful update
   useEffect(() => {
     if (vm) {
       const p = vm as unknown as AdmissionProfileResponse
@@ -159,7 +161,7 @@ export function AdmissionDetailClient({
         version: vm.version ?? 1,
       })
     }
-  }, [vm, form])
+  }, [vm?.version, form]) // Use version as stable change indicator
 
   // =========================================================================
   // 7. Handlers

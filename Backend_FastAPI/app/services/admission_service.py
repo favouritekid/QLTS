@@ -161,11 +161,60 @@ def _compute_frontend_fields(
     
     # Check GPA/scores
     min_gpa = float(applied_rules.get("min_gpa", 0))
+    required_count = int(applied_rules.get("required_subject_count", 3))
+    
+    # Get current score count from the just-computed admission_scores
+    scores_map = profile.admission_scores.get("subject_scores", {}) if profile.admission_scores else {}
+    current_count = len(scores_map)
+    
     gpa_error = False
-    current_gpa = profile.average_score or 0
-    if min_gpa > 0 and current_gpa < min_gpa:
-        validation_errors.append(f"GPA không đạt: {current_gpa:.2f} < {min_gpa}")
-        gpa_error = True
+    method_type = applied_rules.get("method_type", "subject_based")
+    current_gpa = profile.average_score or 0  # Define at top for validation_summary use
+    
+    # =======================================================================
+    # SCORE VALIDATION BY METHOD TYPE
+    # 
+    # Method Types:
+    # - gpa_only: Only check average_score >= min_gpa (typically học bạ GPA-based)
+    # - subject_based: Only check total_score >= min_score (thi tổ hợp)
+    # - combined: Check BOTH conditions (e.g., GPA + điểm thi)
+    # - Other (hoc_ba, tot_nghiep, etc.): Treat as subject_based (total_score)
+    # =======================================================================
+    
+    # Get thresholds from applied_rules
+    min_score = float(applied_rules.get("min_score", 0))
+    current_total = profile.total_score or 0
+    
+    if method_type == "gpa_only":
+        # GPA-Only: Check average_score only
+        if min_gpa > 0 and current_gpa < min_gpa:
+            validation_errors.append(f"GPA không đạt: {current_gpa:.2f} < {min_gpa}")
+            gpa_error = True
+            
+    elif method_type == "combined":
+        # Combined: Check BOTH total_score AND average_score
+        # First: Check subject count
+        if current_count < required_count:
+            validation_errors.append(f"Chưa nhập đủ đầu điểm ({current_count}/{required_count})")
+            gpa_error = True
+        else:
+            # Check total_score
+            if min_score > 0 and current_total < min_score:
+                validation_errors.append(f"Tổng điểm thấp hơn điểm chuẩn: {current_total:.2f} < {min_score}")
+                gpa_error = True
+            # Check GPA (even if total passed)
+            if min_gpa > 0 and current_gpa < min_gpa:
+                validation_errors.append(f"GPA không đạt: {current_gpa:.2f} < {min_gpa}")
+                gpa_error = True
+                
+    else:
+        # subject_based, hoc_ba, tot_nghiep, etc.: Check total_score only
+        if current_count < required_count:
+            validation_errors.append(f"Chưa nhập đủ đầu điểm ({current_count}/{required_count})")
+            gpa_error = True
+        elif min_score > 0 and current_total < min_score:
+            validation_errors.append(f"Tổng điểm thấp hơn điểm chuẩn: {current_total:.2f} < {min_score}")
+            gpa_error = True
     
     # Check mandatory documents that REQUIRE UPLOAD (NEW: only upload_required_docs)
     upload_required_docs = applied_rules.get("upload_required_docs", applied_rules.get("mandatory_docs", []))
@@ -202,12 +251,17 @@ def _compute_frontend_fields(
         profile.eligibility_status = "ineligible"
     
     # Ticket #2: Compute is_qualified
-    # True if NO validation errors (academic or otherwise)
-    # Note: validation_errors includes document checks too, which might not strictly 
-    # mean "unqualified" academically, but for "Thin Client", qualified = eligible.
-    profile.is_qualified = (profile.eligibility_status == "eligible" or profile.eligibility_status == "pending") and not gpa_error
+    # IMPORTANT: is_qualified is specifically for SCORE QUALIFICATION display in Scores Tab
+    # It should ONLY reflect score-based validation (not docs, CCCD, etc.)
+    # 
+    # - is_qualified = True if scores meet threshold (no gpa_error)
+    # - eligibility_status = "eligible" if ALL validations pass (scores + docs + CCCD)
+    #
+    # UI uses is_qualified for "Kết quả xét tuyển" panel
+    # Workflow uses eligibility_status for submission eligibility
+    profile.is_qualified = not gpa_error
     
-    # Refinement: If status is approved/enrolled, always qualified
+    # Override: If status is approved/enrolled, always qualified
     if status in ["approved", "enrolled"]:
         profile.is_qualified = True
     
@@ -1246,10 +1300,26 @@ def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list 
     
     target_scores = scores if scores is not None else profile.subject_scores
     
-    if not target_scores:
+    # STRICT RULE: Check required subject count
+    applied_rules = profile.applied_rules or {}
+    required_count = applied_rules.get("required_subject_count", 3)
+    
+    current_count = len(target_scores) if target_scores else 0
+    
+    if current_count < required_count:
+        # Incomplete scores -> Treat as 0.0 (Invalid)
         profile.total_score = 0.0
         profile.average_score = 0.0
-        profile.admission_scores = {"subject_scores": {}, "total_score": 0.0, "average_score": 0.0}
+        
+        # Build map of partial scores for display, but totals are 0
+        scores_map = {s.subject.code: float(s.score) for s in target_scores} if target_scores else {}
+        
+        profile.admission_scores = {
+            "subject_scores": scores_map,
+            "total_score": 0.0,
+            "average_score": 0.0,
+            "gpa": 0.0
+        }
         return
 
     # Calculate

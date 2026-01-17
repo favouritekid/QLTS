@@ -348,7 +348,7 @@ async def create_new_offering(
     # ✅ Dispatch notification (fire-and-forget)
     await _dispatch_org_notification(db, SystemEvents.OFFERING_CREATED, {
         "offering_id": offering.id,
-        "offering_name": offering.name,
+        "offering_name": offering.offering_type,
         "program_id": offering.program_id,
         "actor_id": current_admin.id,
     })
@@ -398,7 +398,7 @@ async def update_existing_offering(
     # ✅ Dispatch notification (fire-and-forget)
     await _dispatch_org_notification(db, SystemEvents.OFFERING_UPDATED, {
         "offering_id": offering.id,
-        "offering_name": offering.name,
+        "offering_name": offering.offering_type,
         "program_id": offering.program_id,
         "actor_id": current_admin.id,
     })
@@ -427,7 +427,7 @@ async def delete_existing_offering(
     # ✅ Dispatch notification (fire-and-forget)
     await _dispatch_org_notification(db, SystemEvents.OFFERING_DELETED, {
         "offering_id": offering_id,
-        "offering_name": offering.name,
+        "offering_name": offering.offering_type,
         "program_id": offering.program_id,
         "actor_id": current_admin.id,
     })

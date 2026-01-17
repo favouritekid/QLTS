@@ -163,6 +163,12 @@ export const navigationConfig: NavigationConfig = {
           excludePaths: ["/admin/organization-tree"],
         },
         {
+          label: "Cấu hình Tuyển sinh",
+          href: "/admin/admission-config",
+          icon: Settings,
+          roles: ["admin", "manager"],
+        },
+        {
           label: "Organization Tree",
           href: "/admin/organization-tree",
           icon: FolderTree,
