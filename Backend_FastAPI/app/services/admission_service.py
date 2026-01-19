@@ -1339,9 +1339,16 @@ def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list 
     from app.models.admission_config import AdmissionCriteria
     
     # 1. Reconstruct Criteria from Snapshot
-    applied_rules = profile.applied_rules or {}
+    # Safe extraction of method code
+    method_data = applied_rules.get("admission_method")
+    if isinstance(method_data, dict):
+        method_code = method_data.get("code", "SNAPSHOT")
+    else:
+        # Fallback if stored as string literal or None
+        method_code = str(method_data) if method_data else "SNAPSHOT"
+
     snapshot_criteria = models.AdmissionCriteria(
-        code=applied_rules.get("admission_method", {}).get("code", "SNAPSHOT"),
+        code=method_code,
         min_gpa=float(applied_rules.get("min_gpa") or 0),
         min_score=float(applied_rules.get("min_score") or 0),
         min_subject_score=float(applied_rules.get("min_subject_score") or 0),
