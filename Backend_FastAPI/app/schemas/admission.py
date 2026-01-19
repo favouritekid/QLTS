@@ -583,6 +583,12 @@ class AdmissionProfileResponse(BaseModel):
         description="List of required documents with status {code, label, is_mandatory, requires_upload, submission_format, status, file_path, uploaded_at, rejection_reason}"
     )
 
+    # Snapshot Score (for Best N Highlighting)
+    snapshot_score: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Detailed score snapshot containing selected_subjects, etc."
+    )
+
     model_config = ConfigDict(
         from_attributes=True,
         validate_assignment=True

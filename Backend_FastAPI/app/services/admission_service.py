@@ -160,12 +160,19 @@ def _compute_frontend_fields(
     applied_rules = profile.applied_rules or {}
     
     # Check GPA/scores
-    min_gpa = float(applied_rules.get("min_gpa", 0))
-    required_count = int(applied_rules.get("required_subject_count", 3))
+    min_gpa = float(applied_rules.get("min_gpa") or 0)
+    required_count = int(applied_rules.get("required_subject_count") or 3)
     
     # Get current score count from the just-computed admission_scores
     scores_map = profile.admission_scores.get("subject_scores", {}) if profile.admission_scores else {}
     current_count = len(scores_map)
+    
+    # NEW: Populate snapshot_score from admission_scores (if available)
+    # This ensures frontend gets the Best N breakdown
+    if profile.admission_scores and "snapshot_score" in profile.admission_scores:
+        profile.snapshot_score = profile.admission_scores["snapshot_score"]
+    else:
+        profile.snapshot_score = None
     
     gpa_error = False
     method_type = applied_rules.get("method_type", "subject_based")
@@ -182,7 +189,7 @@ def _compute_frontend_fields(
     # =======================================================================
     
     # Get thresholds from applied_rules
-    min_score = float(applied_rules.get("min_score", 0))
+    min_score = float(applied_rules.get("min_score") or 0)
     current_total = profile.total_score or 0
     
     if method_type == "gpa_only":
@@ -1316,28 +1323,62 @@ def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list 
         
         profile.admission_scores = {
             "subject_scores": scores_map,
-            "total_score": 0.0,
             "average_score": 0.0,
             "gpa": 0.0
         }
         return
 
-    # Calculate
-    total = sum(float(s.score) for s in target_scores)
-    count = len(target_scores)
-    avg = total / count if count > 0 else 0.0
+    # Map scores to dict for service
+    from decimal import Decimal
+    target_scores_map = {s.subject.code: Decimal(str(s.score)) for s in target_scores}
+
+    # ---------------------------------------------------------
+    # IMPROVED LOGIC: Use AdmissionScoringService for calculation
+    # ---------------------------------------------------------
+    from .admission_scoring_service import AdmissionScoringService, ProfileStatus, SubjectSelectionMode, ScoringMethod
+    from app.models.admission_config import AdmissionCriteria
+    
+    # 1. Reconstruct Criteria from Snapshot
+    applied_rules = profile.applied_rules or {}
+    snapshot_criteria = models.AdmissionCriteria(
+        code=applied_rules.get("admission_method", {}).get("code", "SNAPSHOT"),
+        min_gpa=float(applied_rules.get("min_gpa") or 0),
+        min_score=float(applied_rules.get("min_score") or 0),
+        min_subject_score=float(applied_rules.get("min_subject_score") or 0),
+        required_subject_count=applied_rules.get("required_subject_count"),
+        subject_selection_mode=applied_rules.get("subject_selection_mode", "fixed"),
+        scoring_method=applied_rules.get("scoring_method", "sum"),
+    )
+    
+    # 2. Prepare allowed subjects
+    allowed_subjects = applied_rules.get("allowed_subject_codes")
+    # Soft fallback for legacy profiles (shouldn't happen for new ones)
+    if not allowed_subjects: 
+         allowed_subjects = list(target_scores_map.keys())
+
+    # 3. Calculate using robust engine
+    score_result = AdmissionScoringService.calculate_score(
+        criteria=snapshot_criteria,
+        subject_scores=target_scores_map,
+        allowed_subjects=allowed_subjects,
+    )
     
     # Update transient fields
-    profile.total_score = round(total, 2)
-    profile.average_score = round(avg, 2)
-    
-    # Update admission_scores schema field
-    scores_map = {s.subject.code: float(s.score) for s in target_scores}
+    profile.total_score = float(score_result.total_score)
+    profile.average_score = float(score_result.average_score)
+
+    # Update admission_scores schema field with detailed snapshot
     profile.admission_scores = {
-        "subject_scores": scores_map,
+        "subject_scores": target_scores_map,
         "total_score": profile.total_score,
         "average_score": profile.average_score,
-        "gpa": profile.average_score # For backward compatibility
+        "gpa": profile.average_score,
+        "snapshot_score": {
+            "selected_subjects": score_result.selected_subjects,
+            "selected_scores": {k: float(v) for k, v in score_result.selected_scores.items()},
+            "status": score_result.status.value,
+            "failure_reasons": score_result.failure_reasons
+        }
     }
 
 
@@ -1420,8 +1461,8 @@ async def submit_and_evaluate(
     # ========================================
 
     # Use AdmissionScoringService for robust validation (Best N, Min Score, etc.)
-    from .admission_scoring_service import AdmissionScoringService, ProfileStatus
-    from app.models.admission_config import AdmissionCriteria, SubjectSelectionMode, ScoringMethod
+    from .admission_scoring_service import AdmissionScoringService, ProfileStatus, SubjectSelectionMode, ScoringMethod
+    from app.models.admission_config import AdmissionCriteria
     
     # 1. Reconstruct Criteria from Snapshot (applied_rules)
     # Note: applied_rules is a dict snapshot. We wrap it in a pseudo-model or Dict 

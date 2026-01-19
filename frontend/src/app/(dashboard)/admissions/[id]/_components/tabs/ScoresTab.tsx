@@ -36,6 +36,10 @@ interface ScoresTabProps {
     admission_scores?: {
       subject_scores?: Record<string, number | null>
     } | null
+    // Snapshot score result containing selected subjects (for Best N highlighting)
+    snapshot_score?: {
+        selected_subjects?: string[]
+    } | null
     // Backend validation errors (actual reasons for not qualifying)
     validation_errors?: string[]
   }
@@ -174,10 +178,35 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
     return allSubjectGroups.find(g => g.code === selectedGroup) || null
   }, [selectedGroup, allSubjectGroups])
   
-  // Get subjects from API data
+  // CHECK BEST N MODE
+  const isBestNMode = appliedRules?.subject_selection_mode === 'best_n' || appliedRules?.subject_selection_mode === 'any_n'
+  
+  // Aggregate all unique subjects for Best N Mode
+  const uniqueSubjects = useMemo(() => {
+     if (!isBestNMode || !allSubjectGroups || !availableGroups) return []
+     
+     const relevantGroups = allSubjectGroups.filter(g => availableGroups.includes(g.code))
+     const subjectSet = new Set<string>()
+     relevantGroups.forEach(g => g.subjects?.forEach(s => subjectSet.add(s)))
+     
+     // Optional: sort subjects by standard order (if easy) or just alphabetical/insertion
+     // For now, let's trust insertion order or sort alphabetically
+     return Array.from(subjectSet)
+  }, [isBestNMode, allSubjectGroups, availableGroups])
+
+  // Get subjects from API data OR unique subjects for Best N
   const subjects = useMemo(() => {
+    if (isBestNMode) {
+        return uniqueSubjects
+    }
     return selectedGroupDetails?.subjects || []
-  }, [selectedGroupDetails])
+  }, [isBestNMode, uniqueSubjects, selectedGroupDetails])
+  
+  // Determine Highlighted Subjects (from Backend Snapshot)
+  const highlightedSubjects = useMemo(() => {
+      if (!isBestNMode || !profile?.snapshot_score?.selected_subjects) return new Set<string>()
+      return new Set(profile.snapshot_score.selected_subjects)
+  }, [isBestNMode, profile])
   
   // =========================================================================
   // Phase 2 Fix: REMOVED local score calculation (Architecture Violation #2)
@@ -267,8 +296,40 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
         })
       }
     }
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedGroupDetails, selectedGroup, form, isEditable]) // Intentionally exclude `profile` - effect only runs on GROUP change
+
+  // Initialize scores for Best N Mode (when mode is detected)
+  useEffect(() => {
+      if (isBestNMode && uniqueSubjects.length > 0 && isEditable) {
+           const backendScores = profile?.admission_scores?.subject_scores || {}
+           const currentFormScores = form.getValues("admission_scores.subject_scores") || {}
+           const savedScores = { ...backendScores, ...currentFormScores }
+           
+           const newScores: Record<string, number | null> = {}
+           uniqueSubjects.forEach(subject => {
+               newScores[subject] = savedScores[subject] ?? null
+           })
+           
+           // Check change to avoid dirty loop
+           const currentValues = form.getValues("admission_scores.subject_scores") || {}
+           let hasChange = false
+           // Simple key check + value check
+           for (const key of uniqueSubjects) {
+               if (newScores[key] !== currentValues[key]) {
+                   hasChange = true; break;
+               }
+           }
+           
+           if (hasChange) {
+                form.setValue("admission_scores.subject_scores", newScores, { 
+                  shouldDirty: true,
+                  shouldValidate: false 
+                })
+           }
+      }
+  }, [isBestNMode, uniqueSubjects, form, isEditable, profile])
   
   // Reset selected_group when criterion changes and group is no longer valid
   useEffect(() => {
@@ -352,7 +413,6 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
                       {criteria.map((c) => (
                         <SelectItem key={c.id} value={c.id}>
                           {c.method_name}
-                          {c.min_score && ` (≥ ${c.min_score} điểm)`}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -363,7 +423,8 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
             />
 
             {/* Step 2: Select Subject Group (if applicable) */}
-            {selectedCriterion && availableGroups.length > 0 && (
+            {/* HIDE Group Selector if Best N Mode */}
+            {!isBestNMode && selectedCriterion && availableGroups.length > 0 && (
               <FormField
                 control={form.control}
                 name="admission_scores.selected_group"
@@ -406,6 +467,16 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
               />
             )}
 
+            {/* Show Best N Info Alert */}
+            {isBestNMode && (
+                <Alert className="mb-4 bg-blue-50 text-blue-800 border-blue-200">
+                  <CheckCircle2 className="h-4 w-4" />
+                  <AlertDescription>
+                    Hệ thống sẽ tự động chọn <strong>{requiredSubjectCount} môn có điểm cao nhất</strong> trong các môn hợp lệ để xét tuyển.
+                  </AlertDescription>
+                </Alert>
+            )}
+
             {/* Step 3A: GPA Input (for GPA-only methods) */}
             {selectedCriterion && isGpaOnlyMethod && (
               <FormField
@@ -437,7 +508,7 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
             )}
 
             {/* Step 3B: Subject Score Inputs (for methods with subject_groups) */}
-            {selectedCriterion && supportsSubjectScoring && selectedGroup && (
+            {selectedCriterion && supportsSubjectScoring && (selectedGroup || isBestNMode) && (
               <div className="space-y-4">
                 <p className="text-sm font-medium text-muted-foreground">
                   Nhập điểm các môn trong tổ hợp {selectedGroup}:
@@ -466,15 +537,26 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
                 {/* Subject inputs */}
                 {!isLoadingGroups && subjects.length > 0 && (
                   <>
+                    <p className="text-sm font-medium text-muted-foreground pb-2">
+                       {isBestNMode ? "Nhập điểm môn học:" : `Nhập điểm các môn trong tổ hợp ${selectedGroup}:`}
+                    </p>
+
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                      {subjects.map((subject) => (
+                      {subjects.map((subject) => {
+                         const label = SUBJECT_LABELS[subject] || subject
+                         const isHighlighted = highlightedSubjects.has(subject)
+
+                         return (
                         <FormField
                           key={subject}
                           control={form.control}
                           name={`admission_scores.subject_scores.${subject}`}
                           render={({ field }) => (
                             <FormItem>
-                              <FormLabel>{SUBJECT_LABELS[subject] || subject}</FormLabel>
+                              <FormLabel className={isHighlighted ? "text-green-700 font-bold flex items-center gap-1" : ""}>
+                                {label}
+                                {isHighlighted && <CheckCircle2 className="w-3 h-3 text-green-600" />}
+                              </FormLabel>
                               <FormControl>
                                 <Input
                                   type="number"
@@ -489,13 +571,15 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
                                       e.target.value ? parseFloat(e.target.value) : null
                                     )
                                   }
+                                  className={isHighlighted ? "border-green-500 bg-green-50 ring-green-500/20" : ""}
                                 />
                               </FormControl>
                               <FormMessage />
                             </FormItem>
                           )}
                         />
-                      ))}
+                      )
+                      })}
                     </div>
 
                     {/* Backend-computed Total (Phase 2 Fix) + P0: Conditional Display */}
@@ -561,30 +645,61 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
               <>
                 <div className="space-y-2 text-sm">
                   <div className="flex justify-between">
-                    <span>Phương thức:</span>
-                    <span className="font-medium">{selectedCriterion.method_name}</span>
+                    <span className="text-muted-foreground">Phương thức:</span>
+                    <span className="font-medium text-right">{selectedCriterion.method_name}</span>
                   </div>
-                  {selectedGroup && (
+                  
+                  {!isBestNMode && selectedGroup && (
                     <div className="flex justify-between">
-                      <span>Tổ hợp môn:</span>
-                      <span className="font-medium">{selectedGroup}</span>
+                      <span className="text-muted-foreground">Tổ hợp môn:</span>
+                      <span className="font-medium text-right">{selectedGroup}</span>
                     </div>
                   )}
+
                   <div className="flex justify-between">
-                    <span>Điểm chuẩn:</span>
-                    <span className="font-medium">
-                      {isGpaOnlyMethod ? `GPA ≥ ${minGpa}` : `≥ ${minScore} điểm`}
+                    <span className="text-muted-foreground">Điểm chuẩn:</span>
+                    <span className="font-medium text-right">
+                      {isGpaOnlyMethod 
+                        ? (minGpa ? `GPA ≥ ${minGpa}` : "—") 
+                        : (minScore ? `≥ ${minScore} điểm` : "—")}
                     </span>
                   </div>
+                  
                   <div className="flex justify-between">
-                    <span>Điểm đạt được:</span>
-                    <span className="font-medium">
+                    <span className="text-muted-foreground">Điểm đạt được:</span>
+                    <span className="font-bold text-lg text-right">
                       {isGpaOnlyMethod
-                        ? (currentGpa !== null ? currentGpa.toFixed(1) : "—")
-                        : (totalScore !== null ? totalScore.toFixed(1) : "—")}
+                        ? (currentGpa !== null ? currentGpa.toFixed(2) : "—")
+                        : (totalScore !== null ? totalScore.toFixed(2) : "—")}
                     </span>
                   </div>
                 </div>
+
+                {/* Best N Breakdown */}
+                {isBestNMode && (
+                   <div className="pt-3 border-t">
+                      <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase flex justify-between">
+                         <span>Chi tiết đánh giá</span>
+                         <span>({highlightedSubjects.size}/{requiredSubjectCount} môn)</span>
+                      </p>
+                      <div className="text-sm space-y-1">
+                          {Array.from(highlightedSubjects).map(subjCode => (
+                              <div key={subjCode} className="flex justify-between items-center bg-green-50/50 px-2 py-1 rounded border border-green-100">
+                                  <span>{SUBJECT_LABELS[subjCode] || subjCode}</span>
+                                  <span className="font-bold text-green-700">
+                                      {profile?.admission_scores?.subject_scores?.[subjCode] ?? "—"}
+                                  </span>
+                              </div>
+                          ))}
+                          
+                          {highlightedSubjects.size < requiredSubjectCount && (
+                             <div className="text-xs text-amber-600 italic px-2 pt-1">
+                                (Chưa đủ {requiredSubjectCount} môn hợp lệ để tính điểm)
+                             </div>
+                          )}
+                      </div>
+                   </div>
+                )}
 
                 <div className="pt-4 border-t border-dashed">
                   <div className="flex justify-between items-center font-semibold">

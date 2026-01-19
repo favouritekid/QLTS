@@ -36,7 +36,7 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
   const [requiredSubjectCount, setRequiredSubjectCount] = useState<string>("");
   
   const [scoringMethod, setScoringMethod] = useState<"sum" | "avg">("sum");
-  const [selectionMode, setSelectionMode] = useState<"fixed" | "dynamic">("fixed");
+  const [selectionMode, setSelectionMode] = useState<"fixed" | "best_n" | "any_n">("fixed");
   const [selectedGroups, setSelectedGroups] = useState<number[]>([]);
   
   // Validity State
@@ -60,7 +60,7 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
       setRequiredSubjectCount(path.criteria.required_subject_count?.toString() || "");
 
       setScoringMethod((path.criteria.scoring_method as "sum" | "avg") || "sum");
-      setSelectionMode((path.criteria.subject_selection_mode as "fixed" | "dynamic") || "fixed");
+      setSelectionMode((path.criteria.subject_selection_mode as "fixed" | "best_n" | "any_n") || "fixed");
 
       setPolicyVersion(path.criteria.policy_version || "2025.1");
       setEffectiveFrom(path.criteria.effective_from || "");
@@ -127,12 +127,50 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
         return isNaN(parsed) ? null : parsed;
       };
 
-      // Helper to safely parse int and avoid NaN
       const safeParseInt = (value: string): number | null => {
         if (!value || value.trim() === "") return null;
         const parsed = parseInt(value.trim());
         return isNaN(parsed) ? null : parsed;
       };
+
+      // 1. Validate Selection Mode & N
+      if (selectionMode === "best_n" || selectionMode === "any_n") {
+        const n = safeParseInt(requiredSubjectCount);
+        if (!n || n <= 0) {
+           toast.warning("Vui lòng nhập số môn bắt buộc (N) lớn hơn 0");
+           return;
+        }
+
+        // Calculate total unique subjects from selected groups
+        const uniqueSubjects = new Set<string>();
+        selectedGroupsDetails.forEach(g => {
+            g.subjects?.forEach(s => uniqueSubjects.add(s.code));
+        });
+        
+        if (n > uniqueSubjects.size) {
+            toast.warning(`Số môn yêu cầu (${n}) không được lớn hơn tổng số môn có trong các tổ hợp đã chọn (${uniqueSubjects.size} môn)`);
+            return;
+        }
+      }
+
+      // 2. Validate Max Score vs Min Score
+      const minS = safeParseFloat(minScore);
+      const maxS = safeParseFloat(maxScore);
+
+      if (maxS !== null && minS !== null && maxS < minS) {
+          toast.warning(`Điểm tối đa (${maxS}) không được nhỏ hơn điểm chuẩn (${minS})`);
+          return;
+      }
+      
+      // 3. Score Logic Warning
+      if (selectionMode === "best_n" && maxS !== null) {
+         const n = safeParseInt(requiredSubjectCount);
+         if (n && (maxS < n * 10)) {
+             // Just a warning, not a block, as some scales might be different
+             // But usually Max = N * 10
+             // toast.info(`Lưu ý: Với ${n} môn, điểm tối đa thường là ${n * 10}`);
+         }
+      }
 
       // Prepare data with proper type conversion
       const payload = {
@@ -244,25 +282,50 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="sum">Tổng điểm (3 môn)</SelectItem>
+                <SelectItem value="sum">Tổng điểm</SelectItem>
                 <SelectItem value="avg">Điểm trung bình</SelectItem>
               </SelectContent>
             </Select>
           </div>
+
           <div className="space-y-2">
             <Label>Chế độ chọn môn</Label>
-            <Select 
-              value={selectionMode} 
-              onValueChange={(val: "fixed" | "dynamic") => setSelectionMode(val)}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="fixed">Cố định (Theo tổ hợp)</SelectItem>
-                <SelectItem value="dynamic">Linh hoạt (Best N)</SelectItem>
-              </SelectContent>
-            </Select>
+            <div className="flex gap-3">
+
+              <div className="flex-1">
+                <Select 
+                  value={selectionMode} 
+                  onValueChange={(val: "fixed" | "best_n" | "any_n") => setSelectionMode(val)}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="fixed">Cố định (Fixed)</SelectItem>
+                    <SelectItem value="best_n">Linh hoạt (Best N)</SelectItem>
+                    <SelectItem value="any_n">Tùy chọn (Any N)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              <div className="w-24">
+                <Input 
+                   id="requiredSubjectCount"
+                   type="number" 
+                   step="1"
+                   min="1"
+                   max="10"
+                   placeholder="N"
+                   value={requiredSubjectCount}
+                   onChange={(e) => setRequiredSubjectCount(e.target.value)}
+                   className="text-center"
+                   title="Số môn bắt buộc (N)"
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              {selectionMode === "fixed" ? "Chọn đúng N môn trong tổ hợp" : `Lấy ${requiredSubjectCount || "N"} môn cao nhất`}
+            </p>
           </div>
            <div className="space-y-2">
             <Label htmlFor="maxScore">Thang điểm tối đa</Label>
