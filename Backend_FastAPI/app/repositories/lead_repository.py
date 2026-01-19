@@ -86,6 +86,8 @@ class LeadRepository(BaseRepository[models.Lead]):
                 selectinload(models.Lead.application).options(
                     selectinload(models.Application.officer)
                 ),
+                # NEW: AdmissionProfile for admission module
+                selectinload(models.Lead.admission_profile),
                 # Collection relationships for timeline/insights
                 selectinload(models.Lead.consultations).options(
                     joinedload(models.Consultation.officer),
@@ -142,6 +144,8 @@ class LeadRepository(BaseRepository[models.Lead]):
                 selectinload(models.Lead.application).options(
                     selectinload(models.Application.officer)
                 ),
+                # NEW: AdmissionProfile for admission module
+                selectinload(models.Lead.admission_profile),
             )
             .where(self.model.id == lead_id)
         )
@@ -327,6 +331,8 @@ class LeadRepository(BaseRepository[models.Lead]):
                 selectinload(models.Lead.pipeline_stage),
                 # ✅ FIX: Add missing eager load for application to prevent MissingGreenlet error
                 selectinload(models.Lead.application),
+                # NEW: AdmissionProfile for admission module
+                selectinload(models.Lead.admission_profile),
             )
             .offset(skip)
             .limit(limit)

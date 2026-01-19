@@ -525,7 +525,7 @@ async def _create_admission_milestone_consultation(
     log.info(
         "Admission milestone consultation created",
         lead_id=lead.id,
-        event=event,
+        admission_event=event,
         stage_id=projection.pipeline_stage_id,
         stage_name=projection.stage_name,
         status_id=projection.consultation_status_id,
@@ -973,6 +973,16 @@ async def create_profile(
         mandatory_docs_count=len(mandatory_docs),
     )
 
+    # ✅ PIPELINE SYNC: Create system consultation for admission milestone
+    if new_profile.lead:
+        await _create_admission_milestone_consultation(
+            db=db,
+            lead=new_profile.lead,
+            event="profile_created",
+            actor=current_user,
+            profile_id=new_profile.id,
+        )
+
     return new_profile
 
 
@@ -1323,8 +1333,10 @@ def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list 
         
         profile.admission_scores = {
             "subject_scores": scores_map,
+            "total_score": 0.0,
             "average_score": 0.0,
-            "gpa": 0.0
+            "gpa": 0.0,
+            "snapshot_score": None
         }
         return
 
@@ -1371,18 +1383,27 @@ def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list 
     )
     
     # Update transient fields
-    profile.total_score = float(score_result.total_score)
-    profile.average_score = float(score_result.average_score)
+    # Note: AdmissionScoreResult uses final_score (not total_score/average_score)
+    final_score_value = float(score_result.final_score) if score_result.final_score is not None else 0.0
+    profile.total_score = final_score_value
+    
+    # Compute average from selected scores
+    # Note: AdmissionScoreResult uses `subject_scores` (not `selected_scores`)
+    selected_scores_list = list(score_result.subject_scores.values()) if score_result.subject_scores else []
+    if selected_scores_list:
+        profile.average_score = sum(float(s) for s in selected_scores_list) / len(selected_scores_list)
+    else:
+        profile.average_score = 0.0
 
     # Update admission_scores schema field with detailed snapshot
     profile.admission_scores = {
-        "subject_scores": target_scores_map,
+        "subject_scores": {k: float(v) for k, v in target_scores_map.items()},
         "total_score": profile.total_score,
         "average_score": profile.average_score,
         "gpa": profile.average_score,
         "snapshot_score": {
             "selected_subjects": score_result.selected_subjects,
-            "selected_scores": {k: float(v) for k, v in score_result.selected_scores.items()},
+            "selected_scores": {k: float(v) for k, v in score_result.subject_scores.items()},
             "status": score_result.status.value,
             "failure_reasons": score_result.failure_reasons
         }
@@ -2035,7 +2056,7 @@ async def enroll_student(
 
 
 # ==============================================================================
-# DELETE PROFILE
+# DELETE PROFILE (implemented at line ~2691)
 # ==============================================================================
 
 # ==============================================================================
@@ -2611,6 +2632,11 @@ async def delete_profile(
     - IDOR: Check lead.unit_id == user.unit_id (unless admin)
     - State Locking: Only draft profiles can be deleted
 
+    Behavior:
+    - Does NOT revert Lead status (Lead already showed interest)
+    - Creates a consultation record noting the deletion
+    - Maintains full audit trail in timeline
+
     IMPORTANT: This function does NOT commit the transaction.
     Router must call db.commit() after this function returns.
 
@@ -2647,6 +2673,37 @@ async def delete_profile(
             "Only draft profiles can be deleted."
         )
 
+    lead = profile.lead
+    lead_id = profile.lead_id
+
+    # ==========================================================================
+    # CREATE CONSULTATION RECORD: Log the deletion event (no status revert)
+    # ==========================================================================
+    # Following the Golden Rule: Every admission event must have a consultation record
+    # Lead status stays the same (they already showed interest by creating profile)
+    
+    system_consultation = models.Consultation(
+        lead_id=lead_id,
+        officer_id=current_user.id,
+        consultation_status_id=lead.consultation_status_id,  # Keep current status
+        consultation_date=datetime.now(timezone.utc),
+        method="system",
+        notes=f"[HỆ THỐNG] Hồ sơ xét tuyển đã bị xóa - Profile #{profile_id}",
+        duration_minutes=0,
+    )
+    db.add(system_consultation)
+    
+    # Update lead timestamp
+    lead.updated_at = datetime.now(timezone.utc)
+
+    log.info(
+        "Profile deletion consultation record created",
+        lead_id=lead_id,
+        profile_id=profile_id,
+        consultation_status_id=lead.consultation_status_id,
+        actor_id=current_user.id,
+    )
+
     # Delete the profile
     await db.delete(profile)
     await db.flush()
@@ -2654,6 +2711,7 @@ async def delete_profile(
     log.info(
         "Admission profile deleted",
         profile_id=profile_id,
+        lead_id=lead_id,
         user_id=current_user.id,
     )
 

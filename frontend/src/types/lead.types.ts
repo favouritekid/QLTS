@@ -112,6 +112,8 @@ export interface Lead {
   pipeline_stage?: PipelineStage | null;
   consultations?: Consultation[];
   application?: Application | null;
+  // NEW: AdmissionProfile (replacement for Application in admission module)
+  admission_profile?: AdmissionProfileShallow | null;
 }
 
 /**
@@ -330,6 +332,22 @@ export interface ApplicationUpdate {
   program_offering_id?: number | null;
   criterion_id?: string | null;
   documents?: ApplicationDocuments | null;
+}
+
+// ============================================
+// ADMISSION PROFILE TYPES (NEW)
+// ============================================
+
+/**
+ * AdmissionProfileShallow - Minimal info for Lead response
+ * Used by frontend to show "View Profile" vs "Create Profile" button
+ * Backend source: AdmissionProfile model
+ */
+export interface AdmissionProfileShallow {
+  id: number;
+  status: string; // draft, submitted, approved, rejected, enrolled, etc.
+  student_code?: string | null; // If enrolled
+  created_at: string; // ISO datetime
 }
 
 // ============================================

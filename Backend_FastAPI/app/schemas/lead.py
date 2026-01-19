@@ -88,6 +88,25 @@ class LeadAction(BaseModel):
 
 
 # -----------------
+# ADMISSION PROFILE SHALLOW (for Lead response)
+# -----------------
+
+
+class AdmissionProfileShallow(BaseModel):
+    """Shallow schema for AdmissionProfile when nested in Lead response.
+    
+    Provides essential info for UI navigation without full profile details.
+    Frontend uses this to show 'View Profile' vs 'Create Profile' button.
+    """
+    id: int
+    status: str  # draft, submitted, approved, rejected, etc.
+    student_code: Optional[str] = None  # If enrolled
+    created_at: datetime
+    
+    model_config = ConfigDict(from_attributes=True)
+
+
+# -----------------
 # SCHEMAS CHÍNH CỦA LEAD
 # -----------------
 
@@ -296,6 +315,8 @@ class Lead(LeadBase):
     consultation_status: Optional[ConsultationStatus] = None
     # Sử dụng ApplicationShallow để tránh cyclic reference (Lead -> Application -> Lead)
     application: Optional["ApplicationShallow"] = None
+    # NEW: AdmissionProfile (replacement for Application in admission module)
+    admission_profile: Optional[AdmissionProfileShallow] = None
 
     model_config = ConfigDict(from_attributes=True)
 
