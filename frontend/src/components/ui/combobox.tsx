@@ -19,10 +19,18 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 
+export interface ComboboxOption {
+  value: string;
+  label: string;
+}
+
 interface ComboboxProps {
   value: string;
   onChange: (value: string) => void;
-  suggestions: string[];
+  /** @deprecated Use `options` instead for value/label pairs */
+  suggestions?: string[];
+  /** Array of {value, label} objects for display */
+  options?: ComboboxOption[];
   placeholder?: string;
   emptyText?: string;
   searchPlaceholder?: string;
@@ -34,20 +42,32 @@ interface ComboboxProps {
  * Combobox component for autocomplete selection
  *
  * Provides searchable dropdown with suggestions from a list.
- * Users can also type custom values not in the suggestions.
+ * Supports both simple strings and value/label pairs.
  *
  * @example
+ * // Simple strings (value = label)
  * <Combobox
- *   value={subject}
- *   onChange={setSubject}
- *   suggestions={["role:admin", "role:manager"]}
- *   placeholder="Select or type subject..."
+ *   value={province}
+ *   onChange={setProvince}
+ *   suggestions={["Hà Nội", "Hồ Chí Minh"]}
+ * />
+ *
+ * @example
+ * // Value/Label pairs (display label, store value)
+ * <Combobox
+ *   value={nationality}
+ *   onChange={setNationality}
+ *   options={[
+ *     { value: "VN", label: "Việt Nam" },
+ *     { value: "US", label: "Hoa Kỳ" }
+ *   ]}
  * />
  */
 export function Combobox({
   value,
   onChange,
-  suggestions,
+  suggestions = [],
+  options,
   placeholder = "Select or type...",
   emptyText = "No suggestions found.",
   searchPlaceholder = "Search...",
@@ -55,6 +75,21 @@ export function Combobox({
   className,
 }: ComboboxProps) {
   const [open, setOpen] = React.useState(false);
+
+  // Normalize to options format
+  const normalizedOptions = React.useMemo<ComboboxOption[]>(() => {
+    if (options && options.length > 0) {
+      return options;
+    }
+    // Backward compatibility: convert suggestions to options
+    return suggestions.map(s => ({ value: s, label: s }));
+  }, [options, suggestions]);
+
+  // Find current label for display
+  const currentLabel = React.useMemo(() => {
+    const option = normalizedOptions.find(opt => opt.value === value);
+    return option?.label || value;
+  }, [value, normalizedOptions]);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -67,37 +102,33 @@ export function Combobox({
           disabled={disabled}
         >
           <span className="truncate">
-            {value || placeholder}
+            {currentLabel || placeholder}
           </span>
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-full p-0" align="start">
         <Command>
-          <CommandInput
-            placeholder={searchPlaceholder}
-            value={value}
-            onValueChange={onChange}
-          />
+          <CommandInput placeholder={searchPlaceholder} />
           <CommandList>
             <CommandEmpty>{emptyText}</CommandEmpty>
             <CommandGroup>
-              {suggestions.map((suggestion) => (
+              {normalizedOptions.map((option) => (
                 <CommandItem
-                  key={suggestion}
-                  value={suggestion}
-                  onSelect={(currentValue: string) => {
-                    onChange(currentValue === value ? "" : currentValue);
+                  key={option.value}
+                  value={option.label}
+                  onSelect={() => {
+                    onChange(option.value === value ? "" : option.value);
                     setOpen(false);
                   }}
                 >
                   <Check
                     className={cn(
                       "mr-2 h-4 w-4",
-                      value === suggestion ? "opacity-100" : "opacity-0"
+                      value === option.value ? "opacity-100" : "opacity-0"
                     )}
                   />
-                  {suggestion}
+                  {option.label}
                 </CommandItem>
               ))}
             </CommandGroup>

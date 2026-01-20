@@ -30,7 +30,8 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageContainer } from "@/components/layouts/PageContainer";
 import { PageHeader } from "@/components/layouts/PageHeader";
-import { GraduationCap, Layers, FileText, Plus, Pencil, Trash2, Loader2 } from "lucide-react";
+import { GraduationCap, Layers, FileText, Plus, Pencil, Trash2, Loader2, List } from "lucide-react";
+import { SystemCategoryManager } from "./SystemCategoryManager";
 
 // ============================================
 // TYPES
@@ -383,6 +384,10 @@ export function ConfigClient({ initialData }: ConfigClientProps) {
             <FileText className="h-4 w-4" />
             Document Types
           </TabsTrigger>
+          <TabsTrigger value="system-categories" className="gap-2">
+            <List className="h-4 w-4" />
+            System Categories
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="degree-levels">
@@ -416,6 +421,10 @@ export function ConfigClient({ initialData }: ConfigClientProps) {
             queryKey="document-types"
             initialData={initialData?.documentTypes}
           />
+        </TabsContent>
+
+        <TabsContent value="system-categories">
+          <SystemCategoryManager />
         </TabsContent>
       </Tabs>
     </PageContainer>

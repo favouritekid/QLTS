@@ -238,7 +238,8 @@ export const admissionProfileUpdateSchema = z.object({
     .nullable()
     .or(z.literal("")),
   email: z.string().email("Email không hợp lệ").max(255).optional().nullable().or(z.literal("")),
-  dob: z.string().datetime({ offset: true }).optional().nullable(),
+  // Relaxed validation to accept YYYY-MM-DD from input[type="date"]
+  dob: z.string().optional().nullable(),
   gender: z.string().max(50).optional().nullable(),
   social_insurance_number: z.string().max(50).optional().nullable(),
   nationality: z.string().max(100).optional().nullable(),
@@ -251,10 +252,10 @@ export const admissionProfileUpdateSchema = z.object({
   place_of_birth: z.string().max(255).optional().nullable(),
   native_place: z.string().max(255).optional().nullable(),
   
-  // Political Info Dates
-  union_entry_date: z.string().datetime({ offset: true }).optional().nullable(),
-  party_entry_date: z.string().datetime({ offset: true }).optional().nullable(),
-  party_official_entry_date: z.string().datetime({ offset: true }).optional().nullable(),
+  // Political Info Dates - Relaxed validation
+  union_entry_date: z.string().optional().nullable(),
+  party_entry_date: z.string().optional().nullable(),
+  party_official_entry_date: z.string().optional().nullable(),
 
   // Identity
   citizen_id: z
