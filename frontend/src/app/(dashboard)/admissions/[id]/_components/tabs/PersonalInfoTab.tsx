@@ -134,7 +134,15 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
               <FormItem>
                 <FormLabel>Nơi sinh</FormLabel>
                 <FormControl>
-                  <Input {...field} value={field.value || ""} disabled={!isEditable} placeholder="Tỉnh/Thành phố nơi sinh" />
+                  <Combobox
+                    value={field.value || ""}
+                    onChange={field.onChange}
+                    suggestions={provinces?.map(p => p.name) || []}
+                    placeholder="Chọn tỉnh/thành phố"
+                    searchPlaceholder="Tìm kiếm tỉnh/thành phố..."
+                    emptyText="Không tìm thấy"
+                    disabled={!isEditable}
+                  />
                 </FormControl>
                 <FormMessage />
               </FormItem>

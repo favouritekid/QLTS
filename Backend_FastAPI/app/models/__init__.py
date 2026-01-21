@@ -73,6 +73,9 @@ from .user_session import UserSession
 from .login_history import LoginHistory  # Security: Login audit trail
 from .trusted_device import TrustedDevice  # Security: Trusted devices for login
 
+# Administrative Geography (Temporal Versioning)
+from .administrative_node import AdministrativeNode, AdministrativeLevel
+
 # Import tất cả các model để chúng được đăng ký với Base
 # và để chúng có thể được truy cập qua package 'models' (vd: models.User)
 
@@ -134,4 +137,7 @@ __all__ = [
     "UserSession",
     "LoginHistory",
     "TrustedDevice",
+    # Administrative Geography
+    "AdministrativeNode",
+    "AdministrativeLevel",
 ]
