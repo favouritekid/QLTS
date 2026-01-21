@@ -10,7 +10,8 @@
       "Bash(find:*)",
       "Bash(python:*)",
       "Bash(npm run type-check:*)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(ls:*)"
     ]
   }
 }

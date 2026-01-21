@@ -18,6 +18,22 @@
 import { z } from "zod"
 
 // ==============================================================================
+// HELPERS
+// ==============================================================================
+
+/**
+ * Nullable String Helper
+ * Phase 3.1 Refactor: Reduces duplication for optional fields that need empty-string-to-null transformation.
+ */
+const nullableString = (max: number = 255) =>
+  z.string()
+    .max(max, `Không được quá ${max} ký tự`)
+    .optional()
+    .nullable()
+    .or(z.literal(""))
+    .transform(v => v === "" ? null : v)
+
+// ==============================================================================
 // NESTED SCHEMAS (for JSONB fields)
 // ==============================================================================
 
@@ -127,25 +143,13 @@ export const admissionScoreSchema = z.object({
   total_score: z.number().optional().nullable(),
   average_score: z.number().optional().nullable(),
   
-  // Legacy fields for backward compatibility
-  math_score: z
-    .number()
-    .min(0, "Điểm Toán phải từ 0 trở lên")
-    .max(10, "Điểm Toán không được quá 10")
-    .optional()
-    .nullable(),
-  literature_score: z
-    .number()
-    .min(0, "Điểm Văn phải từ 0 trở lên")
-    .max(10, "Điểm Văn không được quá 10")
-    .optional()
-    .nullable(),
-  english_score: z
-    .number()
-    .min(0, "Điểm Tiếng Anh phải từ 0 trở lên")
-    .max(10, "Điểm Tiếng Anh không được quá 10")
-    .optional()
-    .nullable(),
+  // =========================================================================
+  // ⚠️ DEPRECATED: Legacy fields – DO NOT USE FOR CALCULATION
+  // Only for backward compatibility
+  // =========================================================================
+  math_score: z.number().min(0).max(10).optional().nullable(),
+  literature_score: z.number().min(0).max(10).optional().nullable(),
+  english_score: z.number().min(0).max(10).optional().nullable(),
 })
 
 export type AdmissionScore = z.infer<typeof admissionScoreSchema>
@@ -230,7 +234,7 @@ export const admissionProfileUpdateSchema = z.object({
   version: z.number().int().min(1).optional(),
 
   // Personal Info Fields
-  full_name: z.string().max(255).optional().nullable().transform(v => v || null),
+  full_name: nullableString(255),
   phone: z
     .string()
     .regex(/^0\d{9,10}$/, "Số điện thoại không hợp lệ")
@@ -240,23 +244,23 @@ export const admissionProfileUpdateSchema = z.object({
     .transform(v => v === "" ? null : v),
   email: z.string().email("Email không hợp lệ").max(255).optional().nullable().or(z.literal("")).transform(v => v === "" ? null : v),
   // Relaxed validation to accept YYYY-MM-DD from input[type="date"]
-  dob: z.string().optional().nullable().or(z.literal("")).transform(v => v === "" ? null : v),
-  gender: z.string().max(50).optional().nullable().transform(v => v || null),
-  social_insurance_number: z.string().max(50).optional().nullable().transform(v => v || null),
-  nationality: z.string().max(100).optional().nullable().transform(v => v || null),
-  ethnicity: z.string().max(100).optional().nullable().transform(v => v || null),
-  religion: z.string().max(100).optional().nullable().transform(v => v || null),
-  disability_type: z.string().max(100).optional().nullable().transform(v => v || null),
-  permanent_province: z.string().max(100).optional().nullable().transform(v => v || null),
-  permanent_district: z.string().max(100).optional().nullable().transform(v => v || null),
-  permanent_ward: z.string().max(100).optional().nullable().transform(v => v || null),
-  place_of_birth: z.string().max(255).optional().nullable().transform(v => v || null),
-  native_place: z.string().max(255).optional().nullable().transform(v => v || null),
+  dob: nullableString(),
+  gender: nullableString(50),
+  social_insurance_number: nullableString(50),
+  nationality: nullableString(100),
+  ethnicity: nullableString(100),
+  religion: nullableString(100),
+  disability_type: nullableString(100),
+  permanent_province: nullableString(100),
+  permanent_district: nullableString(100),
+  permanent_ward: nullableString(100),
+  place_of_birth: nullableString(255),
+  native_place: nullableString(255),
   
   // Political Info Dates - Relaxed validation
-  union_entry_date: z.string().optional().nullable().or(z.literal("")).transform(v => v === "" ? null : v),
-  party_entry_date: z.string().optional().nullable().or(z.literal("")).transform(v => v === "" ? null : v),
-  party_official_entry_date: z.string().optional().nullable().or(z.literal("")).transform(v => v === "" ? null : v),
+  union_entry_date: nullableString(),
+  party_entry_date: nullableString(),
+  party_official_entry_date: nullableString(),
 
   // Identity
   citizen_id: z
@@ -351,12 +355,12 @@ export const appliedRulesSchema = z.object({
   // =========================================================================
   mandatory_docs: z.array(z.string()).optional().default([]),
   doc_configs: z.record(z.string(), documentConfigSnapshotSchema).optional().default({}),
-  // Ticket #4: Upload Configuration (Strict)
+  // Ticket #4: Upload Configuration (Relaxed for migration compatibility)
   upload_config: z.object({
-    allowed_types: z.array(z.string()),
-    max_file_size: z.number().int(),
-    allowed_extensions: z.array(z.string()),
-  }),
+    allowed_types: z.array(z.string()).default([]),
+    max_file_size: z.number().int().default(10 * 1024 * 1024), // 10MB default
+    allowed_extensions: z.array(z.string()).default([]),
+  }).optional().nullable(),
 
   // =========================================================================
   // GROUP 6: Snapshot Metadata
