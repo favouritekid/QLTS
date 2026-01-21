@@ -35,6 +35,7 @@ from .database import AsyncSessionLocal  # For auto-sync templates
 from .core.rate_limits import limiter  # ✅ MIGRATED: Use new centralized rate limits module
 from .utils.redis_lock import init_redis_client, close_redis_client
 from .routers import (
+    administrative,  # ✅ PHASE 4: Administrative Nodes (Province/District/Ward)
     admission_config,  # ✅ PHASE 3: Admission Config + Scoring API
     admission_paths,  # ✅ PHASE 1: Admission Configuration Console
     admissions,  # ✅ NEW: Admission Profile workflow (replacement for applications)
@@ -581,6 +582,7 @@ fastapi_app.include_router(admission_config.router, prefix="/api")  # ✅ PHASE 
 fastapi_app.include_router(admission_paths.router, prefix="/api")  # ✅ PHASE 1: Admission Configuration Console
 fastapi_app.include_router(document_groups.router, prefix="/api")  # ✅ PHASE A.3: DocumentGroup CRUD
 fastapi_app.include_router(config_data.router, prefix="/api") # ✅ NEW: Config Data
+fastapi_app.include_router(administrative.router, prefix="/api")  # ✅ PHASE 4: Administrative address nodes
 fastapi_app.include_router(pipeline.router, prefix="/api/pipeline")
 fastapi_app.include_router(organization.router, prefix="/api")
 fastapi_app.include_router(officer.router, prefix="/api")

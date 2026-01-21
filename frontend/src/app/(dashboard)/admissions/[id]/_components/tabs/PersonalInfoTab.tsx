@@ -8,6 +8,7 @@ import { FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/comp
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Combobox } from "@/components/ui/combobox"
 import { Separator } from "@/components/ui/separator"
+import { AdaptiveAddressSelect } from "@/components/forms/AdaptiveAddressSelect"
 import type { AdmissionProfileResponse, AdmissionProfileUpdate } from "@/lib/zod/admissions"
 import { useConfigData } from "@/lib/hooks/useConfigData"
 import { format } from "date-fns" // Optional if needed for display, but input date handles ISO
@@ -207,47 +208,16 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
               )}
             />
             
-            <div className="col-span-2">
-              <Label className="mb-2 block">Hộ khẩu thường trú</Label>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <FormField
-                  control={form.control}
-                  name="permanent_province"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormControl>
-                        <Input {...field} value={field.value || ""} disabled={!isEditable} placeholder="Tỉnh/Thành phố" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                 <FormField
-                  control={form.control}
-                  name="permanent_district"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormControl>
-                        <Input {...field} value={field.value || ""} disabled={!isEditable} placeholder="Quận/Huyện" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                 <FormField
-                  control={form.control}
-                  name="permanent_ward"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormControl>
-                        <Input {...field} value={field.value || ""} disabled={!isEditable} placeholder="Phường/Xã" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
-            </div>
+            <AdaptiveAddressSelect
+              label="Hộ khẩu thường trú"
+              provinceValue={form.watch("permanent_province") || ""}
+              districtValue={form.watch("permanent_district") || null}
+              wardValue={form.watch("permanent_ward") || ""}
+              onProvinceChange={(value) => form.setValue("permanent_province", value)}
+              onDistrictChange={(value) => form.setValue("permanent_district", value || "")}
+              onWardChange={(value) => form.setValue("permanent_ward", value)}
+              disabled={!isEditable}
+            />
         </CardContent>
       </Card>
 
