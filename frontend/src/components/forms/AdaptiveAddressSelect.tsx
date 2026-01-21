@@ -53,7 +53,7 @@ export function AdaptiveAddressSelect({
   const [selectedDistrictCode, setSelectedDistrictCode] = useState<string | null>(null);
 
   // Fetch data
-  const { data: provinces = [], isLoading: loadingProvinces } = useProvinces();
+  const { data: provinces = [], isLoading: loadingProvinces, error: provincesError } = useProvinces();
   const { data: districts = [], isLoading: loadingDistricts } = useDistricts(selectedProvinceCode);
   const { data: wards = [], isLoading: loadingWards } = useWards(
     selectedProvinceCode, 

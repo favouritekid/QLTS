@@ -1,6 +1,6 @@
 "use client"
 
-import { UseFormReturn } from "react-hook-form"
+import { UseFormReturn, useWatch } from "react-hook-form"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -26,6 +26,11 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
   const { data: nationalities } = useConfigData("nationality")
   const { data: disabilities } = useConfigData("disability_type")
   const { data: provinces } = useConfigData("province")
+
+  // Watch address fields for reactivity (useWatch triggers re-render on change)
+  const permanentProvince = useWatch({ control: form.control, name: "permanent_province" }) || ""
+  const permanentDistrict = useWatch({ control: form.control, name: "permanent_district" }) || null
+  const permanentWard = useWatch({ control: form.control, name: "permanent_ward" }) || ""
 
   return (
     <div className="space-y-6">
@@ -210,9 +215,9 @@ export function PersonalInfoTab({ profile, form, isEditable }: PersonalInfoTabPr
             
             <AdaptiveAddressSelect
               label="Hộ khẩu thường trú"
-              provinceValue={form.watch("permanent_province") || ""}
-              districtValue={form.watch("permanent_district") || null}
-              wardValue={form.watch("permanent_ward") || ""}
+              provinceValue={permanentProvince}
+              districtValue={permanentDistrict}
+              wardValue={permanentWard}
               onProvinceChange={(value) => form.setValue("permanent_province", value)}
               onDistrictChange={(value) => form.setValue("permanent_district", value || "")}
               onWardChange={(value) => form.setValue("permanent_ward", value)}
