@@ -1,3 +1,19 @@
+"use client"
+
+/**
+ * Documents Tab Component (REFACTORED)
+ * 
+ * Comprehensive document submission table per wireframe:
+ * - Tên giấy tờ | Loại nộp | Hình thức | Trạng thái | Thao tác
+ * 
+ * Features:
+ * - Display ALL documents from doc_configs (not just requires_upload=true)
+ * - submission_format badges (photo, certified_copy, original)
+ * - requires_upload column (Online vs Nộp giấy)
+ * - paper_submitted status support
+ * - Officer-only checkbox for paper submission
+ */
+
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
