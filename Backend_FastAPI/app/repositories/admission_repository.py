@@ -492,6 +492,30 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         
         return doc
 
+    async def confirm_document_format(
+        self,
+        profile_id: int,
+        document_type_code: str,
+        verified_format: str,
+    ) -> Optional[models.ProfileDocument]:
+        """
+        Update verified_format for a document.
+        
+        Args:
+            profile_id: AdmissionProfile ID
+            document_type_code: Document type code
+            verified_format: original | certified_copy | photo
+            
+        Returns:
+            Updated ProfileDocument or None
+        """
+        doc = await self.get_document_by_type(profile_id, document_type_code)
+        if not doc:
+            return None
+        
+        doc.verified_format = verified_format
+        return doc
+
     # =========================================================================
     # CONFIRMATION TOKEN METHODS (Magic Link)
     # =========================================================================

@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Calculator, CheckCircle2, XCircle, AlertCircle, BookOpen } from "lucide-react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { configApi } from "@/lib/api/config"
-import type { AppliedRules, AdmissionProfileUpdate } from "@/lib/zod/admissions"
+import type { AppliedRules, AdmissionProfileUpdate, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
 
 // Internal interface for UI logic compatibility
 interface AdmissionCriterion {
@@ -21,7 +21,7 @@ interface AdmissionCriterion {
 }
 
 interface ScoresTabProps {
-  form: UseFormReturn<AdmissionProfileUpdate>
+  form: UseFormReturn<AdmissionProfileUpdateInput>
   isEditable: boolean
   // minGpa removed - now read from appliedRules.min_gpa (Phase 2 Fix)
   // Updated to match the actual AppliedRules type from backend/zod

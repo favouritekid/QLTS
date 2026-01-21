@@ -19,6 +19,7 @@ import {
   admissionProfileUpdateSchema,
   type AdmissionProfileResponse,
   type AdmissionProfileUpdate,
+  type AdmissionProfileUpdateInput,
 } from "@/lib/zod/admissions"
 
 // Architecture Standards (Phase 7)
@@ -97,7 +98,7 @@ export function AdmissionDetailClient({
   // =========================================================================
   // 6. Form Setup
   // =========================================================================
-  const form = useForm<AdmissionProfileUpdate>({
+  const form = useForm<AdmissionProfileUpdateInput>({
     resolver: zodResolver(admissionProfileUpdateSchema),
     mode: "onBlur", // ADR-FE-001: Validate on blur, not on every change
     defaultValues: {
@@ -167,16 +168,12 @@ export function AdmissionDetailClient({
   // 7. Handlers
   // =========================================================================
   const handleSave = () => {
-    const data = form.getValues()
-    const payload = {
-      ...data,
-      citizen_id: data.citizen_id === "" ? null : data.citizen_id,
-      // Fix: Allow sending admission_scores if either gpa OR subject_scores exist
-      admission_scores: (data.admission_scores?.gpa || Object.keys(data.admission_scores?.subject_scores || {}).length > 0) 
-        ? data.admission_scores 
-        : null
-    }
-    updateMutation.mutate(payload)
+    // Phase 3.1: Use handleSubmit to leverage Zod transforms (empty str -> null)
+    form.handleSubmit((data) => {
+      // data is now AdmissionProfileUpdate (Output type with nulls)
+      // RHF types 'data' as Input, so we cast to Output to match runtime behavior from zodResolver
+      updateMutation.mutate(data as unknown as AdmissionProfileUpdate)
+    })()
   }
 
   const handleSubmit = async () => {

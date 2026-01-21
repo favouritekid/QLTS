@@ -147,6 +147,14 @@ class ProfileDocument(Base):
         nullable=True,
         comment="Officer who rejected"
     )
+
+    # ✅ Finding 2.3: Document Internal Verification
+    verified_format = Column(
+        String(50),
+        nullable=True,
+        comment="original | certified_copy | photo"
+    )
+
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,

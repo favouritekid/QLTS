@@ -236,6 +236,11 @@ class DocumentItemSchema(BaseModel):
         None,
         description="Upload timestamp (UTC)"
     )
+    # ✅ FIX Finding 2.3: Document Internal Verification
+    verified_format: Optional[Literal["original", "certified_copy", "photo"]] = Field(
+        None,
+        description="Format verified by officer (original/certified_copy/photo)"
+    )
 
     @field_validator('label')
     @classmethod
@@ -370,6 +375,34 @@ class AdmissionProfileUpdate(BaseModel):
         str_strip_whitespace=True,
         validate_assignment=True
     )
+
+    # ✅ FIX Finding 1.5: Cross-field Date Validation
+    from pydantic import model_validator
+    
+    @model_validator(mode='after')
+    def validate_logical_dates(self) -> 'AdmissionProfileUpdate':
+        """
+        Validate logical sequence of dates to prevent invalid data.
+        Failed validation raises ValueError (422 Unprocessable Entity).
+        """
+        # 1. Political Dates Logic
+        # Union Entry < Party Entry (Probationary) < Party Official Entry
+        if self.union_entry_date and self.party_entry_date:
+            if self.union_entry_date > self.party_entry_date:
+                raise ValueError("Ngày vào Đoàn phải trước Ngày vào Đảng (dự bị)")
+        
+        if self.party_entry_date and self.party_official_entry_date:
+            if self.party_entry_date > self.party_official_entry_date:
+                raise ValueError("Ngày vào Đảng (dự bị) phải trước Ngày vào Đảng (chính thức)")
+
+        # 2. Birth Date Logic
+        # DOB must be reasonable (e.g., < Union Entry if both exist)
+        # Typically Union entry is at age 15+
+        if self.dob and self.union_entry_date:
+            if self.dob > self.union_entry_date:
+               raise ValueError("Ngày sinh phải trước Ngày vào Đoàn")
+
+        return self
 
 
 # ==============================================================================
@@ -701,11 +734,29 @@ class DocumentUploadResponse(BaseModel):
         None,
         description="Upload timestamp (ISO format)"
     )
+    # ✅ FIX Finding 2.3
+    verified_format: Optional[str] = Field(
+        None,
+        description="Verified format (original/certified_copy/photo)"
+    )
 
     model_config = ConfigDict(
         from_attributes=True,
         validate_assignment=True
     )
+
+
+class DocumentFormatVerifyRequest(BaseModel):
+    """
+    Schema for verifying document format (Officer action).
+    Finding 2.3: Officer confirms if document is Original/Copy.
+    """
+    format: Literal["original", "certified_copy", "photo"] = Field(
+        ...,
+        description="Physical format of the document"
+    )
+
+    model_config = ConfigDict(str_strip_whitespace=True)
 
 
 class DocumentRejectRequest(BaseModel):

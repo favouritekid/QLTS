@@ -459,6 +459,52 @@ async def mark_document_paper_submitted(
         await post_commit()
         return result
 
+
+
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except PermissionDeniedError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@limiter.limit(RateLimits.DATA_WRITE)
+@router.patch(
+    "/{profile_id}/documents/{doc_code}/verify-format",
+    response_model=dict,
+    summary="Verify document physical format (Original/Copy)",
+    status_code=status.HTTP_200_OK,
+)
+async def verify_document_format_endpoint(
+    request: Request,
+    profile_id: int,
+    doc_code: str,
+    data: schemas.DocumentFormatVerifyRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    Verify document physical format (Officer action).
+    
+    Update verified_format to 'original', 'certified_copy', or 'photo'.
+    Finding 2.3: Allows officers to distinguish between hard copies and digital uploads.
+    
+    **Returns:**
+    - { code, verified_format, is_format_verified }
+    """
+    try:
+        result, post_commit = await admission_service.confirm_document_format(
+            db=db,
+            profile_id=profile_id,
+            doc_code=doc_code,
+            format_type=data.format,
+            current_user=current_user,
+        )
+        await db.commit()
+        await post_commit()
+        return result
+
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except PermissionDeniedError as e:

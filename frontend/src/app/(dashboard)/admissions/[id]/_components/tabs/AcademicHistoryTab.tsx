@@ -13,10 +13,10 @@ import { Button } from "@/components/ui/button"
 import { FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Plus, Trash2, GraduationCap } from "lucide-react"
-import type { AdmissionProfileUpdate } from "@/lib/zod/admissions"
+import type { AdmissionProfileUpdate, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
 
 interface AcademicHistoryTabProps {
-  form: UseFormReturn<AdmissionProfileUpdate>
+  form: UseFormReturn<AdmissionProfileUpdateInput>
   isEditable: boolean
 }
 

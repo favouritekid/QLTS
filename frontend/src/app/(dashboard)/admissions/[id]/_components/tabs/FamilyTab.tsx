@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form"
 import { Plus, Trash2, Users, UserCheck } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
-import type { AdmissionProfileUpdate } from "@/lib/zod/admissions"
+import type { AdmissionProfileUpdate, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
 
 interface FamilyMember {
   id: string;
@@ -19,7 +19,7 @@ interface FamilyMember {
 }
 
 interface FamilyTabProps {
-  form: UseFormReturn<AdmissionProfileUpdate>
+  form: UseFormReturn<AdmissionProfileUpdateInput>
   isEditable: boolean
 }
 
@@ -130,7 +130,7 @@ export function FamilyTab({ form, isEditable }: FamilyTabProps) {
   )
 }
 
-function MemberRow({ form, index, isEditable, onRemove, isPrimary }: { form: UseFormReturn<AdmissionProfileUpdate>, index: number, isEditable: boolean, onRemove: () => void, isPrimary: boolean }) {
+function MemberRow({ form, index, isEditable, onRemove, isPrimary }: { form: UseFormReturn<AdmissionProfileUpdateInput>, index: number, isEditable: boolean, onRemove: () => void, isPrimary: boolean }) {
     return (
         <div className="p-4 border rounded-lg bg-white relative group">
             <div className="grid grid-cols-1 md:grid-cols-12 gap-4">

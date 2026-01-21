@@ -9,13 +9,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Combobox } from "@/components/ui/combobox"
 import { Separator } from "@/components/ui/separator"
 import { AdaptiveAddressSelect } from "@/components/forms/AdaptiveAddressSelect"
-import type { AdmissionProfileResponse, AdmissionProfileUpdate } from "@/lib/zod/admissions"
+import type { AdmissionProfileResponse, AdmissionProfileUpdate, AdmissionProfileUpdateInput } from "@/lib/zod/admissions"
 import { useConfigData } from "@/lib/hooks/useConfigData"
 import { format } from "date-fns" // Optional if needed for display, but input date handles ISO
 
 interface PersonalInfoTabProps {
   profile: AdmissionProfileResponse
-  form: UseFormReturn<AdmissionProfileUpdate>
+  form: UseFormReturn<AdmissionProfileUpdateInput>
   isEditable: boolean
 }
 

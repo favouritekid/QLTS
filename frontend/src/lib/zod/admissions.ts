@@ -230,32 +230,33 @@ export const admissionProfileUpdateSchema = z.object({
   version: z.number().int().min(1).optional(),
 
   // Personal Info Fields
-  full_name: z.string().max(255).optional().nullable(),
+  full_name: z.string().max(255).optional().nullable().transform(v => v || null),
   phone: z
     .string()
     .regex(/^0\d{9,10}$/, "Số điện thoại không hợp lệ")
     .optional()
     .nullable()
-    .or(z.literal("")),
-  email: z.string().email("Email không hợp lệ").max(255).optional().nullable().or(z.literal("")),
+    .or(z.literal(""))
+    .transform(v => v === "" ? null : v),
+  email: z.string().email("Email không hợp lệ").max(255).optional().nullable().or(z.literal("")).transform(v => v === "" ? null : v),
   // Relaxed validation to accept YYYY-MM-DD from input[type="date"]
-  dob: z.string().optional().nullable(),
-  gender: z.string().max(50).optional().nullable(),
-  social_insurance_number: z.string().max(50).optional().nullable(),
-  nationality: z.string().max(100).optional().nullable(),
-  ethnicity: z.string().max(100).optional().nullable(),
-  religion: z.string().max(100).optional().nullable(),
-  disability_type: z.string().max(100).optional().nullable(),
-  permanent_province: z.string().max(100).optional().nullable(),
-  permanent_district: z.string().max(100).optional().nullable(),
-  permanent_ward: z.string().max(100).optional().nullable(),
-  place_of_birth: z.string().max(255).optional().nullable(),
-  native_place: z.string().max(255).optional().nullable(),
+  dob: z.string().optional().nullable().or(z.literal("")).transform(v => v === "" ? null : v),
+  gender: z.string().max(50).optional().nullable().transform(v => v || null),
+  social_insurance_number: z.string().max(50).optional().nullable().transform(v => v || null),
+  nationality: z.string().max(100).optional().nullable().transform(v => v || null),
+  ethnicity: z.string().max(100).optional().nullable().transform(v => v || null),
+  religion: z.string().max(100).optional().nullable().transform(v => v || null),
+  disability_type: z.string().max(100).optional().nullable().transform(v => v || null),
+  permanent_province: z.string().max(100).optional().nullable().transform(v => v || null),
+  permanent_district: z.string().max(100).optional().nullable().transform(v => v || null),
+  permanent_ward: z.string().max(100).optional().nullable().transform(v => v || null),
+  place_of_birth: z.string().max(255).optional().nullable().transform(v => v || null),
+  native_place: z.string().max(255).optional().nullable().transform(v => v || null),
   
   // Political Info Dates - Relaxed validation
-  union_entry_date: z.string().optional().nullable(),
-  party_entry_date: z.string().optional().nullable(),
-  party_official_entry_date: z.string().optional().nullable(),
+  union_entry_date: z.string().optional().nullable().or(z.literal("")).transform(v => v === "" ? null : v),
+  party_entry_date: z.string().optional().nullable().or(z.literal("")).transform(v => v === "" ? null : v),
+  party_official_entry_date: z.string().optional().nullable().or(z.literal("")).transform(v => v === "" ? null : v),
 
   // Identity
   citizen_id: z
@@ -263,7 +264,8 @@ export const admissionProfileUpdateSchema = z.object({
     .regex(/^\d{12}$/, "CCCD/CMND phải là 12 chữ số")
     .optional()
     .nullable()
-    .or(z.literal("")), // Allow empty string for drafts
+    .or(z.literal("")) // Allow empty string for drafts
+    .transform(v => v === "" ? null : v),
 
   // JSONB Arrays
   family_info: z.array(familyMemberSchema).optional().nullable(),
@@ -272,7 +274,11 @@ export const admissionProfileUpdateSchema = z.object({
   documents_checklist: z.array(documentItemSchema).optional().nullable(),
 })
 
-export type AdmissionProfileUpdate = z.infer<
+export type AdmissionProfileUpdateInput = z.input<
+  typeof admissionProfileUpdateSchema
+>
+
+export type AdmissionProfileUpdate = z.output<
   typeof admissionProfileUpdateSchema
 >
 
