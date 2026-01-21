@@ -425,6 +425,95 @@ async def upload_document(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+@limiter.limit(RateLimits.DATA_WRITE)
+@router.post(
+    "/{profile_id}/documents/{doc_code}/paper-submitted",
+    response_model=dict,
+    summary="Mark document as paper submitted (Officer confirms receipt)",
+    status_code=status.HTTP_200_OK,
+)
+async def mark_document_paper_submitted(
+    request: Request,
+    profile_id: int,
+    doc_code: str,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    Mark a document as paper submitted (officer confirms receipt).
+    
+    For documents where requires_upload=false.
+    Only officers/managers/admins can mark paper submitted.
+    
+    **Returns:**
+    - { code, status, paper_submitted_at, paper_submitted_by_id }
+    """
+    try:
+        result, post_commit = await admission_service.mark_paper_submitted(
+            db=db,
+            profile_id=profile_id,
+            doc_code=doc_code,
+            current_user=current_user,
+        )
+        await db.commit()
+        await post_commit()
+        return result
+
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except PermissionDeniedError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@limiter.limit(RateLimits.DATA_WRITE)
+@router.post(
+    "/{profile_id}/documents/{doc_code}/reject",
+    response_model=dict,
+    summary="Reject document with reason",
+    status_code=status.HTTP_200_OK,
+)
+async def reject_document_endpoint(
+    request: Request,
+    profile_id: int,
+    doc_code: str,
+    data: schemas.DocumentRejectRequest,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    Reject a document with reason.
+    
+    User will need to re-upload or resubmit.
+    Only officers/managers/admins can reject documents.
+    
+    **Request Body:**
+    - reason: Rejection reason (required)
+    
+    **Returns:**
+    - { code, status, rejection_reason, rejected_at, rejected_by_id }
+    """
+    try:
+        result, post_commit = await admission_service.reject_document(
+            db=db,
+            profile_id=profile_id,
+            doc_code=doc_code,
+            reason=data.reason,
+            current_user=current_user,
+        )
+        await db.commit()
+        await post_commit()
+        return result
+
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except PermissionDeniedError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post(
     "/{profile_id}/enroll",

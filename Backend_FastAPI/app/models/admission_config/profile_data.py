@@ -103,7 +103,7 @@ class ProfileDocument(Base):
         nullable=False,
         default="missing",
         index=True,
-        comment="missing | uploaded | verified | rejected"
+        comment="missing | uploaded | verified | rejected | paper_submitted"
     )
     file_path = Column(
         String(500),
@@ -122,6 +122,30 @@ class ProfileDocument(Base):
     verified_at = Column(
         DateTime(timezone=True),
         nullable=True
+    )
+    # Paper submission tracking (for documents that don't require upload)
+    paper_submitted_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When officer confirmed paper was received"
+    )
+    paper_submitted_by = Column(
+        Integer,
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="Officer who confirmed paper receipt"
+    )
+    # Rejection tracking
+    rejected_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When document was rejected"
+    )
+    rejected_by = Column(
+        Integer,
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="Officer who rejected"
     )
     created_at = Column(
         DateTime(timezone=True),

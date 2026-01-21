@@ -427,6 +427,71 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
+    async def mark_paper_submitted(
+        self,
+        profile_id: int,
+        document_type_code: str,
+        officer_id: int,
+    ) -> Optional[models.ProfileDocument]:
+        """
+        Mark a document as paper submitted (officer confirms receipt).
+        
+        For documents where requires_upload=false.
+        
+        Args:
+            profile_id: AdmissionProfile ID
+            document_type_code: Document type code
+            officer_id: ID of officer confirming receipt
+            
+        Returns:
+            Updated ProfileDocument or None if not found
+        """
+        from datetime import datetime, timezone
+        
+        doc = await self.get_document_by_type(profile_id, document_type_code)
+        if not doc:
+            return None
+        
+        doc.status = "paper_submitted"
+        doc.paper_submitted_at = datetime.now(timezone.utc)
+        doc.paper_submitted_by = officer_id
+        
+        return doc
+
+    async def reject_document(
+        self,
+        profile_id: int,
+        document_type_code: str,
+        officer_id: int,
+        reason: str,
+    ) -> Optional[models.ProfileDocument]:
+        """
+        Reject a document with reason.
+        
+        User will need to re-upload or resubmit.
+        
+        Args:
+            profile_id: AdmissionProfile ID
+            document_type_code: Document type code
+            officer_id: ID of officer rejecting
+            reason: Rejection reason
+            
+        Returns:
+            Updated ProfileDocument or None if not found
+        """
+        from datetime import datetime, timezone
+        
+        doc = await self.get_document_by_type(profile_id, document_type_code)
+        if not doc:
+            return None
+        
+        doc.status = "rejected"
+        doc.rejection_reason = reason
+        doc.rejected_at = datetime.now(timezone.utc)
+        doc.rejected_by = officer_id
+        
+        return doc
+
     # =========================================================================
     # CONFIRMATION TOKEN METHODS (Magic Link)
     # =========================================================================

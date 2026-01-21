@@ -689,7 +689,7 @@ class DocumentUploadResponse(BaseModel):
     code: str = Field(..., description="Document code (e.g., HOC_BA)")
     label: str = Field(..., description="Human-readable name")
     is_mandatory: bool = Field(default=True)
-    status: Literal["missing", "uploaded", "verified", "rejected"] = Field(
+    status: Literal["missing", "uploaded", "verified", "rejected", "paper_submitted"] = Field(
         default="uploaded",
         description="Upload status"
     )
@@ -706,6 +706,24 @@ class DocumentUploadResponse(BaseModel):
         from_attributes=True,
         validate_assignment=True
     )
+
+
+class DocumentRejectRequest(BaseModel):
+    """Schema for reject document request."""
+    reason: str = Field(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="Rejection reason (required)"
+    )
+
+    @field_validator('reason')
+    @classmethod
+    def sanitize_reason(cls, v: str) -> str:
+        """XSS Prevention: Escape HTML entities."""
+        return html.escape(v.strip())
+
+    model_config = ConfigDict(str_strip_whitespace=True)
 
 
 class StudentResponse(BaseModel):

@@ -1799,6 +1799,136 @@ async def upload_document(
     return response_data, _post_commit
 
 
+async def mark_paper_submitted(
+    db: AsyncSession,
+    profile_id: int,
+    doc_code: str,
+    current_user: models.User,
+) -> tuple[Dict[str, Any], Any]:
+    """
+    Mark a document as paper submitted (officer confirms receipt).
+    
+    For documents where requires_upload=false.
+    Only officers/managers/admins can mark paper submitted.
+    
+    Args:
+        db: Database session
+        profile_id: AdmissionProfile ID
+        doc_code: Document type code
+        current_user: Current authenticated user (must be officer+)
+        
+    Returns:
+        Tuple of (updated_doc_item, post_commit_callback)
+        
+    Raises:
+        ResourceNotFoundError: Document not found
+        BadRequest: Document requires upload (not paper submission)
+    """
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
+    
+    # Get profile for access check
+    profile = await get_profile(db, profile_id, current_user)
+    
+    # Mark paper submitted
+    doc = await admission_repo.mark_paper_submitted(
+        profile_id=profile_id,
+        document_type_code=doc_code,
+        officer_id=current_user.id,
+    )
+    
+    if not doc:
+        raise ResourceNotFoundError(f"Document code '{doc_code}' not found in profile documents")
+    
+    await db.flush()
+    
+    response_data = {
+        "code": doc_code,
+        "status": "paper_submitted",
+        "paper_submitted_at": doc.paper_submitted_at.isoformat() if doc.paper_submitted_at else None,
+        "paper_submitted_by_id": current_user.id,
+    }
+    
+    async def _post_commit():
+        log.info(
+            "Document paper submitted confirmed",
+            profile_id=profile_id,
+            doc_code=doc_code,
+            officer_id=current_user.id,
+        )
+    
+    return response_data, _post_commit
+
+
+async def reject_document(
+    db: AsyncSession,
+    profile_id: int,
+    doc_code: str,
+    reason: str,
+    current_user: models.User,
+) -> tuple[Dict[str, Any], Any]:
+    """
+    Reject a document with reason.
+    
+    User will need to re-upload or resubmit.
+    Only officers/managers/admins can reject documents.
+    
+    Args:
+        db: Database session
+        profile_id: AdmissionProfile ID
+        doc_code: Document type code
+        reason: Rejection reason (required)
+        current_user: Current authenticated user (must be officer+)
+        
+    Returns:
+        Tuple of (updated_doc_item, post_commit_callback)
+        
+    Raises:
+        ResourceNotFoundError: Document not found
+        BadRequest: Reason not provided
+    """
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
+    
+    if not reason or not reason.strip():
+        raise BadRequest("Rejection reason is required")
+    
+    # Get profile for access check
+    profile = await get_profile(db, profile_id, current_user)
+    
+    # Reject document
+    doc = await admission_repo.reject_document(
+        profile_id=profile_id,
+        document_type_code=doc_code,
+        officer_id=current_user.id,
+        reason=reason.strip(),
+    )
+    
+    if not doc:
+        raise ResourceNotFoundError(f"Document code '{doc_code}' not found in profile documents")
+    
+    await db.flush()
+    
+    response_data = {
+        "code": doc_code,
+        "status": "rejected",
+        "rejection_reason": reason.strip(),
+        "rejected_at": doc.rejected_at.isoformat() if doc.rejected_at else None,
+        "rejected_by_id": current_user.id,
+    }
+    
+    async def _post_commit():
+        log.info(
+            "Document rejected",
+            profile_id=profile_id,
+            doc_code=doc_code,
+            reason=reason,
+            officer_id=current_user.id,
+        )
+    
+    return response_data, _post_commit
+
+
 async def enroll_student(
     db: AsyncSession,
     profile_id: int,
