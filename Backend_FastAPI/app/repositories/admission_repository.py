@@ -342,7 +342,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         document_type_code: str,
         status: str,
         file_path: Optional[str] = None,
-        uploaded_at: Optional[str] = None,
+        uploaded_at = None,  # datetime or str (for backward compatibility)
     ) -> Optional[models.ProfileDocument]:
         """
         Update ProfileDocument status and file metadata.
@@ -354,7 +354,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             document_type_code: Document type code
             status: New status (missing | uploaded | verified | rejected)
             file_path: File path (if uploaded)
-            uploaded_at: Upload timestamp (if uploaded)
+            uploaded_at: Upload timestamp as datetime (if uploaded)
 
         Returns:
             Updated ProfileDocument or None if not found
@@ -366,8 +366,14 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         doc.status = status
         if file_path:
             doc.file_path = file_path
-        if uploaded_at:
-            doc.uploaded_at = uploaded_at
+        if uploaded_at is not None:
+            # Handle both datetime and string (backward compatibility)
+            if isinstance(uploaded_at, str):
+                from datetime import datetime
+                # Parse ISO format string to datetime
+                doc.uploaded_at = datetime.fromisoformat(uploaded_at.replace('Z', '+00:00'))
+            else:
+                doc.uploaded_at = uploaded_at
 
         return doc
 
