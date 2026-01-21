@@ -23,7 +23,7 @@ router = APIRouter(prefix="/administrative", tags=["Administrative"])
 @router.get("/provinces", response_model=List[ProvinceResponse])
 async def get_provinces(
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = Depends(deps.get_current_user),
+    current_user: models.User = Depends(deps.get_current_active_user),
 ):
     """
     Get all provinces/cities.
@@ -38,7 +38,7 @@ async def get_provinces(
 async def get_districts(
     province_code: str = Query(..., description="Province code (e.g., '54' for Phú Yên)"),
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = Depends(deps.get_current_user),
+    current_user: models.User = Depends(deps.get_current_active_user),
 ):
     """
     Get districts/counties under a province.
@@ -65,7 +65,7 @@ async def get_wards(
     province_code: str = Query(..., description="Province code"),
     district_code: Optional[str] = Query(None, description="District code (optional for 2-level)"),
     db: AsyncSession = Depends(database.get_db),
-    current_user: models.User = Depends(deps.get_current_user),
+    current_user: models.User = Depends(deps.get_current_active_user),
 ):
     """
     Get wards/communes based on selection mode.
