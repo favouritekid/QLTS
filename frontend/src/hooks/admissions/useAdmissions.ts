@@ -220,3 +220,63 @@ export function useDeleteAdmission(id: number) {
     },
   })
 }
+
+export function useMarkPaperSubmitted(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (docCode: string) => 
+      admissionsApi.markPaperSubmitted(id, docCode),
+    onSuccess: (data, docCode) => {
+      toast.success("Đã xác nhận nhận giấy tờ")
+      
+      // Optimistic update
+      queryClient.setQueryData(admissionsKeys.detail(id), (oldData: AdmissionProfileResponse | undefined) => {
+        if (!oldData) return oldData
+        
+        const updatedChecklist = oldData.documents_checklist?.map(doc => 
+          doc.code === docCode 
+            ? { ...doc, status: "paper_submitted" as const }
+            : doc
+        ) || []
+        
+        return { ...oldData, documents_checklist: updatedChecklist }
+      })
+      
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, { context: "xác nhận giấy tờ" })
+    }
+  })
+}
+
+export function useRejectDocument(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (variables: { docCode: string, reason: string }) => 
+      admissionsApi.rejectDocument(id, variables.docCode, variables.reason),
+    onSuccess: (data, variables) => {
+      toast.success("Đã từ chối tài liệu")
+      
+      // Optimistic update
+      queryClient.setQueryData(admissionsKeys.detail(id), (oldData: AdmissionProfileResponse | undefined) => {
+        if (!oldData) return oldData
+        
+        const updatedChecklist = oldData.documents_checklist?.map(doc => 
+          doc.code === variables.docCode 
+            ? { ...doc, status: "rejected" as const, rejection_reason: variables.reason }
+            : doc
+        ) || []
+        
+        return { ...oldData, documents_checklist: updatedChecklist }
+      })
+      
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, { context: "từ chối tài liệu" })
+    }
+  })
+}

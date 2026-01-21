@@ -30,6 +30,8 @@ export {
   useEnrollStudent,
   useDeleteAdmission,
   useUploadAdmissionDocument,
+  useMarkPaperSubmitted,
+  useRejectDocument,
 } from "./useAdmissions"
 
 // ============================================================================

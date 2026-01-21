@@ -176,7 +176,7 @@ export const documentItemSchema = z.object({
    */
   submission_format_confirmed: z.boolean().optional(),
   // Status and upload info
-  status: z.enum(["missing", "uploaded", "verified", "rejected"]),
+  status: z.enum(["missing", "uploaded", "verified", "rejected", "paper_submitted"]),
   file_path: z
     .string()
     .max(512, "Đường dẫn file không được quá 512 ký tự")

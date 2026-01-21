@@ -115,6 +115,49 @@ export async function uploadAdmissionDocument(
 // EXPORT DEFAULT OBJECT (Lead Pattern)
 // ============================================
 
+/**
+ * Mark document as paper submitted (officer confirms receipt)
+ */
+export interface PaperSubmittedResponse {
+  code: string
+  status: string
+  paper_submitted_at: string | null
+  paper_submitted_by_id: number
+}
+
+export async function markPaperSubmitted(
+  id: number,
+  docCode: string
+): Promise<PaperSubmittedResponse> {
+  const response = await api.post<PaperSubmittedResponse>(
+    `/api/admissions/${id}/documents/${docCode}/paper-submitted`
+  )
+  return response.data
+}
+
+/**
+ * Reject document with reason
+ */
+export interface DocumentRejectResponse {
+  code: string
+  status: string
+  rejection_reason: string
+  rejected_at: string | null
+  rejected_by_id: number
+}
+
+export async function rejectDocument(
+  id: number,
+  docCode: string,
+  reason: string
+): Promise<DocumentRejectResponse> {
+  const response = await api.post<DocumentRejectResponse>(
+    `/api/admissions/${id}/documents/${docCode}/reject`,
+    { reason }
+  )
+  return response.data
+}
+
 export const admissionsApi = {
   listAdmissions,
   getAdmission,
@@ -124,6 +167,8 @@ export const admissionsApi = {
   enrollStudent,
   deleteAdmission,
   uploadAdmissionDocument,
+  markPaperSubmitted,
+  rejectDocument,
 }
 
 export default admissionsApi
