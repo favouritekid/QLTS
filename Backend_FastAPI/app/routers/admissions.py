@@ -718,6 +718,49 @@ async def delete_admission_profile(
 # STATE MACHINE ENDPOINTS (ADMISSION_STATE_MACHINE_IMPLEMENTATION_PLAN.md)
 # ==============================================================================
 
+# ✅ FIX #8: Assignment Workflow Endpoint
+@limiter.limit(RateLimits.DATA_WRITE)
+@router.post(
+    "/{profile_id}/claim",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Claim admission profile for review (Manager/Admin)",
+)
+async def claim_admission_review(
+    request: Request,
+    profile_id: int,
+    data: schemas.ClaimRequest,  # ✅ Fix #8 Bug 3: Request body with version
+    current_user: models.User = CasbinAuth,  # Layer 2: RBAC (Manager/Admin)
+    profile: models.AdmissionProfile = Depends(get_admission_for_manager),  # Layer 3: IDOR
+    db: AsyncSession = Depends(database.get_db),
+):
+    """
+    Claim a profile for review - Manager/Admin action.
+    
+    **Architecture Compliance**:
+    - Layer 1: Rate limiting
+    - Layer 2: RBAC (Manager/Admin only)
+    - Layer 3: IDOR (Unit check)
+    - Layer 4: Service handles locking logic
+    
+    **Business Rules**:
+    - Status must be 'submitted'
+    - Must not be claimed by another user
+    - Optimistic locking via version check
+    """
+    # ✅ FIX #8 Bug 2: Call module-level function directly
+    # Was: admission_service = AdmissionService() (Error: Class not found)
+    await admission_service.claim_review(
+        db=db,
+        profile=profile,
+        reviewer=current_user,
+        expected_version=data.version  # ✅ Fix #8 Bug 3: Version check
+    )
+    
+    # Commit transaction
+    await db.commit()
+    return profile
+
+
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.post(
     "/{profile_id}/approve",

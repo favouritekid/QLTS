@@ -154,6 +154,8 @@ from .admission import (
     StudentDocumentResponse,
     StudentResponse,
     # State transition schemas (State Machine)
+    ClaimRequest,
+    DocumentFormatVerifyRequest,
     ApproveRequest,
     RejectRequest,
     ResubmitRequest,

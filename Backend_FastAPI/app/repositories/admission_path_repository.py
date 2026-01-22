@@ -108,14 +108,20 @@ class AdmissionPathRepository(BaseRepository[AdmissionPath]):
     ) -> Optional[AdmissionPath]:
         """
         Check if a path already exists for this offering + method combination.
-        
-        Used for unique constraint validation.
+
+        Used for unique constraint validation and profile creation.
+
+        ✅ FIX: Eager load admission_method to prevent MissingGreenlet error
+        when service code accesses admission_path.admission_method.status.
         """
         query = (
             select(AdmissionPath)
             .where(
                 AdmissionPath.academic_info_id == academic_info_id,
                 AdmissionPath.admission_method_id == admission_method_id
+            )
+            .options(
+                selectinload(AdmissionPath.admission_method)  # ← FIX: Eager load
             )
         )
         result = await self.db.execute(query)

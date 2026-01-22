@@ -228,6 +228,22 @@ class AdmissionProfile(Base):
         comment="Rejection reason (required when rejecting)"
     )
 
+    # ✅ FIX #8: Assignment Workflow (Reviewer Assignment)
+    # Allows tracking "Who is reviewing this profile?"
+    # Prevents multiple managers from reviewing the same profile simultaneously
+    assigned_reviewer_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="Assigned Manager/Reviewer ID"
+    )
+    assigned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Timestamp when profile was assigned/claimed"
+    )
+
     # Confirmation tracking for statistics/reporting
     confirmed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -267,6 +283,13 @@ class AdmissionProfile(Base):
     rejected_by: Mapped["User"] = relationship(
         "User",
         foreign_keys=[rejected_by_id],
+        lazy="select",
+        uselist=False
+    )
+    # ✅ FIX #8: Assignment relationship
+    assigned_reviewer: Mapped["User"] = relationship(
+        "User",
+        foreign_keys=[assigned_reviewer_id],
         lazy="select",
         uselist=False
     )

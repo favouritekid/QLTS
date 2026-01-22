@@ -802,14 +802,14 @@ async def create_profile(
     # ✅ FIX Finding 1.2: Check if Admission Method is Active
     # We need to access the admission_method relation from the path
     # Assuming path.admission_method is eager loaded in repository or exists
-    # If not loaded, we rely on the repository ensuring it returns valid paths, 
-    # but explicit check is safer. 
+    # If not loaded, we rely on the repository ensuring it returns valid paths,
+    # but explicit check is safer.
     # Since get_path_by_offering_and_method likely joins admission_method, we check here.
-    if admission_path.admission_method and admission_path.admission_method.status != 'active':
+    if admission_path.admission_method and not admission_path.admission_method.is_active:
          log.warning(
             "Attempt to create profile with inactive admission method",
             method_id=admission_method_id,
-            status=admission_path.admission_method.status
+            is_active=admission_path.admission_method.is_active
         )
          raise BadRequest(
             f"Phương thức tuyển sinh '{admission_path.admission_method.name}' đang tạm dừng hoặc không hoạt động."
@@ -1531,19 +1531,27 @@ async def submit_and_evaluate(
     from app.models.admission_config import AdmissionCriteria
     
     # 1. Reconstruct Criteria from Snapshot (applied_rules)
-    # Note: applied_rules is a dict snapshot. We wrap it in a pseudo-model or Dict 
+    # Note: applied_rules is a dict snapshot. We wrap it in a pseudo-model or Dict
     # compatible with ScoringService if possible, or construct a temporary Criteria object.
     # Since Service expects a model, we populate one.
-    
+
+    # ✅ FIX: Safe extraction of admission_method (can be string or dict in legacy data)
+    method_data = applied_rules.get("admission_method")
+    if isinstance(method_data, dict):
+        method_code = method_data.get("code", "SNAPSHOT")
+    else:
+        # applied_rules.admission_method is a string (e.g., "HOC_BA") - current schema
+        method_code = str(method_data) if method_data else "SNAPSHOT"
+
     snapshot_criteria = models.AdmissionCriteria(
-        code=applied_rules.get("admission_method", {}).get("code", "SNAPSHOT"),
+        code=method_code,
         min_gpa=float(applied_rules.get("min_gpa", 0)) if applied_rules.get("min_gpa") else None,
         min_score=float(applied_rules.get("min_score", 0)) if applied_rules.get("min_score") else None,
         min_subject_score=float(applied_rules.get("min_subject_score", 0)) if applied_rules.get("min_subject_score") else None,
         required_subject_count=applied_rules.get("required_subject_count"),
         subject_selection_mode=applied_rules.get("subject_selection_mode", "fixed"),
         scoring_method=applied_rules.get("scoring_method", "sum"),
-        # subject_group_mappings are tricky from snapshot. 
+        # subject_group_mappings are tricky from snapshot.
         # For Phase 1/2 we assume "fixed" mode or explicit "subject_groups" list in snapshot.
     )
 
@@ -2748,6 +2756,61 @@ async def override_profile(
         )
 
     await db.flush()
+
+    # ✅ FIX #8: Assignment Workflow (Claim Profile)
+    # MOVED OUT of override_profile scope (indentation fix)
+async def claim_review(
+    db: AsyncSession,
+    profile: models.AdmissionProfile,
+    reviewer: models.User,
+    expected_version: Optional[int] = None
+):
+    """
+    Manager claims a profile for review (Assignment Workflow).
+    
+    Business Rules:
+    1. Status MUST be 'submitted' (cannot claim draft/approved) # ADMISSION_RULE_008
+    2. Profile must NOT be already claimed by someone else
+    3. Version check (optimistic locking)
+    """
+    if profile.status != 'submitted':
+        raise BusinessRuleViolation(
+            f"Cannot claim profile in status '{profile.status}'. Only 'submitted' profiles can be claimed."
+        )
+
+    # 3. Version Check (CRITICAL FIX: Prevent Race Condition)
+    if expected_version is not None and profile.version != expected_version:
+        raise ConflictError(
+            f"Profile was modified by another user. "
+            f"Expected version {expected_version}, but current version is {profile.version}. "
+            "Please refresh and try again."
+        )
+
+    if profile.assigned_reviewer_id:
+        if profile.assigned_reviewer_id == reviewer.id:
+            # Idempotent success (already claimed by self)
+            return
+        
+        # Already claimed by someone else
+        raise BusinessRuleViolation(
+            f"Profile is already claimed by another reviewer (ID: {profile.assigned_reviewer_id})"
+        )
+
+    # STATE CHANGE
+    profile.assigned_reviewer_id = reviewer.id
+    profile.assigned_at = datetime.now(timezone.utc)
+    profile.version += 1
+    profile.updated_at = datetime.now(timezone.utc)
+
+    # Audit Log (Internal)
+    log.info(
+        "Profile claimed for review",
+        profile_id=profile.id,
+        reviewer_id=reviewer.id
+    )
+
+    await db.flush()
+
 
     # AUDIT LOG (per AUTHORIZATION_DECISIONS.md Decision 11)
     # TODO: Implement proper audit log table

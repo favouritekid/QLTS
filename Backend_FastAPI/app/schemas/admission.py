@@ -937,6 +937,14 @@ class FinalizeRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
 
+class ClaimRequest(BaseModel):
+    """
+    Schema for Claiming a profile.
+    Only version is needed for optimistic locking.
+    """
+    version: int = Field(..., description="Optimistic locking version")
+
+
 # ==============================================================================
 # EXPORT ALL
 # ==============================================================================
@@ -1016,6 +1024,8 @@ __all__ = [
     "AdmissionSubmitResponse",
     "EnrollStudentResponse",
     # State transition schemas
+    "ClaimRequest",  # ✅ Added
+    "DocumentFormatVerifyRequest",  # ✅ Added
     "ApproveRequest",
     "RejectRequest",
     "ResubmitRequest",

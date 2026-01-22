@@ -5,7 +5,7 @@ import { useForm, FormProvider } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 
 // Phase 7: Reusable status banners
-import { StatusBanner, AdmissionPendingBanner } from "@/components/ui/StatusBanner"
+import { StatusBanner, AdmissionPendingBanner, ValidationErrorsBanner } from "@/components/ui/StatusBanner"
 
 // T3.3 Fix: Use ViewModel hook instead of separate hooks
 import {
@@ -203,18 +203,25 @@ export function AdmissionDetailClient({
   // =========================================================================
   return (
     <FormProvider {...form}>
-      <AdmissionLayout 
+      <AdmissionLayout
         profile={profile}
         currentStep={currentStep}
         onStepChange={setCurrentStep}
         stepsStatus={stepsStatusRecord}
         validation={{ isEligible, missingItems }}
-      >
-        {/* Phase 7: Status-Driven Banners */}
-        <StatusBanner status={profile.status} />
-        <AdmissionPendingBanner status={profile.status} />
-        {/* Phase 0.9: ValidationErrorsBanner removed - validation shown in Header + Sidebar */}
+        banners={
+          <>
+            {/* Phase 7: Status-Driven Banners (in header area) */}
+            <StatusBanner status={profile.status} />
+            <AdmissionPendingBanner status={profile.status} />
 
+            {/* ✅ ValidationErrorsBanner: Detailed validation errors in header area */}
+            {validationErrors.length > 0 && (
+              <ValidationErrorsBanner errors={validationErrors} />
+            )}
+          </>
+        }
+      >
         {/* TAB CONTENT */}
         <div className="bg-white rounded-lg shadow-sm min-h-[500px] p-1">
           {currentStep === 1 && <PersonalInfoTab profile={profile} form={form} isEditable={can('edit')} />}
