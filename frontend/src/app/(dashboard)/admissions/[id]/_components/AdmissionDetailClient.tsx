@@ -1,11 +1,9 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { useForm, FormProvider } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
-
-// Phase 7: Reusable status banners
-import { StatusBanner, AdmissionPendingBanner, ValidationErrorsBanner } from "@/components/ui/StatusBanner"
+import { useRouter } from "next/navigation"
 
 // T3.3 Fix: Use ViewModel hook instead of separate hooks
 import {
@@ -52,7 +50,7 @@ export function AdmissionDetailClient({
   // =========================================================================
   const { data: vm, isLoading } = useAdmissionViewModel(profileId, {
     initialData,
-    staleTime: 15000, // 15 seconds - auto-refresh when stale
+    staleTime: 0, // Phase 4 Fix: Always refetch on invalidate for realtime badge updates
   })
 
   // Mutations
@@ -64,31 +62,25 @@ export function AdmissionDetailClient({
   // =========================================================================
   // 2. Permission-Based Rendering (from ViewModel)
   // =========================================================================
-  // Get raw profile for usePermissions (needs full profile object)
-  const { can } = usePermissions(vm as unknown as AdmissionProfileResponse)
-  
+  // ViewModel includes permissions field via ...rest spread (useAdmissionViewModel.ts:209)
+  // Safe to pass directly to usePermissions
+  const { can } = usePermissions(vm)
+
   // =========================================================================
   // 3. Backend-Computed State (from ViewModel - NO local calculation)
   // @see FRONTEND_ARCHITECTURE_V3.md Section 2.6
   // =========================================================================
   const isEligible = vm?.isEligible ?? false
   const validationErrors = vm?.validationErrors ?? []
+  const validationSummary = vm?.validationSummary
   const stepsStatusRecord = vm?.stepsStatus ?? {}
-  
-  // Convert validation errors to missingItems format for AdmissionLayout
-  const missingItems = useMemo(() => 
-    validationErrors.map(err => ({
-      code: err,
-      label: err,
-      status: "error" as const
-    }))
-  , [validationErrors])
 
   // =========================================================================
   // 4. Derived Profile (for component compatibility)
-  // Components like AdmissionLayout, Tabs need full profile object
+  // ViewModel spreads all AdmissionProfileResponse fields via ...rest
+  // Type assertion is safe but needed for TypeScript compatibility
   // =========================================================================
-  const profile = vm as unknown as AdmissionProfileResponse | null
+  const profile = vm as AdmissionProfileResponse | null
 
   // =========================================================================
   // 5. Navigation State
@@ -164,16 +156,99 @@ export function AdmissionDetailClient({
     }
   }, [vm?.version, form]) // Use version as stable change indicator
 
+  // Phase 3: Sync backend validation_errors to RHF field errors
+  // Trigger on vm.version change (stable indicator of backend updates)
+  useEffect(() => {
+    const errors = vm?.validationErrors ?? []
+
+    // Clear all previous errors first
+    form.clearErrors()
+
+    if (errors.length > 0) {
+      errors.forEach(error => {
+        const lower = error.toLowerCase()
+
+        // Skip document-related errors (they don't map to fields)
+        if (lower.includes("tài liệu") || lower.includes("minh chứng") || lower.includes("document")) {
+          return
+        }
+
+        // Map FIELD errors only (not documents)
+        if (lower.includes("chưa nhập cccd") || lower.includes("citizen_id")) {
+          form.setError("citizen_id", { type: "backend", message: error })
+        } else if (lower.includes("chưa nhập họ tên") || lower.includes("full_name")) {
+          form.setError("full_name", { type: "backend", message: error })
+        } else if (lower.includes("chưa nhập email") || lower.includes("email không hợp lệ")) {
+          form.setError("email", { type: "backend", message: error })
+        } else if (lower.includes("chưa nhập số điện thoại") || lower.includes("phone")) {
+          form.setError("phone", { type: "backend", message: error })
+        } else if (lower.includes("chưa nhập ngày sinh") || lower.includes("dob")) {
+          form.setError("dob", { type: "backend", message: error })
+        } else if (lower.includes("chưa chọn giới tính")) {
+          form.setError("gender", { type: "backend", message: error })
+        } else if (lower.includes("gpa") && !lower.includes("tài liệu")) {
+          form.setError("admission_scores", { type: "backend", message: error })
+        }
+        // Add more field-specific mappings as needed
+      })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vm?.version])
+
+  // =========================================================================
+  // Phase 4: Unsaved Changes Warning
+  // =========================================================================
+  const isDirty = form.formState.isDirty
+
+  // Warn on browser navigation (back/close/refresh)
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (isDirty) {
+        e.preventDefault()
+        e.returnValue = "" // Chrome requires returnValue to be set
+      }
+    }
+
+    window.addEventListener("beforeunload", handleBeforeUnload)
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload)
+  }, [isDirty])
+
   // =========================================================================
   // 7. Handlers
   // =========================================================================
+  const handleStepChange = useCallback((newStep: number) => {
+    if (isDirty) {
+      const confirmed = window.confirm(
+        "Bạn có thay đổi chưa lưu. Bạn có chắc muốn chuyển sang bước khác?\n\nNhấn OK để tiếp tục (thay đổi sẽ bị mất)\nNhấn Cancel để ở lại và lưu"
+      )
+      if (!confirmed) return
+    }
+
+    // Reset dirty state when changing steps (since we're losing changes)
+    form.reset(form.getValues(), { keepValues: true })
+    setCurrentStep(newStep)
+  }, [isDirty, form])
+
   const handleSave = () => {
-    // Phase 3.1: Use handleSubmit to leverage Zod transforms (empty str -> null)
-    form.handleSubmit((data) => {
-      // data is now AdmissionProfileUpdate (Output type with nulls)
-      // RHF types 'data' as Input, so we cast to Output to match runtime behavior from zodResolver
-      updateMutation.mutate(data as unknown as AdmissionProfileUpdate)
-    })()
+    // Phase 4: Save draft without validation
+    // "Lưu thay đổi" should allow incomplete data (draft mode)
+    // Use getValues() instead of handleSubmit() to bypass required validation
+    const data = form.getValues()
+
+    // Transform empty strings to null manually (since we're not using handleSubmit)
+    const transformedData: any = { ...data }
+    Object.keys(transformedData).forEach(key => {
+      if (transformedData[key] === "") {
+        transformedData[key] = null
+      }
+    })
+
+    updateMutation.mutate(transformedData as AdmissionProfileUpdate, {
+      onSuccess: () => {
+        // Reset dirty state after successful save
+        form.reset(form.getValues(), { keepValues: true })
+      }
+    })
   }
 
   const handleSubmit = async () => {
@@ -191,9 +266,9 @@ export function AdmissionDetailClient({
 
   const handleCheckCondition = () => {
     // Navigate to first error step using backend-computed status
-    if (stepsStatusRecord[1] === "error") setCurrentStep(1)
-    else if (stepsStatusRecord[4] === "error") setCurrentStep(4)
-    else if (stepsStatusRecord[5] === "error") setCurrentStep(5)
+    if (stepsStatusRecord[1] === "error") handleStepChange(1)
+    else if (stepsStatusRecord[4] === "error") handleStepChange(4)
+    else if (stepsStatusRecord[5] === "error") handleStepChange(5)
   }
 
   if (!profile) return null
@@ -206,21 +281,11 @@ export function AdmissionDetailClient({
       <AdmissionLayout
         profile={profile}
         currentStep={currentStep}
-        onStepChange={setCurrentStep}
+        onStepChange={handleStepChange}
         stepsStatus={stepsStatusRecord}
-        validation={{ isEligible, missingItems }}
-        banners={
-          <>
-            {/* Phase 7: Status-Driven Banners (in header area) */}
-            <StatusBanner status={profile.status} />
-            <AdmissionPendingBanner status={profile.status} />
-
-            {/* ✅ ValidationErrorsBanner: Detailed validation errors in header area */}
-            {validationErrors.length > 0 && (
-              <ValidationErrorsBanner errors={validationErrors} />
-            )}
-          </>
-        }
+        validation={{ isEligible, missingItems: [] }}
+        validationErrors={validationErrors}
+        validationSummary={validationSummary}
       >
         {/* TAB CONTENT */}
         <div className="bg-white rounded-lg shadow-sm min-h-[500px] p-1">
@@ -233,9 +298,11 @@ export function AdmissionDetailClient({
           {currentStep === 7 && <FinalizeTab isEligible={isEligible} onSubmit={handleSubmit} isSubmitting={submitMutation.isPending} />}
         </div>
 
-        {/* STICKY ACTIONS (now uses permissions) */}
-        <AdmissionActions 
+        {/* STICKY ACTIONS (Phase 2: Context-based buttons) */}
+        <AdmissionActions
           profile={profile}
+          currentStep={currentStep}
+          onStepChange={handleStepChange}
           isSaving={updateMutation.isPending}
           isSubmitting={submitMutation.isPending}
           isEnrolling={enrollMutation.isPending}

@@ -14,7 +14,7 @@ Benefits:
 
 from typing import List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -396,8 +396,11 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             select(models.ProfileDocument)
             .where(
                 models.ProfileDocument.profile_id == profile_id,
-                models.ProfileDocument.status == "uploaded",
-                models.ProfileDocument.file_path.isnot(None),
+                or_(
+                    and_(models.ProfileDocument.status == "uploaded", models.ProfileDocument.file_path.isnot(None)),
+                    models.ProfileDocument.status == "verified",  # Also include verified (uploaded + checked)
+                    models.ProfileDocument.status == "paper_submitted"
+                )
             )
             .options(joinedload(models.ProfileDocument.document_type))
         )

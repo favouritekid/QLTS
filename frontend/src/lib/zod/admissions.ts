@@ -234,7 +234,14 @@ export const admissionProfileUpdateSchema = z.object({
   version: z.number().int().min(1).optional(),
 
   // Personal Info Fields
+  // Phase 4 Fix: Allow optional for draft Save, backend enforces required on Submit
   full_name: nullableString(255),
+  dob: nullableString(),
+  gender: nullableString(50),
+  nationality: nullableString(100),
+  ethnicity: nullableString(100),
+
+  // Optional fields
   phone: z
     .string()
     .regex(/^0\d{9,10}$/, "Số điện thoại không hợp lệ")
@@ -243,12 +250,7 @@ export const admissionProfileUpdateSchema = z.object({
     .or(z.literal(""))
     .transform(v => v === "" ? null : v),
   email: z.string().email("Email không hợp lệ").max(255).optional().nullable().or(z.literal("")).transform(v => v === "" ? null : v),
-  // Relaxed validation to accept YYYY-MM-DD from input[type="date"]
-  dob: nullableString(),
-  gender: nullableString(50),
   social_insurance_number: nullableString(50),
-  nationality: nullableString(100),
-  ethnicity: nullableString(100),
   religion: nullableString(100),
   disability_type: nullableString(100),
   permanent_province: nullableString(100),
@@ -262,7 +264,7 @@ export const admissionProfileUpdateSchema = z.object({
   party_entry_date: nullableString(),
   party_official_entry_date: nullableString(),
 
-  // Identity
+  // Identity - Optional for draft, backend enforces on Submit
   citizen_id: z
     .string()
     .regex(/^\d{12}$/, "CCCD/CMND phải là 12 chữ số")

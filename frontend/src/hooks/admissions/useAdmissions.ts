@@ -177,25 +177,12 @@ export function useUploadAdmissionDocument(id: number) {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (variables: { docCode: string, file: File }) => 
+    mutationFn: (variables: { docCode: string, file: File }) =>
         admissionsApi.uploadAdmissionDocument(id, variables.docCode, variables.file),
     onSuccess: (data, variables) => {
       toast.success("Tài liệu đã được tải lên")
-      
-      // Optimistic update: Update the specific document in cache immediately
-      queryClient.setQueryData(admissionsKeys.detail(id), (oldData: AdmissionProfileResponse | undefined) => {
-        if (!oldData) return oldData
-        
-        const updatedChecklist = oldData.documents_checklist?.map(doc => 
-          doc.code === variables.docCode 
-            ? { ...doc, status: "uploaded" as const, file_path: data.file_path, uploaded_at: data.uploaded_at }
-            : doc
-        ) || []
-        
-        return { ...oldData, documents_checklist: updatedChecklist }
-      })
-      
-      // Also invalidate to ensure consistency with server
+
+      // Invalidate to refetch with updated validation_errors, step_status from backend
       queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
@@ -225,24 +212,12 @@ export function useMarkPaperSubmitted(id: number) {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (docCode: string) => 
+    mutationFn: (docCode: string) =>
       admissionsApi.markPaperSubmitted(id, docCode),
     onSuccess: (data, docCode) => {
       toast.success("Đã xác nhận nhận giấy tờ")
-      
-      // Optimistic update
-      queryClient.setQueryData(admissionsKeys.detail(id), (oldData: AdmissionProfileResponse | undefined) => {
-        if (!oldData) return oldData
-        
-        const updatedChecklist = oldData.documents_checklist?.map(doc => 
-          doc.code === docCode 
-            ? { ...doc, status: "paper_submitted" as const }
-            : doc
-        ) || []
-        
-        return { ...oldData, documents_checklist: updatedChecklist }
-      })
-      
+
+      // Invalidate to refetch with updated validation_errors, step_status from backend
       queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {

@@ -15,8 +15,12 @@ interface AdmissionLayoutProps {
     isEligible: boolean
     missingItems: { code: string; label: string; status: "error" | "warning" }[]
   }
-  /** Optional banners to show below header (ValidationErrorsBanner, StatusBanner, etc.) */
-  banners?: ReactNode
+  validationErrors?: string[]
+  validationSummary?: {
+    personal?: { has_error: boolean; count: number }
+    gpa?: { has_error: boolean; count: number }
+    documents?: { has_error: boolean; count: number }
+  } | null
 }
 
 export function AdmissionLayout({
@@ -26,7 +30,8 @@ export function AdmissionLayout({
   onStepChange,
   stepsStatus,
   validation,
-  banners
+  validationErrors = [],
+  validationSummary
 }: AdmissionLayoutProps) {
   return (
     <div className="flex flex-col min-h-screen bg-gray-50/50">
@@ -35,22 +40,15 @@ export function AdmissionLayout({
           <AdmissionHeader profile={profile} validation={validation} />
        </div>
 
-       {/* 2. Banners Section (below header, above content) */}
-       {banners && (
-         <div className="bg-background border-b">
-           <div className="container max-w-7xl mx-auto py-4 px-6">
-             {banners}
-           </div>
-         </div>
-       )}
-
        <div className="flex flex-1 container max-w-7xl mx-auto pt-6 gap-8">
           {/* 3. Sidebar Nav */}
-          <aside className="w-64 hidden lg:block flex-shrink-0 sticky top-24 h-fit">
+          <aside className="w-56 hidden lg:block flex-shrink-0 sticky top-24 h-fit">
              <PipelineSidebar
                 currentStep={currentStep}
                 onStepChange={onStepChange}
                 stepsStatus={stepsStatus}
+                validationErrors={validationErrors}
+                validationSummary={validationSummary}
              />
           </aside>
 

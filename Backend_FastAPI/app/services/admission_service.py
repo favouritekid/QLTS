@@ -161,7 +161,9 @@ def _compute_frontend_fields(
     
     # Check GPA/scores
     min_gpa = float(applied_rules.get("min_gpa") or 0)
-    required_count = int(applied_rules.get("required_subject_count") or 3)
+    # ✅ FIX: Handle explicit 0 requirement (don't specific check boolean value)
+    req_count_val = applied_rules.get("required_subject_count")
+    required_count = int(req_count_val) if req_count_val is not None else 3
     
     # Get current score count from the just-computed admission_scores
     scores_map = profile.admission_scores.get("subject_scores", {}) if profile.admission_scores else {}
@@ -230,17 +232,25 @@ def _compute_frontend_fields(
     if documents is not None:
         uploaded_doc_codes = {
             doc.document_type.code for doc in documents 
-            if doc.file_path and doc.status in ["uploaded", "verified"]
+            if (doc.file_path and doc.status in ["uploaded", "verified"]) or doc.status == "paper_submitted"
         }
         for doc_code in upload_required_docs:
             if doc_code not in uploaded_doc_codes:
                 doc_errors.append(doc_code)
                 validation_errors.append(f"Thiếu tài liệu bắt buộc: {doc_code}")
     
-    # Check citizen_id
+    # Check citizen_id and other required personal fields
     cccd_error = not profile.citizen_id
     if cccd_error:
         validation_errors.append("Chưa nhập số CCCD/CMND")
+        
+    # ✅ FIX: Validate other required fields (Name, Phone)
+    missing_personal = []
+    if not profile.full_name: missing_personal.append("Họ tên")
+    if not profile.phone: missing_personal.append("SĐT")
+    
+    if missing_personal:
+        validation_errors.append(f"Thiếu thông tin cá nhân: {', '.join(missing_personal)}")
     
     # Determine eligibility status
     # ARCHITECTURE NOTE:
@@ -289,9 +299,9 @@ def _compute_frontend_fields(
             "count": len(doc_errors)
         },
         "personal": {
-            "has_error": cccd_error,
-            "label": "Thiếu CCCD/CMND" if cccd_error else "CCCD: OK",
-            "count": 1 if cccd_error else 0
+            "has_error": cccd_error or len(missing_personal) > 0,
+            "label": "Thiếu CCCD/CMND" if cccd_error else ("Thiếu thông tin cá nhân" if missing_personal else "Thông tin cá nhân: OK"),
+            "count": (1 if cccd_error else 0) + len(missing_personal)
         }
     }
     
@@ -319,7 +329,7 @@ def _compute_frontend_fields(
     
     step_status = {
         # Step 1: Personal Info
-        1: "error" if cccd_error else ("success" if personal_optional_filled else "warning"),
+        1: "error" if (cccd_error or not personal_required_filled) else ("success" if personal_optional_filled else "warning"),
         # Step 2: Family
         2: "success" if has_family else "warning",
         # Step 3: Academic History

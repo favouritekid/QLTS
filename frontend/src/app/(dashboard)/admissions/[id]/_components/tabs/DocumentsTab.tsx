@@ -29,13 +29,13 @@ import {
 } from "lucide-react"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 import { useUploadAdmissionDocument, useMarkPaperSubmitted, useRejectDocument } from "@/hooks/admissions/useAdmissions"
+import { usePermissions } from "@/hooks/usePermissions"
 import { useRef, useState } from "react"
 import { toast } from "sonner"
 
 interface DocumentsTabProps {
   profile: AdmissionProfileResponse
   isEditable: boolean
-  isOfficer?: boolean // NEW: Officer can mark paper submitted or reject
 }
 
 // ============================================================================
@@ -113,12 +113,13 @@ function getFormatConfig(format: string | null | undefined) {
 // COMPONENT
 // ============================================================================
 
-export function DocumentsTab({ profile, isEditable, isOfficer = false }: DocumentsTabProps) {
+export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
   const documents = profile.documents_checklist || []
+  const { can } = usePermissions(profile)
   const uploadMutation = useUploadAdmissionDocument(profile.id)
   const paperMutation = useMarkPaperSubmitted(profile.id)
   const rejectMutation = useRejectDocument(profile.id)
-  
+
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [selectedDocCode, setSelectedDocCode] = useState<string | null>(null)
   
@@ -268,7 +269,7 @@ export function DocumentsTab({ profile, isEditable, isOfficer = false }: Documen
                 const hasFile = doc.file_path && (doc.status === "uploaded" || doc.status === "verified")
                 const requiresUpload = doc.requires_upload !== false // Default true if undefined
                 const isPaperDoc = !requiresUpload
-                const canReject = isOfficer && (doc.status === "uploaded" || doc.status === "paper_submitted" || doc.status === "verified")
+                const canReject = can('edit') && (doc.status === "uploaded" || doc.status === "paper_submitted" || doc.status === "verified")
                 
                 return (
                   <div
@@ -367,7 +368,7 @@ export function DocumentsTab({ profile, isEditable, isOfficer = false }: Documen
                       )}
                       
                       {/* Paper submission checkbox (Officer only) */}
-                      {isPaperDoc && isOfficer && doc.status === "missing" && (
+                      {isPaperDoc && can('edit') && doc.status === "missing" && (
                         <div className="flex items-center gap-1">
                           <Checkbox 
                             id={`paper-${doc.code}`}
