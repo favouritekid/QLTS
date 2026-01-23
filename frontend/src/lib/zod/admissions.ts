@@ -726,3 +726,40 @@ export function getStatusLabel(status: string): string {
   return STATUS_LABELS[status] ?? status
 }
 
+// ==============================================================================
+// WORKFLOW ACTION SCHEMAS
+// ==============================================================================
+
+/**
+ * Approve Request Schema
+ * Mirrors backend: app/schemas/admissions.py -> ApproveRequest
+ * 
+ * Used when Manager/Admin approves a submitted admission profile.
+ * Requires version for optimistic locking.
+ */
+export const approveRequestSchema = z.object({
+  notes: z.string().optional(),
+  version: z.number().int().positive("Version must be a positive integer"),
+})
+
+export type ApproveRequest = z.infer<typeof approveRequestSchema>
+
+/**
+ * Reject Request Schema
+ * Mirrors backend: app/schemas/admissions.py -> RejectRequest
+ * 
+ * Used when Manager/Admin rejects a submitted admission profile.
+ * Requires rejection reason (minimum 10 characters for clarity)
+ * and version for optimistic locking.
+ */
+export const rejectRequestSchema = z.object({
+  reason: z
+    .string()
+    .min(10, "Lý do từ chối phải có ít nhất 10 ký tự")
+    .max(1000, "Lý do từ chối không được quá 1000 ký tự")
+    .trim(),
+  version: z.number().int().positive("Version must be a positive integer"),
+})
+
+export type RejectRequest = z.infer<typeof rejectRequestSchema>
+

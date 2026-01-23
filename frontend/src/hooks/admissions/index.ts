@@ -27,6 +27,8 @@ export {
   useCreateAdmission,
   useUpdateAdmission,
   useSubmitAdmission,
+  useApproveAdmission,  // ✅ NEW
+  useRejectAdmission,   // ✅ NEW
   useEnrollStudent,
   useDeleteAdmission,
   useUploadAdmissionDocument,

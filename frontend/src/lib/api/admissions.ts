@@ -88,6 +88,42 @@ export async function deleteAdmission(id: number): Promise<void> {
 }
 
 /**
+ * Approve admission profile (Manager/Admin action)
+ * POST /api/admissions/{id}/approve
+ * 
+ * Transitions status from submitted/resubmitted → approved
+ * Requires version for optimistic locking
+ */
+export async function approveAdmission(
+  id: number,
+  data: { notes?: string; version: number }
+): Promise<AdmissionProfileResponse> {
+  const response = await api.post<AdmissionProfileResponse>(
+    `/api/admissions/${id}/approve`,
+    data
+  )
+  return response.data
+}
+
+/**
+ * Reject admission profile (Manager/Admin action)
+ * POST /api/admissions/{id}/reject
+ * 
+ * Transitions status from submitted/resubmitted → rejected
+ * Requires rejection reason and version for optimistic locking
+ */
+export async function rejectAdmission(
+  id: number,
+  data: { reason: string; version: number }
+): Promise<AdmissionProfileResponse> {
+  const response = await api.post<AdmissionProfileResponse>(
+    `/api/admissions/${id}/reject`,
+    data
+  )
+  return response.data
+}
+
+/**
  * Upload admission document
  */
 export interface DocumentUploadResponse {
@@ -211,6 +247,8 @@ export const admissionsApi = {
   createAdmission,
   updateAdmission,
   submitAdmission,
+  approveAdmission,  // ✅ NEW
+  rejectAdmission,   // ✅ NEW
   enrollStudent,
   deleteAdmission,
   uploadAdmissionDocument,

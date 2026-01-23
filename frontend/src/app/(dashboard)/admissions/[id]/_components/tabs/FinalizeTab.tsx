@@ -18,8 +18,17 @@ import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 interface FinalizeTabProps {
   profile: AdmissionProfileResponse
   isEligible: boolean
+  
+  // Officer/Student actions (submit workflow)
   onSubmit: () => void
   isSubmitting: boolean
+  
+  // Manager/Admin actions (approve/reject workflow) - NEW
+  onApprove?: () => void
+  onReject?: () => void
+  isApproving?: boolean
+  isRejecting?: boolean
+  
   canApprove: boolean
 }
 
@@ -28,6 +37,10 @@ export function FinalizeTab({
   isEligible,
   onSubmit,
   isSubmitting,
+  onApprove,       // ✅  NEW
+  onReject,        // ✅ NEW
+  isApproving,     // ✅ NEW
+  isRejecting,     // ✅ NEW
   canApprove,
 }: FinalizeTabProps) {
   return (
@@ -48,20 +61,30 @@ export function FinalizeTab({
             <Button
               size="lg"
               variant="outline"
-              disabled={isSubmitting}
+              disabled={isApproving || isRejecting}  // ✅ CHANGED
+              onClick={onReject}  // ✅ CHANGED - was no handler
               className="w-full sm:w-auto min-w-[160px]"
             >
-              <XCircle className="w-4 h-4 mr-2" />
-              Từ chối hồ sơ
+              {isRejecting ? (  // ✅ CHANGED
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Đang xử lý...
+                </>
+              ) : (
+                <>
+                  <XCircle className="w-4 h-4 mr-2" />
+                  Từ chối hồ sơ
+                </>
+              )}
             </Button>
 
             <Button
               size="lg"
-              disabled={!isEligible || isSubmitting}
-              onClick={onSubmit}
+              disabled={!isEligible || isApproving || isRejecting}  // ✅ CHANGED
+              onClick={onApprove}  // ✅ CHANGED - was onSubmit
               className="w-full sm:w-auto min-w-[200px]"
             >
-              {isSubmitting ? (
+              {isApproving ? (  // ✅ CHANGED - was isSubmitting
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                   Đang xử lý...

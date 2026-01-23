@@ -10,6 +10,8 @@ import {
   useAdmissionViewModel,
   useUpdateAdmission,
   useSubmitAdmission,
+  useApproveAdmission,  // ✅ NEW
+  useRejectAdmission,   // ✅ NEW
   useEnrollStudent,
   useDeleteAdmission,
 } from "@/hooks/admissions"
@@ -56,6 +58,8 @@ export function AdmissionDetailClient({
   // Mutations
   const updateMutation = useUpdateAdmission(profileId)
   const submitMutation = useSubmitAdmission(profileId)
+  const approveMutation = useApproveAdmission(profileId)  // ✅ NEW
+  const rejectMutation = useRejectAdmission(profileId)    // ✅ NEW
   const enrollMutation = useEnrollStudent(profileId)
   const deleteMutation = useDeleteAdmission(profileId)
 
@@ -260,6 +264,51 @@ export function AdmissionDetailClient({
     enrollMutation.mutate()
   }
 
+  /**
+   * Approve Handler (Manager/Admin)
+   * Thin Client: Only delegates to mutation, NO business logic
+   * Version read from ViewModel (backend source of truth)
+   */
+  const handleApprove = () => {
+    if (!vm?.version) {
+      toast.error("Không thể phê duyệt: thiếu version")
+      return
+    }
+    
+    approveMutation.mutate({
+      version: vm.version,
+      notes: undefined, // Optional approval notes
+    })
+  }
+
+  /**
+   * Reject Handler (Manager/Admin)
+   * Thin Client: Only collects input and delegates to mutation
+   * Validation handled by Zod schema in mutation hook
+   */
+  const handleReject = () => {
+    const reason = window.prompt(
+      "Nhập lý do từ chối (tối thiểu 10 ký tự):"
+    )
+    
+    if (!reason) return // User cancelled
+    
+    if (reason.length < 10) {
+      toast.error("Lý do từ chối phải có ít nhất 10 ký tự")
+      return
+    }
+    
+    if (!vm?.version) {
+      toast.error("Không thể từ chối: thiếu version")
+      return
+    }
+    
+    rejectMutation.mutate({
+      reason,
+      version: vm.version,
+    })
+  }
+
   // Phase 7: Delete Handler
   const handleDelete = () => {
     deleteMutation.mutate()
@@ -297,7 +346,19 @@ export function AdmissionDetailClient({
           {currentStep === 4 && <ScoresTab form={form} isEditable={can('edit')} appliedRules={profile.applied_rules} profile={profile} />}
           {currentStep === 5 && <DocumentsTab profile={profile} isEditable={can('edit')} />}
           {currentStep === 6 && <TuitionTab profile={profile} />}
-          {currentStep === 7 && <FinalizeTab profile={profile} isEligible={isEligible} onSubmit={handleSubmit} isSubmitting={submitMutation.isPending} canApprove={can('approve')} />}
+          {currentStep === 7 && (
+            <FinalizeTab
+              profile={profile}
+              isEligible={isEligible}
+              onSubmit={handleSubmit}
+              isSubmitting={submitMutation.isPending}
+              onApprove={handleApprove}              // ✅ NEW
+              onReject={handleReject}                // ✅ NEW
+              isApproving={approveMutation.isPending} // ✅ NEW
+              isRejecting={rejectMutation.isPending} // ✅ NEW
+              canApprove={can('approve')}
+            />
+          )}
         </div>
 
         {/* STICKY ACTIONS (Phase 2: Context-based buttons) */}

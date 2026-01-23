@@ -147,6 +147,92 @@ export function useSubmitAdmission(id: number) {
   })
 }
 
+/**
+ * Approve Admission Hook
+ * Manager/Admin action - transitions from submitted/resubmitted → approved
+ * 
+ * Architecture Compliance:
+ * - Uses centralized error handling (handleApiError)
+ * - Handles 409 Conflict (optimistic locking)
+ * - Displays status-driven toast messages
+ * - Invalidates cache on success
+ */
+export function useApproveAdmission(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data: { notes?: string; version: number }) =>
+      admissionsApi.approveAdmission(id, data),
+    onSuccess: (data) => {
+      // Status-driven messaging (FRONTEND_ARCHITECTURE_V3.md 2.3)
+      if (data.status === 'approved') {
+        toast.success("Hồ sơ đã được phê duyệt", {
+          description: `Trạng thái: ${getStatusConfig('approved').label || data.status}`
+        })
+      } else {
+        // Handle unexpected status (async-first principle)
+        toast.info("Yêu cầu phê duyệt đã được xử lý", {
+          description: `Trạng thái hiện tại: ${data.status}`
+        })
+      }
+      
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      // Centralized error handler with 409 Conflict support
+      handleApiError(error, {
+        queryClient,
+        invalidateKeys: [[...admissionsKeys.detail(id)]],
+        context: "phê duyệt hồ sơ"
+      })
+    },
+  })
+}
+
+/**
+ * Reject Admission Hook
+ * Manager/Admin action - transitions from submitted/resubmitted → rejected
+ * 
+ * Architecture Compliance:
+ * - Uses centralized error handling (handleApiError)
+ * - Handles 409 Conflict (optimistic locking)
+ * - Displays status-driven toast messages
+ * - Invalidates cache on success
+ */
+export function useRejectAdmission(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data: { reason: string; version: number }) =>
+      admissionsApi.rejectAdmission(id, data),
+    onSuccess: (data) => {
+      // Status-driven messaging (FRONTEND_ARCHITECTURE_V3.md 2.3)
+      if (data.status === 'rejected') {
+        toast.success("Hồ sơ đã bị từ chối", {
+          description: data.rejection_reason || "Đã gửi lý do từ chối"
+        })
+      } else {
+        // Handle unexpected status (async-first principle)
+        toast.info("Yêu cầu từ chối đã được xử lý", {
+          description: `Trạng thái hiện tại: ${data.status}`
+        })
+      }
+      
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      // Centralized error handler with 409 Conflict support
+      handleApiError(error, {
+        queryClient,
+        invalidateKeys: [[...admissionsKeys.detail(id)]],
+        context: "từ chối hồ sơ"
+      })
+    },
+  })
+}
+
 export function useEnrollStudent(id: number) {
   const queryClient = useQueryClient()
   const router = useRouter()
