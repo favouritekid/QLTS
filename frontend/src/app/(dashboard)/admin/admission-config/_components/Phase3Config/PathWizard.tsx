@@ -28,6 +28,7 @@ import { useAdmissionMethods } from "@/hooks/admissions/useMasterData";
 import { ConfigCriteria } from "./ConfigCriteria";
 import { ConfigDocuments } from "./ConfigDocuments";
 import { ConfigReview } from "./ConfigReview";
+import { PathBasicInfo } from "./PathBasicInfo";
 import type { SelectionContext, Phase3View, AdmissionMethod } from "../shared/types";
 import type { AxiosError } from "axios";
 
@@ -89,82 +90,22 @@ export function PathWizard({ context, pathId, onNavigate, initialStep = 1 }: Pat
   // Fetch data
   const { data: path, isLoading: loadingPath } = useAdmissionPath(activePathId);
   const { data: methods = [], isLoading: loadingMethods } = useAdmissionMethods();
-  const createMutation = useCreateAdmissionPath();
-  const updateMutation = useUpdateAdmissionPath();
 
-  // Form State (Step 1)
-  const [displayName, setDisplayName] = useState("");
-  const [selectedMethodId, setSelectedMethodId] = useState<number | null>(null);
-  const [displayOrder, setDisplayOrder] = useState(1);
-  const [visibility, setVisibility] = useState<"public" | "internal">("internal");
-
-  // Sync form state when path data loads
-   
-  useEffect(() => {
-     
-    if (path) {
-      setDisplayName(path.display_name || "");
-      setSelectedMethodId(path.admission_method?.id || null);
-      setDisplayOrder(path.display_order || 1);
-      setVisibility(path.visibility || "internal");
-      setActivePathId(path.id);
-    }
-  }, [path]);
-
-  // Step 1 Handler: Create/Update Basic Info
-  const handleSaveBasic = async () => {
-    if (!selectedMethodId) {
-      toast.error("Vui lòng chọn phương thức tuyển sinh");
-      return;
-    }
-
-    try {
-      let savedId = activePathId;
-
-      if (activePathId) {
-        // Update existing
-        await updateMutation.mutateAsync({
-          pathId: activePathId,
-          data: {
-            display_name: displayName || undefined,
-            display_order: displayOrder,
-            visibility: visibility,
-          },
-        });
-        toast.success("Cập nhật thông tin cơ bản thành công");
-      } else {
-        // Create new
-        const newPath = await createMutation.mutateAsync({
-          academic_info_id: context.academicInfoId,
-          admission_method_id: selectedMethodId,
-          display_name: displayName || undefined,
-          display_order: displayOrder,
-          visibility: visibility,
-        });
-        savedId = newPath.id;
-        setActivePathId(savedId);
-        toast.success("Tạo đợt tuyển sinh thành công");
-      }
-
-      // Note: Query cache is automatically updated by mutation hooks via setQueryData
-      // No need for manual invalidation here
-
-      // Move to Step 2
-      setStep(2);
-    } catch (error) {
-      const axiosError = error as AxiosError<{ detail?: string }>;
-      toast.error(axiosError.response?.data?.detail || "Lưu thất bại");
-    }
-  };
+  // REMOVED: Local Form State and Effects (delegated to PathBasicInfo)
 
   const handleBackToList = () => {
     onNavigate({ type: "list" });
   };
+  
+  const handleBasicInfoFinish = (savedPathId: number) => {
+    // If created new, set ID to switch to edit mode
+    if (!activePathId) {
+      setActivePathId(savedPathId);
+    }
+    setStep(2);
+  };
 
-  const isSavingBasic = createMutation.isPending || updateMutation.isPending;
   const isLoading = (!!activePathId && loadingPath) || loadingMethods;
-
-  // ... (previous code)
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
@@ -193,102 +134,19 @@ export function PathWizard({ context, pathId, onNavigate, initialStep = 1 }: Pat
 
       {/* Logic for Steps */}
       {step === 1 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Bước 1: Thông tin Cơ bản</CardTitle>
-            <CardDescription>
-              Chọn phương thức tuyển sinh và tên hiển thị
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <div className="flex justify-center py-12">
-                <Loader2 className="h-8 w-8 animate-spin text-primary" />
-              </div>
-            ) : (
-              <div className="space-y-6">
-                <div className="space-y-2">
-                  <Label htmlFor="method">
-                    Phương thức Tuyển sinh <span className="text-destructive">*</span>
-                  </Label>
-                  <Select
-                    value={selectedMethodId?.toString() || ""}
-                    onValueChange={(value) => setSelectedMethodId(parseInt(value))}
-                    disabled={!!activePathId} // Cannot change method after creation
-                  >
-                    <SelectTrigger id="method">
-                      <SelectValue placeholder="Chọn phương thức" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {methods.map((method: AdmissionMethod) => (
-                        <SelectItem key={method.id} value={method.id.toString()}>
-                          {method.name}
-                          <span className="text-muted-foreground ml-2">({method.code})</span>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {activePathId && (
-                    <p className="text-xs text-muted-foreground">
-                      Không thể thay đổi phương thức sau khi tạo
-                    </p>
-                  )}
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="displayName">Tên hiển thị (Tùy chọn)</Label>
-                  <Input
-                    id="displayName"
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    placeholder="Để trống để dùng tên phương thức mặc định"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="displayOrder">Thứ tự hiển thị</Label>
-                  <Input
-                    id="displayOrder"
-                    type="number"
-                    value={displayOrder}
-                    onChange={(e) => setDisplayOrder(parseInt(e.target.value) || 1)}
-                    min={1}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="visibility">Hiển thị</Label>
-                  <Select
-                    value={visibility}
-                    onValueChange={(val: "public" | "internal") => setVisibility(val)}
-                  >
-                    <SelectTrigger id="visibility">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="public">Công khai</SelectItem>
-                      <SelectItem value="internal">Nội bộ</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground">
-                    Công khai: Hiển thị cho thí sinh. Nội bộ: Chỉ admin/manager thấy.
-                  </p>
-                </div>
-
-                <div className="flex justify-end pt-4">
-                  <Button onClick={handleSaveBasic} disabled={isSavingBasic}>
-                    {isSavingBasic ? (
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    ) : (
-                      <ArrowRight className="h-4 w-4 mr-2" />
-                    )}
-                    {activePathId ? "Cập nhật & Tiếp tục" : "Tạo & Tiếp tục"}
-                  </Button>
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        isLoading ? (
+          <div className="flex justify-center py-12">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          </div>
+        ) : (
+          <PathBasicInfo
+            key={activePathId ? `edit-${activePathId}-${path?.updated_at}` : "create-new"}
+            path={path}
+            methods={methods}
+            academicInfoId={context.academicInfoId}
+            onFinish={handleBasicInfoFinish}
+          />
+        )
       )}
 
       {step === 2 && path && (

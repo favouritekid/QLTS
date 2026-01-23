@@ -208,13 +208,16 @@ export function DocumentChecklist({ profile }: DocumentChecklistProps) {
   )
 }
 
+// Helper type for checklist item
+type ChecklistItem = AdmissionProfileResponse["documents_checklist"][number]
+
 function DocumentRow({
   doc,
   profile,
   onFormatChange,
   selectedFormat,
 }: {
-  doc: any
+  doc: ChecklistItem
   profile: AdmissionProfileResponse
   onFormatChange: (code: string, format: string) => void
   selectedFormat: string
@@ -244,7 +247,7 @@ function DocumentRow({
           </Badge>
         ) : (
           <Badge
-            variant={getDocumentStatusConfig(status).variant as any}
+            variant={getDocumentStatusConfig(status).variant as "default" | "secondary" | "destructive" | "outline"}
             className="gap-1"
           >
             {getDocumentStatusConfig(status).label}
@@ -339,7 +342,7 @@ function DocumentRow({
 }
 
 // Helper function to get document URL
-function getDocumentUrl(filePath?: string) {
+function getDocumentUrl(filePath?: string | null) {
   if (!filePath) return null
   if (filePath.startsWith("http")) return filePath
   // Handle relative paths (remove leading slash if present to avoid double slash)

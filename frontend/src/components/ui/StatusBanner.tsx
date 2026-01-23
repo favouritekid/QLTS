@@ -135,8 +135,69 @@ interface ValidationErrorsBannerProps {
   className?: string
 }
 
+interface ErrorSectionProps {
+  id: string
+  title: string
+  icon: React.ComponentType<{ className?: string }>
+  errors: string[]
+  color?: "red" | "yellow" | "blue"
+  expandedSections: Set<string>
+  toggleSection: (section: string) => void
+}
+
+function ErrorSection({
+  id,
+  title,
+  icon: Icon,
+  errors: sectionErrors,
+  color = "red",
+  expandedSections,
+  toggleSection
+}: ErrorSectionProps) {
+  if (sectionErrors.length === 0) return null
+
+  const isExpanded = expandedSections.has(id)
+  const colorClasses = {
+    red: "text-red-700 bg-red-50 hover:bg-red-100",
+    yellow: "text-yellow-700 bg-yellow-50 hover:bg-yellow-100",
+    blue: "text-blue-700 bg-blue-50 hover:bg-blue-100"
+  }
+
+  return (
+    <div className="border-l-4 border-red-400 pl-3 py-2">
+      <button
+        onClick={() => toggleSection(id)}
+        className={cn(
+          "flex items-center justify-between w-full text-sm font-medium transition-colors rounded px-2 py-1",
+          colorClasses[color]
+        )}
+      >
+        <div className="flex items-center gap-2">
+          <Icon className="w-4 h-4" />
+          <span>{title}</span>
+          <span className="text-xs opacity-75">({sectionErrors.length})</span>
+        </div>
+        {isExpanded ? (
+          <ChevronUp className="w-4 h-4" />
+        ) : (
+          <ChevronDown className="w-4 h-4" />
+        )}
+      </button>
+
+      {isExpanded && (
+        <ul className="list-disc pl-9 mt-2 space-y-1 text-sm">
+          {sectionErrors.map((err, i) => (
+            <li key={i} className="text-gray-700">{err}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 export function ValidationErrorsBanner({ errors, className }: ValidationErrorsBannerProps) {
-  if (!errors || errors.length === 0) return null
+  // Fix: Hooks must run unconditionally
+  const safeErrors = useMemo(() => errors || [], [errors])
 
   // Smart grouping based on error content patterns
   const grouped = useMemo(() => {
@@ -149,7 +210,7 @@ export function ValidationErrorsBanner({ errors, className }: ValidationErrorsBa
       other: [] as string[]
     }
 
-    errors.forEach(err => {
+    safeErrors.forEach(err => {
       const lower = err.toLowerCase()
       if (lower.includes("gpa") || lower.includes("điểm") || lower.includes("tổng điểm") || lower.includes("môn")) {
         result.gpa.push(err)
@@ -167,7 +228,7 @@ export function ValidationErrorsBanner({ errors, className }: ValidationErrorsBa
     })
 
     return result
-  }, [errors])
+  }, [safeErrors])
 
   // Calculate total sections that have errors
   const sectionsWithErrors = [
@@ -181,7 +242,8 @@ export function ValidationErrorsBanner({ errors, className }: ValidationErrorsBa
 
   // Collapsible state (auto-expand if <= 2 sections with errors)
   const [expandedSections, setExpandedSections] = useState<Set<string>>(
-    new Set(sectionsWithErrors <= 2 ? ['gpa', 'docs', 'personal', 'family', 'academic', 'other'] : [])
+    // Initialize lazily to avoid recalculating on render
+    () => new Set(sectionsWithErrors <= 2 ? ['gpa', 'docs', 'personal', 'family', 'academic', 'other'] : [])
   )
 
   const toggleSection = (section: string) => {
@@ -193,59 +255,8 @@ export function ValidationErrorsBanner({ errors, className }: ValidationErrorsBa
     })
   }
 
-  const ErrorSection = ({
-    id,
-    title,
-    icon: Icon,
-    errors: sectionErrors,
-    color = "red"
-  }: {
-    id: string
-    title: string
-    icon: React.ComponentType<{ className?: string }>
-    errors: string[]
-    color?: "red" | "yellow" | "blue"
-  }) => {
-    if (sectionErrors.length === 0) return null
-
-    const isExpanded = expandedSections.has(id)
-    const colorClasses = {
-      red: "text-red-700 bg-red-50 hover:bg-red-100",
-      yellow: "text-yellow-700 bg-yellow-50 hover:bg-yellow-100",
-      blue: "text-blue-700 bg-blue-50 hover:bg-blue-100"
-    }
-
-    return (
-      <div className="border-l-4 border-red-400 pl-3 py-2">
-        <button
-          onClick={() => toggleSection(id)}
-          className={cn(
-            "flex items-center justify-between w-full text-sm font-medium transition-colors rounded px-2 py-1",
-            colorClasses[color]
-          )}
-        >
-          <div className="flex items-center gap-2">
-            <Icon className="w-4 h-4" />
-            <span>{title}</span>
-            <span className="text-xs opacity-75">({sectionErrors.length})</span>
-          </div>
-          {isExpanded ? (
-            <ChevronUp className="w-4 h-4" />
-          ) : (
-            <ChevronDown className="w-4 h-4" />
-          )}
-        </button>
-
-        {isExpanded && (
-          <ul className="list-disc pl-9 mt-2 space-y-1 text-sm">
-            {sectionErrors.map((err, i) => (
-              <li key={i} className="text-gray-700">{err}</li>
-            ))}
-          </ul>
-        )}
-      </div>
-    )
-  }
+  // Conditional return moved AFTER hooks
+  if (!errors || errors.length === 0) return null
 
   return (
     <Alert
@@ -265,6 +276,8 @@ export function ValidationErrorsBanner({ errors, className }: ValidationErrorsBa
             icon={GraduationCap}
             errors={grouped.gpa}
             color="red"
+            expandedSections={expandedSections}
+            toggleSection={toggleSection}
           />
 
           {/* Documents Section */}
@@ -274,6 +287,8 @@ export function ValidationErrorsBanner({ errors, className }: ValidationErrorsBa
             icon={FileText}
             errors={grouped.docs}
             color="yellow"
+            expandedSections={expandedSections}
+            toggleSection={toggleSection}
           />
 
           {/* Personal Info Section */}
@@ -283,6 +298,8 @@ export function ValidationErrorsBanner({ errors, className }: ValidationErrorsBa
             icon={UserCircle}
             errors={grouped.personal}
             color="red"
+            expandedSections={expandedSections}
+            toggleSection={toggleSection}
           />
 
           {/* Family Info Section */}
@@ -292,6 +309,8 @@ export function ValidationErrorsBanner({ errors, className }: ValidationErrorsBa
             icon={UserCircle}
             errors={grouped.family}
             color="yellow"
+            expandedSections={expandedSections}
+            toggleSection={toggleSection}
           />
 
           {/* Academic History Section */}
@@ -301,6 +320,8 @@ export function ValidationErrorsBanner({ errors, className }: ValidationErrorsBa
             icon={GraduationCap}
             errors={grouped.academic}
             color="yellow"
+            expandedSections={expandedSections}
+            toggleSection={toggleSection}
           />
 
           {/* Other Errors */}
@@ -311,6 +332,8 @@ export function ValidationErrorsBanner({ errors, className }: ValidationErrorsBa
               icon={AlertTriangle}
               errors={grouped.other}
               color="red"
+              expandedSections={expandedSections}
+              toggleSection={toggleSection}
             />
           )}
         </div>

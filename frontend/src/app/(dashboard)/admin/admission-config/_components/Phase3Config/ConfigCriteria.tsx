@@ -28,21 +28,21 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
   const updateMutation = useUpdateCriteria();
 
   // Form State
-  const [minGpa, setMinGpa] = useState<string>("");
-  const [minScore, setMinScore] = useState<string>("");
-  const [minSubjectScore, setMinSubjectScore] = useState<string>("");
-  const [maxScore, setMaxScore] = useState<string>("");
-  const [conditions, setConditions] = useState<string>("");
-  const [requiredSubjectCount, setRequiredSubjectCount] = useState<string>("");
+  const [minGpa, setMinGpa] = useState<string>(path.criteria?.min_gpa?.toString() || "");
+  const [minScore, setMinScore] = useState<string>(path.criteria?.min_score?.toString() || "");
+  const [minSubjectScore, setMinSubjectScore] = useState<string>(path.criteria?.min_subject_score?.toString() || "");
+  const [maxScore, setMaxScore] = useState<string>(path.criteria?.max_possible_score?.toString() || "");
+  const [conditions, setConditions] = useState<string>(path.criteria?.conditions || "");
+  const [requiredSubjectCount, setRequiredSubjectCount] = useState<string>(path.criteria?.required_subject_count?.toString() || "");
   
-  const [scoringMethod, setScoringMethod] = useState<"sum" | "avg">("sum");
-  const [selectionMode, setSelectionMode] = useState<"fixed" | "best_n" | "any_n">("fixed");
-  const [selectedGroups, setSelectedGroups] = useState<number[]>([]);
+  const [scoringMethod, setScoringMethod] = useState<"sum" | "avg">((path.criteria?.scoring_method as "sum" | "avg") || "sum");
+  const [selectionMode, setSelectionMode] = useState<"fixed" | "best_n" | "any_n">((path.criteria?.subject_selection_mode as "fixed" | "best_n" | "any_n") || "fixed");
+  const [selectedGroups, setSelectedGroups] = useState<number[]>(path.criteria?.subject_groups?.map(g => g.id) || []);
   
   // Validity State
-  const [policyVersion, setPolicyVersion] = useState<string>("2025.1");
-  const [effectiveFrom, setEffectiveFrom] = useState<string>("");
-  const [effectiveTo, setEffectiveTo] = useState<string>("");
+  const [policyVersion, setPolicyVersion] = useState<string>(path.criteria?.policy_version || "2025.1");
+  const [effectiveFrom, setEffectiveFrom] = useState<string>(path.criteria?.effective_from || "");
+  const [effectiveTo, setEffectiveTo] = useState<string>(path.criteria?.effective_to || "");
 
   // Search state for filtering subject groups
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -50,36 +50,10 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
   // Sync form state when path data loads
   const currentPathId = path.id;
    
-  useEffect(() => {
-    if (path.criteria) {
-      setMinGpa(path.criteria.min_gpa?.toString() || "");
-      setMinScore(path.criteria.min_score?.toString() || "");
-      setMinSubjectScore(path.criteria.min_subject_score?.toString() || "");
-      setMaxScore(path.criteria.max_possible_score?.toString() || "");
-      setConditions(path.criteria.conditions || "");
-      setRequiredSubjectCount(path.criteria.required_subject_count?.toString() || "");
-
-      setScoringMethod((path.criteria.scoring_method as "sum" | "avg") || "sum");
-      setSelectionMode((path.criteria.subject_selection_mode as "fixed" | "best_n" | "any_n") || "fixed");
-
-      setPolicyVersion(path.criteria.policy_version || "2025.1");
-      setEffectiveFrom(path.criteria.effective_from || "");
-      setEffectiveTo(path.criteria.effective_to || "");
-
-      // Map nested groups to IDs
-      const groupIds = path.criteria.subject_groups.map(g => g.id);
-      setSelectedGroups(groupIds);
-    }
-  }, [
-    path.criteria,
-    path.criteria?.min_gpa,
-    path.criteria?.min_score,
-    path.criteria?.min_subject_score,
-    path.criteria?.max_possible_score,
-    path.criteria?.scoring_method,
-    path.criteria?.subject_selection_mode,
-    path.updated_at, // Trigger re-sync when path is updated
-  ]);
+  // REMOVED useEffect sync - relying on key-based remount from parent (PathWizard)
+  // to re-initialize these states when path/criteria changes.
+  
+  // Handlers
 
   // Filter subject groups based on search query
   // Filter subject groups based on search query

@@ -242,7 +242,7 @@ export function AdmissionDetailClient({
     const data = form.getValues()
 
     // Transform empty strings to null manually (since we're not using handleSubmit)
-    const transformedData: any = { ...data }
+    const transformedData: Record<string, unknown> = { ...data }
     Object.keys(transformedData).forEach(key => {
       if (transformedData[key] === "") {
         transformedData[key] = null

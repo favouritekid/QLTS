@@ -48,19 +48,33 @@ export function AdaptiveAddressSelect({
   label = "Hộ khẩu thường trú",
   disabled = false,
 }: AdaptiveAddressSelectProps) {
-  // Track selected codes for API calls
-  const [selectedProvinceCode, setSelectedProvinceCode] = useState<string | undefined>();
-  const [selectedDistrictCode, setSelectedDistrictCode] = useState<string | null>(null);
-
-  // Fetch data
+  // 1. Fetch Provinces first (Level 1)
   const { data: provinces = [], isLoading: loadingProvinces, error: provincesError } = useProvinces();
+
+  // 2. Derive Selected Province Code
+  const selectedProvince = useMemo(() => 
+    provinces.find(p => p.name === provinceValue), 
+    [provinces, provinceValue]
+  );
+  const selectedProvinceCode = selectedProvince?.code;
+
+  // 3. Fetch Districts (Level 2) depending on Province Code
   const { data: districts = [], isLoading: loadingDistricts } = useDistricts(selectedProvinceCode);
+
+  // 4. Derive Selected District Code
+  const selectedDistrict = useMemo(() => 
+    districts.find(d => d.name === districtValue), 
+    [districts, districtValue]
+  );
+  const selectedDistrictCode = selectedDistrict?.code ?? null;
+
+  // 5. Fetch Wards (Level 3) depending on District Code
   const { data: wards = [], isLoading: loadingWards } = useWards(
     selectedProvinceCode, 
-    selectedDistrictCode  // NULL = 2-level, code = 3-level
+    selectedDistrictCode
   );
 
-  // Create options for comboboxes
+  // 6. Create Options
   const provinceOptions = useMemo(() => 
     provinces.map(p => ({ value: p.name, label: p.name, code: p.code })),
     [provinces]
@@ -78,9 +92,7 @@ export function AdaptiveAddressSelect({
 
   // Handle province change
   const handleProvinceChange = (name: string) => {
-    const province = provinces.find(p => p.name === name);
-    setSelectedProvinceCode(province?.code);
-    setSelectedDistrictCode(null); // Reset district
+    // Just notify parent, no local state
     onProvinceChange(name);
     onDistrictChange(null); // Clear district
     onWardChange(""); // Clear ward
@@ -88,12 +100,6 @@ export function AdaptiveAddressSelect({
 
   // Handle district change
   const handleDistrictChange = (name: string | null) => {
-    if (name) {
-      const district = districts.find(d => d.name === name);
-      setSelectedDistrictCode(district?.code ?? null);
-    } else {
-      setSelectedDistrictCode(null);
-    }
     onDistrictChange(name);
     onWardChange(""); // Clear ward when district changes
   };
@@ -102,25 +108,8 @@ export function AdaptiveAddressSelect({
   const handleWardChange = (name: string) => {
     onWardChange(name);
   };
-
-  // Initialize codes from existing values (for edit mode)
-  useEffect(() => {
-    if (provinceValue && provinces.length > 0) {
-      const province = provinces.find(p => p.name === provinceValue);
-      if (province && selectedProvinceCode !== province.code) {
-        setSelectedProvinceCode(province.code);
-      }
-    }
-  }, [provinceValue, provinces, selectedProvinceCode]);
-
-  useEffect(() => {
-    if (districtValue && districts.length > 0) {
-      const district = districts.find(d => d.name === districtValue);
-      if (district && selectedDistrictCode !== district.code) {
-        setSelectedDistrictCode(district.code);
-      }
-    }
-  }, [districtValue, districts, selectedDistrictCode]);
+  
+  // Initial Effects removed - no longer needed as we derive on fly
 
   // Check if province has districts (determines if we show hint)
   const hasDistricts = districts.length > 0;

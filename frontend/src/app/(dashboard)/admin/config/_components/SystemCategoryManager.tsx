@@ -29,6 +29,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Plus, Pencil, Trash2, Loader2, List, Upload } from "lucide-react";
+import type { AxiosError } from "axios";
 
 // ============================================
 // TYPES
@@ -106,7 +107,7 @@ export function SystemCategoryManager() {
       queryClient.invalidateQueries({ queryKey: ["config", "categories", selectedType] });
       handleCloseDialog();
     },
-    onError: (error: any) => {
+    onError: (error: AxiosError<{ detail: string }>) => {
       toast.error(error.response?.data?.detail || "Failed to create category");
     },
   });
@@ -120,7 +121,7 @@ export function SystemCategoryManager() {
       toast.success("Category deleted successfully!");
       queryClient.invalidateQueries({ queryKey: ["config", "categories", selectedType] });
     },
-    onError: (error: any) => {
+    onError: (error: AxiosError<{ detail: string }>) => {
       toast.error(error.response?.data?.detail || "Failed to delete category");
     },
   });
