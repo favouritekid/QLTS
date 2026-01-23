@@ -17,6 +17,12 @@ interface PipelineSidebarProps {
     gpa?: { has_error: boolean; count: number }
     documents?: { has_error: boolean; count: number }
   } | null
+  groupedValidationErrors?: {
+    personal_info?: { category: string; errors: string[]; count: number }
+    documents?: { category: string; errors: string[]; count: number }
+    scores?: { category: string; errors: string[]; count: number }
+  } | null
+  completionPercent: number
 }
 
 const STEPS = [
@@ -29,12 +35,21 @@ const STEPS = [
     { id: 7, label: "Hoàn tất & Nộp", icon: CheckSquare },
 ]
 
-export function PipelineSidebar({ currentStep, onStepChange, stepsStatus, validationErrors = [], validationSummary }: PipelineSidebarProps) {
+export function PipelineSidebar({ 
+  currentStep, 
+  onStepChange, 
+  stepsStatus, 
+  validationErrors = [], 
+  validationSummary, 
+  groupedValidationErrors,
+  completionPercent 
+}: PipelineSidebarProps) {
   const [isIssuesOpen, setIsIssuesOpen] = useState(false)
-
-  // Calculate progress
+  
+  // Phase 4 Fix: Progressive Disclosure - Focus current ±1 steps
   const completedSteps = Object.values(stepsStatus).filter(status => status === "success").length
-  const completionPercent = Math.round((completedSteps / STEPS.length) * 100)
+  // Removed local calculation to sync with Backend weighted score
+
 
   // Phase 2: Progressive Disclosure - Focus current ±1 steps
   const focusedSteps = useMemo(() => [
@@ -144,7 +159,7 @@ export function PipelineSidebar({ currentStep, onStepChange, stepsStatus, valida
       </TooltipProvider>
       </nav>
 
-      {/* Issues Summary (Collapsible) */}
+      {/* Issues Summary (Collapsible) - Grouped by Category */}
       {validationErrors.length > 0 && (
         <Collapsible open={isIssuesOpen} onOpenChange={setIsIssuesOpen} className="px-1">
           <CollapsibleTrigger className="flex items-center justify-between w-full px-3 py-2 rounded-lg bg-red-50 border border-red-200 hover:bg-red-100 transition-colors">
@@ -160,14 +175,71 @@ export function PipelineSidebar({ currentStep, onStepChange, stepsStatus, valida
           </CollapsibleTrigger>
 
           <CollapsibleContent className="mt-2 px-3 py-2 bg-white border border-red-100 rounded-lg max-h-[300px] overflow-y-auto">
-            <ul className="text-xs text-gray-700 space-y-1.5">
-              {validationErrors.map((error, idx) => (
-                <li key={idx} className="flex items-start gap-2">
-                  <span className="text-red-500 mt-0.5">•</span>
-                  <span className="leading-relaxed">{error}</span>
-                </li>
-              ))}
-            </ul>
+            {/* Grouped Errors Display */}
+            {groupedValidationErrors ? (
+              <div className="space-y-3">
+                {/* Personal Info Section */}
+                {groupedValidationErrors.personal_info && groupedValidationErrors.personal_info.count > 0 && (
+                  <div>
+                    <h4 className="text-xs font-semibold text-gray-800 mb-1.5">
+                      {groupedValidationErrors.personal_info.category} ({groupedValidationErrors.personal_info.count})
+                    </h4>
+                    <ul className="text-xs text-gray-700 space-y-1 ml-2">
+                      {groupedValidationErrors.personal_info.errors.map((error, idx) => (
+                        <li key={idx} className="flex items-start gap-2">
+                          <span className="text-red-500 mt-0.5">•</span>
+                          <span className="leading-relaxed">{error}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Documents Section */}
+                {groupedValidationErrors.documents && groupedValidationErrors.documents.count > 0 && (
+                  <div>
+                    <h4 className="text-xs font-semibold text-gray-800 mb-1.5">
+                      {groupedValidationErrors.documents.category} ({groupedValidationErrors.documents.count})
+                    </h4>
+                    <ul className="text-xs text-gray-700 space-y-1 ml-2">
+                      {groupedValidationErrors.documents.errors.map((error, idx) => (
+                        <li key={idx} className="flex items-start gap-2">
+                          <span className="text-red-500 mt-0.5">•</span>
+                          <span className="leading-relaxed">{error}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Scores Section */}
+                {groupedValidationErrors.scores && groupedValidationErrors.scores.count > 0 && (
+                  <div>
+                    <h4 className="text-xs font-semibold text-gray-800 mb-1.5">
+                      {groupedValidationErrors.scores.category} ({groupedValidationErrors.scores.count})
+                    </h4>
+                    <ul className="text-xs text-gray-700 space-y-1 ml-2">
+                      {groupedValidationErrors.scores.errors.map((error, idx) => (
+                        <li key={idx} className="flex items-start gap-2">
+                          <span className="text-red-500 mt-0.5">•</span>
+                          <span className="leading-relaxed">{error}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* Fallback to flat list if grouped data not available */
+              <ul className="text-xs text-gray-700 space-y-1.5">
+                {validationErrors.map((error, idx) => (
+                  <li key={idx} className="flex items-start gap-2">
+                    <span className="text-red-500 mt-0.5">•</span>
+                    <span className="leading-relaxed">{error}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </CollapsibleContent>
         </Collapsible>
       )}

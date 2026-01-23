@@ -73,6 +73,7 @@ export function AdmissionDetailClient({
   const isEligible = vm?.isEligible ?? false
   const validationErrors = vm?.validationErrors ?? []
   const validationSummary = vm?.validationSummary
+  const groupedValidationErrors = vm?.groupedValidationErrors
   const stepsStatusRecord = vm?.stepsStatus ?? {}
 
   // =========================================================================
@@ -286,6 +287,7 @@ export function AdmissionDetailClient({
         validation={{ isEligible, missingItems: [] }}
         validationErrors={validationErrors}
         validationSummary={validationSummary}
+        groupedValidationErrors={groupedValidationErrors}
       >
         {/* TAB CONTENT */}
         <div className="bg-white rounded-lg shadow-sm min-h-[500px] p-1">
@@ -295,7 +297,7 @@ export function AdmissionDetailClient({
           {currentStep === 4 && <ScoresTab form={form} isEditable={can('edit')} appliedRules={profile.applied_rules} profile={profile} />}
           {currentStep === 5 && <DocumentsTab profile={profile} isEditable={can('edit')} />}
           {currentStep === 6 && <TuitionTab profile={profile} />}
-          {currentStep === 7 && <FinalizeTab isEligible={isEligible} onSubmit={handleSubmit} isSubmitting={submitMutation.isPending} />}
+          {currentStep === 7 && <FinalizeTab profile={profile} isEligible={isEligible} onSubmit={handleSubmit} isSubmitting={submitMutation.isPending} canApprove={can('approve')} />}
         </div>
 
         {/* STICKY ACTIONS (Phase 2: Context-based buttons) */}

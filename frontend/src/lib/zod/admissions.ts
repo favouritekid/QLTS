@@ -458,7 +458,26 @@ export const admissionProfileResponseSchema = z.object({
       count: z.number().int()
     }).optional()
   }).optional().nullable(),
-  
+
+  // Grouped validation errors (categorized display)
+  grouped_validation_errors: z.object({
+    personal_info: z.object({
+      category: z.string(),
+      errors: z.array(z.string()),
+      count: z.number().int()
+    }).optional(),
+    documents: z.object({
+      category: z.string(),
+      errors: z.array(z.string()),
+      count: z.number().int()
+    }).optional(),
+    scores: z.object({
+      category: z.string(),
+      errors: z.array(z.string()),
+      count: z.number().int()
+    }).optional()
+  }).optional().nullable(),
+
   /**
    * Step status for sidebar navigation.
    * NOTE: Backend returns Dict[int, str] but JSON serializes keys as strings.
@@ -466,7 +485,22 @@ export const admissionProfileResponseSchema = z.object({
    * @see FRONTEND_ARCHITECTURE_V3.md Section 0.6
    */
   step_status: z.record(z.string(), z.enum(["success", "warning", "error", "locked"])).optional().nullable(),
-  
+
+  /**
+   * Executive summary for dashboard overview.
+   * Provides high-level status summary computed by backend.
+   * Frontend uses this to display overall progress, next actions, and blocking issues.
+   */
+  executive_summary: z.object({
+    overall_status: z.enum(["incomplete", "warning", "ready"]),
+    completion_percent: z.number().int().min(0).max(100),
+    step_summary: z.record(z.string(), z.number()),
+    critical_blockers: z.array(z.string()),
+    warnings: z.array(z.string()),
+    next_action: z.string(),
+    can_submit: z.boolean(),
+  }).optional().nullable(),
+
   // Computed scores (backend-calculated)
   total_score: z.number().optional().nullable(),
   average_score: z.number().optional().nullable(),

@@ -603,7 +603,19 @@ class AdmissionProfileResponse(BaseModel):
         default=None,
         description="Grouped validation errors: {gpa: {has_error, label, count}, documents: {...}, personal: {...}}"
     )
-    
+
+    # Grouped validation errors (categorized display)
+    grouped_validation_errors: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Validation errors grouped by category: {personal_info: {category, errors, count}, documents: {...}, scores: {...}}"
+    )
+
+    # Executive summary for dashboard overview
+    executive_summary: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="High-level status summary: {overall_status, completion_percent, step_summary, critical_blockers, warnings, next_action, can_submit}"
+    )
+
     # Step status for sidebar (Architecture Compliant - Backend computes)
     step_status: Optional[Dict[int, str]] = Field(
         default=None,
@@ -744,6 +756,19 @@ class DocumentUploadResponse(BaseModel):
         from_attributes=True,
         validate_assignment=True
     )
+
+
+class DocumentSubmissionRequest(BaseModel):
+    """
+    Schema for document submission (upload or paper receipt).
+    User/Officer declares what type of document is being submitted.
+    """
+    actual_submission_format: Literal["original", "certified_copy", "photo"] = Field(
+        ...,
+        description="Type of physical document being submitted/uploaded"
+    )
+
+    model_config = ConfigDict(str_strip_whitespace=True)
 
 
 class DocumentFormatVerifyRequest(BaseModel):

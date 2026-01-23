@@ -18,7 +18,8 @@ Endpoints:
 - POST /api/admissions/{id}/enroll - Enroll student (ACID transaction)
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
@@ -388,7 +389,7 @@ async def submit_admission_profile(
 @limiter.limit(RateLimits.DATA_WRITE)
 @router.post(
     "/{profile_id}/documents/{doc_code}/upload",
-    response_model=schemas.DocumentUploadResponse,
+    response_model=schemas.AdmissionProfileResponse,
     summary="Upload admission document",
     status_code=status.HTTP_200_OK,
 )
@@ -397,25 +398,31 @@ async def upload_document(
     profile_id: int,
     doc_code: str,
     file: UploadFile = File(...),
+    actual_submission_format: Optional[str] = Form(None),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
 ):
     """
     Upload a document for an admission profile.
-    
-    File will be saved and the checklist item status updated to 'uploaded'.
+
+    File will be saved and the profile will be returned with updated validation_summary.
+
+    **Form Fields:**
+    - file: Document file (PDF, JPG, PNG, max 10MB)
+    - actual_submission_format: Type of document (original | certified_copy | photo)
     """
     try:
-        updated_doc, post_commit = await admission_service.upload_document(
+        profile = await admission_service.upload_document(
             db=db,
             profile_id=profile_id,
             doc_code=doc_code,
             file=file,
             current_user=current_user,
+            actual_submission_format=actual_submission_format,
         )
         await db.commit()
-        await post_commit()
-        return updated_doc
+        await db.refresh(profile)
+        return profile
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -428,7 +435,7 @@ async def upload_document(
 @limiter.limit(RateLimits.DATA_WRITE)
 @router.post(
     "/{profile_id}/documents/{doc_code}/paper-submitted",
-    response_model=dict,
+    response_model=schemas.AdmissionProfileResponse,
     summary="Mark document as paper submitted (Officer confirms receipt)",
     status_code=status.HTTP_200_OK,
 )
@@ -436,30 +443,33 @@ async def mark_document_paper_submitted(
     request: Request,
     profile_id: int,
     doc_code: str,
+    data: schemas.DocumentSubmissionRequest,
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
 ):
     """
     Mark a document as paper submitted (officer confirms receipt).
-    
+
     For documents where requires_upload=false.
     Only officers/managers/admins can mark paper submitted.
-    
+
+    **Request Body:**
+    - actual_submission_format: Type of document received (original | certified_copy | photo)
+
     **Returns:**
-    - { code, status, paper_submitted_at, paper_submitted_by_id }
+    - Full AdmissionProfileResponse with updated validation_summary
     """
     try:
-        result, post_commit = await admission_service.mark_paper_submitted(
+        profile = await admission_service.mark_paper_submitted(
             db=db,
             profile_id=profile_id,
             doc_code=doc_code,
             current_user=current_user,
+            actual_submission_format=data.actual_submission_format,
         )
         await db.commit()
-        await post_commit()
-        return result
-
-
+        await db.refresh(profile)
+        return profile
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
@@ -551,6 +561,59 @@ async def reject_document_endpoint(
         await db.commit()
         await post_commit()
         return result
+
+    except ResourceNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except PermissionDeniedError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@limiter.limit(RateLimits.DATA_WRITE)
+@router.post(
+    "/{profile_id}/documents/{doc_code}/reset",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Reset document to missing status (undo)",
+    status_code=status.HTTP_200_OK,
+)
+async def reset_document_endpoint(
+    request: Request,
+    profile_id: int,
+    doc_code: str,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    Reset a document to 'missing' status (undo submission).
+
+    **Use Cases:**
+    - User accidentally clicked "Đã nộp"
+    - Uploaded wrong file
+    - Need to change submission type
+
+    **Permissions:**
+    - Officer: Can reset documents for profiles in draft/rejected status
+    - Manager/Admin: Can reset any document (except enrolled profiles)
+
+    **What Gets Reset:**
+    - Status → "missing"
+    - File deleted from disk (if exists)
+    - All metadata cleared (timestamps, format, rejection reason)
+
+    **Returns:**
+    - Full AdmissionProfileResponse with updated validation_summary
+    """
+    try:
+        profile = await admission_service.reset_document(
+            db=db,
+            profile_id=profile_id,
+            doc_code=doc_code,
+            current_user=current_user,
+        )
+        await db.commit()
+        await db.refresh(profile)
+        return profile
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))

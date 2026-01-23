@@ -1,55 +1,117 @@
+/**
+ * FinalizeTab Component - Executive Summary
+ *
+ * Step 7: Final Review transformed into Executive Summary
+ * Allows Manager/Admin to review entire profile in one screen
+ */
+
 "use client"
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { CheckCircle2, Lock, Send } from "lucide-react"
+import { Send, Loader2, XCircle } from "lucide-react"
+import { ExecutiveSummaryHeader } from "./executive-summary/ExecutiveSummaryHeader"
+import { HealthCheckGrid } from "./executive-summary/HealthCheckGrid"
+import { ReviewDetails } from "./executive-summary/ReviewDetails"
+import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
 interface FinalizeTabProps {
+  profile: AdmissionProfileResponse
   isEligible: boolean
   onSubmit: () => void
   isSubmitting: boolean
+  canApprove: boolean
 }
 
-export function FinalizeTab({ isEligible, onSubmit, isSubmitting }: FinalizeTabProps) {
+export function FinalizeTab({
+  profile,
+  isEligible,
+  onSubmit,
+  isSubmitting,
+  canApprove,
+}: FinalizeTabProps) {
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
-        <Card className="text-center py-10">
-            <CardHeader>
-                {isEligible ? (
-                    <div className="mx-auto w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-4">
-                        <CheckCircle2 className="w-8 h-8 text-green-600" />
-                    </div>
-                ) : (
-                    <div className="mx-auto w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4">
-                        <Lock className="w-8 h-8 text-gray-400" />
-                    </div>
-                )}
-                
-                <CardTitle className="text-2xl">
-                    {isEligible ? "Hồ sơ đủ điều kiện nộp" : "Chưa đủ điều kiện"}
-                </CardTitle>
-                <CardDescription>
-                    {isEligible 
-                        ? "Tất cả các bước đánh giá đã hoàn tất. Bạn có thể nộp hồ sơ chính thức ngay bây giờ."
-                        : "Vui lòng hoàn thành các bước trước và đảm bảo hồ sơ hợp lệ trước khi nộp."}
-                </CardDescription>
-            </CardHeader>
-            <CardContent>
-                <Button 
-                    size="lg" 
-                    className="w-full sm:w-auto min-w-[200px]" 
-                    disabled={!isEligible || isSubmitting}
-                    onClick={onSubmit}
-                >
-                    {isSubmitting ? "Đang xử lý..." : (
-                        <>
-                            <Send className="w-4 h-4 mr-2" />
-                            Nộp hồ sơ chính thức
-                        </>
-                    )}
-                </Button>
-            </CardContent>
+    <div className="max-w-7xl mx-auto space-y-6 pb-8">
+      {/* Section 1: Header - Thông tin định danh & Trạng thái */}
+      <ExecutiveSummaryHeader profile={profile} />
+
+      {/* Section 2: Health Check Grid - Lưới kiểm tra nhanh */}
+      <HealthCheckGrid profile={profile} />
+
+      {/* Section 3: Chi tiết xét duyệt (Expandable) */}
+      <ReviewDetails profile={profile} />
+
+      {/* Action Buttons - Only for Manager/Admin */}
+      {canApprove && (
+        <Card className="p-6 bg-gradient-to-br from-gray-50 to-white">
+          <div className="flex flex-col sm:flex-row justify-center items-center gap-4">
+            <Button
+              size="lg"
+              variant="outline"
+              disabled={isSubmitting}
+              className="w-full sm:w-auto min-w-[160px]"
+            >
+              <XCircle className="w-4 h-4 mr-2" />
+              Từ chối hồ sơ
+            </Button>
+
+            <Button
+              size="lg"
+              disabled={!isEligible || isSubmitting}
+              onClick={onSubmit}
+              className="w-full sm:w-auto min-w-[200px]"
+            >
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Đang xử lý...
+                </>
+              ) : (
+                <>
+                  <Send className="w-4 h-4 mr-2" />
+                  Phê duyệt hồ sơ
+                </>
+              )}
+            </Button>
+          </div>
+
+          {!isEligible && (
+            <p className="text-center text-sm text-muted-foreground mt-4">
+              Hồ sơ chưa đủ điều kiện. Vui lòng kiểm tra các vấn đề cần sửa ở sidebar.
+            </p>
+          )}
         </Card>
+      )}
+
+      {/* For non-approvers (Officers, Students) - show submit button only */}
+      {!canApprove && (
+        <Card className="p-6 text-center">
+          <Button
+            size="lg"
+            disabled={!isEligible || isSubmitting}
+            onClick={onSubmit}
+            className="min-w-[200px]"
+          >
+            {isSubmitting ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Đang xử lý...
+              </>
+            ) : (
+              <>
+                <Send className="w-4 h-4 mr-2" />
+                Nộp hồ sơ chính thức
+              </>
+            )}
+          </Button>
+
+          {!isEligible && (
+            <p className="text-sm text-muted-foreground mt-4">
+              Hồ sơ chưa đủ điều kiện. Vui lòng hoàn thành các bước trước.
+            </p>
+          )}
+        </Card>
+      )}
     </div>
   )
 }

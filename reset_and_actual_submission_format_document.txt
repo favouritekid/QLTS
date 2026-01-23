@@ -1,0 +1,1687 @@
+                                                                                
+ ▐▛███▜▌   Claude Code v2.1.6                                                   
+▝▜█████▛▘  Sonnet 4.5 · Claude Pro                                              
+  ▘▘ ▝▝    D:\QLTS                                                              
+                                                                                
+❯ & 'c:\Users\hapha\OneDrive\Pictures\Screenshots\Screenshot 2026-01-22         
+  192554.png'                                                                   
+  1. Đang có sự mâu thuẫn số liệu giữa tổng badge và vấn đề cần sửa như ảnh     
+  2. Hãy gom nhóm các vấn đề cần sửa để người dùng dễ hình dung ví dụ:          
+  - Tài liệu chưa đủ                                                            
+  + Bằng                                                                        
+  + Học bạ                                                                      
+  - Thông tin chưa được cập nhật                                                
+  + CCCD                                                                        
+  + .....                                                                       
+  - Điểm số còn thiếu                                                           
+                                                                                
+● I'll help you analyze the issue and improve the grouping of validation        
+  problems. Let me first look at the screenshot to understand the data          
+  contradiction.                                                                
+                                                                                
+● Read(c:\Users\hapha\OneDrive\Pictures\Screenshots\Screenshot 2026-01-22       
+      192554.png)                                                               
+  ⎿  Read image (153.6KB)                                                       
+                                                                                
+● I can see the issue clearly. The badges show "3 + 1 + 12 = 16" total issues,  
+  but the panel says "Vấn đề cần sửa (14)". Let me examine the admission service
+   to understand how validation issues are being calculated and fix both        
+  problems.                                                                     
+                                                                                
+● Read(Backend_FastAPI\app\services\admission_service.py)                       
+  ⎿  Error: File content (32719 tokens) exceeds maximum allowed tokens (25000). 
+     Please use offset and limit parameters to read specific portions of the    
+     file, or use the GrepTool to search for specific content.                  
+                                                                                
+● Search(pattern: "**/useAdmissions.ts")                                        
+  ⎿  Found 1 file (ctrl+o to expand)                                            
+                                                                                
+● Search(pattern: "validation.*issues|vấn đề cần sửa", glob: "**/*.{ts,tsx}")   
+  ⎿  Found 1 file (ctrl+o to expand)                                            
+                                                                                
+● Search(pattern: "def.*validate|validation_issues|validation_summary", path:   
+        "Backend_FastAPI\app\services\admission_service.py", output_mode:       
+        "content")                                                              
+  ⎿  Found 7 lines (ctrl+o to expand)                                           
+                                                                                
+● Read(frontend\src\app\(dashboard)\admissions\[id]\_components\layout\PipelineS
+      idebar.tsx)                                                               
+  ⎿  Read 177 lines                                                             
+  ⎿  Loaded frontend\CLAUDE.md                                                  
+                                                                                
+● Search(pattern: "validation_summary\s*=\s*\{", path:                          
+        "Backend_FastAPI\app\services\admission_service.py", output_mode:       
+        "content")                                                              
+  ⎿  Found 51 lines (ctrl+o to expand)                                          
+                                                                                
+● Search(pattern: "validation_errors\s*=|validation_errors\.append|validation_er
+        rors\.extend", path:                                                    
+        "Backend_FastAPI\app\services\admission_service.py", output_mode:       
+        "content")                                                              
+  ⎿  Found 180 lines (ctrl+o to expand)                                         
+                                                                                
+● Now I can see the issues clearly. Let me create a plan to fix both problems.  
+                                                                                
+● Read(Backend_FastAPI\app\services\admission_service.py)                       
+  ⎿  Read 80 lines                                                              
+  ⎿  Loaded Backend_FastAPI\CLAUDE.md                                           
+                                                                                
+● Read(Backend_FastAPI\app\services\admission_service.py)                       
+  ⎿  Read 70 lines                                                              
+                                                                                
+● Now I'll fix the validation count mismatch and add grouped error structure.   
+  The issue is:                                                                 
+                                                                                
+  Current Problem:                                                              
+  - Personal info: 8 missing fields → badge shows "3" (should be 8) → but only 1
+   error message                                                                
+  - GPA: Multiple error messages possible → badge shows "1" → could be 1-3      
+  messages                                                                      
+  - Documents: 12 missing → badge shows "12" → 12 error messages ✓              
+                                                                                
+  Let me fix this by tracking errors properly.                                  
+                                                                                
+● Update(Backend_FastAPI\app\services\admission_service.py)                     
+  ⎿  Added 79 lines, removed 24 lines                                           
+      182                                                                       
+      183       # ======================================================        
+           =================                                                    
+      184       # SCORE VALIDATION BY METHOD TYPE                               
+      185 -    #                                                                
+      185 +    #                                                                
+      186       # Method Types:                                                 
+      187       # - gpa_only: Only check average_score >= min_gpa               
+           (typically học bạ GPA-based)                                         
+      188       # - subject_based: Only check total_score >= min_score          
+           (thi tổ hợp)                                                         
+      189       # - combined: Check BOTH conditions (e.g., GPA + điểm           
+           thi)                                                                 
+      190       # - Other (hoc_ba, tot_nghiep, etc.): Treat as                  
+           subject_based (total_score)                                          
+      191       # ======================================================        
+           =================                                                    
+      192 -                                                                     
+      192 +                                                                     
+      193       # Get thresholds from applied_rules                             
+      194       min_score = float(applied_rules.get("min_score") or 0)          
+      195       current_total = profile.total_score or 0                        
+      196 -                                                                     
+      196 +                                                                     
+      197 +     # Track GPA errors for grouped display                          
+      198 +     gpa_errors = []                                                 
+      199 +                                                                     
+      200       if method_type == "gpa_only":                                   
+      201           # GPA-Only: Check average_score only                        
+      202           if min_gpa > 0 and current_gpa < min_gpa:                   
+      203 -            validation_errors.append(                                
+          -f"GPA không đạt: {current_gpa:.2f} < {min_gpa}")                     
+      203 +            error_msg =                                              
+          +f"GPA không đạt: {current_gpa:.2f} < {min_gpa}"                      
+      204 +             validation_errors.append(error_msg)                     
+      205 +             gpa_errors.append(error_msg)                            
+      206               gpa_error = True                                        
+      207 -                                                                     
+      207 +                                                                     
+      208       elif method_type == "combined":                                 
+      209           # Combined: Check BOTH total_score AND average_score        
+      210           # First: Check subject count                                
+      211           if current_count < required_count:                          
+      212 -            validation_errors.append(                                
+          -f"Chưa nhập đủ đầu điểm ({current_count}/{required_count})")         
+      212 +            error_msg =                                              
+          +f"Chưa nhập đủ đầu điểm ({current_count}/{required_count})"          
+      213 +             validation_errors.append(error_msg)                     
+      214 +             gpa_errors.append(error_msg)                            
+      215               gpa_error = True                                        
+      216           else:                                                       
+      217               # Check total_score                                     
+      218               if min_score > 0 and current_total < min_score:         
+      219 -                validation_errors.append(                            
+          -f"Tổng điểm thấp hơn điểm chuẩn: {current_total:.2f} <               
+          -{min_score}")                                                        
+      219 +                error_msg =                                          
+          +f"Tổng điểm thấp hơn điểm chuẩn: {current_total:.2f} <               
+          +{min_score}"                                                         
+      220 +                 validation_errors.append(error_msg)                 
+      221 +                 gpa_errors.append(error_msg)                        
+      222                   gpa_error = True                                    
+      223               # Check GPA (even if total passed)                      
+      224               if min_gpa > 0 and current_gpa < min_gpa:               
+      225 -                validation_errors.append(                            
+          -f"GPA không đạt: {current_gpa:.2f} < {min_gpa}")                     
+      225 +                error_msg =                                          
+          +f"GPA không đạt: {current_gpa:.2f} < {min_gpa}"                      
+      226 +                 validation_errors.append(error_msg)                 
+      227 +                 gpa_errors.append(error_msg)                        
+      228                   gpa_error = True                                    
+      229 -                                                                     
+      229 +                                                                     
+      230       else:                                                           
+      231           # subject_based, hoc_ba, tot_nghiep, etc.: Check            
+           total_score only                                                     
+      232           if current_count < required_count:                          
+      233 -            validation_errors.append(                                
+          -f"Chưa nhập đủ đầu điểm ({current_count}/{required_count})")         
+      233 +            error_msg =                                              
+          +f"Chưa nhập đủ đầu điểm ({current_count}/{required_count})"          
+      234 +             validation_errors.append(error_msg)                     
+      235 +             gpa_errors.append(error_msg)                            
+      236               gpa_error = True                                        
+      237           elif min_score > 0 and current_total < min_score:           
+      238 -            validation_errors.append(                                
+          -f"Tổng điểm thấp hơn điểm chuẩn: {current_total:.2f} <               
+          -{min_score}")                                                        
+      238 +            error_msg =                                              
+          +f"Tổng điểm thấp hơn điểm chuẩn: {current_total:.2f} <               
+          +{min_score}"                                                         
+      239 +             validation_errors.append(error_msg)                     
+      240 +             gpa_errors.append(error_msg)                            
+      241               gpa_error = True                                        
+      242 -                                                                     
+      242 +                                                                     
+      243       # Check mandatory documents that REQUIRE UPLOAD (NEW:           
+           only upload_required_docs)                                           
+      244       upload_required_docs =                                          
+           applied_rules.get("upload_required_docs",                            
+           applied_rules.get("mandatory_docs", []))                             
+      245       doc_errors = []                                                 
+      246       uploaded_doc_codes = set()                                      
+      247       if documents is not None:                                       
+      248           uploaded_doc_codes = {                                      
+      249 -            doc.document_type.code for doc in documents              
+      249 +            doc.document_type.code for doc in documents              
+      250               if (doc.file_path and doc.status in ["uploaded",        
+            "verified"]) or doc.status == "paper_submitted"                     
+      251           }                                                           
+      252           for doc_code in upload_required_docs:                       
+      253               if doc_code not in uploaded_doc_codes:                  
+      254                   doc_errors.append(doc_code)                         
+      255                   validation_errors.append(f"Thiếu tài liệu           
+           bắt buộc: {doc_code}")                                               
+      256 -                                                                     
+      256 +                                                                     
+      257       # ✅ EXPANDED: Validate 8 mandatory personal information        
+            fields                                                              
+      258       # These fields are required for a complete admission            
+           profile                                                              
+      259 +     # ✅ FIX: Add individual error messages for each missing        
+          + field (not combined)                                                
+      260 +     # This ensures validation_summary.personal.count matches        
+          + validation_errors length                                            
+      261       missing_personal = []                                           
+      262 -     if not profile.full_name: missing_personal.append("Họ           
+          -tên")                                                                
+      263 -     if not profile.dob: missing_personal.append("Ngày sinh")        
+      264 -     if not profile.gender: missing_personal.append("Giới            
+          -tính")                                                               
+      265 -     if not profile.citizen_id: missing_personal.append("Số          
+          -CCCD/CMND")                                                          
+      266 -     if not profile.nationality:                                     
+          -missing_personal.append("Quốc tịch")                                 
+      267 -     if not profile.ethnicity: missing_personal.append("Dân          
+          -tộc")                                                                
+      268 -     if not profile.phone: missing_personal.append("Số điện          
+          -thoại")                                                              
+      269 -     if not profile.place_of_birth:                                  
+          -missing_personal.append("Nơi sinh")                                  
+      262 +     personal_errors = []                                            
+      263                                                                       
+      264 -     if missing_personal:                                            
+      265 -         validation_errors.append(f"Thiếu thông tin cá nhân:         
+          -{', '.join(missing_personal)}")                                      
+      264 +     if not profile.full_name:                                       
+      265 +         missing_personal.append("Họ tên")                           
+      266 +         error_msg = "Thiếu thông tin cá nhân: Họ tên"               
+      267 +         validation_errors.append(error_msg)                         
+      268 +         personal_errors.append(error_msg)                           
+      269                                                                       
+      270 +     if not profile.dob:                                             
+      271 +         missing_personal.append("Ngày sinh")                        
+      272 +         error_msg = "Thiếu thông tin cá nhân: Ngày sinh"            
+      273 +         validation_errors.append(error_msg)                         
+      274 +         personal_errors.append(error_msg)                           
+      275 +                                                                     
+      276 +     if not profile.gender:                                          
+      277 +         missing_personal.append("Giới tính")                        
+      278 +         error_msg = "Thiếu thông tin cá nhân: Giới tính"            
+      279 +         validation_errors.append(error_msg)                         
+      280 +         personal_errors.append(error_msg)                           
+      281 +                                                                     
+      282 +     if not profile.citizen_id:                                      
+      283 +         missing_personal.append("Số CCCD/CMND")                     
+      284 +         error_msg = "Thiếu thông tin cá nhân: Số CCCD/CMND"         
+      285 +         validation_errors.append(error_msg)                         
+      286 +         personal_errors.append(error_msg)                           
+      287 +                                                                     
+      288 +     if not profile.nationality:                                     
+      289 +         missing_personal.append("Quốc tịch")                        
+      290 +         error_msg = "Thiếu thông tin cá nhân: Quốc tịch"            
+      291 +         validation_errors.append(error_msg)                         
+      292 +         personal_errors.append(error_msg)                           
+      293 +                                                                     
+      294 +     if not profile.ethnicity:                                       
+      295 +         missing_personal.append("Dân tộc")                          
+      296 +         error_msg = "Thiếu thông tin cá nhân: Dân tộc"              
+      297 +         validation_errors.append(error_msg)                         
+      298 +         personal_errors.append(error_msg)                           
+      299 +                                                                     
+      300 +     if not profile.phone:                                           
+      301 +         missing_personal.append("Số điện thoại")                    
+      302 +         error_msg = "Thiếu thông tin cá nhân: Số điện thoại"        
+      303 +         validation_errors.append(error_msg)                         
+      304 +         personal_errors.append(error_msg)                           
+      305 +                                                                     
+      306 +     if not profile.place_of_birth:                                  
+      307 +         missing_personal.append("Nơi sinh")                         
+      308 +         error_msg = "Thiếu thông tin cá nhân: Nơi sinh"             
+      309 +         validation_errors.append(error_msg)                         
+      310 +         personal_errors.append(error_msg)                           
+      311 +                                                                     
+      312       # Count total missing personal fields                           
+      313       personal_error_count = len(missing_personal)                    
+      314                                                                       
+                                                                                
+● Now let me update the validation_summary to reflect the actual error counts   
+  and add grouped error structure.                                              
+                                                                                
+● Update(Backend_FastAPI\app\services\admission_service.py)                     
+  ⎿  Added 29 lines, removed 3 lines                                            
+      346           profile.is_qualified = True                                 
+      347                                                                       
+      348       profile.validation_errors = validation_errors                   
+      349 -                                                                     
+      349 +                                                                     
+      350       # ======================================================        
+           ===================                                                  
+      351       # 4. VALIDATION SUMMARY (Grouped Errors for UX)                 
+      352       # ======================================================        
+           ===================                                                  
+      353 +     # ✅ FIX: Use actual error message counts instead of            
+          +boolean flags                                                        
+      354 +     # This ensures badge counts match the total error list          
+      355       profile.validation_summary = {                                  
+      356           "gpa": {                                                    
+      357 -            "has_error": gpa_error,                                  
+      357 +            "has_error": len(gpa_errors) > 0,                        
+      358               "label": f"GPA: {current_gpa:.1f}/{min_gpa}" if         
+           min_gpa > 0 else "GPA: N/A",                                         
+      359 -             "count": 1 if gpa_error else 0                          
+      359 +             "count": len(gpa_errors)                                
+      360           },                                                          
+      361           "documents": {                                              
+      362               "has_error": len(doc_errors) > 0,                       
+     ...                                                                        
+      367               "count": personal_error_count                           
+      368           }                                                           
+      369       }                                                               
+      370 +                                                                     
+      371 +     # ======================================================        
+          +===================                                                  
+      372 +     # 4.1 GROUPED VALIDATION ERRORS (Enhanced UX -                  
+          +Categorized Display)                                                 
+      373 +     # ======================================================        
+          +===================                                                  
+      374 +     # Provide errors grouped by category for better frontend        
+          + display                                                             
+      375 +     # Frontend can render these as expandable sections              
+          +instead of flat list                                                 
+      376 +     grouped_errors = {                                              
+      377 +         "personal_info": {                                          
+      378 +             "category": "Thông tin cá nhân",                        
+      379 +             "errors": personal_errors,                              
+      380 +             "count": len(personal_errors)                           
+      381 +         },                                                          
+      382 +         "documents": {                                              
+      383 +             "category": "Tài liệu",                                 
+      384 +             "errors": [f"Thiếu tài liệu bắt buộc:                   
+          +{doc_code}" for doc_code in doc_errors],                             
+      385 +             "count": len(doc_errors)                                
+      386 +         },                                                          
+      387 +         "scores": {                                                 
+      388 +             "category": "Điểm số",                                  
+      389 +             "errors": gpa_errors,                                   
+      390 +             "count": len(gpa_errors)                                
+      391 +         }                                                           
+      392 +     }                                                               
+      393 +     profile.grouped_validation_errors = grouped_errors              
+      394                                                                       
+      395       # ======================================================        
+           ===================                                                  
+      396       # 5. STEP STATUS (Architecture Compliant - Backend              
+           computes, FE renders)                                                
+                                                                                
+● Search(pattern: "class.*AdmissionProfile.*Response|grouped_validation_errors|v
+        alidation_summary", glob: "**/schemas/*.py")                            
+  ⎿  Found 1 file (ctrl+o to expand)                                            
+                                                                                
+● Search(pattern: "validation_summary|validation_errors", path:                 
+        "Backend_FastAPI\app\schemas\admission.py", output_mode: "content")     
+  ⎿  Found 40 lines (ctrl+o to expand)                                          
+                                                                                
+● Read(Backend_FastAPI\app\schemas\admission.py)                                
+  ⎿  Read 20 lines                                                              
+                                                                                
+● Update(Backend_FastAPI\app\schemas\admission.py)                              
+  ⎿  Added 7 lines, removed 1 line                                              
+      603           default=None,                                               
+      604           description="Grouped validation errors: {gpa:               
+           {has_error, label, count}, documents: {...}, personal:               
+           {...}}"                                                              
+      605       )                                                               
+      606 -                                                                     
+      606 +                                                                     
+      607 +     # Grouped validation errors (categorized display)               
+      608 +     grouped_validation_errors: Optional[Dict[str, Any]] =           
+          +Field(                                                               
+      609 +         default=None,                                               
+      610 +         description="Validation errors grouped by category:         
+          +{personal_info: {category, errors, count}, documents: {...},         
+          +scores: {...}}"                                                      
+      611 +     )                                                               
+      612 +                                                                     
+      613       # Step status for sidebar (Architecture Compliant -             
+           Backend computes)                                                    
+      614       step_status: Optional[Dict[int, str]] = Field(                  
+      615           default=None,                                               
+                                                                                
+● Search(pattern: "type.*AdmissionProfile|interface.*AdmissionProfile|validation
+        _summary|validationSummary", glob: "**/types/**/*.ts")                  
+  ⎿  Found 1 file (ctrl+o to expand)                                            
+                                                                                
+● Search(pattern: "validationSummary|validation_summary", glob:                 
+        "**/zod/**/*.ts")                                                       
+  ⎿  Found 1 file (ctrl+o to expand)                                            
+                                                                                
+● Search(pattern: "validationSummary|validationErrors|grouped.*validation",     
+        path: "frontend\src\lib\zod\admissions.ts", output_mode: "content")     
+  ⎿  Found 0 lines                                                              
+                                                                                
+● Search(pattern: "validation", path: "frontend\src\lib\zod\admissions.ts",     
+        output_mode: "content")                                                 
+  ⎿  Found 71 lines (ctrl+o to expand)                                          
+                                                                                
+● Read(frontend\src\lib\zod\admissions.ts)                                      
+  ⎿  Read 30 lines                                                              
+                                                                                
+● Update(frontend\src\lib\zod\admissions.ts)                                    
+  ⎿  Added 20 lines, removed 1 line                                             
+      458         count: z.number().int()                                       
+      459       }).optional()                                                   
+      460     }).optional().nullable(),                                         
+      461 -                                                                     
+      461 +                                                                     
+      462 +   // Grouped validation errors (categorized display)                
+      463 +   grouped_validation_errors: z.object({                             
+      464 +     personal_info: z.object({                                       
+      465 +       category: z.string(),                                         
+      466 +       errors: z.array(z.string()),                                  
+      467 +       count: z.number().int()                                       
+      468 +     }).optional(),                                                  
+      469 +     documents: z.object({                                           
+      470 +       category: z.string(),                                         
+      471 +       errors: z.array(z.string()),                                  
+      472 +       count: z.number().int()                                       
+      473 +     }).optional(),                                                  
+      474 +     scores: z.object({                                              
+      475 +       category: z.string(),                                         
+      476 +       errors: z.array(z.string()),                                  
+      477 +       count: z.number().int()                                       
+      478 +     }).optional()                                                   
+      479 +   }).optional().nullable(),                                         
+      480 +                                                                     
+      481     /**                                                               
+      482      * Step status for sidebar navigation.                            
+      483      * NOTE: Backend returns Dict[int, str] but JSON                  
+           serializes keys as strings.                                          
+                                                                                
+● Now let me update the PipelineSidebar to display grouped validation errors    
+  with better UX.                                                               
+                                                                                
+● Update(frontend\src\app\(dashboard)\admissions\[id]\_components\layout\Pipelin
+        eSidebar.tsx)                                                           
+  ⎿  Added 5 lines                                                              
+      17       gpa?: { has_error: boolean; count: number }                      
+      18       documents?: { has_error: boolean; count: number }                
+      19     } | null                                                           
+      20 +   groupedValidationErrors?: {                                        
+      21 +     personal_info?: { category: string; errors: string[];            
+         +count: number }                                                       
+      22 +     documents?: { category: string; errors: string[]; count:         
+         +number }                                                              
+      23 +     scores?: { category: string; errors: string[]; count:            
+         +number }                                                              
+      24 +   } | null                                                           
+      25   }                                                                    
+      26                                                                        
+      27   const STEPS = [                                                      
+                                                                                
+● Update(frontend\src\app\(dashboard)\admissions\[id]\_components\layout\Pipelin
+        eSidebar.tsx)                                                           
+  ⎿  Added 1 line, removed 1 line                                               
+      34       { id: 7, label: "Hoàn tất & Nộp", icon: CheckSquare },           
+      35   ]                                                                    
+      36                                                                        
+      37 -export function PipelineSidebar({ currentStep, onStepChange,          
+         -stepsStatus, validationErrors = [], validationSummary                 
+         -}: PipelineSidebarProps) {                                            
+      37 +export function PipelineSidebar({ currentStep, onStepChange,          
+         +stepsStatus, validationErrors = [], validationSummary,                
+         +groupedValidationErrors }: PipelineSidebarProps) {                    
+      38     const [isIssuesOpen, setIsIssuesOpen] = useState(false)            
+      39                                                                        
+      40     // Calculate progress                                              
+                                                                                
+● Update(frontend\src\app\(dashboard)\admissions\[id]\_components\layout\Pipelin
+        eSidebar.tsx)                                                           
+  ⎿  Added 66 lines, removed 9 lines                                            
+      149         </TooltipProvider>                                            
+      150         </nav>                                                        
+      151                                                                       
+      152 -      {/* Issues Summary (Collapsible) */}                           
+      152 +      {/* Issues Summary (Collapsible) - Grouped by Category         
+          +*/}                                                                  
+      153         {validationErrors.length > 0 && (                             
+      154           <Collapsible open={isIssuesOpen}                            
+           onOpenChange={setIsIssuesOpen} className="px-1">                     
+      155             <CollapsibleTrigger className="flex items-center          
+           justify-between w-full px-3 py-2 rounded-lg bg-red-50 border         
+           border-red-200 hover:bg-red-100 transition-colors">                  
+     ...                                                                        
+      165             </CollapsibleTrigger>                                     
+      166                                                                       
+      167             <CollapsibleContent className="mt-2 px-3 py-2             
+           bg-white border border-red-100 rounded-lg max-h-[300px]              
+           overflow-y-auto">                                                    
+      168 -             <ul className="text-xs text-gray-700                    
+          -space-y-1.5">                                                        
+      169 -               {validationErrors.map((error, idx) => (               
+      170 -                 <li key={idx} className="flex items-start           
+          -gap-2">                                                              
+      171 -                   <span className="text-red-500                     
+          -mt-0.5">•</span>                                                     
+      172 -                   <span                                             
+          -className="leading-relaxed">{error}</span>                           
+      173 -                 </li>                                               
+      174 -               ))}                                                   
+      175 -             </ul>                                                   
+      168 +             {/* Grouped Errors Display */}                          
+      169 +             {groupedValidationErrors ? (                            
+      170 +               <div className="space-y-3">                           
+      171 +                 {/* Personal Info Section */}                       
+      172 +                 {groupedValidationErrors.personal_info &&           
+          +groupedValidationErrors.personal_info.count > 0 && (                 
+      173 +                   <div>                                             
+      174 +                     <h4 className="text-xs font-semibold            
+          +text-gray-800 mb-1.5">                                               
+      175 +                                                                     
+          +{groupedValidationErrors.personal_info.category}                     
+          +({groupedValidationErrors.personal_info.count})                      
+      176 +                     </h4>                                           
+      177 +                     <ul className="text-xs text-gray-700            
+          +space-y-1 ml-2">                                                     
+      178 +                                                                     
+          +{groupedValidationErrors.personal_info.errors.map((error,            
+          +idx) => (                                                            
+      179 +                         <li key={idx} className="flex               
+          +items-start gap-2">                                                  
+      180 +                           <span className="text-red-500             
+          +mt-0.5">•</span>                                                     
+      181 +                           <span                                     
+          +className="leading-relaxed">{error}</span>                           
+      182 +                         </li>                                       
+      183 +                       ))}                                           
+      184 +                     </ul>                                           
+      185 +                   </div>                                            
+      186 +                 )}                                                  
+      187 +                                                                     
+      188 +                 {/* Documents Section */}                           
+      189 +                 {groupedValidationErrors.documents &&               
+          +groupedValidationErrors.documents.count > 0 && (                     
+      190 +                   <div>                                             
+      191 +                     <h4 className="text-xs font-semibold            
+          +text-gray-800 mb-1.5">                                               
+      192 +                                                                     
+          +{groupedValidationErrors.documents.category}                         
+          +({groupedValidationErrors.documents.count})                          
+      193 +                     </h4>                                           
+      194 +                     <ul className="text-xs text-gray-700            
+          +space-y-1 ml-2">                                                     
+      195 +                                                                     
+          +{groupedValidationErrors.documents.errors.map((error, idx) =>        
+          + (                                                                   
+      196 +                         <li key={idx} className="flex               
+          +items-start gap-2">                                                  
+      197 +                           <span className="text-red-500             
+          +mt-0.5">•</span>                                                     
+      198 +                           <span                                     
+          +className="leading-relaxed">{error}</span>                           
+      199 +                         </li>                                       
+      200 +                       ))}                                           
+      201 +                     </ul>                                           
+      202 +                   </div>                                            
+      203 +                 )}                                                  
+      204 +                                                                     
+      205 +                 {/* Scores Section */}                              
+      206 +                 {groupedValidationErrors.scores &&                  
+          +groupedValidationErrors.scores.count > 0 && (                        
+      207 +                   <div>                                             
+      208 +                     <h4 className="text-xs font-semibold            
+          +text-gray-800 mb-1.5">                                               
+      209 +                                                                     
+          +{groupedValidationErrors.scores.category}                            
+          +({groupedValidationErrors.scores.count})                             
+      210 +                     </h4>                                           
+      211 +                     <ul className="text-xs text-gray-700            
+          +space-y-1 ml-2">                                                     
+      212 +                                                                     
+          +{groupedValidationErrors.scores.errors.map((error, idx) => (         
+      213 +                         <li key={idx} className="flex               
+          +items-start gap-2">                                                  
+      214 +                           <span className="text-red-500             
+          +mt-0.5">•</span>                                                     
+      215 +                           <span                                     
+          +className="leading-relaxed">{error}</span>                           
+      216 +                         </li>                                       
+      217 +                       ))}                                           
+      218 +                     </ul>                                           
+      219 +                   </div>                                            
+      220 +                 )}                                                  
+      221 +               </div>                                                
+      222 +             ) : (                                                   
+      223 +               /* Fallback to flat list if grouped data not          
+          +available */                                                         
+      224 +               <ul className="text-xs text-gray-700                  
+          +space-y-1.5">                                                        
+      225 +                 {validationErrors.map((error, idx) => (             
+      226 +                   <li key={idx} className="flex items-start         
+          +gap-2">                                                              
+      227 +                     <span className="text-red-500                   
+          +mt-0.5">•</span>                                                     
+      228 +                     <span                                           
+          +className="leading-relaxed">{error}</span>                           
+      229 +                   </li>                                             
+      230 +                 ))}                                                 
+      231 +               </ul>                                                 
+      232 +             )}                                                      
+      233             </CollapsibleContent>                                     
+      234           </Collapsible>                                              
+      235         )}                                                            
+                                                                                
+● Search(pattern: "PipelineSidebar", glob: "**/admissions/**/*.tsx")            
+  ⎿  Found 2 files (ctrl+o to expand)                                           
+                                                                                
+● Search(pattern: "PipelineSidebar|validationErrors|validationSummary", path:   
+        "frontend\src\app\(dashboard)\admissions\[id]\_components\layout\Admissi
+        onLayout.tsx", output_mode: "content")                                  
+  ⎿  Found 42 lines (ctrl+o to expand)                                          
+                                                                                
+● Read(frontend\src\app\(dashboard)\admissions\[id]\_components\layout\Admission
+      Layout.tsx)                                                               
+  ⎿  Read 63 lines                                                              
+                                                                                
+● Update(frontend\src\app\(dashboard)\admissions\[id]\_components\layout\Admissi
+        onLayout.tsx)                                                           
+  ⎿  Added 5 lines                                                              
+      21       gpa?: { has_error: boolean; count: number }                      
+      22       documents?: { has_error: boolean; count: number }                
+      23     } | null                                                           
+      24 +   groupedValidationErrors?: {                                        
+      25 +     personal_info?: { category: string; errors: string[];            
+         +count: number }                                                       
+      26 +     documents?: { category: string; errors: string[]; count:         
+         +number }                                                              
+      27 +     scores?: { category: string; errors: string[]; count:            
+         +number }                                                              
+      28 +   } | null                                                           
+      29   }                                                                    
+      30                                                                        
+      31   export function AdmissionLayout({                                    
+                                                                                
+● Update(frontend\src\app\(dashboard)\admissions\[id]\_components\layout\Admissi
+        onLayout.tsx)                                                           
+  ⎿  Added 3 lines, removed 1 line                                              
+      36     stepsStatus,                                                       
+      37     validation,                                                        
+      38     validationErrors = [],                                             
+      39 -  validationSummary                                                   
+      39 +  validationSummary,                                                  
+      40 +   groupedValidationErrors                                            
+      41   }: AdmissionLayoutProps) {                                           
+      42     return (                                                           
+      43       <div className="flex flex-col min-h-screen                       
+          bg-gray-50/50">                                                       
+     ...                                                                        
+      54                   stepsStatus={stepsStatus}                            
+      55                   validationErrors={validationErrors}                  
+      56                   validationSummary={validationSummary}                
+      57 +                                                                      
+         +groupedValidationErrors={groupedValidationErrors}                     
+      58                />                                                      
+      59             </aside>                                                   
+      60                                                                        
+                                                                                
+● Search(pattern: "AdmissionLayout", glob: "**/admissions/**/*.tsx")            
+  ⎿  Found 2 files (ctrl+o to expand)                                           
+                                                                                
+● Search(pattern: "AdmissionLayout|validationErrors|validationSummary|grouped.*v
+        alidation", path: "frontend\src\app\(dashboard)\admissions\[id]\_compone
+        nts\AdmissionDetailClient.tsx", output_mode: "content")                 
+  ⎿  Found 50 lines (ctrl+o to expand)                                          
+                                                                                
+● Read(frontend\src\app\(dashboard)\admissions\[id]\_components\AdmissionDetailC
+      lient.tsx)                                                                
+  ⎿  Read 20 lines                                                              
+                                                                                
+● Update(frontend\src\app\(dashboard)\admissions\[id]\_components\AdmissionDetai
+        lClient.tsx)                                                            
+  ⎿  Added 1 line                                                               
+      73     const isEligible = vm?.isEligible ?? false                         
+      74     const validationErrors = vm?.validationErrors ?? []                
+      75     const validationSummary = vm?.validationSummary                    
+      76 +   const groupedValidationErrors = vm?.groupedValidationErrors        
+      77     const stepsStatusRecord = vm?.stepsStatus ?? {}                    
+      78                                                                        
+      79     // ========================================================        
+          =================                                                     
+                                                                                
+● Update(frontend\src\app\(dashboard)\admissions\[id]\_components\AdmissionDetai
+        lClient.tsx)                                                            
+  ⎿  Added 1 line                                                               
+      287           validation={{ isEligible, missingItems: [] }}               
+      288           validationErrors={validationErrors}                         
+      289           validationSummary={validationSummary}                       
+      290 +         groupedValidationErrors={groupedValidationErrors}           
+      291         >                                                             
+      292           {/* TAB CONTENT */}                                         
+      293           <div className="bg-white rounded-lg shadow-sm               
+           min-h-[500px] p-1">                                                  
+                                                                                
+● Let me verify the implementation by checking for any TypeScript errors in the 
+  frontend.                                                                     
+                                                                                
+● Bash(cd frontend && npm run type-check 2>&1 | head -50) timeout: 1m 0s        
+  ⎿  > frontend@0.1.0 type-check                                                
+     > tsc --noEmit                                                             
+     … +140 lines (ctrl+o to expand)                                            
+                                                                                
+● I can see there's a TypeScript error. Let me find where AdmissionViewModel is 
+  defined and add the new field.                                                
+                                                                                
+● Search(pattern: "type.*AdmissionViewModel|interface.*AdmissionViewModel",     
+        glob: "**/*.ts")                                                        
+  ⎿  Found 1 file (ctrl+o to expand)                                            
+                                                                                
+● Search(pattern: "type AdmissionViewModel|interface                            
+        AdmissionViewModel|validationSummary|validationErrors", path:           
+        "frontend\src\hooks\admissions\useAdmissionViewModel.ts", output_mode:  
+        "content")                                                              
+  ⎿  Found 45 lines (ctrl+o to expand)                                          
+                                                                                
+● Read(frontend\src\hooks\admissions\useAdmissionViewModel.ts)                  
+  ⎿  Read 20 lines                                                              
+                                                                                
+● Update(frontend\src\hooks\admissions\useAdmissionViewModel.ts)                
+  ⎿  Added 5 lines, removed 2 lines                                             
+      128                                                                       
+      129     /** Validation errors from backend */                             
+      130     validationErrors: string[]                                        
+      131 -                                                                     
+      131 +                                                                     
+      132     /** Validation summary (grouped errors) */                        
+      133     validationSummary:                                                
+           AdmissionProfileResponse["validation_summary"]                       
+      134 -                                                                     
+      134 +                                                                     
+      135 +   /** Grouped validation errors (categorized display) */            
+      136 +   groupedValidationErrors:                                          
+          +AdmissionProfileResponse["grouped_validation_errors"]                
+      137 +                                                                     
+      138     /** Step status for sidebar navigation */                         
+      139     stepsStatus: Record<number, StepStatus>                           
+      140                                                                       
+                                                                                
+● Read(frontend\src\hooks\admissions\useAdmissionViewModel.ts)                  
+  ⎿  Read 20 lines                                                              
+                                                                                
+● Read(frontend\src\hooks\admissions\useAdmissionViewModel.ts)                  
+  ⎿  Read 70 lines                                                              
+                                                                                
+● Update(frontend\src\hooks\admissions\useAdmissionViewModel.ts)                
+  ⎿  Added 1 line                                                               
+      194         eligibility_status = "pending",                               
+      195         validation_errors = [],                                       
+      196         validation_summary,                                           
+      197 +       grouped_validation_errors,                                    
+      198         completion_percent = 0,                                       
+      199         permissions = {},                                             
+      200         ...rest                                                       
+                                                                                
+● Update(frontend\src\hooks\admissions\useAdmissionViewModel.ts)                
+  ⎿  Added 1 line                                                               
+      232         isQualified: data.is_qualified ?? null,                       
+      233         validationErrors: validation_errors,                          
+      234         validationSummary: validation_summary,                        
+      235 +       groupedValidationErrors: grouped_validation_errors,           
+      236         stepsStatus,                                                  
+      237         completionPercent: completion_percent,                        
+      238         availableActions: available_actions,                          
+                                                                                
+● Bash(cd frontend && npm run type-check 2>&1 | grep -A 2            timeout: 1m
+      "AdmissionDetailClient\|groupedValidationErrors" || echo "No   0s         
+      errors found for AdmissionDetailClient or groupe…)                        
+  ⎿ src/app/(dashboard)/admissions/[id]/_components/AdmissionDetailClient.t     
+    sx(297,118): error TS2322: Type '{ id: number; lead_id: number; full_na     
+    me: string | null; dob: string | null; gender: string | null; email: st     
+    … +14 lines (ctrl+o to expand)                                              
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+● Great! The TypeScript error related to groupedValidationErrors has been fixed.
+   Now let me verify the implementation works by running a quick build check.   
+                                                                                
+● Bash(cd Backend_FastAPI && python -m pytest tests/ -k "test_"       timeout:  
+      --collect-only 2>&1 | head -20)                                 30s       
+  ⎿ C:\Users\hapha\AppData\Local\Programs\Python\Python313\python.exe: No m     
+    odule named pytest                                                          
+                                                                                
+                                                                                
+● Bash(cd Backend_FastAPI && python -c "from app.services import      timeout:  
+      admission_service; print('Import successful')" 2>&1)            10s       
+  ⎿  Error: Exit code 1                                                         
+     Traceback (most recent call last):                                         
+       File "<string>", line 1, in <module>                                     
+         from app.services import admission_service; print('Import successful') 
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^                             
+       File "D:\QLTS\Backend_FastAPI\app\services\admission_service.py", line 29
+      in <module>                                                               
+         import structlog                                                       
+     ModuleNotFoundError: No module named 'structlog'                           
+                                                                                
+● Bash(cd Backend_FastAPI && python -m py_compile                     timeout:  
+      app/services/admission_service.py && echo "Syntax check passed" 10s       
+      || echo "Syntax error found")                                             
+                                                                                
+  ⎿  Syntax check passed                                                        
+                                                                                
+● Perfect! I've successfully fixed both issues. Here's what I implemented:      
+                                                                                
+  Problem Summary                                                               
+                                                                                
+  1. Data Contradiction: Badge counts (3 + 1 + 12 = 16) didn't match the "Vấn đề
+   cần sửa (14)" total                                                          
+  2. Poor UX: Errors were displayed as a flat list, making it hard to understand
+   what category each issue belonged to                                         
+                                                                                
+  Solutions Implemented                                                         
+                                                                                
+  1. Fixed Validation Count Mismatch                                            
+                                                                                
+  Root Cause: Personal info validation was adding 1 combined error message but  
+  reporting 8 separate issues in the badge count.                               
+                                                                                
+  Backend Changes (Backend_FastAPI/app/services/admission_service.py:242-313):  
+  - Changed personal info validation to add individual error messages for each  
+  missing field instead of one combined message                                 
+  - Now tracks actual error message counts for all categories (personal,        
+  documents, scores)                                                            
+  - Updated validation_summary.count to reflect actual error counts:            
+    - gpa.count: Number of score-related error messages                         
+    - documents.count: Number of missing documents                              
+    - personal.count: Number of missing personal fields                         
+                                                                                
+  2. Added Grouped Validation Errors                                            
+                                                                                
+  Backend (Backend_FastAPI/app/services/admission_service.py:315-330):          
+  - Created new grouped_validation_errors structure with 3 categories:          
+    - Thông tin cá nhân (Personal Info): Họ tên, Ngày sinh, Giới tính, CCCD,    
+  Quốc tịch, Dân tộc, Số điện thoại, Nơi sinh                                   
+    - Tài liệu (Documents): All missing required documents                      
+    - Điểm số (Scores): GPA requirements, subject count, score thresholds       
+  - Added field to schema (Backend_FastAPI/app/schemas/admission.py:607-610)    
+                                                                                
+  Frontend (frontend/src/app/(dashboard)/admissions/[id]/_components/layout/Pipe
+  lineSidebar.tsx:147-205):                                                     
+  - Updated UI to display errors grouped by category with section headers       
+  - Each category shows its count: "Thông tin cá nhân (8)", "Tài liệu (12)",    
+  "Điểm số (1)"                                                                 
+  - Fallback to flat list if grouped data not available (backward compatibility)
+  - Updated TypeScript types to include the new field                           
+                                                                                
+  Result                                                                        
+                                                                                
+  ✅ Badge counts now match total: If there are 8 personal + 12 documents + 1   
+  score errors = 21 total, both badges and panel will show 21                   
+                                                                                
+  ✅ Better UX: Users can now see errors organized by category:                 
+  Vấn đề cần sửa (21)                                                           
+  ├─ Thông tin cá nhân (8)                                                      
+  │  • Thiếu thông tin cá nhân: Họ tên                                          
+  │  • Thiếu thông tin cá nhân: Ngày sinh                                       
+  │  • ...                                                                      
+  ├─ Tài liệu (12)                                                              
+  │  • Thiếu tài liệu bắt buộc: hoc_ba_thpt                                     
+  │  • Thiếu tài liệu bắt buộc: bang_tot_nghiep                                 
+  │  • ...                                                                      
+  └─ Điểm số (1)                                                                
+     • Chưa nhập đủ đầu điểm (0/3)                                              
+                                                                                
+  The changes are backward compatible and follow the project's architecture     
+  patterns (Backend computes, Frontend renders).                                
+                                                                                
+✻ Cogitated for 8m 36s                                                          
+                                                                                
+❯ 1. Thanh tiến độ chưa cập nhật chính xác tình hình nhập liệu:                 
+  - Cho tôi biết thanh tiến độ được tính toán dựa trên những nội dung gì?       
+  2. Đối với document tôi nhận ra một vấn đề đó là chưa có nút hoàn tác, ví     
+  dụ khi người dùng lỡ tay bấm Đã nộp nhưng không có nút hoàn tác, và mặc       
+  dù là đã nộp nhưng không biết bản nộp là bản gì chứng thực hay là photo.      
+                                                                                
+● Tôi sẽ giúp bạn phân tích 2 vấn đề này. Hãy để tôi kiểm tra logic tính toán   
+  tiến độ và hệ thống quản lý tài liệu.                                         
+                                                                                
+● Search(pattern: "completion_percent|completion.*=", path:                     
+        "Backend_FastAPI\app\services\admission_service.py", output_mode:       
+        "content")                                                              
+  ⎿  Found 87 lines (ctrl+o to expand)                                          
+                                                                                
+● Search(pattern: "submission_format|paper_submitted|document.*status", path:   
+        "Backend_FastAPI\app\services\admission_service.py", output_mode:       
+        "content")                                                              
+  ⎿  Found 86 lines (ctrl+o to expand)                                          
+                                                                                
+● Search(pattern: "class ProfileDocument|submission_format", glob:              
+        "**/models/*.py", output_mode: "content")                               
+  ⎿  Found 0 lines                                                              
+                                                                                
+● Bash(cd Backend_FastAPI && find . -name "*.py" -type f -exec grep -l "class   
+      ProfileDocument" {} \;)                                                   
+  ⎿  Running in the background (↓ to manage)                                    
+                                                                                
+● Read(C:\Users\hapha\AppData\Local\Temp\claude\D--QLTS\tasks\b432962.output)   
+  ⎿  Read 2 lines                                                               
+                                                                                
+● Search(pattern: "class ProfileDocument", path:                                
+        "Backend_FastAPI\app\models\admission_config\profile_data.py",          
+        output_mode: "content")                                                 
+  ⎿  Found 56 lines (ctrl+o to expand)                                          
+                                                                                
+● Search(pattern: "submission_format|actual_submission_format", path:           
+        "Backend_FastAPI\app\models\admission_config\profile_data.py",          
+        output_mode: "content")                                                 
+  ⎿  Found 0 lines                                                              
+                                                                                
+● Search(pattern: "class.*DocumentType|submission_format", glob:                
+        "**/models/**/*.py", output_mode: "content")                            
+  ⎿  Found 47 lines (ctrl+o to expand)                                          
+                                                                                
+● Search(pattern: "mark_paper_submitted|upload.*document|def.*document", path:  
+        "Backend_FastAPI\app\routers\admissions.py", output_mode: "content")    
+  ⎿  Found 106 lines (ctrl+o to expand)                                         
+                                                                                
+● Search(pattern: "revert|undo|reset.*document|delete.*document", path:         
+        "Backend_FastAPI\app\routers\admissions.py", output_mode: "content")    
+  ⎿  Found 0 lines                                                              
+                                                                                
+● Tôi đã phân tích cả 2 vấn đề. Để tôi trình bày chi tiết:                      
+                                                                                
+  1. THANH TIẾN ĐỘ (COMPLETION_PERCENT)                                         
+                                                                                
+  Cách Tính Toán Hiện Tại                                                       
+                                                                                
+  Vị trí: Backend_FastAPI/app/services/admission_service.py:441-460             
+                                                                                
+  # 50% - Thông tin cá nhân cơ bản (9 trường bắt buộc)                          
+  required_fields = ["full_name", "phone", "email", "dob", "gender",            
+  "citizen_id",                                                                 
+                     "nationality", "ethnicity", "permanent_province"]          
+  base_completion = (số_trường_đã_điền / 9) * 50                                
+                                                                                
+  # 20% - Thông tin gia đình                                                    
+  family_completion = 20 nếu có ít nhất 1 người trong family_info               
+                                                                                
+  # 20% - Lịch sử học tập                                                       
+  academic_completion = 20 nếu có ít nhất 1 bản ghi trong academic_history      
+                                                                                
+  # 10% - Tài liệu                                                              
+  doc_completion = (số_tài_liệu_đã_upload / tổng_tài_liệu_bắt_buộc) * 10        
+                                                                                
+  # Tổng                                                                        
+  completion_percent = min(100, base_completion + family_completion +           
+  academic_completion + doc_completion)                                         
+                                                                                
+  ⚠️ Vấn Đề Hiện Tại                                                            
+                                                                                
+  1. Không tính điểm số (Scores): Điểm thi/GPA không được tính vào tiến độ      
+  2. Logic đơn giản quá:                                                        
+    - Family: Chỉ cần 1 người → +20% (không khuyến khích điền đầy đủ)           
+    - Academic: Chỉ cần 1 trường → +20%                                         
+    - Không phân biệt trường bắt buộc vs không bắt buộc                         
+  3. Không đồng bộ với step_status: Thanh tiến độ không phản ánh các bước trong 
+  sidebar                                                                       
+                                                                                
+  💡 Đề Xuất Cải Thiện                                                          
+                                                                                
+  # Tính toán theo 7 bước trong sidebar (mỗi bước ~14.3%)                       
+  completion_percent = sum([                                                    
+      14 if step_status[1] == "success" else 0,  # Personal Info                
+      14 if step_status[2] == "success" else 0,  # Family                       
+      14 if step_status[3] == "success" else 0,  # Academic History             
+      15 if step_status[4] == "success" else 0,  # Scores (quan trọng hơn)      
+      15 if step_status[5] == "success" else 0,  # Documents (quan trọng hơn)   
+      14 if step_status[6] == "success" else 0,  # Tuition (nếu có)             
+      14 if step_status[7] != "locked" else 0,   # Final Review                 
+  ])                                                                            
+                                                                                
+  Ưu điểm:                                                                      
+  - Đồng bộ với UI sidebar                                                      
+  - User hiểu rõ: "Hoàn thành 1 bước = tăng ~14%"                               
+  - Khuyến khích hoàn thành đầy đủ từng bước                                    
+                                                                                
+  ---                                                                           
+  2. HỆ THỐNG TÀI LIỆU - 2 VẤN ĐỀ NGHIÊM TRỌNG                                  
+                                                                                
+  Vấn Đề A: Không Có Nút Hoàn Tác                                               
+                                                                                
+  Workflow Hiện Tại:                                                            
+  [missing] → [paper_submitted] → ??? (KHÔNG THỂ HỒI PHỤC)                      
+           ↓                                                                    
+      [uploaded] → [verified] → ??? (KHÔNG THỂ HỒI PHỤC)                        
+           ↓                                                                    
+      [rejected] → phải upload lại                                              
+                                                                                
+  Hậu quả:                                                                      
+  - Officer lỡ tay bấm "Đã nộp" → không thể sửa                                 
+  - Upload nhầm file → phải chờ admin reject → mất thời gian                    
+  - Không có audit trail rõ ràng                                                
+                                                                                
+  Vấn Đề B: Không Phân Biệt Loại Bản Nộp                                        
+                                                                                
+  Thiết kế config có submission_format:                                         
+  # DocumentGroupItem model (document_group.py:135-139)                         
+  submission_format = Column(String(20))                                        
+  # Giá trị: "photo" | "certified_copy" | "original"                            
+                                                                                
+  NHƯNG ProfileDocument KHÔNG LƯU:                                              
+  - Chỉ lưu: status, file_path, uploaded_at                                     
+  - KHÔNG có trường actual_submission_format để lưu loại bản người dùng nộp     
+                                                                                
+  Kịch bản thực tế:                                                             
+  Yêu cầu: Bằng tốt nghiệp (submission_format="original")                       
+  User nộp: Photo copy                                                          
+  → Hệ thống CHẤP NHẬN vì không verify                                          
+  → Sau đó mới phát hiện sai → phải từ chối                                     
+                                                                                
+  ---                                                                           
+  💡 GIẢI PHÁP ĐỀ XUẤT                                                          
+                                                                                
+  Giải pháp 1: Thêm Nút Hoàn Tác (Undo)                                         
+                                                                                
+  Backend Changes:                                                              
+                                                                                
+  1. Thêm endpoint reset document (admissions.py):                              
+  @router.post("/profiles/{profile_id}/documents/{doc_code}/reset")             
+  async def reset_document_status(                                              
+      profile_id: int,                                                          
+      doc_code: str,                                                            
+      reason: str,  # Lý do hoàn tác (bắt buộc)                                 
+      current_user: User = CasbinAuth,                                          
+  ):                                                                            
+      """                                                                       
+      Reset document to 'missing' status.                                       
+                                                                                
+      Permissions:                                                              
+      - Officer: Can reset their own profile's documents (status=draft/rejected)
+      - Manager/Admin: Can reset any document (any status except enrolled)      
+                                                                                
+      Creates audit log entry.                                                  
+      """                                                                       
+                                                                                
+  2. Thêm audit log để theo dõi:                                                
+  # Lưu vào ProfileDocumentHistory table                                        
+  {                                                                             
+      "action": "reset",                                                        
+      "from_status": "paper_submitted",                                         
+      "to_status": "missing",                                                   
+      "reason": "Người dùng nhầm lẫn, chưa thực sự nộp",                        
+      "officer_id": 123,                                                        
+      "timestamp": "2026-01-22T19:30:00Z"                                       
+  }                                                                             
+                                                                                
+  Frontend UI:                                                                  
+  {doc.status === "paper_submitted" && canEdit && (                             
+    <Button                                                                     
+      variant="ghost"                                                           
+      size="sm"                                                                 
+      onClick={() => handleResetDocument(doc.code)}                             
+    >                                                                           
+      <RotateCcw className="w-4 h-4 mr-1" />                                    
+      Hoàn tác                                                                  
+    </Button>                                                                   
+  )}                                                                            
+                                                                                
+  ---                                                                           
+  Giải pháp 2: Theo Dõi Loại Bản Nộp Thực Tế                                    
+                                                                                
+  Database Migration:                                                           
+  -- Add column to ProfileDocument                                              
+  ALTER TABLE profile_document                                                  
+  ADD COLUMN actual_submission_format VARCHAR(20);                              
+  -- Values: 'photo' | 'certified_copy' | 'original'                            
+                                                                                
+  ADD COLUMN format_verified_by INTEGER REFERENCES users(id);                   
+  ADD COLUMN format_verified_at TIMESTAMP;                                      
+                                                                                
+  Updated Workflow:                                                             
+  1. User upload file hoặc officer đánh dấu "Đã nộp"                            
+     → Hiển thị modal: "Loại bản nộp?"                                          
+     [Photo] [Bản sao có chứng thực] [Bản chính]                                
+                                                                                
+  2. Lưu vào actual_submission_format                                           
+                                                                                
+  3. Backend validation:                                                        
+     if actual_submission_format != required_submission_format:                 
+         status = "pending_verification"  # Cần manager xác nhận                
+     else:                                                                      
+         status = "uploaded" hoặc "paper_submitted"                             
+                                                                                
+  4. Frontend hiển thị:                                                         
+     Yêu cầu: Bản chính ✓                                                       
+     Đã nộp: Photo copy ⚠️ (Cần xác nhận từ quản lý)                            
+                                                                                
+  Backend Service Update (admission_service.py):                                
+  async def mark_paper_submitted(                                               
+      db: AsyncSession,                                                         
+      profile_id: int,                                                          
+      doc_code: str,                                                            
+      actual_format: str,  # NEW PARAMETER                                      
+      current_user: User,                                                       
+  ):                                                                            
+      # Validate format                                                         
+      required_format = doc_config.get("submission_format")                     
+                                                                                
+      if actual_format != required_format:                                      
+          # Đánh dấu cần xác nhận                                               
+          status = "pending_verification"                                       
+          validation_errors.append(                                             
+              f"Tài liệu {doc_code}: Yêu cầu {required_format}, "               
+              f"nhưng nộp {actual_format}"                                      
+          )                                                                     
+      else:                                                                     
+          status = "paper_submitted"                                            
+                                                                                
+  ---                                                                           
+  TỔNG KẾT & KHUYẾN NGHỊ                                                        
+  ┌──────────────────────────────┬─────────────────────┬─────────┬────────┐     
+  │            Vấn đề            │ Mức độ nghiêm trọng │ Ưu tiên │ Effort │     
+  ├──────────────────────────────┼─────────────────────┼─────────┼────────┤     
+  │ Completion % không chính xác │ Medium              │ P1      │ 2h     │     
+  ├──────────────────────────────┼─────────────────────┼─────────┼────────┤     
+  │ Không có nút hoàn tác        │ HIGH                │ P0      │ 4h     │     
+  ├──────────────────────────────┼─────────────────────┼─────────┼────────┤     
+  │ Không theo dõi loại bản nộp  │ HIGH                │ P1      │ 6h     │     
+  └──────────────────────────────┴─────────────────────┴─────────┴────────┘     
+  Bạn muốn tôi implement giải pháp nào trước? Tôi khuyến nghị bắt đầu với:      
+  1. Hoàn tác document (P0) - Vấn đề UX nghiêm trọng                            
+  2. Fix completion_percent (P1) - Dễ implement                                 
+  3. Theo dõi submission format (P1) - Cần migration DB                         
+                                                                                
+✻ Cooked for 4m 33s                                                             
+                                                                                
+● Background command "Find ProfileDocument model" completed (exit code 0)       
+                                                                                
+● Tôi đã phân tích xong cả 2 vấn đề. Để tóm tắt lại:                            
+                                                                                
+  📊 VẤN ĐỀ 1: THANH TIẾN ĐỘ                                                    
+                                                                                
+  Cách tính hiện tại (admission_service.py:441-460):                            
+  - 50%: Thông tin cá nhân (9 trường)                                           
+  - 20%: Gia đình (chỉ cần 1 người)                                             
+  - 20%: Học tập (chỉ cần 1 trường)                                             
+  - 10%: Tài liệu (tỷ lệ hoàn thành)                                            
+  - KHÔNG tính điểm số                                                          
+                                                                                
+  Vấn đề:                                                                       
+  - Logic quá đơn giản, không khuyến khích điền đầy đủ                          
+  - Không đồng bộ với 7 bước trong sidebar                                      
+  - User khó hiểu tại sao điền nhiều mà % không tăng                            
+                                                                                
+  📁 VẤN ĐỀ 2: HỆ THỐNG TÀI LIỆU                                                
+                                                                                
+  A. Không có nút hoàn tác ⚠️ NGHIÊM TRỌNG                                      
+                                                                                
+  - Officer lỡ tay bấm "Đã nộp" → không thể sửa                                 
+  - Không có audit trail                                                        
+  - Cần phải reject rồi làm lại → mất thời gian                                 
+                                                                                
+  B. Không theo dõi loại bản nộp ⚠️ NGHIÊM TRỌNG                                
+                                                                                
+  - Config có submission_format (photo/certified_copy/original)                 
+  - Nhưng ProfileDocument không lưu loại bản thực tế người dùng nộp             
+  - Hệ thống không validate được: "Yêu cầu bản chính nhưng nộp photo"           
+                                                                                
+  ---                                                                           
+  💡 GIẢI PHÁP ĐỀ XUẤT                                                          
+                                                                                
+  Priority 0 (Urgent): Thêm nút hoàn tác document                               
+                                                                                
+  - Endpoint: POST /profiles/{id}/documents/{code}/reset                        
+  - UI: Nút "Hoàn tác" với confirmation dialog                                  
+  - Audit log: Lưu lịch sử thay đổi                                             
+  - Effort: ~4 giờ                                                              
+                                                                                
+  Priority 1: Theo dõi loại bản nộp thực tế                                     
+                                                                                
+  - Migration: Thêm actual_submission_format vào ProfileDocument                
+  - UI: Modal chọn loại bản khi đánh dấu "Đã nộp"                               
+  - Validation: So sánh với required_submission_format                          
+  - Effort: ~6 giờ                                                              
+                                                                                
+  Priority 1: Fix completion_percent                                            
+                                                                                
+  - Tính theo 7 bước trong sidebar (mỗi bước ~14%)                              
+  - Đồng bộ với step_status                                                     
+  - Effort: ~2 giờ                                                              
+                                                                                
+  ---                                                                           
+  Bạn muốn tôi implement giải pháp nào trước? Tôi recommend:                    
+  1. ✅ Hoàn tác document (P0) - Vấn đề UX nghiêm trọng nhất                    
+  2. ✅ Fix completion % (P1) - Dễ, tác động ngay                               
+  3. ✅ Submission format tracking (P1) - Cần chuẩn bị kỹ hơn                   
+                                                                                
+  Hoặc bạn muốn tôi làm cả 3 song song?                                         
+                                                                                
+❯ tôi nghĩ không cần phải thêm bảng để ghi nhận lý do hoàn tác vì đây chỉ       
+  là hành vi ngoài ý muốn và bấm nhầm nút Đã nộp hoặc upload nhầm file.         
+  Đối với việc xác nhận tài liệu kể cả có yêu cầu upload thì phải có một        
+  bản lưu trữ (đồng nghĩa với việc phải xác nhận bản lưu trữ là bản gì          
+  photo, công chứng hay bản gốc)                                                
+                                                                                
+● Rất đúng! Tôi hiểu rồi. Để tôi implement giải pháp đơn giản và thực tế hơn:   
+                                                                                
+  🎯 GIẢI PHÁP CUỐI CÙNG                                                        
+                                                                                
+  1. Hoàn tác Document (Đơn giản - không cần audit log phức tạp)                
+                                                                                
+  - Chỉ cần endpoint reset về "missing"                                         
+  - Không cần bảng lịch sử riêng                                                
+  - Có thể log đơn giản trong system log nếu cần                                
+                                                                                
+  2. Xác nhận loại bản lưu trữ (Áp dụng cho TẤT CẢ)                             
+                                                                                
+  Điểm quan trọng: Dù upload file hay đánh dấu "Đã nộp giấy", đều phải xác nhận:
+  - File PDF này scan từ bản gốc hay photo copy hay bản công chứng?             
+  - Bản giấy nộp là loại nào?                                                   
+                                                                                
+  → Thêm cột actual_submission_format vào ProfileDocument                       
+                                                                                
+  Để tôi implement cả 3 vấn đề:                                                 
+                                                                                
+● Read(Backend_FastAPI\app\models\admission_config\profile_data.py)             
+  ⎿  Read 80 lines                                                              
+                                                                                
+● Read(Backend_FastAPI\app\models\admission_config\profile_data.py)             
+  ⎿  Read 34 lines                                                              
+                                                                                
+● Update(Backend_FastAPI\app\models\admission_config\profile_data.py)           
+  ⎿  Added 10 lines, removed 1 line                                             
+      148           comment="Officer who rejected"                              
+      149       )                                                               
+      150                                                                       
+      151 +     # ✅ Submission Format Tracking                                 
+      152 +     # User declares what type of document they are                  
+          +submitting                                                           
+      153 +     actual_submission_format = Column(                              
+      154 +         String(50),                                                 
+      155 +         nullable=True,                                              
+      156 +         comment="Declared by user/officer at submission:            
+          +original | certified_copy | photo"                                   
+      157 +     )                                                               
+      158 +                                                                     
+      159       # ✅ Finding 2.3: Document Internal Verification                
+      160 +     # Officer verifies the actual physical format (may              
+          +differ from declared)                                                
+      161       verified_format = Column(                                       
+      162           String(50),                                                 
+      163           nullable=True,                                              
+      164 -        comment="original | certified_copy | photo"                  
+      164 +        comment="Verified by officer after inspection:               
+          +original | certified_copy | photo"                                   
+      165       )                                                               
+      166                                                                       
+      167       created_at = Column(                                            
+                                                                                
+● Bash(cd Backend_FastAPI && ls -la alembic/versions/ | head -10)               
+  ⎿  total 613                                                                  
+     drwxr-xr-x 1 hapha 197609     0 Jan 21 16:01 ./                            
+     drwxr-xr-x 1 hapha 197609     0 Jan  8 19:23 ../                           
+     … +13 lines (ctrl+o to expand)                                             
+                                                                                
+● Bash(cd Backend_FastAPI && ls -lt alembic/versions/*.py | head -5)            
+  ⎿ -rw-r--r-- 1 hapha 197609  1528 Jan 21 15:58 alembic/versions/5f4e3d2c1     
+    b0a_add_assignment_to_admission_profile.py                                  
+    -rw-r--r-- 1 hapha 197609   814 Jan 21 15:01 alembic/versions/a1ad22f98     
+    … +7 lines (ctrl+o to expand)                                               
+                                                                                
+                                                                                
+                                                                                
+● Read(Backend_FastAPI\alembic\versions\a1ad22f9812a_add_verified_format_to_prof
+      ile_document.py)                                                          
+  ⎿  Read 33 lines                                                              
+                                                                                
+● Write(Backend_FastAPI\alembic\versions\6g5h4i3j2k1l_add_actual_submission_form
+       at_to_profile_document.py)                                               
+  ⎿  Wrote 1 lines to Backend_FastAPI\alembic\versions\6g5h4i3j2k1l_add_actu    
+     al_submission_format_to_profile_document.py                                
+     """add_actual_submission_format_to_profile_document                        
+     Revision ID: 6g5h4i3j2k1l                                                  
+     Revises: 5f4e3d2c1b0a                                                      
+     Create Date: 2026-01-22 19:45:00.000000                                    
+     """                                                                        
+     from typing import Sequence, Union                                         
+     from alembic import op                                                     
+                                                                                
+● Search(pattern: "async def upload_document", path:                            
+        "Backend_FastAPI\app\services\admission_service.py", output_mode:       
+        "content")                                                              
+  ⎿  Found 81 lines (ctrl+o to expand)                                          
+                                                                                
+● Search(pattern: "await                                                        
+        admission_repo.update_document_status|admission_repo.update_document",  
+        path: "Backend_FastAPI\app\services\admission_service.py", output_mode: 
+        "content")                                                              
+  ⎿  Found 21 lines (ctrl+o to expand)                                          
+                                                                                
+● Bash(cd Backend_FastAPI && find . -name "*repository*.py" -o -name "*repo*.py"
+       | grep -i admission | head -5)                                           
+  ⎿  ./app/repositories/admission_config_repository.py                          
+     ./app/repositories/admission_path_repository.py                            
+     ./app/repositories/admission_repository.py                                 
+     ./tests/unit/test_admission_repository_documents.py                        
+                                                                                
+● Search(pattern: "def update_document_status|async def update_document_status",
+         path: "Backend_FastAPI\app\repositories\admission_repository.py",      
+        output_mode: "content")                                                 
+  ⎿  Found 46 lines (ctrl+o to expand)                                          
+                                                                                
+● Update(Backend_FastAPI\app\repositories\admission_repository.py)              
+  ⎿  File must be read first                                                    
+                                                                                
+● Read(Backend_FastAPI\app\repositories\admission_repository.py)                
+  ⎿  Read 50 lines                                                              
+                                                                                
+● Update(Backend_FastAPI\app\repositories\admission_repository.py)              
+  ⎿  Added 4 lines                                                              
+      343           status: str,                                                
+      344           file_path: Optional[str] = None,                            
+      345           uploaded_at = None,  # datetime or str (for backward        
+            compatibility)                                                      
+      346 +         actual_submission_format: Optional[str] = None,             
+      347       ) -> Optional[models.ProfileDocument]:                          
+      348           """                                                         
+      349           Update ProfileDocument status and file metadata.            
+     ...                                                                        
+      355               status: New status (missing | uploaded |                
+           verified | rejected)                                                 
+      356               file_path: File path (if uploaded)                      
+      357               uploaded_at: Upload timestamp as datetime (if           
+           uploaded)                                                            
+      358 +             actual_submission_format: Declared document             
+          +format (original | certified_copy | photo)                           
+      359                                                                       
+      360           Returns:                                                    
+      361               Updated ProfileDocument or None if not found            
+     ...                                                                        
+      374                   doc.uploaded_at =                                   
+           datetime.fromisoformat(uploaded_at.replace('Z', '+00:00'))           
+      375               else:                                                   
+      376                   doc.uploaded_at = uploaded_at                       
+      377 +         if actual_submission_format:                                
+      378 +             doc.actual_submission_format =                          
+          +actual_submission_format                                             
+      379                                                                       
+      380           return doc                                                  
+      381                                                                       
+                                                                                
+● Update(Backend_FastAPI\app\services\admission_service.py)                     
+  ⎿  Added 6 lines, removed 1 line                                              
+      1820       doc_code: str,                                                 
+      1821       file: Any,  # UploadFile                                       
+      1822       current_user: models.User,                                     
+      1823 +     actual_submission_format: Optional[str] = None,                
+      1824   ) -> models.AdmissionProfile:                                      
+      1825       """                                                            
+      1826       Upload a document for an admission profile.                    
+     ...                                                                        
+      1829       2. Verify profile status (draft/rejected)                      
+      1830       3. Verify doc_code exists in ProfileDocument                   
+      1831       4. Save file to disk                                           
+            (uploads/admissions/{id}/{doc_code}_{filename})                     
+      1832 -    5. Update ProfileDocument status='uploaded' and file_path       
+      1832 +    5. Update ProfileDocument status='uploaded', file_path,         
+           +and actual_submission_format                                        
+      1833       6. Re-compute validation_summary with updated documents        
+      1834                                                                      
+      1835       IMPORTANT: This function does NOT commit the                   
+            transaction.                                                        
+      1836       Router must call db.commit().                                  
+      1837                                                                      
+      1838 +     Args:                                                          
+      1839 +         actual_submission_format: Type of document                 
+           +submitted (original | certified_copy | photo)                       
+      1840 +             User must declare what type of physical                
+           +document they scanned/uploaded.                                     
+      1841 +                                                                    
+      1842       Returns:                                                       
+      1843           AdmissionProfile with updated validation_summary           
+      1844                                                                      
+                                                                                
+● Update(Backend_FastAPI\app\services\admission_service.py)                     
+  ⎿  Added 2 lines, removed 1 line                                              
+      1928           document_type_code=doc_code,                               
+      1929           status="uploaded",                                         
+      1930           file_path=file_path,                                       
+      1931 -        uploaded_at=uploaded_at_dt.isoformat()                      
+      1931 +        uploaded_at=uploaded_at_dt.isoformat(),                     
+      1932 +         actual_submission_format=actual_submission_format          
+      1933       )                                                              
+      1934                                                                      
+      1935       profile.updated_at = uploaded_at_dt                            
+                                                                                
+● Search(pattern: "^async def mark_paper_submitted", path:                      
+        "Backend_FastAPI\app\services\admission_service.py", output_mode:       
+        "content")                                                              
+  ⎿  Found 61 lines (ctrl+o to expand)                                          
+                                                                                
+● Search(pattern: "async def mark_paper_submitted", path:                       
+        "Backend_FastAPI\app\repositories\admission_repository.py", output_mode:
+         "content")                                                             
+  ⎿  Found 34 lines (ctrl+o to expand)                                          
+                                                                                
+● Update(Backend_FastAPI\app\repositories\admission_repository.py)              
+  ⎿  Added 10 lines, removed 6 lines                                            
+      439           profile_id: int,                                            
+      440           document_type_code: str,                                    
+      441           officer_id: int,                                            
+      442 +         actual_submission_format: Optional[str] = None,             
+      443       ) -> Optional[models.ProfileDocument]:                          
+      444           """                                                         
+      445           Mark a document as paper submitted (officer confirms        
+            receipt).                                                           
+      446 -                                                                     
+      446 +                                                                     
+      447           For documents where requires_upload=false.                  
+      448 -                                                                     
+      448 +                                                                     
+      449           Args:                                                       
+      450               profile_id: AdmissionProfile ID                         
+      451               document_type_code: Document type code                  
+      452               officer_id: ID of officer confirming receipt            
+      453 -                                                                     
+      453 +             actual_submission_format: Declared document             
+          +format (original | certified_copy | photo)                           
+      454 +                                                                     
+      455           Returns:                                                    
+      456               Updated ProfileDocument or None if not found            
+      457           """                                                         
+      458           from datetime import datetime, timezone                     
+      459 -                                                                     
+      459 +                                                                     
+      460           doc = await self.get_document_by_type(profile_id,           
+           document_type_code)                                                  
+      461           if not doc:                                                 
+      462               return None                                             
+      463 -                                                                     
+      463 +                                                                     
+      464           doc.status = "paper_submitted"                              
+      465           doc.paper_submitted_at = datetime.now(timezone.utc)         
+      466           doc.paper_submitted_by = officer_id                         
+      467 -                                                                     
+      467 +         if actual_submission_format:                                
+      468 +             doc.actual_submission_format =                          
+          +actual_submission_format                                             
+      469 +                                                                     
+      470           return doc                                                  
+      471                                                                       
+      472       async def reject_document(                                      
+                                                                                
+● Update(Backend_FastAPI\app\services\admission_service.py)                     
+  ⎿  Added 5 lines, removed 2 lines                                             
+      2017       profile_id: int,                                               
+      2018       doc_code: str,                                                 
+      2019       current_user: models.User,                                     
+      2020 +     actual_submission_format: Optional[str] = None,                
+      2021   ) -> models.AdmissionProfile:                                      
+      2022       """                                                            
+      2023       Mark a document as paper submitted (officer confirms           
+            receipt).                                                           
+     ...                                                                        
+      2029           profile_id: AdmissionProfile ID                            
+      2030           doc_code: Document type code                               
+      2031           current_user: Current authenticated user (must be          
+            officer+)                                                           
+      2032 +         actual_submission_format: Type of document                 
+           +submitted (original | certified_copy | photo)                       
+      2033                                                                      
+      2034       Returns:                                                       
+      2035           AdmissionProfile with updated validation_summary           
+     ...                                                                        
+      2039       """                                                            
+      2040       from app.repositories import AdmissionRepository               
+      2041       admission_repo = AdmissionRepository(db)                       
+      2042 -                                                                    
+      2042 +                                                                    
+      2043       # Get profile for access check                                 
+      2044       profile = await get_profile(db, profile_id,                    
+            current_user)                                                       
+      2045 -                                                                    
+      2045 +                                                                    
+      2046       # Mark paper submitted                                         
+      2047       doc = await admission_repo.mark_paper_submitted(               
+      2048           profile_id=profile_id,                                     
+      2049           document_type_code=doc_code,                               
+      2050           officer_id=current_user.id,                                
+      2051 +         actual_submission_format=actual_submission_format,         
+      2052       )                                                              
+      2053                                                                      
+      2054       if not doc:                                                    
+                                                                                
+● Read(Backend_FastAPI\app\routers\admissions.py)                               
+  ⎿  Read 80 lines                                                              
+                                                                                
+● Search(pattern: "class.*PaperSubmit|class.*DocumentSubmit", glob:             
+        "**/schemas/*.py")                                                      
+  ⎿  Found 0 files                                                              
+                                                                                
+● Search(pattern: "class Document.*Request|class.*FormatVerify", path:          
+        "Backend_FastAPI\app\schemas\admission.py", output_mode: "content")     
+  ⎿  Found 32 lines (ctrl+o to expand)                                          
+                                                                                
+● Update(Backend_FastAPI\app\schemas\admission.py)                              
+  ⎿  Added 13 lines                                                             
+      752       )                                                               
+      753                                                                       
+      754                                                                       
+      755 + class DocumentSubmissionRequest(BaseModel):                         
+      756 +     """                                                             
+      757 +     Schema for document submission (upload or paper                 
+          +receipt).                                                            
+      758 +     User/Officer declares what type of document is being            
+          +submitted.                                                           
+      759 +     """                                                             
+      760 +     actual_submission_format: Literal["original",                   
+          +"certified_copy", "photo"] = Field(                                  
+      761 +         ...,                                                        
+      762 +         description="Type of physical document being                
+          +submitted/uploaded"                                                  
+      763 +     )                                                               
+      764 +                                                                     
+      765 +     model_config = ConfigDict(str_strip_whitespace=True)            
+      766 +                                                                     
+      767 +                                                                     
+      768   class DocumentFormatVerifyRequest(BaseModel):                       
+      769       """                                                             
+      770       Schema for verifying document format (Officer action).          
+                                                                                
+● Update(Backend_FastAPI\app\routers\admissions.py)                             
+  ⎿  Error editing file                                                         
+                                                                                
+● Search(pattern: "^async def upload_document", path:                           
+        "Backend_FastAPI\app\routers\admissions.py", output_mode: "content")    
+  ⎿  Found 36 lines (ctrl+o to expand)                                          
+                                                                                
+● Update(Backend_FastAPI\app\routers\admissions.py)                             
+  ⎿  Added 6 lines                                                              
+      397       profile_id: int,                                                
+      398       doc_code: str,                                                  
+      399       file: UploadFile = File(...),                                   
+      400 +     actual_submission_format: Optional[str] = Form(None),           
+      401       db: AsyncSession = Depends(database.get_db),                    
+      402       current_user: models.User = CasbinAuth,                         
+      403   ):                                                                  
+     ...                                                                        
+      404       Upload a document for an admission profile.                     
+      405                                                                       
+      406       File will be saved and the profile will be returned with        
+            updated validation_summary.                                         
+      407 +                                                                     
+      408 +     **Form Fields:**                                                
+      409 +     - file: Document file (PDF, JPG, PNG, max 10MB)                 
+      410 +     - actual_submission_format: Type of document (original |        
+          + certified_copy | photo)                                             
+      411       """                                                             
+      412       try:                                                            
+      413           profile = await admission_service.upload_document(          
+     ...                                                                        
+      412               doc_code=doc_code,                                      
+      413               file=file,                                              
+      414               current_user=current_user,                              
+      415 +                                                                     
+          +actual_submission_format=actual_submission_format,                   
+      416           )                                                           
+      417           await db.commit()                                           
+      418           await db.refresh(profile)                                   
+                                                                                
+● Update(Backend_FastAPI\app\routers\admissions.py)                             
+  ⎿  Added 5 lines                                                              
+      442       request: Request,                                               
+      443       profile_id: int,                                                
+      444       doc_code: str,                                                  
+      445 +     data: schemas.DocumentSubmissionRequest,                        
+      446       db: AsyncSession = Depends(database.get_db),                    
+      447       current_user: models.User = CasbinAuth,                         
+      448   ):                                                                  
+     ...                                                                        
+      451       For documents where requires_upload=false.                      
+      452       Only officers/managers/admins can mark paper submitted.         
+      453                                                                       
+      454 +     **Request Body:**                                               
+      455 +     - actual_submission_format: Type of document received           
+          +(original | certified_copy | photo)                                  
+      456 +                                                                     
+      457       **Returns:**                                                    
+      458       - Full AdmissionProfileResponse with updated                    
+           validation_summary                                                   
+      459       """                                                             
+     ...                                                                        
+      460               profile_id=profile_id,                                  
+      461               doc_code=doc_code,                                      
+      462               current_user=current_user,                              
+      463 +                                                                     
+          +actual_submission_format=data.actual_submission_format,              
+      464           )                                                           
+      465           await db.commit()                                           
+      466           await db.refresh(profile)                                   
+                                                                                
+● Search(pattern: "^from fastapi import|^from fastapi.responses import", path:  
+        "Backend_FastAPI\app\routers\admissions.py", output_mode: "content")    
+  ⎿  Found 4 lines (ctrl+o to expand)                                           
+                                                                                
+● Update(Backend_FastAPI\app\routers\admissions.py)                             
+  ⎿  Added 1 line, removed 1 line                                               
+      18   - POST /api/admissions/{id}/enroll - Enroll student (ACID            
+          transaction)                                                          
+      19   """                                                                  
+      20                                                                        
+      21 -from fastapi import APIRouter, Depends, HTTPException, Request,       
+         - status, UploadFile, File                                             
+      21 +from fastapi import APIRouter, Depends, HTTPException, Request,       
+         + status, UploadFile, File, Form                                       
+      22   from sqlalchemy.ext.asyncio import AsyncSession                      
+      23   import structlog                                                     
+      24                                                                        
+                                                                                
+● Search(pattern: "^from typing import", path:                                  
+        "Backend_FastAPI\app\routers\admissions.py", output_mode: "content")    
+  ⎿  Found 0 lines                                                              
+                                                                                
+● Read(Backend_FastAPI\app\routers\admissions.py)                               
+  ⎿  Read 25 lines                                                              
+                                                                                
+● Update(Backend_FastAPI\app\routers\admissions.py)                             
+  ⎿  Added 1 line                                                               
+      18   - POST /api/admissions/{id}/enroll - Enroll student (ACID            
+          transaction)                                                          
+      19   """                                                                  
+      20                                                                        
+      21 + from typing import Optional                                          
+      22   from fastapi import APIRouter, Depends, HTTPException,               
+          Request, status, UploadFile, File, Form                               
+      23   from sqlalchemy.ext.asyncio import AsyncSession                      
+      24   import structlog                                                     
+                                                                                
+● Search(pattern: "^async def reject_document", path:                           
+        "Backend_FastAPI\app\services\admission_service.py", output_mode:       
+        "content")                                                              
+  ⎿  Found 31 lines (ctrl+o to expand)                                          
+                                                                                
+● Tôi sẽ tạm dừng ở đây để tóm tắt những gì đã implement và hỏi bạn có muốn tiếp
+   tục không, vì đã implement khá nhiều rồi:                                    
+                                                                                
+  ✅ ĐÃ HOÀN THÀNH                                                              
+                                                                                
+  1. Theo dõi loại bản nộp (actual_submission_format)                           
+                                                                                
+  ✅ Database:                                                                  
+  - Thêm cột actual_submission_format vào ProfileDocument model                 
+  - Tạo migration file                                                          
+                                                                                
+  ✅ Backend:                                                                   
+  - Update AdmissionRepository.update_document_status() - nhận parameter        
+  - Update AdmissionRepository.mark_paper_submitted() - nhận parameter          
+  - Update admission_service.upload_document() - nhận & truyền format           
+  - Update admission_service.mark_paper_submitted() - nhận & truyền format      
+  - Tạo schema DocumentSubmissionRequest                                        
+                                                                                
+  ✅ Router:                                                                    
+  - Update /documents/{code}/upload - nhận actual_submission_format qua Form    
+  - Update /documents/{code}/paper-submitted - nhận qua body                    
+                                                                                
+  🔄 ĐANG LÀM                                                                   
+                                                                                
+  2. Nút hoàn tác document (Reset/Undo)                                         
+                                                                                
+  - Cần thêm repository method                                                  
+  - Cần thêm service method                                                     
+  - Cần thêm router endpoint                                                    
+                                                                                
+  3. Fix completion_percent                                                     
+                                                                                
+  - Cần refactor logic tính toán                                                
+                                                                                
+  4. Frontend UI                                                                
+                                                                                
+  - Cần add modal chọn loại bản                                                 
+  - Cần add nút hoàn tác                                                        
+                                                                                
+  Bạn muốn tôi tiếp tục implement phần còn lại không? Hay bạn muốn test phần đã 
+  làm trước?                                                                    
+                                                                                
+✻ Cogitated for 6m 58s                                                          
+                                                                                
+❯ Hãy thực hiện toàn bộ phần còn lại                                            
+                                                                                
+● Được rồi! Tôi sẽ hoàn thành toàn bộ phần còn lại.                             
+  ⎿  You're out of extra usage · resets 12am (Asia/Saigon)                      
+     /upgrade to increase your usage limit.                                     
+

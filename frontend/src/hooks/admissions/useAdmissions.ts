@@ -177,13 +177,14 @@ export function useUploadAdmissionDocument(id: number) {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (variables: { docCode: string, file: File }) =>
-        admissionsApi.uploadAdmissionDocument(id, variables.docCode, variables.file),
-    onSuccess: (data, variables) => {
+    mutationFn: (variables: { docCode: string, file: File, actualSubmissionFormat?: string }) =>
+        admissionsApi.uploadAdmissionDocument(id, variables.docCode, variables.file, variables.actualSubmissionFormat),
+    onSuccess: (updatedProfile, variables) => {
       toast.success("Tài liệu đã được tải lên")
 
-      // Invalidate to refetch with updated validation_errors, step_status from backend
-      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+      // ✅ Backend now returns full AdmissionProfileResponse with updated validation_summary
+      // Update cache directly (no need to refetch)
+      queryClient.setQueryData(admissionsKeys.detail(id), updatedProfile)
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
       handleApiError(error, { context: "tải lên tài liệu" })
@@ -212,13 +213,14 @@ export function useMarkPaperSubmitted(id: number) {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (docCode: string) =>
-      admissionsApi.markPaperSubmitted(id, docCode),
-    onSuccess: (data, docCode) => {
+    mutationFn: (variables: { docCode: string, actualSubmissionFormat: string }) =>
+      admissionsApi.markPaperSubmitted(id, variables.docCode, variables.actualSubmissionFormat),
+    onSuccess: (updatedProfile, variables) => {
       toast.success("Đã xác nhận nhận giấy tờ")
 
-      // Invalidate to refetch with updated validation_errors, step_status from backend
-      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+      // ✅ Backend now returns full AdmissionProfileResponse with updated validation_summary
+      // Update cache directly (no need to refetch)
+      queryClient.setQueryData(admissionsKeys.detail(id), updatedProfile)
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
       handleApiError(error, { context: "xác nhận giấy tờ" })
@@ -230,28 +232,46 @@ export function useRejectDocument(id: number) {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (variables: { docCode: string, reason: string }) => 
+    mutationFn: (variables: { docCode: string, reason: string }) =>
       admissionsApi.rejectDocument(id, variables.docCode, variables.reason),
     onSuccess: (data, variables) => {
       toast.success("Đã từ chối tài liệu")
-      
+
       // Optimistic update
       queryClient.setQueryData(admissionsKeys.detail(id), (oldData: AdmissionProfileResponse | undefined) => {
         if (!oldData) return oldData
-        
-        const updatedChecklist = oldData.documents_checklist?.map(doc => 
-          doc.code === variables.docCode 
+
+        const updatedChecklist = oldData.documents_checklist?.map(doc =>
+          doc.code === variables.docCode
             ? { ...doc, status: "rejected" as const, rejection_reason: variables.reason }
             : doc
         ) || []
-        
+
         return { ...oldData, documents_checklist: updatedChecklist }
       })
-      
+
       queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
     },
     onError: (error: AxiosError<ApiErrorResponse>) => {
       handleApiError(error, { context: "từ chối tài liệu" })
+    }
+  })
+}
+
+export function useResetDocument(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (docCode: string) =>
+      admissionsApi.resetDocument(id, docCode),
+    onSuccess: (updatedProfile, docCode) => {
+      toast.success("Đã hoàn tác tài liệu")
+
+      // Update cache with full profile response
+      queryClient.setQueryData(admissionsKeys.detail(id), updatedProfile)
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, { context: "hoàn tác tài liệu" })
     }
   })
 }

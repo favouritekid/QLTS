@@ -150,6 +150,7 @@ from .admission import (
     # Document upload
     DocumentUploadResponse,
     DocumentRejectRequest,
+    DocumentSubmissionRequest,
     # Student schemas
     StudentDocumentResponse,
     StudentResponse,

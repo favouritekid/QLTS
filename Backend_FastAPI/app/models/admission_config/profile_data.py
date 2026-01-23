@@ -148,11 +148,20 @@ class ProfileDocument(Base):
         comment="Officer who rejected"
     )
 
+    # ✅ Submission Format Tracking
+    # User declares what type of document they are submitting
+    actual_submission_format = Column(
+        String(50),
+        nullable=True,
+        comment="Declared by user/officer at submission: original | certified_copy | photo"
+    )
+
     # ✅ Finding 2.3: Document Internal Verification
+    # Officer verifies the actual physical format (may differ from declared)
     verified_format = Column(
         String(50),
         nullable=True,
-        comment="original | certified_copy | photo"
+        comment="Verified by officer after inspection: original | certified_copy | photo"
     )
 
     created_at = Column(

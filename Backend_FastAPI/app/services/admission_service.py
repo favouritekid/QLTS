@@ -88,23 +88,24 @@ def _compute_frontend_fields(
 ) -> None:
     """
     Phase 7: Frontend Thin Client Compliance
-    
-    Compute permissions, eligibility, validation_errors, available_actions, 
+
+    Compute permissions, eligibility, validation_errors, available_actions,
     and completion_percent for AdmissionProfileResponse.
-    
+
     These are transient fields (not stored in DB) computed at response time.
-    
+
     Args:
         profile: AdmissionProfile object
-        current_user: Current authenticated user (for role-based permissions)
+        current_user: Current authenticated user (for role-based permissions). None for debug.
         documents: Optional list of ProfileDocument (to avoid re-fetching)
     """
     status = profile.status
-    user_role = current_user.role
-    is_admin = user_role == UserRole.ADMIN
-    is_manager = user_role == UserRole.MANAGER
-    is_officer = user_role in [UserRole.OFFICER, UserRole.MANAGER, UserRole.ADMIN]
-    
+    user_role = current_user.role                                   
+    is_admin = user_role == UserRole.ADMIN                          
+    is_manager = user_role == UserRole.MANAGER                      
+    is_officer = user_role in [UserRole.OFFICER,UserRole.MANAGER, UserRole.ADMIN]  
+
+
     # Check if user owns this profile (for applicant self-actions)
     # Corrected: Lead uses assigned_officer_id, not user_id
     is_owner = profile.lead and profile.lead.assigned_officer_id == current_user.id
@@ -182,75 +183,138 @@ def _compute_frontend_fields(
     
     # =======================================================================
     # SCORE VALIDATION BY METHOD TYPE
-    # 
+    #
     # Method Types:
     # - gpa_only: Only check average_score >= min_gpa (typically học bạ GPA-based)
     # - subject_based: Only check total_score >= min_score (thi tổ hợp)
     # - combined: Check BOTH conditions (e.g., GPA + điểm thi)
     # - Other (hoc_ba, tot_nghiep, etc.): Treat as subject_based (total_score)
     # =======================================================================
-    
+
     # Get thresholds from applied_rules
     min_score = float(applied_rules.get("min_score") or 0)
     current_total = profile.total_score or 0
-    
+
+    # Track GPA errors for grouped display
+    gpa_errors = []
+
     if method_type == "gpa_only":
         # GPA-Only: Check average_score only
         if min_gpa > 0 and current_gpa < min_gpa:
-            validation_errors.append(f"GPA không đạt: {current_gpa:.2f} < {min_gpa}")
+            error_msg = f"GPA không đạt: {current_gpa:.2f} < {min_gpa}"
+            validation_errors.append(error_msg)
+            gpa_errors.append(error_msg)
             gpa_error = True
-            
+
     elif method_type == "combined":
         # Combined: Check BOTH total_score AND average_score
         # First: Check subject count
         if current_count < required_count:
-            validation_errors.append(f"Chưa nhập đủ đầu điểm ({current_count}/{required_count})")
+            error_msg = f"Chưa nhập đủ đầu điểm ({current_count}/{required_count})"
+            validation_errors.append(error_msg)
+            gpa_errors.append(error_msg)
             gpa_error = True
         else:
             # Check total_score
             if min_score > 0 and current_total < min_score:
-                validation_errors.append(f"Tổng điểm thấp hơn điểm chuẩn: {current_total:.2f} < {min_score}")
+                error_msg = f"Tổng điểm thấp hơn điểm chuẩn: {current_total:.2f} < {min_score}"
+                validation_errors.append(error_msg)
+                gpa_errors.append(error_msg)
                 gpa_error = True
             # Check GPA (even if total passed)
             if min_gpa > 0 and current_gpa < min_gpa:
-                validation_errors.append(f"GPA không đạt: {current_gpa:.2f} < {min_gpa}")
+                error_msg = f"GPA không đạt: {current_gpa:.2f} < {min_gpa}"
+                validation_errors.append(error_msg)
+                gpa_errors.append(error_msg)
                 gpa_error = True
-                
+
     else:
         # subject_based, hoc_ba, tot_nghiep, etc.: Check total_score only
         if current_count < required_count:
-            validation_errors.append(f"Chưa nhập đủ đầu điểm ({current_count}/{required_count})")
+            error_msg = f"Chưa nhập đủ đầu điểm ({current_count}/{required_count})"
+            validation_errors.append(error_msg)
+            gpa_errors.append(error_msg)
             gpa_error = True
         elif min_score > 0 and current_total < min_score:
-            validation_errors.append(f"Tổng điểm thấp hơn điểm chuẩn: {current_total:.2f} < {min_score}")
+            error_msg = f"Tổng điểm thấp hơn điểm chuẩn: {current_total:.2f} < {min_score}"
+            validation_errors.append(error_msg)
+            gpa_errors.append(error_msg)
             gpa_error = True
-    
+
     # Check mandatory documents that REQUIRE UPLOAD (NEW: only upload_required_docs)
     upload_required_docs = applied_rules.get("upload_required_docs", applied_rules.get("mandatory_docs", []))
     doc_errors = []
     uploaded_doc_codes = set()
     if documents is not None:
         uploaded_doc_codes = {
-            doc.document_type.code for doc in documents 
+            doc.document_type.code for doc in documents
             if (doc.file_path and doc.status in ["uploaded", "verified"]) or doc.status == "paper_submitted"
         }
         for doc_code in upload_required_docs:
             if doc_code not in uploaded_doc_codes:
                 doc_errors.append(doc_code)
                 validation_errors.append(f"Thiếu tài liệu bắt buộc: {doc_code}")
-    
-    # Check citizen_id and other required personal fields
-    cccd_error = not profile.citizen_id
-    if cccd_error:
-        validation_errors.append("Chưa nhập số CCCD/CMND")
-        
-    # ✅ FIX: Validate other required fields (Name, Phone)
+
+    # ✅ EXPANDED: Validate 8 mandatory personal information fields
+    # These fields are required for a complete admission profile per regulations
+    # ✅ FIX: Add individual error messages for each missing field (not combined)
+    # This ensures validation_summary.personal.count matches validation_errors length
     missing_personal = []
-    if not profile.full_name: missing_personal.append("Họ tên")
-    if not profile.phone: missing_personal.append("SĐT")
-    
-    if missing_personal:
-        validation_errors.append(f"Thiếu thông tin cá nhân: {', '.join(missing_personal)}")
+    personal_errors = []
+
+    if not profile.full_name:
+        missing_personal.append("Họ tên")
+        error_msg = "Thiếu thông tin cá nhân: Họ tên"
+        validation_errors.append(error_msg)
+        personal_errors.append(error_msg)
+
+    if not profile.dob:
+        missing_personal.append("Ngày sinh")
+        error_msg = "Thiếu thông tin cá nhân: Ngày sinh"
+        validation_errors.append(error_msg)
+        personal_errors.append(error_msg)
+
+    if not profile.gender:
+        missing_personal.append("Giới tính")
+        error_msg = "Thiếu thông tin cá nhân: Giới tính"
+        validation_errors.append(error_msg)
+        personal_errors.append(error_msg)
+
+    if not profile.citizen_id:
+        missing_personal.append("Số CCCD/CMND")
+        error_msg = "Thiếu thông tin cá nhân: Số CCCD/CMND"
+        validation_errors.append(error_msg)
+        personal_errors.append(error_msg)
+
+    if not profile.nationality:
+        missing_personal.append("Quốc tịch")
+        error_msg = "Thiếu thông tin cá nhân: Quốc tịch"
+        validation_errors.append(error_msg)
+        personal_errors.append(error_msg)
+
+    if not profile.ethnicity:
+        missing_personal.append("Dân tộc")
+        error_msg = "Thiếu thông tin cá nhân: Dân tộc"
+        validation_errors.append(error_msg)
+        personal_errors.append(error_msg)
+
+    if not profile.phone:
+        missing_personal.append("Số điện thoại")
+        error_msg = "Thiếu thông tin cá nhân: Số điện thoại"
+        validation_errors.append(error_msg)
+        personal_errors.append(error_msg)
+
+    if not profile.place_of_birth:
+        missing_personal.append("Nơi sinh")
+        error_msg = "Thiếu thông tin cá nhân: Nơi sinh"
+        validation_errors.append(error_msg)
+        personal_errors.append(error_msg)
+
+    # Count total missing personal fields
+    personal_error_count = len(missing_personal)
+
+    # Track CCCD error for backward compatibility with step_status logic
+    cccd_error = not profile.citizen_id
     
     # Determine eligibility status
     # ARCHITECTURE NOTE:
@@ -283,15 +347,17 @@ def _compute_frontend_fields(
         profile.is_qualified = True
     
     profile.validation_errors = validation_errors
-    
+
     # =========================================================================
     # 4. VALIDATION SUMMARY (Grouped Errors for UX)
     # =========================================================================
+    # ✅ FIX: Use actual error message counts instead of boolean flags
+    # This ensures badge counts match the total error list
     profile.validation_summary = {
         "gpa": {
-            "has_error": gpa_error,
+            "has_error": len(gpa_errors) > 0,
             "label": f"GPA: {current_gpa:.1f}/{min_gpa}" if min_gpa > 0 else "GPA: N/A",
-            "count": 1 if gpa_error else 0
+            "count": len(gpa_errors)
         },
         "documents": {
             "has_error": len(doc_errors) > 0,
@@ -299,11 +365,35 @@ def _compute_frontend_fields(
             "count": len(doc_errors)
         },
         "personal": {
-            "has_error": cccd_error or len(missing_personal) > 0,
-            "label": "Thiếu CCCD/CMND" if cccd_error else ("Thiếu thông tin cá nhân" if missing_personal else "Thông tin cá nhân: OK"),
-            "count": (1 if cccd_error else 0) + len(missing_personal)
+            "has_error": personal_error_count > 0,
+            "label": f"Thiếu {personal_error_count} thông tin cá nhân" if personal_error_count > 0 else "Thông tin cá nhân: OK",
+            "count": personal_error_count
         }
     }
+
+    # =========================================================================
+    # 4.1 GROUPED VALIDATION ERRORS (Enhanced UX - Categorized Display)
+    # =========================================================================
+    # Provide errors grouped by category for better frontend display
+    # Frontend can render these as expandable sections instead of flat list
+    grouped_errors = {
+        "personal_info": {
+            "category": "Thông tin cá nhân",
+            "errors": personal_errors,
+            "count": len(personal_errors)
+        },
+        "documents": {
+            "category": "Tài liệu",
+            "errors": [f"Thiếu tài liệu bắt buộc: {doc_code}" for doc_code in doc_errors],
+            "count": len(doc_errors)
+        },
+        "scores": {
+            "category": "Điểm số",
+            "errors": gpa_errors,
+            "count": len(gpa_errors)
+        }
+    }
+    profile.grouped_validation_errors = grouped_errors
     
     # =========================================================================
     # 5. STEP STATUS (Architecture Compliant - Backend computes, FE renders)
@@ -322,11 +412,17 @@ def _compute_frontend_fields(
     
     # Scores
     has_any_scores = bool(profile.subject_scores) if hasattr(profile, 'subject_scores') else False
-    
-    # Documents: Check if all uploaded docs have format confirmed
-    # TODO: Add submission_format_confirmed tracking when ProfileDocument is updated
-    docs_format_confirmed = True  # Placeholder for future enhancement
-    
+
+    # ✅ FIX: Documents format confirmation check
+    # Check if all uploaded documents have been verified by manager or confirmed as paper submitted
+    docs_format_confirmed = True
+    if documents is not None:
+        for doc in documents:
+            # If document is uploaded but not yet verified/paper_submitted, format not confirmed
+            if doc.status == "uploaded" and doc.file_path:
+                docs_format_confirmed = False
+                break
+
     step_status = {
         # Step 1: Personal Info
         1: "error" if (cccd_error or not personal_required_filled) else ("success" if personal_optional_filled else "warning"),
@@ -344,31 +440,35 @@ def _compute_frontend_fields(
         7: "locked" if profile.eligibility_status == "ineligible" else "success",
     }
     profile.step_status = step_status
-    
+
     # =========================================================================
-    # 6. COMPLETION PERCENT
+    # 6. COMPLETION PERCENT (Based on Step Status)
     # =========================================================================
-    # Simple calculation based on required fields
-    required_fields = [
-        "full_name", "phone", "email", "dob", "gender", "citizen_id",
-        "nationality", "ethnicity", "permanent_province"
-    ]
-    filled_count = sum(1 for f in required_fields if getattr(profile, f, None))
-    base_completion = int((filled_count / len(required_fields)) * 50)  # 50% for basic info
-    
-    # Add 20% for family info
-    family_completion = 20 if has_family else 0
-    
-    # Add 20% for academic history
-    academic_completion = 20 if has_academic else 0
-    
-    # Add 10% for documents
-    doc_completion = 0
-    if documents is not None and upload_required_docs:
-        uploaded_count = len(uploaded_doc_codes)
-        doc_completion = int((uploaded_count / max(len(upload_required_docs), 1)) * 10)
-    
-    profile.completion_percent = min(100, base_completion + family_completion + academic_completion + doc_completion)
+    # ✅ REFACTORED: Sync with step_status for consistency with UI sidebar
+    # Each step contributes equally: 7 steps = ~14% each
+    # "success" = full points, "warning" = partial points, "error"/"locked" = 0 points
+
+    step_weights = {
+        1: 14,  # Personal Info
+        2: 14,  # Family
+        3: 14,  # Academic History
+        4: 15,  # Scores (slightly higher priority)
+        5: 15,  # Documents (slightly higher priority)
+        6: 14,  # Tuition
+        7: 14,  # Final Review
+    }
+
+    completion_percent = 0
+    for step_num, weight in step_weights.items():
+        step_state = step_status.get(step_num, "locked")
+
+        if step_state == "success":
+            completion_percent += weight  # Full points
+        elif step_state == "warning":
+            completion_percent += int(weight * 0.5)  # Half points for partial completion
+        # "error" and "locked" contribute 0
+
+    profile.completion_percent = min(100, completion_percent)
     
     # =========================================================================
     # 7. DOCUMENTS CHECKLIST (for frontend display)
@@ -389,7 +489,8 @@ def _compute_frontend_fields(
                     "rejection_reason": doc.rejection_reason,
                     # submission_format_confirmed: True if manager verified the format
                     # Defaults to True for verified status, False otherwise
-                    "submission_format_confirmed": doc.status == "verified"
+                    "submission_format_confirmed": doc.status == "verified",
+                    "label_from_db": doc.document_type.name,
                 }
     
     # Build documents_checklist
@@ -400,7 +501,7 @@ def _compute_frontend_fields(
         
         documents_checklist.append({
             "code": doc_code,
-            "label": config.get("label", doc_code),
+            "label": config.get("label") or uploaded_doc.get("label_from_db") or doc_code,
             "is_mandatory": True,
             "requires_upload": config.get("requires_upload", True),
             "submission_format": config.get("submission_format"),
@@ -412,6 +513,74 @@ def _compute_frontend_fields(
         })
     
     profile.documents_checklist = documents_checklist
+
+    # =========================================================================
+    # 8. EXECUTIVE SUMMARY (Dashboard Overview)
+    # =========================================================================
+    # Provides high-level status summary for dashboard display
+    # Frontend uses this to show overall progress and next actions
+
+    # Count steps by status
+    step_counts = {"success": 0, "warning": 0, "error": 0, "locked": 0}
+    for step_state in step_status.values():
+        step_counts[step_state] = step_counts.get(step_state, 0) + 1
+
+    # Determine overall status
+    has_errors = step_counts["error"] > 0
+    has_warnings = step_counts["warning"] > 0
+    has_locked = step_counts["locked"] > 0
+
+    if has_errors or has_locked:
+        overall_status = "incomplete"  # Blocking issues exist
+    elif has_warnings:
+        overall_status = "warning"  # Optional fields missing
+    else:
+        overall_status = "ready"  # All steps complete
+
+    # Identify critical blockers (errors that prevent submission)
+    critical_blockers = []
+    if personal_error_count > 0:
+        critical_blockers.append(f"Thiếu {personal_error_count} thông tin cá nhân bắt buộc")
+    if len(doc_errors) > 0:
+        critical_blockers.append(f"Thiếu {len(doc_errors)} tài liệu bắt buộc")
+    if gpa_error:
+        critical_blockers.append("Điểm số chưa đạt yêu cầu")
+
+    # Identify warnings (non-blocking issues)
+    warning_messages = []
+    if not has_family:
+        warning_messages.append("Chưa điền thông tin gia đình")
+    if not has_academic:
+        warning_messages.append("Chưa điền lịch sử học tập")
+    if not docs_format_confirmed:
+        warning_messages.append("Một số tài liệu chưa được xác nhận định dạng")
+
+    # Suggest next action
+    if step_status[1] == "error":
+        next_action = "Hoàn thiện thông tin cá nhân bắt buộc"
+    elif step_status[4] == "error":
+        next_action = "Nhập điểm số đạt yêu cầu"
+    elif step_status[5] == "error":
+        next_action = "Tải lên tài liệu bắt buộc"
+    elif has_warnings:
+        next_action = "Hoàn thiện thông tin còn thiếu (không bắt buộc)"
+    elif profile.eligibility_status == "eligible" and status == "draft":
+        next_action = "Kiểm tra và nộp hồ sơ"
+    else:
+        next_action = "Hồ sơ đã hoàn tất"
+
+    # Can submit only if eligible and in draft status
+    can_submit = profile.eligibility_status == "eligible" and status == "draft"
+
+    profile.executive_summary = {
+        "overall_status": overall_status,
+        "completion_percent": profile.completion_percent,
+        "step_summary": step_counts,
+        "critical_blockers": critical_blockers,
+        "warnings": warning_messages,
+        "next_action": next_action,
+        "can_submit": can_submit,
+    }
 
 
 async def _create_admission_milestone_consultation(
@@ -942,6 +1111,7 @@ async def create_profile(
                 "requires_upload": doc.requires_upload,
                 "submission_format": doc.submission_format,
                 "is_mandatory": doc.is_mandatory,
+                "label": doc.document_type_name,
             }
             for doc in resolved_docs
         },
@@ -1731,7 +1901,8 @@ async def upload_document(
     doc_code: str,
     file: Any,  # UploadFile
     current_user: models.User,
-) -> tuple[Dict[str, Any], Any]:
+    actual_submission_format: Optional[str] = None,
+) -> models.AdmissionProfile:
     """
     Upload a document for an admission profile.
 
@@ -1740,14 +1911,19 @@ async def upload_document(
     2. Verify profile status (draft/rejected)
     3. Verify doc_code exists in ProfileDocument
     4. Save file to disk (uploads/admissions/{id}/{doc_code}_{filename})
-    5. Update ProfileDocument status='uploaded' and file_path
-    
+    5. Update ProfileDocument status='uploaded', file_path, and actual_submission_format
+    6. Re-compute validation_summary with updated documents
+
     IMPORTANT: This function does NOT commit the transaction.
-    Router must call db.commit() and then execute the returned callback.
-    
+    Router must call db.commit().
+
+    Args:
+        actual_submission_format: Type of document submitted (original | certified_copy | photo)
+            User must declare what type of physical document they scanned/uploaded.
+
     Returns:
-        Tuple of (updated_doc_item, post_commit_callback)
-    
+        AdmissionProfile with updated validation_summary
+
     Security:
     - Path Traversal: filename sanitization (inherent in modern frameworks but good practice)
     - File Type: Should be validated at Router level generally, but here we accept generic
@@ -1833,34 +2009,29 @@ async def upload_document(
         document_type_code=doc_code,
         status="uploaded",
         file_path=file_path,
-        uploaded_at=uploaded_at_dt.isoformat()
+        uploaded_at=uploaded_at_dt.isoformat(),
+        actual_submission_format=actual_submission_format
     )
 
     profile.updated_at = uploaded_at_dt
 
     await db.flush()
 
-    # Prepare response data (matches DocumentUploadResponse schema)
-    response_data = {
-        "code": doc_code,
-        "label": doc_record.document_type.name,
-        "is_mandatory": True,  # All documents in ProfileDocument are mandatory
-        "status": "uploaded",
-        "file_path": file_path,
-        "uploaded_at": uploaded_at_dt.isoformat(),
-    }
-    
-    # Post-commit callback for logging/side effects
-    async def _post_commit():
-        log.info(
-            "Document uploaded", 
-            profile_id=profile_id, 
-            doc_code=doc_code, 
-            file_path=file_path,
-            user_id=current_user.id
-        )
-    
-    return response_data, _post_commit
+    # ✅ Re-compute validation_summary with updated documents
+    from app.repositories import AdmissionRepository
+    admission_repo_refresh = AdmissionRepository(db)
+    documents = await admission_repo_refresh.get_all_documents(profile_id)
+    _compute_frontend_fields(profile, current_user, documents)
+
+    log.info(
+        "Document uploaded",
+        profile_id=profile_id,
+        doc_code=doc_code,
+        file_path=file_path,
+        user_id=current_user.id
+    )
+
+    return profile
 
 
 async def confirm_document_format(
@@ -1927,60 +2098,59 @@ async def mark_paper_submitted(
     profile_id: int,
     doc_code: str,
     current_user: models.User,
-) -> tuple[Dict[str, Any], Any]:
+    actual_submission_format: Optional[str] = None,
+) -> models.AdmissionProfile:
     """
     Mark a document as paper submitted (officer confirms receipt).
-    
+
     For documents where requires_upload=false.
     Only officers/managers/admins can mark paper submitted.
-    
+
     Args:
         db: Database session
         profile_id: AdmissionProfile ID
         doc_code: Document type code
         current_user: Current authenticated user (must be officer+)
-        
+        actual_submission_format: Type of document submitted (original | certified_copy | photo)
+
     Returns:
-        Tuple of (updated_doc_item, post_commit_callback)
-        
+        AdmissionProfile with updated validation_summary
+
     Raises:
         ResourceNotFoundError: Document not found
         BadRequest: Document requires upload (not paper submission)
     """
     from app.repositories import AdmissionRepository
     admission_repo = AdmissionRepository(db)
-    
+
     # Get profile for access check
     profile = await get_profile(db, profile_id, current_user)
-    
+
     # Mark paper submitted
     doc = await admission_repo.mark_paper_submitted(
         profile_id=profile_id,
         document_type_code=doc_code,
         officer_id=current_user.id,
+        actual_submission_format=actual_submission_format,
     )
     
     if not doc:
         raise ResourceNotFoundError(f"Document code '{doc_code}' not found in profile documents")
-    
+
     await db.flush()
-    
-    response_data = {
-        "code": doc_code,
-        "status": "paper_submitted",
-        "paper_submitted_at": doc.paper_submitted_at.isoformat() if doc.paper_submitted_at else None,
-        "paper_submitted_by_id": current_user.id,
-    }
-    
-    async def _post_commit():
-        log.info(
-            "Document paper submitted confirmed",
-            profile_id=profile_id,
-            doc_code=doc_code,
-            officer_id=current_user.id,
-        )
-    
-    return response_data, _post_commit
+
+    # ✅ Re-compute validation_summary with updated documents
+    documents = await admission_repo.get_all_documents(profile_id)
+    _compute_frontend_fields(profile, current_user, documents)
+
+    log.info(
+        "Document paper submitted confirmed",
+        profile_id=profile_id,
+        doc_code=doc_code,
+        officer_id=current_user.id,
+    )
+
+    return profile
 
 
 async def reject_document(
@@ -2050,6 +2220,80 @@ async def reject_document(
         )
     
     return response_data, _post_commit
+
+
+async def reset_document(
+    db: AsyncSession,
+    profile_id: int,
+    doc_code: str,
+    current_user: models.User,
+) -> models.AdmissionProfile:
+    """
+    Reset a document to 'missing' status (undo submission).
+
+    Use case: User accidentally clicked "Đã nộp" or uploaded wrong file.
+    Allows simple undo without complex audit trail.
+
+    Permissions:
+    - Officer: Can reset documents for profiles in draft/rejected status
+    - Manager/Admin: Can reset any document except for enrolled profiles
+
+    Args:
+        db: Database session
+        profile_id: AdmissionProfile ID
+        doc_code: Document type code
+        current_user: Current authenticated user
+
+    Returns:
+        AdmissionProfile with updated validation_summary
+
+    Raises:
+        ResourceNotFoundError: Document not found
+        BadRequest: Cannot reset (e.g., profile is enrolled)
+    """
+    from app.repositories import AdmissionRepository
+    admission_repo = AdmissionRepository(db)
+
+    # Get profile for access check
+    profile = await get_profile(db, profile_id, current_user)
+
+    # State Locking: Cannot reset documents for enrolled profiles
+    if profile.status == "enrolled":
+        raise BadRequest("Cannot reset documents for enrolled profiles")
+
+    # Reset document
+    doc = await admission_repo.reset_document(
+        profile_id=profile_id,
+        document_type_code=doc_code,
+    )
+
+    if not doc:
+        raise ResourceNotFoundError(f"Document code '{doc_code}' not found in profile documents")
+
+    # Delete physical file if exists
+    if doc.file_path:
+        import os
+        if os.path.exists(doc.file_path):
+            try:
+                os.remove(doc.file_path)
+                log.info("Document file deleted during reset", file_path=doc.file_path)
+            except OSError as e:
+                log.warning("Failed to delete document file", error=str(e), file_path=doc.file_path)
+
+    await db.flush()
+
+    # Re-compute validation_summary with updated documents
+    documents = await admission_repo.get_all_documents(profile_id)
+    _compute_frontend_fields(profile, current_user, documents)
+
+    log.info(
+        "Document reset to missing",
+        profile_id=profile_id,
+        doc_code=doc_code,
+        user_id=current_user.id,
+    )
+
+    return profile
 
 
 async def enroll_student(

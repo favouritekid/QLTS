@@ -21,6 +21,11 @@ interface AdmissionLayoutProps {
     gpa?: { has_error: boolean; count: number }
     documents?: { has_error: boolean; count: number }
   } | null
+  groupedValidationErrors?: {
+    personal_info?: { category: string; errors: string[]; count: number }
+    documents?: { category: string; errors: string[]; count: number }
+    scores?: { category: string; errors: string[]; count: number }
+  } | null
 }
 
 export function AdmissionLayout({
@@ -31,7 +36,8 @@ export function AdmissionLayout({
   stepsStatus,
   validation,
   validationErrors = [],
-  validationSummary
+  validationSummary,
+  groupedValidationErrors
 }: AdmissionLayoutProps) {
   return (
     <div className="flex flex-col min-h-screen bg-gray-50/50">
@@ -49,6 +55,8 @@ export function AdmissionLayout({
                 stepsStatus={stepsStatus}
                 validationErrors={validationErrors}
                 validationSummary={validationSummary}
+                groupedValidationErrors={groupedValidationErrors}
+                completionPercent={profile?.completion_percent ?? 0}
              />
           </aside>
 

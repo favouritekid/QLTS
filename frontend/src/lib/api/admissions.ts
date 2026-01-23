@@ -98,10 +98,14 @@ export interface DocumentUploadResponse {
 export async function uploadAdmissionDocument(
   id: number,
   docCode: string,
-  file: File
+  file: File,
+  actualSubmissionFormat?: string
 ): Promise<DocumentUploadResponse> {
     const formData = new FormData()
     formData.append("file", file)
+    if (actualSubmissionFormat) {
+      formData.append("actual_submission_format", actualSubmissionFormat)
+    }
 
     // Note: No explicit Content-Type header needed, axios/browser sets it with boundary
     const response = await api.post<DocumentUploadResponse>(
@@ -127,10 +131,12 @@ export interface PaperSubmittedResponse {
 
 export async function markPaperSubmitted(
   id: number,
-  docCode: string
+  docCode: string,
+  actualSubmissionFormat: string
 ): Promise<PaperSubmittedResponse> {
   const response = await api.post<PaperSubmittedResponse>(
-    `/api/admissions/${id}/documents/${docCode}/paper-submitted`
+    `/api/admissions/${id}/documents/${docCode}/paper-submitted`,
+    { actual_submission_format: actualSubmissionFormat }
   )
   return response.data
 }
@@ -158,6 +164,24 @@ export async function rejectDocument(
   return response.data
 }
 
+/**
+ * Reset document to missing status (undo submission)
+ */
+export interface DocumentResetResponse {
+  code: string
+  status: string
+}
+
+export async function resetDocument(
+  id: number,
+  docCode: string
+): Promise<AdmissionProfileResponse> {
+  const response = await api.post<AdmissionProfileResponse>(
+    `/api/admissions/${id}/documents/${docCode}/reset`
+  )
+  return response.data
+}
+
 export const admissionsApi = {
   listAdmissions,
   getAdmission,
@@ -169,6 +193,7 @@ export const admissionsApi = {
   uploadAdmissionDocument,
   markPaperSubmitted,
   rejectDocument,
+  resetDocument,
 }
 
 export default admissionsApi

@@ -128,10 +128,13 @@ export interface AdmissionViewModel {
   
   /** Validation errors from backend */
   validationErrors: string[]
-  
+
   /** Validation summary (grouped errors) */
   validationSummary: AdmissionProfileResponse["validation_summary"]
-  
+
+  /** Grouped validation errors (categorized display) */
+  groupedValidationErrors: AdmissionProfileResponse["grouped_validation_errors"]
+
   /** Step status for sidebar navigation */
   stepsStatus: Record<number, StepStatus>
   
@@ -191,6 +194,7 @@ export function useAdmissionViewModel(
       eligibility_status = "pending",
       validation_errors = [],
       validation_summary,
+      grouped_validation_errors,
       completion_percent = 0,
       permissions = {},
       ...rest
@@ -209,6 +213,17 @@ export function useAdmissionViewModel(
       ...rest,
       status,
       
+      // Re-export snake_case fields for component compatibility (Zod Schema)
+      // Fixes 0% completion and missing status badges in ExecutiveSummary
+      completion_percent: completion_percent,
+      eligibility_status: eligibility_status,
+      step_status: step_status,
+      validation_errors: validation_errors,
+      validation_summary: validation_summary,
+      grouped_validation_errors: grouped_validation_errors,
+      permissions: permissions,
+      available_actions: available_actions,
+
       // UX Derivations (labels/colors)
       statusLabel: STATUS_LABELS[status] ?? status,
       statusColor: STATUS_COLORS[status] ?? "gray",
@@ -228,10 +243,11 @@ export function useAdmissionViewModel(
       isQualified: data.is_qualified ?? null,
       validationErrors: validation_errors,
       validationSummary: validation_summary,
+      groupedValidationErrors: grouped_validation_errors,
       stepsStatus,
       completionPercent: completion_percent,
       availableActions: available_actions,
-      permissions,
+      // permissions already in snake_case above
     }
   }, [query.data])
 

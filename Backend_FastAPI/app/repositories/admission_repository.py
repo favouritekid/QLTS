@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
 from app import models
-from app.models import ProfileSubjectScore
+from app.models import ProfileSubjectScore, ProfileDocument
 from app.repositories.base import BaseRepository
 
 
@@ -61,7 +61,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
                 joinedload(models.AdmissionProfile.lead),
                 selectinload(models.AdmissionProfile.student),
                 selectinload(models.AdmissionProfile.subject_scores).selectinload(ProfileSubjectScore.subject),
-                selectinload(models.AdmissionProfile.documents),
+                selectinload(models.AdmissionProfile.documents).joinedload(ProfileDocument.document_type),
             )
             .offset(skip)
             .limit(limit)
@@ -151,7 +151,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
                 joinedload(models.AdmissionProfile.lead),
                 selectinload(models.AdmissionProfile.student),
                 selectinload(models.AdmissionProfile.subject_scores).selectinload(ProfileSubjectScore.subject),
-                selectinload(models.AdmissionProfile.documents),
+                selectinload(models.AdmissionProfile.documents).joinedload(ProfileDocument.document_type),
             )
         )
         result = await self.db.execute(stmt)
@@ -179,7 +179,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
                 joinedload(models.AdmissionProfile.lead),
                 selectinload(models.AdmissionProfile.student),  # Prevent MissingGreenlet
                 selectinload(models.AdmissionProfile.subject_scores).selectinload(ProfileSubjectScore.subject),
-                selectinload(models.AdmissionProfile.documents),
+                selectinload(models.AdmissionProfile.documents).joinedload(ProfileDocument.document_type),
             )
         )
         result = await self.db.execute(stmt)
@@ -343,6 +343,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         status: str,
         file_path: Optional[str] = None,
         uploaded_at = None,  # datetime or str (for backward compatibility)
+        actual_submission_format: Optional[str] = None,
     ) -> Optional[models.ProfileDocument]:
         """
         Update ProfileDocument status and file metadata.
@@ -355,6 +356,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             status: New status (missing | uploaded | verified | rejected)
             file_path: File path (if uploaded)
             uploaded_at: Upload timestamp as datetime (if uploaded)
+            actual_submission_format: Declared document format (original | certified_copy | photo)
 
         Returns:
             Updated ProfileDocument or None if not found
@@ -374,6 +376,8 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
                 doc.uploaded_at = datetime.fromisoformat(uploaded_at.replace('Z', '+00:00'))
             else:
                 doc.uploaded_at = uploaded_at
+        if actual_submission_format:
+            doc.actual_submission_format = actual_submission_format
 
         return doc
 
@@ -435,30 +439,71 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         profile_id: int,
         document_type_code: str,
         officer_id: int,
+        actual_submission_format: Optional[str] = None,
     ) -> Optional[models.ProfileDocument]:
         """
         Mark a document as paper submitted (officer confirms receipt).
-        
+
         For documents where requires_upload=false.
-        
+
         Args:
             profile_id: AdmissionProfile ID
             document_type_code: Document type code
             officer_id: ID of officer confirming receipt
-            
+            actual_submission_format: Declared document format (original | certified_copy | photo)
+
         Returns:
             Updated ProfileDocument or None if not found
         """
         from datetime import datetime, timezone
-        
+
         doc = await self.get_document_by_type(profile_id, document_type_code)
         if not doc:
             return None
-        
+
         doc.status = "paper_submitted"
         doc.paper_submitted_at = datetime.now(timezone.utc)
         doc.paper_submitted_by = officer_id
-        
+        if actual_submission_format:
+            doc.actual_submission_format = actual_submission_format
+
+        return doc
+
+    async def reset_document(
+        self,
+        profile_id: int,
+        document_type_code: str,
+    ) -> Optional[models.ProfileDocument]:
+        """
+        Reset a document to 'missing' status (undo submission).
+
+        Use case: User accidentally clicked "Đã nộp" or uploaded wrong file.
+        Simple undo without complex audit trail.
+
+        Args:
+            profile_id: AdmissionProfile ID
+            document_type_code: Document type code
+
+        Returns:
+            Updated ProfileDocument or None if not found
+        """
+        doc = await self.get_document_by_type(profile_id, document_type_code)
+        if not doc:
+            return None
+
+        # Reset to missing state
+        doc.status = "missing"
+        doc.file_path = None
+        doc.actual_submission_format = None
+        doc.verified_format = None
+        doc.uploaded_at = None
+        doc.verified_at = None
+        doc.paper_submitted_at = None
+        doc.paper_submitted_by = None
+        doc.rejected_at = None
+        doc.rejected_by = None
+        doc.rejection_reason = None
+
         return doc
 
     async def reject_document(
