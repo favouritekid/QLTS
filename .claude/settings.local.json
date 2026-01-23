@@ -15,7 +15,8 @@
       "Bash(python3:*)",
       "Bash(awk:*)",
       "Bash(tail:*)",
-      "Bash(alembic revision:*)"
+      "Bash(alembic revision:*)",
+      "Bash(wslpath:*)"
     ]
   }
 }

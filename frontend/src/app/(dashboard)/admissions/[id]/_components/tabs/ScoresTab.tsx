@@ -34,7 +34,7 @@ interface ScoresTabProps {
     is_qualified?: boolean | null
     // Original backend scores for preservation when switching groups
     admission_scores?: {
-      subject_scores?: Record<string, number | null>
+      subject_scores?: Record<string, number | null | undefined> | null
     } | null
     // Snapshot score result containing selected subjects (for Best N highlighting)
     snapshot_score?: {

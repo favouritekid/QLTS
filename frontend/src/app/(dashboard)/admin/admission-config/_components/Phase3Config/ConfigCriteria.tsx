@@ -143,7 +143,7 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
 
         // Calculate total unique subjects from selected groups
         const uniqueSubjects = new Set<string>();
-        selectedGroupsDetails.forEach(g => {
+        selectedGroupsDetails.forEach((g: SubjectGroup) => {
             g.subjects?.forEach(s => uniqueSubjects.add(s.code));
         });
         

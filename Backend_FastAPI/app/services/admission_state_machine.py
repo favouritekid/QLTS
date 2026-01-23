@@ -50,7 +50,7 @@ class AdmissionStatus(str, Enum):
 ALLOWED_TRANSITIONS: Dict[AdmissionStatus, Set[AdmissionStatus]] = {
     AdmissionStatus.DRAFT: {AdmissionStatus.SUBMITTED},
     AdmissionStatus.SUBMITTED: {AdmissionStatus.APPROVED, AdmissionStatus.REJECTED},
-    AdmissionStatus.REJECTED: {AdmissionStatus.RESUBMITTED},
+    AdmissionStatus.REJECTED: {AdmissionStatus.RESUBMITTED, AdmissionStatus.DRAFT},
     AdmissionStatus.RESUBMITTED: {AdmissionStatus.APPROVED, AdmissionStatus.REJECTED},
     AdmissionStatus.APPROVED: {AdmissionStatus.CONFIRMED, AdmissionStatus.OVERRIDDEN},
     AdmissionStatus.OVERRIDDEN: {AdmissionStatus.ENROLLED},

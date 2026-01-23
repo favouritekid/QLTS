@@ -146,6 +146,17 @@ export interface AdmissionViewModel {
   
   /** Permission flags object */
   permissions: Record<string, boolean>
+
+  // -------------------------------------------------------------------------
+  // Legacy Snake_case Fields (for component compatibility)
+  // -------------------------------------------------------------------------
+  completion_percent: number
+  eligibility_status: string
+  step_status?: Record<string, string> | null
+  validation_errors: string[]
+  validation_summary?: AdmissionProfileResponse["validation_summary"]
+  grouped_validation_errors?: AdmissionProfileResponse["grouped_validation_errors"]
+  available_actions: string[]
 }
 
 // ============================================================================

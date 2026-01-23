@@ -442,6 +442,14 @@ export const admissionProfileResponseSchema = z.object({
   // Permission flags (from backend Casbin + status)
   permissions: z.record(z.string(), z.boolean()).default({}),
   
+  // ✅ Ticket #3.1: Document Status Summary (Computed by Backend)
+  document_stats: z.object({
+    submitted_count: z.number().int(),
+    verified_count: z.number().int(),
+    mandatory_count: z.number().int(), 
+    missing_count: z.number().int()
+  }).nullable().optional(),
+  
   // Eligibility status (backend-computed)
   eligibility_status: z.enum(["eligible", "ineligible", "pending"]).default("pending"),
   

@@ -10,11 +10,7 @@
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { FileText, CheckCircle2, Clock, AlertTriangle } from "lucide-react"
 import { HealthCheckItem } from "./HealthCheckItem"
-import {
-  getVerifiedDocsCount,
-  getMandatoryDocsCount,
-  getMissingDocsCount,
-} from "@/lib/utils/admission-helpers"
+
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
 interface AdminCardProps {
@@ -34,13 +30,11 @@ export function AdminCard({ profile }: AdminCardProps) {
 
   // Document counts
   // Fix: Show "Submitted" instead of "Verified" for main counter to avoid "0/12" panic
-  const submittedCount = (profile.documents_checklist ?? []).filter(
-    doc => doc.is_mandatory && ["uploaded", "verified", "paper_submitted"].includes(doc.status)
-  ).length
-  
-  const verifiedCount = getVerifiedDocsCount(profile.documents_checklist ?? [])
-  const mandatoryCount = getMandatoryDocsCount(profile.documents_checklist ?? [])
-  const missingCount = getMissingDocsCount(profile.documents_checklist ?? [])
+  // ✅ FIX: Use backend-computed stats (Thin Client)
+  const submittedCount = profile.document_stats?.submitted_count ?? 0
+  const verifiedCount = profile.document_stats?.verified_count ?? 0
+  const mandatoryCount = profile.document_stats?.mandatory_count ?? 0
+  const missingCount = profile.document_stats?.missing_count ?? 0
 
   // Status icon for the whole card
   const StatusIcon = isComplete

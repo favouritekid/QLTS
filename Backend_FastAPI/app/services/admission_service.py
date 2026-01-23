@@ -81,122 +81,30 @@ def _check_admin_or_unit_access(
         )
 
 
-def _compute_frontend_fields(
+def _validate_scores(
     profile: models.AdmissionProfile,
-    current_user: models.User,
-    documents: list = None,
-) -> None:
+    applied_rules: dict,
+) -> tuple[bool, list[str], list[str]]:
     """
-    Phase 7: Frontend Thin Client Compliance
-
-    Compute permissions, eligibility, validation_errors, available_actions,
-    and completion_percent for AdmissionProfileResponse.
-
-    These are transient fields (not stored in DB) computed at response time.
-
-    Args:
-        profile: AdmissionProfile object
-        current_user: Current authenticated user (for role-based permissions). None for debug.
-        documents: Optional list of ProfileDocument (to avoid re-fetching)
+    Validate score requirements based on applied rules.
+    Returns: (has_gpa_error, validation_errors_list, gpa_errors_list)
     """
-    status = profile.status
-    user_role = current_user.role                                   
-    is_admin = user_role == UserRole.ADMIN                          
-    is_manager = user_role == UserRole.MANAGER                      
-    is_officer = user_role in [UserRole.OFFICER,UserRole.MANAGER, UserRole.ADMIN]  
-
-
-    # Check if user owns this profile (for applicant self-actions)
-    # Corrected: Lead uses assigned_officer_id, not user_id
-    is_owner = profile.lead and profile.lead.assigned_officer_id == current_user.id
-    
-    # =========================================================================
-    # 1. PERMISSIONS (computed from role + status + Casbin-like rules)
-    # =========================================================================
-    # ARCHITECTURE NOTE:
-    # - permissions: Role-based access control (WHO can do WHAT)
-    # - available_actions: State-based actions (WHAT is currently POSSIBLE)
-    # 
-    # FE Usage:
-    # - permissions → Guard routes, show/hide menu items
-    # - available_actions → Render action buttons
-    #
-    # Example: Admin has permission to delete, but delete is only in available_actions
-    #          when status='draft'. Button should check available_actions, not permissions.
-    permissions = {
-        # Edit/Save: Only in draft/rejected, by owner or officer
-        "edit": status in ["draft", "rejected"] and (is_owner or is_officer),
-        "save": status in ["draft", "rejected"] and (is_owner or is_officer),
-        
-        # Submit: Only draft, by owner or officer
-        "submit": status == "draft" and (is_owner or is_officer),
-        
-        # Approve/Reject: Only submitted/resubmitted, by manager or admin
-        "approve": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
-        "reject": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
-        
-        # Resubmit: Only rejected, by owner or officer
-        "resubmit": status == "rejected" and (is_owner or is_officer),
-        
-        # Enroll: Only approved, by officer or higher
-        "enroll": status == "approved" and is_officer,
-        
-        # Delete: Only draft, by admin
-        "delete": status == "draft" and is_admin,
-        
-        # View: Always (if passed IDOR check)
-        "view": True,
-    }
-    profile.permissions = permissions
-    
-    # =========================================================================
-    # 2. AVAILABLE ACTIONS (list of action names that are currently allowed)
-    # =========================================================================
-    profile.available_actions = [action for action, allowed in permissions.items() if allowed]
-    
-    # =========================================================================
-    # 3. ELIGIBILITY STATUS & VALIDATION ERRORS
-    # =========================================================================
-    validation_errors = []
-    applied_rules = profile.applied_rules or {}
-    
-    # Check GPA/scores
     min_gpa = float(applied_rules.get("min_gpa") or 0)
-    # ✅ FIX: Handle explicit 0 requirement (don't specific check boolean value)
     req_count_val = applied_rules.get("required_subject_count")
     required_count = int(req_count_val) if req_count_val is not None else 3
     
-    # Get current score count from the just-computed admission_scores
+    # Get current score count
     scores_map = profile.admission_scores.get("subject_scores", {}) if profile.admission_scores else {}
     current_count = len(scores_map)
     
-    # NEW: Populate snapshot_score from admission_scores (if available)
-    # This ensures frontend gets the Best N breakdown
-    if profile.admission_scores and "snapshot_score" in profile.admission_scores:
-        profile.snapshot_score = profile.admission_scores["snapshot_score"]
-    else:
-        profile.snapshot_score = None
-    
-    gpa_error = False
     method_type = applied_rules.get("method_type", "subject_based")
-    current_gpa = profile.average_score or 0  # Define at top for validation_summary use
-    
-    # =======================================================================
-    # SCORE VALIDATION BY METHOD TYPE
-    #
-    # Method Types:
-    # - gpa_only: Only check average_score >= min_gpa (typically học bạ GPA-based)
-    # - subject_based: Only check total_score >= min_score (thi tổ hợp)
-    # - combined: Check BOTH conditions (e.g., GPA + điểm thi)
-    # - Other (hoc_ba, tot_nghiep, etc.): Treat as subject_based (total_score)
-    # =======================================================================
-
-    # Get thresholds from applied_rules
+    current_gpa = profile.average_score or 0
     min_score = float(applied_rules.get("min_score") or 0)
     current_total = profile.total_score or 0
 
-    # Track GPA errors for grouped display
+    validation_errors = []
     gpa_errors = []
+    gpa_error = False
 
     if method_type == "gpa_only":
         # GPA-Only: Check average_score only
@@ -240,20 +148,33 @@ def _compute_frontend_fields(
             validation_errors.append(error_msg)
             gpa_errors.append(error_msg)
             gpa_error = True
+            
+    return gpa_error, validation_errors, gpa_errors
 
-    # Check mandatory documents that REQUIRE UPLOAD (NEW: only upload_required_docs)
+
+def _validate_documents(
+    profile: models.AdmissionProfile,
+    documents: list | None,
+    applied_rules: dict,
+) -> tuple[list[str], list[str], set[str], list[str]]:
+    """
+    Validate document requirements.
+    Returns: (doc_errors_list, validation_errors_list, uploaded_doc_codes_set, upload_required_docs_list)
+    """
     upload_required_docs = applied_rules.get("upload_required_docs", applied_rules.get("mandatory_docs", []))
     doc_errors = []
+    validation_errors = []
     uploaded_doc_codes = set()
+    
     if documents is not None:
-        # ✅ FIX: Verified/paper_submitted documents are ALWAYS valid (officer confirmed)
+        # Verified/paper_submitted documents are ALWAYS valid
         # Only check file_path for "uploaded" status
         uploaded_doc_codes = {
             doc.document_type.code for doc in documents
             if doc.status in ["verified", "paper_submitted"] or (doc.file_path and doc.status == "uploaded")
         }
         
-        # ✅ DEBUG: Log document validation details
+        # Log document validation details (preserved from original code)
         log.debug(
             "Document validation check",
             profile_id=profile.id,
@@ -261,116 +182,126 @@ def _compute_frontend_fields(
             uploaded_doc_codes=list(uploaded_doc_codes),
             total_documents=len(documents),
         )
-        for doc in documents:
-            log.debug(
-                "Document status",
-                code=doc.document_type.code if doc.document_type else "NO_TYPE",
-                status=doc.status,
-                has_file=bool(doc.file_path),
-                included_in_uploaded=doc.document_type.code in uploaded_doc_codes if doc.document_type else False,
-            )
         
         for doc_code in upload_required_docs:
             if doc_code not in uploaded_doc_codes:
                 doc_errors.append(doc_code)
                 validation_errors.append(f"Thiếu tài liệu bắt buộc: {doc_code}")
-        
-        # ✅ DEBUG: Log final validation result
-        log.info(
-            "Document validation result",
-            profile_id=profile.id,
-            doc_errors_count=len(doc_errors),
-            doc_errors=doc_errors,
-        )
+                
+    return doc_errors, validation_errors, uploaded_doc_codes, upload_required_docs
 
-    # ✅ EXPANDED: Validate 8 mandatory personal information fields
-    # These fields are required for a complete admission profile per regulations
-    # ✅ FIX: Add individual error messages for each missing field (not combined)
-    # This ensures validation_summary.personal.count matches validation_errors length
+
+def _validate_personal_info(
+    profile: models.AdmissionProfile,
+) -> tuple[list[str], list[str]]:
+    """
+    Validate mandatory personal fields.
+    Returns: (missing_fields_list, validation_errors_list)
+    """
     missing_personal = []
-    personal_errors = []
+    validation_errors = []
+    
+    field_map = {
+        "full_name": "Họ tên",
+        "dob": "Ngày sinh",
+        "gender": "Giới tính",
+        "citizen_id": "Số CCCD/CMND",
+        "nationality": "Quốc tịch",
+        "ethnicity": "Dân tộc",
+        "phone": "Số điện thoại",
+        "place_of_birth": "Nơi sinh"
+    }
+    
+    for field, label in field_map.items():
+        if not getattr(profile, field, None):
+            missing_personal.append(label)
+            validation_errors.append(f"Thiếu thông tin cá nhân: {label}")
+            
+    return missing_personal, validation_errors
 
-    if not profile.full_name:
-        missing_personal.append("Họ tên")
-        error_msg = "Thiếu thông tin cá nhân: Họ tên"
-        validation_errors.append(error_msg)
-        personal_errors.append(error_msg)
 
-    if not profile.dob:
-        missing_personal.append("Ngày sinh")
-        error_msg = "Thiếu thông tin cá nhân: Ngày sinh"
-        validation_errors.append(error_msg)
-        personal_errors.append(error_msg)
+def _compute_frontend_fields(
+    profile: models.AdmissionProfile,
+    current_user: models.User,
+    documents: list = None,
+) -> None:
+    """
+    Phase 7: Frontend Thin Client Compliance
 
-    if not profile.gender:
-        missing_personal.append("Giới tính")
-        error_msg = "Thiếu thông tin cá nhân: Giới tính"
-        validation_errors.append(error_msg)
-        personal_errors.append(error_msg)
+    Compute permissions, eligibility, validation_errors, available_actions,
+    and completion_percent for AdmissionProfileResponse.
 
-    if not profile.citizen_id:
-        missing_personal.append("Số CCCD/CMND")
-        error_msg = "Thiếu thông tin cá nhân: Số CCCD/CMND"
-        validation_errors.append(error_msg)
-        personal_errors.append(error_msg)
+    These are transient fields (not stored in DB) computed at response time.
 
-    if not profile.nationality:
-        missing_personal.append("Quốc tịch")
-        error_msg = "Thiếu thông tin cá nhân: Quốc tịch"
-        validation_errors.append(error_msg)
-        personal_errors.append(error_msg)
+    Args:
+        profile: AdmissionProfile object
+        current_user: Current authenticated user (for role-based permissions). None for debug.
+        documents: Optional list of ProfileDocument (to avoid re-fetching)
+    """
+    status = profile.status
+    user_role = current_user.role                                   
+    is_admin = user_role == UserRole.ADMIN                          
+    is_manager = user_role == UserRole.MANAGER                      
+    is_officer = user_role in [UserRole.OFFICER,UserRole.MANAGER, UserRole.ADMIN]  
 
-    if not profile.ethnicity:
-        missing_personal.append("Dân tộc")
-        error_msg = "Thiếu thông tin cá nhân: Dân tộc"
-        validation_errors.append(error_msg)
-        personal_errors.append(error_msg)
 
-    if not profile.phone:
-        missing_personal.append("Số điện thoại")
-        error_msg = "Thiếu thông tin cá nhân: Số điện thoại"
-        validation_errors.append(error_msg)
-        personal_errors.append(error_msg)
-
-    if not profile.place_of_birth:
-        missing_personal.append("Nơi sinh")
-        error_msg = "Thiếu thông tin cá nhân: Nơi sinh"
-        validation_errors.append(error_msg)
-        personal_errors.append(error_msg)
-
-    # Count total missing personal fields
-    personal_error_count = len(missing_personal)
-
+    # Check if user owns this profile (for applicant self-actions)
+    # Corrected: Lead uses assigned_officer_id, not user_id
+    is_owner = profile.lead and profile.lead.assigned_officer_id == current_user.id
+    
+    # =========================================================================
+    # 1. PERMISSIONS (computed from role + status + Casbin-like rules)
+    # =========================================================================
+    permissions = {
+        "edit": status in ["draft", "rejected"] and (is_owner or is_officer),
+        "save": status in ["draft", "rejected"] and (is_owner or is_officer),
+        "submit": status == "draft" and (is_owner or is_officer),
+        "approve": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
+        "reject": status in ["submitted", "resubmitted"] and (is_manager or is_admin),
+        "resubmit": status == "rejected" and (is_owner or is_officer),
+        "enroll": status == "approved" and is_officer,
+        "delete": status == "draft" and is_admin,
+        "view": True,
+    }
+    profile.permissions = permissions
+    
+    # =========================================================================
+    # 2. AVAILABLE ACTIONS (list of action names that are currently allowed)
+    # =========================================================================
+    profile.available_actions = [action for action, allowed in permissions.items() if allowed]
+    
+    # =========================================================================
+    # 3. ELIGIBILITY STATUS & VALIDATION ERRORS
+    # =========================================================================
+    applied_rules = profile.applied_rules or {}
+    
+    # Set snapshot_score if available
+    if profile.admission_scores and "snapshot_score" in profile.admission_scores:
+        profile.snapshot_score = profile.admission_scores["snapshot_score"]
+    else:
+        profile.snapshot_score = None
+    
+    # --- Execute Validation Helpers ---
+    gpa_error, score_ve, gpa_errors = _validate_scores(profile, applied_rules)
+    doc_errors, doc_ve, uploaded_doc_codes, upload_required_docs = _validate_documents(profile, documents, applied_rules)
+    missing_personal, personal_ve = _validate_personal_info(profile)
+    
+    # Aggregate validation errors
+    validation_errors = score_ve + doc_ve + personal_ve
+    
     # Track CCCD error for backward compatibility with step_status logic
     cccd_error = not profile.citizen_id
     
     # Determine eligibility status
-    # ARCHITECTURE NOTE:
-    # - eligibility_status: Academic eligibility (GPA, score thresholds) - DOES NOT control UI
-    # - step_status[7]: Workflow UI state (locked/success) - DOES NOT reflect academic status
-    # 
-    # Rule: Submit button uses available_actions, NOT eligibility_status.
-    # A profile with eligibility_status='ineligible' may still be submittable for review.
     if len(validation_errors) == 0:
         profile.eligibility_status = "eligible"
     elif status in ["approved", "enrolled"]:
-        # Already approved, so eligible (even if rules changed)
         profile.eligibility_status = "eligible"
     else:
         profile.eligibility_status = "ineligible"
     
     # Ticket #2: Compute is_qualified
-    # IMPORTANT: is_qualified is specifically for SCORE QUALIFICATION display in Scores Tab
-    # It should ONLY reflect score-based validation (not docs, CCCD, etc.)
-    # 
-    # - is_qualified = True if scores meet threshold (no gpa_error)
-    # - eligibility_status = "eligible" if ALL validations pass (scores + docs + CCCD)
-    #
-    # UI uses is_qualified for "Kết quả xét tuyển" panel
-    # Workflow uses eligibility_status for submission eligibility
     profile.is_qualified = not gpa_error
-    
-    # Override: If status is approved/enrolled, always qualified
     if status in ["approved", "enrolled"]:
         profile.is_qualified = True
     
@@ -379,8 +310,11 @@ def _compute_frontend_fields(
     # =========================================================================
     # 4. VALIDATION SUMMARY (Grouped Errors for UX)
     # =========================================================================
-    # ✅ FIX: Use actual error message counts instead of boolean flags
-    # This ensures badge counts match the total error list
+    # Calculate GPA label for summary
+    min_gpa = float(applied_rules.get("min_gpa") or 0)
+    current_gpa = profile.average_score or 0
+    personal_error_count = len(missing_personal)
+    
     profile.validation_summary = {
         "gpa": {
             "has_error": len(gpa_errors) > 0,
@@ -402,13 +336,11 @@ def _compute_frontend_fields(
     # =========================================================================
     # 4.1 GROUPED VALIDATION ERRORS (Enhanced UX - Categorized Display)
     # =========================================================================
-    # Provide errors grouped by category for better frontend display
-    # Frontend can render these as expandable sections instead of flat list
-    grouped_errors = {
+    profile.grouped_validation_errors = {
         "personal_info": {
             "category": "Thông tin cá nhân",
-            "errors": personal_errors,
-            "count": len(personal_errors)
+            "errors": personal_ve, # Use the computed list from helper
+            "count": len(personal_ve)
         },
         "documents": {
             "category": "Tài liệu",
@@ -421,12 +353,11 @@ def _compute_frontend_fields(
             "count": len(gpa_errors)
         }
     }
-    profile.grouped_validation_errors = grouped_errors
     
     # =========================================================================
     # 5. STEP STATUS (Architecture Compliant - Backend computes, FE renders)
     # =========================================================================
-    # Required personal fields for step 1
+    # Required personal fields for step 1 check
     personal_required = ["full_name", "phone", "citizen_id"]
     personal_optional = ["email", "dob", "gender", "nationality", "ethnicity"]
     personal_required_filled = all(getattr(profile, f, None) for f in personal_required)
@@ -438,7 +369,6 @@ def _compute_frontend_fields(
     # Academic
     has_academic = profile.academic_history and len(profile.academic_history) > 0
     
-    # Scores
     has_any_scores = bool(profile.subject_scores) if hasattr(profile, 'subject_scores') else False
 
     # ✅ FIX: Documents format confirmation check
@@ -541,6 +471,24 @@ def _compute_frontend_fields(
         })
     
     profile.documents_checklist = documents_checklist
+
+    # ✅ Ticket #3.1: Document Status Summary (Backend Computed)
+    # Calculate stats for Thin Client compliance
+    if documents is not None:
+         mandatory_docs = [doc for doc in documents if doc.document_type and doc.document_type.code in upload_required_docs]
+         
+         # Count based on status
+         submitted_count = len([d for d in mandatory_docs if d.status in ["uploaded", "verified", "paper_submitted"]])
+         verified_count = len([d for d in mandatory_docs if d.status == "verified"])
+         mandatory_count = len(upload_required_docs)
+         missing_count = len(doc_errors) # Already computed via validation helper
+         
+         profile.document_stats = {
+             "submitted_count": submitted_count,
+             "verified_count": verified_count, 
+             "mandatory_count": mandatory_count,
+             "missing_count": missing_count
+         }
 
     # =========================================================================
     # 8. EXECUTIVE SUMMARY (Dashboard Overview)
@@ -1364,8 +1312,25 @@ async def update_profile(
         PermissionDeniedError: User doesn't have access
         BadRequest: Status is not 'draft'
     """
-    # Get profile with IDOR check
-    profile = await get_profile(db, profile_id, current_user)
+    # ✅ CRITICAL FIX #1.2: Pessimistic Locking (Row Lock)
+    # Prevent Race Condition (Lost Update) by locking the row
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(selectinload(models.AdmissionProfile.lead)) # Eager load lead for IDOR check
+        .with_for_update() # Lock the row
+    )
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+    
+    if not profile:
+        raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
+
+    # IDOR Check (MOVED CHECK AFTER LOCK)
+    _check_admin_or_unit_access(profile, current_user)
 
     # Initialize Repo
     from app.repositories import AdmissionRepository
@@ -1386,6 +1351,14 @@ async def update_profile(
     
     # If profile is rejected, reset to draft on update
     if profile.status == "rejected":
+        # ✅ CRITICAL FIX #1.3: Validate transition REJECTED -> DRAFT
+        from .admission_state_machine import validate_transition
+        try:
+            validate_transition("rejected", "draft")
+        except ValueError as e:
+            # Should not happen if state machine is correct
+            log.error("Invalid transition rejected->draft", error=str(e))
+            raise BadRequest(str(e))
         profile.status = "draft"
 
     # Optimistic Locking: Check version matches
@@ -1526,7 +1499,27 @@ async def update_profile(
     profile.updated_at = datetime.now(timezone.utc)
     profile.version += 1
 
-    await db.flush()  # Router commits
+    # ✅ FIX #2.2: Handle Integrity Errors (Duplicate Citizen ID)
+    from sqlalchemy.exc import IntegrityError
+    try:
+        await db.flush()  # Router commits
+    except IntegrityError as e:
+        # Rollback is optional here as router handles transaction, but good for clarity
+        # await db.rollback() 
+        error_msg = str(e.orig) if hasattr(e, 'orig') else str(e)
+        
+        log.error(
+            "Update failed due to integrity error",
+            profile_id=profile.id,
+            error=error_msg
+        )
+
+        if "citizen_id" in error_msg.lower():
+            raise ConflictError(f"CCCD {profile.citizen_id} đã tồn tại trong hệ thống")
+        elif "unique constraint" in error_msg.lower():
+            raise ConflictError("Dữ liệu trùng lặp (CCCD hoặc thông tin đã tồn tại)")
+        else:
+            raise ConflictError(f"Vi phạm ràng buộc dữ liệu: {error_msg}")
     
     # ✅ Fix: Fetch fresh scores but do NOT assign to profile.subject_scores (avoid SA error)
     fresh_scores = await admission_repo.get_profile_scores(profile.id)
@@ -1616,10 +1609,8 @@ def _calculate_and_update_totals(profile: models.AdmissionProfile, scores: list 
     )
     
     # 2. Prepare allowed subjects
-    allowed_subjects = applied_rules.get("allowed_subject_codes")
-    # Soft fallback for legacy profiles (shouldn't happen for new ones)
-    if not allowed_subjects: 
-         allowed_subjects = list(target_scores_map.keys())
+    allowed_subjects = applied_rules.get("allowed_subject_codes", [])
+    # Removed legacy fallback - allowed_subjects must be populated in validation phase
 
     # 3. Calculate using robust engine
     score_result = AdmissionScoringService.calculate_score(
@@ -1894,6 +1885,13 @@ async def submit_and_evaluate(
         }
     else:
         # ✅ FIX: Submit validation passed → Move to SUBMITTED (not APPROVED)
+        # ✅ CRITICAL FIX #1.3: Validate transition DRAFT -> SUBMITTED
+        from .admission_state_machine import validate_transition
+        try:
+            validate_transition(profile.status, "submitted")
+        except ValueError as e:
+            raise BadRequest(str(e))
+        
         profile.status = "submitted"  # ✅ CRITICAL FIX: submitted, not approved
         profile.version += 1  # Increment version on status change
 
@@ -2431,11 +2429,26 @@ async def enroll_student(
 
     # Must be in approved or confirmed status
     # 'confirmed' = Lead confirmed via magic link, ready to enroll
-    if profile.status not in ("approved", "confirmed", "overridden"):
-        raise BadRequest(
-            f"Cannot enroll student with profile status '{profile.status}'. "
-            "Only approved, confirmed, or overridden profiles can be enrolled."
+    # ✅ CRITICAL FIX #1.1: Enforce State Machine (APPROVED -> CONFIRMED -> ENROLLED)
+    # Prevents skipping confirmation step
+    from .admission_state_machine import validate_transition
+    
+    try:
+        validate_transition(profile.status, "enrolled")
+    except ValueError as e:
+        log.warning(
+            "Invalid state transition for enrollment",
+            profile_id=profile.id,
+            current_status=profile.status,
+            error=str(e),
         )
+        raise BadRequest(str(e))
+
+    if profile.status not in ("confirmed", "overridden"):
+         # Double check (redundant with validate_transition but keeps specific error message clear)
+         # Actually validate_transition handles this, but we keep this block if we want custom message
+         # However, for strict compliance, let's rely on validate_transition or re-raise cleaner error
+         pass # validate_transition already checked this
 
     # ✅ CRITICAL FIX #3: Final citizen_id duplicate check INSIDE transaction
     # Prevents race condition where 2 enrolls pass validation check but both create Student
@@ -2595,7 +2608,7 @@ async def enroll_student(
 
 async def approve_profile(
     db: AsyncSession,
-    profile: models.AdmissionProfile,
+    profile_id: int,
     approver: models.User,
     data: Dict[str, Any],
 ) -> tuple[models.AdmissionProfile, Any]:
@@ -2616,7 +2629,7 @@ async def approve_profile(
 
     Args:
         db: Database session
-        profile: AdmissionProfile (from IDOR dependency)
+        profile_id: AdmissionProfile ID
         approver: User performing approval
         data: ApproveRequest data (notes)
 
@@ -2627,6 +2640,24 @@ async def approve_profile(
         BadRequest: Invalid state transition
         ConflictError: Version mismatch
     """
+    # ✅ CRITICAL FIX #1.2: Pessimistic Locking (Row Lock)
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(selectinload(models.AdmissionProfile.lead)) 
+        .with_for_update() # Lock the row
+    )
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+    
+    if not profile:
+        raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
+
+    # IDOR Check (MOVED CHECK AFTER LOCK)
+    _check_admin_or_unit_access(profile, approver)
     from .admission_state_machine import validate_transition
 
     # STATE VALIDATION (Business Rule)
@@ -2700,7 +2731,7 @@ async def approve_profile(
 
 async def reject_profile(
     db: AsyncSession,
-    profile: models.AdmissionProfile,
+    profile_id: int,
     rejector: models.User,
     data: Dict[str, Any],
 ) -> tuple[models.AdmissionProfile, Any]:
@@ -2715,7 +2746,7 @@ async def reject_profile(
 
     Args:
         db: Database session
-        profile: AdmissionProfile (from IDOR dependency)
+        profile_id: AdmissionProfile ID
         rejector: User performing rejection
         data: RejectRequest data (reason - required)
 
@@ -2726,6 +2757,25 @@ async def reject_profile(
         BadRequest: Invalid state transition or missing reason
         ConflictError: Version mismatch
     """
+    # ✅ CRITICAL FIX #1.2: Pessimistic Locking (Row Lock)
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(selectinload(models.AdmissionProfile.lead)) 
+        .with_for_update() # Lock the row
+    )
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+    
+    if not profile:
+        raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
+
+    # IDOR Check (MOVED CHECK AFTER LOCK)
+    _check_admin_or_unit_access(profile, rejector)
+    
     from .admission_state_machine import validate_transition
 
     # STATE VALIDATION
@@ -2800,7 +2850,7 @@ async def reject_profile(
 
 async def resubmit_profile(
     db: AsyncSession,
-    profile: models.AdmissionProfile,
+    profile_id: int,
     officer: models.User,
     data: Dict[str, Any],
 ) -> tuple[models.AdmissionProfile, Any]:
@@ -2814,7 +2864,7 @@ async def resubmit_profile(
 
     Args:
         db: Database session
-        profile: AdmissionProfile (from IDOR dependency)
+        profile_id: AdmissionProfile ID
         officer: User performing resubmit
         data: ResubmitRequest data (notes)
 
@@ -2825,6 +2875,25 @@ async def resubmit_profile(
         BadRequest: Invalid state transition
         ConflictError: Version mismatch
     """
+    # ✅ CRITICAL FIX #1.2: Pessimistic Locking (Row Lock)
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    
+    stmt = (
+        select(models.AdmissionProfile)
+        .where(models.AdmissionProfile.id == profile_id)
+        .options(selectinload(models.AdmissionProfile.lead)) 
+        .with_for_update() # Lock the row
+    )
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+    
+    if not profile:
+        raise ResourceNotFoundError(f"Admission profile {profile_id} not found")
+
+    # IDOR Check (MOVED CHECK AFTER LOCK)
+    _check_admin_or_unit_access(profile, officer)
+    
     from .admission_state_machine import validate_transition
 
     # STATE VALIDATION

@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
 from .. import database, models, schemas
+from ..core import deps
 from ..core.deps import (
     CasbinAuth,  # ✅ Phase 2.2: Use standard alias
     get_admission_for_manager,
@@ -840,8 +841,8 @@ async def approve_admission(
     request: Request,
     profile_id: int,
     data: schemas.ApproveRequest,
-    current_user: models.User = CasbinAuth,  # Layer 2: RBAC (Manager/Admin)
-    profile: models.AdmissionProfile = Depends(get_admission_for_manager),  # Layer 3: IDOR
+    current_user: models.User = Depends(deps.get_current_active_user),  # ✅ FIX: Strict Active User Check
+    # profile: models.AdmissionProfile = Depends(get_admission_for_manager),  # REMOVED: Service handles fetching with lock
     db: AsyncSession = Depends(database.get_db),
 ):
     """
@@ -872,11 +873,16 @@ async def approve_admission(
     - 400: Invalid state transition or version mismatch
     - 404: Profile not found (or IDOR protection)
     """
+    
+    # Check Manager/Admin Role explicitly since we removed CasbinAuth/IDOR dep
+    if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER]:
+         raise PermissionDeniedError("Only Managers or Admins can approve profiles")
+
     try:
-        # 1. DELEGATE to Service
+        # 1. DELEGATE to Service (Service handles Locking + IDOR)
         result, callback = await admission_service.approve_profile(
             db=db,
-            profile=profile,
+            profile_id=profile_id,  # Pass ID, not object
             approver=current_user,
             data=data.model_dump(),
         )
@@ -907,8 +913,8 @@ async def reject_admission(
     request: Request,
     profile_id: int,
     data: schemas.RejectRequest,
-    current_user: models.User = CasbinAuth,  # Layer 2: RBAC (Manager/Admin)
-    profile: models.AdmissionProfile = Depends(get_admission_for_manager),  # Layer 3: IDOR
+    current_user: models.User = Depends(deps.get_current_active_user),  # ✅ FIX: Strict Active User Check
+    # profile: models.AdmissionProfile = Depends(get_admission_for_manager),  # REMOVED: Service handles fetching with lock
     db: AsyncSession = Depends(database.get_db),
 ):
     """
@@ -926,25 +932,19 @@ async def reject_admission(
 
     **Validation:**
     - State transition via validate_transition()
+    - Reason is mandatory (10+ chars)
     - Optimistic locking via version check
-    - Rejection reason required (min 10 chars, XSS sanitized)
-
-    **Request Body:**
-    - reason: Rejection reason (REQUIRED, min 10 chars, max 1000)
-    - version: Optional version for optimistic locking
-
-    **Returns:**
-    - Updated AdmissionProfile with status='rejected'
-
-    **Errors:**
-    - 400: Invalid state transition, version mismatch, or invalid reason
-    - 404: Profile not found (or IDOR protection)
     """
+    
+    # Check Manager/Admin Role explicitly since we removed CasbinAuth/IDOR dep
+    if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER]:
+         raise PermissionDeniedError("Only Managers or Admins can reject profiles")
+
     try:
-        # 1. DELEGATE to Service
+        # 1. DELEGATE to Service (Service handles Locking + IDOR)
         result, callback = await admission_service.reject_profile(
             db=db,
-            profile=profile,
+            profile_id=profile_id, # Pass ID
             rejector=current_user,
             data=data.model_dump(),
         )
@@ -975,8 +975,8 @@ async def resubmit_admission(
     request: Request,
     profile_id: int,
     data: schemas.ResubmitRequest,
-    current_user: models.User = CasbinAuth,  # Layer 2: RBAC (Officer/Admin)
-    profile: models.AdmissionProfile = Depends(get_admission_for_user),  # Layer 3: IDOR
+    current_user: models.User = Depends(deps.get_current_active_user),  # ✅ FIX: Strict Active User Check
+    # profile: models.AdmissionProfile = Depends(get_admission_for_user),  # REMOVED: Service handles fetching with lock
     db: AsyncSession = Depends(database.get_db),
 ):
     """
@@ -994,25 +994,19 @@ async def resubmit_admission(
 
     **Validation:**
     - State transition via validate_transition()
+    - Reason is optional
     - Optimistic locking via version check
-    - Resubmit notes required (min 10 chars, XSS sanitized)
-
-    **Request Body:**
-    - notes: Resubmission notes explaining what was fixed (REQUIRED, min 10 chars)
-    - version: Optional version for optimistic locking
-
-    **Returns:**
-    - Updated AdmissionProfile with status='resubmitted'
-
-    **Errors:**
-    - 400: Invalid state transition, version mismatch, or invalid notes
-    - 404: Profile not found (or IDOR protection)
     """
+
+    # Check Officer/Manager/Admin Role explicitly since we removed CasbinAuth/IDOR dep
+    if current_user.role not in [UserRole.ADMIN, UserRole.MANAGER, UserRole.OFFICER]:
+         raise PermissionDeniedError("Only staff can resubmit profiles")
+
     try:
         # 1. DELEGATE to Service
         result, callback = await admission_service.resubmit_profile(
             db=db,
-            profile=profile,
+            profile_id=profile_id, # Pass ID
             officer=current_user,
             data=data.model_dump(),
         )

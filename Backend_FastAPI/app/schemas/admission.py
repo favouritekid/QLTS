@@ -627,6 +627,13 @@ class AdmissionProfileResponse(BaseModel):
         default_factory=list,
         description="List of required documents with status {code, label, is_mandatory, requires_upload, submission_format, status, file_path, uploaded_at, rejection_reason}"
     )
+    
+    # ✅ Ticket #3.1: Document Status Summary (Computed by Backend)
+    # Replaces frontend calculation logic for Thin Client compliance
+    document_stats: Optional[Dict[str, int]] = Field(
+        None,
+        description="Document stats: {submitted_count, verified_count, mandatory_count, missing_count}"
+    )
 
     # Snapshot Score (for Best N Highlighting)
     snapshot_score: Optional[Dict[str, Any]] = Field(

@@ -144,7 +144,7 @@ export const admissionCriteriaCreateSchema = z.object({
   max_possible_score: z.number().min(0).max(1500).nullable().optional(),
   conditions: z.string().nullable().optional(),
   required_subject_count: z.number().int().min(1).nullable().optional(),
-  subject_selection_mode: z.enum(["fixed", "dynamic"]).default("fixed"),
+  subject_selection_mode: z.enum(["fixed", "best_n", "any_n"]).default("fixed"),
   scoring_method: z.enum(["sum", "avg"]).default("sum"),
   subject_groups: z.array(z.number().int()).default([]), // List of IDs
   
