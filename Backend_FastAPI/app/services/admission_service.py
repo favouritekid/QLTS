@@ -246,14 +246,42 @@ def _compute_frontend_fields(
     doc_errors = []
     uploaded_doc_codes = set()
     if documents is not None:
+        # ✅ FIX: Verified/paper_submitted documents are ALWAYS valid (officer confirmed)
+        # Only check file_path for "uploaded" status
         uploaded_doc_codes = {
             doc.document_type.code for doc in documents
-            if (doc.file_path and doc.status in ["uploaded", "verified"]) or doc.status == "paper_submitted"
+            if doc.status in ["verified", "paper_submitted"] or (doc.file_path and doc.status == "uploaded")
         }
+        
+        # ✅ DEBUG: Log document validation details
+        log.debug(
+            "Document validation check",
+            profile_id=profile.id,
+            upload_required_docs=upload_required_docs,
+            uploaded_doc_codes=list(uploaded_doc_codes),
+            total_documents=len(documents),
+        )
+        for doc in documents:
+            log.debug(
+                "Document status",
+                code=doc.document_type.code if doc.document_type else "NO_TYPE",
+                status=doc.status,
+                has_file=bool(doc.file_path),
+                included_in_uploaded=doc.document_type.code in uploaded_doc_codes if doc.document_type else False,
+            )
+        
         for doc_code in upload_required_docs:
             if doc_code not in uploaded_doc_codes:
                 doc_errors.append(doc_code)
                 validation_errors.append(f"Thiếu tài liệu bắt buộc: {doc_code}")
+        
+        # ✅ DEBUG: Log final validation result
+        log.info(
+            "Document validation result",
+            profile_id=profile.id,
+            doc_errors_count=len(doc_errors),
+            doc_errors=doc_errors,
+        )
 
     # ✅ EXPANDED: Validate 8 mandatory personal information fields
     # These fields are required for a complete admission profile per regulations
@@ -2040,57 +2068,62 @@ async def confirm_document_format(
     doc_code: str,
     format_type: str,
     current_user: models.User,
-) -> tuple[Dict[str, Any], Any]:
+) -> models.AdmissionProfile:
     """
-    Confirm physical format of a document (Finding 2.3).
-    
+    Confirm physical format of a document and mark as verified.
+
+    This performs the full verification workflow:
+    1. Updates verified_format (original | certified_copy | photo)
+    2. Sets status to 'verified'
+    3. Records verification timestamp and officer
+    4. Re-computes validation_summary with updated document status
+
     Args:
         db: Database session
         profile_id: AdmissionProfile ID
         doc_code: Document type code
         format_type: original | certified_copy | photo
         current_user: Officer performing verification
-        
+
     Returns:
-        Tuple (response_data, post_commit_callback)
+        AdmissionProfile with updated validation_summary
+
+    Raises:
+        ResourceNotFoundError: Document not found
     """
     from app.repositories import AdmissionRepository
     admission_repo = AdmissionRepository(db)
-    
+
     # 1. Access Check
     profile = await get_profile(db, profile_id, current_user)
-    
-    # 2. Update Format
+
+    # 2. Verify Document Format (full verification)
     doc = await admission_repo.confirm_document_format(
         profile_id=profile_id,
         document_type_code=doc_code,
-        verified_format=format_type
+        verified_format=format_type,
+        officer_id=current_user.id,
     )
-    
+
     if not doc:
         raise ResourceNotFoundError(f"Document code '{doc_code}' not found")
-        
+
     await db.flush()
-    
-    # 3. Response
-    response_data = {
-        "code": doc_code,
-        "verified_format": format_type,
-        "is_format_verified": True # Computed flag for frontend convenience if needed? 
-                                   # Actually schema relies on confirmed fields.
-    }
-    
-    # 4. Callback
-    async def _post_commit():
-        log.info(
-            "Document format confirmed",
-            profile_id=profile_id,
-            doc_code=doc_code,
-            format=format_type,
-            officer=current_user.email
-        )
-        
-    return response_data, _post_commit
+
+    # 3. Re-compute validation_summary with updated documents
+    documents = await admission_repo.get_all_documents(profile_id)
+    _compute_frontend_fields(profile, current_user, documents)
+
+    log.info(
+        "Document verified",
+        profile_id=profile_id,
+        doc_code=doc_code,
+        verified_format=format_type,
+        officer_id=current_user.id,
+        officer_email=current_user.email,
+    )
+
+    return profile
 
 
 async def mark_paper_submitted(

@@ -69,12 +69,30 @@ export function AdminCard({ profile }: AdminCardProps) {
 
       <CardContent className="space-y-3">
         {/* Documents Summary */}
-        <div className="bg-gradient-to-br from-amber-50 to-amber-100 rounded-lg p-3.5 border border-amber-200">
+        <div 
+          className={`rounded-lg p-3.5 border ${ 
+            verifiedCount === mandatoryCount && mandatoryCount > 0
+              ? "bg-gradient-to-br from-green-50 to-green-100 border-green-200"
+              : "bg-gradient-to-br from-amber-50 to-amber-100 border-amber-200"
+          }`}
+        >
           <div className="flex justify-between items-center text-sm mb-1">
-            <span className="font-medium text-amber-900">
+            <span 
+              className={`font-medium ${
+                verifiedCount === mandatoryCount && mandatoryCount > 0
+                  ? "text-green-900"
+                  : "text-amber-900"
+              }`}
+            >
               Tài liệu đã nộp / Bắt buộc
             </span>
-            <span className="font-bold text-lg text-amber-700">
+            <span 
+              className={`font-bold text-lg ${
+                verifiedCount === mandatoryCount && mandatoryCount > 0
+                  ? "text-green-700"
+                  : "text-amber-700"
+              }`}
+            >
               {submittedCount} / {mandatoryCount}
             </span>
           </div>

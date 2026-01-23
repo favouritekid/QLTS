@@ -482,8 +482,8 @@ async def mark_document_paper_submitted(
 @limiter.limit(RateLimits.DATA_WRITE)
 @router.patch(
     "/{profile_id}/documents/{doc_code}/verify-format",
-    response_model=dict,
-    summary="Verify document physical format (Original/Copy)",
+    response_model=schemas.AdmissionProfileResponse,
+    summary="Verify document format and mark as verified",
     status_code=status.HTTP_200_OK,
 )
 async def verify_document_format_endpoint(
@@ -495,16 +495,22 @@ async def verify_document_format_endpoint(
     current_user: models.User = CasbinAuth,
 ):
     """
-    Verify document physical format (Officer action).
-    
-    Update verified_format to 'original', 'certified_copy', or 'photo'.
-    Finding 2.3: Allows officers to distinguish between hard copies and digital uploads.
-    
+    Verify document physical format and mark as verified (Officer action).
+
+    This performs the full verification workflow:
+    1. Updates verified_format to 'original', 'certified_copy', or 'photo'
+    2. Sets document status to 'verified'
+    3. Records verification timestamp and officer
+    4. Re-computes validation_summary
+
+    **Request Body:**
+    - format: original | certified_copy | photo
+
     **Returns:**
-    - { code, verified_format, is_format_verified }
+    - Full AdmissionProfileResponse with updated validation_summary and document status
     """
     try:
-        result, post_commit = await admission_service.confirm_document_format(
+        profile = await admission_service.confirm_document_format(
             db=db,
             profile_id=profile_id,
             doc_code=doc_code,
@@ -512,8 +518,8 @@ async def verify_document_format_endpoint(
             current_user=current_user,
         )
         await db.commit()
-        await post_commit()
-        return result
+        await db.refresh(profile)
+        return profile
 
     except ResourceNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))

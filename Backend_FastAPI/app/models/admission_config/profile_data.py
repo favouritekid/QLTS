@@ -123,6 +123,12 @@ class ProfileDocument(Base):
         DateTime(timezone=True),
         nullable=True
     )
+    verified_by = Column(
+        Integer,
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="Officer who verified the document"
+    )
     # Paper submission tracking (for documents that don't require upload)
     paper_submitted_at = Column(
         DateTime(timezone=True),

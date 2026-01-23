@@ -141,6 +141,29 @@ export async function markPaperSubmitted(
   return response.data
 }
 
+
+
+/**
+ * Verify document physical format (Officer action)
+ */
+export interface DocumentFormatVerifyResponse {
+  code: string
+  verified_format: string
+  is_format_verified: boolean
+}
+
+export async function verifyDocumentFormat(
+  id: number,
+  docCode: string,
+  format: string
+): Promise<DocumentFormatVerifyResponse> {
+  const response = await api.patch<DocumentFormatVerifyResponse>(
+    `/api/admissions/${id}/documents/${docCode}/verify-format`,
+    { format }
+  )
+  return response.data
+}
+
 /**
  * Reject document with reason
  */
@@ -192,6 +215,7 @@ export const admissionsApi = {
   deleteAdmission,
   uploadAdmissionDocument,
   markPaperSubmitted,
+  verifyDocumentFormat,
   rejectDocument,
   resetDocument,
 }

@@ -16,7 +16,21 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-import { FileText, CheckCircle2, Upload, XCircle } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import { FileText, CheckCircle2, Upload, XCircle, Eye } from "lucide-react"
 import {
   Collapsible,
   CollapsibleContent,
@@ -29,7 +43,9 @@ import {
   getFormatLabel,
   formatDateTime,
 } from "@/lib/utils/admission-helpers"
+import { useVerifyDocument, useRejectDocument } from "@/hooks/admissions"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
+import { API_BASE_URL } from "@/lib/api/client"
 
 interface DocumentChecklistProps {
   profile: AdmissionProfileResponse
@@ -37,28 +53,66 @@ interface DocumentChecklistProps {
 
 export function DocumentChecklist({ profile }: DocumentChecklistProps) {
   const [isOpen, setIsOpen] = useState(false)
+  const verifyMutation = useVerifyDocument(profile.id)
 
   const mandatoryDocs = (profile.documents_checklist ?? []).filter(
     (doc) => doc.is_mandatory
   )
 
-  // Helper to render status badge
-  const renderStatusBadge = (status: string) => {
-    const config = getDocumentStatusConfig(status)
-    const iconMap = {
-      XCircle: XCircle,
-      Upload: Upload,
-      CheckCircle2: CheckCircle2,
-      FileText: FileText,
+  // Track selected format for each document (for bulk review)
+  // Initialize with actual_submission_format or submission_format as default
+  const [selectedFormats, setSelectedFormats] = useState<Record<string, string>>(
+    () => {
+      const initial: Record<string, string> = {}
+      mandatoryDocs.forEach((doc) => {
+        const isPending = doc.status === "uploaded" || doc.status === "paper_submitted"
+        if (isPending) {
+          // Default to actual_submission_format (what user/officer declared),
+          // fallback to submission_format (config requirement),
+          // final fallback to "photo"
+          initial[doc.code] = doc.actual_submission_format || doc.submission_format || "photo"
+        }
+      })
+      return initial
     }
-    const Icon = iconMap[config.iconName]
+  )
 
-    return (
-      <Badge variant={config.variant} className="gap-1">
-        <Icon className="w-3 h-3" />
-        {config.label}
-      </Badge>
+  const handleFormatChange = (code: string, format: string) => {
+    setSelectedFormats((prev) => ({
+      ...prev,
+      [code]: format,
+    }))
+  }
+
+  // Get pending documents (ready for bulk verification)
+  const pendingDocs = mandatoryDocs.filter(
+    (doc) => doc.status === "uploaded" || doc.status === "paper_submitted"
+  )
+
+  // Batch verify all pending documents
+  const handleBatchVerify = async () => {
+    if (pendingDocs.length === 0) return
+
+    const confirmed = window.confirm(
+      `Xác nhận kiểm tra ${pendingDocs.length} tài liệu đang chờ?`
     )
+    if (!confirmed) return
+
+    try {
+      // Verify all documents in parallel using Promise.all
+      await Promise.all(
+        pendingDocs.map((doc) =>
+          verifyMutation.mutateAsync({
+            docCode: doc.code,
+            format: selectedFormats[doc.code] || "photo",
+          })
+        )
+      )
+      // Success handled by React Query cache invalidation
+    } catch (error) {
+      // Error toast already shown by mutation onError
+      console.error("Batch verify failed:", error)
+    }
   }
 
   return (
@@ -97,48 +151,40 @@ export function DocumentChecklist({ profile }: DocumentChecklistProps) {
                   <TableHead className="text-center min-w-[140px]">
                     Loại bản nộp
                   </TableHead>
-                  <TableHead className="text-right min-w-[140px]">
-                    Ngày nộp
+                  {/* Phase 8: Removed Date column for cleaner review UI */}
+                  <TableHead className="text-right w-[100px]">
+                    Thao tác
                   </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {mandatoryDocs.map((doc) => (
-                  <TableRow key={doc.code}>
-                    {/* Document Label */}
-                    <TableCell className="font-medium">
-                      {doc.label}
-                      {doc.requires_upload === false && (
-                        <Badge variant="outline" className="ml-2 text-xs">
-                          Nộp giấy
-                        </Badge>
-                      )}
-                    </TableCell>
-
-                    {/* Status */}
-                    <TableCell className="text-center">
-                      {renderStatusBadge(doc.status)}
-                    </TableCell>
-
-                    {/* Submission Format */}
-                    <TableCell className="text-center">
-                      {doc.submission_format && doc.status !== "missing" ? (
-                        <Badge variant="secondary" className="font-normal">
-                          {getFormatLabel(doc.submission_format)}
-                        </Badge>
-                      ) : (
-                        <span className="text-muted-foreground text-sm">-</span>
-                      )}
-                    </TableCell>
-
-                    {/* Upload Date */}
-                    <TableCell className="text-right text-sm text-muted-foreground">
-                      {formatDateTime(doc.uploaded_at)}
-                    </TableCell>
-                  </TableRow>
+                  <DocumentRow
+                    key={doc.code}
+                    doc={doc}
+                    profile={profile}
+                    onFormatChange={handleFormatChange}
+                    selectedFormat={selectedFormats[doc.code] || "photo"}
+                  />
                 ))}
               </TableBody>
             </Table>
+
+            {/* Batch Verify Button */}
+            {pendingDocs.length > 0 && (
+              <div className="mt-4 flex justify-end">
+                <Button
+                  onClick={handleBatchVerify}
+                  disabled={verifyMutation.isPending}
+                  className="bg-green-600 hover:bg-green-700"
+                >
+                  <CheckCircle2 className="w-4 h-4 mr-2" />
+                  {verifyMutation.isPending
+                    ? "Đang xác nhận..."
+                    : `Xác nhận kiểm tra (${pendingDocs.length})`}
+                </Button>
+              </div>
+            )}
 
             {/* Rejection Info */}
             {mandatoryDocs.some((doc) => doc.status === "rejected") && (
@@ -160,4 +206,143 @@ export function DocumentChecklist({ profile }: DocumentChecklistProps) {
       </CollapsibleContent>
     </Collapsible>
   )
+}
+
+function DocumentRow({
+  doc,
+  profile,
+  onFormatChange,
+  selectedFormat,
+}: {
+  doc: any
+  profile: AdmissionProfileResponse
+  onFormatChange: (code: string, format: string) => void
+  selectedFormat: string
+}) {
+  const { code, status } = doc
+  const rejectMutation = useRejectDocument(profile.id)
+
+  const handleReject = () => {
+    const reason = window.prompt("Nhập lý do từ chối:")
+    if (reason) {
+      rejectMutation.mutate({ docCode: code, reason })
+    }
+  }
+
+  // Only show inline select for pending documents
+  const isPending = status === "uploaded" || status === "paper_submitted"
+
+  return (
+    <TableRow>
+      <TableCell className="font-medium">{doc.label}</TableCell>
+
+      <TableCell className="text-center">
+        {status === "verified" ? (
+          <Badge className="bg-green-600 hover:bg-green-700 gap-1">
+            <CheckCircle2 className="w-3 h-3" />
+            Đã xác nhận
+          </Badge>
+        ) : (
+          <Badge
+            variant={getDocumentStatusConfig(status).variant as any}
+            className="gap-1"
+          >
+            {getDocumentStatusConfig(status).label}
+          </Badge>
+        )}
+      </TableCell>
+
+      <TableCell className="text-center">
+        {isPending ? (
+          // Inline Select for pending documents - Officer can review/correct format
+          <Select
+            value={selectedFormat}
+            onValueChange={(value) => onFormatChange(code, value)}
+          >
+            <SelectTrigger className="w-[180px] h-8">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="original">Bản gốc</SelectItem>
+              <SelectItem value="certified_copy">Bản sao có công chứng</SelectItem>
+              <SelectItem value="photo">Bản photo/scan</SelectItem>
+            </SelectContent>
+          </Select>
+        ) : status === "verified" && doc.verified_format ? (
+          // Show verified format as badge
+          <Badge
+            variant="outline"
+            className="font-normal border-green-200 bg-green-50 text-green-700"
+          >
+            {getFormatLabel(doc.verified_format)}
+          </Badge>
+        ) : doc.actual_submission_format ? (
+          // Show user-declared format
+          <Badge
+            variant="outline"
+            className="font-normal border-blue-200 bg-blue-50 text-blue-700"
+          >
+            {getFormatLabel(doc.actual_submission_format)}
+          </Badge>
+        ) : (
+          <span className="text-muted-foreground text-sm">-</span>
+        )}
+      </TableCell>
+
+      <TableCell className="text-right">
+        <div className="flex justify-end gap-1">
+          {/* View Button - Always show if file exists */}
+          {doc.file_path && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-8 w-8 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                    onClick={() => {
+                      const url = getDocumentUrl(doc.file_path)
+                      if (url) window.open(url, "_blank")
+                    }}
+                  >
+                    <Eye className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Xem tài liệu</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+
+          {/* Reject Button - Only show for pending documents */}
+          {isPending && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-8 w-8 text-red-600 hover:text-red-700 hover:bg-red-50"
+                    onClick={handleReject}
+                    disabled={rejectMutation.isPending}
+                  >
+                    <XCircle className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Từ chối tài liệu</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+        </div>
+      </TableCell>
+    </TableRow>
+  )
+}
+
+// Helper function to get document URL
+function getDocumentUrl(filePath?: string) {
+  if (!filePath) return null
+  if (filePath.startsWith("http")) return filePath
+  // Handle relative paths (remove leading slash if present to avoid double slash)
+  const cleanPath = filePath.startsWith("/") ? filePath.slice(1) : filePath
+  return `${API_BASE_URL}/${cleanPath}`
 }

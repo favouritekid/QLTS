@@ -196,6 +196,20 @@ export const documentItemSchema = z.object({
     .nullable()
     .optional(),
   rejection_reason: z.string().nullable().optional(),
+  actual_submission_format: z.string().nullable().optional(),
+  /**
+   * Verified format - confirmed by officer during document review.
+   * Records the actual physical format of the document after verification.
+   */
+  verified_format: z.enum(["photo", "certified_copy", "original"]).nullable().optional(),
+  /**
+   * Verification timestamp - when officer verified the document.
+   */
+  verified_at: z.string().datetime({ offset: true }).nullable().optional(),
+  /**
+   * ID of officer who verified the document.
+   */
+  verified_by: z.number().int().nullable().optional(),
 })
 
 export type DocumentItem = z.infer<typeof documentItemSchema>

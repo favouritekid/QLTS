@@ -228,6 +228,40 @@ export function useMarkPaperSubmitted(id: number) {
   })
 }
 
+export function useVerifyDocument(id: number) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (variables: { docCode: string, format: string }) =>
+      admissionsApi.verifyDocumentFormat(id, variables.docCode, variables.format),
+    onSuccess: (data, variables) => {
+      toast.success("Đã xác nhận tài liệu")
+      
+      // Update cache optimistically or invalidate
+      queryClient.setQueryData(admissionsKeys.detail(id), (oldData: AdmissionProfileResponse | undefined) => {
+        if (!oldData) return oldData
+        
+        const updatedChecklist = oldData.documents_checklist?.map(doc => 
+          doc.code === variables.docCode
+            ? { 
+                ...doc, 
+                status: "verified" as const, 
+                submission_format: variables.format 
+              }
+            : doc
+        ) || []
+        
+        return { ...oldData, documents_checklist: updatedChecklist }
+      })
+      
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.detail(id) })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, { context: "xác nhận tài liệu" })
+    }
+  })
+}
+
 export function useRejectDocument(id: number) {
   const queryClient = useQueryClient()
 

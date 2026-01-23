@@ -31,6 +31,7 @@ export {
   useDeleteAdmission,
   useUploadAdmissionDocument,
   useMarkPaperSubmitted,
+  useVerifyDocument,
   useRejectDocument,
 } from "./useAdmissions"
 

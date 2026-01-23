@@ -545,23 +545,38 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         profile_id: int,
         document_type_code: str,
         verified_format: str,
+        officer_id: int,
     ) -> Optional[models.ProfileDocument]:
         """
-        Update verified_format for a document.
-        
+        Confirm document format and mark as verified.
+
+        This method performs the full verification:
+        1. Updates verified_format (original | certified_copy | photo)
+        2. Sets status to 'verified'
+        3. Records verification timestamp
+        4. Records officer who verified
+
         Args:
             profile_id: AdmissionProfile ID
             document_type_code: Document type code
             verified_format: original | certified_copy | photo
-            
+            officer_id: ID of officer performing verification
+
         Returns:
             Updated ProfileDocument or None
         """
+        from datetime import datetime, timezone
+
         doc = await self.get_document_by_type(profile_id, document_type_code)
         if not doc:
             return None
-        
+
+        # Full verification update
         doc.verified_format = verified_format
+        doc.status = "verified"
+        doc.verified_at = datetime.now(timezone.utc)
+        doc.verified_by = officer_id
+
         return doc
 
     # =========================================================================

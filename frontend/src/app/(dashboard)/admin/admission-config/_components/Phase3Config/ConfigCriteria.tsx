@@ -49,7 +49,7 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
 
   // Sync form state when path data loads
   const currentPathId = path.id;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   useEffect(() => {
     if (path.criteria) {
       setMinGpa(path.criteria.min_gpa?.toString() || "");
