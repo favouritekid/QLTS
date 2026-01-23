@@ -109,12 +109,12 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
   
   // Auto-select criterion if only one option available (profile is created for a single path)
   useEffect(() => {
-    if (!selectedCriterionId && criteria.length === 1 && isEditable) {
+    if (!selectedCriterionId && criteria.length === 1) {
       form.setValue("admission_scores.selected_criterion_id", criteria[0].id, {
         shouldDirty: false, // Don't mark as dirty since it's initialization
       })
     }
-  }, [selectedCriterionId, criteria, form, isEditable])
+  }, [selectedCriterionId, criteria, form])
   
   const subjectScoresData = useWatch({
     control: form.control,
@@ -140,7 +140,7 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
   // 1. Only one group available -> auto-select
   // 2. OR saved scores keys match a specific group -> infer and select
   useEffect(() => {
-    if (!selectedGroup && selectedCriterion && availableGroups.length > 0 && isEditable && allSubjectGroups) {
+    if (!selectedGroup && selectedCriterion && availableGroups.length > 0 && allSubjectGroups) {
       // Case 1: Only one group available
       if (availableGroups.length === 1) {
         form.setValue("admission_scores.selected_group", availableGroups[0], {
@@ -170,7 +170,7 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
         }
       }
     }
-  }, [selectedGroup, selectedCriterion, availableGroups, subjectScoresData, allSubjectGroups, form, isEditable])
+  }, [selectedGroup, selectedCriterion, availableGroups, subjectScoresData, allSubjectGroups, form])
   
   // Get selected subject group details from API
   const selectedGroupDetails = useMemo(() => {
@@ -234,7 +234,7 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
   // Initialize subject_scores when group CHANGES (not on initial load)
   // IMPORTANT: Load existing saved scores if available (allows switching back to a group)
   useEffect(() => {
-    if (selectedGroupDetails?.subjects && isEditable && selectedGroup) {
+    if (selectedGroupDetails?.subjects && selectedGroup) {
       // First render: just store the group, don't reset scores
       if (prevGroupRef.current === undefined) {
         prevGroupRef.current = selectedGroup
@@ -291,18 +291,18 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
       
       if (hasChange) {
         form.setValue("admission_scores.subject_scores", newScores, { 
-          shouldDirty: true,
+          shouldDirty: isEditable, // Only dirty if editable
           shouldValidate: false 
         })
       }
     }
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedGroupDetails, selectedGroup, form, isEditable]) // Intentionally exclude `profile` - effect only runs on GROUP change
+  }, [selectedGroupDetails, selectedGroup, form]) // Intentionally exclude `profile` - effect only runs on GROUP change
 
   // Initialize scores for Best N Mode (when mode is detected)
   useEffect(() => {
-      if (isBestNMode && uniqueSubjects.length > 0 && isEditable) {
+      if (isBestNMode && uniqueSubjects.length > 0) {
            const backendScores = profile?.admission_scores?.subject_scores || {}
            const currentFormScores = form.getValues("admission_scores.subject_scores") || {}
            const savedScores = { ...backendScores, ...currentFormScores }
@@ -324,12 +324,12 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
            
            if (hasChange) {
                 form.setValue("admission_scores.subject_scores", newScores, { 
-                  shouldDirty: true,
+                  shouldDirty: isEditable, // Only dirty if editable
                   shouldValidate: false 
                 })
            }
       }
-  }, [isBestNMode, uniqueSubjects, form, isEditable, profile])
+  }, [isBestNMode, uniqueSubjects, form, profile])
   
   // Reset selected_group when criterion changes and group is no longer valid
   useEffect(() => {
