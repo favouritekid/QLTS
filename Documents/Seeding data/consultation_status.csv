@@ -15,3 +15,4 @@
 "sts13","Đã đóng lệ phí","#10B981","stg04","positive",False,"qualified",False,True,True
 "sts14","Đã rút lại học phí","#EF4444","stg07","negative",False,"unqualified",False,True,False
 "sts15","Nhắn tin không trả lời","#14B8A6","stg01","neutral",False,"new",True,False,True
+"sts16","Yêu cầu bổ sung","#EF4444","stg03","neutral",False,"unqualified",False,True,True

@@ -374,7 +374,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
 
         {/* Right: Detail Panel (35%) - Independent Scroll */}
         <ResizablePanel defaultSize={35} minSize={25} maxSize={50}>
-          <div ref={detailPanelRef} className="h-full overflow-y-auto">
+          <div ref={detailPanelRef} className="h-full overflow-y-auto bg-background">
             <LeadDetailPanel
               leadId={selectedLeadId}
               onEdit={handleEdit}
