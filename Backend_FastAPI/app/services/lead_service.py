@@ -1005,51 +1005,13 @@ async def update_lead(
                     new_score=recalculated_score,
                 )
 
-            # Xử lý cập nhật consultation_status_id (nếu có)
-            if "consultation_status_id" in update_data:
-                new_status_id = update_data["consultation_status_id"]
-                current_status_id = db_lead.consultation_status_id
-                
-                # Chỉ kiểm tra nếu trạng thái thực sự thay đổi
-                if new_status_id and new_status_id != current_status_id:
-                    # Nếu current_status là None (Lead mới), thường cho phép gán bất kỳ
-                    if current_status_id:
-                        # Gọi service để kiểm tra trong bảng AllowedTransition
-                        is_valid = await pipeline_service.validate_status_transition(
-                            db, from_status_id=current_status_id, to_status_id=new_status_id
-                        )
-                        
-                        if not is_valid:
-                            # Chỉ cho phép Admin bypass quy tắc này (Tùy chọn)
-                            if updated_by.role != UserRole.ADMIN:
-                                raise BadRequest(
-                                    detail=f"Không thể chuyển trạng thái từ '{current_status_id}' sang '{new_status_id}'. Quy trình không cho phép (Allowed Transitions)."
-                                )
-                            else:
-                                # ✅ IMPROVED: Log with more context
-                                # Note: Universal status sẽ pass validation, nên không vào đây
-                                new_status_obj = await db.get(models.ConsultationStatus, new_status_id)
-                                log.warning(
-                                    "Admin bypassed transition rule",
-                                    admin_username=updated_by.username,
-                                    from_status=current_status_id,
-                                    to_status=new_status_id,
-                                    to_status_name=new_status_obj.name if new_status_obj else "Unknown",
-                                    is_universal=new_status_obj.is_universal if new_status_obj else False,
-                                    reason="Admin override - no explicit transition rule exists",
-                                )
-
-                    # Logic gán status mới (Giữ nguyên)
-                    new_status_obj = await db.get(models.ConsultationStatus, new_status_id)
-                    if not new_status_obj:
-                        raise BadRequest(detail=f"Consultation status '{new_status_id}' not found.")
-                    
-                    db_lead.consultation_status_id = new_status_id
-                    db_lead.pipeline_stage_id = new_status_obj.stage_id
-                elif new_status_id is None:
-                     # Trường hợp clear status (hiếm)
-                     db_lead.consultation_status_id = None
-                     db_lead.pipeline_stage_id = None  # Hoặc một trạng thái mặc định khác
+            # ✅ CRITICAL FIX: GOLDEN RULE ENFORCEMENT
+            # Block direct status updates. Status must ONLY change via Consultation.
+            if "consultation_status_id" in update_data or "pipeline_stage_id" in update_data:
+                raise BadRequest(
+                    detail="Không được phép cập nhật trạng thái trực tiếp. "
+                           "Vui lòng sử dụng tính năng 'Thêm Tương Tác' (Consultation) để ghi nhận kết quả và thay đổi trạng thái."
+                )
 
             # === NEW FEATURE: Auto-Reassign when Offering Changes ===
             # If offering_id changed, re-route Lead to new Unit and reset assignment
