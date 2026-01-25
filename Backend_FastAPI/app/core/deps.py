@@ -1754,3 +1754,93 @@ async def get_admission_for_user(
 #         "get_admission_for_owner is deprecated. "
 #         "Use token-based confirmation: POST /api/admissions/confirm/{token}"
 #     )
+
+
+# ==============================================================================
+# FSM VALIDATION DEPENDENCIES (Smart Dependencies Pattern)
+# ==============================================================================
+
+async def validate_status_transition(
+    to_status_id: str,
+    lead_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_active_user)
+) -> models.ConsultationStatus:
+    """
+    Smart Dependency: Validate FSM transition BEFORE updating lead status.
+    
+    This dependency enforces RULE #12: Backend must validate transitions.
+    
+    Args:
+        to_status_id: Target status ID
+        lead_id: Lead ID to update
+        db: Database session
+        current_user: Authenticated user
+        
+    Returns:
+        Validated ConsultationStatus object
+        
+    Raises:
+        ResourceNotFoundError: If lead or status not found (404)
+        BusinessRuleViolation: If transition violates FSM rules (400)
+        
+    Architecture Compliance:
+        - Smart Dependency: ALL validation logic here
+        - Dumb Router: Just coordinates service + commit
+        - Service: Pure Python, no HTTPException
+    """
+    from ..repositories.lead_repository import LeadRepository
+    from ..services.phase_manager import derive_phase_from_admission
+    from ..services.fsm_engine import is_transition_allowed
+    from ..utils.exceptions import BusinessRuleViolation
+    
+    # 1. Get lead with admission_profile for phase derivation (IDOR check)
+    repo = LeadRepository(db)
+    lead = await repo.get_lead_by_id_and_unit(lead_id, current_user.unit_id)
+    
+    if not lead:
+        raise ResourceNotFoundError(f"Lead {lead_id} not found")
+    
+    # 2. Get target status
+    to_status = await db.get(models.ConsultationStatus, to_status_id)
+    if not to_status:
+        raise ResourceNotFoundError(f"Status {to_status_id} not found")
+    
+    # 3. Derive lead phase from admission_profile
+    lead_phase = derive_phase_from_admission(lead.admission_profile).value
+    
+    # 4. ✅ RULE #12: Validate transition using FSM engine
+    is_allowed = await is_transition_allowed(
+        db=db,
+        from_status_id=lead.consultation_status_id,
+        to_status_id=to_status_id,
+        lead_phase=lead_phase,
+        user_role=current_user.role
+    )
+    
+    if not is_allowed:
+        log.warning(
+            "FSM validation failed - invalid transition",
+            user_id=current_user.id,
+            lead_id=lead_id,
+            from_status=lead.consultation_status_id,
+            to_status=to_status_id,
+            lead_phase=lead_phase,
+            user_role=current_user.role
+        )
+        raise BusinessRuleViolation(
+            f"Invalid status transition from {lead.consultation_status_id or 'NULL'} "
+            f"to {to_status_id}. Not allowed in current phase '{lead_phase}' "
+            f"for role '{current_user.role}'."
+        )
+    
+    log.info(
+        "FSM validation passed",
+        user_id=current_user.id,
+        lead_id=lead_id,
+        from_status=lead.consultation_status_id,
+        to_status=to_status_id,
+        lead_phase=lead_phase
+    )
+    
+    return to_status

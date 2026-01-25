@@ -1,5 +1,5 @@
 # app/models/pipeline.py
-from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import enum
@@ -18,6 +18,47 @@ class OutcomeTypeEnum(str, enum.Enum):
     positive = "positive"
     neutral = "neutral"
     negative = "negative"
+
+
+class StatusTypeEnum(str, enum.Enum):
+    """
+    Status type classification for FSM engine.
+    
+    - transition: Normal workflow status, follows FSM rules
+    - activity: Activity tracking status, doesn't affect workflow
+    - system: System-controlled status, not user-selectable
+    """
+    transition = "transition"
+    activity = "activity"
+    system = "system"
+
+
+class SelectableModeEnum(str, enum.Enum):
+    """
+    Who can select this status.
+    
+    - user: Any authenticated user (officer+)
+    - role: Only manager/admin roles
+    - system: Only backend system (not UI selectable)
+    """
+    user = "user"
+    role = "role"
+    system = "system"
+
+
+class TriggerTypeEnum(str, enum.Enum):
+    """
+    What triggers a transition in FSM.
+    
+    - user: UI action by any user
+    - role: UI action by manager/admin
+    - system: Backend system action
+    - event: External event (webhook, cron, etc.)
+    """
+    user = "user"
+    role = "role"
+    system = "system"
+    event = "event"
 
 
 class PipelineStage(Base):
@@ -51,26 +92,39 @@ class PipelineStage(Base):
 
 class ConsultationStatus(Base):
     """
-    Consultation Status (Sub-status) - Detailed state within a stage.
-
-    Examples: "First contact", "Rescheduled", "Not interested", "Enrolled"
-
-    CRM Standards:
-    - Each status belongs to one stage
-    - Status has outcome_type: positive/neutral/negative
-    - Final statuses (end of lifecycle) marked with is_final_status=True
+    Consultation Status - FSM-based status for lead lifecycle.
+    
+    SYSTEM SPEC v2:
+    - status_type: transition/activity/system
+    - selectable_mode: user/role/system
+    - phase: consultation/admission/fee/enrolled/universal
+    
+    Activity statuses (is_universal=true) bypass FSM and are always available.
+    System statuses can only be set by backend, not UI.
     """
     __tablename__ = "consultation_status"
 
     id = Column(String(50), primary_key=True, comment="Unique status identifier")
+    
+    # NEW: Machine-readable code
+    code = Column(
+        String(50),
+        nullable=True,
+        unique=True,
+        comment="Machine-readable code (e.g., NOT_CONTACTED, ENROLLED)"
+    )
+    
     name = Column(String(255), nullable=False, comment="Display name")
     color_code = Column(String(7), nullable=False, comment="Hex color code for UI")
+    
+    # MODIFIED: stage_id now nullable for universal statuses
     stage_id = Column(
         String(50),
         ForeignKey("pipeline_stage.id", ondelete="CASCADE"),
-        nullable=False,
-        comment="Parent pipeline stage"
+        nullable=True,  # Changed from False - universal statuses have NULL stage
+        comment="Parent pipeline stage (NULL for universal statuses)"
     )
+    
     outcome_type = Column(
         Enum(OutcomeTypeEnum, name="outcome_type_enum", create_type=False),
         nullable=False,
@@ -78,43 +132,110 @@ class ConsultationStatus(Base):
         server_default="neutral",
         comment="Outcome classification: positive/neutral/negative"
     )
-    is_final_status = Column(
+    
+    # RENAMED: is_final_status → is_final for consistency
+    is_final = Column(
         Boolean,
         nullable=False,
         default=False,
         server_default="false",
         comment="Whether this status marks end of lead lifecycle"
     )
-    # Legacy status mapping for backward compatibility with lead.status field
-    # Valid values: "new", "assigned", "contacted", "qualified", "unqualified", "converted", "rejected"
-    legacy_status = Column(
-        String(50),
-        nullable=True,
-        default=None,
-        comment="Maps to lead.status for backward compatibility (auto-derived if NULL)"
+    
+    # NEW: Status type for FSM engine
+    status_type = Column(
+        Enum(StatusTypeEnum, name="status_type_enum", create_type=False),
+        nullable=False,
+        default=StatusTypeEnum.transition,
+        server_default="transition",
+        comment="Status type: transition/activity/system"
     )
-
-    # Universal status support (Phase 1 - Option B architecture)
+    
+    # RENAMED: selectable_by_user → selectable_mode (now enum)
+    selectable_mode = Column(
+        Enum(SelectableModeEnum, name="selectable_mode_enum", create_type=False),
+        nullable=False,
+        default=SelectableModeEnum.user,
+        server_default="user",
+        comment="Who can select: user/role/system"
+    )
+    
+    # Universal status support
     is_universal = Column(
         Boolean,
         nullable=False,
         default=False,
         server_default="false",
-        comment="True nếu status có thể dùng ở mọi pipeline stage (VD: Không nghe máy, Thuê bao)"
+        comment="True for activity statuses that bypass FSM"
     )
+    
     updates_pipeline = Column(
         Boolean,
         nullable=False,
         default=True,
         server_default="true",
-        comment="False nếu chỉ ghi nhận activity, không thay đổi pipeline progression"
+        comment="False if only records activity, doesn't change pipeline"
     )
-    counts_for_kpi = Column(
+    
+    # RENAMED: counts_for_kpi → counts_for_funnel
+    counts_for_funnel = Column(
         Boolean,
         nullable=False,
         default=True,
         server_default="true",
-        comment="True nếu status được đếm vào KPI enrollments (VD: False cho 'Đã rút học phí')"
+        comment="True if counted in funnel analytics"
+    )
+
+    # Phase-Based Workflow
+    phase = Column(
+        String(20),
+        nullable=False,
+        default="consultation",
+        server_default="consultation",
+        comment="Phase: consultation/admission/fee/enrolled/universal"
+    )
+    
+    # NEW: Description
+    description = Column(
+        Text,
+        nullable=True,
+        comment="Optional description for status"
+    )
+
+    # NEW: Display order for sorting
+    display_order = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+        comment="Sort order for displaying statuses (lower = first)"
+    )
+
+    # DEPRECATED: Keep for backward compatibility, will remove later
+    legacy_status = Column(
+        String(50),
+        nullable=True,
+        default=None,
+        comment="DEPRECATED: Maps to lead.status for backward compatibility"
+    )
+    
+    # DEPRECATED: Keeping old column name for migration
+    is_final_status = Column(
+        Boolean,
+        nullable=True,  # Made nullable since we're migrating to is_final
+        comment="DEPRECATED: Use is_final instead"
+    )
+    
+    selectable_by_user = Column(
+        String(20),
+        nullable=True,  # Made nullable since we're migrating to selectable_mode
+        comment="DEPRECATED: Use selectable_mode instead"
+    )
+    
+    counts_for_kpi = Column(
+        Boolean,
+        nullable=True,  # Made nullable since we're migrating to counts_for_funnel
+        comment="DEPRECATED: Use counts_for_funnel instead"
     )
 
     # Relationships
@@ -134,6 +255,7 @@ class ConsultationStatus(Base):
         back_populates="to_status",
         cascade="all, delete-orphan"
     )
+
 
 
 class AllowedTransition(Base):
@@ -163,6 +285,36 @@ class AllowedTransition(Base):
         nullable=False,
         comment="Destination status ID"
     )
+
+    # ✅ NEW: FSM Engine fields
+    trigger_type = Column(
+        Enum(TriggerTypeEnum, name="trigger_type_enum", create_type=False),
+        nullable=False,
+        default=TriggerTypeEnum.user,
+        server_default="user",
+        comment="Who/what triggers this transition: user/role/system/event"
+    )
+
+    required_phase = Column(
+        String(20),
+        nullable=True,
+        comment="Target phase (must match to_status.phase). NULL for same-phase transitions."
+    )
+
+    is_active = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="true",
+        comment="Whether this transition is currently enabled"
+    )
+
+    description = Column(
+        Text,
+        nullable=True,
+        comment="Human-readable description of this transition"
+    )
+
     created_at = Column(
         DateTime(timezone=True),
         server_default=func.now(),

@@ -3,7 +3,7 @@
 
 import React, { useState, useMemo } from "react";
 import { addDays, set } from "date-fns";
-import { Loader2, PhoneOff, ThumbsUp, XCircle } from "lucide-react";
+import { Loader2, PhoneOff, ThumbsUp, XCircle, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -20,6 +20,7 @@ import { DateTimePicker } from "@/components/common/form";
 import { cn } from "@/lib/utils";
 import { useAllowedNextStatuses } from "@/hooks/usePipeline";
 import { useAddConsultation, useLead } from "@/hooks/useLeads";
+import { useWorkflowContext, getAllowedStatusIds } from "@/hooks/useWorkflowContext";
 import type { ConsultationStatus, ConsultationCreate } from "@/types/lead.types";
 
 interface QuickDispositionProps {
@@ -45,6 +46,11 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
 
   // Get allowed next statuses based on state machine
   const { data: statuses = [], isLoading: statusesLoading, error, isError } = useAllowedNextStatuses(currentStatusId);
+  
+  // ✅ PHASE-BASED WORKFLOW: Get workflow context for phase filtering
+  const { data: workflowContext, isLoading: contextLoading } = useWorkflowContext(leadId);
+  const allowedByPhase = getAllowedStatusIds(workflowContext);
+  
   const addConsultation = useAddConsultation();
 
   // Dialog state
@@ -56,13 +62,23 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
   const [notes, setNotes] = useState("");
   const [scheduledDateTime, setScheduledDateTime] = useState<Date | undefined>(undefined);
 
+  // ✅ PHASE-BASED WORKFLOW: Filter statuses by both transitions AND phase
+  const filteredStatuses = useMemo(() => {
+    // If no workflow context yet, show all statuses from transitions
+    if (!workflowContext || allowedByPhase.size === 0) {
+      return statuses;
+    }
+    // Filter to only show statuses allowed in current phase
+    return statuses.filter(s => allowedByPhase.has(s.id));
+  }, [statuses, workflowContext, allowedByPhase]);
+
   // Group statuses by outcome_type
   const groupedStatuses = useMemo(() => {
     const neutral: ConsultationStatus[] = [];
     const positive: ConsultationStatus[] = [];
     const negative: ConsultationStatus[] = [];
 
-    statuses.forEach((status) => {
+    filteredStatuses.forEach((status) => {
       switch (status.outcome_type) {
         case "neutral":
           neutral.push(status);
@@ -79,7 +95,8 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
     });
 
     return { neutral, positive, negative };
-  }, [statuses]);
+  }, [filteredStatuses]);
+
 
   // Handle simple 1-click disposition
   const handleSimpleDisposition = async (status: ConsultationStatus) => {

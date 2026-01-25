@@ -456,6 +456,73 @@ async def get_lead_insights(
     return await insights_service.get_lead_insights(db, lead, timeline)
 
 
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
+@router.get("/{lead_id}/workflow-context", response_model=schemas.WorkflowContext)
+async def get_workflow_context(
+    request: Request,
+    lead: models.Lead = LeadAccessDep,
+    current_user: models.User = CasbinAuth,
+    db: AsyncSession = Depends(database.get_db),
+):
+    """
+    Get workflow context for a lead - Phase-Based Workflow.
+    
+    Provides frontend with:
+    - Current phase (consultation, admission, fee, enrolled)
+    - Allowed statuses user can select
+    - Phase constraints and locked states
+    
+    Used to dynamically filter status dropdowns based on lead's current phase.
+    """
+    from app.services.phase_manager import (
+        derive_phase_from_admission,
+        get_allowed_statuses_for_phase,
+        is_terminal_phase,
+        UNIVERSAL_STATUSES,
+    )
+    from app.repositories import AdmissionRepository, PipelineRepository
+    
+    # Get admission profile to derive phase
+    admission_repo = AdmissionRepository(db)
+    pipeline_repo = PipelineRepository(db)
+    
+    admission_profile = await admission_repo.get_profile_by_lead_id(lead.id)
+    current_phase = derive_phase_from_admission(admission_profile)
+    
+    # Get allowed status IDs for this phase and user role
+    user_role = current_user.role if isinstance(current_user.role, str) else current_user.role.value
+    allowed_status_ids = get_allowed_statuses_for_phase(
+        current_phase, 
+        user_role
+    )
+    
+    # Get full status objects for allowed statuses
+    all_statuses = await pipeline_repo.get_all_statuses_with_stage()
+    
+    allowed_statuses = []
+    for status in all_statuses:
+        if status.id in allowed_status_ids:
+            allowed_statuses.append(schemas.WorkflowAllowedStatus(
+                id=status.id,
+                name=status.name,
+                phase=status.phase if hasattr(status, 'phase') else "consultation",
+                color_code=status.color_code,
+                outcome_type=status.outcome_type.value if hasattr(status.outcome_type, 'value') else str(status.outcome_type),
+                is_universal=status.is_universal,
+            ))
+    
+    return schemas.WorkflowContext(
+        lead_id=lead.id,
+        current_phase=current_phase.value,
+        current_status_id=lead.consultation_status_id,
+        current_stage_id=lead.pipeline_stage_id,
+        allowed_statuses=allowed_statuses,
+        is_terminal_phase=is_terminal_phase(current_phase),
+        can_change_status=not is_terminal_phase(current_phase),
+        has_admission_profile=admission_profile is not None,
+        admission_status=admission_profile.status if admission_profile else None,
+    )
+
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
 @router.put(
     "/{lead_id}/consultations/{consultation_id}", response_model=schemas.Consultation
@@ -1072,3 +1139,99 @@ async def officer_import_leads(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
+
+# ==============================================================================
+# FSM-COMPLIANT STATUS UPDATE (Spec v3.0)
+# ==============================================================================
+
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.patch("/{lead_id}/status", response_model=schemas.Lead)
+async def update_lead_consultation_status(
+    request: Request,
+    lead_id: int,
+    status_update: schemas.LeadStatusUpdate,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+    # ✅ SMART DEPENDENCY: Validates FSM transition BEFORE service
+    # This dependency enforces RULE #12: Backend must validate transitions
+    # Returns validated ConsultationStatus or raises BusinessRuleViolation (400)
+):
+    """
+    Update lead consultation status with FSM validation (Spec v3.0 compliant).
+    
+    This endpoint enforces:
+    - Rule #11: NULL status → only NOT_CONTACTED
+    - Rule #12: Backend FSM validation (not just UI)
+    - Phase guards (user/role cannot cross phases)
+    - Trigger type enforcement (cannot set system-only statuses)
+    
+    **Architecture Compliance:**
+    - Smart Dependency: validate_status_transition() does ALL validation
+    - Dumb Router: Just coordinates service + commit
+    - Service: Pure Python, raises domain exceptions
+    
+    **Request Body:**
+    ```json
+    {
+        "consultation_status_id": "sts02"
+    }
+    ```
+    
+    **Error Responses:**
+    - 400: Invalid FSM transition (BusinessRuleViolation)
+    - 404: Lead or status not found (ResourceNotFoundError)
+    """
+    from ..core.deps import validate_status_transition
+    from ..services.status_helper import StatusHelper
+    
+    # ✅ SMART DEPENDENCY: Validate transition using FSM engine
+    validated_status = await validate_status_transition(
+        to_status_id=status_update.consultation_status_id,
+        lead_id=lead_id,
+        db=db,
+        current_user=current_user
+    )
+    
+    # Get lead (already validated by dependency, but need for update)
+    from ..repositories.lead_repository import LeadRepository
+    repo = LeadRepository(db)
+    lead = await repo.get_lead_by_id_and_unit(lead_id, current_user.unit_id)
+    
+    if not lead:
+        from ..utils.exceptions import ResourceNotFoundError
+        raise ResourceNotFoundError(f"Lead {lead_id} not found")
+    
+    # Store old status for history/notification
+    old_status_id = lead.consultation_status_id
+    
+    # ✅ UPDATE STATUS: Use StatusHelper to sync all fields
+    await StatusHelper.sync_lead_status(lead, validated_status)
+    
+    # Create history record
+    history = models.LeadHistory(
+        lead_id=lead.id,
+        consultation_status_id=validated_status.id,
+        changed_by_user_id=current_user.id,
+        notes=f"Status updated via FSM-validated endpoint"
+    )
+    db.add(history)
+    
+    # Flush before commit to get updated timestamp
+    await db.flush()
+    
+    # Commit transaction
+    await db.commit()
+    await db.refresh(lead)
+    
+    log.info(
+        "Lead status updated via FSM endpoint",
+        lead_id=lead_id,
+        old_status=old_status_id,
+        new_status=validated_status.id,
+        user_id=current_user.id
+    )
+    
+    # TODO: Dispatch status change notification if needed
+    # await dispatch(db, SystemEvents.LEAD_STATUS_CHANGED, {...})
+    
+    return lead

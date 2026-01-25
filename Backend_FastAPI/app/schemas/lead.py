@@ -270,6 +270,21 @@ class LeadUpdate(BaseModel):
         return normalized
 
 
+class LeadStatusUpdate(BaseModel):
+    """
+    Schema for updating lead consultation status (FSM v3.0 compliant).
+
+    Used by PATCH /api/leads/{lead_id}/status endpoint.
+    This schema is validated by the FSM engine before being applied.
+    """
+    consultation_status_id: str = Field(
+        ...,
+        description="Target consultation status ID (validated by FSM engine)"
+    )
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class Lead(LeadBase):
     id: int
     status: str
@@ -435,6 +450,58 @@ class Application(ApplicationBase):
     officer: Optional[User] = None
     lead: Optional["Lead"] = None  # Forward reference
 
+    model_config = ConfigDict(from_attributes=True)
+
+
+# -----------------
+# WORKFLOW CONTEXT SCHEMA (Phase-Based Workflow)
+# -----------------
+
+
+class WorkflowAllowedStatus(BaseModel):
+    """Status option in workflow context."""
+    id: str
+    name: str
+    phase: str
+    color_code: str
+    outcome_type: str
+    is_universal: bool
+
+
+class WorkflowContext(BaseModel):
+    """
+    Workflow context for a lead - provides frontend with allowed actions.
+    
+    Used by frontend to:
+    - Filter status dropdown options
+    - Show/hide phase-specific UI elements
+    - Validate user actions before API call
+    """
+    lead_id: int
+    current_phase: str = Field(..., description="Current workflow phase: consultation, admission, fee, enrolled")
+    current_status_id: Optional[str] = None
+    current_stage_id: Optional[str] = None
+    
+    # Allowed statuses for current phase
+    allowed_statuses: List[WorkflowAllowedStatus] = Field(
+        default_factory=list,
+        description="Statuses user can select based on current phase and role"
+    )
+    
+    # Locked actions (for UI to disable buttons)
+    is_terminal_phase: bool = Field(
+        default=False,
+        description="True if lead is in enrolled phase (no further transitions)"
+    )
+    can_change_status: bool = Field(
+        default=True,
+        description="False if status changes are locked"
+    )
+    
+    # Admission profile info (for phase derivation)
+    has_admission_profile: bool = False
+    admission_status: Optional[str] = None
+    
     model_config = ConfigDict(from_attributes=True)
 
 

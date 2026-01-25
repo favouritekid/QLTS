@@ -124,6 +124,7 @@ from .lead import (
     LeadInsights,
     LeadsPage,
     LeadUpdate,
+    LeadStatusUpdate,  # ✅ FSM v3.0: Status update schema
     TimelineItem,
     # Application schemas (Hồ sơ Tuyển sinh - Legacy)
     Application,
@@ -132,7 +133,11 @@ from .lead import (
     ApplicationUpdate,
     ApplicationDocuments,
     ChecklistItem,
+    # ✅ Phase-Based Workflow schemas
+    WorkflowContext,
+    WorkflowAllowedStatus,
 )
+
 
 # --- 5. Từ admission.py (Depends on: lead, organization) ---
 from .admission import (

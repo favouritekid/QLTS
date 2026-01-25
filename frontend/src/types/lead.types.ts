@@ -351,6 +351,50 @@ export interface AdmissionProfileShallow {
 }
 
 // ============================================
+// WORKFLOW CONTEXT TYPES (Phase-Based Workflow)
+// ============================================
+
+/**
+ * Lead Phase - Business lifecycle stage
+ */
+export type LeadPhase = "consultation" | "admission" | "fee" | "enrolled";
+
+/**
+ * Allowed status option in workflow context
+ */
+export interface WorkflowAllowedStatus {
+  id: string;
+  name: string;
+  phase: string;
+  color_code: string;
+  outcome_type: string;
+  is_universal: boolean;
+}
+
+/**
+ * Workflow context for a lead - Phase-Based Workflow
+ * Used by frontend to dynamically filter status dropdowns
+ */
+export interface WorkflowContext {
+  lead_id: number;
+  current_phase: LeadPhase;
+  current_status_id?: string | null;
+  current_stage_id?: string | null;
+  
+  // Allowed statuses for current phase
+  allowed_statuses: WorkflowAllowedStatus[];
+  
+  // Phase constraints
+  is_terminal_phase: boolean;
+  can_change_status: boolean;
+  
+  // Admission profile info
+  has_admission_profile: boolean;
+  admission_status?: string | null;
+}
+
+
+// ============================================
 // CRM INTERACTION TYPES
 // ============================================
 

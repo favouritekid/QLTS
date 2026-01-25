@@ -97,6 +97,15 @@ class ConsultationStatusBase(BaseModel):
         default=True,
         description="False nếu chỉ ghi nhận activity, không thay đổi pipeline progression"
     )
+    # Phase-Based Workflow fields
+    phase: str = Field(
+        default="consultation",
+        description="Phase: consultation, admission, fee, enrolled, universal"
+    )
+    selectable_by_user: str = Field(
+        default="true",
+        description="true = officer can select, false = system only, role-based = manager/admin only"
+    )
 
     # ✅ QUAN TRỌNG NHẤT: Fix lỗi "invalid input value ... NEUTRAL"
     model_config = ConfigDict(use_enum_values=True, from_attributes=True)
@@ -131,6 +140,15 @@ class ConsultationStatusUpdate(BaseModel):
     updates_pipeline: Optional[bool] = Field(
         default=None,
         description="False nếu chỉ ghi nhận activity, không thay đổi pipeline progression"
+    )
+    # Phase-Based Workflow fields
+    phase: Optional[str] = Field(
+        default=None,
+        description="Phase: consultation, admission, fee, enrolled, universal"
+    )
+    selectable_by_user: Optional[str] = Field(
+        default=None,
+        description="true = officer can select, false = system only, role-based = manager/admin only"
     )
 
     model_config = ConfigDict(use_enum_values=True)

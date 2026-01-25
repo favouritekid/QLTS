@@ -349,6 +349,35 @@ export async function getLeadInsights(leadId: number): Promise<LeadInsights> {
 }
 
 // ============================================
+// WORKFLOW CONTEXT (Phase-Based Workflow)
+// ============================================
+
+import type { WorkflowContext } from '@/types/lead.types'
+
+/**
+ * Get workflow context for a lead - Phase-Based Workflow
+ * 
+ * Provides frontend with:
+ * - Current phase (consultation, admission, fee, enrolled)
+ * - Allowed statuses user can select
+ * - Phase constraints and locked states
+ * 
+ * @throws {AxiosError} 404 if lead not found, 403 if no permission
+ * 
+ * @example
+ * ```ts
+ * const context = await leadsApi.getWorkflowContext(123)
+ * // Filter status dropdown based on context.allowed_statuses
+ * // Disable UI if context.is_terminal_phase
+ * ```
+ */
+export async function getWorkflowContext(leadId: number): Promise<WorkflowContext> {
+  const response = await api.get<WorkflowContext>(`/api/leads/${leadId}/workflow-context`)
+  return response.data
+}
+
+
+// ============================================
 // IMPORT/EXPORT OPERATIONS
 // ============================================
 
@@ -487,8 +516,8 @@ export const leadsApi = {
   // Data Access
   getLeadTimeline,
   getLeadInsights,
+  getWorkflowContext,
 
-  // Import/Export
   importLeads,
   exportLeads,
 

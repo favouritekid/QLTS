@@ -1238,6 +1238,30 @@ async def add_consultation(
             # Chỉ validate nếu lead đã có status và status thực sự thay đổi
             current_status_id = lead.consultation_status_id
             if current_status_id and current_status_id != data.status_id:
+                # ✅ PHASE-BASED WORKFLOW: Validate phase before transition
+                from app.services.phase_manager import (
+                    derive_phase_from_admission,
+                    is_status_allowed_for_phase,
+                    UNIVERSAL_STATUSES,
+                )
+                from app.repositories import AdmissionRepository
+                
+                # Get admission profile to derive phase
+                admission_repo = AdmissionRepository(db)
+                admission_profile = await admission_repo.get_profile_by_lead_id(lead_id)
+                current_phase = derive_phase_from_admission(admission_profile)
+                
+                # Check if new status is allowed in current phase
+                # Note: officer.role is already a string (e.g., "officer", "admin")
+                user_role = officer.role if isinstance(officer.role, str) else officer.role.value
+                if not is_status_allowed_for_phase(current_phase, data.status_id, user_role):
+                    # Check if it's a universal status (always allowed)
+                    if data.status_id not in UNIVERSAL_STATUSES:
+                        raise BadRequest(
+                            detail=f"Status '{new_status.name}' không hợp lệ trong phase '{current_phase.value}'. "
+                                   f"Lead hiện đang ở giai đoạn {current_phase.value.upper()}."
+                        )
+                
                 is_valid = await pipeline_service.validate_status_transition(
                     db, 
                     from_status_id=current_status_id, 
@@ -1246,7 +1270,8 @@ async def add_consultation(
                 
                 if not is_valid:
                     # Admin có thể bypass rule này
-                    if officer.role != UserRole.ADMIN:
+                    is_admin = (officer.role == "admin") if isinstance(officer.role, str) else (officer.role == UserRole.ADMIN)
+                    if not is_admin:
                         raise BadRequest(
                             detail=f"Không thể chuyển trạng thái từ '{current_status_id}' sang '{data.status_id}'. "
                                    f"Quy trình không cho phép (Allowed Transitions). "
@@ -1265,6 +1290,7 @@ async def add_consultation(
                             is_universal=new_status.is_universal,
                             reason="Admin override - no explicit transition rule exists",
                         )
+
 
             # Lưu trạng thái Lead cũ
             old_state = _get_current_lead_state(lead)

@@ -1,0 +1,22 @@
+id,from_status_id,to_status_id,trigger_type,required_phase,is_active,description
+1,sts00,sts02,user,consultation,true,Kết nối được
+2,sts00,sts04,user,consultation,true,Từ chối ngay
+3,sts02,sts03,user,consultation,true,Quan tâm
+4,sts02,sts04,user,consultation,true,Không quan tâm
+5,sts02,sts05,user,consultation,true,Hẹn lại
+6,sts03,sts04,user,consultation,true,Không tiếp tục
+7,sts03,sts06,user,consultation,true,Đồng ý tư vấn
+8,sts05,sts03,user,consultation,true,Gọi lại có nhu cầu
+9,sts05,sts04,user,consultation,true,Gọi lại nhưng từ chối
+10,sts06,sts07,system,admission,true,Tạo hồ sơ xét tuyển
+11,sts07,sts17,user,admission,true,Yêu cầu bổ sung
+12,sts17,sts07,user,admission,true,Bổ sung xong
+13,sts07,sts08,user,admission,true,Rút hồ sơ
+14,sts07,sts16,role,admission,true,Không đạt
+15,sts13,sts09,system,admission,true,Lệ phí hợp lệ
+16,sts09,sts14,system,fee,true,Chuyển sang thu học phí
+17,sts14,sts10,system,fee,true,Thanh toán thành công
+18,sts14,sts18,system,fee,true,Hoàn tiền
+19,sts10,sts11,system,enrolled,true,Nhập học
+20,sts11,sts12,role,enrolled,true,Ngừng học
+21,sts05,sts06,user,consultation,true,Hẹn lại thành công đồng ý tư vấn

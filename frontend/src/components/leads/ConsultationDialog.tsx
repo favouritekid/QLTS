@@ -1,7 +1,7 @@
 // src/components/leads/ConsultationDialog.tsx
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -38,6 +38,7 @@ import { DateTimePicker } from "@/components/common/form";
 
 import { useAddConsultation, useUpdateConsultation } from "@/hooks/useLeads";
 import { useAllowedNextStatuses } from "@/hooks/usePipeline";
+import { useWorkflowContext, getAllowedStatusIds } from "@/hooks/useWorkflowContext";
 import { SmartConsultationStatusSelector } from "@/components/common/selectors";
 import type { Consultation, ConsultationUpdate } from "@/types/lead.types";
 
@@ -89,6 +90,7 @@ function CancelButton({ disabled }: { disabled?: boolean }) {
  * - FormDialog wrapper prevents accidental data loss
  * - isDirty check shows confirmation when closing with unsaved changes
  * - Allowed next statuses for workflow compliance in edit mode
+ * - ✅ Phase-based filtering via useWorkflowContext
  */
 export function ConsultationDialog({
   open,
@@ -107,6 +109,25 @@ export function ConsultationDialog({
   const { data: allowedStatuses, isLoading: statusesLoading } = useAllowedNextStatuses(
     isEdit ? (consultation?.consultation_status_id || null) : null
   );
+  
+  // ✅ PHASE-BASED WORKFLOW: Get workflow context for phase filtering
+  const { data: workflowContext } = useWorkflowContext(leadId, { enabled: open });
+  const allowedByPhase = getAllowedStatusIds(workflowContext);
+  
+  // Combine transition-based and phase-based filtering
+  const filteredAllowedStatusIds = useMemo(() => {
+    if (!isEdit) return undefined; // Create mode: let selector handle it
+    
+    const transitionIds = allowedStatuses?.map(s => s.id) || [];
+    
+    // If no phase context, use transition-based filtering only
+    if (allowedByPhase.size === 0) {
+      return transitionIds;
+    }
+    
+    // Intersect: status must be allowed by BOTH transitions AND phase
+    return transitionIds.filter(id => allowedByPhase.has(id));
+  }, [isEdit, allowedStatuses, allowedByPhase]);
 
   const form = useForm<ConsultationFormValues>({
     resolver: zodResolver(consultationSchema),
@@ -118,6 +139,7 @@ export function ConsultationDialog({
       duration_minutes: undefined,
     },
   });
+
 
   // Reset/populate form when dialog opens
   useEffect(() => {
@@ -288,7 +310,7 @@ export function ConsultationDialog({
                       value={field.value}
                       onChange={field.onChange}
                       placeholder="Chọn trạng thái"
-                      allowedStatusIds={isEdit ? allowedStatuses?.map(s => s.id) : undefined}
+                      allowedStatusIds={filteredAllowedStatusIds}
                       disabled={isEdit && statusesLoading}
                       variant="select"
                       showOutcomeType
