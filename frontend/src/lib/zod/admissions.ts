@@ -540,6 +540,17 @@ export const admissionProfileResponseSchema = z.object({
 
   // Ticket #2: Backend-computed qualification status
   is_qualified: z.boolean().nullable().optional().describe("Whether profile meets admission criteria. Computed by backend."),
+
+  // =========================================================================
+  // Ticket #5: Score Snapshot Status (Thin Client Compliance)
+  // Backend computes pass/fail status, Frontend ONLY renders
+  // =========================================================================
+  score_snapshot_status: z.object({
+    total_status: z.enum(["passing", "failing"]).nullable(),
+    subject_statuses: z.record(z.string(), z.enum(["passing", "failing"]).nullable()),
+    min_subject_score: z.number(),
+    min_score: z.number(),
+  }).nullable().optional().describe("Backend-computed score pass/fail status for each subject and total"),
 })
 
 export type AdmissionProfileResponse = z.infer<

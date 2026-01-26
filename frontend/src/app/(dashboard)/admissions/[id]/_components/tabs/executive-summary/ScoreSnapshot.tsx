@@ -24,11 +24,7 @@ import {
 } from "@/components/ui/collapsible"
 import { ChevronDown } from "lucide-react"
 import { useState } from "react"
-import {
-  getSubjectLabel,
-  isSubjectPassing,
-  isTotalScorePassing,
-} from "@/lib/utils/admission-helpers"
+import { getSubjectLabel } from "@/lib/utils/admission-helpers"
 import type { AdmissionProfileResponse } from "@/lib/zod/admissions"
 
 interface ScoreSnapshotProps {
@@ -43,8 +39,11 @@ export function ScoreSnapshot({ profile }: ScoreSnapshotProps) {
   const subjectScores = profile.admission_scores?.subject_scores ?? {}
   const totalScore = profile.admission_scores?.total_score
   const selectedGroup = profile.admission_scores?.selected_group
-  const minSubjectScore = profile.applied_rules?.min_subject_score
-  const minScore = profile.applied_rules?.min_score
+
+  // ✅ THIN CLIENT: Use backend-computed score status instead of local calculation
+  const scoreStatus = profile.score_snapshot_status
+  const minSubjectScore = scoreStatus?.min_subject_score ?? profile.applied_rules?.min_subject_score
+  const minScore = scoreStatus?.min_score ?? profile.applied_rules?.min_score
 
   // If GPA-only method, show message
   if (isGpaOnly) {
@@ -112,7 +111,9 @@ export function ScoreSnapshot({ profile }: ScoreSnapshotProps) {
             <TableBody>
               {/* Subject Rows */}
               {Object.entries(subjectScores).map(([subjectCode, score]) => {
-                const isPassing = isSubjectPassing(score, minSubjectScore)
+                // ✅ THIN CLIENT: Use backend-computed status, NOT local calculation
+                const subjectStatus = scoreStatus?.subject_statuses?.[subjectCode]
+                const isPassing = subjectStatus === "passing"
 
                 return (
                   <TableRow key={subjectCode}>
@@ -125,7 +126,7 @@ export function ScoreSnapshot({ profile }: ScoreSnapshotProps) {
                         : "N/A"}
                     </TableCell>
                     <TableCell className="text-right">
-                      {score !== null && score !== undefined ? (
+                      {score !== null && score !== undefined && subjectStatus !== null ? (
                         isPassing ? (
                           <Badge className="bg-green-600">Đạt</Badge>
                         ) : (
@@ -148,8 +149,9 @@ export function ScoreSnapshot({ profile }: ScoreSnapshotProps) {
                     : "N/A"}
                 </TableCell>
                 <TableCell className="text-right">
-                  {totalScore !== null && totalScore !== undefined ? (
-                    isTotalScorePassing(totalScore, minScore) ? (
+                  {/* ✅ THIN CLIENT: Use backend-computed status, NOT local calculation */}
+                  {totalScore !== null && totalScore !== undefined && scoreStatus?.total_status !== null ? (
+                    scoreStatus?.total_status === "passing" ? (
                       <Badge className="bg-green-600 text-base px-3 py-1">
                         Đạt chuẩn
                       </Badge>

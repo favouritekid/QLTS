@@ -354,6 +354,38 @@ def _compute_frontend_fields(
             "count": len(gpa_errors)
         }
     }
+
+    # =========================================================================
+    # 4.2 SCORE SNAPSHOT STATUS (Thin Client Compliance - Ticket #5)
+    # Backend computes pass/fail for each subject and total score
+    # Frontend ONLY renders, never calculates
+    # =========================================================================
+    min_subject_score = float(applied_rules.get("min_subject_score") or 0)
+    min_score = float(applied_rules.get("min_score") or 0)
+    total_score = profile.total_score
+    subject_scores = profile.admission_scores.get("subject_scores", {}) if profile.admission_scores else {}
+
+    # Compute subject pass/fail statuses
+    subject_statuses = {}
+    for code, score in subject_scores.items():
+        if score is not None:
+            # Pass if score >= min_subject_score (0 threshold means always pass)
+            subject_statuses[code] = "passing" if score >= min_subject_score else "failing"
+        else:
+            subject_statuses[code] = None  # No score yet
+
+    # Compute total score status
+    total_status = None
+    if total_score is not None:
+        # Pass if total >= min_score (0 threshold means always pass)
+        total_status = "passing" if total_score >= min_score else "failing"
+
+    profile.score_snapshot_status = {
+        "total_status": total_status,
+        "subject_statuses": subject_statuses,
+        "min_subject_score": min_subject_score,
+        "min_score": min_score,
+    }
     
     # =========================================================================
     # 5. STEP STATUS (Architecture Compliant - Backend computes, FE renders)

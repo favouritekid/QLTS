@@ -645,6 +645,15 @@ class AdmissionProfileResponse(BaseModel):
         description="Detailed score snapshot containing selected_subjects, etc."
     )
 
+    # =========================================================================
+    # Ticket #5: Score Status (Thin Client Compliance)
+    # Backend computes pass/fail status, Frontend ONLY renders
+    # =========================================================================
+    score_snapshot_status: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Backend-computed score pass/fail status: {total_status, subject_statuses: {code: status}}"
+    )
+
     model_config = ConfigDict(
         from_attributes=True,
         validate_assignment=True

@@ -227,6 +227,10 @@ export function getMissingDocsCount(documents: DocumentItem[]): number {
 // ==============================================================================
 
 /**
+ * @deprecated Use profile.score_snapshot_status.subject_statuses from backend instead.
+ * This function violates the Thin Client philosophy. Backend should compute pass/fail status.
+ * Kept for backward compatibility only - DO NOT USE IN NEW CODE.
+ *
  * Check if a subject score passes the minimum threshold.
  * @param score Subject score (0-10)
  * @param minSubjectScore Minimum allowed score from applied_rules
@@ -242,6 +246,10 @@ export function isSubjectPassing(
 }
 
 /**
+ * @deprecated Use profile.score_snapshot_status.total_status from backend instead.
+ * This function violates the Thin Client philosophy. Backend should compute pass/fail status.
+ * Kept for backward compatibility only - DO NOT USE IN NEW CODE.
+ *
  * Check if total score passes the minimum threshold.
  * @param totalScore Total admission score
  * @param minScore Minimum required score from applied_rules
