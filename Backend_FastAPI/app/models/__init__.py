@@ -73,6 +73,7 @@ from .user_activity import UserActivityLog
 from .user_session import UserSession
 from .login_history import LoginHistory  # Security: Login audit trail
 from .trusted_device import TrustedDevice  # Security: Trusted devices for login
+from .entity_audit_log import EntityAuditLog  # Generic audit trail for any entity
 
 # Administrative Geography (Temporal Versioning)
 from .administrative_node import AdministrativeNode, AdministrativeLevel
@@ -139,6 +140,7 @@ __all__ = [
     "UserSession",
     "LoginHistory",
     "TrustedDevice",
+    "EntityAuditLog",
     # Administrative Geography
     "AdministrativeNode",
     "AdministrativeLevel",
