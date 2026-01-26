@@ -111,6 +111,20 @@ const getOutcomeColorClasses = (
   }
 };
 
+// ✅ Get sort order for outcome_type: Positive → Neutral → Negative
+const getOutcomeSortOrder = (outcomeType: string | null | undefined): number => {
+  switch (outcomeType) {
+    case "positive":
+      return 0;
+    case "neutral":
+      return 1;
+    case "negative":
+      return 2;
+    default:
+      return 1; // Default to neutral
+  }
+};
+
 
 
 export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultationSectionProps) {
@@ -414,18 +428,37 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
       }
     });
 
-    // Sort Previous desc (closest to current first? or asc?) -> Let's do Ascending order
-    previousStage.sort((a, b) => (a.stage?.order ?? 0) - (b.stage?.order ?? 0));
+    // ✅ Sort each group by: outcome_type (Positive → Neutral → Negative), then display_order
+    const sortByOutcomeThenOrder = (a: ConsultationStatus, b: ConsultationStatus) => {
+      const outcomeA = getOutcomeSortOrder(a.outcome_type);
+      const outcomeB = getOutcomeSortOrder(b.outcome_type);
+      if (outcomeA !== outcomeB) return outcomeA - outcomeB;
+      // Secondary sort by display_order
+      return (a.display_order ?? 999) - (b.display_order ?? 999);
+    };
 
-    // Sort Next asc
-    nextStage.sort((a, b) => (a.stage?.order ?? 0) - (b.stage?.order ?? 0));
+    // Sort Previous: outcome_type first, then by stage order (closest to current)
+    previousStage.sort((a, b) => {
+      const outcomeA = getOutcomeSortOrder(a.outcome_type);
+      const outcomeB = getOutcomeSortOrder(b.outcome_type);
+      if (outcomeA !== outcomeB) return outcomeA - outcomeB;
+      // Within same outcome, sort by stage order desc (closest to current first)
+      return (b.stage?.order ?? 0) - (a.stage?.order ?? 0);
+    });
 
-    // Sort Same Stage: Current status first, then others by name
+    // Sort Same Stage: outcome_type first, current status within its group, then display_order
     sameStage.sort((a, b) => {
+      const outcomeA = getOutcomeSortOrder(a.outcome_type);
+      const outcomeB = getOutcomeSortOrder(b.outcome_type);
+      if (outcomeA !== outcomeB) return outcomeA - outcomeB;
+      // Current status first within its outcome group
       if (a.id === currentStatusId) return -1;
       if (b.id === currentStatusId) return 1;
-      return a.name.localeCompare(b.name);
+      return (a.display_order ?? 999) - (b.display_order ?? 999);
     });
+
+    // Sort Next: outcome_type first, then by stage order (furthest first = most progress)
+    nextStage.sort(sortByOutcomeThenOrder);
 
     return { universal, previousStage, sameStage, nextStage };
   }, [statuses, currentStatusId, lead?.pipeline_stage?.order, lead?.pipeline_stage_id]);
