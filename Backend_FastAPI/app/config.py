@@ -132,6 +132,18 @@ class Settings(BaseSettings):
         default=30, validation_alias="ACCOUNT_LOCKOUT_WINDOW_MINUTES"
     )  # Reset counter after N minutes of no attempts
 
+    # -- Security: CSRF Protection --
+    # Double-submit cookie pattern for state-changing requests
+    CSRF_PROTECTION_ENABLED: bool = Field(
+        default=True, validation_alias="CSRF_PROTECTION_ENABLED"
+    )  # Enable CSRF middleware (disabled in test by default)
+    CSRF_PROTECTION_IN_TEST: bool = Field(
+        default=False, validation_alias="CSRF_PROTECTION_IN_TEST"
+    )  # Force enable CSRF in test mode
+    CSRF_ORIGIN_CHECK_ENABLED: bool = Field(
+        default=False, validation_alias="CSRF_ORIGIN_CHECK_ENABLED"
+    )  # Additional Origin/Referer validation (optional layer)
+
     # -- Security: Anomaly Detection --
     # These settings control suspicious activity detection on login
     ANOMALY_MAX_FAILED_LOGINS_PER_HOUR: int = Field(

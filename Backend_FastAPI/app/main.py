@@ -33,6 +33,7 @@ from .database import redis_client as main_redis_client
 from .database import safe_redis_ping
 from .database import AsyncSessionLocal  # For auto-sync templates
 from .core.rate_limits import limiter  # ✅ MIGRATED: Use new centralized rate limits module
+from .middleware.csrf import CSRFMiddleware  # ✅ CSRF Protection
 from .utils.redis_lock import init_redis_client, close_redis_client
 from .routers import (
     administrative,  # ✅ PHASE 4: Administrative Nodes (Province/District/Ward)
@@ -501,6 +502,16 @@ fastapi_app.add_middleware(
     allow_headers=["*"],
     expose_headers=["Set-Cookie"],
 )
+
+# ===============================================================
+# === CSRF PROTECTION MIDDLEWARE (Double-Submit Cookie Pattern)
+# ===============================================================
+# Validates X-CSRF-Token header for state-changing requests (POST/PUT/DELETE/PATCH)
+# Token is set as a readable cookie on login, frontend sends it in headers
+# Protects against CSRF attacks even with SameSite=Lax cookies
+if settings.APP_ENV != "test":  # Disabled in tests by default
+    fastapi_app.add_middleware(CSRFMiddleware)
+    log.info("✅ CSRF protection middleware enabled")
 
 
 # ===============================================================

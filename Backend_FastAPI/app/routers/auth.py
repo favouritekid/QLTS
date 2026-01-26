@@ -27,6 +27,7 @@ from ..utils.exceptions import (  # ✅ PHASE 1: Import custom exceptions
     InvalidCredentials,
     UserServiceError,
 )
+from ..middleware.csrf import set_csrf_cookie  # ✅ CSRF Protection
 from ..database import (
     safe_redis_delete,
     safe_redis_exists,
@@ -441,6 +442,10 @@ async def login_for_access_token(
         max_age=int(refresh_ttl),
         path="/api",  # ✅ FIX: Changed from "/api/auth" to "/api" so cookie is sent to all /api/* endpoints
     )
+
+    # ✅ CSRF Protection: Set CSRF token cookie (readable by JS for header submission)
+    set_csrf_cookie(response)
+
     return response
 
 
@@ -952,6 +957,10 @@ async def refresh_access_token(
                     max_age=int(new_refresh_ttl),
                     path="/api",  # ✅ FIX: Changed from "/api/auth" to "/api" so cookie is sent to all /api/* endpoints
                 )
+
+                # ✅ CSRF Protection: Refresh CSRF token on token refresh
+                set_csrf_cookie(response)
+
                 return response
 
             except InvalidToken:

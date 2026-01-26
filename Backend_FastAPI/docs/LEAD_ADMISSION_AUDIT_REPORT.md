@@ -960,7 +960,7 @@ Step 9: Enroll Student
 | 3 | Terminal status guard chỉ log warning, không hard block | Potential state corruption | MEDIUM | Đã Fixed, cần kiểm tra lại
 | 4 | Missing composite indexes cho common queries | Performance degradation at scale | MEDIUM | Đã Fixed, cần kiểm tra lại
 | 5 | Lack of generic audit log | Khó trace field changes | MEDIUM | Đã Fixed, cần kiểm tra lại
-| 6 | Rate limiting cho /auth/login không rõ | Brute force risk | HIGH |
+| 6 | Rate limiting cho /auth/login không rõ | Brute force risk | HIGH | ĐÃ IMPLEMENT - Không cần thêm code mới.
 | 7 | CSRF protection chưa optimal | Cookie-based JWT vulnerable | MEDIUM |
 
 ### 8.3 Điểm Thiết Kế RẤT TỐT
