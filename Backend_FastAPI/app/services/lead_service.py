@@ -24,6 +24,7 @@ from ..core.status_mapping import sync_lead_status_from_consultation
 from ..core.constants import UserRole
 from .status_helper import StatusHelper, AssignmentStatus
 from ..repositories import LeadRepository  # ✅ PHASE 2: Repository Pattern
+from .lead_profile_sync import sync_profile_from_lead, detect_changed_personal_fields, SYNCABLE_FIELDS
 
 log = structlog.get_logger(__name__)
 
@@ -928,6 +929,13 @@ async def update_lead(
             # Lưu trạng thái cũ trước khi thay đổi
             old_state = _get_current_lead_state(db_lead)
 
+            # ✅ BIDIRECTIONAL SYNC: Capture old personal info for Lead → Profile sync
+            old_personal_info = {
+                "full_name": db_lead.full_name,
+                "phone": db_lead.phone,
+                "email": db_lead.email,
+            }
+
             # Lấy dữ liệu cập nhật từ schema Pydantic
             update_data = lead_in.model_dump(exclude_unset=True)
 
@@ -1132,6 +1140,31 @@ async def update_lead(
             # Especially important when lead_score changes (affects is_hot_lead)
             from app.services import lead_cache_service
             await lead_cache_service.update_lead_cache(db, lead_id, db_lead)
+
+            # ✅ BIDIRECTIONAL SYNC: Sync personal info from Lead → AdmissionProfile
+            # Only syncs to profiles in editable states (draft, submitted)
+            new_personal_info = {
+                "full_name": db_lead.full_name,
+                "phone": db_lead.phone,
+                "email": db_lead.email,
+            }
+            changed_personal_fields = detect_changed_personal_fields(
+                old_personal_info, new_personal_info
+            )
+            if changed_personal_fields:
+                synced, synced_profile_ids = await sync_profile_from_lead(
+                    db=db,
+                    lead=db_lead,
+                    changed_fields=changed_personal_fields,
+                    changed_by_user_id=updated_by.id,
+                )
+                if synced:
+                    log.info(
+                        "Personal info synced from Lead to AdmissionProfiles",
+                        lead_id=lead_id,
+                        changed_fields=changed_personal_fields,
+                        synced_profile_ids=synced_profile_ids,
+                    )
 
             log.info("Lead updated successfully within transaction", lead_id=lead_id)
             # Transaction sẽ commit khi ra khỏi `async with db.begin_nested()`
@@ -1618,8 +1651,11 @@ async def get_lead_timeline(db: AsyncSession, lead_id: int) -> List[dict]:
     timeline_items = []
 
     # 3. Xử lý consultations (Dữ liệu đã có sẵn)
+    # ✅ FIX: Filter out soft-deleted consultations
     if lead.consultations:
         for c in lead.consultations:
+            if c.deleted_at is not None:
+                continue  # Skip soft-deleted consultations
             # ❌ KHÔNG CẦN: await db.refresh(c, ["officer", "consultation_status"])
             timeline_items.append(
                 schemas.TimelineItem(
@@ -1674,15 +1710,19 @@ async def delete_consultation(
 
             # Lấy Consultation cần xóa với row-level lock
             # ✅ FIX: Use FOR UPDATE to prevent concurrent modification
+            # ✅ FIX: Filter out already soft-deleted consultations
             consultation_result = await db.execute(
                 select(models.Consultation)
-                .where(models.Consultation.id == consultation_id)
+                .where(
+                    models.Consultation.id == consultation_id,
+                    models.Consultation.deleted_at.is_(None),  # Not already deleted
+                )
                 .with_for_update()
             )
             consultation = consultation_result.scalar_one_or_none()
             if not consultation:
                 raise ResourceNotFoundError(
-                    detail=f"Consultation with id {consultation_id} not found."
+                    detail=f"Consultation with id {consultation_id} not found or already deleted."
                 )
             # Kiểm tra consultation thuộc đúng Lead
             if consultation.lead_id != lead_id:
@@ -1718,10 +1758,17 @@ async def delete_consultation(
             # Lưu trạng thái cũ của Lead trước khi xóa consultation
             old_state = _get_current_lead_state(lead)
 
-            # Xóa consultation
-            await db.delete(consultation)
-            await db.flush() # Ensure delete is processed before querying remaining
-            log.info("Consultation marked for deletion", consultation_id=consultation_id)
+            # ✅ FIX: Soft delete thay vì hard delete
+            # Giữ audit trail, có thể restore nếu xóa nhầm
+            consultation.deleted_at = datetime.now(timezone.utc)
+            await db.flush()  # Ensure soft delete is processed before querying remaining
+            log.info(
+                "Consultation soft-deleted",
+                consultation_id=consultation_id,
+                lead_id=lead_id,
+                deleted_by=current_user.id,
+                deleted_at=consultation.deleted_at.isoformat(),
+            )
 
             # Tìm consultation gần nhất còn lại để cập nhật trạng thái Lead
             # ✅ REFACTORED: Use LeadRepository

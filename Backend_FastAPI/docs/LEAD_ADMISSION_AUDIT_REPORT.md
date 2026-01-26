@@ -945,9 +945,9 @@ Step 9: Enroll Student
 
 | # | Issue | Impact | File/Location | Effort |
 |---|-------|--------|---------------|--------|
-| 1 | **Admission Profile tạo được khi chưa có Consultation** | Bypass workflow, data không đầy đủ | `admission_service.create_profile()` | 2h |
-| 2 | **Data không sync giữa Lead và Admission Profile** | Email/phone sai, magic link gửi sai | Architecture decision | 4h |
-| 3 | **Consultation delete dùng hard delete** | Mất audit trail, không restore được | `lead_service.delete_consultation()` | 1h |
+| 1 | **Admission Profile tạo được khi chưa có Consultation** | Bypass workflow, data không đầy đủ | `admission_service.create_profile()` | 2h | Đã Fixed, cần kiểm tra lại
+| 2 | **Data không sync giữa Lead và Admission Profile** | Email/phone sai, magic link gửi sai | Architecture decision | 4h | Đã Fixed, cần kiểm tra lại
+| 3 | **Consultation delete dùng hard delete** | Mất audit trail, không restore được | `lead_service.delete_consultation()` | 1h | Đã Fixed, cần kiểm tra lại
 | 4 | **Document upload/delete không có audit log** | Compliance risk | Toàn bộ document workflow | 4h |
 | 5 | **CCCD hiển thị đầy đủ, không mask** | Privacy/security risk | Frontend display | 1h |
 
@@ -955,7 +955,7 @@ Step 9: Enroll Student
 
 | # | Issue | Impact | Priority |
 |---|-------|--------|----------|
-| 1 | Lead status không auto-sync với Admission status | Inconsistent reporting | HIGH |
+| 1 | Lead status không auto-sync với Admission status | Inconsistent reporting | HIGH | Đã Fixed, cần kiểm tra lại
 | 2 | Không có status DEFERRED, DECLINED, LOCKED | Không cover real-world scenarios | MEDIUM |
 | 3 | Terminal status guard chỉ log warning, không hard block | Potential state corruption | MEDIUM |
 | 4 | Missing composite indexes cho common queries | Performance degradation at scale | MEDIUM |

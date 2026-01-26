@@ -1174,6 +1174,15 @@ async def create_profile(
     # Calculate totals for response
     _calculate_and_update_totals(new_profile)
 
+    # ✅ SYNC: Update lead consultation status to match admission status
+    from .lead_admission_sync import sync_lead_from_admission
+    await sync_lead_from_admission(
+        db=db,
+        profile=new_profile,
+        changed_by_user_id=current_user.id,
+        reason="Admission profile created",
+    )
+
     log.info(
         "Admission profile created (relational flow)",
         profile_id=new_profile.id,
@@ -2573,6 +2582,15 @@ async def enroll_student(
             )
 
             await db.flush()
+
+            # ✅ SYNC: Update lead consultation status to match admission status (enrolled → sts11)
+            from .lead_admission_sync import sync_lead_from_admission
+            await sync_lead_from_admission(
+                db=db,
+                profile=profile,
+                changed_by_user_id=current_user.id,
+                reason="Student enrolled successfully",
+            )
             # Savepoint auto-commits here if no errors
 
         log.info(
@@ -2726,6 +2744,15 @@ async def approve_profile(
 
     await db.flush()  # Flush, don't commit! Router commits.
 
+    # ✅ SYNC: Update lead consultation status to match admission status (approved → sts09)
+    from .lead_admission_sync import sync_lead_from_admission
+    await sync_lead_from_admission(
+        db=db,
+        profile=profile,
+        changed_by_user_id=approver.id,
+        reason="Admission profile approved",
+    )
+
     log.info(
         "Admission profile approved",
         profile_id=profile.id,
@@ -2846,6 +2873,15 @@ async def reject_profile(
         )
 
     await db.flush()
+
+    # ✅ SYNC: Update lead consultation status to match admission status (rejected → sts16)
+    from .lead_admission_sync import sync_lead_from_admission
+    await sync_lead_from_admission(
+        db=db,
+        profile=profile,
+        changed_by_user_id=rejector.id,
+        reason=f"Admission profile rejected: {data['reason'][:50]}",
+    )
 
     log.info(
         "Admission profile rejected",
