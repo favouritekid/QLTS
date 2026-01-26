@@ -896,14 +896,31 @@ async def create_profile(
             f"Lead must be in active pipeline (new, assigned, contacted, qualified)."
         )
 
-    # Warn if lead status is "new" (hasn't been contacted yet)
-    if lead.status == "new":
+    # ✅ GAP #1 FIX: Require at least 1 consultation before admission profile
+    # This enforces the business workflow: Lead → Consultation → Admission
+    if lead.consultation_count is None or lead.consultation_count < 1:
         log.warning(
-            "Creating admission profile for uncontacted lead (status=new)",
+            "Attempt to create admission profile for lead without consultations",
+            lead_id=lead_id,
+            consultation_count=lead.consultation_count,
+            user_id=current_user.id,
+        )
+        raise BusinessRuleViolation(
+            "Cannot create admission profile: Lead must have at least 1 consultation record. "
+            "Please add a consultation before creating an admission profile."
+        )
+
+    # Additional check: Lead must have been contacted (has consultation_status)
+    if lead.consultation_status_id is None:
+        log.warning(
+            "Attempt to create admission profile for lead without consultation status",
             lead_id=lead_id,
             user_id=current_user.id,
         )
-        # Allow but log - might be valid for self-service admission
+        raise BusinessRuleViolation(
+            "Cannot create admission profile: Lead has not been contacted yet. "
+            "Please update lead status through consultation before creating admission profile."
+        )
 
     # Step 5: Validate offering exists
     if not lead.offering:
