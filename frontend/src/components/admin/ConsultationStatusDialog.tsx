@@ -42,6 +42,8 @@ import type {
   ConsultationStatusCreate,
   ConsultationStatusUpdate,
   OutcomeType,
+  StatusType,
+  SelectableMode,
 } from "@/types/pipeline.types";
 import { Checkbox as ShadcnCheckbox } from "@/components/ui/checkbox";
 import {
@@ -72,15 +74,24 @@ const statusFormSchema = z.object({
     .string()
     .min(1, "Màu sắc là bắt buộc")
     .regex(/^#[0-9A-Fa-f]{6}$/, "Màu phải là mã hex hợp lệ (VD: #FF5733)"),
-  stage_id: z.string().min(1, "Giai đoạn là bắt buộc"),
+  // ✅ FSM v3.0: stage_id is optional (NULL for universal statuses)
+  stage_id: z.string().nullable().optional(),
   outcome_type: z.enum(["positive", "neutral", "negative"]),
-  is_final_status: z.boolean(),
+  // ✅ FSM v3.0: is_final replaces is_final_status
+  is_final: z.boolean(),
   legacy_status: z.string().nullable().optional(),
-  // ✅ Universal status support (Phase 1 - Option B)
+  // ✅ Universal status support
   is_universal: z.boolean(),
   updates_pipeline: z.boolean(),
-  // ✅ KPI counting flag
-  counts_for_kpi: z.boolean(),
+  // ✅ FSM v3.0: counts_for_funnel replaces counts_for_kpi
+  counts_for_funnel: z.boolean(),
+  // ✅ FSM v3.0: New fields
+  code: z.string().nullable().optional(),
+  status_type: z.enum(["transition", "activity", "system"]),
+  selectable_mode: z.enum(["user", "role", "system"]),
+  phase: z.string().min(1, "Phase là bắt buộc"),
+  description: z.string().nullable().optional(),
+  display_order: z.number().min(0),
 });
 
 type StatusFormValues = z.infer<typeof statusFormSchema>;
@@ -122,15 +133,23 @@ export function ConsultationStatusDialog({
       id: "",
       name: "",
       color_code: DEFAULT_STATUS_COLOR,
-      stage_id: "",
+      stage_id: null,
       outcome_type: "neutral",
-      is_final_status: false,
+      // ✅ FSM v3.0: is_final replaces is_final_status
+      is_final: false,
       legacy_status: null,
       // ✅ Universal status defaults
       is_universal: false,
       updates_pipeline: true,
-      // ✅ KPI counting default
-      counts_for_kpi: true,
+      // ✅ FSM v3.0: counts_for_funnel replaces counts_for_kpi
+      counts_for_funnel: true,
+      // ✅ FSM v3.0: New field defaults
+      code: null,
+      status_type: "transition",
+      selectable_mode: "user",
+      phase: "consultation",
+      description: null,
+      display_order: 0,
     },
   });
 
@@ -142,30 +161,43 @@ export function ConsultationStatusDialog({
           id: status.id,
           name: status.name,
           color_code: status.color_code,
-          stage_id: status.stage_id,
+          stage_id: status.stage_id || null,
           outcome_type: status.outcome_type || "neutral",
-          is_final_status: status.is_final_status || false,
+          // ✅ FSM v3.0: is_final with fallback to is_final_status
+          is_final: status.is_final ?? status.is_final_status ?? false,
           legacy_status: status.legacy_status || null,
           // ✅ Universal status fields
           is_universal: status.is_universal ?? false,
           updates_pipeline: status.updates_pipeline ?? true,
-          // ✅ KPI counting field
-          counts_for_kpi: status.counts_for_kpi ?? true,
+          // ✅ FSM v3.0: counts_for_funnel with fallback to counts_for_kpi
+          counts_for_funnel: status.counts_for_funnel ?? status.counts_for_kpi ?? true,
+          // ✅ FSM v3.0: New fields
+          code: status.code || null,
+          status_type: status.status_type || "transition",
+          selectable_mode: status.selectable_mode || "user",
+          phase: status.phase || "consultation",
+          description: status.description || null,
+          display_order: status.display_order ?? 0,
         });
       } else {
         form.reset({
           id: "",
           name: "",
           color_code: DEFAULT_STATUS_COLOR,
-          stage_id: "",
+          stage_id: null,
           outcome_type: "neutral",
-          is_final_status: false,
+          // ✅ FSM v3.0 defaults for create mode
+          is_final: false,
           legacy_status: null,
-          // ✅ Universal status defaults for create mode
           is_universal: false,
           updates_pipeline: true,
-          // ✅ KPI counting default for create mode
-          counts_for_kpi: true,
+          counts_for_funnel: true,
+          code: null,
+          status_type: "transition",
+          selectable_mode: "user",
+          phase: "consultation",
+          description: null,
+          display_order: 0,
         });
       }
     }
@@ -174,37 +206,36 @@ export function ConsultationStatusDialog({
   // Handle form submission
   const onSubmit = async (values: StatusFormValues) => {
     try {
+      // ✅ FSM v3.0: Build payload with all fields
+      const payload = {
+        name: values.name,
+        color_code: values.color_code,
+        stage_id: values.is_universal ? null : (values.stage_id || null),
+        outcome_type: values.outcome_type as OutcomeType,
+        // ✅ FSM v3.0: New field names
+        is_final: values.is_final,
+        legacy_status: values.legacy_status || null,
+        is_universal: values.is_universal,
+        updates_pipeline: values.updates_pipeline,
+        counts_for_funnel: values.counts_for_funnel,
+        // ✅ FSM v3.0: New fields
+        code: values.code || null,
+        status_type: values.status_type as StatusType,
+        selectable_mode: values.selectable_mode as SelectableMode,
+        phase: values.is_universal ? "universal" : values.phase,
+        description: values.description || null,
+        display_order: values.display_order,
+      };
+
       if (isEditMode && status) {
         await updateMutation.mutateAsync({
           id: status.id,
-          data: {
-            name: values.name,
-            color_code: values.color_code,
-            stage_id: values.stage_id,
-            outcome_type: values.outcome_type as OutcomeType,
-            is_final_status: values.is_final_status,
-            legacy_status: values.legacy_status || null,
-            // ✅ Universal status fields
-            is_universal: values.is_universal,
-            updates_pipeline: values.updates_pipeline,
-            // ✅ KPI counting field
-            counts_for_kpi: values.counts_for_kpi,
-          } as ConsultationStatusUpdate,
+          data: payload as ConsultationStatusUpdate,
         });
       } else {
         await createMutation.mutateAsync({
           id: values.id,
-          name: values.name,
-          color_code: values.color_code,
-          stage_id: values.stage_id,
-          outcome_type: values.outcome_type as OutcomeType,
-          is_final_status: values.is_final_status,
-          legacy_status: values.legacy_status || null,
-          // ✅ Universal status fields
-          is_universal: values.is_universal,
-          updates_pipeline: values.updates_pipeline,
-          // ✅ KPI counting field
-          counts_for_kpi: values.counts_for_kpi,
+          ...payload,
         } as ConsultationStatusCreate);
       }
 
@@ -276,48 +307,50 @@ export function ConsultationStatusDialog({
               )}
             />
 
-            {/* Stage Field */}
-            <FormField
-              control={form.control}
-              name="stage_id"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>
-                    Giai đoạn Pipeline <span className="text-red-500">*</span>
-                  </FormLabel>
-                  <Select
-                    onValueChange={field.onChange}
-                    value={field.value}
-                    disabled={isSubmitting || stagesLoading}
-                  >
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Chọn giai đoạn" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {stagesLoading ? (
-                        <SelectItem value="loading" disabled>
-                          Đang tải...
-                        </SelectItem>
-                      ) : stages.length === 0 ? (
-                        <SelectItem value="empty" disabled>
-                          Không có giai đoạn nào
-                        </SelectItem>
-                      ) : (
-                        stages.map((stage) => (
-                          <SelectItem key={stage.id} value={stage.id}>
-                            {stage.name}
+            {/* Stage Field - Hidden when Universal */}
+            {!form.watch("is_universal") && (
+              <FormField
+                control={form.control}
+                name="stage_id"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      Giai đoạn Pipeline <span className="text-red-500">*</span>
+                    </FormLabel>
+                    <Select
+                      onValueChange={field.onChange}
+                      value={field.value || ""}
+                      disabled={isSubmitting || stagesLoading}
+                    >
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Chọn giai đoạn" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {stagesLoading ? (
+                          <SelectItem value="loading" disabled>
+                            Đang tải...
                           </SelectItem>
-                        ))
-                      )}
-                    </SelectContent>
-                  </Select>
-                  <FormDescription>Trạng thái này thuộc giai đoạn pipeline nào</FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+                        ) : stages.length === 0 ? (
+                          <SelectItem value="empty" disabled>
+                            Không có giai đoạn nào
+                          </SelectItem>
+                        ) : (
+                          stages.map((stage) => (
+                            <SelectItem key={stage.id} value={stage.id}>
+                              {stage.name}
+                            </SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
+                    <FormDescription>Trạng thái này thuộc giai đoạn pipeline nào</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
             {/* Color Field */}
             <FormField
@@ -409,10 +442,10 @@ export function ConsultationStatusDialog({
               )}
             />
 
-            {/* Is Final Status Field */}
+            {/* Is Final Field (FSM v3.0) */}
             <FormField
               control={form.control}
-              name="is_final_status"
+              name="is_final"
               render={({ field }) => (
                 <FormItem className="flex flex-row items-start space-y-0 space-x-3 rounded-md border p-4">
                   <FormControl>
@@ -472,19 +505,19 @@ export function ConsultationStatusDialog({
               )}
             />
 
-            {/* ✅ Counts for KPI Field */}
+            {/* ✅ FSM v3.0: Counts for Funnel Field */}
             <FormField
               control={form.control}
-              name="counts_for_kpi"
+              name="counts_for_funnel"
               render={({ field }) => (
                 <FormItem className="flex flex-row items-start space-y-0 space-x-3 rounded-md border p-4 bg-green-50 border-green-200">
                   <FormControl>
                     <ShadcnCheckbox checked={field.value} onCheckedChange={field.onChange} />
                   </FormControl>
                   <div className="space-y-1 leading-none">
-                    <FormLabel>Đếm vào KPI Nhập học</FormLabel>
+                    <FormLabel>Đếm vào Funnel Analytics</FormLabel>
                     <FormDescription>
-                      Bỏ tích nếu status KHÔNG được đếm vào chỉ tiêu nhập học (VD: &quot;Đã rút
+                      Bỏ tích nếu status KHÔNG được đếm vào funnel analytics (VD: &quot;Đã rút
                       lại học phí&quot; - thí sinh đã hoàn tiền nên không tính là nhập học).
                     </FormDescription>
                   </div>
@@ -528,6 +561,196 @@ export function ConsultationStatusDialog({
                 </FormItem>
               )}
             />
+
+            {/* ============================================================= */}
+            {/* FSM v3.0 FIELDS */}
+            {/* ============================================================= */}
+
+            <div className="border-t pt-4 mt-4">
+              <h4 className="font-medium text-sm text-muted-foreground mb-4">
+                FSM v3.0 Configuration
+              </h4>
+
+              {/* Code Field */}
+              <FormField
+                control={form.control}
+                name="code"
+                render={({ field }) => (
+                  <FormItem className="mb-4">
+                    <FormLabel>Code (Machine-readable)</FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder="VD: NOT_CONTACTED, ENROLLED"
+                        {...field}
+                        value={field.value || ""}
+                        disabled={isSubmitting}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      Mã máy đọc được cho status (uppercase, underscore). Dùng trong FSM engine.
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {/* Phase Field - Hidden when Universal */}
+              {!form.watch("is_universal") && (
+                <FormField
+                  control={form.control}
+                  name="phase"
+                  render={({ field }) => (
+                    <FormItem className="mb-4">
+                      <FormLabel>
+                        Phase <span className="text-red-500">*</span>
+                      </FormLabel>
+                      <Select
+                        onValueChange={field.onChange}
+                        value={field.value}
+                        disabled={isSubmitting}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Chọn phase" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="consultation">Consultation (Tư vấn)</SelectItem>
+                          <SelectItem value="admission">Admission (Hồ sơ)</SelectItem>
+                          <SelectItem value="fee">Fee (Học phí)</SelectItem>
+                          <SelectItem value="enrolled">Enrolled (Nhập học)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FormDescription>
+                        Phase trong workflow. Lead phải có admission_profile phù hợp để chuyển phase.
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
+
+              {/* Status Type Field */}
+              <FormField
+                control={form.control}
+                name="status_type"
+                render={({ field }) => (
+                  <FormItem className="mb-4">
+                    <FormLabel>
+                      Status Type <span className="text-red-500">*</span>
+                    </FormLabel>
+                    <Select
+                      onValueChange={field.onChange}
+                      value={field.value}
+                      disabled={isSubmitting}
+                    >
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Chọn loại status" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="transition">
+                          Transition - Status workflow thường
+                        </SelectItem>
+                        <SelectItem value="activity">
+                          Activity - Ghi nhận hoạt động, không ảnh hưởng workflow
+                        </SelectItem>
+                        <SelectItem value="system">
+                          System - Chỉ hệ thống thay đổi, không hiển thị cho user
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormDescription>
+                      Loại status: transition (workflow), activity (ghi nhận), system (tự động)
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {/* Selectable Mode Field */}
+              <FormField
+                control={form.control}
+                name="selectable_mode"
+                render={({ field }) => (
+                  <FormItem className="mb-4">
+                    <FormLabel>
+                      Selectable Mode <span className="text-red-500">*</span>
+                    </FormLabel>
+                    <Select
+                      onValueChange={field.onChange}
+                      value={field.value}
+                      disabled={isSubmitting}
+                    >
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Chọn quyền chọn" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="user">User - Mọi user có thể chọn</SelectItem>
+                        <SelectItem value="role">Role - Chỉ Manager/Admin chọn được</SelectItem>
+                        <SelectItem value="system">System - Không hiển thị trong UI</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormDescription>
+                      Ai có thể chọn status này trong UI
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {/* Display Order Field */}
+              <FormField
+                control={form.control}
+                name="display_order"
+                render={({ field }) => (
+                  <FormItem className="mb-4">
+                    <FormLabel>Display Order</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="number"
+                        min={0}
+                        placeholder="0"
+                        {...field}
+                        value={field.value}
+                        onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}
+                        disabled={isSubmitting}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      Thứ tự hiển thị trong danh sách (số nhỏ hơn hiển thị trước)
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {/* Description Field */}
+              <FormField
+                control={form.control}
+                name="description"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Description</FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder="Mô tả chi tiết về status này..."
+                        {...field}
+                        value={field.value || ""}
+                        disabled={isSubmitting}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      Mô tả chi tiết về ý nghĩa và cách sử dụng status
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
 
             <DialogFooter>
               <Button

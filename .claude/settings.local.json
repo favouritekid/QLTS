@@ -16,7 +16,8 @@
       "Bash(awk:*)",
       "Bash(tail:*)",
       "Bash(alembic revision:*)",
-      "Bash(wslpath:*)"
+      "Bash(wslpath:*)",
+      "Bash(sort:*)"
     ]
   }
 }

@@ -1,17 +1,16 @@
 """add FSM fields to allowed_transitions
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: fsm20260125001
 Revises: z6c7d8e9f0g1
-Create Date: 2026-01-25 14:00:00.000000
+Create Date: 2026-01-25 16:00:00.000000
 
 """
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision = 'a1b2c3d4e5f6'
-down_revision = 'z6c7d8e9f0g1'
+revision = 'fsm20260125001'
+down_revision = 'd5e6f7a8b9c0'
 branch_labels = None
 depends_on = None
 
@@ -26,6 +25,10 @@ def upgrade():
     - is_active: Whether this transition is currently enabled
     - description: Human-readable description
     """
+    # Create TriggerTypeEnum explicitly
+    # Use execute to ensure it works on Postgres
+    op.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'trigger_type_enum') THEN CREATE TYPE trigger_type_enum AS ENUM ('user', 'role', 'system', 'event'); END IF; END $$;")
+
     # Add trigger_type column (enum)
     op.add_column('allowed_transitions',
         sa.Column('trigger_type',
@@ -83,3 +86,6 @@ def downgrade():
     op.drop_column('allowed_transitions', 'is_active')
     op.drop_column('allowed_transitions', 'required_phase')
     op.drop_column('allowed_transitions', 'trigger_type')
+
+    # Drop Enum type
+    op.execute("DROP TYPE IF EXISTS trigger_type_enum")

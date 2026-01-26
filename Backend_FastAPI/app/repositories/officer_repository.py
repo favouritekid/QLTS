@@ -291,7 +291,7 @@ class OfficerRepository(BaseRepository[models.User]):
             if date_str in trends:
                 trends[date_str].assigned = row.count
         
-        # Query 2: Consultations per day
+        # Query 2: Consultations per day (exclude soft-deleted)
         consult_query = (
             select(
                 func.date(models.Consultation.consultation_date).label("day"),
@@ -302,7 +302,8 @@ class OfficerRepository(BaseRepository[models.User]):
                 models.Consultation.officer_id == officer_id,
                 func.date(models.Consultation.consultation_date) >= start_date,
                 func.date(models.Consultation.consultation_date) <= end_date,
-                models.Lead.deleted_at.is_(None)
+                models.Lead.deleted_at.is_(None),
+                models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
             )
             .group_by(func.date(models.Consultation.consultation_date))
         )
@@ -373,7 +374,8 @@ class OfficerRepository(BaseRepository[models.User]):
                 models.Consultation.officer_id == officer_id,
                 func.date(models.Consultation.consultation_date) >= start_date,
                 func.date(models.Consultation.consultation_date) <= end_date,
-                models.Lead.deleted_at.is_(None)
+                models.Lead.deleted_at.is_(None),
+                models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
             )
         )
         consult_result = await self.db.execute(consult_query)
@@ -578,6 +580,7 @@ class OfficerRepository(BaseRepository[models.User]):
                 models.User.status == "active",
                 func.date(models.Consultation.consultation_date) >= week_start,
                 func.date(models.Consultation.consultation_date) <= week_end,
+                models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
             )
             .group_by(models.User.id, models.User.username, models.User.full_name)
             .order_by(func.count(models.Consultation.id).desc())
@@ -593,7 +596,7 @@ class OfficerRepository(BaseRepository[models.User]):
         week_end: date,
     ) -> int:
         """Get officer's rank based on consultation count."""
-        # Subquery to count consultations per officer
+        # Subquery to count consultations per officer (exclude soft-deleted)
         subq = (
             select(
                 models.Consultation.officer_id,
@@ -602,17 +605,19 @@ class OfficerRepository(BaseRepository[models.User]):
             .where(
                 func.date(models.Consultation.consultation_date) >= week_start,
                 func.date(models.Consultation.consultation_date) <= week_end,
+                models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
             )
             .group_by(models.Consultation.officer_id)
         ).subquery()
-        
-        # Count how many have more consultations
+
+        # Count how many have more consultations (exclude soft-deleted)
         my_count_query = (
             select(func.count(models.Consultation.id))
             .where(
                 models.Consultation.officer_id == officer_id,
                 func.date(models.Consultation.consultation_date) >= week_start,
                 func.date(models.Consultation.consultation_date) <= week_end,
+                models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
             )
         )
         my_count = (await self.db.execute(my_count_query)).scalar() or 0
@@ -661,11 +666,12 @@ class OfficerRepository(BaseRepository[models.User]):
         officer_count = (await self.db.execute(officer_count_query)).scalar() or 1
         
         # Total consultations
-        # JOIN with Lead to filter soft-deleted leads
+        # JOIN with Lead to filter soft-deleted leads and consultations
         consult_conditions = [
             func.date(models.Consultation.consultation_date) >= start_date,
             func.date(models.Consultation.consultation_date) <= end_date,
-            models.Lead.deleted_at.is_(None) # Exclude consultations of deleted leads
+            models.Lead.deleted_at.is_(None),  # Exclude consultations of deleted leads
+            models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
         ]
         
         if unit_id:
@@ -775,7 +781,7 @@ class OfficerRepository(BaseRepository[models.User]):
         """
         today = datetime.now(timezone.utc).date()
         
-        # Query 1: Consultations (batch)
+        # Query 1: Consultations (batch, exclude soft-deleted)
         consult_query = (
             select(
                 func.count(models.Consultation.id).label("range_count"),
@@ -788,7 +794,8 @@ class OfficerRepository(BaseRepository[models.User]):
                 models.Consultation.officer_id.in_(officer_ids),
                 func.date(models.Consultation.consultation_date) >= start_date,
                 func.date(models.Consultation.consultation_date) <= end_date,
-                models.Lead.deleted_at.is_(None)
+                models.Lead.deleted_at.is_(None),
+                models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
             )
         )
         consult_result = await self.db.execute(consult_query)
@@ -910,6 +917,7 @@ class OfficerRepository(BaseRepository[models.User]):
                     models.Consultation.officer_id == models.User.id,
                     func.date(models.Consultation.consultation_date) >= start_date,
                     func.date(models.Consultation.consultation_date) <= end_date,
+                    models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
                 )
             )
             .where(models.User.id.in_(officer_ids))
@@ -952,6 +960,7 @@ class OfficerRepository(BaseRepository[models.User]):
                     models.Consultation.officer_id == models.User.id,
                     func.date(models.Consultation.consultation_date) >= week_start,
                     func.date(models.Consultation.consultation_date) <= week_end,
+                    models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
                 )
             )
             .where(

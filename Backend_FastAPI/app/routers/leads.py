@@ -312,9 +312,14 @@ async def delete_lead(
 
     **Permission:** Admin only (enforced by Casbin)
 
+    **Business Rules:**
+    - Cannot delete leads that have an admission profile
+    - Must cancel/delete admission profile first before deleting lead
+
     **Status Code:** 204 No Content on success
 
     **Raises:**
+    - 400 Bad Request: If lead has an admission profile (cannot be deleted)
     - 404 Not Found: If lead doesn't exist or already deleted
     - 403 Forbidden: If user doesn't have admin permission
     """
@@ -341,6 +346,44 @@ async def delete_lead(
         log.warning("Failed to dispatch lead deletion notification", error=str(e))
 
     return None
+
+
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.post("/{lead_id}/restore", response_model=schemas.Lead)
+async def restore_lead(
+    request: Request,
+    lead_id: int,
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    (Admin only) Restore a soft-deleted Lead and its related consultations.
+
+    Clears deleted_at timestamp to restore the lead and all consultations
+    that were deleted at the same time.
+
+    **Permission:** Admin only (enforced by Casbin)
+
+    **Business Rules:**
+    - Only restores leads that were previously soft-deleted
+    - Automatically restores related consultations deleted at the same time
+    - Restored lead status is reset to 'new'
+
+    **Raises:**
+    - 400 Bad Request: If lead is not deleted (cannot restore active lead)
+    - 404 Not Found: If lead doesn't exist
+    - 403 Forbidden: If user doesn't have admin permission
+    """
+    restored_lead = await lead_service.restore_lead(db, lead_id, restored_by=current_user)
+    await db.commit()
+
+    log.info(
+        "Lead restored via API",
+        lead_id=lead_id,
+        restored_by_user_id=current_user.id
+    )
+
+    return restored_lead
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
@@ -1051,8 +1094,14 @@ async def bulk_delete_leads(
     ```json
     {"lead_ids": [1, 2, 3]}
     ```
+
+    **Response:**
+    - deleted_count: Number of successfully deleted leads
+    - skipped: List of lead IDs that couldn't be deleted (with reasons)
     """
     deleted_count = 0
+    skipped = []
+
     for lead_id in bulk_data.lead_ids:
         try:
             deleted_lead = await lead_service.delete_lead(db, lead_id, deleted_by=current_user)
@@ -1060,9 +1109,14 @@ async def bulk_delete_leads(
                 deleted_count += 1
         except Exception as e:
             log.warning(f"Failed to delete lead {lead_id}: {e}")
+            skipped.append({"lead_id": lead_id, "reason": str(e)})
 
     await db.commit()
-    return {"message": f"Deleted {deleted_count} leads", "deleted_count": deleted_count}
+    return {
+        "message": f"Deleted {deleted_count} leads",
+        "deleted_count": deleted_count,
+        "skipped": skipped
+    }
 
 
 @limiter.limit(RateLimits.DATA_WRITE)  # 200/hour

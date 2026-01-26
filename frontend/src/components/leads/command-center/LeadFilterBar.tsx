@@ -39,6 +39,7 @@ import { useAllProgramOfferings } from "@/hooks/useOrganization";
 import { useAdminUsersList } from "@/hooks/useAdminUsers";
 import { STAGE_COLORS } from "@/types/pipeline.types";
 import { useAuth } from "@/hooks/useAuth";
+import { isAdmin as checkIsAdmin, canFilterByOfficer as checkCanFilterByOfficer } from "@/lib/utils/permissions";
 import { MultiOfferingSelector } from "@/components/common/selectors";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -196,9 +197,9 @@ export function LeadFilterBar({
   const [isMounted, setIsMounted] = React.useState(false);
   React.useEffect(() => { setIsMounted(true); }, []);
 
-  const isAdmin = isMounted && user?.role === "admin";
-  const isManager = isMounted && user?.role === "manager";
-  const canFilterByOfficer = isAdmin || isManager;
+  // ✅ SECURITY: Use centralized permission utility (UX only - backend enforces)
+  const isAdminFlag = isMounted && checkIsAdmin(user);
+  const canFilterByOfficerFlag = isMounted && checkCanFilterByOfficer(user);
 
   // Collapsible filter pills state
   const [isFiltersExpanded, setIsFiltersExpanded] = React.useState(false);
@@ -314,7 +315,7 @@ export function LeadFilterBar({
         {/* Filter Dropdowns */}
         <div className="flex items-center gap-2">
           {/* Status Filter - Admin only */}
-          {isAdmin && (
+          {isAdminFlag && (
             <FilterDropdown label="Trạng thái" count={statusFilters.length}>
               <div className="space-y-2">
                 {LEAD_STATUS_OPTIONS.map((option) => (
@@ -392,7 +393,7 @@ export function LeadFilterBar({
           </FilterDropdown>
 
           {/* Officer Filter - Admin/Manager only */}
-          {canFilterByOfficer && (
+          {canFilterByOfficerFlag && (
             <FilterDropdown label="Cán bộ" count={officerFilters.length}>
               <div className="max-h-48 space-y-2 overflow-y-auto">
                 {officers.map((officer) => (

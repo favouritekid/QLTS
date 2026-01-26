@@ -36,6 +36,62 @@ export const leadsKeys = {
 };
 
 // =====================================================================
+// QUERY INVALIDATION HELPERS
+// =====================================================================
+
+/**
+ * Invalidate lead-related queries with optimized batching.
+ * Only invalidates pipeline when a status-changing operation is performed.
+ *
+ * @param queryClient - React Query client
+ * @param leadId - ID of the lead to invalidate
+ * @param options - Control which queries to invalidate
+ */
+type InvalidationOptions = {
+  detail?: boolean;
+  timeline?: boolean;
+  insights?: boolean;
+  lists?: boolean;
+  pipeline?: boolean;
+};
+
+const invalidateLeadQueries = (
+  queryClient: ReturnType<typeof useQueryClient>,
+  leadId: number,
+  options: InvalidationOptions = {}
+) => {
+  const { detail = true, timeline = false, insights = false, lists = false, pipeline = false } = options;
+
+  // Batch invalidations for better performance
+  const invalidations: Promise<void>[] = [];
+
+  if (detail) {
+    invalidations.push(queryClient.invalidateQueries({ queryKey: leadsKeys.detail(leadId) }));
+  }
+  if (timeline) {
+    invalidations.push(queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(leadId) }));
+  }
+  if (insights) {
+    invalidations.push(queryClient.invalidateQueries({ queryKey: leadsKeys.insights(leadId) }));
+  }
+  if (lists) {
+    // Use refetchType: 'active' to only refetch visible queries
+    invalidations.push(queryClient.invalidateQueries({
+      queryKey: leadsKeys.lists(),
+      refetchType: 'active'
+    }));
+  }
+  if (pipeline) {
+    invalidations.push(queryClient.invalidateQueries({
+      queryKey: ["pipeline"],
+      refetchType: 'active'
+    }));
+  }
+
+  return Promise.all(invalidations);
+};
+
+// =====================================================================
 // QUERIES (READ) - LEADS
 // =====================================================================
 
@@ -640,15 +696,18 @@ export function useAddConsultation() {
       return await leadsApi.addConsultation(leadId, data);
     },
 
-    onSuccess: (consultation, { leadId }) => {
+    onSuccess: (_consultation, { leadId }) => {
       toast.success("Consultation added successfully!");
 
-      // Invalidate lead detail, timeline, insights and lists (for LeadCard updates)
-      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(leadId) });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(leadId) });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.insights(leadId) });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+      // ✅ OPTIMIZED: Use helper with targeted invalidations
+      // Consultation always changes status, so invalidate pipeline
+      invalidateLeadQueries(queryClient, leadId, {
+        detail: true,
+        timeline: true,
+        insights: true,
+        lists: true,
+        pipeline: true, // Consultation changes status
+      });
     },
 
     onError: (error) => {
@@ -689,15 +748,19 @@ export function useUpdateConsultation() {
       return await leadsApi.updateConsultation(leadId, consultationId, data);
     },
 
-    onSuccess: (consultation, { leadId }) => {
+    onSuccess: (_consultation, { leadId, data }) => {
       toast.success("Consultation updated successfully!");
 
-      // Invalidate lead detail, timeline, insights and pipeline (if status changed)
-      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(leadId) });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(leadId) });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.insights(leadId) });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+      // ✅ OPTIMIZED: Only invalidate pipeline if status was updated
+      const statusChanged = !!data.status_id;
+
+      invalidateLeadQueries(queryClient, leadId, {
+        detail: true,
+        timeline: true,
+        insights: true,
+        lists: statusChanged, // Only refetch list if status changed
+        pipeline: statusChanged, // Only refetch pipeline if status changed
+      });
     },
 
     onError: (error) => {
@@ -737,10 +800,14 @@ export function useDeleteConsultation() {
     onSuccess: (_, { leadId }) => {
       toast.success("Consultation deleted successfully!");
 
-      // Invalidate lead detail and timeline
-      queryClient.invalidateQueries({ queryKey: leadsKeys.detail(leadId) });
-      queryClient.invalidateQueries({ queryKey: leadsKeys.timeline(leadId) });
-      queryClient.invalidateQueries({ queryKey: ["pipeline"] });
+      // ✅ OPTIMIZED: Deletion may revert status, invalidate pipeline
+      invalidateLeadQueries(queryClient, leadId, {
+        detail: true,
+        timeline: true,
+        insights: true,
+        lists: true,
+        pipeline: true, // Deletion reverts to previous status
+      });
     },
 
     onError: (error) => {

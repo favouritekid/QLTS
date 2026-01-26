@@ -13,6 +13,8 @@ from .. import models, schemas
 from ..config import settings
 from ..utils.exceptions import (
     BadRequest,
+    BusinessRuleViolation,
+    ConflictError,
     DuplicateResourceError,
     PermissionDeniedError,
     ResourceNotFoundError,
@@ -907,6 +909,22 @@ async def update_lead(
                         detail="You are not assigned to this lead."
                     )
 
+            # ✅ OPTIMISTIC LOCKING: Check version if provided
+            if lead_in.version is not None:
+                if db_lead.version != lead_in.version:
+                    log.warning(
+                        "Optimistic lock conflict detected",
+                        lead_id=lead_id,
+                        expected_version=lead_in.version,
+                        current_version=db_lead.version,
+                        updated_by=updated_by.id
+                    )
+                    raise ConflictError(
+                        detail=f"Lead đã được cập nhật bởi người khác. "
+                               f"Vui lòng tải lại và thử lại. "
+                               f"(Version: {lead_in.version} → {db_lead.version})"
+                    )
+
             # Lưu trạng thái cũ trước khi thay đổi
             old_state = _get_current_lead_state(db_lead)
 
@@ -984,7 +1002,8 @@ async def update_lead(
             for key, value in update_data.items():
                 # Xử lý consultation_status_id riêng (processed separately below)
                 # Xử lý offering_id riêng (processed for auto-reassign below)
-                if key not in ["consultation_status_id", "offering_id"]:
+                # Xử lý version riêng (used for optimistic locking check, not direct update)
+                if key not in ["consultation_status_id", "offering_id", "version"]:
                     setattr(db_lead, key, value)
 
             # Recalculate lead score if relevant fields changed
@@ -1093,6 +1112,9 @@ async def update_lead(
             # Lấy trạng thái mới sau khi cập nhật
             new_state = _get_current_lead_state(db_lead)
 
+            # ✅ OPTIMISTIC LOCKING: Increment version
+            db_lead.version = (db_lead.version or 1) + 1
+
             # Thêm đối tượng vào session (đánh dấu là dirty)
             db.add(db_lead)
 
@@ -1117,7 +1139,7 @@ async def update_lead(
         except Exception as e:
             # Rollback tự động xảy ra khi có lỗi trong `async with`
             # Phân biệt giữa lỗi business logic và lỗi hệ thống
-            if isinstance(e, (DuplicateResourceError, ResourceNotFoundError, PermissionDeniedError)):
+            if isinstance(e, (DuplicateResourceError, ResourceNotFoundError, PermissionDeniedError, ConflictError)):
                 # Business logic exceptions - không cần traceback
                 log.warning(
                     "Lead update rejected due to business rule",
@@ -1269,7 +1291,9 @@ async def add_consultation(
                 )
                 
                 if not is_valid:
-                    # Admin có thể bypass rule này
+                    # ✅ SECURITY: Admin can bypass allowed_transitions rules ONLY
+                    # Phase guard (is_status_allowed_for_phase) has ALREADY been checked above
+                    # Admin bypass does NOT skip phase validation - only transition rules
                     is_admin = (officer.role == "admin") if isinstance(officer.role, str) else (officer.role == UserRole.ADMIN)
                     if not is_admin:
                         raise BadRequest(
@@ -1278,7 +1302,23 @@ async def add_consultation(
                                    f"Liên hệ Admin nếu cần bypass."
                         )
                     else:
-                        # Log admin bypass cho audit
+                        # ✅ AUDIT: Double-check phase guard is respected even for admin
+                        # This is redundant (already checked at line 1257) but adds defense-in-depth
+                        if not is_status_allowed_for_phase(current_phase, data.status_id, "admin"):
+                            if data.status_id not in UNIVERSAL_STATUSES:
+                                log.error(
+                                    "SECURITY: Admin attempted phase-violating transition (blocked)",
+                                    admin_id=officer.id,
+                                    lead_id=lead_id,
+                                    current_phase=current_phase.value,
+                                    target_status=data.status_id,
+                                )
+                                raise BadRequest(
+                                    detail=f"Không thể bypass: Status '{new_status.name}' không thuộc phase '{current_phase.value}'. "
+                                           f"Admin bypass chỉ bỏ qua transition rules, không bỏ qua phase guards."
+                                )
+
+                        # Log admin bypass for audit trail
                         log.warning(
                             "Admin bypassed transition rule in add_consultation",
                             admin_id=officer.id,
@@ -1287,8 +1327,9 @@ async def add_consultation(
                             from_status=current_status_id,
                             to_status=data.status_id,
                             to_status_name=new_status.name,
+                            current_phase=current_phase.value,
                             is_universal=new_status.is_universal,
-                            reason="Admin override - no explicit transition rule exists",
+                            reason="Admin override - no explicit transition rule exists but phase guard passed",
                         )
 
 
@@ -1445,6 +1486,13 @@ async def assign_lead_manually(
                 raise PermissionDeniedError(
                     detail=f"Officer with id {officer_id} is not active (status: {officer.status})."
                 )
+
+            # ✅ FIX: Manager can only assign to officers in their unit
+            if assigner.role == UserRole.MANAGER:
+                if officer.unit_id != assigner.unit_id:
+                    raise PermissionDeniedError(
+                        detail="Manager chỉ có thể phân công lead cho officer trong đơn vị của mình."
+                    )
 
             # Lưu trạng thái cũ
             old_state = _get_current_lead_state(lead)
@@ -1624,8 +1672,14 @@ async def delete_consultation(
             if lead.deleted_at is not None:
                 raise BadRequest(detail="Cannot modify consultations for a deleted lead.")
 
-            # Lấy Consultation cần xóa
-            consultation = await db.get(models.Consultation, consultation_id)
+            # Lấy Consultation cần xóa với row-level lock
+            # ✅ FIX: Use FOR UPDATE to prevent concurrent modification
+            consultation_result = await db.execute(
+                select(models.Consultation)
+                .where(models.Consultation.id == consultation_id)
+                .with_for_update()
+            )
+            consultation = consultation_result.scalar_one_or_none()
             if not consultation:
                 raise ResourceNotFoundError(
                     detail=f"Consultation with id {consultation_id} not found."
@@ -1897,9 +1951,73 @@ async def update_consultation(
 
             # Update các trường được cung cấp
             update_data = consultation_in.model_dump(exclude_unset=True)
+
+            # ✅ SECURITY FIX: Validate status_id BEFORE modifying consultation
+            # Prevents creating consultation with invalid/nonexistent status
+            validated_status = None
+            if "status_id" in update_data:
+                new_status_id = update_data["status_id"]
+                validated_status = await db.get(models.ConsultationStatus, new_status_id)
+                if not validated_status:
+                    raise ResourceNotFoundError(
+                        detail=f"Consultation status '{new_status_id}' not found. Cannot update consultation."
+                    )
+
+                # ✅ FIX: Validate workflow transition (consistent with add_consultation)
+                # Only validate if status is actually changing
+                if old_consultation_status_id and old_consultation_status_id != new_status_id:
+                    # Phase-based workflow validation
+                    from app.services.phase_manager import (
+                        derive_phase_from_admission,
+                        is_status_allowed_for_phase,
+                        UNIVERSAL_STATUSES,
+                    )
+                    from app.repositories import AdmissionRepository
+
+                    # Get admission profile to derive phase
+                    admission_repo = AdmissionRepository(db)
+                    admission_profile = await admission_repo.get_profile_by_lead_id(lead_id)
+                    current_phase = derive_phase_from_admission(admission_profile)
+
+                    # Check if new status is allowed in current phase
+                    user_role = current_user.role if isinstance(current_user.role, str) else current_user.role.value
+                    if not is_status_allowed_for_phase(current_phase, new_status_id, user_role):
+                        if new_status_id not in UNIVERSAL_STATUSES:
+                            raise BadRequest(
+                                detail=f"Status '{validated_status.name}' không hợp lệ trong phase '{current_phase.value}'. "
+                                       f"Lead hiện đang ở giai đoạn {current_phase.value.upper()}."
+                            )
+
+                    # Validate allowed transitions
+                    is_valid = await pipeline_service.validate_status_transition(
+                        db,
+                        from_status_id=old_consultation_status_id,
+                        to_status_id=new_status_id
+                    )
+
+                    if not is_valid:
+                        # Admin can bypass transition rules (but not phase guards)
+                        is_admin = (current_user.role == "admin") if isinstance(current_user.role, str) else (current_user.role == UserRole.ADMIN)
+                        if not is_admin:
+                            raise BadRequest(
+                                detail=f"Không thể chuyển trạng thái từ '{old_consultation_status_id}' sang '{new_status_id}'. "
+                                       f"Quy trình không cho phép (Allowed Transitions). "
+                                       f"Liên hệ Admin nếu cần bypass."
+                            )
+                        else:
+                            log.warning(
+                                "Admin bypassed transition rule in update_consultation",
+                                admin_id=current_user.id,
+                                admin_username=current_user.username,
+                                lead_id=lead_id,
+                                consultation_id=consultation_id,
+                                from_status=old_consultation_status_id,
+                                to_status=new_status_id,
+                            )
+
             for field, value in update_data.items():
                 if field == "status_id":
-                    # Đặt consultation_status_id
+                    # Đặt consultation_status_id (already validated above)
                     consultation.consultation_status_id = value
                 else:
                     setattr(consultation, field, value)
@@ -1924,29 +2042,23 @@ async def update_consultation(
                         # Skip status update but continue with consultation update
                     else:
                         # Đây là consultation mới nhất, cập nhật lead status
-                        new_status = await db.get(
-                            models.ConsultationStatus, update_data["status_id"]
-                        )
-                        if new_status:
-                            lead.consultation_status_id = new_status.id
-                            lead.pipeline_stage_id = new_status.stage_id
-                            # ✅ Sync lead.status từ consultation_status (Hybrid Approach)
-                            sync_lead_status_from_consultation(lead, new_status)
-                            db.add(lead)
-                            status_changed = True
+                        # ✅ SECURITY FIX: Status already validated above, use validated_status
+                        # No need for redundant db.get() - status existence is guaranteed
+                        new_status = validated_status  # Reuse from validation above
+                        lead.consultation_status_id = new_status.id
+                        lead.pipeline_stage_id = new_status.stage_id
+                        # ✅ Sync lead.status từ consultation_status (Hybrid Approach)
+                        sync_lead_status_from_consultation(lead, new_status)
+                        db.add(lead)
+                        status_changed = True
 
-                            log.info(
-                                "Lead status updated via consultation update",
-                                lead_id=lead_id,
-                                consultation_id=consultation_id,
-                                old_status=old_consultation_status_id,
-                                new_status=new_status.id,
-                            )
-                        else:
-                            log.warning(
-                                f"Status '{update_data['status_id']}' not found",
-                                lead_id=lead_id,
-                            )
+                        log.info(
+                            "Lead status updated via consultation update",
+                            lead_id=lead_id,
+                            consultation_id=consultation_id,
+                            old_status=old_consultation_status_id,
+                            new_status=new_status.id,
+                        )
 
             # Lấy trạng thái mới sau khi cập nhật
             new_state = _get_current_lead_state(lead)
@@ -2834,6 +2946,13 @@ async def bulk_assign_leads(
     if officer.availability_status != "available":
         raise BadRequest(f"Officer {officer_id} is not available for assignment")
 
+    # ✅ FIX: Manager can only bulk assign to officers in their unit
+    if assigner.role == UserRole.MANAGER:
+        if officer.unit_id != assigner.unit_id:
+            raise PermissionDeniedError(
+                "Manager chỉ có thể phân công lead cho officer trong đơn vị của mình."
+            )
+
     assigned_lead_ids = []
     errors = []
 
@@ -2978,7 +3097,7 @@ async def delete_lead(
     
     try:
         async with db.begin_nested():
-            # Fetch lead (exclude already deleted leads)
+            # Fetch lead with admission_profile relationship
             lead = await get_lead_by_id_shallow(db, lead_id, include_deleted=False)
 
             # Check if lead is already deleted (double-check)
@@ -2987,11 +3106,39 @@ async def delete_lead(
                     detail=f"Lead with id {lead_id} is already deleted"
                 )
 
+            # ✅ FIX: Prevent deletion of leads with admission profiles
+            # Check if lead has an admission profile (indicates enrollment process started)
+            admission_profile_check = await db.execute(
+                select(models.AdmissionProfile.id)
+                .where(models.AdmissionProfile.lead_id == lead_id)
+                .limit(1)
+            )
+            has_admission_profile = admission_profile_check.scalar_one_or_none() is not None
+
+            if has_admission_profile:
+                raise BusinessRuleViolation(
+                    detail="Không thể xóa lead đã có hồ sơ xét tuyển. "
+                           "Vui lòng hủy hồ sơ xét tuyển trước khi xóa lead."
+                )
+
             # Capture old state for history logging
             old_state = _get_current_lead_state(lead)
 
+            # Get current timestamp for atomic soft-delete
+            deleted_timestamp = datetime.now(timezone.utc)
+
+            # ✅ FIX: Soft-delete all related consultations atomically
+            from sqlalchemy import update
+            consultation_update_result = await db.execute(
+                update(models.Consultation)
+                .where(models.Consultation.lead_id == lead_id)
+                .where(models.Consultation.deleted_at.is_(None))
+                .values(deleted_at=deleted_timestamp)
+            )
+            consultations_deleted = consultation_update_result.rowcount
+
             # Set deleted_at timestamp (soft delete)
-            lead.deleted_at = datetime.now(timezone.utc)
+            lead.deleted_at = deleted_timestamp
 
             # Optionally update status to indicate deletion
             lead.status = "deleted"
@@ -3015,6 +3162,7 @@ async def delete_lead(
             log.info(
                 "Lead soft-deleted successfully",
                 lead_id=lead_id,
+                consultations_deleted=consultations_deleted,
                 deleted_by_user_id=deleted_by.id,
                 deleted_by_username=deleted_by.username
             )
@@ -3031,6 +3179,157 @@ async def delete_lead(
             "Failed to delete lead",
             lead_id=lead_id,
             deleted_by_user_id=deleted_by.id,
+            error=str(e),
+            exc_info=True
+        )
+        raise e
+
+
+# =============================================================================
+# RESTORE LEAD (UNDELETE)
+# =============================================================================
+
+async def restore_lead(
+    db: AsyncSession,
+    lead_id: int,
+    restored_by: models.User
+) -> models.Lead:
+    """
+    Restore a soft-deleted Lead and its related consultations (Admin only).
+
+    Business Rules:
+    - Clears deleted_at timestamp to restore the lead
+    - Also restores all consultations that were deleted at the same time
+    - Only Admin can restore leads
+    - Cannot restore leads that are not deleted
+
+    Args:
+        db: Database session
+        lead_id: Lead ID to restore
+        restored_by: User performing the restoration (for audit trail)
+
+    Returns:
+        models.Lead: The restored lead object
+
+    Raises:
+        ResourceNotFoundError: If lead not found
+        BusinessRuleViolation: If lead is not deleted
+        PermissionDeniedError: If user doesn't have permission
+
+    Example:
+        >>> lead = await restore_lead(db, lead_id=123, restored_by=admin_user)
+        >>> print(lead.deleted_at)  # None
+    """
+    # Enforce admin-only at service layer
+    if restored_by.role != UserRole.ADMIN:
+        raise PermissionDeniedError(
+            detail="Only admin can restore leads."
+        )
+
+    try:
+        async with db.begin_nested():
+            # Fetch lead including deleted ones
+            lead = await get_lead_by_id_shallow(db, lead_id, include_deleted=True)
+
+            # Check if lead is actually deleted
+            if lead.deleted_at is None:
+                raise BusinessRuleViolation(
+                    detail=f"Lead with id {lead_id} is not deleted"
+                )
+
+            # ✅ FIX: Check phone/email conflicts before restoring
+            # Prevents restoring a lead whose phone/email is now used by another active lead
+            repo = LeadRepository(db)
+
+            # Check phone conflict (global check)
+            if lead.phone or lead.phone2:
+                phone_conflict = await repo.check_phone_conflict(
+                    phone=lead.phone,
+                    phone2=lead.phone2,
+                    exclude_id=lead_id  # Exclude the lead being restored
+                )
+                if phone_conflict:
+                    raise BusinessRuleViolation(
+                        detail=f"Không thể khôi phục lead: Số điện thoại đã được sử dụng bởi lead khác "
+                               f"({phone_conflict.full_name} - {phone_conflict.phone})"
+                    )
+
+            # Check email conflict (unit-scoped check)
+            if lead.email and lead.unit_id:
+                email_conflict = await repo.check_email_conflict(
+                    email=lead.email,
+                    unit_id=lead.unit_id,
+                    exclude_id=lead_id
+                )
+                if email_conflict:
+                    raise BusinessRuleViolation(
+                        detail=f"Không thể khôi phục lead: Email đã được sử dụng bởi lead khác "
+                               f"({email_conflict.full_name} - {email_conflict.email})"
+                    )
+
+            # Capture old state for history logging
+            old_state = _get_current_lead_state(lead)
+
+            # Get the deleted_at timestamp to find related consultations
+            lead_deleted_at = lead.deleted_at
+
+            # Restore all related consultations that were deleted at the same time
+            # (within 2 seconds tolerance to account for slight timing differences)
+            from sqlalchemy import update
+            consultation_update_result = await db.execute(
+                update(models.Consultation)
+                .where(models.Consultation.lead_id == lead_id)
+                .where(models.Consultation.deleted_at.isnot(None))
+                .where(
+                    func.abs(
+                        func.extract('epoch', models.Consultation.deleted_at) -
+                        func.extract('epoch', lead_deleted_at)
+                    ) < 2  # Within 2 seconds
+                )
+                .values(deleted_at=None)
+            )
+            consultations_restored = consultation_update_result.rowcount
+
+            # Clear deleted_at to restore the lead
+            lead.deleted_at = None
+
+            # Restore status to a valid state
+            lead.status = "new"  # Default to 'new' status
+
+            # Mark as modified
+            db.add(lead)
+
+            # Get new state
+            new_state = _get_current_lead_state(lead)
+
+            # Log state change in history
+            await _log_lead_state_change(
+                db,
+                lead,
+                old_state,
+                new_state,
+                changed_by=restored_by,
+                reason=f"Lead restored by {restored_by.role} {restored_by.username}"
+            )
+
+            log.info(
+                "Lead restored successfully",
+                lead_id=lead_id,
+                consultations_restored=consultations_restored,
+                restored_by_user_id=restored_by.id,
+                restored_by_username=restored_by.username
+            )
+
+            return lead
+
+    except (ResourceNotFoundError, BusinessRuleViolation):
+        raise
+    except Exception as e:
+        await db.rollback()
+        log.error(
+            "Failed to restore lead",
+            lead_id=lead_id,
+            restored_by_user_id=restored_by.id,
             error=str(e),
             exc_info=True
         )

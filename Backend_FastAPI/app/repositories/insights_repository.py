@@ -90,6 +90,7 @@ class InsightsRepository(BaseRepository[models.Lead]):
         ).where(
             models.Consultation.lead_id == lead_id,
             models.Consultation.consultation_date <= now,
+            models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted consultations
         )
         
         result = await self.db.execute(stmt)

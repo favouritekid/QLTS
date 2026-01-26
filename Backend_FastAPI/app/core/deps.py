@@ -620,8 +620,10 @@ async def get_lead_for_user(
         return lead
     if current_user.role == UserRole.OFFICER and lead.assigned_officer_id == current_user.id:
         return lead
-    raise PermissionDeniedError(
-        detail="You do not have permission to access this lead."
+    # ✅ SECURITY FIX: Return 404 instead of 403 to prevent resource enumeration
+    # Per IDOR best practices, unauthorized access should not reveal resource existence
+    raise ResourceNotFoundError(
+        detail="Lead not found"
     )
 
 

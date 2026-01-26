@@ -11,7 +11,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
+import { cn, sanitizeColorCode } from "@/lib/utils";
 import { format, isToday, isPast, parseISO } from "date-fns";
 import { vi } from "date-fns/locale";
 import type { Lead, LeadStatus } from "@/types/lead.types";
@@ -189,8 +189,8 @@ export const LeadCard = React.memo(function LeadCard({
               variant="outline"
               className="text-[10px] px-1.5 py-0"
               style={{
-                borderColor: lead.consultation_status.color_code,
-                color: lead.consultation_status.color_code
+                borderColor: sanitizeColorCode(lead.consultation_status.color_code),
+                color: sanitizeColorCode(lead.consultation_status.color_code)
               }}
             >
               {lead.consultation_status.name}

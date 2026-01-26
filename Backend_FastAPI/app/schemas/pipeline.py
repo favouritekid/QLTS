@@ -5,7 +5,7 @@ from typing import List, Optional
 # ✅ 1. Thêm import ConfigDict
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..models.pipeline import OutcomeTypeEnum
+from ..models.pipeline import OutcomeTypeEnum, StatusTypeEnum, SelectableModeEnum
 
 
 # =====================================================================
@@ -75,39 +75,49 @@ class ConsultationStatusBase(BaseModel):
         pattern=r"^#[0-9a-fA-F]{6}$",
         description="Hex color code for UI (e.g., #FF5733)"
     )
-    stage_id: str = Field(..., description="Parent pipeline stage ID")
+    # ✅ FSM v3.0: stage_id is nullable for universal statuses
+    stage_id: Optional[str] = Field(None, description="Parent pipeline stage ID (NULL for universal)")
     outcome_type: OutcomeTypeEnum = Field(
         default=OutcomeTypeEnum.neutral,
         description="Outcome classification: positive/neutral/negative"
     )
-    is_final_status: bool = Field(
-        default=False,
-        description="Whether this status marks end of lead lifecycle"
+
+    # ✅ FSM v3.0: New fields
+    code: Optional[str] = Field(None, description="Machine-readable code (e.g., NOT_CONTACTED)")
+    is_final: bool = Field(default=False, description="Whether this status marks end of lead lifecycle")
+    status_type: StatusTypeEnum = Field(
+        default=StatusTypeEnum.transition,
+        description="Status type: transition/activity/system"
     )
-    legacy_status: Optional[str] = Field(
-        default=None,
-        description="Maps to lead.status for backward compatibility. Valid values: new, assigned, contacted, qualified, unqualified, converted, rejected"
+    selectable_mode: SelectableModeEnum = Field(
+        default=SelectableModeEnum.user,
+        description="Who can select: user/role/system"
     )
-    # Universal status support (Phase 1 - Option B architecture)
     is_universal: bool = Field(
         default=False,
-        description="True nếu status có thể dùng ở mọi pipeline stage (VD: Không nghe máy, Thuê bao)"
+        description="True for activity statuses that bypass FSM"
     )
     updates_pipeline: bool = Field(
         default=True,
-        description="False nếu chỉ ghi nhận activity, không thay đổi pipeline progression"
+        description="False if only records activity, doesn't change pipeline"
     )
-    # Phase-Based Workflow fields
+    counts_for_funnel: bool = Field(
+        default=True,
+        description="True if counted in funnel analytics"
+    )
     phase: str = Field(
         default="consultation",
         description="Phase: consultation, admission, fee, enrolled, universal"
     )
-    selectable_by_user: str = Field(
-        default="true",
-        description="true = officer can select, false = system only, role-based = manager/admin only"
-    )
+    description: Optional[str] = Field(None, description="Optional status description")
+    display_order: int = Field(default=0, description="Sort order for displaying statuses")
 
-    # ✅ QUAN TRỌNG NHẤT: Fix lỗi "invalid input value ... NEUTRAL"
+    # ✅ DEPRECATED fields (kept for backward compatibility)
+    is_final_status: Optional[bool] = Field(default=None, description="DEPRECATED: Use is_final")
+    legacy_status: Optional[str] = Field(default=None, description="DEPRECATED")
+    selectable_by_user: Optional[str] = Field(default=None, description="DEPRECATED: Use selectable_mode")
+    counts_for_kpi: Optional[bool] = Field(default=None, description="DEPRECATED: Use counts_for_funnel")
+
     model_config = ConfigDict(use_enum_values=True, from_attributes=True)
 
 
@@ -128,28 +138,24 @@ class ConsultationStatusUpdate(BaseModel):
     color_code: Optional[str] = Field(None, pattern=r"^#[0-9a-fA-F]{6}$")
     stage_id: Optional[str] = None
     outcome_type: Optional[OutcomeTypeEnum] = None
+
+    # ✅ FSM v3.0 fields
+    code: Optional[str] = None
+    is_final: Optional[bool] = None
+    status_type: Optional[StatusTypeEnum] = None
+    selectable_mode: Optional[SelectableModeEnum] = None
+    is_universal: Optional[bool] = None
+    updates_pipeline: Optional[bool] = None
+    counts_for_funnel: Optional[bool] = None
+    phase: Optional[str] = None
+    description: Optional[str] = None
+    display_order: Optional[int] = None
+
+    # DEPRECATED fields
     is_final_status: Optional[bool] = None
-    legacy_status: Optional[str] = Field(
-        default=None,
-        description="Maps to lead.status for backward compatibility"
-    )
-    is_universal: Optional[bool] = Field(
-        default=None,
-        description="True nếu status có thể dùng ở mọi pipeline stage"
-    )
-    updates_pipeline: Optional[bool] = Field(
-        default=None,
-        description="False nếu chỉ ghi nhận activity, không thay đổi pipeline progression"
-    )
-    # Phase-Based Workflow fields
-    phase: Optional[str] = Field(
-        default=None,
-        description="Phase: consultation, admission, fee, enrolled, universal"
-    )
-    selectable_by_user: Optional[str] = Field(
-        default=None,
-        description="true = officer can select, false = system only, role-based = manager/admin only"
-    )
+    legacy_status: Optional[str] = None
+    selectable_by_user: Optional[str] = None
+    counts_for_kpi: Optional[bool] = None
 
     model_config = ConfigDict(use_enum_values=True)
 

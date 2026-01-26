@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import { cn } from "@/lib/utils";
+import { cn, sanitizeColorCode } from "@/lib/utils";
 import {
   usePipelineStages,
   useConsultationStatuses,
@@ -139,7 +139,7 @@ export function TransitionMatrix() {
                                   ? "ring-primary-foreground"
                                   : "ring-transparent"
                               )}
-                              style={{ backgroundColor: status.color_code }}
+                              style={{ backgroundColor: sanitizeColorCode(status.color_code) }}
                             />
                             <span className="font-medium">{status.name}</span>
                           </div>
@@ -176,7 +176,7 @@ export function TransitionMatrix() {
               <Badge variant="outline" className="gap-2 px-3 py-1 text-sm">
                 <div
                   className="h-2 w-2 rounded-full"
-                  style={{ backgroundColor: selectedFromStatus?.color_code }}
+                  style={{ backgroundColor: sanitizeColorCode(selectedFromStatus?.color_code) }}
                 />
                 {selectedFromStatus?.name}
               </Badge>
@@ -239,7 +239,7 @@ export function TransitionMatrix() {
                               >
                                 <div
                                   className="h-2 w-2 rounded-full"
-                                  style={{ backgroundColor: toStatus.color_code }}
+                                  style={{ backgroundColor: sanitizeColorCode(toStatus.color_code) }}
                                 />
                                 {toStatus.name}
                               </label>

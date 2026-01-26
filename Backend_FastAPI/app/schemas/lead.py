@@ -229,6 +229,8 @@ class LeadUpdate(BaseModel):
     location_proximity: Optional[int] = Field(None, ge=0, le=2)
     occupation_relevance: Optional[int] = Field(None, ge=0, le=2)
     academic_performance: Optional[int] = Field(None, ge=0, le=3)
+    # Optimistic locking - optional, when provided will check for concurrent updates
+    version: Optional[int] = Field(None, description="Optimistic locking version")
 
     @field_validator("email", mode="before")
     @classmethod
@@ -298,6 +300,8 @@ class Lead(LeadBase):
     consultation_status_id: Optional[str] = None
     pipeline_stage_id: Optional[str] = None
     next_activity_at: Optional[datetime] = None  # Quick Disposition: bubble-up sorting
+    # Optimistic locking version
+    version: int = 1
     # Fit Score fields
     birth_year: Optional[int] = None
     location_proximity: int = 0

@@ -39,6 +39,7 @@ from app.utils.exceptions import (
     FileValidationError,
     FileSizeError,
     FileTypeError,
+    BusinessRuleViolation,
     AuthenticationError,
     InvalidCredentials,
     InvalidToken,
@@ -387,6 +388,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(FileTypeError, validation_error_handler)
     app.add_exception_handler(FileValidationError, validation_error_handler)
     app.add_exception_handler(DataValidationError, validation_error_handler)
+    app.add_exception_handler(BusinessRuleViolation, validation_error_handler)
     app.add_exception_handler(ValidationError, validation_error_handler)
 
     # Duplicate resource (409)

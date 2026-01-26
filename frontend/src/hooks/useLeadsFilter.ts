@@ -12,7 +12,7 @@
 "use client";
 
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
-import { useSearchParams, useRouter, usePathname } from "next/navigation";
+import { useSearchParams, usePathname } from "next/navigation";
 import type { LeadStatus } from "@/types/lead.types";
 
 // =============================================================================
@@ -151,9 +151,9 @@ function parseSearchParams(searchParams: URLSearchParams): StoredFilters {
 
 export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterReturn {
   const searchParams = useSearchParams();
-  const router = useRouter();
   const pathname = usePathname();
   const isInitialMount = useRef(true);
+  const urlUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Determine initial values: URL params > localStorage > defaults
   const initialValues = useMemo(() => {
@@ -248,38 +248,55 @@ export function useLeadsFilter(defaultPageSize: number = 50): UseLeadsFilterRetu
   }, [searchParams]); // Only trigger on searchParams change
 
   // ==========================================================================
-  // URL SYNC
+  // URL SYNC (Using native History API for better performance)
   // ==========================================================================
-  
+
   useEffect(() => {
     if (isInitialMount.current) {
       isInitialMount.current = false;
       return;
     }
 
-    const params = new URLSearchParams();
+    // Clear any pending URL update
+    if (urlUpdateTimeoutRef.current) {
+      clearTimeout(urlUpdateTimeoutRef.current);
+    }
 
-    if (page > 1) params.set("page", page.toString());
-    if (search) params.set("q", search);
-    if (statusFilters.length > 0) params.set("status", statusFilters.join(","));
-    if (sourceFilters.length > 0) params.set("source", sourceFilters.join(","));
-    if (offeringFilters.length > 0) params.set("offering", offeringFilters.join(","));
-    if (stageFilters.length > 0) params.set("stage", stageFilters.join(","));
-    if (officerFilters.length > 0) params.set("officer", officerFilters.join(","));
-    if (dateFrom) params.set("from", dateFrom);
-    if (dateTo) params.set("to", dateTo);
-    if (dateField !== "created_at") params.set("date_field", dateField);
+    // Debounce URL updates to prevent excessive history changes
+    urlUpdateTimeoutRef.current = setTimeout(() => {
+      const params = new URLSearchParams();
 
-    const queryString = params.toString();
-    const newUrl = queryString ? `${pathname}?${queryString}` : pathname;
+      if (page > 1) params.set("page", page.toString());
+      if (search) params.set("q", search);
+      if (statusFilters.length > 0) params.set("status", statusFilters.join(","));
+      if (sourceFilters.length > 0) params.set("source", sourceFilters.join(","));
+      if (offeringFilters.length > 0) params.set("offering", offeringFilters.join(","));
+      if (stageFilters.length > 0) params.set("stage", stageFilters.join(","));
+      if (officerFilters.length > 0) params.set("officer", officerFilters.join(","));
+      if (dateFrom) params.set("from", dateFrom);
+      if (dateTo) params.set("to", dateTo);
+      if (dateField !== "created_at") params.set("date_field", dateField);
 
-    // Mark this URL change as internal to prevent sync effect from re-syncing
-    isInternalUrlChange.current = true;
-    router.replace(newUrl, { scroll: false });
+      const queryString = params.toString();
+      const newUrl = queryString ? `${pathname}?${queryString}` : pathname;
+
+      // Mark this URL change as internal to prevent sync effect from re-syncing
+      isInternalUrlChange.current = true;
+
+      // ✅ Use native History API instead of router.replace() for better performance
+      // This avoids triggering RSC refetch which causes the slow 400ms+ delays
+      window.history.replaceState(window.history.state, "", newUrl);
+    }, 100); // 100ms debounce
+
+    return () => {
+      if (urlUpdateTimeoutRef.current) {
+        clearTimeout(urlUpdateTimeoutRef.current);
+      }
+    };
   }, [
     page, search, statusFilters, sourceFilters, offeringFilters,
     stageFilters, officerFilters, dateFrom, dateTo, dateField,
-    pathname, router,
+    pathname,
   ]);
 
   // ==========================================================================

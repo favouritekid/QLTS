@@ -48,6 +48,7 @@ import {
 
 import { useCreateLead, useUpdateLead } from "@/hooks/useLeads";
 import { useAuth } from "@/hooks/useAuth";
+import { isAdmin as checkIsAdmin, isManagerOrAbove, canSelectOfficer as checkCanSelectOfficer } from "@/lib/utils/permissions";
 import { useAdminUsersList } from "@/hooks/useAdminUsers";
 import { SmartUnitSelector, SmartOfferingSelector } from "@/components/common/selectors";
 import { LEAD_SOURCE_OPTIONS } from "@/constants";
@@ -176,10 +177,11 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
 
   const isCreate = mode === "create";
   const isEdit = mode === "edit";
-  const isOfficer = user?.role === "officer"; // Officers can only create in their own unit
-  const isAdmin = user?.role === "admin";
-  const isManager = user?.role === "manager";
-  const canSelectOfficer = isCreate && (isAdmin || isManager); // Only Admin/Manager can select officer when creating
+  // ✅ SECURITY: Use centralized permission utility (UX only - backend enforces)
+  const isOfficer = !isManagerOrAbove(user); // Officers = not manager or above
+  const isAdmin = checkIsAdmin(user);
+  const isManager = isManagerOrAbove(user) && !checkIsAdmin(user);
+  const canSelectOfficerInForm = isCreate && checkCanSelectOfficer(user); // Only Admin/Manager can select officer when creating
 
   const form = useForm<LeadFormValues>({
     resolver: zodResolver(leadSchema),
@@ -597,7 +599,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
               )}
 
               {/* Officer Assignment - Only for Admin/Manager when creating */}
-              {canSelectOfficer && (
+              {canSelectOfficerInForm && (
                 <FormField
                   control={form.control}
                   name="assigned_officer_id"

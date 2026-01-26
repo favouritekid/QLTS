@@ -411,6 +411,12 @@ FEATURE_MAP: Dict[str, FeatureDefinition] = {
             {"subject": "{role}", "object": "/api/leads/{id}", "action": "DELETE"},
         ]
     },
+    "restore_leads": {
+        "display_name": "Khôi phục Leads đã xóa",
+        "policies": [
+            {"subject": "{role}", "object": "/api/leads/{id}/restore", "action": "POST"},
+        ]
+    },
     "manage_users": {
         "display_name": "Quản lý Users",
         "policies": [

@@ -32,7 +32,7 @@ import {
   ExternalLink,
   RefreshCcw,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, sanitizeColorCode } from "@/lib/utils";
 import { useLead } from "@/hooks/useLeads";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { QuickConsultationSection } from "@/components/leads/QuickConsultationSection";
@@ -187,7 +187,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
               {lead.pipeline_stage &&
                 (() => {
                   const stageColor =
-                    lead.pipeline_stage.color_code || STAGE_COLORS[lead.pipeline_stage.id];
+                    sanitizeColorCode(lead.pipeline_stage.color_code) || STAGE_COLORS[lead.pipeline_stage.id];
                   return (
                     <Badge
                       variant="outline"

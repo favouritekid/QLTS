@@ -69,7 +69,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
+import { cn, sanitizeColorCode } from "@/lib/utils";
 import type { Lead } from "@/types/lead.types";
 import { LEAD_SOURCE_OPTIONS } from "@/constants";
 import { STAGE_COLORS } from "@/types/pipeline.types";
@@ -356,7 +356,7 @@ export function LeadsTable({
             <Badge
               variant="secondary"
               className="text-[10px] h-5 px-2 font-medium whitespace-nowrap"
-              style={{ color: status.color || status.color_code || "inherit" }}
+              style={{ color: sanitizeColorCode(status.color || status.color_code, "inherit") }}
             >
               {status.name}
             </Badge>

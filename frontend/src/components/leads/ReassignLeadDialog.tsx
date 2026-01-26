@@ -25,8 +25,7 @@ import { Badge } from "@/components/ui/badge";
 import { AlertCircle, RefreshCcw, Loader2 } from "lucide-react";
 import { usePerformLeadAction, useReassignQuota } from "@/hooks/useLeads";
 import { useAuth } from "@/hooks/useAuth";
-// useQuery removed
-// leadsApi removed
+import { isManagerOrAbove } from "@/lib/utils/permissions";
 
 // ============================================================================
 // CONSTANTS
@@ -79,15 +78,16 @@ export function ReassignLeadDialog({
   onSuccess,
 }: ReassignLeadDialogProps) {
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin" || user?.role === "manager";
+  // ✅ SECURITY: Use centralized permission utility (UX only - backend enforces)
+  const hasManagerAccess = isManagerOrAbove(user);
   
   const [selectedReason, setSelectedReason] = useState<string>("");
   const [customReason, setCustomReason] = useState("");
   
-  const { data: quota, isLoading: quotaLoading } = useReassignQuota(!isAdmin);
+  const { data: quota, isLoading: quotaLoading } = useReassignQuota(!hasManagerAccess);
   const performAction = usePerformLeadAction();
   
-  const reasons = isAdmin ? ADMIN_REASONS : OFFICER_REASONS;
+  const reasons = hasManagerAccess ? ADMIN_REASONS : OFFICER_REASONS;
   
   const handleSubmit = async () => {
     const reason = selectedReason === "other" 
@@ -116,7 +116,7 @@ export function ReassignLeadDialog({
   };
   
   const canSubmit = selectedReason && (selectedReason !== "other" || customReason.trim());
-  const quotaExceeded = !isAdmin && quota && quota.remaining_today <= 0;
+  const quotaExceeded = !hasManagerAccess && quota && quota.remaining_today <= 0;
   
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -127,7 +127,7 @@ export function ReassignLeadDialog({
             Phân công lại Lead
           </DialogTitle>
           <DialogDescription>
-            {isAdmin 
+            {hasManagerAccess 
               ? "Chọn nhân viên mới và lý do phân công lại."
               : "Gửi yêu cầu phân công lại lead này cho nhân viên khác."}
           </DialogDescription>
@@ -141,7 +141,7 @@ export function ReassignLeadDialog({
           </div>
           
           {/* Quota Warning (Officers only) */}
-          {!isAdmin && (
+          {!hasManagerAccess && (
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">Số lượt còn lại tuần này:</span>
               {quotaLoading ? (
@@ -212,7 +212,7 @@ export function ReassignLeadDialog({
             {performAction.isPending && (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             )}
-            {isAdmin ? "Phân công lại" : "Gửi yêu cầu"}
+            {hasManagerAccess ? "Phân công lại" : "Gửi yêu cầu"}
           </Button>
         </DialogFooter>
       </DialogContent>

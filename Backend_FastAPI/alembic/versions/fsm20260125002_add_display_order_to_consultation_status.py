@@ -1,16 +1,16 @@
 """add display_order to consultation_status
 
-Revision ID: b2c3d4e5f6g7
-Revises: a1b2c3d4e5f6
-Create Date: 2026-01-25 14:05:00.000000
+Revision ID: fsm20260125002
+Revises: fsm20260125001
+Create Date: 2026-01-25 16:05:00.000000
 
 """
 from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision = 'b2c3d4e5f6g7'
-down_revision = 'a1b2c3d4e5f6'
+revision = 'fsm20260125002'
+down_revision = 'fsm20260125001'
 branch_labels = None
 depends_on = None
 

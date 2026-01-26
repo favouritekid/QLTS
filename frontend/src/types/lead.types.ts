@@ -78,7 +78,8 @@ export interface Lead {
   updated_at: string; // ISO datetime
   assigned_at?: string | null; // ISO datetime
   next_activity_at?: string | null; // ISO datetime - Quick Disposition bubble-up
-  
+  version: number; // Optimistic locking version
+
   // Fit Score fields
   birth_year?: number | null;
   location_proximity: number; // 0=Xa, 1=Lân cận, 2=Gần
@@ -168,6 +169,8 @@ export interface LeadUpdate {
   location_proximity?: number;
   occupation_relevance?: number;
   academic_performance?: number;
+  // Optimistic locking - optional, when provided will check for concurrent updates
+  version?: number;
 }
 
 /**

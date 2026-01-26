@@ -89,7 +89,12 @@ class LeadRepository(BaseRepository[models.Lead]):
                 # NEW: AdmissionProfile for admission module
                 selectinload(models.Lead.admission_profile),
                 # Collection relationships for timeline/insights
-                selectinload(models.Lead.consultations).options(
+                # ✅ FIX: Filter out soft-deleted consultations
+                selectinload(
+                    models.Lead.consultations.and_(
+                        models.Consultation.deleted_at.is_(None)
+                    )
+                ).options(
                     joinedload(models.Consultation.officer),
                     joinedload(models.Consultation.consultation_status).joinedload(models.ConsultationStatus.stage),
                 ),
@@ -417,6 +422,7 @@ class LeadRepository(BaseRepository[models.Lead]):
                     models.Consultation.lead_id == lead_id,
                     models.Consultation.scheduled_at.isnot(None),
                     models.Consultation.consultation_status_id.in_(PENDING_STATUS_IDS),
+                    models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
                 )
             )
         )
@@ -543,24 +549,28 @@ class LeadRepository(BaseRepository[models.Lead]):
             Dict with: last_consultation_at, consultation_count, 
                        pending_next_activity (earliest pending task)
         """
-        # Query 1: Get consultation stats
+        # Query 1: Get consultation stats (exclude soft-deleted)
         stats_query = select(
             func.max(models.Consultation.consultation_date).label("last_consultation_at"),
             func.count(models.Consultation.id).label("consultation_count"),
-        ).where(models.Consultation.lead_id == lead_id)
-        
+        ).where(
+            models.Consultation.lead_id == lead_id,
+            models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
+        )
+
         stats_result = await self.db.execute(stats_query)
         stats = stats_result.one()
-        
-        # Query 2: Get earliest pending activity (not completed)
+
+        # Query 2: Get earliest pending activity (not completed, exclude soft-deleted)
         PENDING_STATUS_IDS = ["sts01", "sts03"]  # Lên lịch, Cần theo dõi
-        
+
         pending_query = select(
             func.min(models.Consultation.scheduled_at)
         ).where(
             models.Consultation.lead_id == lead_id,
             models.Consultation.scheduled_at.isnot(None),
             models.Consultation.consultation_status_id.in_(PENDING_STATUS_IDS),
+            models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
         )
         
         pending_result = await self.db.execute(pending_query)
@@ -902,16 +912,19 @@ class LeadRepository(BaseRepository[models.Lead]):
     ) -> Optional[models.Consultation]:
         """
         Get the most recent consultation for a lead.
-        
+
         Args:
             lead_id: Lead ID
-            
+
         Returns:
-            Most recent Consultation or None
+            Most recent Consultation or None (excludes soft-deleted)
         """
         query = (
             select(models.Consultation)
-            .where(models.Consultation.lead_id == lead_id)
+            .where(
+                models.Consultation.lead_id == lead_id,
+                models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
+            )
             .order_by(
                 models.Consultation.consultation_date.desc(),
                 models.Consultation.id.desc(),
@@ -928,17 +941,20 @@ class LeadRepository(BaseRepository[models.Lead]):
     ) -> List[models.Consultation]:
         """
         Get recent consultations for a lead.
-        
+
         Args:
             lead_id: Lead ID
             limit: Number of records to return
-            
+
         Returns:
-            List of Consultation objects
+            List of Consultation objects (excludes soft-deleted)
         """
         query = (
             select(models.Consultation)
-            .where(models.Consultation.lead_id == lead_id)
+            .where(
+                models.Consultation.lead_id == lead_id,
+                models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
+            )
             .order_by(
                 models.Consultation.consultation_date.desc(),
                 models.Consultation.id.desc(),

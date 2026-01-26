@@ -30,6 +30,9 @@ export const pipelineKeys = {
   fullPipeline: (params?: PipelineQueryParams) => [...pipelineKeys.all, "full", params] as const,
   stageLeads: (stageId: string) => [...pipelineKeys.all, "stageLeads", stageId] as const,
   consultationStatuses: () => [...pipelineKeys.all, "consultationStatuses"] as const,
+  // ✅ FSM v3.1: Cache by currentStatusId ONLY (not leadId)
+  // Rationale: FSM results depend on (status, phase), and most leads share the same phase.
+  // This enables React Query deduplication across concurrent requests for same status.
   allowedNextStatuses: (currentStatusId?: string | null) =>
     [...pipelineKeys.all, "allowedNextStatuses", currentStatusId] as const,
   allowedTransitions: () => [...pipelineKeys.all, "allowedTransitions"] as const,
@@ -179,28 +182,46 @@ export function useConsultationStatuses(options?: { initialData?: ConsultationSt
 }
 
 /**
- * Get allowed next statuses from current status (state machine)
- * Returns only valid transitions based on workflow configuration
+ * Get allowed next statuses from current status (FSM v3.1)
+ * Returns only valid transitions based on:
+ * - Workflow transitions (allowed_transitions table)
+ * - Phase guards (user/role cannot cross phases)
+ * - Trigger type (hide system-only statuses)
+ * - Lead phase (derived from admission_profile)
  *
  * @param currentStatusId - Current consultation status ID (null/undefined for new leads)
+ * @param leadId - Lead ID to derive phase from admission_profile (optional, not used in cache key)
  *
  * @example
  * ```tsx
- * // Get next allowed statuses for a lead with status 'sts01'
- * const { data: nextStatuses } = useAllowedNextStatuses('sts01');
+ * // Get next allowed statuses for a specific lead
+ * const { data: nextStatuses } = useAllowedNextStatuses('sts01', 123);
  *
- * // Get all statuses for new lead (no current status)
- * const { data: allStatuses } = useAllowedNextStatuses(null);
+ * // Get initial status for new lead (NULL → NOT_CONTACTED only)
+ * const { data: initialStatuses } = useAllowedNextStatuses(null);
  * ```
+ *
+ * @note v3.1: Cache key uses currentStatusId ONLY (not leadId) to enable deduplication.
+ * FSM results depend on (status, phase), and most leads share the same phase (consultation).
+ * This prevents N+1 API calls when rendering multiple lead cards with same status.
  */
-export function useAllowedNextStatuses(currentStatusId?: string | null) {
+export function useAllowedNextStatuses(currentStatusId?: string | null, leadId?: number) {
   return useQuery<ConsultationStatus[], AxiosError<ApiErrorResponse>>({
+    // ✅ v3.1: Cache by status only - enables deduplication across components
     queryKey: pipelineKeys.allowedNextStatuses(currentStatusId),
     queryFn: async () => {
-      return await pipelineApi.getAllowedNextStatuses(currentStatusId || null);
+      // leadId still passed to API for phase derivation, just not in cache key
+      return await pipelineApi.getAllowedNextStatuses(currentStatusId || null, leadId);
     },
+    // ✅ Only fetch when currentStatusId is explicitly provided (not undefined)
+    // This prevents unnecessary API calls when the hook is mounted but not yet needed
+    enabled: currentStatusId !== undefined,
     staleTime: 1000 * 60 * 5, // 5 minutes (workflow rules don't change frequently)
     gcTime: 1000 * 60 * 10, // 10 minutes in cache
+    // ✅ v3.1: Prevent refetch on mount if data already in cache
+    refetchOnMount: false,
+    // ✅ v3.1: Don't refetch when window regains focus
+    refetchOnWindowFocus: false,
   });
 }
 

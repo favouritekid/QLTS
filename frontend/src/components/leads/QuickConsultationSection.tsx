@@ -27,7 +27,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { DateTimePicker } from "@/components/common/form";
-import { cn } from "@/lib/utils";
+import { cn, sanitizeColorCode } from "@/lib/utils";
 import { useAllowedNextStatuses } from "@/hooks/usePipeline";
 import { useAddConsultation, useLead } from "@/hooks/useLeads";
 import type { ConsultationStatus, ConsultationCreate, ConsultationMethod } from "@/types/lead.types";
@@ -119,6 +119,15 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
   const [pendingStatus, setPendingStatus] = useState<ConsultationStatus | null>(null);
   const [countdown, setCountdown] = useState(COUNTDOWN_SECONDS);
   const countdownRef = useRef<NodeJS.Timeout | null>(null);
+  // ✅ FIX: Guard against concurrent saves
+  const isSavingRef = useRef(false);
+  // ✅ FIX: Store pending status in ref to avoid stale closure
+  const pendingStatusRef = useRef<ConsultationStatus | null>(null);
+
+  // Keep ref in sync with state
+  useEffect(() => {
+    pendingStatusRef.current = pendingStatus;
+  }, [pendingStatus]);
 
   // Cleanup timer on unmount
   useEffect(() => {
@@ -131,8 +140,13 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
 
   // Countdown logic - when countdown reaches 0, commit the save
   useEffect(() => {
-    if (pendingStatus && countdown === 0) {
-      commitSave(pendingStatus);
+    // ✅ FIX: Check isSavingRef to prevent concurrent saves
+    if (pendingStatus && countdown === 0 && !isSavingRef.current) {
+      // Use ref to get the latest pending status
+      const statusToSave = pendingStatusRef.current;
+      if (statusToSave) {
+        commitSave(statusToSave);
+      }
     }
   }, [countdown, pendingStatus]);
 
@@ -170,10 +184,16 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
 
   // Commit the save immediately
   const commitSave = async (status: ConsultationStatus) => {
+    // ✅ FIX: Guard against concurrent saves
+    if (isSavingRef.current) {
+      return;
+    }
+    isSavingRef.current = true;
+
     if (countdownRef.current) {
       clearInterval(countdownRef.current);
     }
-    
+
     // Determine scheduled_at based on option
     let scheduledAt: string | null = null;
     if (scheduleOption === "custom" && customDateTime) {
@@ -193,7 +213,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
       setSavingStatusId(status.id);
       setPendingStatus(null);
       setCountdown(COUNTDOWN_SECONDS);
-      
+
       await addConsultation.mutateAsync({ leadId, data: payload });
 
       // Reset form on success
@@ -206,30 +226,51 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
       // Error is handled by the mutation
     } finally {
       setSavingStatusId(null);
+      isSavingRef.current = false;
     }
   };
 
   // Handle status badge click - start delayed commit
   const handleStatusClick = (status: ConsultationStatus) => {
+    // ✅ FIX: Don't start new countdown while saving
+    if (isSavingRef.current) return;
+
     // If clicking the same pending status, do nothing
     if (pendingStatus?.id === status.id) return;
-    
+
     // If there's a different pending status, switch to new one
     startCountdown(status);
   };
 
-  // ✅ Drag-to-scroll using callback refs
+  // ✅ Drag-to-scroll using callback refs with proper cleanup
   // Callback refs are called when element mounts, guaranteeing element exists
   const resultHasDraggedRef = useRef(false);
   const universalHasDraggedRef = useRef(false);
-  
+
+  // ✅ FIX: Store cleanup functions to prevent memory leaks
+  const cleanupFunctionsRef = useRef<Map<HTMLDivElement, () => void>>(new Map());
+
+  // Cleanup all listeners on unmount
+  useEffect(() => {
+    return () => {
+      cleanupFunctionsRef.current.forEach((cleanup) => cleanup());
+      cleanupFunctionsRef.current.clear();
+    };
+  }, []);
+
   const setupDragToScroll = (element: HTMLDivElement | null, hasDraggedRef: React.MutableRefObject<boolean>) => {
+    // Clean up previous listeners for this element if any
+    if (element && cleanupFunctionsRef.current.has(element)) {
+      cleanupFunctionsRef.current.get(element)?.();
+      cleanupFunctionsRef.current.delete(element);
+    }
+
     if (!element) return;
-    
+
     const isDragging = { current: false };
     const startX = { current: 0 };
     const scrollLeftStart = { current: 0 };
-    
+
     // Wheel scroll handler
     const handleWheel = (e: WheelEvent) => {
       if (e.deltaY === 0) return;
@@ -285,6 +326,16 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mouseup", handleMouseUp);
     element.addEventListener("mouseleave", handleMouseLeave);
+
+    // ✅ FIX: Store cleanup function
+    const cleanup = () => {
+      element.removeEventListener("wheel", handleWheel);
+      element.removeEventListener("mousedown", handleMouseDown);
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+      element.removeEventListener("mouseleave", handleMouseLeave);
+    };
+    cleanupFunctionsRef.current.set(element, cleanup);
   };
   
   // Callback refs that setup listeners when elements mount
@@ -574,7 +625,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                   ) : (
                     <span
                       className="mr-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full"
-                      style={{ backgroundColor: status.color_code }}
+                      style={{ backgroundColor: sanitizeColorCode(status.color_code) }}
                     />
                   )}
                   {status.name}
@@ -640,7 +691,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                           ) : (
                             <span
                               className="mr-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full"
-                              style={{ backgroundColor: status.color_code }}
+                              style={{ backgroundColor: sanitizeColorCode(status.color_code) }}
                             />
                           )}
                           {status.name}
@@ -684,7 +735,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                             ) : (
                               <span
                                 className="mr-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full"
-                                style={{ backgroundColor: status.color_code }}
+                                style={{ backgroundColor: sanitizeColorCode(status.color_code) }}
                               />
                             )}
                             {status.name}
@@ -729,7 +780,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                           ) : (
                             <span
                               className="mr-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full"
-                              style={{ backgroundColor: status.color_code }}
+                              style={{ backgroundColor: sanitizeColorCode(status.color_code) }}
                             />
                           )}
                           {status.name}
@@ -744,16 +795,18 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
               {(() => {
                  // Calculate colors for gradient
                  // Fallbacks: Slate-200 (Gray), Primary (Blue/Brand), Emerald-200 (Green)
-                 const prevColor = groupedStatuses.previousStage.length > 0 
-                    ? groupedStatuses.previousStage[groupedStatuses.previousStage.length - 1].color_code 
+                 const prevColor = groupedStatuses.previousStage.length > 0
+                    ? sanitizeColorCode(groupedStatuses.previousStage[groupedStatuses.previousStage.length - 1].color_code, "#e2e8f0")
                     : "#e2e8f0";
-                 
-                 const currColor = groupedStatuses.sameStage.find(s => s.id === currentStatusId)?.color_code 
-                    || groupedStatuses.sameStage[0]?.color_code 
-                    || "#3b82f6";
-                 
-                 const nextColor = groupedStatuses.nextStage.length > 0 
-                    ? groupedStatuses.nextStage[0].color_code 
+
+                 const currColor = sanitizeColorCode(
+                    groupedStatuses.sameStage.find(s => s.id === currentStatusId)?.color_code
+                    || groupedStatuses.sameStage[0]?.color_code,
+                    "#3b82f6"
+                 );
+
+                 const nextColor = groupedStatuses.nextStage.length > 0
+                    ? sanitizeColorCode(groupedStatuses.nextStage[0].color_code, "#a7f3d0")
                     : "#a7f3d0";
 
                  return (

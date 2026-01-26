@@ -17,7 +17,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { DateTimePicker } from "@/components/common/form";
-import { cn } from "@/lib/utils";
+import { cn, sanitizeColorCode } from "@/lib/utils";
 import { useAllowedNextStatuses } from "@/hooks/usePipeline";
 import { useAddConsultation, useLead } from "@/hooks/useLeads";
 import { useWorkflowContext, getAllowedStatusIds } from "@/hooks/useWorkflowContext";
@@ -223,7 +223,7 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
                 ) : (
                   <span
                     className="w-1.5 h-1.5 rounded-full mr-1.5 flex-shrink-0"
-                    style={{ backgroundColor: status.color_code }}
+                    style={{ backgroundColor: sanitizeColorCode(status.color_code) }}
                   />
                 )}
                 {status.name}
@@ -259,7 +259,7 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
                 ) : (
                   <span
                     className="w-2 h-2 rounded-full mr-2 flex-shrink-0"
-                    style={{ backgroundColor: status.color_code }}
+                    style={{ backgroundColor: sanitizeColorCode(status.color_code) }}
                   />
                 )}
                 <span className="truncate">{status.name}</span>
@@ -299,7 +299,7 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
                 ) : (
                   <span
                     className="w-1.5 h-1.5 rounded-full mr-1.5 flex-shrink-0"
-                    style={{ backgroundColor: status.color_code }}
+                    style={{ backgroundColor: sanitizeColorCode(status.color_code) }}
                   />
                 )}
                 {status.name}
