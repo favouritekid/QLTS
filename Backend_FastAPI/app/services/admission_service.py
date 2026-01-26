@@ -2075,8 +2075,23 @@ async def upload_document(
     documents = await admission_repo_refresh.get_all_documents(profile_id)
     _compute_frontend_fields(profile, current_user, documents)
 
+    # ✅ AUDIT LOG: Track document upload
+    from .document_audit_service import log_document_upload
+    await log_document_upload(
+        db=db,
+        profile_document_id=doc_record.id,
+        actor_user_id=current_user.id,
+        old_status=doc_record.status if doc_record.status != "uploaded" else "missing",
+        new_file_path=file_path,
+        original_filename=file.filename or "unknown",
+        file_size_bytes=file_size,
+        content_type=file.content_type,
+        old_file_path=old_file_path,
+        declared_format=actual_submission_format,
+    )
+
     log.info(
-        "Document uploaded",
+        "Document uploaded with audit log",
         profile_id=profile_id,
         doc_code=doc_code,
         file_path=file_path,
@@ -2138,8 +2153,18 @@ async def confirm_document_format(
     documents = await admission_repo.get_all_documents(profile_id)
     _compute_frontend_fields(profile, current_user, documents)
 
+    # ✅ AUDIT LOG: Track document verification
+    from .document_audit_service import log_document_verification
+    await log_document_verification(
+        db=db,
+        profile_document_id=doc.id,
+        actor_user_id=current_user.id,
+        old_status="uploaded",
+        verified_format=format_type,
+    )
+
     log.info(
-        "Document verified",
+        "Document verified with audit log",
         profile_id=profile_id,
         doc_code=doc_code,
         verified_format=format_type,
@@ -2183,6 +2208,10 @@ async def mark_paper_submitted(
     # Get profile for access check
     profile = await get_profile(db, profile_id, current_user)
 
+    # Get document to capture old status
+    doc_before = await admission_repo.get_document_by_type(profile_id, doc_code)
+    old_status = doc_before.status if doc_before else "missing"
+
     # Mark paper submitted
     doc = await admission_repo.mark_paper_submitted(
         profile_id=profile_id,
@@ -2190,18 +2219,28 @@ async def mark_paper_submitted(
         officer_id=current_user.id,
         actual_submission_format=actual_submission_format,
     )
-    
+
     if not doc:
         raise ResourceNotFoundError(f"Document code '{doc_code}' not found in profile documents")
 
     await db.flush()
+
+    # ✅ AUDIT LOG: Track paper submission
+    from .document_audit_service import log_paper_submission
+    await log_paper_submission(
+        db=db,
+        profile_document_id=doc.id,
+        actor_user_id=current_user.id,
+        old_status=old_status,
+        declared_format=actual_submission_format,
+    )
 
     # ✅ Re-compute validation_summary with updated documents
     documents = await admission_repo.get_all_documents(profile_id)
     _compute_frontend_fields(profile, current_user, documents)
 
     log.info(
-        "Document paper submitted confirmed",
+        "Document paper submitted confirmed with audit log",
         profile_id=profile_id,
         doc_code=doc_code,
         officer_id=current_user.id,
@@ -2246,6 +2285,10 @@ async def reject_document(
     # Get profile for access check
     profile = await get_profile(db, profile_id, current_user)
     
+    # Get document to capture old status
+    doc_before = await admission_repo.get_document_by_type(profile_id, doc_code)
+    old_status = doc_before.status if doc_before else "unknown"
+
     # Reject document
     doc = await admission_repo.reject_document(
         profile_id=profile_id,
@@ -2253,12 +2296,22 @@ async def reject_document(
         officer_id=current_user.id,
         reason=reason.strip(),
     )
-    
+
     if not doc:
         raise ResourceNotFoundError(f"Document code '{doc_code}' not found in profile documents")
-    
+
     await db.flush()
-    
+
+    # ✅ AUDIT LOG: Track document rejection
+    from .document_audit_service import log_document_rejection
+    await log_document_rejection(
+        db=db,
+        profile_document_id=doc.id,
+        actor_user_id=current_user.id,
+        old_status=old_status,
+        reason=reason.strip(),
+    )
+
     response_data = {
         "code": doc_code,
         "status": "rejected",
@@ -2266,16 +2319,16 @@ async def reject_document(
         "rejected_at": doc.rejected_at.isoformat() if doc.rejected_at else None,
         "rejected_by_id": current_user.id,
     }
-    
+
     async def _post_commit():
         log.info(
-            "Document rejected",
+            "Document rejected with audit log",
             profile_id=profile_id,
             doc_code=doc_code,
             reason=reason,
             officer_id=current_user.id,
         )
-    
+
     return response_data, _post_commit
 
 
@@ -2318,6 +2371,11 @@ async def reset_document(
     if profile.status == "enrolled":
         raise BadRequest("Cannot reset documents for enrolled profiles")
 
+    # Get document to capture old status and file path before reset
+    doc_before = await admission_repo.get_document_by_type(profile_id, doc_code)
+    old_status = doc_before.status if doc_before else "unknown"
+    old_file_path = doc_before.file_path if doc_before else None
+
     # Reset document
     doc = await admission_repo.reset_document(
         profile_id=profile_id,
@@ -2327,15 +2385,26 @@ async def reset_document(
     if not doc:
         raise ResourceNotFoundError(f"Document code '{doc_code}' not found in profile documents")
 
+    # ✅ AUDIT LOG: Track document reset
+    from .document_audit_service import log_document_reset
+    await log_document_reset(
+        db=db,
+        profile_document_id=doc.id,
+        actor_user_id=current_user.id,
+        old_status=old_status,
+        old_file_path=old_file_path,
+        reason="User requested reset",
+    )
+
     # Delete physical file if exists
-    if doc.file_path:
+    if old_file_path:
         import os
-        if os.path.exists(doc.file_path):
+        if os.path.exists(old_file_path):
             try:
-                os.remove(doc.file_path)
-                log.info("Document file deleted during reset", file_path=doc.file_path)
+                os.remove(old_file_path)
+                log.info("Document file deleted during reset", file_path=old_file_path)
             except OSError as e:
-                log.warning("Failed to delete document file", error=str(e), file_path=doc.file_path)
+                log.warning("Failed to delete document file", error=str(e), file_path=old_file_path)
 
     await db.flush()
 

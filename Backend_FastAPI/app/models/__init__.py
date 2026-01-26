@@ -40,6 +40,7 @@ from .admission_config import (
     DocumentGroupItem,
     ProfileSubjectScore,
     ProfileDocument,
+    DocumentAuditLog,  # Audit trail for document operations
     AdmissionPath,  # Phase 1: Admission Configuration Console
 )
 
@@ -107,6 +108,7 @@ __all__ = [
     "StudentDocument",
     "ProfileSubjectScore",
     "ProfileDocument",
+    "DocumentAuditLog",  # Audit trail for document operations
     "AdmissionPath",  # Phase 1: Admission Configuration Console
     # Notification
     "Notification",
