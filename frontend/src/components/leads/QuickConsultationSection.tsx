@@ -90,6 +90,27 @@ const getSchedulePreviewText = (option: ScheduleOption, customDate?: Date): stri
   }
 };
 
+// ✅ Get color classes based on outcome_type
+const getOutcomeColorClasses = (
+  outcomeType: string | null | undefined,
+  isCurrentStatus: boolean = false
+): string => {
+  if (isCurrentStatus) {
+    // Current status always highlighted with ring
+    return "border-2 border-blue-500 bg-blue-100 font-medium text-blue-800 hover:bg-blue-150";
+  }
+
+  switch (outcomeType) {
+    case "positive":
+      return "border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100";
+    case "negative":
+      return "border border-red-200 bg-red-50 text-red-600 hover:bg-red-100";
+    case "neutral":
+    default:
+      return "border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100";
+  }
+};
+
 
 
 export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultationSectionProps) {
@@ -661,7 +682,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                 ref={scrollContainerRef}
                 className="flex flex-nowrap items-center gap-2.5 cursor-grab overflow-x-auto overflow-y-hidden overscroll-x-contain [-ms-overflow-style:none] [scrollbar-width:none] active:cursor-grabbing [&::-webkit-scrollbar]:hidden"
               >
-                  {/* GROUP 1: PREVIOUS STAGE (Revert) */}
+                  {/* GROUP 1: PREVIOUS STAGE (Revert) - Color by outcome_type */}
                   {groupedStatuses.previousStage.length > 0 && (
                     <>
                       {groupedStatuses.previousStage.map((status) => (
@@ -671,11 +692,12 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                           size="sm"
                           className={cn(
                             "h-7 flex-shrink-0 px-2.5 text-xs font-normal",
-                            // Previous Stage: Slate (neutral/revert)
-                            "border border-slate-300 bg-slate-100 text-slate-600 hover:bg-slate-200",
+                            // ✅ Use outcome_type-based colors (with slate tint for previous stage)
+                            getOutcomeColorClasses(status.outcome_type),
+                            "opacity-80", // Slightly dimmed to indicate it's a revert
                             "transition-all hover:scale-[1.02]",
                             // Pending highlight
-                            pendingStatus?.id === status.id && "ring-2 ring-blue-500 ring-offset-1 scale-105"
+                            pendingStatus?.id === status.id && "ring-2 ring-blue-500 ring-offset-1 scale-105 opacity-100"
                           )}
                           onClick={() => {
                             if (resultHasDraggedRef.current) {
@@ -702,10 +724,11 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                     </>
                   )}
 
-                  {/* GROUP 2: SAME STAGE (Current & Siblings) */}
+                  {/* GROUP 2: SAME STAGE (Current & Siblings) - Color by outcome_type */}
                   {groupedStatuses.sameStage.length > 0 && (
                     <>
                       {groupedStatuses.sameStage.map((status) => {
+                        const isCurrentStatus = status.id === currentStatusId;
                         return (
                           <Button
                             key={status.id}
@@ -713,10 +736,8 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                             size="sm"
                             className={cn(
                               "h-7 flex-shrink-0 px-2.5 text-xs font-normal",
-                              // Same Stage: Blue (current focus)
-                              status.id === currentStatusId
-                                ? "border-2 border-blue-500 bg-blue-100 font-medium text-blue-800 hover:bg-blue-150"
-                                : "border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100",
+                              // ✅ Use outcome_type-based colors
+                              getOutcomeColorClasses(status.outcome_type, isCurrentStatus),
                               "transition-all hover:scale-[1.02]",
                               // Pending highlight
                               pendingStatus?.id === status.id && "ring-2 ring-blue-500 ring-offset-1 scale-105"
@@ -750,7 +771,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                     <ArrowRight className="text-muted-foreground/50 mx-1 h-4 w-4 flex-shrink-0" />
                   )}
 
-                  {/* GROUP 3: NEXT STAGE (Progress) */}
+                  {/* GROUP 3: NEXT STAGE (Progress) - Color by outcome_type */}
                   {groupedStatuses.nextStage.length > 0 && (
                     <>
                       {groupedStatuses.nextStage.map((status) => (
@@ -760,8 +781,8 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                           size="sm"
                           className={cn(
                             "h-7 flex-shrink-0 px-2.5 text-xs font-normal",
-                            // Next Stage: Emerald (progress/forward)
-                            "border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
+                            // ✅ Use outcome_type-based colors
+                            getOutcomeColorClasses(status.outcome_type),
                             "transition-all hover:scale-[1.02]",
                             // Pending highlight
                             pendingStatus?.id === status.id && "ring-2 ring-blue-500 ring-offset-1 scale-105"
