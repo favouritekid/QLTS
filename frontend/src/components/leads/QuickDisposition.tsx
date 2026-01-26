@@ -3,7 +3,15 @@
 
 import React, { useState, useMemo } from "react";
 import { addDays, set } from "date-fns";
-import { Loader2, PhoneOff, ThumbsUp, XCircle, AlertTriangle } from "lucide-react";
+import {
+  Loader2,
+  PhoneOff,
+  ThumbsUp,
+  XCircle,
+  Info,
+  TrendingUp,
+  Activity,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -16,6 +24,13 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { Badge } from "@/components/ui/badge";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { DateTimePicker } from "@/components/common/form";
 import { cn, sanitizeColorCode } from "@/lib/utils";
 import { useAllowedNextStatuses } from "@/hooks/usePipeline";
@@ -39,6 +54,71 @@ const COMPLEX_STATUS_IDS = [
 // Statuses that show scheduled_at field
 const SCHEDULABLE_STATUS_IDS = ["hen_goi_lai", "tiem_nang"];
 
+// =============================================================================
+// SECTION HEADER WITH TOOLTIP
+// =============================================================================
+
+interface SectionHeaderProps {
+  icon: React.ReactNode;
+  title: string;
+  badge?: string;
+  badgeVariant?: "default" | "secondary" | "outline";
+  tooltipTitle: string;
+  tooltipDescription: string;
+  tooltipExample?: string;
+}
+
+function SectionHeader({
+  icon,
+  title,
+  badge,
+  badgeVariant = "secondary",
+  tooltipTitle,
+  tooltipDescription,
+  tooltipExample,
+}: SectionHeaderProps) {
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        {icon}
+        <span className="font-medium">{title}</span>
+      </div>
+      {badge && (
+        <TooltipProvider>
+          <Tooltip delayDuration={300}>
+            <TooltipTrigger asChild>
+              <Badge
+                variant={badgeVariant}
+                className="text-[10px] cursor-help gap-1"
+              >
+                <Info className="h-2.5 w-2.5" />
+                {badge}
+              </Badge>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-xs">
+              <div className="space-y-1.5">
+                <p className="font-semibold text-sm">{tooltipTitle}</p>
+                <p className="text-xs text-muted-foreground">
+                  {tooltipDescription}
+                </p>
+                {tooltipExample && (
+                  <p className="text-xs italic border-l-2 border-muted pl-2 mt-2">
+                    VD: {tooltipExample}
+                  </p>
+                )}
+              </div>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
+// MAIN COMPONENT
+// =============================================================================
+
 export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
   // Get lead data to determine current consultation status
   const { data: lead } = useLead(leadId);
@@ -46,11 +126,11 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
 
   // Get allowed next statuses based on state machine
   const { data: statuses = [], isLoading: statusesLoading, error, isError } = useAllowedNextStatuses(currentStatusId);
-  
+
   // ✅ PHASE-BASED WORKFLOW: Get workflow context for phase filtering
   const { data: workflowContext, isLoading: contextLoading } = useWorkflowContext(leadId);
   const allowedByPhase = getAllowedStatusIds(workflowContext);
-  
+
   const addConsultation = useAddConsultation();
 
   // Dialog state
@@ -72,29 +152,35 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
     return statuses.filter(s => allowedByPhase.has(s.id));
   }, [statuses, workflowContext, allowedByPhase]);
 
-  // Group statuses by outcome_type
+  // ✅ UX IMPROVEMENT: Group statuses by Universal vs Result, then by outcome_type
   const groupedStatuses = useMemo(() => {
-    const neutral: ConsultationStatus[] = [];
-    const positive: ConsultationStatus[] = [];
-    const negative: ConsultationStatus[] = [];
+    // Universal statuses - only record activity, no stage change
+    const universal: ConsultationStatus[] = [];
+    // Result statuses - change lead progress
+    const resultPositive: ConsultationStatus[] = [];
+    const resultNegative: ConsultationStatus[] = [];
 
     filteredStatuses.forEach((status) => {
-      switch (status.outcome_type) {
-        case "neutral":
-          neutral.push(status);
-          break;
-        case "positive":
-          positive.push(status);
-          break;
-        case "negative":
-          negative.push(status);
-          break;
-        default:
-          neutral.push(status);
+      // Check if universal (doesn't update pipeline)
+      if (status.is_universal || status.updates_pipeline === false) {
+        universal.push(status);
+      } else {
+        // Group result statuses by outcome_type
+        switch (status.outcome_type) {
+          case "positive":
+            resultPositive.push(status);
+            break;
+          case "negative":
+            resultNegative.push(status);
+            break;
+          default:
+            // Neutral result statuses go to positive (they still progress)
+            resultPositive.push(status);
+        }
       }
     });
 
-    return { neutral, positive, negative };
+    return { universal, resultPositive, resultNegative };
   }, [filteredStatuses]);
 
 
@@ -198,112 +284,157 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
 
   return (
     <div className="space-y-4">
-      {/* Neutral Group - Retry/Callback */}
-      {groupedStatuses.neutral.length > 0 && (
+      {/* ================================================================== */}
+      {/* UNIVERSAL STATUSES - Activity logging without stage change */}
+      {/* ================================================================== */}
+      {groupedStatuses.universal.length > 0 && (
         <div className="space-y-2">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <PhoneOff className="h-3.5 w-3.5" />
-            <span className="font-medium">Kết nối thất bại / Gọi lại</span>
-          </div>
+          <SectionHeader
+            icon={<Activity className="h-3.5 w-3.5" />}
+            title="Ghi nhận hoạt động"
+            badge="Không đổi TT"
+            badgeVariant="outline"
+            tooltipTitle="Trạng thái hoạt động"
+            tooltipDescription="Dùng để ghi nhận cuộc gọi/tin nhắn mà KHÔNG thay đổi tiến trình lead. Lead vẫn giữ nguyên giai đoạn hiện tại."
+            tooltipExample="Gọi 3 lần không nghe máy → Lead vẫn ở 'Chưa tiếp cận', nhưng lịch sử ghi nhận đủ 3 lần gọi"
+          />
           <div className="flex flex-wrap gap-1.5">
-            {groupedStatuses.neutral.map((status) => (
-              <Button
-                key={status.id}
-                variant="ghost"
-                size="sm"
-                className={cn(
-                  "h-7 text-xs px-2.5",
-                  "bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200"
-                )}
-                onClick={() => handleStatusClick(status)}
-                disabled={addConsultation.isPending}
-              >
-                {addConsultation.isPending ? (
-                  <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
-                ) : (
-                  <span
-                    className="w-1.5 h-1.5 rounded-full mr-1.5 flex-shrink-0"
-                    style={{ backgroundColor: sanitizeColorCode(status.color_code) }}
-                  />
-                )}
-                {status.name}
-              </Button>
+            {groupedStatuses.universal.map((status) => (
+              <TooltipProvider key={status.id}>
+                <Tooltip delayDuration={500}>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className={cn(
+                        "h-7 text-xs px-2.5",
+                        "bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200"
+                      )}
+                      onClick={() => handleStatusClick(status)}
+                      disabled={addConsultation.isPending}
+                    >
+                      {addConsultation.isPending ? (
+                        <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
+                      ) : (
+                        <span
+                          className="w-1.5 h-1.5 rounded-full mr-1.5 flex-shrink-0"
+                          style={{ backgroundColor: sanitizeColorCode(status.color_code) }}
+                        />
+                      )}
+                      {status.name}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="max-w-xs">
+                    <p className="text-xs">{status.description || `Ghi nhận: ${status.name}`}</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             ))}
           </div>
         </div>
       )}
 
-      {/* Positive Group - Progress/Success */}
-      {groupedStatuses.positive.length > 0 && (
+      {/* ================================================================== */}
+      {/* RESULT STATUSES - Actually change lead progress */}
+      {/* ================================================================== */}
+
+      {/* Positive Results - Progress/Success */}
+      {groupedStatuses.resultPositive.length > 0 && (
         <div className="space-y-2">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <ThumbsUp className="h-3.5 w-3.5" />
-            <span className="font-medium">Tích cực / Tiến triển</span>
-          </div>
+          <SectionHeader
+            icon={<TrendingUp className="h-3.5 w-3.5" />}
+            title="Kết quả tích cực"
+            badge="Chuyển TT"
+            badgeVariant="default"
+            tooltipTitle="Kết quả thực sự"
+            tooltipDescription="Chọn khi đã có kết quả rõ ràng từ cuộc tư vấn. Lead sẽ CHUYỂN SANG giai đoạn mới trong pipeline."
+            tooltipExample="Lead đồng ý tư vấn → Chuyển từ 'Chưa tiếp cận' sang 'Đang tư vấn'"
+          />
           <div className="grid grid-cols-2 gap-2">
-            {groupedStatuses.positive.map((status) => (
-              <Button
-                key={status.id}
-                variant="outline"
-                size="sm"
-                className={cn(
-                  "h-9 text-xs justify-start",
-                  "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200",
-                  "font-medium"
-                )}
-                onClick={() => handleStatusClick(status)}
-                disabled={addConsultation.isPending}
-              >
-                {addConsultation.isPending ? (
-                  <Loader2 className="h-3 w-3 animate-spin mr-2" />
-                ) : (
-                  <span
-                    className="w-2 h-2 rounded-full mr-2 flex-shrink-0"
-                    style={{ backgroundColor: sanitizeColorCode(status.color_code) }}
-                  />
-                )}
-                <span className="truncate">{status.name}</span>
-              </Button>
+            {groupedStatuses.resultPositive.map((status) => (
+              <TooltipProvider key={status.id}>
+                <Tooltip delayDuration={500}>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className={cn(
+                        "h-9 text-xs justify-start",
+                        "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200",
+                        "font-medium"
+                      )}
+                      onClick={() => handleStatusClick(status)}
+                      disabled={addConsultation.isPending}
+                    >
+                      {addConsultation.isPending ? (
+                        <Loader2 className="h-3 w-3 animate-spin mr-2" />
+                      ) : (
+                        <span
+                          className="w-2 h-2 rounded-full mr-2 flex-shrink-0"
+                          style={{ backgroundColor: sanitizeColorCode(status.color_code) }}
+                        />
+                      )}
+                      <span className="truncate">{status.name}</span>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="max-w-xs">
+                    <p className="text-xs">{status.description || `Chuyển sang: ${status.name}`}</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             ))}
           </div>
         </div>
       )}
 
-      {/* Separator */}
-      {groupedStatuses.negative.length > 0 && (
+      {/* Separator before negative */}
+      {groupedStatuses.resultNegative.length > 0 && (
         <Separator className="my-3" />
       )}
 
-      {/* Negative Group - Stop/Remove */}
-      {groupedStatuses.negative.length > 0 && (
+      {/* Negative Results - Stop/Remove */}
+      {groupedStatuses.resultNegative.length > 0 && (
         <div className="space-y-2">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <XCircle className="h-3.5 w-3.5" />
-            <span className="font-medium">Dừng / Loại bỏ</span>
-          </div>
+          <SectionHeader
+            icon={<XCircle className="h-3.5 w-3.5" />}
+            title="Kết thúc / Loại bỏ"
+            badge="Đóng lead"
+            badgeVariant="secondary"
+            tooltipTitle="Kết thúc theo dõi"
+            tooltipDescription="Chọn khi lead không còn tiềm năng. Lead sẽ được đánh dấu hoàn tất và không xuất hiện trong danh sách làm việc."
+            tooltipExample="Lead từ chối hoàn toàn → Đóng lead, không follow-up nữa"
+          />
           <div className="flex flex-wrap gap-1.5">
-            {groupedStatuses.negative.map((status) => (
-              <Button
-                key={status.id}
-                variant="ghost"
-                size="sm"
-                className={cn(
-                  "h-7 text-xs px-2.5",
-                  "bg-red-50 hover:bg-red-100 text-red-600 border border-red-200"
-                )}
-                onClick={() => handleStatusClick(status)}
-                disabled={addConsultation.isPending}
-              >
-                {addConsultation.isPending ? (
-                  <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
-                ) : (
-                  <span
-                    className="w-1.5 h-1.5 rounded-full mr-1.5 flex-shrink-0"
-                    style={{ backgroundColor: sanitizeColorCode(status.color_code) }}
-                  />
-                )}
-                {status.name}
-              </Button>
+            {groupedStatuses.resultNegative.map((status) => (
+              <TooltipProvider key={status.id}>
+                <Tooltip delayDuration={500}>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className={cn(
+                        "h-7 text-xs px-2.5",
+                        "bg-red-50 hover:bg-red-100 text-red-600 border border-red-200"
+                      )}
+                      onClick={() => handleStatusClick(status)}
+                      disabled={addConsultation.isPending}
+                    >
+                      {addConsultation.isPending ? (
+                        <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
+                      ) : (
+                        <span
+                          className="w-1.5 h-1.5 rounded-full mr-1.5 flex-shrink-0"
+                          style={{ backgroundColor: sanitizeColorCode(status.color_code) }}
+                        />
+                      )}
+                      {status.name}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="max-w-xs">
+                    <p className="text-xs">{status.description || `Kết thúc: ${status.name}`}</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             ))}
           </div>
         </div>
