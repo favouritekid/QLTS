@@ -377,17 +377,16 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
   const groupedStatuses = useMemo(() => {
     // 1. Universal (Toàn cục - Row 1)
     const universal: ConsultationStatus[] = [];
-    
+
     // 2. Result Groups (Kết quả - Row 2)
     const previousStage: ConsultationStatus[] = [];
     const sameStage: ConsultationStatus[] = [];
     const nextStage: ConsultationStatus[] = [];
 
-    // Find current status to determine current stage order
-    // We try to find it in the fetched statuses first (since backend includes current status now)
-    const currentStatusObj = statuses.find(s => s.id === currentStatusId);
-    const currentStageOrder = currentStatusObj?.stage?.order ?? -1;
-    const currentStageId = currentStatusObj?.stage_id;
+    // ✅ FIX: Get current stage from LEAD object (not from allowed next statuses)
+    // The current status is NOT in the "allowed next statuses" list
+    const currentStageOrder = lead?.pipeline_stage?.order ?? -1;
+    const currentStageId = lead?.pipeline_stage_id;
 
     const displayStatuses = statuses.filter(s => {
       if (s.is_universal) {
@@ -399,8 +398,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
 
     displayStatuses.forEach((status) => {
       // Logic: Previous vs Same vs Next
-      // We rely on stage.order. If stage info is missing, fallback to 'next' or 'same'?
-      // Since we updated schema, status.stage should be available.
+      // We rely on stage.order from the status's associated stage
       const statusStageOrder = status.stage?.order ?? -1;
 
       // Grouping logic
@@ -418,7 +416,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
 
     // Sort Previous desc (closest to current first? or asc?) -> Let's do Ascending order
     previousStage.sort((a, b) => (a.stage?.order ?? 0) - (b.stage?.order ?? 0));
-    
+
     // Sort Next asc
     nextStage.sort((a, b) => (a.stage?.order ?? 0) - (b.stage?.order ?? 0));
 
@@ -430,7 +428,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
     });
 
     return { universal, previousStage, sameStage, nextStage };
-  }, [statuses, currentStatusId]);
+  }, [statuses, currentStatusId, lead?.pipeline_stage?.order, lead?.pipeline_stage_id]);
 
   // Loading state
   if (statusesLoading) {
