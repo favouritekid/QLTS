@@ -401,6 +401,7 @@ export const admissionProfileResponseSchema = z.object({
   id: z.number(),
   lead_id: z.number(),
   citizen_id: z.string().optional().nullable(),
+  citizen_id_masked: z.string().optional().nullable(), // Masked CCCD for display (e.g., ********1234)
   // Personal Info Extensions
   full_name: z.string().nullable(),
   dob: z.string().datetime({ offset: true }).nullable(), // Backend returns ISO string

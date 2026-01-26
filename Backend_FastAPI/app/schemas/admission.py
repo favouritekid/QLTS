@@ -518,6 +518,10 @@ class AdmissionProfileResponse(BaseModel):
     dob: Optional[datetime] = None
     gender: Optional[str] = None
     citizen_id: Optional[str] = None
+    citizen_id_masked: Optional[str] = Field(
+        None,
+        description="Masked citizen ID for display (e.g., ********1234)"
+    )
     social_insurance_number: Optional[str] = None
     
     # Location Fields

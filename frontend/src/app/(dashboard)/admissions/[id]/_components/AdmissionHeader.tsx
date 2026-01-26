@@ -49,7 +49,7 @@ export function AdmissionHeader({ profile }: AdmissionHeaderProps) {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
           <div>
             <p className="text-muted-foreground">CCCD/CMND</p>
-            <p className="font-medium">{profile.citizen_id || "Chưa nhập"}</p>
+            <p className="font-medium">{profile.citizen_id_masked || "Chưa nhập"}</p>
           </div>
           <div>
             <p className="text-muted-foreground">GPA</p>

@@ -43,6 +43,7 @@ from ..utils.exceptions import (
     PermissionDeniedError,
     ConflictError,
 )
+from ..utils.masking import mask_citizen_id
 
 log = structlog.get_logger(__name__)
 
@@ -557,6 +558,13 @@ def _compute_frontend_fields(
         "next_action": next_action,
         "can_submit": can_submit,
     }
+
+    # =========================================================================
+    # 9. SENSITIVE DATA MASKING (Security & Privacy Compliance)
+    # =========================================================================
+    # Mask CCCD for display purposes - show only last 4 digits
+    # Full citizen_id is still available for form editing
+    profile.citizen_id_masked = mask_citizen_id(profile.citizen_id)
 
 
 async def _create_admission_milestone_consultation(

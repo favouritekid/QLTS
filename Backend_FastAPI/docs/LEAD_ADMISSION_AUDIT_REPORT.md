@@ -949,7 +949,7 @@ Step 9: Enroll Student
 | 2 | **Data không sync giữa Lead và Admission Profile** | Email/phone sai, magic link gửi sai | Architecture decision | 4h | Đã Fixed, cần kiểm tra lại
 | 3 | **Consultation delete dùng hard delete** | Mất audit trail, không restore được | `lead_service.delete_consultation()` | 1h | Đã Fixed, cần kiểm tra lại
 | 4 | **Document upload/delete không có audit log** | Compliance risk | Toàn bộ document workflow | 4h | Đã Fixed, cần kiểm tra lại
-| 5 | **CCCD hiển thị đầy đủ, không mask** | Privacy/security risk | Frontend display | 1h |
+| 5 | **CCCD hiển thị đầy đủ, không mask** | Privacy/security risk | Frontend display | 1h | Đã Fixed, cần kiểm tra lại
 
 ### 8.2 Danh Sách Vấn Đề WARNING (Nên Fix Sớm)
 

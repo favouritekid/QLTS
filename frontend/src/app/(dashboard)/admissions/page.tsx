@@ -120,8 +120,8 @@ export default function AdmissionsPage() {
               </CardHeader>
               <CardContent>
                 <div className="space-y-2 text-sm text-muted-foreground">
-                  {profile.citizen_id && (
-                    <div>CCCD: {profile.citizen_id}</div>
+                  {profile.citizen_id_masked && (
+                    <div>CCCD: {profile.citizen_id_masked}</div>
                   )}
                   <div className="flex items-center gap-1">
                     <Calendar className="h-3 w-3" />
