@@ -203,6 +203,20 @@ export function LeadSidebar({ lead, timeline, onAssign, hideHeader }: LeadSideba
                 {lead.pipeline_stage.name}
               </Badge>
             )}
+
+            {/* Consultation Status - Current status within the stage */}
+            {lead.consultation_status && (
+              <div className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-background border">
+                <div
+                  className="h-2 w-2 rounded-full shrink-0"
+                  style={{ backgroundColor: lead.consultation_status.color_code || "#6b7280" }}
+                />
+                <span className="text-xs text-muted-foreground">Trạng thái:</span>
+                <span className="text-sm font-medium truncate">
+                  {lead.consultation_status.name}
+                </span>
+              </div>
+            )}
           </div>
 
           <Separator />
