@@ -4,6 +4,10 @@
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
+import {
+  getStatusBadgeConfig,
+  type StatusModule,
+} from "@/lib/ui-config/status-badge.config";
 
 // =============================================================================
 // VARIANT DEFINITIONS
@@ -14,6 +18,7 @@ const statusBadgeVariants = cva(
   {
     variants: {
       variant: {
+        // Legacy variants (backward compatible)
         success: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400",
         warning: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400",
         danger: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
@@ -21,6 +26,25 @@ const statusBadgeVariants = cva(
         neutral: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-400",
         primary: "bg-primary/10 text-primary dark:bg-primary/20",
         secondary: "bg-secondary text-secondary-foreground",
+
+        // Semantic variants (using CSS tokens) - NEW
+        "admission-draft": "bg-admission-draft-bg text-admission-draft-fg border border-admission-draft-border",
+        "admission-submitted": "bg-admission-submitted-bg text-admission-submitted-fg border border-admission-submitted-border",
+        "admission-reviewing": "bg-admission-reviewing-bg text-admission-reviewing-fg border border-admission-reviewing-border",
+        "admission-approved": "bg-admission-approved-bg text-admission-approved-fg border border-admission-approved-border",
+        "admission-rejected": "bg-admission-rejected-bg text-admission-rejected-fg border border-admission-rejected-border",
+        "admission-enrolled": "bg-admission-enrolled-bg text-admission-enrolled-fg border border-admission-enrolled-border",
+
+        "lead-new": "bg-lead-new-bg text-lead-new-fg",
+        "lead-contacted": "bg-lead-contacted-bg text-lead-contacted-fg",
+        "lead-qualified": "bg-lead-qualified-bg text-lead-qualified-fg",
+        "lead-converted": "bg-lead-converted-bg text-lead-converted-fg",
+        "lead-lost": "bg-lead-lost-bg text-lead-lost-fg",
+
+        "score-excellent": "bg-score-excellent-bg text-score-excellent-fg",
+        "score-good": "bg-score-good-bg text-score-good-fg",
+        "score-average": "bg-score-average-bg text-score-average-fg",
+        "score-poor": "bg-score-poor-bg text-score-poor-fg",
       },
       size: {
         sm: "text-[10px] px-2 py-0.5",
@@ -39,7 +63,13 @@ const statusBadgeVariants = cva(
 // TYPES
 // =============================================================================
 
-export type StatusVariant = "success" | "warning" | "danger" | "info" | "neutral" | "primary" | "secondary";
+export type StatusVariant =
+  | "success" | "warning" | "danger" | "info" | "neutral" | "primary" | "secondary"
+  // Semantic variants
+  | "admission-draft" | "admission-submitted" | "admission-reviewing"
+  | "admission-approved" | "admission-rejected" | "admission-enrolled"
+  | "lead-new" | "lead-contacted" | "lead-qualified" | "lead-converted" | "lead-lost"
+  | "score-excellent" | "score-good" | "score-average" | "score-poor";
 
 export interface StatusConfig {
   label: string;
@@ -68,36 +98,53 @@ export interface StatusBadgeProps
  * Pre-defined status mappings for common scenarios
  */
 export const LEAD_STATUS_MAP: Record<string, StatusConfig> = {
-  new: { label: "Moi", variant: "info" },
-  assigned: { label: "Da gan", variant: "primary" },
-  contacted: { label: "Da lien he", variant: "warning" },
-  qualified: { label: "Du dieu kien", variant: "success" },
-  unqualified: { label: "Khong du dieu kien", variant: "neutral" },
-  converted: { label: "Da chuyen doi", variant: "success" },
-  rejected: { label: "Tu choi", variant: "danger" },
+  new: { label: "Mới", variant: "lead-new" },
+  assigned: { label: "Đã gán", variant: "lead-contacted" },
+  contacted: { label: "Đã liên hệ", variant: "lead-contacted" },
+  qualified: { label: "Đủ điều kiện", variant: "lead-qualified" },
+  unqualified: { label: "Không đủ ĐK", variant: "lead-lost" },
+  converted: { label: "Đã chuyển đổi", variant: "lead-converted" },
+  rejected: { label: "Từ chối", variant: "admission-rejected" },
+};
+
+export const ADMISSION_STATUS_MAP: Record<string, StatusConfig> = {
+  draft: { label: "Nháp", variant: "admission-draft" },
+  submitted: { label: "Đã nộp", variant: "admission-submitted" },
+  resubmitted: { label: "Nộp lại", variant: "admission-submitted" },
+  reviewing: { label: "Đang xét", variant: "admission-reviewing" },
+  approved: { label: "Đã duyệt", variant: "admission-approved" },
+  rejected: { label: "Từ chối", variant: "admission-rejected" },
+  enrolled: { label: "Đã nhập học", variant: "admission-enrolled" },
+};
+
+export const SCORE_LEVEL_MAP: Record<string, StatusConfig> = {
+  excellent: { label: "Xuất sắc", variant: "score-excellent" },
+  good: { label: "Tốt", variant: "score-good" },
+  average: { label: "Trung bình", variant: "score-average" },
+  poor: { label: "Yếu", variant: "score-poor" },
 };
 
 export const PAYMENT_STATUS_MAP: Record<string, StatusConfig> = {
-  pending: { label: "Cho xu ly", variant: "warning" },
-  processing: { label: "Dang xu ly", variant: "info" },
-  completed: { label: "Hoan thanh", variant: "success" },
-  failed: { label: "That bai", variant: "danger" },
-  refunded: { label: "Da hoan tien", variant: "neutral" },
+  pending: { label: "Chờ xử lý", variant: "warning" },
+  processing: { label: "Đang xử lý", variant: "info" },
+  completed: { label: "Hoàn thành", variant: "success" },
+  failed: { label: "Thất bại", variant: "danger" },
+  refunded: { label: "Đã hoàn tiền", variant: "neutral" },
 };
 
 export const CONSULTATION_STATUS_MAP: Record<string, StatusConfig> = {
-  scheduled: { label: "Da hen", variant: "info" },
-  in_progress: { label: "Dang tu van", variant: "warning" },
-  completed: { label: "Hoan thanh", variant: "success" },
-  cancelled: { label: "Da huy", variant: "danger" },
-  no_show: { label: "Vang mat", variant: "neutral" },
+  scheduled: { label: "Đã hẹn", variant: "info" },
+  in_progress: { label: "Đang tư vấn", variant: "warning" },
+  completed: { label: "Hoàn thành", variant: "success" },
+  cancelled: { label: "Đã hủy", variant: "danger" },
+  no_show: { label: "Vắng mặt", variant: "neutral" },
 };
 
 export const ACTIVE_STATUS_MAP: Record<string, StatusConfig> = {
-  active: { label: "Hoat dong", variant: "success" },
-  inactive: { label: "Khong hoat dong", variant: "neutral" },
-  suspended: { label: "Tam ngung", variant: "warning" },
-  deleted: { label: "Da xoa", variant: "danger" },
+  active: { label: "Hoạt động", variant: "success" },
+  inactive: { label: "Không hoạt động", variant: "neutral" },
+  suspended: { label: "Tạm ngưng", variant: "warning" },
+  deleted: { label: "Đã xóa", variant: "danger" },
 };
 
 // =============================================================================
@@ -141,7 +188,11 @@ export function StatusBadge({
             variant === "info" && "bg-blue-500",
             variant === "neutral" && "bg-gray-500",
             variant === "primary" && "bg-primary",
-            variant === "secondary" && "bg-secondary-foreground"
+            variant === "secondary" && "bg-secondary-foreground",
+            // Semantic variants use currentColor
+            variant.startsWith("admission-") && "bg-current opacity-70",
+            variant.startsWith("lead-") && "bg-current opacity-70",
+            variant.startsWith("score-") && "bg-current opacity-70"
           )}
         />
       )}
@@ -156,7 +207,7 @@ export function StatusBadge({
 }
 
 // =============================================================================
-// CONVENIENCE COMPONENT
+// CONVENIENCE COMPONENTS
 // =============================================================================
 
 export interface StatusFromMapProps extends Omit<StatusBadgeProps, "children" | "variant"> {
@@ -182,6 +233,96 @@ export function StatusFromMap({
   return (
     <StatusBadge variant={config.variant} icon={config.icon} {...props}>
       {config.label}
+    </StatusBadge>
+  );
+}
+
+// =============================================================================
+// SEMANTIC BADGE COMPONENTS (NEW - using config system)
+// =============================================================================
+
+interface SemanticBadgeProps extends Omit<StatusBadgeProps, "children" | "variant"> {
+  /** Status value from backend */
+  status: string;
+  /** Use compact label */
+  compact?: boolean;
+}
+
+/**
+ * Admission status badge using semantic tokens
+ * @example <AdmissionBadge status="approved" />
+ */
+export function AdmissionBadge({ status, compact, showDot, ...props }: SemanticBadgeProps) {
+  const config = getStatusBadgeConfig(status, "admission");
+  const Icon = config.icon;
+  const label = compact ? (config.shortLabel ?? config.label) : config.label;
+
+  return (
+    <StatusBadge
+      variant={`admission-${status}` as StatusVariant}
+      icon={!showDot && Icon ? <Icon className="h-3 w-3" /> : undefined}
+      showDot={showDot}
+      {...props}
+    >
+      {label}
+    </StatusBadge>
+  );
+}
+
+/**
+ * Lead status badge using semantic tokens
+ * @example <LeadBadge status="qualified" />
+ */
+export function LeadBadge({ status, compact, showDot, ...props }: SemanticBadgeProps) {
+  const config = getStatusBadgeConfig(status, "lead");
+  const Icon = config.icon;
+  const label = compact ? (config.shortLabel ?? config.label) : config.label;
+
+  // Map to closest semantic variant
+  const variantMap: Record<string, StatusVariant> = {
+    new: "lead-new",
+    assigned: "lead-contacted",
+    contacted: "lead-contacted",
+    qualified: "lead-qualified",
+    unqualified: "lead-lost",
+    converted: "lead-converted",
+    rejected: "admission-rejected",
+  };
+
+  return (
+    <StatusBadge
+      variant={variantMap[status] ?? "neutral"}
+      icon={!showDot && Icon ? <Icon className="h-3 w-3" /> : undefined}
+      showDot={showDot}
+      {...props}
+    >
+      {label}
+    </StatusBadge>
+  );
+}
+
+/**
+ * Score level badge using semantic tokens
+ * @example <ScoreLevelBadge level="excellent" />
+ */
+export function ScoreLevelBadge({
+  level,
+  compact,
+  showDot,
+  ...props
+}: Omit<SemanticBadgeProps, "status"> & { level: string }) {
+  const config = getStatusBadgeConfig(level, "score");
+  const Icon = config.icon;
+  const label = compact ? (config.shortLabel ?? config.label) : config.label;
+
+  return (
+    <StatusBadge
+      variant={`score-${level}` as StatusVariant}
+      icon={!showDot && Icon ? <Icon className="h-3 w-3" /> : undefined}
+      showDot={showDot}
+      {...props}
+    >
+      {label}
     </StatusBadge>
   );
 }
