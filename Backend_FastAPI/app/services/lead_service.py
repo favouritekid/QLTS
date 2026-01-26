@@ -29,6 +29,94 @@ from .lead_profile_sync import sync_profile_from_lead, detect_changed_personal_f
 log = structlog.get_logger(__name__)
 
 
+# =========================================================================
+# TERMINAL STATUS GUARD
+# =========================================================================
+# Phase "enrolled" + is_final = HARD BLOCK (Lead đã hoàn tất quy trình)
+# Other phases + is_final = SOFT BLOCK (cho phép ghi nhận, không update status)
+# =========================================================================
+
+class TerminalGuardResult:
+    """Result of terminal status check."""
+    __slots__ = ("is_terminal", "hard_block", "reason", "current_status")
+
+    def __init__(
+        self,
+        is_terminal: bool = False,
+        hard_block: bool = False,
+        reason: str = "",
+        current_status: Optional["models.ConsultationStatus"] = None
+    ):
+        self.is_terminal = is_terminal
+        self.hard_block = hard_block
+        self.reason = reason
+        self.current_status = current_status
+
+
+async def check_terminal_status_guard(
+    db: AsyncSession,
+    lead: "models.Lead",
+) -> TerminalGuardResult:
+    """
+    Check if lead is in a terminal state that blocks or limits further updates.
+
+    Terminal Status Guard Logic:
+    - If current status has is_final=True AND phase="enrolled" → HARD BLOCK
+      (Lead đã nhập học/bảo lưu - quy trình hoàn tất)
+    - If current status has is_final=True AND phase!="enrolled" → SOFT BLOCK
+      (Lead đã từ chối/rút hồ sơ - cho phép ghi nhận nhưng không update status)
+    - Otherwise → ALLOW (không có guard)
+
+    Args:
+        db: Database session
+        lead: Lead object (must be loaded from DB)
+
+    Returns:
+        TerminalGuardResult with:
+        - is_terminal: True if current status is terminal
+        - hard_block: True if should completely block consultation creation
+        - reason: Human-readable explanation
+        - current_status: The ConsultationStatus object (if loaded)
+    """
+    if not lead.consultation_status_id:
+        # Lead chưa có status → cho phép
+        return TerminalGuardResult(is_terminal=False)
+
+    # Lấy current status với is_final và phase
+    current_status = await db.get(models.ConsultationStatus, lead.consultation_status_id)
+    if not current_status:
+        log.warning(
+            "Terminal guard: current_status not found",
+            lead_id=lead.id,
+            consultation_status_id=lead.consultation_status_id
+        )
+        return TerminalGuardResult(is_terminal=False)
+
+    # Check terminal state
+    if not current_status.is_final:
+        return TerminalGuardResult(is_terminal=False, current_status=current_status)
+
+    # Terminal state detected
+    if current_status.phase == "enrolled":
+        # HARD BLOCK: Lead đã nhập học/bảo lưu
+        return TerminalGuardResult(
+            is_terminal=True,
+            hard_block=True,
+            reason=f"Lead đang ở trạng thái '{current_status.name}' (phase={current_status.phase}, is_final=True). "
+                   f"Không thể thêm consultation mới cho lead đã hoàn tất quy trình nhập học.",
+            current_status=current_status
+        )
+    else:
+        # SOFT BLOCK: Lead terminal nhưng không phải enrolled (từ chối, rút hồ sơ, etc.)
+        return TerminalGuardResult(
+            is_terminal=True,
+            hard_block=False,
+            reason=f"Lead đang ở trạng thái terminal '{current_status.name}' (phase={current_status.phase}, is_final=True). "
+                   f"Cho phép ghi nhận consultation nhưng không cập nhật lead status.",
+            current_status=current_status
+        )
+
+
 async def update_lead_next_activity(
     db: AsyncSession,
     lead_id: int
@@ -1289,6 +1377,26 @@ async def add_consultation(
                     detail=f"Consultation status with id {data.status_id} not found."
                 )
 
+            # ✅ TERMINAL STATUS GUARD (Issue #3 fix)
+            # Check if lead is in terminal state BEFORE any workflow validation
+            terminal_guard = await check_terminal_status_guard(db, lead)
+            if terminal_guard.hard_block:
+                # HARD BLOCK: Lead đã nhập học - không cho tạo consultation
+                log.warning(
+                    "Terminal guard HARD BLOCK: cannot add consultation to enrolled lead",
+                    lead_id=lead_id,
+                    current_status_id=lead.consultation_status_id,
+                    current_status_name=terminal_guard.current_status.name if terminal_guard.current_status else None,
+                    attempted_status=new_status.id,
+                    officer_id=officer_id,
+                )
+                raise BusinessRuleViolation(
+                    detail=terminal_guard.reason
+                )
+
+            # SOFT BLOCK flag - sẽ sử dụng ở bước update lead status
+            skip_status_update = terminal_guard.is_terminal
+
             # ✅ NEW: Validate workflow transition (following update_lead pattern)
             # Chỉ validate nếu lead đã có status và status thực sự thay đổi
             current_status_id = lead.consultation_status_id
@@ -1369,19 +1477,22 @@ async def add_consultation(
             # Lưu trạng thái Lead cũ
             old_state = _get_current_lead_state(lead)
 
-            # ✅ AUDIT FIX: Terminal state guard - prevent overwriting "converted"
-            if lead.status == "converted":
+            # ✅ TERMINAL STATUS GUARD (Issue #3) - Using check result from earlier
+            # skip_status_update flag was set by check_terminal_status_guard() above
+            if skip_status_update:
                 log.warning(
-                    "Skipping lead status update: lead already converted (terminal state)",
+                    "Terminal guard SOFT BLOCK: skipping lead status update for terminal lead",
                     lead_id=lead_id,
-                    current_status="converted",
+                    current_status_id=lead.consultation_status_id,
+                    current_status_phase=terminal_guard.current_status.phase if terminal_guard.current_status else None,
                     attempted_status=new_status.id,
                     attempted_status_name=new_status.name,
                     officer_id=officer_id,
+                    reason=terminal_guard.reason,
                 )
                 # Still create consultation record for history, but don't update lead status
                 # Continue to consultation creation below without status update
-            # ✅ NEW: Chỉ cập nhật pipeline nếu status.updates_pipeline = True
+            # ✅ Chỉ cập nhật pipeline nếu status.updates_pipeline = True
             elif new_status.updates_pipeline:
                 # Cập nhật trạng thái Lead theo status mới của consultation
                 lead.consultation_status_id = new_status.id
@@ -2002,6 +2113,7 @@ async def update_consultation(
             # ✅ SECURITY FIX: Validate status_id BEFORE modifying consultation
             # Prevents creating consultation with invalid/nonexistent status
             validated_status = None
+            skip_status_update = False  # ✅ TERMINAL STATUS GUARD flag
             if "status_id" in update_data:
                 new_status_id = update_data["status_id"]
                 validated_status = await db.get(models.ConsultationStatus, new_status_id)
@@ -2009,6 +2121,25 @@ async def update_consultation(
                     raise ResourceNotFoundError(
                         detail=f"Consultation status '{new_status_id}' not found. Cannot update consultation."
                     )
+
+                # ✅ TERMINAL STATUS GUARD (Issue #3 fix)
+                # Check if lead is in terminal state BEFORE workflow validation
+                terminal_guard = await check_terminal_status_guard(db, lead)
+                if terminal_guard.hard_block:
+                    # HARD BLOCK: Lead đã nhập học - không cho thay đổi consultation status
+                    log.warning(
+                        "Terminal guard HARD BLOCK: cannot change consultation status for enrolled lead",
+                        lead_id=lead_id,
+                        consultation_id=consultation_id,
+                        current_status_id=lead.consultation_status_id,
+                        current_status_name=terminal_guard.current_status.name if terminal_guard.current_status else None,
+                        attempted_status=new_status_id,
+                        user_id=current_user.id,
+                    )
+                    raise BusinessRuleViolation(
+                        detail=terminal_guard.reason
+                    )
+                skip_status_update = terminal_guard.is_terminal
 
                 # ✅ FIX: Validate workflow transition (consistent with add_consultation)
                 # Only validate if status is actually changing
@@ -2076,15 +2207,18 @@ async def update_consultation(
             status_changed = False
             if "status_id" in update_data and update_data["status_id"] != old_consultation_status_id:
                 if is_latest_consultation:
-                    # ✅ AUDIT FIX: Terminal state guard - prevent overwriting "converted"
-                    if lead.status == "converted":
+                    # ✅ TERMINAL STATUS GUARD (Issue #3) - Using check result from earlier
+                    # skip_status_update flag was set by check_terminal_status_guard() above
+                    if skip_status_update:
                         log.warning(
-                            "Skipping lead status update: lead already converted (terminal state)",
+                            "Terminal guard SOFT BLOCK: skipping lead status update for terminal lead",
                             lead_id=lead_id,
                             consultation_id=consultation_id,
-                            current_status="converted",
+                            current_status_id=lead.consultation_status_id,
+                            current_status_phase=terminal_guard.current_status.phase if terminal_guard.current_status else None,
                             attempted_status=update_data["status_id"],
                             user_id=current_user.id,
+                            reason=terminal_guard.reason,
                         )
                         # Skip status update but continue with consultation update
                     else:

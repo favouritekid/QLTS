@@ -957,7 +957,7 @@ Step 9: Enroll Student
 |---|-------|--------|----------|
 | 1 | Lead status không auto-sync với Admission status | Inconsistent reporting | HIGH | Đã Fixed, cần kiểm tra lại
 | 2 | Không có status DEFERRED, DECLINED, LOCKED | Không cover real-world scenarios | MEDIUM |
-| 3 | Terminal status guard chỉ log warning, không hard block | Potential state corruption | MEDIUM |
+| 3 | Terminal status guard chỉ log warning, không hard block | Potential state corruption | MEDIUM | Đã Fixed, cần kiểm tra lại
 | 4 | Missing composite indexes cho common queries | Performance degradation at scale | MEDIUM |
 | 5 | Lack of generic audit log | Khó trace field changes | MEDIUM |
 | 6 | Rate limiting cho /auth/login không rõ | Brute force risk | HIGH |
