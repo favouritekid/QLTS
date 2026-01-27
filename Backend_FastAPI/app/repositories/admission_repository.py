@@ -129,6 +129,37 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_latest_consultation_for_lead(
+        self,
+        lead_id: int
+    ) -> Optional[models.Consultation]:
+        """
+        Get the latest consultation for a lead (by consultation_date).
+
+        ✅ EDGE CASE #9 FIX: Validate consultation completeness before admission.
+
+        Args:
+            lead_id: Lead ID
+
+        Returns:
+            Latest Consultation with status loaded, or None if no consultations
+        """
+        stmt = (
+            select(models.Consultation)
+            .where(
+                models.Consultation.lead_id == lead_id,
+                models.Consultation.deleted_at.is_(None)  # Exclude soft-deleted
+            )
+            .options(
+                joinedload(models.Consultation.consultation_status),
+                joinedload(models.Consultation.officer),
+            )
+            .order_by(models.Consultation.consultation_date.desc())
+            .limit(1)
+        )
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def get_profile_by_id_with_lead(
         self,
         profile_id: int

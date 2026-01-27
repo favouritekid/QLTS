@@ -315,7 +315,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { assigned_officer_id: _assigned_officer_id, ...updateData } = apiData;
       updateMutation.mutate(
-        { id: lead.id, data: updateData },
+        { id: lead.id, data: { ...updateData, version: lead.version } },
         {
           onSuccess: () => {
             onOpenChange(false);

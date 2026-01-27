@@ -939,9 +939,16 @@ async def create_profile(
     # Note: If lead is rejected/unqualified, proceeding here effectively re-opens them via admission process.
 
 
-    # ✅ GAP #1 FIX: Require at least 1 consultation before admission profile
-    # This enforces the business workflow: Lead → Consultation → Admission
-    if lead.consultation_count is None or lead.consultation_count < 1:
+    # =========================================================================
+    # ✅ EDGE CASE #9 FIX: Validate Consultation Completeness
+    # Enforces workflow: Lead → Consultation (with status) → Admission
+    # Uses ACTUAL consultation data, not just cached fields on Lead
+    # =========================================================================
+
+    # Step 4a: Get latest consultation (actual DB query for accuracy)
+    latest_consultation = await admission_repo.get_latest_consultation_for_lead(lead_id)
+
+    if not latest_consultation:
         log.warning(
             "Attempt to create admission profile for lead without consultations",
             lead_id=lead_id,
@@ -949,20 +956,41 @@ async def create_profile(
             user_id=current_user.id,
         )
         raise BusinessRuleViolation(
-            "Cannot create admission profile: Lead must have at least 1 consultation record. "
-            "Please add a consultation before creating an admission profile."
+            "Chưa thể tạo hồ sơ xét tuyển: Lead chưa có lịch sử tư vấn. "
+            "Vui lòng thêm ít nhất 1 lần tư vấn trước khi tạo hồ sơ."
         )
 
-    # Additional check: Lead must have been contacted (has consultation_status)
-    if lead.consultation_status_id is None:
+    # Step 4b: Validate consultation has a status assigned
+    if not latest_consultation.consultation_status_id:
         log.warning(
-            "Attempt to create admission profile for lead without consultation status",
+            "Attempt to create admission profile with incomplete consultation",
             lead_id=lead_id,
+            consultation_id=latest_consultation.id,
+            has_status=False,
             user_id=current_user.id,
         )
         raise BusinessRuleViolation(
-            "Cannot create admission profile: Lead has not been contacted yet. "
-            "Please update lead status through consultation before creating admission profile."
+            "Chưa thể tạo hồ sơ xét tuyển: Lần tư vấn gần nhất chưa cập nhật kết quả. "
+            "Vui lòng chọn trạng thái tư vấn (VD: 'Có nhu cầu', 'Đồng ý tư vấn') trước khi tạo hồ sơ."
+        )
+
+    # Step 4c: Validate consultation status is not a "universal" activity-only status
+    # Universal statuses (e.g., "Không nghe máy", "Nhắn tin không phản hồi") are
+    # activity markers, not pipeline progression indicators
+    if latest_consultation.consultation_status and latest_consultation.consultation_status.is_universal:
+        status_name = latest_consultation.consultation_status.name
+        log.warning(
+            "Attempt to create admission profile with universal/activity-only status",
+            lead_id=lead_id,
+            consultation_id=latest_consultation.id,
+            status_id=latest_consultation.consultation_status_id,
+            status_name=status_name,
+            user_id=current_user.id,
+        )
+        raise BusinessRuleViolation(
+            f"Chưa thể tạo hồ sơ xét tuyển: Trạng thái hiện tại '{status_name}' chỉ là ghi nhận hoạt động, "
+            "chưa phải kết quả tư vấn. Vui lòng cập nhật trạng thái phản ánh kết quả tư vấn thực tế "
+            "(VD: 'Có nhu cầu tìm hiểu', 'Đồng ý tư vấn', 'Từ chối tư vấn')."
         )
 
     # Step 5: Validate offering exists

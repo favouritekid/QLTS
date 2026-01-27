@@ -27,6 +27,7 @@ interface OfficerRatingInputProps {
   currentLeadScore?: number;
   className?: string;
   compact?: boolean;
+  version?: number; // Optimistic locking - prevents concurrent update conflicts
 }
 
 const RATING_LABELS: Record<number, { label: string; description: string }> = {
@@ -43,6 +44,7 @@ export function OfficerRatingInput({
   currentLeadScore = 0,
   className,
   compact = false,
+  version,
 }: OfficerRatingInputProps) {
   const [hoverRating, setHoverRating] = useState<number | null>(null);
   // Local state để UI update ngay lập tức khi click
@@ -72,7 +74,7 @@ export function OfficerRatingInput({
     updateLead.mutate(
       {
         id: leadId,
-        data: { officer_rating: rating },
+        data: { officer_rating: rating, version },
       },
       {
         onSuccess: () => {

@@ -515,6 +515,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                   leadId={lead.id}
                   currentRating={lead.officer_rating ?? null}
                   currentLeadScore={lead.lead_score}
+                  version={lead.version}
                   compact
                 />
               </div>

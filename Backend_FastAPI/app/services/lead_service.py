@@ -1027,7 +1027,22 @@ async def update_lead(
             # Lấy dữ liệu cập nhật từ schema Pydantic
             update_data = lead_in.model_dump(exclude_unset=True)
 
-            # (Dọn dẹp .strip() đã bị xóa vì Pydantic xử lý)
+            # =========================================================================
+            # ✅ IDENTITY FIELD LOCK: Block updates to identity fields when profile locked
+            # Identity fields (full_name, phone, email) cannot be changed when Lead has
+            # an AdmissionProfile in approved/rejected/enrolled state.
+            # =========================================================================
+            from .lead_profile_sync import check_lead_identity_update_allowed
+
+            fields_being_updated = list(update_data.keys())
+            allowed, block_reason, blocked_profile_id = await check_lead_identity_update_allowed(
+                db=db,
+                lead_id=lead_id,
+                fields_to_update=fields_being_updated,
+            )
+
+            if not allowed:
+                raise BusinessRuleViolation(detail=block_reason)
 
             # Kiểm tra trùng lặp email nếu email được cập nhật (case-insensitive)
             # Kiểm tra trùng lặp email nếu email được cập nhật (case-insensitive)
@@ -1089,6 +1104,33 @@ async def update_lead(
             # Track offering_id change before applying updates
             old_offering_id = db_lead.offering_id
             offering_changed = "offering_id" in update_data and update_data["offering_id"] != old_offering_id
+
+            # =========================================================================
+            # ✅ EDGE CASE FIX: Block offering change when AdmissionProfile exists
+            # AdmissionProfile contains snapshotted applied_rules from the offering's
+            # admission path. Changing offering would make the rules invalid.
+            # =========================================================================
+            if offering_changed:
+                from app.repositories import AdmissionRepository
+                admission_repo = AdmissionRepository(db)
+                existing_profile = await admission_repo.get_profile_by_lead_id(lead_id)
+
+                if existing_profile:
+                    log.warning(
+                        "Blocked offering change: Lead has admission profile",
+                        lead_id=lead_id,
+                        old_offering_id=old_offering_id,
+                        new_offering_id=update_data["offering_id"],
+                        profile_id=existing_profile.id,
+                        profile_status=existing_profile.status,
+                        user_id=updated_by.id,
+                    )
+                    raise BusinessRuleViolation(
+                        f"Không thể đổi ngành khi Lead đã có hồ sơ xét tuyển (#{existing_profile.id}, "
+                        f"trạng thái: {existing_profile.status}). "
+                        "Hồ sơ xét tuyển chứa quy định tuyển sinh của ngành cũ. "
+                        "Vui lòng hủy hồ sơ xét tuyển trước khi đổi ngành."
+                    )
 
             # Check if scoring-related fields are being updated
             scoring_fields = ["education_level", "gpa", "source", "location"]
