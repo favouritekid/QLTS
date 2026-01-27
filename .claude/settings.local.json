@@ -17,7 +17,12 @@
       "Bash(tail:*)",
       "Bash(alembic revision:*)",
       "Bash(wslpath:*)",
-      "Bash(sort:*)"
+      "Bash(sort:*)",
+      "Bash(xargs file:*)",
+      "WebSearch",
+      "Bash(DEBUG=*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }

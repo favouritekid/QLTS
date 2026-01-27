@@ -793,6 +793,8 @@ export function useUpdateConsultation() {
 /**
  * Delete a consultation (admin: all, officer: most recent only)
  *
+ * Shows an undo toast that allows restoring the consultation within 10 seconds.
+ *
  * @example
  * ```tsx
  * const deleteConsultation = useDeleteConsultation();
@@ -811,8 +813,36 @@ export function useDeleteConsultation() {
       await leadsApi.deleteConsultation(leadId, consultationId);
     },
 
-    onSuccess: (_, { leadId }) => {
-      toast.success("Consultation deleted successfully!");
+    onSuccess: (_, { leadId, consultationId }) => {
+      // ✅ UNDO TOAST: Show toast with undo button for 10 seconds
+      toast.success("Đã xóa ghi nhận tư vấn", {
+        description: "Bấm Hoàn tác để khôi phục",
+        duration: 10000, // 10 seconds
+        action: {
+          label: "Hoàn tác",
+          onClick: async () => {
+            try {
+              await leadsApi.restoreConsultation(leadId, consultationId);
+              toast.success("Đã khôi phục ghi nhận tư vấn");
+              // Refresh data after restore
+              invalidateLeadQueries(queryClient, leadId, {
+                detail: true,
+                timeline: true,
+                insights: true,
+                lists: true,
+                pipeline: true,
+              });
+              queryClient.invalidateQueries({
+                queryKey: ["pipeline", "allowedNextStatuses"],
+              });
+            } catch {
+              toast.error("Không thể khôi phục", {
+                description: "Vui lòng thử lại hoặc liên hệ admin",
+              });
+            }
+          },
+        },
+      });
 
       // ✅ OPTIMIZED: Deletion may revert status, invalidate pipeline
       invalidateLeadQueries(queryClient, leadId, {
@@ -838,6 +868,56 @@ export function useDeleteConsultation() {
           : Array.isArray(detail)
             ? detail.map((e) => e.msg).join(", ")
             : "Failed to delete consultation";
+      toast.error("Error", { description: message });
+    },
+  });
+}
+
+/**
+ * Restore a soft-deleted consultation
+ *
+ * @example
+ * ```tsx
+ * const restoreConsultation = useRestoreConsultation();
+ * restoreConsultation.mutate({ leadId: 123, consultationId: 456 });
+ * ```
+ */
+export function useRestoreConsultation() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    Consultation,
+    AxiosError<ApiErrorResponse>,
+    { leadId: number; consultationId: number }
+  >({
+    mutationFn: async ({ leadId, consultationId }) => {
+      return await leadsApi.restoreConsultation(leadId, consultationId);
+    },
+
+    onSuccess: (_, { leadId }) => {
+      toast.success("Đã khôi phục ghi nhận tư vấn");
+
+      invalidateLeadQueries(queryClient, leadId, {
+        detail: true,
+        timeline: true,
+        insights: true,
+        lists: true,
+        pipeline: true,
+      });
+
+      queryClient.invalidateQueries({
+        queryKey: ["pipeline", "allowedNextStatuses"],
+      });
+    },
+
+    onError: (error) => {
+      const detail = error.response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((e) => e.msg).join(", ")
+            : "Không thể khôi phục ghi nhận tư vấn";
       toast.error("Error", { description: message });
     },
   });

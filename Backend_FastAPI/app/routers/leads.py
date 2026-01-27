@@ -758,6 +758,61 @@ async def delete_a_consultation(
     return None
 
 
+@limiter.limit(RateLimits.DATA_WRITE)  # 200/hour
+@router.post(
+    "/{lead_id}/consultations/{consultation_id}/restore",
+    response_model=schemas.Consultation,
+)
+async def restore_a_consultation(
+    request: Request,
+    consultation_id: int,
+    lead: models.Lead = LeadAccessDep,
+    current_user: models.User = CasbinAuth,
+    db: AsyncSession = Depends(database.get_db),
+):
+    """
+    Restore a soft-deleted consultation.
+
+    Permission Rules:
+    - Admin/Manager: Can restore any consultation
+    - Officer: Can only restore if assigned to the lead
+
+    Business Logic:
+    - Restores the consultation by clearing deleted_at
+    - If restored consultation is the most recent, updates lead status accordingly
+    """
+    await lead_service.restore_consultation(
+        db, lead.id, consultation_id, current_user
+    )
+
+    # Commit the transaction
+    await db.commit()
+
+    # Re-fetch with eager loading to avoid lazy load issues
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    result = await db.execute(
+        select(models.Consultation)
+        .where(models.Consultation.id == consultation_id)
+        .options(
+            selectinload(models.Consultation.consultation_status)
+            .selectinload(models.ConsultationStatus.stage),
+            selectinload(models.Consultation.lead),
+        )
+    )
+    consultation = result.scalar_one()
+
+    log.info(
+        "Consultation restored via API",
+        consultation_id=consultation_id,
+        lead_id=lead.id,
+        restored_by=current_user.id,
+    )
+
+    return consultation
+
+
 @limiter.limit(RateLimits.DATA_EXPORT)  # 20/hour - Export operation
 @router.get("/export")
 async def export_leads(

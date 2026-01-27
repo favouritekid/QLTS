@@ -1,0 +1,986 @@
+3fad66b..800f698  claude/audit-authorization-l8RNH -> claude/audit-authorization-l8RNH                                                                                                                                                                                                                          
+❯ ```                                                                                                                                                      Tôi cần refactor màn hình Lead Details trong hệ thống QLTS.
+                                                                                                                                                           ## QUAN TRỌNG - ĐỌC TRƯỚC KHI LÀM
+  Đây là refactor, KHÔNG PHẢI viết mới. Bạn phải:                                                                                                        
+  1. Khám phá codebase hiện tại TRƯỚC                                                                                                                    
+  2. Tuân thủ kiến trúc, patterns, conventions đang dùng                                                                                                 
+  3. Tái sử dụng components, hooks, utils có sẵn                                                                                                         
+  4. KHÔNG tạo cấu trúc mới nếu đã có sẵn                                                                                                                
+                                                                                                                                                         
+  ## BƯỚC 1: KHÁM PHÁ CODEBASE (BẮT BUỘC)                                                                                                                
+                                                                                                                                                         
+  Trước khi code, hãy thực hiện các lệnh sau để hiểu project:                                                                                            
+                                                                                                                                                         
+  ### 1.1 Cấu trúc thư mục                                                                                                                               
+  ```bash                                                                                                                                                
+  # Xem cấu trúc tổng quan                                                                                                                               
+  find . -type f -name "*.tsx" | head -50                                                                                                                
+  ls -la src/                                                                                                                                            
+  ls -la src/components/                                                                                                                                 
+  ls -la src/app/ hoặc ls -la src/pages/                                                                                                                 
+  ```                                                                                                                                                    
+                                                                                                                                                         
+  ### 1.2 Tìm code Lead Details hiện tại                                                                                                                 
+  ```bash                                                                                                                                                
+  # Tìm file Lead Details                                                                                                                                
+  find . -type f -name "*[Ll]ead*" -o -name "*detail*"                                                                                                   
+  grep -r "LeadDetail" --include="*.tsx" --include="*.ts"                                                                                                
+                                                                                                                                                         
+  # Xem nội dung file chính                                                                                                                              
+  cat <đường_dẫn_file_lead_details>                                                                                                                      
+  ```                                                                                                                                                    
+                                                                                                                                                         
+  ### 1.3 Xác định patterns đang dùng                                                                                                                    
+  ```bash                                                                                                                                                
+  # Xem cách tổ chức components                                                                                                                          
+  ls -la src/components/                                                                                                                                 
+  cat src/components/ui/button.tsx  # hoặc tương tự                                                                                                      
+                                                                                                                                                         
+  # Xem hooks đang dùng                                                                                                                                  
+  ls -la src/hooks/                                                                                                                                      
+  grep -r "useLead" --include="*.ts"                                                                                                                     
+                                                                                                                                                         
+  # Xem API/services                                                                                                                                     
+  ls -la src/services/ hoặc src/api/                                                                                                                     
+  grep -r "lead" --include="*.ts" src/services/                                                                                                          
+  ```                                                                                                                                                    
+                                                                                                                                                         
+  ### 1.4 Xác định conventions                                                                                                                           
+  ```bash                                                                                                                                                
+  # Xem file config                                                                                                                                      
+  cat tsconfig.json                                                                                                                                      
+  cat .eslintrc.js hoặc eslint.config.js                                                                                                                 
+  cat tailwind.config.js                                                                                                                                 
+                                                                                                                                                         
+  # Xem một vài component mẫu để hiểu style code                                                                                                         
+  head -100 src/components/<any_component>.tsx                                                                                                           
+  ```                                                                                                                                                    
+                                                                                                                                                         
+  **SAU KHI KHÁM PHÁ XONG, báo cáo lại cho tôi:**                                                                                                        
+  - Cấu trúc thư mục project                                                                                                                             
+  - File Lead Details hiện tại ở đâu                                                                                                                     
+  - Các components/hooks có sẵn có thể tái sử dụng                                                                                                       
+  - Conventions đang dùng (naming, folder structure, etc.)                                                                                               
+                                                                                                                                                         
+  ## BƯỚC 2: ĐỌC TÀI LIỆU YÊU CẦU                                                                                                                        
+                                                                                                                                                         
+  Sau khi hiểu codebase, đọc các file đính kèm trong thư mục frontend\docs\upgrade lead detail\                                                          
+  1. `ui-change-request.pdf` - Yêu cầu thay đổi chi tiết                                                                                                 
+  2. `lead-details-wireframe.jsx` - Wireframe tham khảo (KHÔNG copy y nguyên)                                                                            
+  3. `current-ui.png` - Screenshot giao diện hiện tại                                                                                                    
+                                                                                                                                                         
+  ## BƯỚC 3: LẬP KẾ HOẠCH REFACTOR                                                                                                                       
+                                                                                                                                                         
+  Dựa trên codebase và yêu cầu, đề xuất kế hoạch:                                                                                                        
+                                                                                                                                                         
+  ### 3.1 Các thay đổi chính cần làm:                                                                                                                    
+  - [ ] Di chuyển SĐT + nút Gọi lên header                                                                                                               
+  - [ ] Thêm Action Banner hiển thị next task                                                                                                            
+  - [ ] Refactor form ghi nhận (gộp Trạng thái + Kết quả)                                                                                                
+  - [ ] Chuyển scoring cards sang collapsible                                                                                                            
+  - [ ] Thêm Admission Checklist                                                                                                                         
+  - [ ] Tổ chức lại layout (left panel 4 cols, right panel 8 cols)                                                                                       
+                                                                                                                                                         
+  ### 3.2 Files cần modify:                                                                                                                              
+  ```                                                                                                                                                    
+  - src/.../LeadDetails.tsx (hoặc tên file thực tế)                                                                                                      
+  - src/.../components liên quan                                                                                                                         
+  - Có thể cần tạo mới: ActionBanner, AdmissionChecklist                                                                                                 
+  ```                                                                                                                                                    
+                                                                                                                                                         
+  ### 3.3 Components có thể tái sử dụng:                                                                                                                 
+  ```                                                                                                                                                    
+  - Button, Card, Tabs, Badge từ UI library hiện tại                                                                                                     
+  - Hooks: useLead, useConsultation (nếu có)                                                                                                             
+  - Utils: formatPhone, formatDate (nếu có)                                                                                                              
+  ```                                                                                                                                                    
+                                                                                                                                                         
+  **Trình bày kế hoạch để tôi review trước khi bắt đầu code.**                                                                                           
+                                                                                                                                                         
+  ## BƯỚC 4: THỰC HIỆN REFACTOR                                                                                                                          
+                                                                                                                                                         
+  Sau khi tôi approve kế hoạch, thực hiện theo nguyên tắc:                                                                                               
+                                                                                                                                                         
+  ### Nguyên tắc BẮT BUỘC:                                                                                                                               
+  1. **Giữ nguyên cấu trúc thư mục** - không tạo folder mới nếu không cần                                                                                
+  2. **Tái sử dụng components** - dùng Button, Card, etc. có sẵn                                                                                         
+  3. **Giữ nguyên naming convention** - theo style code hiện tại                                                                                         
+  4. **Giữ nguyên API interface** - không thay đổi props/types nếu không cần                                                                             
+  5. **Backward compatible** - không break các phần khác đang import                                                                                     
+                                                                                                                                                         
+  ### Thứ tự ưu tiên:                                                                                                                                    
+  1. **Header refactor** - SĐT + nút Gọi (P0)                                                                                                            
+  2. **Action Banner** - thêm mới hoặc refactor từ component có sẵn (P0)                                                                                 
+  3. **Form refactor** - gộp fields, thêm keyboard shortcut (P0)                                                                                         
+  4. **Layout restructure** - tabs, collapsible scoring (P1)                                                                                             
+  5. **Admission Checklist** - component mới (P1)                                                                                                        
+                                                                                                                                                         
+  ### Khi tạo component mới:                                                                                                                             
+  - Đặt trong thư mục phù hợp với convention hiện tại                                                                                                    
+  - Follow naming pattern của project (PascalCase, kebab-case, etc.)                                                                                     
+  - Import từ đúng paths đang dùng (@/components, ~/components, etc.)                                                                                    
+  - Sử dụng same styling approach (Tailwind classes, CSS modules, etc.)                                                                                  
+                                                                                                                                                         
+  ## NGUYÊN TẮC CODE                                                                                                                                     
+                                                                                                                                                         
+  ### KHÔNG ĐƯỢC:                                                                                                                                        
+  ❌ Tạo cấu trúc thư mục mới khác với project                                                                                                           
+  ❌ Cài thêm dependencies nếu đã có tương đương                                                                                                         
+  ❌ Thay đổi config files (tsconfig, tailwind, etc.)                                                                                                    
+  ❌ Rename/move files không liên quan                                                                                                                   
+  ❌ Thay đổi API types/interfaces đang hoạt động                                                                                                        
+                                                                                                                                                         
+  ### NÊN LÀM:                                                                                                                                           
+  ✅ Tái sử dụng UI components có sẵn                                                                                                                    
+  ✅ Follow existing code style                                                                                                                          
+  ✅ Giữ backward compatibility                                                                                                                          
+  ✅ Comment code nếu logic phức tạp                                                                                                                     
+  ✅ Tách nhỏ PR nếu thay đổi lớn                                                                                                                        
+                                                                                                                                                         
+  ## OUTPUT MONG ĐỢI                                                                                                                                     
+                                                                                                                                                         
+  Với mỗi file thay đổi, show:                                                                                                                           
+  1. Đường dẫn file                                                                                                                                      
+  2. Những gì thay đổi (tóm tắt)                                                                                                                         
+  3. Code đầy đủ (hoặc diff nếu file lớn)                                                                                                                
+                                                                                                                                                         
+  Ví dụ:                                                                                                                                                 
+  ```                                                                                                                                                    
+  ### File: src/features/lead/components/LeadDetails.tsx                                                                                                 
+  **Thay đổi:** Refactor header section, thêm ActionBanner                                                                                               
+                                                                                                                                                         
+  [code here]                                                                                                                                            
+  ```                                                                                                                                                    
+                                                                                                                                                         
+  ---                                                                                                                                                    
+                                                                                                                                                         
+  Bắt đầu với BƯỚC 1: Khám phá codebase và báo cáo lại cho tôi.                                                                                          
+  ```                                                                                                                                                    
+                                                                                                                                                         
+                                                                                                                                                         
+                                                                                                                                                         
+  ## 📋 CHECKLIST TRƯỚC KHI MERGE                                                                                                                        
+                                                                                                                                                         
+  ```markdown                                                                                                                                            
+  ## Pre-merge Checklist                                                                                                                                 
+                                                                                                                                                         
+  ### Codebase Integrity                                                                                                                                 
+  - [ ] Không thay đổi folder structure                                                                                                                  
+  - [ ] Không thêm dependencies mới không cần thiết                                                                                                      
+  - [ ] Không thay đổi config files                                                                                                                      
+  - [ ] Tái sử dụng components có sẵn                                                                                                                    
+                                                                                                                                                         
+  ### Code Quality                                                                                                                                       
+  - [ ] Follow existing naming conventions                                                                                                               
+  - [ ] Follow existing code style                                                                                                                       
+  - [ ] Không có unused imports                                                                                                                          
+  - [ ] TypeScript không có errors                                                                                                                       
+                                                                                                                                                         
+  ### Functionality                                                                                                                                      
+  - [ ] SĐT clickable (tel: link)                                                                                                                        
+  - [ ] Nút Gọi nổi bật ở header                                                                                                                         
+  - [ ] Form submit với Ctrl+Enter                                                                                                                       
+  - [ ] Scoring collapse/expand hoạt động                                                                                                                
+  - [ ] Action Banner hiển thị đúng                                                                                                                      
+                                                                                                                                                         
+  ### Backward Compatibility                                                                                                                             
+  - [ ] Các import từ file này vẫn hoạt động                                                                                                             
+  - [ ] API calls không thay đổi                                                                                                                         
+  - [ ] Props interface giữ nguyên (hoặc extend)                                                                                                         
+                                                                                                                                                         
+  ### Testing                                                                                                                                            
+  - [ ] UI render đúng                                                                                                                                   
+  - [ ] Responsive >= 1280px                                                                                                                             
+  - [ ] Không console errors                                                                                                                             
+  ```                                                                                                                                                    
+                                                                                                                                                         
+  ---                                                                                                                                                    
+
+● Tôi sẽ bắt đầu với Bước 1: Khám phá codebase để hiểu rõ cấu trúc hiện tại trước khi đề xuất kế hoạch refactor.
+
+● Explore(Explore Lead Details codebase)                                                                                                                   ⎿  Done (32 tool uses · 62.8k tokens · 2m 46s)                                                                                                         
+                                                                                                                                                         
+● Read(frontend\docs\upgrade lead detail\ui-change-request.pdf)                                    
+  ⎿  Read PDF (4MB)                                                                                                                                      
+                                 
+● Read(frontend\docs\upgrade lead detail\lead-details-wireframe.jsx)                                                                                     
+  ⎿  Read 656 lines               
+                                                                                                                                                         
+● Tôi đã khám phá xong codebase và đọc tài liệu yêu cầu. Bây giờ tôi cần đọc file Lead Details hiện tại để hiểu implementation cụ thể.                   
+                   
+● Read(frontend\src\components\leads\command-center\LeadDetailPanel.tsx)                                                                                   ⎿  Read 568 lines                                                                                                                                      
+                                                                                                                                                         
+● Tôi đã khám phá xong codebase và đọc tất cả tài liệu yêu cầu. Dưới đây là báo cáo và kế hoạch refactor:                                                
+                                                                                                                                                           ---                                                                                                                                                      📋 BÁO CÁO KHÁM PHÁ CODEBASE                                                                                                                           
+                                                                                                                                                           1. Cấu trúc thư mục project                                                                                                                            
+
+  frontend/src/
+  ├── app/(dashboard)/leads/
+  │   ├── [id]/                    # Full page lead detail (SSR)
+  │   │   ├── page.tsx
+  │   │   └── _components/
+  │   │       ├── LeadDetailClient.tsx
+  │   │       └── LeadSidebar.tsx
+  │   ├── _components/
+  │   │   └── LeadsClient.tsx      # Lead list page
+  │   └── page.tsx
+  ├── components/
+  │   ├── leads/
+  │   │   ├── command-center/
+  │   │   │   └── LeadDetailPanel.tsx   ← FILE CHÍNH CẦN REFACTOR
+  │   │   ├── QuickConsultationSection.tsx
+  │   │   ├── LeadTimelineTab.tsx
+  │   │   ├── LeadInsightsCard.tsx
+  │   │   └── OfficerRatingInput.tsx
+  │   └── ui/                      # shadcn/ui components
+  ├── hooks/
+  │   ├── useLeads.ts              # Lead queries & mutations
+  │   └── usePipeline.ts           # Consultation status hooks
+  └── types/
+      └── lead.types.ts            # Lead type definitions
+
+  2. File Lead Details hiện tại
+  ┌─────────────────────────────────────────────────────┬──────────────────────────────────┬───────────────┐
+  │                        File                         │             Mục đích             │  Cần modify   │
+  ├─────────────────────────────────────────────────────┼──────────────────────────────────┼───────────────┤
+  │ components/leads/command-center/LeadDetailPanel.tsx │ Panel chi tiết lead (right side) │ ✅ CHÍNH      │
+  ├─────────────────────────────────────────────────────┼──────────────────────────────────┼───────────────┤
+  │ components/leads/QuickConsultationSection.tsx       │ Form ghi nhận tư vấn             │ ✅ Có thể cần │
+  ├─────────────────────────────────────────────────────┼──────────────────────────────────┼───────────────┤
+  │ components/leads/LeadTimelineTab.tsx                │ Lịch sử tư vấn                   │ ❌ Giữ nguyên │
+  ├─────────────────────────────────────────────────────┼──────────────────────────────────┼───────────────┤
+  │ components/leads/LeadInsightsCard.tsx               │ Insights card                    │ ❌ Tham khảo  │
+  └─────────────────────────────────────────────────────┴──────────────────────────────────┴───────────────┘
+  3. Components có thể tái sử dụng
+  ┌──────────────┬──────────────────────────────────┬────────────────────┐
+  │  Component   │             Location             │      Dùng cho      │
+  ├──────────────┼──────────────────────────────────┼────────────────────┤
+  │ Button       │ @/components/ui/button           │ Nút Gọi, Actions   │
+  ├──────────────┼──────────────────────────────────┼────────────────────┤
+  │ Badge        │ @/components/ui/badge            │ Status badges      │
+  ├──────────────┼──────────────────────────────────┼────────────────────┤
+  │ Card         │ @/components/ui/card             │ Container sections │
+  ├──────────────┼──────────────────────────────────┼────────────────────┤
+  │ Tabs         │ @/components/ui/tabs             │ Left panel tabs    │
+  ├──────────────┼──────────────────────────────────┼────────────────────┤
+  │ Collapsible  │ @/components/ui/collapsible      │ Scoring collapse   │
+  ├──────────────┼──────────────────────────────────┼────────────────────┤
+  │ Avatar       │ @/components/ui/avatar           │ Lead avatar        │
+  ├──────────────┼──────────────────────────────────┼────────────────────┤
+  │ Tooltip      │ @/components/ui/tooltip          │ Action hints       │
+  ├──────────────┼──────────────────────────────────┼────────────────────┤
+  │ CopyableCell │ @/components/common/CopyableCell │ SĐT copy           │
+  └──────────────┴──────────────────────────────────┴────────────────────┘
+  4. Hooks có sẵn
+
+  // useLeads.ts
+  useLead(id, enabled)              // Get single lead
+  useLeadTimeline(id)               // Get consultation history
+  useAddConsultation()              // Add new consultation
+
+  // usePipeline.ts
+  useAllowedNextStatuses(currentId) // FSM validation
+
+  5. Code conventions
+  ┌─────────┬────────────────────────────────────────────────────┐
+  │ Aspect  │                     Convention                     │
+  ├─────────┼────────────────────────────────────────────────────┤
+  │ Naming  │ PascalCase cho components, camelCase cho functions │
+  ├─────────┼────────────────────────────────────────────────────┤
+  │ Imports │ @/components/..., @/hooks/..., @/lib/...           │
+  ├─────────┼────────────────────────────────────────────────────┤
+  │ Styling │ Tailwind CSS + shadcn/ui                           │
+  ├─────────┼────────────────────────────────────────────────────┤
+  │ State   │ React Query (server), useState (local)             │
+  └─────────┴────────────────────────────────────────────────────┘
+  ---
+  📐 KẾ HOẠCH REFACTOR
+
+  Phân tích vấn đề hiện tại (từ PDF)
+  ┌─────────┬────────────────────────────────────┬─────────────┐
+  │  Vùng   │               Vấn đề               │   Mức độ    │
+  ├─────────┼────────────────────────────────────┼─────────────┤
+  │ Header  │ SĐT + nút Gọi không nổi bật        │ 🔴 Critical │
+  ├─────────┼────────────────────────────────────┼─────────────┤
+  │ Scoring │ 4 cards chiếm diện tích lớn        │ 🔴 Critical │
+  ├─────────┼────────────────────────────────────┼─────────────┤
+  │ Action  │ Thiếu "việc cần làm tiếp theo"     │ 🔴 Critical │
+  ├─────────┼────────────────────────────────────┼─────────────┤
+  │ Form    │ "Trạng thái" vs "Kết quả" gây nhầm │ 🟡 Medium   │
+  └─────────┴────────────────────────────────────┴─────────────┘
+  Thay đổi đề xuất
+
+  P0 - Critical (Cần làm ngay)
+
+  1. Header Zone Refactor
+    - Di chuyển SĐT + nút "GỌI NGAY" lên header zone
+    - SĐT font 18px bold, clickable (tel: link)
+    - Nút Gọi màu xanh lá (#10b981), size lớn, có icon Phone
+    - Giữ avatar, tên, badges như cũ
+  2. Action Banner (Component mới)
+    - Hiển thị việc cần làm tiếp theo
+    - Background amber (#fef3c7)
+    - Lấy từ lead.next_activity_at hoặc lead.scheduled_consultation
+    - Nút [Đánh dấu hoàn thành] [Gọi ngay]
+  3. Form Ghi nhận - Keyboard Shortcut
+    - Thêm Ctrl+Enter để submit (trong QuickConsultationSection)
+
+  P1 - High (Sau khi P0 xong)
+
+  4. Layout Restructure
+    - Đổi từ layout hiện tại sang 2-column (4 cols + 8 cols)
+    - Left: Info tabs + Scoring collapsed + Checklist
+    - Right: Form ghi nhận + Timeline gần đây
+  5. Scoring Collapsible
+    - Mặc định collapsed, chỉ hiện "Điểm: 65/100"
+    - Expand để xem chi tiết 4 scores
+  6. Admission Checklist (Component mới)
+    - Checklist "Sẵn sàng nộp hồ sơ"
+    - Progress indicator "2/4 hoàn thành"
+
+  Files cần modify
+
+  ✅ Modify:
+  - src/components/leads/command-center/LeadDetailPanel.tsx (main)
+  - src/components/leads/QuickConsultationSection.tsx (Ctrl+Enter)
+
+  ✅ Create new:
+  - src/components/leads/ActionBanner.tsx
+  - src/components/leads/LeadScoringCollapsible.tsx
+  - src/components/leads/AdmissionReadinessChecklist.tsx
+
+  Components tái sử dụng
+  ┌─────────────────────────┬─────────────────────────────────────┐
+  │        Cần dùng         │               Có sẵn                │
+  ├─────────────────────────┼─────────────────────────────────────┤
+  │ Button cho "GỌI NGAY"   │ ✅ @/components/ui/button           │
+  ├─────────────────────────┼─────────────────────────────────────┤
+  │ Collapsible cho Scoring │ ✅ @/components/ui/collapsible      │
+  ├─────────────────────────┼─────────────────────────────────────┤
+  │ Tabs cho Left Panel     │ ✅ @/components/ui/tabs             │
+  ├─────────────────────────┼─────────────────────────────────────┤
+  │ Badge cho status        │ ✅ @/components/ui/badge            │
+  ├─────────────────────────┼─────────────────────────────────────┤
+  │ CopyableCell cho SĐT    │ ✅ @/components/common/CopyableCell │
+  └─────────────────────────┴─────────────────────────────────────┘
+  ---
+  ❓ CÂU HỎI CẦN XÁC NHẬN
+
+  Trước khi bắt đầu implement, tôi cần xác nhận:
+
+  1. Scope refactor: Chỉ refactor LeadDetailPanel.tsx (right panel trong Lead List) hay cả full page /leads/[id]?
+  2. Action Banner data source:
+    - Dùng lead.next_activity_at (đã có)?
+    - Hay cần thêm field mới từ backend?
+  3. Admission Checklist:
+    - Data checklist lấy từ đâu? (có API sẵn hay hardcode tạm?)
+  4. Ưu tiên thực hiện:
+    - Làm tuần tự P0 → P1?
+    - Hay làm tất cả trong 1 lần?
+
+  ---
+  Vui lòng review kế hoạch và trả lời các câu hỏi trên để tôi bắt đầu implement.
+
+✻ Churned for 3m 49s                           
+
+❯ Nếu refactor lead detail pannel thì giao diện hiện tại không đáp ứng được đúng không?                                                                                                                                                           
+● Đúng vậy. Phân tích kỹ hơn:                                                                                                                            
+                                                                                                                                                         
+  Vấn đề: LeadDetailPanel vs Yêu cầu                                                                                                                        
+  LeadDetailPanel hiện tại là gì?                                                                                                                        
+                                                                                                                                                         
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │  Lead List Page (/leads)                                              │
+  ├────────────────────────────────┬─────────────────────────────────────┤
+  │                                │                                     │
+  │   Lead Table/List              │   LeadDetailPanel                   │
+  │   (Main content)               │   (Right sidebar ~400px)            │
+  │                                │                                     │
+  │   [Lead 1]                     │   ┌─────────────────────┐          │
+  │   [Lead 2] ← selected          │   │ Avatar | Name      │          │
+  │   [Lead 3]                     │   │ Badges             │          │
+  │                                │   ├─────────────────────┤          │
+  │                                │   │ Info Card          │          │
+  │                                │   │ - Scores           │          │
+  │                                │   │ - Contact          │          │
+  │                                │   ├─────────────────────┤          │
+  │                                │   │ Consultation Form  │          │
+  │                                │   ├─────────────────────┤          │
+  │                                │   │ Timeline (3 items) │          │
+  │                                │   └─────────────────────┘          │
+  └────────────────────────────────┴─────────────────────────────────────┘
+
+  Yêu cầu trong PDF là gì?
+
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │ HEADER ZONE: [Avatar] Tên Lead    SĐT [GỌI NGAY]    [Actions]       │
+  │              Ngành • Điểm tiềm năng • Trạng thái                    │
+  ├─────────────────────────────────────────────────────────────────────┤
+  │ ACTION BANNER: Việc cần làm tiếp theo              [Hành động]      │
+  ├───────────────────────────────┬─────────────────────────────────────┤
+  │ LEFT PANEL (4/12 cols)        │ RIGHT PANEL (8/12 cols)             │
+  │ [Tab: Tổng quan|Lịch sử|Hồ sơ]│ Form ghi nhận tư vấn               │
+  │ • Thông tin liên hệ           │ • Phương thức                       │
+  │ • Thông tin cá nhân           │ • Ghi chú                           │
+  │ • Học vấn (warning nếu yếu)   │ • Kết quả cuộc gọi                  │
+  │ • Scoring (collapsed)         │ • Hẹn gọi lại                       │
+  │ • Admission Checklist         │ Lịch sử gần đây (compact)           │
+  └───────────────────────────────┴─────────────────────────────────────┘
+
+  Kết luận
+  ┌───────────────┬─────────────────────────┬─────────────────────────────────┐
+  │    Aspect     │     LeadDetailPanel     │           Yêu cầu PDF           │
+  ├───────────────┼─────────────────────────┼─────────────────────────────────┤
+  │ Vị trí        │ Sidebar trong list page │ Full page hoặc wide view        │
+  ├───────────────┼─────────────────────────┼─────────────────────────────────┤
+  │ Chiều rộng    │ ~400px cố định          │ 12-column grid                  │
+  ├───────────────┼─────────────────────────┼─────────────────────────────────┤
+  │ Layout        │ 1 column vertical       │ 2 columns (4+8)                 │
+  ├───────────────┼─────────────────────────┼─────────────────────────────────┤
+  │ Header        │ Compact                 │ Wide với SĐT + GỌI NGAY nổi bật │
+  ├───────────────┼─────────────────────────┼─────────────────────────────────┤
+  │ Action Banner │ ❌ Không có             │ ✅ Cần có                       │
+  └───────────────┴─────────────────────────┴─────────────────────────────────┘
+  LeadDetailPanel không phù hợp vì:
+  1. Quá hẹp cho layout 4+8 columns
+  2. Là sidebar, không phải main content area
+  3. Không có không gian cho Action Banner rộng
+
+  Đề xuất mới
+
+  Tùy vào mục tiêu của bạn:
+
+  Option A: Refactor Full Page /leads/[id]
+
+  - Target: LeadDetailClient.tsx + LeadSidebar.tsx
+  - Đây là trang full-width, phù hợp với yêu cầu
+  - Officer click vào lead → mở full page để làm việc
+
+  Option B: Cải thiện LeadDetailPanel (sidebar)
+
+  - Giữ nguyên là sidebar nhưng optimize cho workflow
+  - Di chuyển SĐT + nút Gọi lên đầu (trong giới hạn width)
+  - Thêm Action Banner compact
+  - Không thể đạt được layout 4+8 columns
+
+  Option C: Hybrid - Cả hai
+
+  - LeadDetailPanel: quick preview khi hover/select
+  - Full page: khi cần làm việc chi tiết
+
+  Bạn muốn đi theo hướng nào?
+
+✻ Crunched for 36s                              
+
+❯ ---                                                                                                                                                    
+
+  ## ✅ TRẢ LỜI CÁC CÂU HỎI                                                                                                                              
+                                                                                                                                                         
+  ### 1. Scope refactor                                                                                                                                  
+                                                                                                                                                         
+  **Ưu tiên Full page `/leads/[id]` do kích thước yêu cầu quá lớn**                                                                                      
+                                                                                                                                                         
+  Còn LeadDetailPanel sẽ nghiên cứu refactor sau                                                                                                         
+  ---                                                                                                                                                    
+                                                                                                                                                         
+  ### 2. Action Banner data source                                                                                                                       
+                                                                                                                                                         
+  **Dùng data có sẵn, KHÔNG cần backend change.**                                                                                                        
+                                                                                                                                                         
+  #### Logic lấy next action (theo thứ tự ưu tiên):                                                                                                      
+                                                                                                                                                         
+  ```typescript                                                                                                                                          
+  // src/components/leads/ActionBanner.tsx                                                                                                               
+                                                                                                                                                         
+  interface NextAction {                                                                                                                                 
+  type: 'scheduled' | 'callback' | 'overdue' | 'hot' | null                                                                                              
+  datetime: string | null                                                                                                                                
+  label: string                                                                                                                                          
+  note: string | null                                                                                                                                    
+  method?: string                                                                                                                                        
+  }                                                                                                                                                      
+                                                                                                                                                         
+  function getNextAction(lead: Lead, consultations: Consultation[]): NextAction | null {                                                                 
+                                                                                                                                                         
+  // 1. Ưu tiên 1: Có lịch hẹn trong tương lai từ lead.next_activity_at                                                                                  
+  if (lead.next_activity_at && new Date(lead.next_activity_at) > new Date()) {                                                                           
+  return {                                                                                                                                               
+  type: 'scheduled',                                                                                                                                     
+  datetime: lead.next_activity_at,                                                                                                                       
+  label: 'Lịch hẹn tiếp theo',                                                                                                                           
+  note: null                                                                                                                                             
+  }                                                                                                                                                      
+  }                                                                                                                                                      
+                                                                                                                                                         
+  // 2. Ưu tiên 2: Consultation gần nhất có scheduled_at trong tương lai                                                                                 
+  const upcomingConsultation = consultations                                                                                                             
+  .filter(c => c.scheduled_at && new Date(c.scheduled_at) > new Date())                                                                                  
+  .sort((a, b) => new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime())[0]                                                            
+                                                                                                                                                         
+  if (upcomingConsultation) {                                                                                                                            
+  return {                                                                                                                                               
+  type: 'callback',                                                                                                                                      
+  datetime: upcomingConsultation.scheduled_at,                                                                                                           
+  label: 'Hẹn gọi lại',                                                                                                                                  
+  note: upcomingConsultation.notes,                                                                                                                      
+  method: upcomingConsultation.method                                                                                                                    
+  }                                                                                                                                                      
+  }                                                                                                                                                      
+                                                                                                                                                         
+  // 3. Ưu tiên 3: Lead quá hạn cần follow up                                                                                                            
+  if (lead.is_overdue) {                                                                                                                                 
+  return {                                                                                                                                               
+  type: 'overdue',                                                                                                                                       
+  datetime: lead.last_consultation_at,                                                                                                                   
+  label: 'Quá hạn follow-up',                                                                                                                            
+  note: 'Lead chưa được liên hệ trong thời gian dài'                                                                                                     
+  }                                                                                                                                                      
+  }                                                                                                                                                      
+                                                                                                                                                         
+  // 4. Ưu tiên 4: Hot lead cần ưu tiên                                                                                                                  
+  if (lead.is_hot_lead) {                                                                                                                                
+  return {                                                                                                                                               
+  type: 'hot',                                                                                                                                           
+  datetime: null,                                                                                                                                        
+  label: 'Lead nóng - Cần liên hệ ngay',                                                                                                                 
+  note: null                                                                                                                                             
+  }                                                                                                                                                      
+  }                                                                                                                                                      
+                                                                                                                                                         
+  // 5. Không có action → return null để ẩn banner                                                                                                       
+  return null                                                                                                                                            
+  }                                                                                                                                                      
+  ```                                                                                                                                                    
+                                                                                                                                                         
+  #### Các field sử dụng từ schema:                                                                                                                      
+                                                                                                                                                         
+  | Field | Bảng | Mục đích |                                                                                                                            
+  |-------|------|----------|                                                                                                                            
+  | `next_activity_at` | lead | Lịch hẹn chính |                                                                                                         
+  | `scheduled_at` | consultation | Lịch hẹn từ consultation |                                                                                           
+  | `notes` | consultation | Nội dung ghi chú để hiển thị |                                                                                              
+  | `method` | consultation | Loại hình liên hệ (phone/email) |                                                                                          
+  | `is_overdue` | lead | Flag quá hạn |                                                                                                                 
+  | `is_hot_lead` | lead | Flag lead nóng |                                                                                                              
+  | `last_consultation_at` | lead | Để tính thời gian quá hạn |                                                                                          
+                                                                                                                                                         
+  #### UI hiển thị theo type:                                                                                                                            
+                                                                                                                                                         
+  | Type | Background | Border | Icon | Label mẫu |                                                                                                      
+  |------|------------|--------|------|-----------|                                                                                                      
+  | `scheduled` | `bg-amber-50` | `border-amber-200` | `Calendar` | "Lịch hẹn: 15:00 hôm nay" |                                                          
+  | `callback` | `bg-amber-50` | `border-amber-200` | `Phone` | "Hẹn gọi lại: 15:00 hôm nay" |                                                           
+  | `overdue` | `bg-red-50` | `border-red-200` | `AlertCircle` | "Quá hạn 3 ngày - Cần liên hệ" |                                                        
+  | `hot` | `bg-orange-50` | `border-orange-200` | `Flame` | "Lead nóng - Ưu tiên liên hệ" |                                                             
+  | `null` | - | - | - | Ẩn banner |                                                                                                                     
+                                                                                                                                                         
+  ---                                                                                                                                                    
+                                                                                                                                                         
+  ### 3. Admission Checklist                                                                                                                             
+                                                                                                                                                         
+  #### 🔄 PHÂN CHIA 2 PHASE:                                                                                                                             
+                                                                                                                                                         
+  | Phase | Mô tả | Database | Frontend |                                                                                                                
+  |-------|-------|----------|----------|                                                                                                                
+  | **Phase 1** (PR #2) | Validate UX trước | Không thay đổi | Derive từ data có sẵn, `readonly` |                                                       
+  | **Phase 2** (PR riêng) | Production-ready | Tạo bảng mới | Gọi API, cho phép toggle |                                                                
+                                                                                                                                                         
+  ---                                                                                                                                                    
+                                                                                                                                                         
+  #### PHASE 1: Derive từ data có sẵn (Tạm thời)                                                                                                         
+                                                                                                                                                         
+  **Mục đích:** Validate UX, không lưu database.                                                                                                         
+                                                                                                                                                         
+  #### Logic checklist items:                                                                                                                            
+                                                                                                                                                         
+  ```typescript                                                                                                                                          
+  // src/components/leads/AdmissionReadinessChecklist.tsx                                                                                                
+                                                                                                                                                         
+  interface ChecklistItem {                                                                                                                              
+  id: string                                                                                                                                             
+  label: string                                                                                                                                          
+  checked: boolean                                                                                                                                       
+  note: string | null                                                                                                                                    
+  warning?: boolean                                                                                                                                      
+  }                                                                                                                                                      
+                                                                                                                                                         
+  function getAdmissionChecklist(lead: Lead, consultations: Consultation[]): ChecklistItem[] {                                                           
+                                                                                                                                                         
+  return [                                                                                                                                               
+  {                                                                                                                                                      
+  id: 'major_confirmed',                                                                                                                                 
+  label: 'Đã xác nhận ngành học',                                                                                                                        
+  checked: !!lead.offering_id,                                                                                                                           
+  note: lead.offering_id ? null : 'Chưa chọn ngành đăng ký'                                                                                              
+  },                                                                                                                                                     
+  {                                                                                                                                                      
+  id: 'contact_established',                                                                                                                             
+  label: 'Đã liên hệ được',                                                                                                                              
+  checked: lead.consultation_count > 0 &&                                                                                                                
+  consultations.some(c =>                                                                                                                                
+  ['contacted', 'interested', 'consulting'].includes(c.consultation_status_id || '')                                                                     
+  ),                                                                                                                                                     
+  note: lead.consultation_count === 0 ? 'Chưa có lần tư vấn nào' : null                                                                                  
+  },                                                                                                                                                     
+  {                                                                                                                                                      
+  id: 'tuition_discussed',                                                                                                                               
+  label: 'Đã tư vấn về học phí',                                                                                                                         
+  checked: lead.consultation_count >= 2 ||                                                                                                               
+  ['tuition_discussed', 'ready', 'applied'].includes(lead.pipeline_stage_id || ''),                                                                      
+  note: null                                                                                                                                             
+  },                                                                                                                                                     
+  {                                                                                                                                                      
+  id: 'qualified',                                                                                                                                       
+  label: 'Đủ điều kiện xét tuyển',                                                                                                                       
+  checked: (lead.academic_performance ?? 0) >= 1 && !!lead.education_level,                                                                              
+  note: lead.academic_performance === 0 ? 'Học lực yếu - cần tư vấn kỹ' : null,                                                                          
+  warning: lead.academic_performance === 0                                                                                                               
+  },                                                                                                                                                     
+  {                                                                                                                                                      
+  id: 'ready_to_apply',                                                                                                                                  
+  label: 'Sẵn sàng nộp hồ sơ',                                                                                                                           
+  checked: ['ready_for_admission', 'applied', 'enrolled'].includes(lead.status) ||                                                                       
+  ['ready', 'applied'].includes(lead.pipeline_stage_id || ''),                                                                                           
+  note: null                                                                                                                                             
+  }                                                                                                                                                      
+  ]                                                                                                                                                      
+  }                                                                                                                                                      
+                                                                                                                                                         
+  // Tính progress                                                                                                                                       
+  function getChecklistProgress(checklist: ChecklistItem[]) {                                                                                            
+  const completed = checklist.filter(item => item.checked).length                                                                                        
+  const total = checklist.length                                                                                                                         
+  return { completed, total, percentage: Math.round((completed / total) * 100) }                                                                         
+  }                                                                                                                                                      
+                                                                                                                                                         
+  // Smart suggestion                                                                                                                                    
+  function getSmartSuggestion(checklist: ChecklistItem[], lead: Lead): string {                                                                          
+  const nextItem = checklist.find(item => !item.checked)                                                                                                 
+                                                                                                                                                         
+  if (!nextItem) {                                                                                                                                       
+  return '✅ Lead đã sẵn sàng tạo hồ sơ tuyển sinh!'                                                                                                     
+  }                                                                                                                                                      
+                                                                                                                                                         
+  const suggestions: Record<string, string> = {                                                                                                          
+  'major_confirmed': 'Cần xác nhận ngành học với KH',                                                                                                    
+  'contact_established': 'Cần liên hệ lần đầu với KH',                                                                                                   
+  'tuition_discussed': 'Cuộc gọi tiếp theo nên tư vấn về học phí',                                                                                       
+  'qualified': lead.academic_performance === 0                                                                                                           
+  ? 'Học lực yếu - tư vấn về lộ trình bổ sung'                                                                                                           
+  : 'Cần xác nhận trình độ học vấn',                                                                                                                     
+  'ready_to_apply': 'Cần xác nhận ý định nộp hồ sơ với KH'                                                                                               
+  }                                                                                                                                                      
+                                                                                                                                                         
+  return `💡 Gợi ý: ${suggestions[nextItem.id]}`                                                                                                         
+  }                                                                                                                                                      
+  ```                                                                                                                                                    
+                                                                                                                                                         
+  #### Mapping với Lead schema:                                                                                                                          
+                                                                                                                                                         
+  | Checklist Item | Field sử dụng | Logic |                                                                                                             
+  |----------------|---------------|-------|                                                                                                             
+  | Đã xác nhận ngành | `lead.offering_id` | `!= null` |                                                                                                 
+  | Đã liên hệ được | `lead.consultation_count`, `consultation.consultation_status_id` | `count > 0` + status phù hợp |                                  
+  | Đã tư vấn học phí | `lead.consultation_count`, `lead.pipeline_stage_id` | `count >= 2` hoặc stage phù hợp |                                          
+  | Đủ điều kiện xét tuyển | `lead.academic_performance`, `lead.education_level` | `performance >= 1` |                                                  
+  | Sẵn sàng nộp hồ sơ | `lead.status`, `lead.pipeline_stage_id` | Status = ready/applied |                                                              
+                                                                                                                                                         
+  #### UI Layout:                                                                                                                                        
+                                                                                                                                                         
+  ```                                                                                                                                                    
+  ┌─────────────────────────────────────────┐                                                                                                            
+  │ ✅ Sẵn sàng nộp hồ sơ           2/5    │                                                                                                             
+  ├─────────────────────────────────────────┤                                                                                                            
+  │ ☑ Đã xác nhận ngành học                 │  ← bg-emerald-50                                                                                           
+  │ ☑ Đã liên hệ được                       │  ← bg-emerald-50                                                                                           
+  │ ☐ Đã tư vấn về học phí                  │  ← bg-slate-50                                                                                             
+  │ ⚠️ Đủ điều kiện (Học lực yếu)           │  ← bg-amber-50 (warning)                                                                                   
+  │ ☐ Sẵn sàng nộp hồ sơ                    │  ← bg-slate-50                                                                                             
+  ├─────────────────────────────────────────┤                                                                                                            
+  │ 💡 Gợi ý: Cần tư vấn thêm về học phí    │                                                                                                            
+  └─────────────────────────────────────────┘                                                                                                            
+  ```                                                                                                                                                    
+                                                                                                                                                         
+  #### Styles theo trạng thái:                                                                                                                           
+                                                                                                                                                         
+  | Trạng thái | Background | Icon | Color |                                                                                                             
+  |------------|------------|------|-------|                                                                                                             
+  | Checked | `bg-emerald-50` | `CheckCircle2` | `text-emerald-600` |                                                                                    
+  | Unchecked | `bg-slate-50` | `Circle` | `text-slate-400` |                                                                                            
+  | Warning | `bg-amber-50` | `AlertCircle` | `text-amber-600` |                                                                                         
+                                                                                                                                                         
+  ---                                                                                                                                                    
+                                                                                                                                                         
+  #### PHASE 2: Database Design (Sau khi validate UX)                                                                                                    
+                                                                                                                                                         
+  **Tạo bảng `lead_admission_checklist` để track đầy đủ:**                                                                                               
+                                                                                                                                                         
+  ```python                                                                                                                                              
+  # app/models/lead.py - Thêm class mới                                                                                                                  
+                                                                                                                                                         
+  class LeadAdmissionChecklistItem(Base):                                                                                                                
+  __tablename__ = 'lead_admission_checklist'                                                                                                             
+                                                                                                                                                         
+  id = Column(Integer, primary_key=True)                                                                                                                 
+  lead_id = Column(Integer, ForeignKey('lead.id'), nullable=False)                                                                                       
+                                                                                                                                                         
+  # Checklist item                                                                                                                                       
+  item_key = Column(String(50), nullable=False)  # 'major_confirmed', 'tuition_discussed', etc.                                                          
+  checked = Column(Boolean, default=False)                                                                                                               
+  checked_at = Column(DateTime, nullable=True)                                                                                                           
+  checked_by_id = Column(Integer, ForeignKey('user.id'), nullable=True)                                                                                  
+                                                                                                                                                         
+  # Notes                                                                                                                                                
+  note = Column(Text, nullable=True)                                                                                                                     
+                                                                                                                                                         
+  # System                                                                                                                                               
+  created_at = Column(DateTime, default=func.now())                                                                                                      
+  updated_at = Column(DateTime, default=func.now(), onupdate=func.now())                                                                                 
+                                                                                                                                                         
+  # Relationships                                                                                                                                        
+  lead = relationship('Lead', back_populates='admission_checklist')                                                                                      
+  checked_by = relationship('User')                                                                                                                      
+                                                                                                                                                         
+  # Unique constraint                                                                                                                                    
+  __table_args__ = (                                                                                                                                     
+  UniqueConstraint('lead_id', 'item_key', name='uq_lead_checklist_item'),                                                                                
+  )                                                                                                                                                      
+  ```                                                                                                                                                    
+                                                                                                                                                         
+  **Thêm vào class Lead:**                                                                                                                               
+                                                                                                                                                         
+  ```python                                                                                                                                              
+  class Lead(Base):                                                                                                                                      
+  # ... existing fields ...                                                                                                                              
+                                                                                                                                                         
+  # Relationship                                                                                                                                         
+  admission_checklist = relationship('LeadAdmissionChecklistItem', back_populates='lead', cascade='all, delete-orphan')                                  
+                                                                                                                                                         
+  # Cached score (update khi checklist change)                                                                                                           
+  admission_readiness_score = Column(Integer, default=0)                                                                                                 
+  ```                                                                                                                                                    
+                                                                                                                                                         
+  **Checklist Items Config:**                                                                                                                            
+                                                                                                                                                         
+  ```python                                                                                                                                              
+  # app/constants/admission.py                                                                                                                           
+                                                                                                                                                         
+  ADMISSION_CHECKLIST_ITEMS = [                                                                                                                          
+  {'key': 'major_confirmed', 'label': 'Đã xác nhận ngành học', 'order': 1},                                                                              
+  {'key': 'contact_established', 'label': 'Đã liên hệ được', 'order': 2},                                                                                
+  {'key': 'tuition_discussed', 'label': 'Đã tư vấn về học phí', 'order': 3},                                                                             
+  {'key': 'documents_received', 'label': 'Đã nhận giấy tờ cần thiết', 'order': 4},                                                                       
+  {'key': 'ready_to_apply', 'label': 'Sẵn sàng nộp hồ sơ', 'order': 5},                                                                                  
+  ]                                                                                                                                                      
+  ```                                                                                                                                                    
+                                                                                                                                                         
+  **API Endpoints (Phase 2):**                                                                                                                           
+                                                                                                                                                         
+  ```python                                                                                                                                              
+  # app/api/leads/checklist.py                                                                                                                           
+                                                                                                                                                         
+  @router.get("/leads/{lead_id}/admission-checklist")                                                                                                    
+  async def get_checklist(lead_id: int):                                                                                                                 
+  """Lấy checklist của lead"""                                                                                                                           
+  pass                                                                                                                                                   
+                                                                                                                                                         
+  @router.patch("/leads/{lead_id}/admission-checklist/{item_key}")                                                                                       
+  async def update_checklist_item(                                                                                                                       
+  lead_id: int,                                                                                                                                          
+  item_key: str,                                                                                                                                         
+  checked: bool,                                                                                                                                         
+  note: Optional[str] = None                                                                                                                             
+  ):                                                                                                                                                     
+  """Cập nhật 1 item trong checklist"""                                                                                                                  
+  pass                                                                                                                                                   
+  ```                                                                                                                                                    
+                                                                                                                                                         
+  ---                                                                                                                                                    
+                                                                                                                                                         
+  #### FRONTEND COMPONENT INTERFACE (Hỗ trợ cả 2 Phase):                                                                                                 
+                                                                                                                                                         
+  ```typescript                                                                                                                                          
+  // src/components/leads/AdmissionReadinessChecklist.tsx                                                                                                
+                                                                                                                                                         
+  interface ChecklistItem {                                                                                                                              
+  key: string                                                                                                                                            
+  label: string                                                                                                                                          
+  checked: boolean                                                                                                                                       
+  checked_at: string | null                                                                                                                              
+  checked_by: string | null  // Officer name                                                                                                             
+  note: string | null                                                                                                                                    
+  warning?: boolean                                                                                                                                      
+  }                                                                                                                                                      
+                                                                                                                                                         
+  interface AdmissionChecklistProps {                                                                                                                    
+  lead: Lead                                                                                                                                             
+  checklist: ChecklistItem[]        // Từ API (Phase 2) hoặc derive (Phase 1)                                                                            
+  onToggle?: (key: string, checked: boolean, note?: string) => void                                                                                      
+  readonly?: boolean                // Phase 1: true, Phase 2: false                                                                                     
+  }                                                                                                                                                      
+                                                                                                                                                         
+  // Usage Phase 1:                                                                                                                                      
+  <AdmissionReadinessChecklist                                                                                                                           
+  lead={lead}                                                                                                                                            
+  checklist={getDerivedChecklist(lead, consultations)}  // Derive function                                                                               
+  readonly={true}                                                                                                                                        
+  />                                                                                                                                                     
+                                                                                                                                                         
+  // Usage Phase 2:                                                                                                                                      
+  <AdmissionReadinessChecklist                                                                                                                           
+  lead={lead}                                                                                                                                            
+  checklist={checklistFromAPI}                                                                                                                           
+  onToggle={handleToggleItem}  // Gọi PATCH API                                                                                                          
+  readonly={false}                                                                                                                                       
+  />                                                                                                                                                     
+  ```                                                                                                                                                    
+                                                                                                                                                         
+  **Migration Plan:**                                                                                                                                    
+                                                                                                                                                         
+  | Bước | Task | Owner |                                                                                                                                
+  |------|------|-------|                                                                                                                                
+  | 1 | Frontend Phase 1: Component với `readonly={true}` | Frontend |                                                                                   
+  | 2 | Validate UX với team tư vấn | Product |                                                                                                          
+  | 3 | Backend: Tạo bảng + API | Backend |                                                                                                              
+  | 4 | Frontend Phase 2: Kết nối API, `readonly={false}` | Frontend |                                                                                   
+                                                                                                                                                         
+  ---                                                                                                                                                    
+                                                                                                                                                         
+  ### 4. Ưu tiên thực hiện                                                                                                                               
+                                                                                                                                                         
+  **Làm tuần tự P0 → P1. Mỗi phase tạo 1 PR riêng.**                                                                                                     
+                                                                                                                                                         
+  #### PR #1: P0 - Core Workflow (ưu tiên cao nhất)                                                                                                      
+                                                                                                                                                         
+  | # | Task | File |                                                                                                                                    
+  |---|------|------|                                                                                                                                    
+  | 1 | Header Zone: SĐT + nút GỌI NGAY lên header | `LeadDetailPanel.tsx` |                                                                             
+  | 2 | Action Banner: Component mới | `ActionBanner.tsx` (new) |                                                                                        
+  | 3 | Keyboard shortcut: Ctrl+Enter submit | `QuickConsultationSection.tsx` |                                                                          
+                                                                                                                                                         
+  → **Merge và test trước khi làm P1**                                                                                                                   
+                                                                                                                                                         
+  #### PR #2: P1 - Layout & Enhancement                                                                                                                  
+                                                                                                                                                         
+  | # | Task | File |                                                                                                                                    
+  |---|------|------|                                                                                                                                    
+  | 4 | Layout restructure (2 columns) | `LeadDetailPanel.tsx` |                                                                                         
+  | 5 | Scoring collapsible | `LeadScoringCollapsible.tsx` (new) |                                                                                       
+  | 6 | Admission Checklist | `AdmissionReadinessChecklist.tsx` (new) |                                                                                  
+                                                                                                                                                         
+  ---                                                                                                                                                    
+                                                                                                                                                         
+  ## 📁 FILES SUMMARY                                                                                                                                    
+                                                                                                                                                         
+  ### Cần MODIFY:                                                                                                                                        
+                                                                                                                                                         
+  ```                                                                                                                                                    
+  src/components/leads/command-center/LeadDetailPanel.tsx  ← Main file                                                                                   
+  src/components/leads/QuickConsultationSection.tsx        ← Thêm Ctrl+Enter                                                                             
+  ```                                                                                                                                                    
+                                                                                                                                                         
+  ### Cần CREATE:                                                                                                                                        
+                                                                                                                                                         
+  ```                                                                                                                                                    
+  src/components/leads/ActionBanner.tsx                    ← P0                                                                                          
+  src/components/leads/LeadScoringCollapsible.tsx          ← P1                                                                                          
+  src/components/leads/AdmissionReadinessChecklist.tsx     ← P1                                                                                          
+  ```                                                                                                                                                    
+                                                                                                                                                         
+  ### KHÔNG thay đổi:                                                                                                                                    
+                                                                                                                                                         
+  ```                                                                                                                                                    
+  src/components/leads/LeadTimelineTab.tsx      ← Giữ nguyên                                                                                             
+  src/components/leads/LeadInsightsCard.tsx     ← Giữ nguyên                                                                                             
+  src/hooks/useLeads.ts                         ← Giữ nguyên                                                                                             
+  src/types/lead.types.ts                       ← Giữ nguyên                                                                                             
+  ```                                                                                                                                                    
+                                                                                                                                                         
+  ---                                                                                                                                                    
+                                                                                                                                                         
+  ## 🔧 THÔNG TIN BỔ SUNG                                                                                                                                
+                                                                                                                                                         
+  ### Về nút GỌI NGAY:                                                                                                                                   
+                                                                                                                                                         
+  ```typescript                                                                                                                                          
+  // Dùng tel: link để mở dialer                                                                                                                         
+  <Button                                                                                                                                                
+  asChild                                                                                                                                                
+  size="lg"                                                                                                                                              
+  className="bg-emerald-500 hover:bg-emerald-600 text-white font-semibold"                                                                               
+  >                                                                                                                                                      
+  <a href={`tel:${lead.phone}`}>                                                                                                                         
+  <Phone className="w-4 h-4 mr-2" />                                                                                                                     
+  GỌI NGAY                                                                                                                                               
+  </a>                                                                                                                                                   
+  </Button>                                                                                                                                              
+  ```                                                                                                                                                    
+                                                                                                                                                         
+  ### Về Keyboard Shortcut:                                                                                                                              
+                                                                                                                                                         
+  ```typescript                                                                                                                                          
+  // Trong QuickConsultationSection.tsx                                                                                                                  
+  useEffect(() => {                                                                                                                                      
+  const handleKeyDown = (e: KeyboardEvent) => {                                                                                                          
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {                                                                                                   
+  e.preventDefault()                                                                                                                                     
+  handleSubmit()                                                                                                                                         
+  }                                                                                                                                                      
+  }                                                                                                                                                      
+                                                                                                                                                         
+  document.addEventListener('keydown', handleKeyDown)                                                                                                    
+  return () => document.removeEventListener('keydown', handleKeyDown)                                                                                    
+  }, [handleSubmit])                                                                                                                                     
+  ```                                                                                                                                                    
+                                                                                                                                                         
+  ### Về Responsive:                                                                                                                                     
+                                                                                                                                                         
+  - Chỉ cần support >= 1280px (desktop)                                                                                                                  
+  - Command center không dùng trên mobile                                                                                                                
+                                                                                                                                                         
+  ### Components tái sử dụng:                                                                                                                            
+                                                                                                                                                         
+  | Cần dùng | Import từ |                                                                                                                               
+  |----------|-----------|                                                                                                                               
+  | Button | `@/components/ui/button` |                                                                                                                  
+  | Badge | `@/components/ui/badge` |                                                                                                                    
+  | Card | `@/components/ui/card` |                                                                                                                      
+  | Tabs | `@/components/ui/tabs` |                                                                                                                      
+  | Collapsible | `@/components/ui/collapsible` |                                                                                                        
+  | Tooltip | `@/components/ui/tooltip` |                                                                                                                
+  | CopyableCell | `@/components/common/CopyableCell` |                                                                                                  
+                                                                                                                                                         
+  ---                                                                                                                                                    
+                                                                                                                                                         
+  ## ✅ CHECKLIST TRƯỚC KHI SUBMIT PR                                                                                                                    
+                                                                                                                                                         
+  ### PR #1 (P0):                                                                                                                                        
+  - [ ] SĐT hiển thị rõ ràng ở header                                                                                                                    
+  - [ ] Nút "GỌI NGAY" màu xanh lá (#10b981), nổi bật                                                                                                    
+  - [ ] Click nút Gọi → mở dialer (tel: link)                                                                                                            
+  - [ ] Action Banner hiển thị đúng theo logic priority                                                                                                  
+  - [ ] Action Banner ẩn khi không có pending action                                                                                                     
+  - [ ] Ctrl+Enter / Cmd+Enter submit form hoạt động                                                                                                     
+  - [ ] Không break UI hiện tại                                                                                                                          
+                                                                                                                                                         
+  ### PR #2 (P1):                                                                                                                                        
+  - [ ] Layout 2 columns (4 + 8)                                                                                                                         
+  - [ ] Scoring collapsed mặc định                                                                                                                       
+  - [ ] Scoring expand/collapse hoạt động                                                                                                                
+  - [ ] Checklist hiển thị đúng trạng thái                                                                                                               
+  - [ ] Checklist progress đúng (x/5)                                                                                                                    
+  - [ ] Smart suggestion hiển thị                                                                                                                        
+                                                                                                                                                         
+  ---                                                                                                                                                    
+                                                                                                                                                         
+  ## 🚀 BẮT ĐẦU IMPLEMENT                                                                                                                                
+                                                                                                                                                         
+  Bắt đầu với **PR #1 (P0)**. Làm từng phần và show code để review:                                                                                      
+                                                                                                                                                         
+  1. **Đầu tiên:** Show code HIỆN TẠI của header section trong `LeadDetailPanel.tsx` (khoảng 50-100 dòng)                                                
+  2. **Sau đó:** Show code SAU KHI refactor header + thêm ActionBanner                                                                                   
+  3. **Cuối cùng:** Show changes trong `QuickConsultationSection.tsx` cho Ctrl+Enter                                                                     
+                                                                                                                                                         
+  Tôi cần thấy code cụ thể để review trước khi bạn làm tiếp.                                                                                             
+                                                                                                                                                         
+  **Go ahead!** 

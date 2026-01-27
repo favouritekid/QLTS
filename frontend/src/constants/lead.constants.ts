@@ -3,7 +3,7 @@
  * Centralized Lead Constants
  *
  * Single source of truth for lead-related enums and options.
- * Used across LeadFilters, QuickDisposition, and other lead components.
+ * Used across LeadFilters and other lead components.
  */
 
 import type { LeadStatus, LeadSource } from "@/types/lead.types";
@@ -106,12 +106,12 @@ export const getLeadSourceLabel = (value: LeadSource): string =>
   getLeadSourceOption(value)?.label ?? value;
 
 // =============================================================================
-// STATUS WORKFLOW HELPERS (for QuickDisposition)
+// STATUS WORKFLOW HELPERS
 // =============================================================================
 
 /**
  * Status IDs that require additional information (complex disposition)
- * Used by QuickDisposition to determine which statuses need extra forms
+ * @deprecated These constants are no longer actively used
  */
 export const COMPLEX_STATUS_IDS: LeadStatus[] = [
   "qualified",

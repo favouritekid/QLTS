@@ -312,6 +312,21 @@ export async function deleteConsultation(
   await api.delete(`/api/leads/${leadId}/consultations/${consultationId}`)
 }
 
+/**
+ * Restore a soft-deleted consultation
+ *
+ * @throws {AxiosError} 404 if not found, 403 if no permission
+ */
+export async function restoreConsultation(
+  leadId: number,
+  consultationId: number
+): Promise<Consultation> {
+  const response = await api.post<Consultation>(
+    `/api/leads/${leadId}/consultations/${consultationId}/restore`
+  )
+  return response.data
+}
+
 // ============================================
 // LEAD DATA ACCESS
 // ============================================
@@ -549,6 +564,7 @@ export const leadsApi = {
   addConsultation,
   updateConsultation,
   deleteConsultation,
+  restoreConsultation,
 
   // Data Access
   getLeadTimeline,

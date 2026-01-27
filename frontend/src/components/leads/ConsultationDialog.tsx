@@ -36,7 +36,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { DateTimePicker } from "@/components/common/form";
 
-import { useAddConsultation, useUpdateConsultation } from "@/hooks/useLeads";
+import { useAddConsultation, useUpdateConsultation, useLead } from "@/hooks/useLeads";
 import { useAllowedNextStatuses } from "@/hooks/usePipeline";
 import { useWorkflowContext, getAllowedStatusIds } from "@/hooks/useWorkflowContext";
 import { SmartConsultationStatusSelector } from "@/components/common/selectors";
@@ -105,31 +105,45 @@ export function ConsultationDialog({
   const addMutation = useAddConsultation();
   const updateMutation = useUpdateConsultation();
 
-  // Get allowed next statuses for edit mode (workflow compliance)
-  // ✅ FIX: Pass leadId to derive correct phase from admission_profile
+  // ✅ FIX: Fetch lead data to get current consultation status for CREATE mode
+  const { data: lead } = useLead(leadId, open && isCreate);
+
+  // Determine current status ID based on mode:
+  // - CREATE mode: use lead's current consultation_status_id
+  // - EDIT mode: use the consultation's status (for editing existing consultation)
+  const currentStatusId = isCreate
+    ? (lead?.consultation_status_id || null)
+    : (consultation?.consultation_status_id || null);
+
+  // Get allowed next statuses using FSM engine (filtered by selectable_mode)
+  // This ensures officers only see statuses they're allowed to select
   const { data: allowedStatuses, isLoading: statusesLoading } = useAllowedNextStatuses(
-    isEdit ? (consultation?.consultation_status_id || null) : null,
+    currentStatusId,
     leadId
   );
-  
+
   // ✅ PHASE-BASED WORKFLOW: Get workflow context for phase filtering
   const { data: workflowContext } = useWorkflowContext(leadId, { enabled: open });
   const allowedByPhase = getAllowedStatusIds(workflowContext);
-  
-  // Combine transition-based and phase-based filtering
+
+  // Combine transition-based and phase-based filtering for BOTH modes
   const filteredAllowedStatusIds = useMemo(() => {
-    if (!isEdit) return undefined; // Create mode: let selector handle it
-    
     const transitionIds = allowedStatuses?.map(s => s.id) || [];
-    
+
+    // If no allowed statuses yet (loading), return undefined to show loading state
+    if (transitionIds.length === 0 && statusesLoading) {
+      return undefined;
+    }
+
     // If no phase context, use transition-based filtering only
     if (allowedByPhase.size === 0) {
-      return transitionIds;
+      return transitionIds.length > 0 ? transitionIds : undefined;
     }
-    
+
     // Intersect: status must be allowed by BOTH transitions AND phase
-    return transitionIds.filter(id => allowedByPhase.has(id));
-  }, [isEdit, allowedStatuses, allowedByPhase]);
+    const filtered = transitionIds.filter(id => allowedByPhase.has(id));
+    return filtered.length > 0 ? filtered : transitionIds; // Fallback to transition-only if phase filter returns empty
+  }, [allowedStatuses, allowedByPhase, statusesLoading]);
 
   const form = useForm<ConsultationFormValues>({
     resolver: zodResolver(consultationSchema),
@@ -313,7 +327,7 @@ export function ConsultationDialog({
                       onChange={field.onChange}
                       placeholder="Chọn trạng thái"
                       allowedStatusIds={filteredAllowedStatusIds}
-                      disabled={isEdit && statusesLoading}
+                      disabled={statusesLoading}
                       variant="select"
                       showOutcomeType
                     />

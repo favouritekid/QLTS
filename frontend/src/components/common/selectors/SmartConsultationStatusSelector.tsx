@@ -11,9 +11,8 @@
  * - Searchable with Command component
  *
  * Usage:
- * - ConsultationDialog (status selection)
- * - EditConsultationDialog (status update)
- * - QuickDisposition (quick status change)
+ * - ConsultationDialog (status selection in create/edit mode)
+ * - QuickConsultationSection (quick status change)
  */
 
 "use client";

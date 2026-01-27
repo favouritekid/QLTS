@@ -1,22 +1,33 @@
-id,from_status_id,to_status_id,trigger_type,required_phase,is_active,description
-1,sts00,sts02,user,consultation,true,Kết nối được
-2,sts00,sts04,user,consultation,true,Từ chối ngay
-3,sts02,sts03,user,consultation,true,Quan tâm
-4,sts02,sts04,user,consultation,true,Không quan tâm
-5,sts02,sts05,user,consultation,true,Hẹn lại
-6,sts03,sts04,user,consultation,true,Không tiếp tục
-7,sts03,sts06,user,consultation,true,Đồng ý tư vấn
-8,sts05,sts03,user,consultation,true,Gọi lại có nhu cầu
-9,sts05,sts04,user,consultation,true,Gọi lại nhưng từ chối
-10,sts06,sts07,system,admission,true,Tạo hồ sơ xét tuyển
-11,sts07,sts17,user,admission,true,Yêu cầu bổ sung
-12,sts17,sts07,user,admission,true,Bổ sung xong
-13,sts07,sts08,user,admission,true,Rút hồ sơ
-14,sts07,sts16,role,admission,true,Không đạt
-15,sts13,sts09,system,admission,true,Lệ phí hợp lệ
-16,sts09,sts14,system,fee,true,Chuyển sang thu học phí
-17,sts14,sts10,system,fee,true,Thanh toán thành công
-18,sts14,sts18,system,fee,true,Hoàn tiền
-19,sts10,sts11,system,enrolled,true,Nhập học
-20,sts11,sts12,role,enrolled,true,Ngừng học
-21,sts05,sts06,user,consultation,true,Hẹn lại thành công đồng ý tư vấn
+"id","from_status_id","to_status_id","created_at","updated_at","trigger_type","required_phase","is_active","description"
+1,"sts00","sts02","2026-01-25 19:56:44.639601+07","2026-01-25 19:56:44.639601+07","user","consultation",True,"Kết nối được"
+2,"sts00","sts04","2026-01-25 19:56:44.639601+07","2026-01-25 19:56:44.639601+07","user","consultation",True,"Từ chối ngay"
+3,"sts02","sts03","2026-01-25 19:56:44.639601+07","2026-01-25 19:56:44.639601+07","user","consultation",True,"Quan tâm"
+4,"sts02","sts05","2026-01-25 19:56:44.639601+07","2026-01-25 19:56:44.639601+07","user","consultation",True,"Hẹn lại"
+5,"sts02","sts04","2026-01-25 19:56:44.639601+07","2026-01-25 19:56:44.639601+07","user","consultation",True,"Không quan tâm"
+6,"sts05","sts03","2026-01-25 19:56:44.639601+07","2026-01-25 19:56:44.639601+07","user","consultation",True,"Gọi lại có nhu cầu"
+7,"sts05","sts04","2026-01-25 19:56:44.639601+07","2026-01-25 19:56:44.639601+07","user","consultation",True,"Gọi lại nhưng từ chối"
+8,"sts03","sts06","2026-01-25 19:56:44.639601+07","2026-01-25 19:56:44.639601+07","user","consultation",True,"Đồng ý tư vấn"
+9,"sts03","sts04","2026-01-25 19:56:44.639601+07","2026-01-25 19:56:44.639601+07","user","consultation",True,"Không tiếp tục"
+10,"sts06","sts07","2026-01-25 19:56:44.639601+07","2026-01-25 19:56:44.639601+07","system","admission",True,"Tạo hồ sơ xét tuyển"
+11,"sts07","sts17","2026-01-25 19:56:44.639601+07","2026-01-25 19:56:44.639601+07","user","admission",True,"Yêu cầu bổ sung"
+12,"sts17","sts07","2026-01-25 19:56:44.639601+07","2026-01-25 19:56:44.639601+07","user","admission",True,"Bổ sung xong"
+13,"sts07","sts08","2026-01-25 19:56:44.639601+07","2026-01-25 19:56:44.639601+07","user","admission",True,"Rút hồ sơ"
+14,"sts07","sts16","2026-01-25 19:56:44.639601+07","2026-01-25 19:56:44.639601+07","role","admission",True,"Không đạt"
+15,"sts13","sts09","2026-01-25 19:56:44.639601+07","2026-01-25 19:56:44.639601+07","system","admission",True,"Lệ phí hợp lệ"
+16,"sts09","sts14","2026-01-25 19:56:44.639601+07","2026-01-25 19:56:44.639601+07","system","fee",True,"Chuyển sang thu học phí"
+17,"sts14","sts10","2026-01-25 19:56:44.639601+07","2026-01-25 19:56:44.639601+07","system","fee",True,"Thanh toán thành công"
+18,"sts14","sts18","2026-01-25 19:56:44.639601+07","2026-01-25 19:56:44.639601+07","system","fee",True,"Hoàn tiền"
+19,"sts10","sts11","2026-01-25 19:56:44.639601+07","2026-01-25 19:56:44.639601+07","system","enrolled",True,"Nhập học"
+20,"sts11","sts12","2026-01-25 19:56:44.639601+07","2026-01-25 19:56:44.639601+07","role","enrolled",True,"Ngừng học"
+21,"sts00","sts03","2026-01-25 22:38:01.502555+07","2026-01-25 22:38:01.502555+07","user","consultation",True,"Quan tâm ngay từ đầu"
+22,"sts00","sts05","2026-01-25 22:38:01.502555+07","2026-01-25 22:38:01.502555+07","user","consultation",True,"Hẹn gọi lại"
+23,"sts00","sts06","2026-01-25 22:38:01.502555+07","2026-01-25 22:38:01.502555+07","user","consultation",True,"Đồng ý tư vấn ngay"
+24,"sts02","sts06","2026-01-25 22:38:01.502555+07","2026-01-25 22:38:01.502555+07","user","consultation",True,"Đồng ý tư vấn"
+26,"sts05","sts06","2026-01-25 22:38:01.502555+07","2026-01-25 22:38:01.502555+07","user","consultation",True,"Đồng ý sau khi gọi lại"
+28,"sts03","sts05","2026-01-25 22:38:01.502555+07","2026-01-25 22:38:01.502555+07","user","consultation",True,"Hẹn gọi lại"
+29,"sts06","sts03","2026-01-25 22:38:01.502555+07","2026-01-25 22:38:01.502555+07","user","consultation",True,"Quay lại quan tâm"
+30,"sts06","sts05","2026-01-25 22:38:01.502555+07","2026-01-25 22:38:01.502555+07","user","consultation",True,"Hẹn lại"
+31,"sts06","sts04","2026-01-25 22:38:01.502555+07","2026-01-25 22:38:01.502555+07","user","consultation",True,"Từ chối sau tư vấn"
+161,"sts04","sts03","2026-01-25 22:47:48.811474+07","2026-01-25 22:47:48.811474+07","user","consultation",True,"Từ chối sau tư vấn"
+162,"sts04","sts05","2026-01-27 14:09:02.712448+07","2026-01-27 14:09:02.712448+07","user","consultation",True,"Từ chối sau tư vấn"
+163,"sts04","sts06","2026-01-27 14:09:32.255699+07","2026-01-27 14:09:32.255699+07","user","consultation",True,"Từ chối sau tư vấn"
