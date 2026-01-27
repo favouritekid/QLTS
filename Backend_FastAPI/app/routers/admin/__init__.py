@@ -41,6 +41,12 @@ from . import cache
 # System Management router (NOTIFICATION 2.0)
 from . import system
 
+# Deleted Items Management router
+from . import deleted_items
+
+# Audit Logs router
+from . import audit_logs
+
 # Create main admin router
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -103,3 +109,9 @@ router.include_router(cache.router)  # /api/admin/cache/*
 
 # Include System Management router (NOTIFICATION 2.0)
 router.include_router(system.router)  # /api/admin/system/*
+
+# Include Deleted Items Management router
+router.include_router(deleted_items.router)  # /api/admin/deleted-items/*
+
+# Include Audit Logs router
+router.include_router(audit_logs.router)  # /api/admin/audit-logs/*

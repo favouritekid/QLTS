@@ -16,11 +16,13 @@ import {
   Database,
   FileText,
   FolderTree,
+  History,
   LayoutDashboard,
   Percent,
   Settings,
   Share2,
   ShieldCheck,
+  Trash2,
   TrendingUp,
   Trello,
   Users,
@@ -248,6 +250,18 @@ export const navigationConfig: NavigationConfig = {
           href: "/admin/monitoring",
           icon: Activity,
           roles: ["admin"], // Only admin can access monitoring
+        },
+        {
+          label: "Deleted Items",
+          href: "/admin/deleted-items",
+          icon: Trash2,
+          roles: ["admin", "manager"], // Admin and Manager can restore deleted items
+        },
+        {
+          label: "Audit Logs",
+          href: "/admin/audit-logs",
+          icon: History,
+          roles: ["admin", "manager"], // Admin and Manager can view audit logs
         },
         {
           label: "Settings",

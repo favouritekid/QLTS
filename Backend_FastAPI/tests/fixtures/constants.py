@@ -68,6 +68,13 @@ class AdminURLs:
     POLICIES = f"{BASE}/policies"
     ASSIGN_ROLE = f"{BASE}/assign-role"
 
+    # Audit Logs URLs
+    AUDIT_LOGS = f"{BASE}/audit-logs"
+    AUDIT_LOGS_ENTITY = (
+        lambda entity_type, entity_id: f"{AdminURLs.AUDIT_LOGS}/entity/{entity_type}/{entity_id}"
+    )
+    AUDIT_LOGS_SUMMARY = f"{AUDIT_LOGS}/summary"
+
 
 class ProfileURLs:
     """URLs cho module Profile."""

@@ -19,7 +19,7 @@ from ..utils.exceptions import (
     PermissionDeniedError,
     ResourceNotFoundError,
 )
-from ..services import pipeline_service, distribution_service
+from ..services import pipeline_service, distribution_service, audit_service
 from ..core.status_mapping import sync_lead_status_from_consultation
 from ..core.constants import UserRole
 from .status_helper import StatusHelper, AssignmentStatus
@@ -517,6 +517,31 @@ def _get_current_lead_state(lead: models.Lead) -> dict:
     }
 
 
+def _get_lead_audit_state(lead: models.Lead) -> dict:
+    """
+    Helper to capture comprehensive Lead state for audit logging.
+
+    Captures all user-editable fields that should be tracked in audit logs.
+    """
+    return {
+        "full_name": lead.full_name,
+        "phone": lead.phone,
+        "phone2": lead.phone2,
+        "email": lead.email,
+        "source": lead.source,
+        "education_level": lead.education_level,
+        "gpa": lead.gpa,
+        "location": lead.location,
+        "officer_summary": lead.officer_summary,
+        "unit_id": lead.unit_id,
+        "offering_id": lead.offering_id,
+        "status": lead.status,
+        "consultation_status_id": lead.consultation_status_id,
+        "pipeline_stage_id": lead.pipeline_stage_id,
+        "assigned_officer_id": lead.assigned_officer_id,
+    }
+
+
 async def get_lead_by_id(db: AsyncSession, lead_id: int, include_deleted: bool = False) -> models.Lead:
     """
     Lấy chi tiết Lead bằng ID (Detail View).
@@ -921,6 +946,24 @@ async def create_lead(
         await db.flush()
         await db.refresh(db_lead)
 
+        # ✅ AUDIT LOG: Log lead creation
+        await audit_service.log_created(
+            db,
+            entity_type="Lead",
+            entity_id=db_lead.id,
+            actor_user_id=created_by.id if created_by else None,
+            new_values={
+                "full_name": db_lead.full_name,
+                "phone": db_lead.phone,
+                "email": db_lead.email,
+                "unit_id": db_lead.unit_id,
+                "offering_id": db_lead.offering_id,
+                "source": db_lead.source,
+                "status": db_lead.status,
+            },
+            source="api",
+        )
+
         # ✅ Create post-commit callback with all post-commit actions
         async def _post_commit():
             """Execute after router commits the transaction."""
@@ -1054,6 +1097,9 @@ async def update_lead(
 
             # Lưu trạng thái cũ trước khi thay đổi
             old_state = _get_current_lead_state(db_lead)
+
+            # ✅ AUDIT LOG: Capture comprehensive state for audit logging
+            old_audit_state = _get_lead_audit_state(db_lead)
 
             # ✅ BIDIRECTIONAL SYNC: Capture old personal info for Lead → Profile sync
             old_personal_info = {
@@ -1348,6 +1394,24 @@ async def update_lead(
                         changed_fields=changed_personal_fields,
                         synced_profile_ids=synced_profile_ids,
                     )
+
+            # ✅ AUDIT LOG: Log lead update with changes (comprehensive field tracking)
+            # Detect what fields were changed using full audit state
+            audit_changes = audit_service.detect_changes(
+                old_audit_state,
+                _get_lead_audit_state(db_lead),
+                exclude_fields=["_sa_instance_state", "updated_at", "created_at"]
+            )
+            if audit_changes:
+                await audit_service.log_changes(
+                    db,
+                    entity_type="Lead",
+                    entity_id=lead_id,
+                    action="updated",
+                    changes=audit_changes,
+                    actor_user_id=updated_by.id,
+                    source="api",
+                )
 
             log.info("Lead updated successfully within transaction", lead_id=lead_id)
             # Transaction sẽ commit khi ra khỏi `async with db.begin_nested()`
@@ -1656,6 +1720,22 @@ async def add_consultation(
             # Runs sync within transaction for consistency
             from app.services import lead_cache_service
             await lead_cache_service.update_lead_cache(db, lead_id, lead)
+
+            # ✅ AUDIT LOG: Log consultation creation
+            await audit_service.log_created(
+                db,
+                entity_type="Consultation",
+                entity_id=new_consultation.id,
+                actor_user_id=officer_id,
+                new_values={
+                    "lead_id": lead_id,
+                    "consultation_status_id": new_status.id,
+                    "consultation_status_name": new_status.name,
+                    "method": data.method,
+                    "consultation_date": consultation_date.isoformat() if consultation_date else None,
+                },
+                source="api",
+            )
 
             # ✅ ARCHITECTURE FIX: Use Repository instead of direct query
             # Service must not query Model directly (Rule E: Repository Pattern)
@@ -2056,6 +2136,22 @@ async def delete_consultation(
             await lead_cache_service.update_lead_cache(db, lead_id, lead)
             log.info("Updated lead cache after deleting consultation", lead_id=lead_id, deleted_consultation_id=consultation_id)
 
+            # ✅ AUDIT LOG: Log consultation deletion
+            await audit_service.log_deleted(
+                db,
+                entity_type="Consultation",
+                entity_id=consultation_id,
+                actor_user_id=current_user.id,
+                old_values={
+                    "lead_id": lead_id,
+                    "consultation_status_id": consultation.consultation_status_id,
+                    "consultation_date": consultation.consultation_date.isoformat() if consultation.consultation_date else None,
+                    "notes": consultation.notes[:200] if consultation.notes else None,
+                },
+                reason=f"Consultation soft-deleted by {current_user.role} {current_user.username}",
+                source="api",
+            )
+
             # Store values for use after transaction
             _lead_id = lead_id
             _consultation_id = consultation_id
@@ -2105,6 +2201,160 @@ async def delete_consultation(
             error=str(e),
             exc_info=True
         )
+
+
+async def restore_consultation(
+    db: AsyncSession, lead_id: int, consultation_id: int, current_user: models.User
+) -> models.Consultation:
+    """
+    Restore a soft-deleted consultation and update Lead status accordingly.
+
+    Permission Rules:
+    - Admin/Manager: Can restore any consultation
+    - Officer: Can only restore if assigned to the lead
+
+    Business Logic:
+    - Clears deleted_at timestamp to restore the consultation
+    - Updates lead's consultation_status_id to the restored consultation's status
+      (only if restored consultation is the most recent by consultation_date)
+    - Logs the change in LeadStatusHistory
+
+    Args:
+        db: Database session
+        lead_id: Lead ID
+        consultation_id: Consultation ID to restore
+        current_user: User performing the restoration
+
+    Returns:
+        models.Consultation: The restored consultation object
+
+    Raises:
+        ResourceNotFoundError: If consultation not found or not deleted
+        BusinessRuleViolation: If consultation is not deleted
+        PermissionDeniedError: If user doesn't have permission
+    """
+    async with db.begin_nested():
+        try:
+            repo = LeadRepository(db)
+            lead = await repo.get_by_id_for_update(lead_id)
+
+            if not lead:
+                raise ResourceNotFoundError(detail=f"Lead with id {lead_id} not found.")
+
+            # Check if lead is deleted
+            if lead.deleted_at is not None:
+                raise BadRequest(detail="Cannot restore consultations for a deleted lead.")
+
+            # Fetch the deleted consultation
+            consultation_result = await db.execute(
+                select(models.Consultation)
+                .where(
+                    models.Consultation.id == consultation_id,
+                    models.Consultation.lead_id == lead_id,
+                    models.Consultation.deleted_at.isnot(None),  # Must be deleted
+                )
+                .with_for_update()
+            )
+            consultation = consultation_result.scalar_one_or_none()
+
+            if not consultation:
+                raise ResourceNotFoundError(
+                    detail=f"Deleted consultation with id {consultation_id} not found."
+                )
+
+            # Permission check
+            if current_user.role in (UserRole.ADMIN, UserRole.MANAGER):
+                pass  # Admin/Manager can restore any
+            elif current_user.role == UserRole.OFFICER:
+                if lead.assigned_officer_id != current_user.id:
+                    raise PermissionDeniedError(
+                        detail="You are not assigned to this lead."
+                    )
+            else:
+                raise PermissionDeniedError(
+                    detail="You don't have permission to restore consultations."
+                )
+
+            # Capture old state
+            old_state = _get_current_lead_state(lead)
+
+            # Restore the consultation
+            consultation.deleted_at = None
+            await db.flush()
+
+            log.info(
+                "Consultation restored",
+                consultation_id=consultation_id,
+                lead_id=lead_id,
+                restored_by=current_user.id,
+            )
+
+            # Determine if we need to update lead status
+            # Get the latest consultation (including the just-restored one)
+            latest_consultation = await repo.get_latest_consultation(lead_id)
+
+            # If restored consultation is now the latest, update lead status
+            if latest_consultation and latest_consultation.id == consultation_id:
+                if consultation.consultation_status_id:
+                    new_status = await db.get(
+                        models.ConsultationStatus, consultation.consultation_status_id
+                    )
+                    if new_status:
+                        lead.consultation_status_id = new_status.id
+                        lead.pipeline_stage_id = new_status.stage_id
+                        sync_lead_status_from_consultation(lead, new_status)
+                        db.add(lead)
+
+                        log.info(
+                            "Lead status updated to restored consultation's status",
+                            lead_id=lead_id,
+                            new_status_id=new_status.id,
+                        )
+
+            # Get new state and log change
+            new_state = _get_current_lead_state(lead)
+            await _log_lead_state_change(
+                db,
+                lead,
+                old_state,
+                new_state,
+                changed_by=current_user,
+                reason=f"Restored consultation ID {consultation_id}",
+            )
+
+            # Update lead cache
+            from app.services import lead_cache_service
+            await lead_cache_service.update_lead_cache(db, lead_id, lead)
+
+            # ✅ AUDIT LOG: Log consultation restoration
+            await audit_service.log_audit(
+                db,
+                entity_type="Consultation",
+                entity_id=consultation_id,
+                action="restored",
+                actor_user_id=current_user.id,
+                new_value={
+                    "lead_id": lead_id,
+                    "consultation_status_id": consultation.consultation_status_id,
+                    "consultation_date": consultation.consultation_date.isoformat() if consultation.consultation_date else None,
+                },
+                reason=f"Consultation restored by {current_user.role} {current_user.username}",
+                source="api",
+            )
+
+            return consultation
+
+        except (ResourceNotFoundError, BusinessRuleViolation, PermissionDeniedError):
+            raise
+        except Exception as e:
+            log.error(
+                "Failed to restore consultation",
+                lead_id=lead_id,
+                consultation_id=consultation_id,
+                error=str(e),
+                exc_info=True,
+            )
+            raise e
 
 
 async def update_consultation(
@@ -3435,6 +3685,23 @@ async def delete_lead(
                 reason=f"Lead soft-deleted by {deleted_by.role} {deleted_by.username}"
             )
 
+            # ✅ AUDIT LOG: Log lead deletion
+            await audit_service.log_deleted(
+                db,
+                entity_type="Lead",
+                entity_id=lead_id,
+                actor_user_id=deleted_by.id,
+                old_values={
+                    "full_name": lead.full_name,
+                    "phone": lead.phone,
+                    "email": lead.email,
+                    "unit_id": lead.unit_id,
+                    "consultations_deleted": consultations_deleted,
+                },
+                reason=f"Lead soft-deleted by {deleted_by.role} {deleted_by.username}",
+                source="api",
+            )
+
             log.info(
                 "Lead soft-deleted successfully",
                 lead_id=lead_id,
@@ -3586,6 +3853,23 @@ async def restore_lead(
                 new_state,
                 changed_by=restored_by,
                 reason=f"Lead restored by {restored_by.role} {restored_by.username}"
+            )
+
+            # ✅ AUDIT LOG: Log lead restoration
+            await audit_service.log_audit(
+                db,
+                entity_type="Lead",
+                entity_id=lead_id,
+                action="restored",
+                actor_user_id=restored_by.id,
+                new_value={
+                    "full_name": lead.full_name,
+                    "phone": lead.phone,
+                    "email": lead.email,
+                    "consultations_restored": consultations_restored,
+                },
+                reason=f"Lead restored by {restored_by.role} {restored_by.username}",
+                source="api",
             )
 
             log.info(

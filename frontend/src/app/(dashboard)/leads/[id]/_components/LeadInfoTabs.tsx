@@ -29,10 +29,12 @@ import {
   Video,
   MessageSquare,
   Clock,
+  History,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { CopyableCell } from "@/components/common/CopyableCell";
+import { AuditLogTimeline } from "@/components/audit/AuditLogTimeline";
 import { LEAD_SOURCE_OPTIONS } from "@/constants";
 import type { Lead, TimelineItem } from "@/types/lead.types";
 
@@ -44,12 +46,13 @@ interface LeadInfoTabsProps {
   onViewProfile?: () => void;
 }
 
-type TabId = "overview" | "history" | "profile";
+type TabId = "overview" | "history" | "profile" | "audit";
 
 const tabs: { id: TabId; label: string }[] = [
   { id: "overview", label: "Tổng quan" },
   { id: "history", label: "Lịch sử" },
   { id: "profile", label: "Hồ sơ" },
+  { id: "audit", label: "Audit Log" },
 ];
 
 // Helper functions
@@ -490,6 +493,19 @@ export function LeadInfoTabs({
                 )}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Audit Log Tab */}
+        {activeTab === "audit" && (
+          <div>
+            <div className="flex items-center gap-2 mb-4">
+              <History className="w-4 h-4 text-slate-500" />
+              <h3 className="text-sm font-semibold text-slate-600">
+                Lịch sử thay đổi
+              </h3>
+            </div>
+            <AuditLogTimeline entityType="Lead" entityId={lead.id} />
           </div>
         )}
       </div>
