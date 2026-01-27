@@ -30,6 +30,44 @@ log = structlog.get_logger(__name__)
 
 
 # =========================================================================
+# ALLOWED FIELDS FOR LEAD UPDATE (Defense in Depth)
+# =========================================================================
+# Explicit whitelist of fields that can be updated via API.
+# Even if Pydantic schema allows a field, service layer double-checks.
+# Fields NOT in this list will be blocked and logged as potential attack.
+# =========================================================================
+ALLOWED_LEAD_UPDATE_FIELDS: frozenset = frozenset({
+    # Personal/Contact info
+    "full_name",
+    "phone",
+    "phone2",
+    "email",
+    # CRM info
+    "source",
+    "education_level",
+    "gpa",
+    "location",
+    # Officer assessment (CRM operational)
+    "officer_rating",
+    "officer_summary",
+    # Fit score input fields (manual assessment)
+    "birth_year",
+    "location_proximity",
+    "occupation_relevance",
+    "academic_performance",
+})
+
+# Fields handled separately with special logic (not blocked, but not direct setattr)
+SPECIAL_HANDLED_FIELDS: frozenset = frozenset({
+    "consultation_status_id",  # Blocked - must use consultation flow
+    "pipeline_stage_id",       # Blocked - must use consultation flow
+    "offering_id",             # Handled separately for auto-reassign
+    "unit_id",                 # Handled separately for reassignment
+    "version",                 # Optimistic locking - not stored directly
+})
+
+
+# =========================================================================
 # TERMINAL STATUS GUARD
 # =========================================================================
 # Phase "enrolled" + is_final = HARD BLOCK (Lead đã hoàn tất quy trình)
@@ -1136,13 +1174,28 @@ async def update_lead(
             scoring_fields = ["education_level", "gpa", "source", "location"]
             should_recalculate_score = any(field in update_data for field in scoring_fields)
 
-            # Cập nhật các trường thông thường
+            # =========================================================================
+            # ✅ DEFENSE IN DEPTH: Whitelist validation for allowed fields
+            # Even if Pydantic schema allows a field, we double-check here.
+            # This prevents accidental exposure of internal fields like lead_score.
+            # =========================================================================
             for key, value in update_data.items():
-                # Xử lý consultation_status_id riêng (processed separately below)
-                # Xử lý offering_id riêng (processed for auto-reassign below)
-                # Xử lý version riêng (used for optimistic locking check, not direct update)
-                if key not in ["consultation_status_id", "offering_id", "version"]:
+                if key in ALLOWED_LEAD_UPDATE_FIELDS:
+                    # ✅ Field is in whitelist - safe to update
                     setattr(db_lead, key, value)
+                elif key in SPECIAL_HANDLED_FIELDS:
+                    # Field has special handling logic (processed below or already checked)
+                    pass
+                else:
+                    # ⚠️ Field not in whitelist - potential security issue
+                    log.warning(
+                        "Blocked attempt to update non-whitelisted field",
+                        field=key,
+                        lead_id=lead_id,
+                        user_id=updated_by.id,
+                        user_role=updated_by.role,
+                        hint="If this field should be updatable, add it to ALLOWED_LEAD_UPDATE_FIELDS",
+                    )
 
             # Recalculate lead score if relevant fields changed
             if should_recalculate_score:

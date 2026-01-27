@@ -18,3 +18,4 @@ sts18,TUITION_REFUNDED,Đã hoàn học phí,fee,stg05,system,system,negative,tr
 sts11,ENROLLED,Đã xác nhận nhập học,enrolled,stg06,system,system,positive,true,false,true,true,500,"Chính thức trở thành sinh viên",#008000
 sts12,DROPPED_OUT,Ngừng theo học,enrolled,stg07,transition,role,negative,true,false,true,true,510,"Sinh viên thôi học",#FF0000
 sts15,NO_REPLY_MESSAGE,Nhắn tin không phản hồi,universal,NULL,activity,user,neutral,false,true,false,false,910,"Có gửi tin nhưng không phản hồi",#808080
+sts19,CANCELLED,Đã hủy lịch hẹn,universal,NULL,activity,user,neutral,false,true,false,false,920,"Lịch hẹn tư vấn bị hủy",#FF6B6B

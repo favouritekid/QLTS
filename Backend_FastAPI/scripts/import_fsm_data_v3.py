@@ -158,8 +158,8 @@ async def validate_data(db: AsyncSession) -> bool:
     # Check 1: All statuses loaded
     result = await db.execute(select(models.ConsultationStatus))
     statuses = result.scalars().all()
-    if len(statuses) != 19:  # Expected 19 statuses from v3
-        errors.append(f"Expected 19 consultation_status records, got {len(statuses)}")
+    if len(statuses) != 20:  # Expected 20 statuses from v3 (includes sts19 CANCELLED)
+        errors.append(f"Expected 20 consultation_status records, got {len(statuses)}")
 
     # Check 2: All transitions loaded
     result = await db.execute(select(models.AllowedTransition))

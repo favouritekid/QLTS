@@ -61,7 +61,10 @@ PHASE_STATUSES: dict[LeadPhase, Set[str]] = {
 
 # Universal statuses - can be used in ANY phase, DON'T change stage
 # These are for tracking contact attempts without affecting pipeline progression
-UNIVERSAL_STATUSES: Set[str] = {"sts01", "sts15"}
+# sts01: NO_ANSWER (Không nghe máy)
+# sts15: NO_REPLY_MESSAGE (Nhắn tin không phản hồi)
+# sts19: CANCELLED (Đã hủy lịch hẹn)
+UNIVERSAL_STATUSES: Set[str] = {"sts01", "sts15", "sts19"}
 
 # System-only statuses - cannot be selected by regular users
 SYSTEM_ONLY_STATUSES: Set[str] = {"sts10", "sts11", "sts12", "sts13", "sts18"}
