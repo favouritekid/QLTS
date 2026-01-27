@@ -139,12 +139,18 @@ function getActionBannerConfig(lead: Lead): BannerConfig | null {
 
   // Priority 3: Hot lead needing contact
   // is_hot_lead = lead_score >= 70 (set by LeadCacheService)
-  if (lead.is_hot_lead && lead.cached_urgency_score >= 70) {
+  // Show banner if:
+  // - Lead is hot (score >= 70) AND
+  // - Either no recent contact OR urgency is elevated
+  const hasRecentContact = lead.consultation_count > 0 && lead.last_consultation_at &&
+    (new Date().getTime() - new Date(lead.last_consultation_at).getTime()) < 24 * 60 * 60 * 1000; // Within 24h
+
+  if (lead.is_hot_lead && !hasRecentContact) {
     return {
       type: "hot_lead",
       priority: "high",
       title: "LEAD TIỀM NĂNG CAO",
-      message: "Lead có điểm số cao, cần liên hệ sớm để không bỏ lỡ cơ hội",
+      message: `Điểm: ${lead.lead_score} — Cần liên hệ sớm để không bỏ lỡ cơ hội`,
       actionPrimary: "Gọi ngay",
       actionSecondary: null,
       gradient: "from-orange-50 to-amber-50",

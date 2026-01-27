@@ -561,18 +561,20 @@ class LeadRepository(BaseRepository[models.Lead]):
         stats_result = await self.db.execute(stats_query)
         stats = stats_result.one()
 
-        # Query 2: Get earliest pending activity (not completed, exclude soft-deleted)
-        PENDING_STATUS_IDS = ["sts01", "sts03"]  # Lên lịch, Cần theo dõi
+        # Query 2: Get earliest scheduled activity (ANY consultation with scheduled_at)
+        # ✅ FIX: Consider ALL consultations with scheduled_at, not just pending statuses
+        # This ensures ActionBanner shows for any future scheduled follow-up
+        now = datetime.now(timezone.utc)
 
         pending_query = select(
             func.min(models.Consultation.scheduled_at)
         ).where(
             models.Consultation.lead_id == lead_id,
             models.Consultation.scheduled_at.isnot(None),
-            models.Consultation.consultation_status_id.in_(PENDING_STATUS_IDS),
+            models.Consultation.scheduled_at > now,  # Only future appointments
             models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
         )
-        
+
         pending_result = await self.db.execute(pending_query)
         pending_next_activity = pending_result.scalar_one_or_none()
         
