@@ -41,6 +41,7 @@ interface LeadSidebarProps {
   timeline?: TimelineItem[];
   onAssign?: () => void;
   hideHeader?: boolean; // Hide name/score header when shown in top bar
+  compact?: boolean; // Compact mode for grid layout (no fixed height, card-style)
 }
 
 const getInitials = (name: string) => {
@@ -154,14 +155,17 @@ function InfoRow({
   );
 }
 
-export function LeadSidebar({ lead, timeline, onAssign, hideHeader }: LeadSidebarProps) {
+export function LeadSidebar({ lead, timeline, onAssign, hideHeader, compact }: LeadSidebarProps) {
   const stageColor = lead.pipeline_stage?.color_code || STAGE_COLORS[lead.pipeline_stage?.id || 0];
   const daysInPipeline = Math.floor(
     (new Date().getTime() - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24)
   );
 
   return (
-    <div className="flex h-full flex-col bg-muted/30 border-r overflow-y-auto">
+    <div className={cn(
+      "flex flex-col bg-muted/30",
+      compact ? "rounded-lg border" : "h-full border-r overflow-y-auto"
+    )}>
       {/* Lead Identity - Hidden when shown in top bar */}
       {!hideHeader && (
         <>

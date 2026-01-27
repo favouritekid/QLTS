@@ -164,6 +164,23 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
     pendingStatusRef.current = pendingStatus;
   }, [pendingStatus]);
 
+  // ✅ Ctrl+Enter keyboard shortcut to save immediately
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+Enter (or Cmd+Enter on Mac) commits pending status immediately
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        const statusToSave = pendingStatusRef.current;
+        if (statusToSave && !isSavingRef.current) {
+          e.preventDefault();
+          commitSave(statusToSave);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []); // Empty deps - uses refs for current values
+
   // Cleanup timer on unmount
   useEffect(() => {
     return () => {
@@ -903,7 +920,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                         Hoàn tác
                       </Button>
                       
-                      {/* Save now button */}
+                      {/* Save now button with keyboard hint */}
                       <Button
                         type="button"
                         variant="default"
@@ -911,11 +928,17 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                         className="h-7 px-3 text-xs bg-blue-600 hover:bg-blue-700"
                         onClick={() => commitSave(pendingStatus)}
                         disabled={addConsultation.isPending}
+                        title="Ctrl+Enter để lưu nhanh"
                       >
                         {addConsultation.isPending ? (
                           <Loader2 className="h-3 w-3 animate-spin" />
                         ) : (
-                          "Lưu ngay"
+                          <>
+                            Lưu ngay
+                            <kbd className="ml-1.5 hidden sm:inline-flex items-center px-1 py-0.5 text-[9px] font-mono bg-blue-700 rounded">
+                              ⌘↵
+                            </kbd>
+                          </>
                         )}
                       </Button>
                       

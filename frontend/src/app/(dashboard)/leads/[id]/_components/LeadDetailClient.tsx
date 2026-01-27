@@ -19,6 +19,9 @@ import {
   History,
   Zap,
   AlertCircle,
+  Phone,
+  Copy,
+  Check,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -43,6 +46,9 @@ import { ConsultationDialog } from "@/components/leads/ConsultationDialog";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { QuickConsultationSection } from "@/components/leads/QuickConsultationSection";
 import { LeadInsightsTab } from "@/components/leads/LeadInsightsTab";
+import { ActionBanner } from "@/components/leads/ActionBanner";
+import { LeadScoringCollapsible } from "@/components/leads/LeadScoringCollapsible";
+import { AdmissionReadinessChecklist } from "@/components/leads/AdmissionReadinessChecklist";
 import { LeadSidebar } from "./LeadSidebar";
 import { WorkflowBreadcrumb } from "@/components/common";
 import type { Lead } from "@/types/lead.types";
@@ -59,6 +65,18 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);
   const [consultationDialogOpen, setConsultationDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [phoneCopied, setPhoneCopied] = useState(false);
+
+  // Copy phone number to clipboard
+  const handleCopyPhone = async (phone: string) => {
+    try {
+      await navigator.clipboard.writeText(phone);
+      setPhoneCopied(true);
+      setTimeout(() => setPhoneCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy phone:", err);
+    }
+  };
 
   // Fetch lead data
   const { data: lead, isLoading, isError, error } = useLead(leadId, true, { initialData });
@@ -142,14 +160,46 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)]">
-      {/* === TOP BAR: Workflow Breadcrumb + Actions === */}
+      {/* === TOP BAR: Workflow Breadcrumb + Phone + Actions === */}
       <div className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-20">
         <div className="px-6 py-2 flex items-center justify-between">
-          {/* Workflow Progression Breadcrumb */}
+          {/* Left: Workflow Breadcrumb */}
           <WorkflowBreadcrumb
             currentPhase={workflowContext?.current_phase}
             hasAdmissionProfile={workflowContext?.has_admission_profile}
           />
+
+          {/* Center: Prominent Phone + Call Button */}
+          <div className="flex items-center gap-3 px-4 py-1.5 rounded-lg bg-green-50 border border-green-200">
+            <div className="flex items-center gap-2">
+              <Phone className="h-4 w-4 text-green-600" />
+              <span className="font-mono text-base font-semibold text-green-800">
+                {lead.phone}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 w-6 p-0 text-green-600 hover:text-green-700 hover:bg-green-100"
+                onClick={() => handleCopyPhone(lead.phone)}
+              >
+                {phoneCopied ? (
+                  <Check className="h-3.5 w-3.5" />
+                ) : (
+                  <Copy className="h-3.5 w-3.5" />
+                )}
+              </Button>
+            </div>
+            <Button
+              size="sm"
+              className="bg-green-600 hover:bg-green-700 text-white font-medium px-4"
+              onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
+            >
+              <Phone className="mr-1.5 h-4 w-4" />
+              GỌI NGAY
+            </Button>
+          </div>
+
+          {/* Right: Action Buttons */}
           <div className="flex items-center gap-2">
             {/* Admission Profile Button - Show View or Create based on existing profile */}
             {lead.offering_id && (
@@ -189,40 +239,45 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
         </div>
       </div>
 
-      {/* === MAIN CONTENT: Sidebar + Center === */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar - Full version with name/score/stage */}
-        <div className="w-72 shrink-0">
-          <LeadSidebar 
-            lead={lead} 
-            timeline={timeline}
-            onAssign={() => setAssignDialogOpen(true)}
-          />
-        </div>
+      {/* === MAIN CONTENT: 12-column Grid (4 + 8) === */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="p-6">
+          <div className="grid grid-cols-12 gap-6">
+            {/* LEFT COLUMN (4 cols): Lead Info + Scoring + Checklist */}
+            <div className="col-span-12 lg:col-span-4 space-y-4">
+              {/* Lead Identity & Personal Info (from sidebar) */}
+              <LeadSidebar
+                lead={lead}
+                timeline={timeline}
+                onAssign={() => setAssignDialogOpen(true)}
+                compact
+              />
 
-        {/* Center - Consultation Focus */}
-        <div className="flex-1 overflow-y-auto">
-          <div className="p-6 space-y-4">
-            {/* AI Insights - Compact Bar */}
-            <LeadInsightsTab leadId={leadId} insights={insights} lead={lead} />
+              {/* Scoring Collapsible */}
+              <LeadScoringCollapsible
+                lead={lead}
+                insights={insights}
+                defaultExpanded={false}
+              />
 
-            {/* 2-column: Timeline (left) + Quick Consultation (right) */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {/* Left: Timeline */}
-              <Card className="h-fit lg:max-h-[500px] lg:overflow-y-auto">
-                <CardHeader className="pb-3 sticky top-0 bg-card z-10 border-b">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <History className="h-4 w-4 text-muted-foreground" />
-                    Lịch sử tư vấn
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="pt-4">
-                  <LeadTimelineTab leadId={leadId} />
-                </CardContent>
-              </Card>
+              {/* Admission Readiness Checklist */}
+              <AdmissionReadinessChecklist
+                lead={lead}
+                onCreateProfile={() => router.push(`/admissions/create?lead_id=${leadId}`)}
+                onViewProfile={() => lead.admission_profile && router.push(`/admissions/${lead.admission_profile.id}`)}
+              />
+            </div>
 
-              {/* Right: Quick Consultation */}
-              <Card className="border-amber-200 bg-amber-50/30 h-fit">
+            {/* RIGHT COLUMN (8 cols): Action Area */}
+            <div className="col-span-12 lg:col-span-8 space-y-4">
+              {/* Action Banner - Shows priority action (overdue/scheduled/hot) */}
+              <ActionBanner lead={lead} />
+
+              {/* AI Insights - Compact Bar */}
+              <LeadInsightsTab leadId={leadId} insights={insights} lead={lead} />
+
+              {/* Quick Consultation - Primary Action */}
+              <Card className="border-amber-200 bg-amber-50/30">
                 <CardHeader className="pb-3">
                   <CardTitle className="flex items-center gap-2 text-base">
                     <Zap className="h-4 w-4 text-amber-500" />
@@ -231,6 +286,19 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
                 </CardHeader>
                 <CardContent>
                   <QuickConsultationSection leadId={lead.id} />
+                </CardContent>
+              </Card>
+
+              {/* Timeline History */}
+              <Card className="max-h-[400px] overflow-y-auto">
+                <CardHeader className="pb-3 sticky top-0 bg-card z-10 border-b">
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <History className="h-4 w-4 text-muted-foreground" />
+                    Lịch sử tư vấn
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pt-4">
+                  <LeadTimelineTab leadId={leadId} />
                 </CardContent>
               </Card>
             </div>
