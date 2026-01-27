@@ -562,10 +562,9 @@ class LeadRepository(BaseRepository[models.Lead]):
         stats = stats_result.one()
 
         # Query 2: Get scheduled_at from the LATEST consultation only
-        # ✅ FIX: Only consider the most recent consultation's scheduled_at
+        # ✅ FIX: Return scheduled_at regardless of past/future
         # If there's a newer consultation without scheduled_at, it means the follow-up was done
-        # This prevents stale scheduled_at from old consultations showing in ActionBanner
-        now = datetime.now(timezone.utc)
+        # LeadCacheService will determine if it's overdue (past) or pending (future)
 
         # Subquery: Get the latest consultation for this lead
         latest_consult_subq = (
@@ -579,13 +578,13 @@ class LeadRepository(BaseRepository[models.Lead]):
             .scalar_subquery()
         )
 
-        # Get scheduled_at from the latest consultation (if it's in the future)
+        # Get scheduled_at from the latest consultation (if it exists)
+        # Don't filter by time - let LeadCacheService handle past/future logic
         pending_query = select(
             models.Consultation.scheduled_at
         ).where(
             models.Consultation.id == latest_consult_subq,
             models.Consultation.scheduled_at.isnot(None),
-            models.Consultation.scheduled_at > now,  # Only if still in the future
         )
 
         pending_result = await self.db.execute(pending_query)

@@ -131,12 +131,16 @@ async def update_lead_cache(
             created_at = created_at.replace(tzinfo=timezone.utc)
         days_since_contact = (now - created_at).days
     
-    # 3. Calculate overdue days
+    # 3. Calculate overdue status and days
+    # is_overdue = scheduled time has passed (even if just 1 minute ago)
+    # overdue_days = number of full days overdue (for urgency calculation)
+    is_overdue_flag = False
     overdue_days = 0
     if pending_next_activity:
         if pending_next_activity.tzinfo is None:
             pending_next_activity = pending_next_activity.replace(tzinfo=timezone.utc)
         if pending_next_activity < now:
+            is_overdue_flag = True
             overdue_days = (now - pending_next_activity).days
     
     # 4. Check final stage
@@ -161,7 +165,7 @@ async def update_lead_cache(
     lead.consultation_count = consultation_count
     lead.cached_urgency_score = urgency_score
     lead.is_hot_lead = (lead.lead_score or 0) >= 70
-    lead.is_overdue = overdue_days > 0
+    lead.is_overdue = is_overdue_flag  # True if scheduled time has passed
     lead.next_activity_at = pending_next_activity
     
     # 7. Flush (no commit - caller handles transaction)
