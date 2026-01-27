@@ -102,6 +102,87 @@ async def get_distribution_preview(
 
 
 @limiter.limit(RateLimits.DATA_READ)  # 1000/hour
+@router.get("/check-duplicate")
+async def check_duplicate(
+    request: Request,
+    phone: Optional[str] = Query(None, description="Phone number to check"),
+    email: Optional[str] = Query(None, description="Email to check"),
+    unit_id: Optional[int] = Query(None, description="Unit ID for email check scope"),
+    exclude_id: Optional[int] = Query(None, description="Lead ID to exclude (for edit mode)"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """
+    Real-time duplicate check for phone/email.
+
+    - Phone: Checked globally (must be unique across ALL units)
+    - Email: Checked within same unit only
+
+    Returns:
+        - phone_available: True if phone is available (or not provided)
+        - email_available: True if email is available (or not provided)
+        - phone_conflict: Info about conflicting lead (if phone taken)
+        - email_conflict: Info about conflicting lead (if email taken)
+    """
+    from ..repositories import LeadRepository
+
+    repo = LeadRepository(db)
+    result = {
+        "phone_available": True,
+        "email_available": True,
+        "phone_conflict": None,
+        "email_conflict": None,
+    }
+
+    # Check phone (global scope)
+    if phone:
+        # Normalize phone (remove spaces, dashes)
+        normalized_phone = phone.replace(" ", "").replace("-", "").replace(".", "")
+        existing = await repo.check_phone_conflict(
+            phone=normalized_phone,
+            phone2=None,
+            exclude_id=exclude_id
+        )
+        if existing:
+            officer_name = "Chưa phân công"
+            if existing.assigned_officer:
+                officer_name = existing.assigned_officer.full_name or "N/A"
+
+            # Get unit name
+            unit_name = "N/A"
+            if existing.unit_id:
+                await db.refresh(existing, ["unit"])
+                if existing.unit:
+                    unit_name = existing.unit.name
+
+            result["phone_available"] = False
+            result["phone_conflict"] = (
+                f"SĐT đã tồn tại: {existing.full_name} ({existing.phone}) - "
+                f"Đơn vị: {unit_name} - Quản lý: {officer_name}"
+            )
+
+    # Check email (unit scope)
+    if email and unit_id:
+        existing = await repo.check_email_conflict(
+            email=email,
+            unit_id=unit_id,
+            exclude_id=exclude_id
+        )
+        if existing:
+            officer_name = "Chưa phân công"
+            if existing.assigned_officer:
+                officer_name = existing.assigned_officer.full_name or "N/A"
+
+            result["email_available"] = False
+            result["email_conflict"] = (
+                f"Email đã tồn tại trong đơn vị: {existing.full_name} ({existing.phone}) - "
+                f"Quản lý: {officer_name}"
+            )
+
+    return result
+
+
+@limiter.limit(RateLimits.DATA_READ)  # 1000/hour
 @router.get("", response_model=schemas.LeadsPage)
 async def get_all_leads(
     request: Request,

@@ -483,6 +483,43 @@ export async function getDistributionPreview(offeringId: number): Promise<Distri
 }
 
 // ============================================
+// REAL-TIME VALIDATION
+// ============================================
+
+export interface DuplicateCheckParams {
+  phone?: string
+  email?: string
+  unit_id?: number
+  exclude_id?: number  // For edit mode
+}
+
+export interface DuplicateCheckResult {
+  phone_available: boolean
+  email_available: boolean
+  phone_conflict: string | null
+  email_conflict: string | null
+}
+
+/**
+ * Real-time duplicate check for phone/email
+ *
+ * - Phone: Checked globally (must be unique across ALL units)
+ * - Email: Checked within same unit only
+ *
+ * @example
+ * ```ts
+ * const result = await leadsApi.checkDuplicate({ phone: '0901234567' })
+ * if (!result.phone_available) {
+ *   console.log(result.phone_conflict)  // "SĐT đã tồn tại: Nguyen Van A..."
+ * }
+ * ```
+ */
+export async function checkDuplicate(params: DuplicateCheckParams): Promise<DuplicateCheckResult> {
+  const response = await api.get<DuplicateCheckResult>('/api/leads/check-duplicate', { params })
+  return response.data
+}
+
+// ============================================
 // AGGREGATED EXPORTS
 // ============================================
 
@@ -523,6 +560,9 @@ export const leadsApi = {
 
   // Distribution
   getDistributionPreview,
+
+  // Validation
+  checkDuplicate,
 }
 
 // Default export for convenience
