@@ -125,7 +125,8 @@ export function QuickDisposition({ leadId, onSuccess }: QuickDispositionProps) {
   const currentStatusId = lead?.consultation_status_id;
 
   // Get allowed next statuses based on state machine
-  const { data: statuses = [], isLoading: statusesLoading, error, isError } = useAllowedNextStatuses(currentStatusId);
+  // ✅ FIX: Pass leadId to derive correct phase from admission_profile
+  const { data: statuses = [], isLoading: statusesLoading, error, isError } = useAllowedNextStatuses(currentStatusId, leadId);
 
   // ✅ PHASE-BASED WORKFLOW: Get workflow context for phase filtering
   const { data: workflowContext, isLoading: contextLoading } = useWorkflowContext(leadId);

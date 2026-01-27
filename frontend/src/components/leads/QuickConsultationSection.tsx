@@ -133,12 +133,13 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
   const currentStatusId = lead?.consultation_status_id;
 
   // Get allowed next statuses based on state machine
+  // ✅ FIX: Pass leadId to derive correct phase from admission_profile
   const {
     data: statuses = [],
     isLoading: statusesLoading,
     error,
     isError,
-  } = useAllowedNextStatuses(currentStatusId);
+  } = useAllowedNextStatuses(currentStatusId, leadId);
   const addConsultation = useAddConsultation();
 
   // Form state

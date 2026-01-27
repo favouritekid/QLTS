@@ -106,8 +106,10 @@ export function ConsultationDialog({
   const updateMutation = useUpdateConsultation();
 
   // Get allowed next statuses for edit mode (workflow compliance)
+  // ✅ FIX: Pass leadId to derive correct phase from admission_profile
   const { data: allowedStatuses, isLoading: statusesLoading } = useAllowedNextStatuses(
-    isEdit ? (consultation?.consultation_status_id || null) : null
+    isEdit ? (consultation?.consultation_status_id || null) : null,
+    leadId
   );
   
   // ✅ PHASE-BASED WORKFLOW: Get workflow context for phase filtering
