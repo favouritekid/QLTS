@@ -139,28 +139,19 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
   };
 
   // Mark scheduled appointment as complete
-  // Creates a quick consultation without scheduled_at to clear the banner
+  // Instead of auto-creating consultation, scroll to QuickConsultationSection
+  // so user can select the appropriate outcome status (respects FSM rules)
   const handleMarkComplete = () => {
-    // Use current status or default to "sts02" (Đã kết nối liên hệ)
-    const statusId = lead?.consultation_status_id || "sts02";
-
-    addConsultationMutation.mutate(
-      {
-        leadId,
-        data: {
-          status_id: statusId,
-          method: "phone",
-          notes: "Đã hoàn thành lịch hẹn",
-          // No scheduled_at - this clears the pending activity
-        },
-      },
-      {
-        onSuccess: () => {
-          // Cache will be refreshed automatically by the mutation
-          // ActionBanner will disappear on next render
-        },
-      }
-    );
+    // Scroll to the consultation section for user to record the outcome
+    const consultSection = document.getElementById("quick-consultation-section");
+    if (consultSection) {
+      consultSection.scrollIntoView({ behavior: "smooth", block: "start" });
+      // Add visual highlight
+      consultSection.classList.add("ring-2", "ring-amber-400", "ring-offset-2");
+      setTimeout(() => {
+        consultSection.classList.remove("ring-2", "ring-amber-400", "ring-offset-2");
+      }, 2000);
+    }
   };
 
   // Calculate quick stats
@@ -406,7 +397,10 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
           {/* ===== RIGHT PANEL (8 cols): Quick Actions ===== */}
           <div className="col-span-12 lg:col-span-8 space-y-4">
             {/* Quick Consultation Form */}
-            <Card className="rounded-2xl border-slate-200">
+            <Card
+              id="quick-consultation-section"
+              className="rounded-2xl border-slate-200 transition-all duration-300"
+            >
               <CardHeader className="pb-3">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center">
