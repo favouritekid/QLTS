@@ -91,15 +91,14 @@ function getActionBannerConfig(lead: Lead): BannerConfig | null {
   const now = new Date();
 
   // Priority 1: Overdue check (from cached field)
-  if (lead.is_overdue) {
-    const overdueDate = lead.next_activity_at ? new Date(lead.next_activity_at) : null;
+  // is_overdue = next_activity_at has passed
+  if (lead.is_overdue && lead.next_activity_at) {
+    const overdueDate = new Date(lead.next_activity_at);
     return {
       type: "overdue",
       priority: "critical",
       title: "QUÁ HẠN LIÊN HỆ",
-      message: overdueDate
-        ? `Hẹn gọi lại ${formatTimeAgo(overdueDate)} — Cần liên hệ ngay`
-        : "Đã quá hạn liên hệ theo lịch hẹn",
+      message: `Hẹn gọi lại ${formatTimeAgo(overdueDate)} — Cần liên hệ ngay`,
       actionPrimary: "Gọi ngay",
       actionSecondary: "Đánh dấu hoàn thành",
       gradient: "from-red-50 to-rose-50",
@@ -111,35 +110,35 @@ function getActionBannerConfig(lead: Lead): BannerConfig | null {
     };
   }
 
-  // Priority 2: Scheduled appointment
-  const nextConsultation = lead.consultations?.find(
-    (c) => c.scheduled_at && new Date(c.scheduled_at) > now
-  );
-  if (nextConsultation?.scheduled_at) {
-    const scheduledDate = new Date(nextConsultation.scheduled_at);
-    const diffHours = (scheduledDate.getTime() - now.getTime()) / (1000 * 60 * 60);
-    const isSoon = diffHours <= 2 && diffHours > 0;
-    const notes = nextConsultation.notes;
+  // Priority 2: Scheduled appointment (next_activity_at is in the future)
+  // NOTE: We use next_activity_at instead of scanning consultations array
+  // because Lead API response doesn't include consultations by default
+  if (lead.next_activity_at && !lead.is_overdue) {
+    const scheduledDate = new Date(lead.next_activity_at);
+    // Only show if the scheduled date is in the future
+    if (scheduledDate > now) {
+      const diffHours = (scheduledDate.getTime() - now.getTime()) / (1000 * 60 * 60);
+      const isSoon = diffHours <= 2 && diffHours > 0;
 
-    return {
-      type: "scheduled",
-      priority: isSoon ? "high" : "medium",
-      title: "ACTION CẦN LÀM",
-      message: notes
-        ? `Hẹn gọi lại lúc ${formatScheduledTime(scheduledDate)} — ${notes}`
-        : `Có lịch hẹn lúc ${formatScheduledTime(scheduledDate)}`,
-      actionPrimary: isSoon ? "Gọi ngay" : null,
-      actionSecondary: "Đánh dấu hoàn thành",
-      gradient: "from-amber-50 to-orange-50",
-      iconBg: "bg-amber-100",
-      iconColor: "text-amber-600",
-      textColor: "text-amber-800",
-      badgeColor: "bg-amber-200 text-amber-800",
-      icon: Bell,
-    };
+      return {
+        type: "scheduled",
+        priority: isSoon ? "high" : "medium",
+        title: "LỊCH HẸN SẮP TỚI",
+        message: `Có lịch hẹn lúc ${formatScheduledTime(scheduledDate)}`,
+        actionPrimary: isSoon ? "Gọi ngay" : null,
+        actionSecondary: "Đánh dấu hoàn thành",
+        gradient: "from-amber-50 to-orange-50",
+        iconBg: "bg-amber-100",
+        iconColor: "text-amber-600",
+        textColor: "text-amber-800",
+        badgeColor: "bg-amber-200 text-amber-800",
+        icon: Bell,
+      };
+    }
   }
 
-  // Priority 3: Hot lead without recent contact
+  // Priority 3: Hot lead needing contact
+  // is_hot_lead = lead_score >= 70 (set by LeadCacheService)
   if (lead.is_hot_lead && lead.cached_urgency_score >= 70) {
     return {
       type: "hot_lead",
