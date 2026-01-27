@@ -301,7 +301,7 @@ export function LeadInfoTabs({
             {recentTimeline.length > 0 ? (
               recentTimeline.map((item, index) => (
                 <div
-                  key={item.id}
+                  key={`${item.id}-${index}`}
                   className={cn(
                     "p-3 rounded-xl border transition-colors",
                     index === 0
