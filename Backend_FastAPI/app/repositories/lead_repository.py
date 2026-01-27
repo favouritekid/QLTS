@@ -561,18 +561,31 @@ class LeadRepository(BaseRepository[models.Lead]):
         stats_result = await self.db.execute(stats_query)
         stats = stats_result.one()
 
-        # Query 2: Get earliest scheduled activity (ANY consultation with scheduled_at)
-        # ✅ FIX: Consider ALL consultations with scheduled_at, not just pending statuses
-        # This ensures ActionBanner shows for any future scheduled follow-up
+        # Query 2: Get scheduled_at from the LATEST consultation only
+        # ✅ FIX: Only consider the most recent consultation's scheduled_at
+        # If there's a newer consultation without scheduled_at, it means the follow-up was done
+        # This prevents stale scheduled_at from old consultations showing in ActionBanner
         now = datetime.now(timezone.utc)
 
+        # Subquery: Get the latest consultation for this lead
+        latest_consult_subq = (
+            select(models.Consultation.id)
+            .where(
+                models.Consultation.lead_id == lead_id,
+                models.Consultation.deleted_at.is_(None),
+            )
+            .order_by(models.Consultation.consultation_date.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+
+        # Get scheduled_at from the latest consultation (if it's in the future)
         pending_query = select(
-            func.min(models.Consultation.scheduled_at)
+            models.Consultation.scheduled_at
         ).where(
-            models.Consultation.lead_id == lead_id,
+            models.Consultation.id == latest_consult_subq,
             models.Consultation.scheduled_at.isnot(None),
-            models.Consultation.scheduled_at > now,  # Only future appointments
-            models.Consultation.deleted_at.is_(None),  # Exclude soft-deleted
+            models.Consultation.scheduled_at > now,  # Only if still in the future
         )
 
         pending_result = await self.db.execute(pending_query)

@@ -55,7 +55,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-import { useLead, useLeadTimeline, useLeadInsights, useDeleteLead } from "@/hooks/useLeads";
+import { useLead, useLeadTimeline, useLeadInsights, useDeleteLead, useAddConsultation } from "@/hooks/useLeads";
 import { useWorkflowContext } from "@/hooks/useWorkflowContext";
 import { LeadDialog } from "@/components/leads/LeadDialog";
 import { AssignLeadDialog } from "@/components/leads/AssignLeadDialog";
@@ -127,12 +127,40 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
   // Delete mutation
   const deleteMutation = useDeleteLead();
 
+  // Add consultation mutation (for Mark Complete)
+  const addConsultationMutation = useAddConsultation();
+
   const handleDelete = () => {
     deleteMutation.mutate(leadId, {
       onSuccess: () => {
         router.push("/leads");
       },
     });
+  };
+
+  // Mark scheduled appointment as complete
+  // Creates a quick consultation without scheduled_at to clear the banner
+  const handleMarkComplete = () => {
+    // Use current status or default to "sts02" (Đã kết nối liên hệ)
+    const statusId = lead?.consultation_status_id || "sts02";
+
+    addConsultationMutation.mutate(
+      {
+        leadId,
+        data: {
+          status_id: statusId,
+          method: "phone",
+          notes: "Đã hoàn thành lịch hẹn",
+          // No scheduled_at - this clears the pending activity
+        },
+      },
+      {
+        onSuccess: () => {
+          // Cache will be refreshed automatically by the mutation
+          // ActionBanner will disappear on next render
+        },
+      }
+    );
   };
 
   // Calculate quick stats
@@ -336,7 +364,10 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
 
       {/* ===== ACTION BANNER ===== */}
       <div className="px-6 pt-4">
-        <ActionBanner lead={lead} />
+        <ActionBanner
+          lead={lead}
+          onMarkComplete={handleMarkComplete}
+        />
       </div>
 
       {/* ===== MAIN CONTENT: 12-column grid (4 + 8) ===== */}
