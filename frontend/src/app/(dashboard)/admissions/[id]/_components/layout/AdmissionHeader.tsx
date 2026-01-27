@@ -39,7 +39,7 @@ export function AdmissionHeader({ profile }: AdmissionHeaderProps) {
 
       {/* Officer Name */}
       <span className="text-sm text-muted-foreground">
-        Phụ trách: {profile?.lead?.assigned_officer_id || "---"}
+        Phụ trách: {profile?.lead?.assigned_officer?.full_name || "Chưa phân công"}
       </span>
     </div>
   )

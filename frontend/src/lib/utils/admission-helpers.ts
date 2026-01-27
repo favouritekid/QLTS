@@ -223,43 +223,13 @@ export function getMissingDocsCount(documents: DocumentItem[]): number {
 }
 
 // ==============================================================================
-// SCORE VALIDATION
+// SCORE VALIDATION - REMOVED (Thin Client Compliance)
 // ==============================================================================
-
-/**
- * @deprecated Use profile.score_snapshot_status.subject_statuses from backend instead.
- * This function violates the Thin Client philosophy. Backend should compute pass/fail status.
- * Kept for backward compatibility only - DO NOT USE IN NEW CODE.
- *
- * Check if a subject score passes the minimum threshold.
- * @param score Subject score (0-10)
- * @param minSubjectScore Minimum allowed score from applied_rules
- * @returns True if score passes threshold
- */
-export function isSubjectPassing(
-  score: number | null | undefined,
-  minSubjectScore: number | null | undefined
-): boolean {
-  if (score === null || score === undefined) return false
-  const threshold = minSubjectScore ?? 0
-  return score >= threshold
-}
-
-/**
- * @deprecated Use profile.score_snapshot_status.total_status from backend instead.
- * This function violates the Thin Client philosophy. Backend should compute pass/fail status.
- * Kept for backward compatibility only - DO NOT USE IN NEW CODE.
- *
- * Check if total score passes the minimum threshold.
- * @param totalScore Total admission score
- * @param minScore Minimum required score from applied_rules
- * @returns True if total score passes threshold
- */
-export function isTotalScorePassing(
-  totalScore: number | null | undefined,
-  minScore: number | null | undefined
-): boolean {
-  if (totalScore === null || totalScore === undefined) return false
-  const threshold = minScore ?? 0
-  return totalScore >= threshold
-}
+//
+// The following functions have been REMOVED as they violate Thin Client philosophy:
+// - isSubjectPassing() - Use profile.score_snapshot_status.subject_statuses instead
+// - isTotalScorePassing() - Use profile.score_snapshot_status.total_status instead
+//
+// Backend now computes pass/fail status and returns it in the API response.
+// See: ScoreSnapshot.tsx for correct usage pattern.
+// ==============================================================================

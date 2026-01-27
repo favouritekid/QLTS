@@ -110,8 +110,14 @@ export function LeadConsultationsTab({
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Badge variant="outline">
-                        Status #{consultation.consultation_status_id}
+                      <Badge
+                        variant="outline"
+                        style={{
+                          backgroundColor: consultation.consultation_status?.color_code ? `${consultation.consultation_status.color_code}20` : undefined,
+                          borderColor: consultation.consultation_status?.color_code
+                        }}
+                      >
+                        {consultation.consultation_status?.name || `Status #${consultation.consultation_status_id}`}
                       </Badge>
                     </TableCell>
                     <TableCell>
