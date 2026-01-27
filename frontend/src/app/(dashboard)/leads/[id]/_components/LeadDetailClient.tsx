@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/alert-dialog";
 
 import { useLead, useLeadTimeline, useLeadInsights, useDeleteLead } from "@/hooks/useLeads";
+import { useWorkflowContext } from "@/hooks/useWorkflowContext";
 import { LeadDialog } from "@/components/leads/LeadDialog";
 import { AssignLeadDialog } from "@/components/leads/AssignLeadDialog";
 import { ConsultationDialog } from "@/components/leads/ConsultationDialog";
@@ -43,6 +44,7 @@ import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { QuickConsultationSection } from "@/components/leads/QuickConsultationSection";
 import { LeadInsightsTab } from "@/components/leads/LeadInsightsTab";
 import { LeadSidebar } from "./LeadSidebar";
+import { WorkflowBreadcrumb } from "@/components/common";
 import type { Lead } from "@/types/lead.types";
 
 interface LeadDetailClientProps {
@@ -62,6 +64,7 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
   const { data: lead, isLoading, isError, error } = useLead(leadId, true, { initialData });
   const { data: timeline } = useLeadTimeline(leadId);
   const { data: insights } = useLeadInsights(leadId);
+  const { data: workflowContext } = useWorkflowContext(leadId);
 
   // Delete mutation
   const deleteMutation = useDeleteLead();
@@ -139,9 +142,14 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)]">
-      {/* === TOP BAR: Actions Only === */}
+      {/* === TOP BAR: Workflow Breadcrumb + Actions === */}
       <div className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-20">
-        <div className="px-6 py-2 flex items-center justify-end">
+        <div className="px-6 py-2 flex items-center justify-between">
+          {/* Workflow Progression Breadcrumb */}
+          <WorkflowBreadcrumb
+            currentPhase={workflowContext?.current_phase}
+            hasAdmissionProfile={workflowContext?.has_admission_profile}
+          />
           <div className="flex items-center gap-2">
             {/* Admission Profile Button - Show View or Create based on existing profile */}
             {lead.offering_id && (

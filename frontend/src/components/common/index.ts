@@ -29,3 +29,7 @@ export * from "./selectors";
 // Navigation components
 export { BackButton } from "./BackButton";
 export { Breadcrumbs } from "./Breadcrumbs";
+
+// Workflow components
+export { WorkflowBreadcrumb, MiniBreadcrumb } from "./WorkflowBreadcrumb";
+export type { WorkflowBreadcrumbProps, MiniBreadcrumbProps } from "./WorkflowBreadcrumb";
