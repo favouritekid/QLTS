@@ -266,11 +266,14 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
       (u) => u.availability_status === "available" || u.availability_status === undefined
     ) || [];
 
+  // Destructure stable function references from duplicateValidation
+  const { reset: resetDuplicateValidation } = duplicateValidation;
+
   // Reset form when dialog opens/closes
   useEffect(() => {
     if (!open) {
       form.reset();
-      duplicateValidation.reset();
+      resetDuplicateValidation();
       setShowDetails(false);
       return;
     }
@@ -312,7 +315,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
         academic_performance: 0,
       });
     }
-  }, [open, lead, isEdit, isCreate, form, user, duplicateValidation]);
+  }, [open, lead, isEdit, isCreate, form, user, resetDuplicateValidation]);
 
   const onSubmit = async (data: LeadFormValues, shouldCreateAnother: boolean = false) => {
     // Block submit if duplicate validation failed
@@ -351,7 +354,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
               occupation_relevance: 0,
               academic_performance: 0,
             });
-            duplicateValidation.reset();
+            resetDuplicateValidation();
           } else {
             onOpenChange(false);
           }
