@@ -52,6 +52,10 @@ interface LeadTimelineTabProps {
   leadId: number;
   /** Maximum items to show initially. Set 0 or undefined to show all. */
   maxItems?: number;
+  /** Compact mode - simpler display without date grouping */
+  compact?: boolean;
+  /** Limit number of items (alias for maxItems, used in compact mode) */
+  limit?: number;
 }
 
 // Get icon and color based on event type and method
@@ -166,8 +170,9 @@ const getInitials = (name: string) => {
     .slice(0, 2);
 };
 
-export function LeadTimelineTab({ leadId, maxItems }: LeadTimelineTabProps) {
+export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimelineTabProps) {
   const { data: timeline, isLoading } = useLeadTimeline(leadId);
+  const effectiveLimit = limit ?? maxItems;
   const deleteMutation = useDeleteConsultation();
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedConsultationId, setSelectedConsultationId] = useState<number | null>(null);
@@ -191,6 +196,52 @@ export function LeadTimelineTab({ leadId, maxItems }: LeadTimelineTabProps) {
         <MessageSquare className="h-10 w-10 mx-auto mb-3 opacity-20" />
         <p className="font-medium">Chưa có hoạt động nào</p>
         <p className="text-xs mt-1">Lịch sử tương tác sẽ xuất hiện tại đây</p>
+      </div>
+    );
+  }
+
+  // Compact mode - simpler display for right panel
+  if (compact) {
+    const compactItems = effectiveLimit ? timeline.slice(0, effectiveLimit) : timeline;
+
+    return (
+      <div className="space-y-3">
+        {compactItems.map((event, index) => {
+          const eventType = event.type || "lead_created";
+          const eventData = event.data || {};
+          const isConsultation = eventType === "consultation" || eventType === "consultation_added";
+          const config = getEventConfig(
+            eventType,
+            isConsultation ? (eventData as { method?: string }).method : undefined
+          );
+          const Icon = config.icon;
+
+          const consultData = isConsultation ? (eventData as Consultation) : null;
+          const statusName = consultData?.consultation_status?.name || event.description || "Hoạt động";
+          const notes = consultData?.notes || "";
+
+          return (
+            <div
+              key={index}
+              className="flex items-center gap-4 p-3 bg-slate-50 rounded-xl"
+            >
+              <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0", config.bgColor)}>
+                <Icon className={cn("w-5 h-5", config.color)} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-slate-800">{statusName}</span>
+                  <span className="text-xs text-slate-400">
+                    {format(parseISO(event.timestamp || ""), "dd/MM")} • {format(parseISO(event.timestamp || ""), "HH:mm")}
+                  </span>
+                </div>
+                {notes && (
+                  <p className="text-sm text-slate-500 truncate">{notes}</p>
+                )}
+              </div>
+            </div>
+          );
+        })}
       </div>
     );
   }

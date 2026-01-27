@@ -1,12 +1,13 @@
 // src/app/(dashboard)/leads/[id]/_components/LeadDetailClient.tsx
 /**
- * LeadDetailClient - Streamlined Lead Detail Layout
- * 
- * Layout:
- * - TOP BAR: Actions only (Edit, Delete) - breadcrumbs in layout
- * - LEFT: Sidebar with name, score, stage, personal info
- * - CENTER: Insights + Consultation (2-column: History + Quick)
- * - FOOTER (optional): Next follow-up reminder
+ * LeadDetailClient - Lead Detail Page following wireframe design
+ *
+ * Layout Structure:
+ * - HEADER: Avatar + Name + Score | Phone + GỌI NGAY | Actions
+ * - ACTION BANNER: Next action reminder (overdue/scheduled/hot)
+ * - MAIN CONTENT: 12-column grid (4 + 8)
+ *   - LEFT (4 cols): Tabs (Overview/History/Profile) + Scoring + Checklist
+ *   - RIGHT (8 cols): Quick Consultation Form + Recent History + Quick Stats
  */
 "use client";
 
@@ -18,15 +19,24 @@ import {
   Trash2,
   History,
   Zap,
-  AlertCircle,
   Phone,
+  PhoneCall,
   Copy,
   Check,
+  MoreHorizontal,
+  Clock,
+  Calendar,
+  TrendingUp,
+  Target,
+  FileText,
+  GraduationCap,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -37,6 +47,13 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 import { useLead, useLeadTimeline, useLeadInsights, useDeleteLead } from "@/hooks/useLeads";
 import { useWorkflowContext } from "@/hooks/useWorkflowContext";
@@ -45,18 +62,41 @@ import { AssignLeadDialog } from "@/components/leads/AssignLeadDialog";
 import { ConsultationDialog } from "@/components/leads/ConsultationDialog";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { QuickConsultationSection } from "@/components/leads/QuickConsultationSection";
-import { LeadInsightsTab } from "@/components/leads/LeadInsightsTab";
 import { ActionBanner } from "@/components/leads/ActionBanner";
 import { LeadScoringCollapsible } from "@/components/leads/LeadScoringCollapsible";
 import { AdmissionReadinessChecklist } from "@/components/leads/AdmissionReadinessChecklist";
-import { LeadSidebar } from "./LeadSidebar";
+import { LeadInfoTabs } from "./LeadInfoTabs";
 import { WorkflowBreadcrumb } from "@/components/common";
+import { cn } from "@/lib/utils";
 import type { Lead } from "@/types/lead.types";
 
 interface LeadDetailClientProps {
   leadId: number;
   initialData?: Lead;
 }
+
+const getInitials = (name: string) => {
+  return name
+    .split(" ")
+    .map((n) => n[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
+};
+
+const getScoreLabel = (score: number) => {
+  if (score >= 70) return "Tiềm năng cao";
+  if (score >= 50) return "Trung bình";
+  if (score >= 30) return "Thấp";
+  return "Rất thấp";
+};
+
+const getScoreColor = (score: number) => {
+  if (score >= 70) return "text-emerald-600 bg-emerald-50";
+  if (score >= 50) return "text-blue-600 bg-blue-50";
+  if (score >= 30) return "text-amber-600 bg-amber-50";
+  return "text-gray-500 bg-gray-50";
+};
 
 export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps) {
   const router = useRouter();
@@ -95,42 +135,41 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
     });
   };
 
-  // Get next follow-up from timeline (if any scheduled)
-  const getNextFollowUp = () => {
-    if (!lead?.consultations?.length) return null;
-    const scheduled = lead.consultations.find(
-      (c) => c.scheduled_at && new Date(c.scheduled_at) > new Date()
-    );
-    return scheduled;
-  };
-
-  const nextFollowUp = getNextFollowUp();
+  // Calculate quick stats
+  const daysInPipeline = lead
+    ? Math.floor((new Date().getTime() - new Date(lead.created_at).getTime()) / (1000 * 60 * 60 * 24))
+    : 0;
+  const successfulContacts = lead?.consultations?.filter(
+    (c) => c.consultation_status?.outcome_type === "positive"
+  ).length || 0;
 
   // Loading state
   if (isLoading) {
     return (
       <div className="flex flex-col h-[calc(100vh-4rem)]">
-        {/* Top bar skeleton */}
-        <div className="border-b px-6 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Skeleton className="h-8 w-20" />
-            <Skeleton className="h-8 w-48" />
-            <Skeleton className="h-7 w-16" />
-          </div>
-          <div className="flex gap-2">
-            <Skeleton className="h-9 w-24" />
-            <Skeleton className="h-9 w-16" />
+        <div className="border-b px-6 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <Skeleton className="h-14 w-14 rounded-2xl" />
+              <div className="space-y-2">
+                <Skeleton className="h-6 w-48" />
+                <Skeleton className="h-4 w-32" />
+              </div>
+            </div>
+            <Skeleton className="h-12 w-64" />
+            <Skeleton className="h-10 w-40" />
           </div>
         </div>
-        {/* Content skeleton */}
-        <div className="flex flex-1">
-          <div className="w-72 border-r p-4 space-y-4">
-            <Skeleton className="h-32 w-full" />
-            <Skeleton className="h-32 w-full" />
-          </div>
-          <div className="flex-1 p-6">
-            <Skeleton className="h-48 w-full mb-4" />
-            <Skeleton className="h-64 w-full" />
+        <div className="flex-1 p-6">
+          <div className="grid grid-cols-12 gap-6">
+            <div className="col-span-4 space-y-4">
+              <Skeleton className="h-64 w-full" />
+              <Skeleton className="h-32 w-full" />
+            </div>
+            <div className="col-span-8 space-y-4">
+              <Skeleton className="h-96 w-full" />
+              <Skeleton className="h-32 w-full" />
+            </div>
           </div>
         </div>
       </div>
@@ -159,168 +198,239 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-4rem)]">
-      {/* === TOP BAR: Workflow Breadcrumb + Phone + Actions === */}
-      <div className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-20">
-        <div className="px-6 py-2 flex items-center justify-between">
-          {/* Left: Workflow Breadcrumb */}
-          <WorkflowBreadcrumb
-            currentPhase={workflowContext?.current_phase}
-            hasAdmissionProfile={workflowContext?.has_admission_profile}
-          />
+    <div className="flex flex-col min-h-[calc(100vh-4rem)] bg-slate-50">
+      {/* ===== WORKFLOW TABS ===== */}
+      <div className="bg-white border-b border-slate-200 px-6">
+        <WorkflowBreadcrumb
+          currentPhase={workflowContext?.current_phase}
+          hasAdmissionProfile={workflowContext?.has_admission_profile}
+        />
+      </div>
 
-          {/* Center: Prominent Phone + Call Button */}
-          <div className="flex items-center gap-3 px-4 py-1.5 rounded-lg bg-green-50 border border-green-200">
-            <div className="flex items-center gap-2">
-              <Phone className="h-4 w-4 text-green-600" />
-              <span className="font-mono text-base font-semibold text-green-800">
-                {lead.phone}
-              </span>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-6 w-6 p-0 text-green-600 hover:text-green-700 hover:bg-green-100"
-                onClick={() => handleCopyPhone(lead.phone)}
-              >
-                {phoneCopied ? (
-                  <Check className="h-3.5 w-3.5" />
-                ) : (
-                  <Copy className="h-3.5 w-3.5" />
+      {/* ===== HEADER: ACTION ZONE ===== */}
+      <div className="bg-white border-b border-slate-200 px-6 py-4">
+        <div className="flex items-center justify-between">
+          {/* Left: Lead Info */}
+          <div className="flex items-center gap-4">
+            <Avatar className="h-14 w-14 rounded-2xl border-2 border-background shadow-lg">
+              <AvatarFallback className="rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 text-white text-xl font-bold">
+                {getInitials(lead.full_name)}
+              </AvatarFallback>
+            </Avatar>
+            <div>
+              <div className="flex items-center gap-3">
+                <h1 className="text-xl font-bold text-slate-900">{lead.full_name}</h1>
+                <span className="text-sm text-slate-400">#{lead.id}</span>
+                {lead.consultation_status && (
+                  <Badge
+                    variant="outline"
+                    className="border-0 font-medium"
+                    style={{
+                      backgroundColor: `${lead.consultation_status.color_code}20`,
+                      color: lead.consultation_status.color_code,
+                    }}
+                  >
+                    {lead.consultation_status.name}
+                  </Badge>
                 )}
-              </Button>
+              </div>
+              <div className="flex items-center gap-4 mt-1.5 text-sm text-slate-600">
+                {lead.offering && (
+                  <span className="flex items-center gap-1.5">
+                    <GraduationCap className="w-4 h-4 text-slate-400" />
+                    {lead.offering.program?.name || lead.offering.offering_type}
+                  </span>
+                )}
+                <span className="flex items-center gap-1.5">
+                  <Target className="w-4 h-4 text-amber-500" />
+                  <span className={cn("font-semibold", getScoreColor(lead.lead_score).split(" ")[0])}>
+                    {lead.lead_score} điểm
+                  </span>
+                  <span className="text-slate-400">• {getScoreLabel(lead.lead_score)}</span>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Center: PHONE - Primary Action */}
+          <div className="flex items-center gap-3 bg-slate-50 rounded-2xl p-3 border border-slate-200">
+            <div className="flex flex-col items-end">
+              <div className="flex items-center gap-2">
+                <span className="text-lg font-bold text-slate-900">{lead.phone}</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 w-6 p-0 text-slate-400 hover:text-slate-600"
+                  onClick={() => handleCopyPhone(lead.phone)}
+                >
+                  {phoneCopied ? (
+                    <Check className="h-3.5 w-3.5 text-green-600" />
+                  ) : (
+                    <Copy className="h-3.5 w-3.5" />
+                  )}
+                </Button>
+              </div>
+              <span className="text-xs text-slate-400">SĐT chính</span>
             </div>
             <Button
-              size="sm"
-              className="bg-green-600 hover:bg-green-700 text-white font-medium px-4"
+              size="lg"
+              className="bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white font-semibold rounded-xl shadow-lg shadow-emerald-200 hover:shadow-emerald-300 transition-all hover:scale-105 active:scale-95"
               onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
             >
-              <Phone className="mr-1.5 h-4 w-4" />
+              <PhoneCall className="mr-2 h-5 w-5" />
               GỌI NGAY
             </Button>
           </div>
 
-          {/* Right: Action Buttons */}
+          {/* Right: Actions */}
           <div className="flex items-center gap-2">
-            {/* Admission Profile Button - Show View or Create based on existing profile */}
             {lead.offering_id && (
               lead.admission_profile ? (
                 <Button
                   variant="default"
-                  size="sm"
+                  className="bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-lg shadow-indigo-200"
                   onClick={() => router.push(`/admissions/${lead.admission_profile!.id}`)}
                 >
-                  <ClipboardCheck className="mr-1.5 h-4 w-4" />
+                  <FileText className="mr-1.5 h-4 w-4" />
                   Xem hồ sơ tuyển sinh
                 </Button>
               ) : (
                 <Button
                   variant="default"
-                  size="sm"
+                  className="bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-lg shadow-indigo-200"
                   onClick={() => router.push(`/admissions/create?lead_id=${leadId}`)}
                 >
-                  <ClipboardCheck className="mr-1.5 h-4 w-4" />
+                  <FileText className="mr-1.5 h-4 w-4" />
                   Tạo hồ sơ tuyển sinh
                 </Button>
               )
             )}
-            <Button variant="outline" size="sm" onClick={() => setEditDialogOpen(true)}>
-              <Edit className="mr-1.5 h-4 w-4" />
-              Chỉnh sửa
-            </Button>
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={() => setDeleteDialogOpen(true)}
-            >
-              <Trash2 className="mr-1.5 h-4 w-4" />
-              Xoá
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="rounded-xl">
+                  <MoreHorizontal className="h-5 w-5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => setEditDialogOpen(true)}>
+                  <Edit className="mr-2 h-4 w-4" />
+                  Chỉnh sửa
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setAssignDialogOpen(true)}>
+                  <TrendingUp className="mr-2 h-4 w-4" />
+                  Phân công lại
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => setDeleteDialogOpen(true)}
+                  className="text-red-600"
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Xoá lead
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
       </div>
 
-      {/* === MAIN CONTENT: 12-column Grid (4 + 8) === */}
-      <div className="flex-1 overflow-y-auto">
-        <div className="p-6">
-          <div className="grid grid-cols-12 gap-6">
-            {/* LEFT COLUMN (4 cols): Lead Info + Scoring + Checklist */}
-            <div className="col-span-12 lg:col-span-4 space-y-4">
-              {/* Lead Identity & Personal Info (from sidebar) */}
-              <LeadSidebar
-                lead={lead}
-                timeline={timeline}
-                onAssign={() => setAssignDialogOpen(true)}
-                compact
-              />
+      {/* ===== ACTION BANNER ===== */}
+      <div className="px-6 pt-4">
+        <ActionBanner lead={lead} />
+      </div>
 
-              {/* Scoring Collapsible */}
-              <LeadScoringCollapsible
-                lead={lead}
-                insights={insights}
-                defaultExpanded={false}
-              />
+      {/* ===== MAIN CONTENT: 12-column grid (4 + 8) ===== */}
+      <div className="px-6 py-4 flex-1">
+        <div className="grid grid-cols-12 gap-4">
+          {/* ===== LEFT PANEL (4 cols): Reference Info ===== */}
+          <div className="col-span-12 lg:col-span-4 space-y-4">
+            {/* Tabs: Overview / History / Profile */}
+            <LeadInfoTabs
+              lead={lead}
+              timeline={timeline}
+              onAssign={() => setAssignDialogOpen(true)}
+              onCreateProfile={() => router.push(`/admissions/create?lead_id=${leadId}`)}
+              onViewProfile={() =>
+                lead.admission_profile && router.push(`/admissions/${lead.admission_profile.id}`)
+              }
+            />
 
-              {/* Admission Readiness Checklist */}
-              <AdmissionReadinessChecklist
-                lead={lead}
-                onCreateProfile={() => router.push(`/admissions/create?lead_id=${leadId}`)}
-                onViewProfile={() => lead.admission_profile && router.push(`/admissions/${lead.admission_profile.id}`)}
-              />
-            </div>
+            {/* Lead Scoring - Collapsible */}
+            <LeadScoringCollapsible
+              lead={lead}
+              insights={insights}
+              defaultExpanded={false}
+            />
 
-            {/* RIGHT COLUMN (8 cols): Action Area */}
-            <div className="col-span-12 lg:col-span-8 space-y-4">
-              {/* Action Banner - Shows priority action (overdue/scheduled/hot) */}
-              <ActionBanner lead={lead} />
+            {/* Admission Checklist */}
+            <AdmissionReadinessChecklist
+              lead={lead}
+              onCreateProfile={() => router.push(`/admissions/create?lead_id=${leadId}`)}
+              onViewProfile={() =>
+                lead.admission_profile && router.push(`/admissions/${lead.admission_profile.id}`)
+              }
+            />
+          </div>
 
-              {/* AI Insights - Compact Bar */}
-              <LeadInsightsTab leadId={leadId} insights={insights} lead={lead} />
+          {/* ===== RIGHT PANEL (8 cols): Quick Actions ===== */}
+          <div className="col-span-12 lg:col-span-8 space-y-4">
+            {/* Quick Consultation Form */}
+            <Card className="rounded-2xl border-slate-200">
+              <CardHeader className="pb-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center">
+                    <Zap className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-base">Ghi nhận tư vấn</CardTitle>
+                    <p className="text-xs text-muted-foreground">
+                      Ghi lại kết quả cuộc gọi / liên hệ
+                    </p>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <QuickConsultationSection leadId={lead.id} />
+              </CardContent>
+            </Card>
 
-              {/* Quick Consultation - Primary Action */}
-              <Card className="border-amber-200 bg-amber-50/30">
-                <CardHeader className="pb-3">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <Zap className="h-4 w-4 text-amber-500" />
-                    Ghi nhận tư vấn nhanh
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <QuickConsultationSection leadId={lead.id} />
-                </CardContent>
+            {/* Recent Consultation History - Compact */}
+            <Card className="rounded-2xl border-slate-200">
+              <CardHeader className="pb-3 flex flex-row items-center justify-between">
+                <CardTitle className="text-sm font-semibold">Lịch sử tư vấn gần đây</CardTitle>
+                <Button variant="link" size="sm" className="text-xs text-indigo-600 p-0 h-auto">
+                  Xem tất cả →
+                </Button>
+              </CardHeader>
+              <CardContent>
+                <LeadTimelineTab leadId={leadId} compact limit={3} />
+              </CardContent>
+            </Card>
+
+            {/* Quick Stats */}
+            <div className="grid grid-cols-4 gap-3">
+              <Card className="rounded-2xl border-slate-200 text-center p-4">
+                <div className="text-2xl font-bold text-indigo-600">
+                  {lead.consultation_count}
+                </div>
+                <div className="text-xs text-muted-foreground">Lần liên hệ</div>
               </Card>
-
-              {/* Timeline History */}
-              <Card className="max-h-[400px] overflow-y-auto">
-                <CardHeader className="pb-3 sticky top-0 bg-card z-10 border-b">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <History className="h-4 w-4 text-muted-foreground" />
-                    Lịch sử tư vấn
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="pt-4">
-                  <LeadTimelineTab leadId={leadId} />
-                </CardContent>
+              <Card className="rounded-2xl border-slate-200 text-center p-4">
+                <div className="text-2xl font-bold text-emerald-600">{successfulContacts}</div>
+                <div className="text-xs text-muted-foreground">Kết nối thành công</div>
+              </Card>
+              <Card className="rounded-2xl border-slate-200 text-center p-4">
+                <div className="text-2xl font-bold text-amber-600">{daysInPipeline}</div>
+                <div className="text-xs text-muted-foreground">Ngày từ lúc tạo</div>
+              </Card>
+              <Card className="rounded-2xl border-slate-200 text-center p-4">
+                <div className="text-2xl font-bold text-purple-600">{lead.days_in_stage}</div>
+                <div className="text-xs text-muted-foreground">Ngày trong giai đoạn</div>
               </Card>
             </div>
           </div>
         </div>
       </div>
-
-      {/* === FOOTER: Follow-up Reminder (optional) === */}
-      {nextFollowUp && (
-        <div className="border-t bg-amber-50 px-6 py-2 flex items-center gap-3 text-sm">
-          <AlertCircle className="h-4 w-4 text-amber-600" />
-          <span className="text-amber-800">
-            <strong>Nhắc nhở:</strong> Có lịch hẹn tiếp theo vào{" "}
-            {new Date(nextFollowUp.scheduled_at!).toLocaleString("vi-VN", {
-              day: "2-digit",
-              month: "2-digit",
-              hour: "2-digit",
-              minute: "2-digit",
-            })}
-          </span>
-        </div>
-      )}
 
       {/* Dialogs */}
       <LeadDialog
@@ -350,9 +460,10 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
             <AlertDialogTitle>Bạn có chắc chắn?</AlertDialogTitle>
             <AlertDialogDescription>
               Thao tác này sẽ xoá mềm lead <strong>{lead.full_name}</strong> (ID: #{lead.id}).
-              <br /><br />
-              Lead sẽ được đánh dấu đã xoá và ẩn khỏi danh sách.
-              Tất cả dữ liệu lịch sử (tư vấn, hồ sơ, nhật ký) sẽ được giữ lại.
+              <br />
+              <br />
+              Lead sẽ được đánh dấu đã xoá và ẩn khỏi danh sách. Tất cả dữ liệu lịch sử (tư vấn,
+              hồ sơ, nhật ký) sẽ được giữ lại.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

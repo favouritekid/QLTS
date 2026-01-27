@@ -1,10 +1,10 @@
 // src/components/leads/ActionBanner.tsx
 /**
- * ActionBanner - Shows priority action for a lead
+ * ActionBanner - Shows priority action for a lead (wireframe design)
  *
  * Priority order:
  * 1. Overdue (is_overdue from backend) - Critical red alert
- * 2. Scheduled appointment (from consultations) - Blue/Amber info
+ * 2. Scheduled appointment (from consultations) - Amber/Blue info
  * 3. Hot lead needing contact - Orange alert
  */
 "use client";
@@ -12,27 +12,36 @@
 import { useMemo } from "react";
 import {
   AlertTriangle,
-  CalendarClock,
+  Bell,
   Flame,
   Phone,
-  Clock
+  Clock,
+  CheckCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { Lead } from "@/types/lead.types";
 
 interface ActionBannerProps {
   lead: Lead;
   onCall?: () => void;
+  onMarkComplete?: () => void;
   className?: string;
 }
 
 type BannerConfig = {
   type: "overdue" | "scheduled" | "hot_lead";
   priority: "critical" | "high" | "medium";
+  title: string;
   message: string;
-  action: string | null;
-  color: "red" | "amber" | "blue" | "orange";
+  actionPrimary: string | null;
+  actionSecondary: string | null;
+  gradient: string;
+  iconBg: string;
+  iconColor: string;
+  textColor: string;
+  badgeColor: string;
   icon: React.ElementType;
 };
 
@@ -51,7 +60,7 @@ function formatTimeAgo(date: Date): string {
   return "vừa xong";
 }
 
-function formatDateTime(date: Date): string {
+function formatScheduledTime(date: Date): string {
   const now = new Date();
   const isToday = date.toDateString() === now.toDateString();
 
@@ -61,13 +70,13 @@ function formatDateTime(date: Date): string {
   });
 
   if (isToday) {
-    return `hôm nay lúc ${time}`;
+    return `${time} hôm nay`;
   }
 
   const tomorrow = new Date(now);
   tomorrow.setDate(tomorrow.getDate() + 1);
   if (date.toDateString() === tomorrow.toDateString()) {
-    return `ngày mai lúc ${time}`;
+    return `${time} ngày mai`;
   }
 
   return date.toLocaleDateString("vi-VN", {
@@ -87,11 +96,17 @@ function getActionBannerConfig(lead: Lead): BannerConfig | null {
     return {
       type: "overdue",
       priority: "critical",
+      title: "QUÁ HẠN LIÊN HỆ",
       message: overdueDate
-        ? `Quá hạn liên hệ ${formatTimeAgo(overdueDate)}`
-        : "Quá hạn liên hệ",
-      action: "Gọi ngay",
-      color: "red",
+        ? `Hẹn gọi lại ${formatTimeAgo(overdueDate)} — Cần liên hệ ngay`
+        : "Đã quá hạn liên hệ theo lịch hẹn",
+      actionPrimary: "Gọi ngay",
+      actionSecondary: "Đánh dấu hoàn thành",
+      gradient: "from-red-50 to-rose-50",
+      iconBg: "bg-red-100",
+      iconColor: "text-red-600",
+      textColor: "text-red-800",
+      badgeColor: "bg-red-200 text-red-800",
       icon: AlertTriangle,
     };
   }
@@ -104,14 +119,23 @@ function getActionBannerConfig(lead: Lead): BannerConfig | null {
     const scheduledDate = new Date(nextConsultation.scheduled_at);
     const diffHours = (scheduledDate.getTime() - now.getTime()) / (1000 * 60 * 60);
     const isSoon = diffHours <= 2 && diffHours > 0;
+    const notes = nextConsultation.notes;
 
     return {
       type: "scheduled",
       priority: isSoon ? "high" : "medium",
-      message: `Có lịch hẹn ${formatDateTime(scheduledDate)}`,
-      action: isSoon ? "Chuẩn bị gọi" : null,
-      color: isSoon ? "amber" : "blue",
-      icon: isSoon ? Clock : CalendarClock,
+      title: "ACTION CẦN LÀM",
+      message: notes
+        ? `Hẹn gọi lại lúc ${formatScheduledTime(scheduledDate)} — ${notes}`
+        : `Có lịch hẹn lúc ${formatScheduledTime(scheduledDate)}`,
+      actionPrimary: isSoon ? "Gọi ngay" : null,
+      actionSecondary: "Đánh dấu hoàn thành",
+      gradient: "from-amber-50 to-orange-50",
+      iconBg: "bg-amber-100",
+      iconColor: "text-amber-600",
+      textColor: "text-amber-800",
+      badgeColor: "bg-amber-200 text-amber-800",
+      icon: Bell,
     };
   }
 
@@ -120,9 +144,15 @@ function getActionBannerConfig(lead: Lead): BannerConfig | null {
     return {
       type: "hot_lead",
       priority: "high",
-      message: "Lead tiềm năng cao - Cần liên hệ sớm",
-      action: "Gọi ngay",
-      color: "orange",
+      title: "LEAD TIỀM NĂNG CAO",
+      message: "Lead có điểm số cao, cần liên hệ sớm để không bỏ lỡ cơ hội",
+      actionPrimary: "Gọi ngay",
+      actionSecondary: null,
+      gradient: "from-orange-50 to-amber-50",
+      iconBg: "bg-orange-100",
+      iconColor: "text-orange-600",
+      textColor: "text-orange-800",
+      badgeColor: "bg-orange-200 text-orange-800",
       icon: Flame,
     };
   }
@@ -130,34 +160,7 @@ function getActionBannerConfig(lead: Lead): BannerConfig | null {
   return null; // No banner needed
 }
 
-const colorClasses = {
-  red: {
-    bg: "bg-red-50 border-red-200",
-    text: "text-red-800",
-    icon: "text-red-600",
-    button: "bg-red-600 hover:bg-red-700 text-white",
-  },
-  amber: {
-    bg: "bg-amber-50 border-amber-200",
-    text: "text-amber-800",
-    icon: "text-amber-600",
-    button: "bg-amber-600 hover:bg-amber-700 text-white",
-  },
-  blue: {
-    bg: "bg-blue-50 border-blue-200",
-    text: "text-blue-800",
-    icon: "text-blue-600",
-    button: "bg-blue-600 hover:bg-blue-700 text-white",
-  },
-  orange: {
-    bg: "bg-orange-50 border-orange-200",
-    text: "text-orange-800",
-    icon: "text-orange-600",
-    button: "bg-orange-600 hover:bg-orange-700 text-white",
-  },
-};
-
-export function ActionBanner({ lead, onCall, className }: ActionBannerProps) {
+export function ActionBanner({ lead, onCall, onMarkComplete, className }: ActionBannerProps) {
   const config = useMemo(() => getActionBannerConfig(lead), [lead]);
 
   if (!config) {
@@ -165,7 +168,6 @@ export function ActionBanner({ lead, onCall, className }: ActionBannerProps) {
   }
 
   const Icon = config.icon;
-  const colors = colorClasses[config.color];
 
   const handleCall = () => {
     if (onCall) {
@@ -178,28 +180,60 @@ export function ActionBanner({ lead, onCall, className }: ActionBannerProps) {
   return (
     <div
       className={cn(
-        "flex items-center justify-between gap-4 px-4 py-2.5 rounded-lg border",
-        colors.bg,
+        "flex items-center justify-between p-4 rounded-2xl border",
+        `bg-gradient-to-r ${config.gradient}`,
+        config.type === "overdue" ? "border-red-200" : "border-amber-200",
         className
       )}
     >
+      {/* Left: Icon + Message */}
       <div className="flex items-center gap-3">
-        <Icon className={cn("h-5 w-5 shrink-0", colors.icon)} />
-        <span className={cn("text-sm font-medium", colors.text)}>
-          {config.message}
-        </span>
+        <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center", config.iconBg)}>
+          <Icon className={cn("w-5 h-5", config.iconColor)} />
+        </div>
+        <div>
+          <div className="flex items-center gap-2">
+            <span className={cn("text-sm font-bold", config.textColor)}>{config.title}</span>
+            <Badge className={cn("text-xs font-medium", config.badgeColor)}>
+              {config.priority === "critical" ? "Khẩn cấp" : "Ưu tiên"}
+            </Badge>
+          </div>
+          <p className={cn("text-sm mt-0.5", config.textColor)}>
+            <Clock className="w-3.5 h-3.5 inline mr-1" />
+            {config.message}
+          </p>
+        </div>
       </div>
 
-      {config.action && (
-        <Button
-          size="sm"
-          className={cn("shrink-0", colors.button)}
-          onClick={handleCall}
-        >
-          <Phone className="mr-1.5 h-4 w-4" />
-          {config.action}
-        </Button>
-      )}
+      {/* Right: Actions */}
+      <div className="flex items-center gap-2">
+        {config.actionSecondary && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className={cn("text-sm font-medium", config.textColor, "hover:bg-white/50")}
+            onClick={onMarkComplete}
+          >
+            <CheckCircle className="w-4 h-4 mr-1" />
+            {config.actionSecondary}
+          </Button>
+        )}
+        {config.actionPrimary && (
+          <Button
+            size="sm"
+            className={cn(
+              "text-sm font-medium text-white",
+              config.type === "overdue"
+                ? "bg-red-500 hover:bg-red-600"
+                : "bg-amber-500 hover:bg-amber-600"
+            )}
+            onClick={handleCall}
+          >
+            <Phone className="w-4 h-4 mr-1" />
+            {config.actionPrimary}
+          </Button>
+        )}
+      </div>
     </div>
   );
 }
