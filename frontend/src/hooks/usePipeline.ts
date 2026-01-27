@@ -30,11 +30,11 @@ export const pipelineKeys = {
   fullPipeline: (params?: PipelineQueryParams) => [...pipelineKeys.all, "full", params] as const,
   stageLeads: (stageId: string) => [...pipelineKeys.all, "stageLeads", stageId] as const,
   consultationStatuses: () => [...pipelineKeys.all, "consultationStatuses"] as const,
-  // ✅ FSM v3.1: Cache by currentStatusId ONLY (not leadId)
-  // Rationale: FSM results depend on (status, phase), and most leads share the same phase.
-  // This enables React Query deduplication across concurrent requests for same status.
-  allowedNextStatuses: (currentStatusId?: string | null) =>
-    [...pipelineKeys.all, "allowedNextStatuses", currentStatusId] as const,
+  // ✅ FSM v3.2: Cache by (currentStatusId, leadId)
+  // leadId is required because phase is derived from lead's admission_profile
+  // Different leads can be in different phases (consultation vs admission vs fee)
+  allowedNextStatuses: (currentStatusId?: string | null, leadId?: number) =>
+    [...pipelineKeys.all, "allowedNextStatuses", currentStatusId, leadId] as const,
   allowedTransitions: () => [...pipelineKeys.all, "allowedTransitions"] as const,
   stats: (params?: PipelineQueryParams) => [...pipelineKeys.all, "stats", params] as const,
 };
@@ -201,16 +201,14 @@ export function useConsultationStatuses(options?: { initialData?: ConsultationSt
  * const { data: initialStatuses } = useAllowedNextStatuses(null);
  * ```
  *
- * @note v3.1: Cache key uses currentStatusId ONLY (not leadId) to enable deduplication.
- * FSM results depend on (status, phase), and most leads share the same phase (consultation).
- * This prevents N+1 API calls when rendering multiple lead cards with same status.
+ * @note v3.2: Cache key includes leadId because phase is derived from admission_profile.
+ * Different leads can be in different phases (consultation/admission/fee/enrolled).
  */
 export function useAllowedNextStatuses(currentStatusId?: string | null, leadId?: number) {
   return useQuery<ConsultationStatus[], AxiosError<ApiErrorResponse>>({
-    // ✅ v3.1: Cache by status only - enables deduplication across components
-    queryKey: pipelineKeys.allowedNextStatuses(currentStatusId),
+    // ✅ v3.2: Cache by (status, leadId) - phase varies per lead
+    queryKey: pipelineKeys.allowedNextStatuses(currentStatusId, leadId),
     queryFn: async () => {
-      // leadId still passed to API for phase derivation, just not in cache key
       return await pipelineApi.getAllowedNextStatuses(currentStatusId || null, leadId);
     },
     // ✅ Only fetch when currentStatusId is explicitly provided (not undefined)
