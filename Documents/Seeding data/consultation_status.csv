@@ -2,7 +2,7 @@
 "sts00","Chưa tiếp cận","#9CA3AF","stg01","neutral",False,"new",False,True,True,"consultation","user",0,"NOT_CONTACTED",False,"transition","user",True,"Lead mới tạo, chưa có tương tác"
 "sts01","Không nghe máy","#94A3B8",NULL,"neutral",False,"new",True,False,False,"universal","user",900,"NO_ANSWER",False,"activity","user",False,"Gọi điện không bắt máy"
 "sts02","Đã kết nối liên hệ","#38BDF8","stg01","neutral",False,"new",False,True,True,"consultation","user",10,"CONTACTED",False,"transition","user",True,"Đã liên hệ được"
-"sts03","Có nhu cầu tìm hiểu","#FACC15","stg02","neutral",False,"rejected",False,True,True,"consultation","user",20,"INTERESTED",False,"transition","user",True,"Lead có quan tâm"
+"sts03","Có nhu cầu tìm hiểu","#FACC15","stg02","neutral",False,"qualified",False,True,True,"consultation","user",20,"INTERESTED",False,"transition","user",True,"Lead có quan tâm"
 "sts04","Từ chối tư vấn","#EF4444","stg02","negative",True,"rejected",False,True,True,"consultation","user",30,"CONSULT_REJECTED",True,"transition","user",True,"Từ chối hoàn toàn"
 "sts05","Hẹn liên hệ lại","#A78BFA","stg02","neutral",False,"contacted",False,False,False,"consultation","user",40,"CALLBACK_LATER",False,"transition","user",False,"Hẹn gọi lại"
 "sts06","Đồng ý tư vấn","#22C55E","stg02","positive",False,"qualified",False,False,True,"consultation","user",50,"CONSULT_ACCEPTED",False,"transition","user",True,"Đồng ý bước tư vấn"

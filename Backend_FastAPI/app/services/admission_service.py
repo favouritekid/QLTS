@@ -919,9 +919,9 @@ async def create_profile(
     from app.utils.exceptions import BusinessRuleViolation
 
     INVALID_LEAD_STATUSES_FOR_ADMISSION = frozenset({
-        "rejected",      # Explicitly rejected by officer
-        "unqualified",   # Failed qualification criteria
-        "converted",     # Already enrolled (shouldn't happen, but defensive)
+        # "rejected",      # REMOVED: Allow re-engagement with rejected leads
+        # "unqualified",   # REMOVED: Allow re-engagement with unqualified leads
+        "converted",       # Already enrolled (shouldn't happen, but defensive)
     })
 
     if lead.status in INVALID_LEAD_STATUSES_FOR_ADMISSION:
@@ -933,8 +933,11 @@ async def create_profile(
         )
         raise BusinessRuleViolation(
             f"Cannot create admission profile for lead with status '{lead.status}'. "
-            f"Lead must be in active pipeline (new, assigned, contacted, qualified)."
+            f"Lead must be in active pipeline (new, assigned, contacted, qualified) or be re-engaged."
         )
+
+    # Note: If lead is rejected/unqualified, proceeding here effectively re-opens them via admission process.
+
 
     # ✅ GAP #1 FIX: Require at least 1 consultation before admission profile
     # This enforces the business workflow: Lead → Consultation → Admission
