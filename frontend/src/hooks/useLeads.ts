@@ -708,6 +708,13 @@ export function useAddConsultation() {
         lists: true,
         pipeline: true, // Consultation changes status
       });
+
+      // ✅ FIX: Also invalidate all allowedNextStatuses queries
+      // This ensures QuickConsultationSection gets fresh status options
+      // when the lead's status changes
+      queryClient.invalidateQueries({
+        queryKey: ["pipeline", "allowedNextStatuses"],
+      });
     },
 
     onError: (error) => {
@@ -761,6 +768,13 @@ export function useUpdateConsultation() {
         lists: statusChanged, // Only refetch list if status changed
         pipeline: statusChanged, // Only refetch pipeline if status changed
       });
+
+      // ✅ FIX: Also invalidate allowedNextStatuses if status changed
+      if (statusChanged) {
+        queryClient.invalidateQueries({
+          queryKey: ["pipeline", "allowedNextStatuses"],
+        });
+      }
     },
 
     onError: (error) => {
@@ -807,6 +821,12 @@ export function useDeleteConsultation() {
         insights: true,
         lists: true,
         pipeline: true, // Deletion reverts to previous status
+      });
+
+      // ✅ FIX: Also invalidate allowedNextStatuses
+      // Deletion may revert to previous status, need fresh options
+      queryClient.invalidateQueries({
+        queryKey: ["pipeline", "allowedNextStatuses"],
       });
     },
 
