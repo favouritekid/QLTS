@@ -19,7 +19,7 @@ const AppTitle = ({ isCollapsed }: { isCollapsed: boolean }) => (
       {isCollapsed ? (
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button variant="ghost" size="icon" className="flex-shrink-0">
+            <Button variant="ghost" size="icon" className="flex-shrink-0" aria-label="QLTS - Trang chủ">
               <BookMarked className="h-6 w-6" />
             </Button>
           </TooltipTrigger>
@@ -32,7 +32,7 @@ const AppTitle = ({ isCollapsed }: { isCollapsed: boolean }) => (
         </Tooltip>
       ) : (
         <>
-          <Button variant="ghost" size="icon" className="flex-shrink-0">
+          <Button variant="ghost" size="icon" className="flex-shrink-0" aria-label="QLTS - Trang chủ">
             <BookMarked className="h-6 w-6" />
           </Button>
           <h1

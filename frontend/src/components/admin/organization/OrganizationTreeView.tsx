@@ -119,7 +119,12 @@ const TreeNode = memo(function TreeNode({ node, level, onNodeClick }: TreeNodePr
           {/* Expand/Collapse Button */}
           {hasChildren ? (
             <CollapsibleTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-6 w-6 p-0">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 p-0"
+                aria-label={isExpanded ? "Thu gọn" : "Mở rộng"}
+              >
                 {isExpanded ? (
                   <ChevronDown className="h-4 w-4" />
                 ) : (

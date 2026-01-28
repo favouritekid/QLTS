@@ -50,6 +50,7 @@ import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { TableEmptyState } from "@/components/common/EmptyState";
 import { PageContainer } from "@/components/layouts/PageContainer";
 import { PageHeader } from "@/components/layouts/PageHeader";
 import { cn } from "@/lib/utils";
@@ -294,8 +295,11 @@ export function TuitionDiscountClient({ initialData }: TuitionDiscountClientProp
               <TableBody>
                 {data?.items.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-muted-foreground text-center py-8">
-                      Chưa có chính sách nào. Nhấn &quot;Thêm chính sách&quot; để tạo mới.
+                    <TableCell colSpan={7} className="h-32">
+                      <TableEmptyState
+                        title="Chưa có chính sách giảm giá"
+                        description="Nhấn 'Thêm chính sách' để tạo chính sách giảm giá học phí mới"
+                      />
                     </TableCell>
                   </TableRow>
                 )}

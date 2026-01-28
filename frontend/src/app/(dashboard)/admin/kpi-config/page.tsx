@@ -77,6 +77,7 @@ import { useOrganizationUnits } from "@/hooks/useOrganization";
 import { OrganizationUnit } from "@/types/organization.types";
 import { cn } from "@/lib/utils";
 import { PageContainer } from "@/components/layouts/PageContainer";
+import { TableEmptyState } from "@/components/common/EmptyState";
 
 // =============================================================================
 // TYPES
@@ -545,8 +546,11 @@ export default function KpiConfigPage() {
               <TableBody>
                 {configs?.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
-                      Chưa có cấu hình nào. Hãy thêm cấu hình KPI đầu tiên của bạn.
+                    <TableCell colSpan={6} className="h-32">
+                      <TableEmptyState
+                        title="Chưa có cấu hình KPI"
+                        description="Hãy thêm cấu hình KPI đầu tiên để theo dõi hiệu suất"
+                      />
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -659,8 +663,11 @@ export default function KpiConfigPage() {
               <TableBody>
                 {targets?.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
-                      Chưa có mục tiêu năm. Hãy thêm mục tiêu để theo dõi YTD.
+                    <TableCell colSpan={8} className="h-32">
+                      <TableEmptyState
+                        title="Chưa có mục tiêu năm"
+                        description="Hãy thêm mục tiêu để theo dõi tiến độ YTD"
+                      />
                     </TableCell>
                   </TableRow>
                 ) : (

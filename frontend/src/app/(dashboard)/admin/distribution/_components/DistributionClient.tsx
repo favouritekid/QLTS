@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { PageContainer } from "@/components/layouts/PageContainer";
 import { PageHeader } from "@/components/layouts/PageHeader";
+import { TableEmptyState } from "@/components/common/EmptyState";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -272,7 +273,7 @@ export function DistributionClient({ initialData }: DistributionClientProps) {
           return (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon">
+                <Button variant="ghost" size="icon" aria-label="Mở menu hành động">
                   <MoreVertical className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
@@ -475,8 +476,11 @@ export function DistributionClient({ initialData }: DistributionClientProps) {
                     ))
                   ) : (
                     <TableRow>
-                      <TableCell colSpan={columns.length} className="h-24 text-center">
-                        Chưa có luật phân phối nào được cấu hình.
+                      <TableCell colSpan={columns.length} className="h-32">
+                        <TableEmptyState
+                          title="Chưa có luật phân phối"
+                          description="Tạo luật phân phối mới để tự động gán lead cho cán bộ"
+                        />
                       </TableCell>
                     </TableRow>
                   )}

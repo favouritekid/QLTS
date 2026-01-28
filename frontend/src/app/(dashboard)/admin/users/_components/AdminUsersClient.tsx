@@ -92,6 +92,7 @@ import { API_ENDPOINTS } from "@/lib/api/endpoints";
 import { toast } from "sonner";
 import type { UsersPage } from "@/types/api.types";
 import { PageContainer } from "@/components/layouts/PageContainer";
+import { TableEmptyState } from "@/components/common/EmptyState";
 
 interface AdminUsersClientProps {
   initialData: UsersPage; // ✅ Initial data from server
@@ -254,7 +255,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
           return (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon">
+                <Button variant="ghost" size="icon" aria-label="Mở menu thao tác">
                   <MoreVertical className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
@@ -579,8 +580,11 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
                     ))
                   ) : (
                     <TableRow>
-                      <TableCell colSpan={columns.length} className="h-24 text-center">
-                        Không tìm thấy người dùng.
+                      <TableCell colSpan={columns.length} className="h-32">
+                        <TableEmptyState
+                          title={search ? "Không tìm thấy người dùng" : "Chưa có người dùng nào"}
+                          description={search ? "Thử tìm kiếm với từ khóa khác" : "Thêm người dùng mới để bắt đầu"}
+                        />
                       </TableCell>
                     </TableRow>
                   )}

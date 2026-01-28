@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { PageContainer } from "@/components/layouts/PageContainer";
 import { PageHeader } from "@/components/layouts/PageHeader";
 import { Input } from "@/components/ui/input";
+import { EmptyState } from "@/components/common/EmptyState";
 import {
   Select,
   SelectContent,
@@ -326,22 +327,39 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
               ))}
             </div>
           ) : filteredNotifications.length === 0 ? (
-            // Empty state
+            // Empty state - using standardized EmptyState component
             <Card>
-              <CardContent className="flex flex-col items-center justify-center py-12">
-                <Bell className="text-muted-foreground mb-4 h-16 w-16" />
-                <h3 className="text-lg font-semibold">
-                    {searchQuery || typeFilter !== "all" 
-                        ? "Không tìm thấy kết quả"
-                        : "Không có thông báo"}
-                </h3>
-                <p className="text-muted-foreground text-sm">
-                  {searchQuery || typeFilter !== "all"
-                    ? "Thử thay đổi bộ lọc tìm kiếm của bạn"
-                    : currentTab === "unread"
+              <CardContent className="p-0">
+                <EmptyState
+                  icon={<Bell className="h-12 w-12" />}
+                  variant={searchQuery || typeFilter !== "all" ? "search" : "default"}
+                  title={
+                    searchQuery || typeFilter !== "all"
+                      ? "Không tìm thấy kết quả"
+                      : "Không có thông báo"
+                  }
+                  description={
+                    searchQuery || typeFilter !== "all"
+                      ? "Thử thay đổi bộ lọc tìm kiếm của bạn"
+                      : currentTab === "unread"
                         ? "Bạn đã đọc hết!"
-                        : "Bạn chưa có thông báo nào."}
-                </p>
+                        : "Bạn chưa có thông báo nào."
+                  }
+                  action={
+                    (searchQuery || typeFilter !== "all") && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setSearchQuery("");
+                          setTypeFilter("all");
+                        }}
+                      >
+                        Xóa bộ lọc
+                      </Button>
+                    )
+                  }
+                />
               </CardContent>
             </Card>
           ) : viewMode === "table" ? (

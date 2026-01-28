@@ -32,6 +32,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/common/EmptyState";
 import { API_ENDPOINTS } from "@/lib/api/endpoints";
 import { API_BASE_URL } from "@/lib/api/client";
 import type {
@@ -396,8 +397,12 @@ export function LoginHistoryClient() {
 
         {data?.items.length === 0 && (
           <Card>
-            <CardContent className="py-8 text-center text-muted-foreground">
-              Chưa có lịch sử đăng nhập nào.
+            <CardContent className="p-0">
+              <EmptyState
+                icon={<Clock className="h-12 w-12" />}
+                title="Chưa có lịch sử đăng nhập"
+                description="Lịch sử đăng nhập sẽ hiển thị ở đây sau khi bạn đăng nhập."
+              />
             </CardContent>
           </Card>
         )}

@@ -326,7 +326,7 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
             )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="rounded-xl">
+                <Button variant="ghost" size="icon" className="rounded-xl" aria-label="Tùy chọn khác">
                   <MoreHorizontal className="h-5 w-5" />
                 </Button>
               </DropdownMenuTrigger>

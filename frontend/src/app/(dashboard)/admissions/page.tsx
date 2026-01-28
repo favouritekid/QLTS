@@ -16,6 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ClipboardCheck, User, Calendar, ArrowRight } from "lucide-react"
 import { useListAdmissions } from "@/hooks/admissions"
 import { PageContainer } from "@/components/layouts/PageContainer"
+import { EmptyState, ErrorEmptyState } from "@/components/common/EmptyState"
 
 const STATUS_LABELS: Record<string, string> = {
   draft: "Nháp",
@@ -81,24 +82,23 @@ export default function AdmissionsPage() {
       )}
 
       {isError && (
-        <Card className="border-error-200 bg-error-50">
-          <CardHeader>
-            <CardTitle className="text-error-900">Lỗi tải dữ liệu</CardTitle>
-            <CardDescription className="text-error-700">
-              Không thể tải danh sách hồ sơ. Vui lòng thử lại.
-            </CardDescription>
-          </CardHeader>
+        <Card>
+          <CardContent className="p-0">
+            <ErrorEmptyState
+              message="Không thể tải danh sách hồ sơ. Vui lòng thử lại."
+            />
+          </CardContent>
         </Card>
       )}
 
       {!isLoading && !isError && profiles?.length === 0 && (
         <Card>
-          <CardContent className="py-12">
-            <div className="text-center text-muted-foreground">
-              <ClipboardCheck className="h-16 w-16 mx-auto mb-4 opacity-20" />
-              <p>Chưa có hồ sơ nào</p>
-              <p className="text-sm mt-2">Để tạo hồ sơ mới, vào trang chi tiết Lead và nhấn &quot;Tạo hồ sơ tuyển sinh&quot;</p>
-            </div>
+          <CardContent className="p-0">
+            <EmptyState
+              icon={<ClipboardCheck className="h-12 w-12" />}
+              title="Chưa có hồ sơ nào"
+              description="Để tạo hồ sơ mới, vào trang chi tiết Lead và nhấn 'Tạo hồ sơ tuyển sinh'"
+            />
           </CardContent>
         </Card>
       )}

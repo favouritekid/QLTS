@@ -244,7 +244,7 @@ function ConfigTable({ title, description, icon, endpoint, queryKey, initialData
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-2">
-                      <Button variant="ghost" size="icon" onClick={() => handleOpenEdit(item)}>
+                      <Button variant="ghost" size="icon" onClick={() => handleOpenEdit(item)} aria-label="Chỉnh sửa">
                         <Pencil className="h-4 w-4" />
                       </Button>
                       <Button
@@ -252,6 +252,7 @@ function ConfigTable({ title, description, icon, endpoint, queryKey, initialData
                         size="icon"
                         onClick={() => handleDelete(item.id)}
                         disabled={deleteMutation.isPending}
+                        aria-label="Xóa"
                       >
                         <Trash2 className="text-destructive h-4 w-4" />
                       </Button>

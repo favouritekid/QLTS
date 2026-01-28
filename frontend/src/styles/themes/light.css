@@ -85,7 +85,7 @@
   --secondary-foreground: var(--gray-700);
 
   --muted: var(--gray-100);
-  --muted-foreground: var(--gray-500);
+  --muted-foreground: var(--gray-600); /* WCAG AA: ~5.9:1 contrast (was gray-500 ~4.2:1) */
 
   --accent: var(--gray-100);
   --accent-foreground: var(--gray-900);

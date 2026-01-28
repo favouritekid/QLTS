@@ -10,14 +10,15 @@
 
 1. [Overview](#overview)
 2. [Design Philosophy](#design-philosophy)
-3. [Color System](#color-system)
-4. [Typography](#typography)
-5. [Spacing & Layout](#spacing--layout)
-6. [Component Specifications](#component-specifications)
-7. [Layout Components](#layout-components)
-8. [Icons](#icons)
-9. [Animation & Motion](#animation--motion)
-10. [Patterns & Best Practices](#patterns--best-practices)
+3. [**Accessibility (MANDATORY)**](#accessibility-mandatory)
+4. [Color System](#color-system)
+5. [Typography](#typography)
+6. [Spacing & Layout](#spacing--layout)
+7. [Component Specifications](#component-specifications)
+8. [Layout Components](#layout-components)
+9. [Icons](#icons)
+10. [Animation & Motion](#animation--motion)
+11. [Patterns & Best Practices](#patterns--best-practices)
 
 ---
 
@@ -63,6 +64,154 @@ frontend/src/styles/
 - All values come from CSS custom properties
 - Easy theme customization by changing token values
 - Predictable spacing scale (4px base unit)
+
+---
+
+## Accessibility (MANDATORY)
+
+> **CRITICAL:** All components and pages MUST comply with WCAG 2.1 Level AA standards.
+> Non-compliant code will be rejected during code review.
+
+### Accessibility Requirements Checklist
+
+Every developer MUST ensure:
+
+- [ ] Color contrast ratio >= 4.5:1 for normal text
+- [ ] Color contrast ratio >= 3:1 for large text (18px+ or 14px bold)
+- [ ] All interactive elements are keyboard accessible
+- [ ] All icon buttons have `aria-label`
+- [ ] All form inputs have associated labels
+- [ ] Focus states are visible (never remove `outline` without replacement)
+- [ ] Error messages use `role="alert"` for screen readers
+
+### Color Contrast Standards
+
+| Element | Minimum Ratio | Current Implementation |
+|---------|---------------|------------------------|
+| Body text (`foreground`) | 4.5:1 | ~16.8:1 ✅ |
+| Muted text (`muted-foreground`) | 4.5:1 | ~5.9:1 ✅ (gray-600) |
+| Placeholder text | 4.5:1 | ~5.9:1 ✅ |
+| Primary button text | 4.5:1 | ~6.3:1 ✅ |
+| Destructive button text | 4.5:1 | ~4.6:1 ✅ |
+
+**WARNING:** Never use `gray-500` or lighter for text on white backgrounds.
+
+### Icon Button Accessibility
+
+**MANDATORY:** All icon-only buttons MUST have `aria-label`.
+
+```tsx
+// ❌ WRONG - Missing aria-label
+<Button variant="ghost" size="icon">
+  <Trash2 className="h-4 w-4" />
+</Button>
+
+// ❌ WRONG - Tooltip does NOT provide accessible name
+<Tooltip>
+  <TooltipTrigger asChild>
+    <Button variant="ghost" size="icon">
+      <Edit className="h-4 w-4" />
+    </Button>
+  </TooltipTrigger>
+  <TooltipContent>Edit</TooltipContent>
+</Tooltip>
+
+// ✅ CORRECT - aria-label provides accessible name
+<Button variant="ghost" size="icon" aria-label="Xóa">
+  <Trash2 className="h-4 w-4" />
+</Button>
+
+// ✅ CORRECT - aria-label even with tooltip
+<Tooltip>
+  <TooltipTrigger asChild>
+    <Button variant="ghost" size="icon" aria-label="Chỉnh sửa">
+      <Edit className="h-4 w-4" />
+    </Button>
+  </TooltipTrigger>
+  <TooltipContent>Chỉnh sửa</TooltipContent>
+</Tooltip>
+```
+
+### Keyboard Navigation
+
+All interactive elements must be:
+1. **Focusable** via Tab key
+2. **Activatable** via Enter/Space
+3. **Dismissible** via Escape (for modals/dropdowns)
+
+```tsx
+// Focus states are built into our components
+"focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+
+// Never do this:
+"outline-none" // Without focus-visible replacement
+```
+
+### Form Accessibility
+
+Forms MUST have:
+1. Labels associated with inputs (`htmlFor` / `id`)
+2. Error states indicated (`aria-invalid`)
+3. Error messages linked (`aria-describedby`)
+4. Error announcements (`role="alert"`)
+
+```tsx
+// Our FormInput component handles this automatically
+<FormInput
+  label="Email"
+  error={errors.email?.message}
+  {...register("email")}
+/>
+
+// Renders with proper ARIA:
+// - htmlFor on label
+// - aria-invalid="true" when error
+// - aria-describedby pointing to error message
+// - role="alert" on error message
+```
+
+### Screen Reader Support
+
+Use `sr-only` for visually hidden but screen-reader accessible text:
+
+```tsx
+// Close button with screen reader text
+<Button variant="ghost" size="icon">
+  <X className="h-4 w-4" />
+  <span className="sr-only">Đóng</span>
+</Button>
+
+// Or use aria-label (preferred for buttons)
+<Button variant="ghost" size="icon" aria-label="Đóng">
+  <X className="h-4 w-4" />
+</Button>
+```
+
+### Semantic HTML
+
+Always use semantic HTML elements:
+
+| Use This | Not This | For |
+|----------|----------|-----|
+| `<button>` | `<div onClick>` | Clickable actions |
+| `<a href>` | `<span onClick>` | Navigation |
+| `<table>` | Nested `<div>` | Tabular data |
+| `<h1>`-`<h6>` | `<div className="title">` | Headings |
+| `<nav>` | `<div className="nav">` | Navigation regions |
+| `<main>` | `<div className="main">` | Main content |
+
+### Accessibility Testing
+
+Before submitting code:
+1. **Tab through** the page - all interactive elements should be reachable
+2. **Check focus visibility** - focus ring should be visible
+3. **Test with screen reader** (optional but recommended)
+4. **Run Lighthouse** accessibility audit
+
+### Related Documentation
+
+- Full audit report: `frontend/docs/accessibility-audit-report.md`
+- WCAG 2.1 Guidelines: https://www.w3.org/WAI/WCAG21/quickref/
 
 ---
 
@@ -785,6 +934,13 @@ import { cn } from "@/lib/utils";
 ---
 
 ## Changelog
+
+### v3.1 (2026-01-28)
+- **MAJOR: Added mandatory accessibility section (WCAG 2.1 AA)**
+- Fixed muted-foreground contrast: gray-500 → gray-600 (~5.9:1 ratio)
+- Added aria-label to all icon buttons across 10+ files
+- Added aria-expanded for collapsible elements
+- Documented accessibility checklist and requirements
 
 ### v3.0 (2026-01-28)
 - Added layout CSS variables for sidebar, header, content

@@ -434,7 +434,12 @@ export function NotificationRuleList({ initialData }: NotificationRuleListProps)
                           <CardDescription>{categoryInfo.description}</CardDescription>
                         </div>
                       </div>
-                      <Button variant="ghost" size="icon">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={isCollapsed ? "Mở rộng" : "Thu gọn"}
+                        aria-expanded={!isCollapsed}
+                      >
                         {isCollapsed ? (
                           <ChevronRight className="h-5 w-5" />
                         ) : (

@@ -244,7 +244,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
               {/* Link: Xem đầy đủ */}
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" asChild className="h-8 w-8">
+                  <Button variant="ghost" size="icon" asChild className="h-8 w-8" aria-label="Xem đầy đủ">
                     <Link href={`/leads/${lead.id}`}>
                       <ExternalLink className="h-4 w-4" />
                     </Link>
@@ -256,7 +256,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
               {/* Action: Sửa */}
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" onClick={() => onEdit(lead)} className="h-8 w-8">
+                  <Button variant="ghost" size="icon" onClick={() => onEdit(lead)} className="h-8 w-8" aria-label="Chỉnh sửa lead">
                     <Edit className="h-4 w-4" />
                   </Button>
                 </TooltipTrigger>
@@ -267,7 +267,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
               {!lead.assigned_officer && (
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Button variant="ghost" size="icon" onClick={() => onAssign(lead)} className="h-8 w-8">
+                    <Button variant="ghost" size="icon" onClick={() => onAssign(lead)} className="h-8 w-8" aria-label="Gán cho cán bộ">
                       <UserPlus className="h-4 w-4" />
                     </Button>
                   </TooltipTrigger>
@@ -279,11 +279,12 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
               {lead.assigned_officer && (
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Button 
-                      variant="ghost" 
+                    <Button
+                      variant="ghost"
                       size="icon"
-                      onClick={() => setReassignOpen(true)} 
+                      onClick={() => setReassignOpen(true)}
                       className="h-8 w-8"
+                      aria-label="Yêu cầu phân công lại"
                     >
                       <RefreshCcw className="h-4 w-4" />
                     </Button>
@@ -300,6 +301,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                     size="icon"
                     onClick={() => onDelete(lead)}
                     className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                    aria-label="Xóa lead"
                   >
                     <Trash2 className="h-4 w-4" />
                   </Button>

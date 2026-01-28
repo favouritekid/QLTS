@@ -223,7 +223,7 @@ function MemberRow({ form, index, isEditable, onRemove, isPrimary }: { form: Use
                 
                 {isEditable && (
                     <div className="md:col-span-1 flex items-end justify-end pb-2">
-                        <Button variant="ghost" size="icon" onClick={onRemove} className="text-destructive hover:bg-error-50">
+                        <Button variant="ghost" size="icon" onClick={onRemove} className="text-destructive hover:bg-error-50" aria-label="Xóa người giám hộ">
                             <Trash2 className="w-4 h-4" />
                         </Button>
                     </div>

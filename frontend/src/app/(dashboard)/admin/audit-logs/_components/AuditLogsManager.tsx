@@ -46,6 +46,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { TableEmptyState } from "@/components/common/EmptyState";
 import {
   Tooltip,
   TooltipContent,
@@ -433,11 +434,11 @@ export function AuditLogsManager() {
                   <LoadingRows />
                 ) : !data?.items || data.items.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center py-8">
-                      <div className="text-muted-foreground">
-                        <Clock className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                        <p>Không có dữ liệu audit log</p>
-                      </div>
+                    <TableCell colSpan={5} className="h-32">
+                      <TableEmptyState
+                        title="Không có dữ liệu audit log"
+                        description="Các hoạt động trong hệ thống sẽ được ghi lại ở đây"
+                      />
                     </TableCell>
                   </TableRow>
                 ) : (
