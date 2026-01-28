@@ -31,7 +31,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { cn } from "@/lib/utils";
+import { cn, sanitizeColorCode } from "@/lib/utils";
 import { ColorDot } from "@/components/ui/dynamic-color-badge";
 import type { LeadStatus } from "@/types/lead.types";
 import { LEAD_STATUS_OPTIONS, LEAD_SOURCE_OPTIONS } from "@/constants";
@@ -409,7 +409,7 @@ export function LeadFilterBar({
                     htmlFor={`bar-stage-${stage.id}`}
                     className="flex cursor-pointer items-center gap-2 text-sm font-normal"
                   >
-                    <ColorDot color={STAGE_COLORS[stage.id]} size="sm" />
+                    <ColorDot color={sanitizeColorCode(stage.color_code) || STAGE_COLORS[stage.id]} size="sm" />
                     {stage.name}
                   </Label>
                 </div>
@@ -625,7 +625,7 @@ export function LeadFilterBar({
                       htmlFor={`mobile-stage-${stage.id}`}
                       className="flex cursor-pointer items-center gap-2 text-sm font-normal"
                     >
-                      <ColorDot color={STAGE_COLORS[stage.id]} size="sm" />
+                      <ColorDot color={sanitizeColorCode(stage.color_code) || STAGE_COLORS[stage.id]} size="sm" />
                       {stage.name}
                     </Label>
                   </div>

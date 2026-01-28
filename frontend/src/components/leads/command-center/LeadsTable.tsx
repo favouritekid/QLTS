@@ -69,7 +69,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
+import { cn, sanitizeColorCode } from "@/lib/utils";
 import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
 import type { Lead } from "@/types/lead.types";
 import { LEAD_SOURCE_OPTIONS } from "@/constants";
@@ -330,7 +330,8 @@ export function LeadsTable({
         cell: ({ row }) => {
           const stage = row.original.pipeline_stage;
           if (!stage) return <span className="text-muted-foreground">—</span>;
-          const color = STAGE_COLORS[stage.id] || "#6B7280";
+          // Use stage.color_code from database first, fallback to centralized STAGE_COLORS
+          const color = sanitizeColorCode(stage.color_code) || STAGE_COLORS[stage.id] || "#6B7280";
           return (
             <Badge
               className="text-[10px] h-5 px-2 font-normal whitespace-nowrap"
