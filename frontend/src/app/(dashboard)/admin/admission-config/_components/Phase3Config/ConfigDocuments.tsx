@@ -169,7 +169,7 @@ export function ConfigDocuments({ path, onFinish, onBack }: ConfigDocumentsProps
         {!isLoading && (
           <div className="mb-4">
             {isDetached ? (
-              <Alert className="bg-blue-50 text-blue-900 border-blue-200">
+              <Alert className="bg-info-50 text-info-900 border-info-200">
                 <Info className="h-4 w-4" />
                 <AlertTitle>Cấu hình riêng biệt (Forked)</AlertTitle>
                 <AlertDescription>
@@ -177,7 +177,7 @@ export function ConfigDocuments({ path, onFinish, onBack }: ConfigDocumentsProps
                 </AlertDescription>
               </Alert>
             ) : (
-              <Alert className="bg-yellow-50 text-yellow-900 border-yellow-200">
+              <Alert className="bg-warning-50 text-warning-900 border-warning-200">
                 <AlertTriangle className="h-4 w-4" />
                 <AlertTitle>Chú ý: Ghi đè cấu hình chung</AlertTitle>
                 <AlertDescription>
@@ -210,7 +210,7 @@ export function ConfigDocuments({ path, onFinish, onBack }: ConfigDocumentsProps
                   return (
                     <div 
                       key={type.id} 
-                      className={`grid grid-cols-12 p-3 items-center border-b last:border-0 hover:bg-slate-50 ${isSelected ? 'bg-blue-50/30' : ''}`}
+                      className={`grid grid-cols-12 p-3 items-center border-b last:border-0 hover:bg-muted ${isSelected ? 'bg-info-50/30' : ''}`}
                     >
                       <div className="col-span-6 flex items-center gap-3">
                         <Checkbox 

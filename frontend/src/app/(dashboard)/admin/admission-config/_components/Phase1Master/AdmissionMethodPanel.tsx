@@ -225,7 +225,7 @@ export function AdmissionMethodPanel() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Phương thức Tuyển sinh</h1>
+        <h1 className="text-3xl font-bold font-display">Phương thức Tuyển sinh</h1>
         <p className="text-muted-foreground mt-2">
           Quản lý các phương thức xét tuyển (Xét học bạ, Điểm thi THPT, Đánh giá năng lực...)
         </p>

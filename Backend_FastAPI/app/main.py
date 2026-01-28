@@ -157,7 +157,10 @@ async def lifespan(app: FastAPI):
         log.info("Casbin 'casbin_rule' table checked/created.")
         adapter = AsyncCasbinAdapter(async_db_engine)
         log.info(f"Casbin Adapter successfully initialized: Type={type(adapter)}")
-        enforcer = casbin.AsyncEnforcer("auth_model.conf", adapter)
+        # ✅ FIX: Use absolute path to avoid working directory issues
+        auth_model_path = Path(__file__).parent.parent / "auth_model.conf"
+        log.info(f"Loading Casbin model from: {auth_model_path}")
+        enforcer = casbin.AsyncEnforcer(str(auth_model_path), adapter)
         await enforcer.load_policy()
         fastapi_app.state.enforcer = enforcer
         log.info("✅ Casbin AsyncEnforcer initialized and policies loaded.")
@@ -312,6 +315,8 @@ async def lifespan(app: FastAPI):
             error=str(e),
             exc_info=True,
         )
+        # ✅ FIX: Re-raise to prevent app from starting without authorization
+        raise
 
     # (Giữ nguyên logic Rate Limiter)
     if settings.APP_ENV != "test":

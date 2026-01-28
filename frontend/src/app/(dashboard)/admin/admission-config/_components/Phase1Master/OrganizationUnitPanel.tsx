@@ -276,7 +276,7 @@ export function OrganizationUnitPanel() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Quản lý Đơn vị Tổ chức</h1>
+        <h1 className="text-3xl font-bold font-display">Quản lý Đơn vị Tổ chức</h1>
         <p className="text-muted-foreground mt-2">
           Quản lý danh sách các khoa, phòng ban và đơn vị trực thuộc
         </p>

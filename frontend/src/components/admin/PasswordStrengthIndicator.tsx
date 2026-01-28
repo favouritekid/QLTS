@@ -31,20 +31,20 @@ export function PasswordStrengthIndicator({
     if (checks.special) score += 20;
 
     let label = "Weak";
-    let color = "bg-red-500";
+    let color = "bg-error-500";
 
     if (score >= 80) {
       label = "Mạnh";
-      color = "bg-green-500";
+      color = "bg-success-500";
     } else if (score >= 60) {
       label = "Tốt";
-      color = "bg-yellow-500";
+      color = "bg-warning-500";
     } else if (score >= 40) {
       label = "Trung bình";
       color = "bg-orange-500";
     } else {
       label = "Yếu";
-      color = "bg-red-500";
+      color = "bg-error-500";
     }
 
     return { score, label, color, checks };
@@ -80,11 +80,11 @@ function RequirementItem({ met, text }: { met: boolean; text: string }) {
   return (
     <div className="flex items-center gap-2 text-xs">
       {met ? (
-        <Check className="h-3 w-3 text-green-500" />
+        <Check className="h-3 w-3 text-success-500" />
       ) : (
         <X className="h-3 w-3 text-muted-foreground" />
       )}
-      <span className={met ? "text-green-600" : "text-muted-foreground"}>{text}</span>
+      <span className={met ? "text-success-600" : "text-muted-foreground"}>{text}</span>
     </div>
   );
 }

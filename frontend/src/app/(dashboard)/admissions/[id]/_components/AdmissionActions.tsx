@@ -172,7 +172,7 @@ export function AdmissionActions({
                 <Button
                   onClick={onApprove}
                   disabled={isApproving}
-                  className="bg-green-600 hover:bg-green-700"
+                  className="bg-success-600 hover:bg-success-700"
                 >
                   {isApproving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle className="w-4 h-4 mr-2" />}
                   Phê duyệt
@@ -194,7 +194,7 @@ export function AdmissionActions({
 
           {/* Enroll - can('enroll') when status = approved */}
           {can('enroll') && (
-            <Button onClick={onEnroll} disabled={isEnrolling} className="bg-blue-600 hover:bg-blue-700">
+            <Button onClick={onEnroll} disabled={isEnrolling} className="bg-info-600 hover:bg-info-700">
               {isEnrolling ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <GraduationCap className="w-4 h-4 mr-2" />}
               Xác nhận nhập học
             </Button>

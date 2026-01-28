@@ -99,7 +99,7 @@ export function DashboardClient({ initialUser, initialStats }: DashboardClientPr
       {/* Page Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="space-y-1">
-          <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Bảng Điều Khiển</h1>
+          <h1 className="text-2xl font-bold font-display tracking-tight md:text-3xl">Bảng Điều Khiển</h1>
           <p className="text-muted-foreground text-sm">
             Chào mừng trở lại,{" "}
             <span className="text-foreground font-medium">{user?.username || "Khách"}</span>!
@@ -329,7 +329,7 @@ export function DashboardClient({ initialUser, initialStats }: DashboardClientPr
             {["Máy chủ API", "Cơ sở dữ liệu", "Bộ nhớ đệm", "Lưu trữ"].map((service) => (
               <div key={service} className="flex items-center justify-between text-sm">
                 <span className="font-medium">{service}</span>
-                <Badge className="bg-green-500 hover:bg-green-600">Hoạt động</Badge>
+                <Badge variant="success">Hoạt động</Badge>
               </div>
             ))}
           </CardContent>

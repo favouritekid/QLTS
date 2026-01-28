@@ -100,7 +100,7 @@ export function ConfirmDialog({
     <AlertTriangle
       className={cn(
         "h-5 w-5",
-        variant === "destructive" ? "text-destructive" : "text-yellow-500"
+        variant === "destructive" ? "text-destructive" : "text-warning-500"
       )}
     />
   );

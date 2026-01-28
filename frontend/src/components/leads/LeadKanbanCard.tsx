@@ -18,22 +18,22 @@ interface LeadKanbanCardProps {
 
 // Helper to get score color
 const getScoreColor = (score: number) => {
-  if (score >= 75) return "bg-green-100 text-green-800 border-green-300";
-  if (score >= 50) return "bg-yellow-100 text-yellow-800 border-yellow-300";
-  return "bg-red-100 text-red-800 border-red-300";
+  if (score >= 75) return "bg-success-100 text-success-800 border-success-300";
+  if (score >= 50) return "bg-warning-100 text-warning-800 border-warning-300";
+  return "bg-error-100 text-error-800 border-error-300";
 };
 
 // Helper to get source badge color
 const getSourceColor = (source: string) => {
   const colors: Record<string, string> = {
-    website: "bg-blue-100 text-blue-800",
-    referral: "bg-green-100 text-green-800",
+    website: "bg-info-100 text-info-800",
+    referral: "bg-success-100 text-success-800",
     social_media: "bg-purple-100 text-purple-800",
     walk_in: "bg-orange-100 text-orange-800",
     email: "bg-cyan-100 text-cyan-800",
     phone: "bg-pink-100 text-pink-800",
-    event: "bg-yellow-100 text-yellow-800",
-    other: "bg-gray-100 text-gray-800",
+    event: "bg-warning-100 text-warning-800",
+    other: "bg-muted text-muted-foreground",
   };
   return colors[source] || colors.other;
 };

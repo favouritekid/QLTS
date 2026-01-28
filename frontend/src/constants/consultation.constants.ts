@@ -47,22 +47,22 @@ export const OUTCOME_TYPE_OPTIONS: OutcomeTypeOption[] = [
   {
     value: OutcomeType.POSITIVE,
     label: "Positive",
-    color: "text-green-700",
-    bgColor: "bg-green-100",
+    color: "text-success-700",
+    bgColor: "bg-success-100",
     description: "Ket qua tich cuc, lead tien den chuyen doi",
   },
   {
     value: OutcomeType.NEUTRAL,
     label: "Neutral",
-    color: "text-gray-700",
-    bgColor: "bg-gray-100",
+    color: "text-muted-foreground",
+    bgColor: "bg-muted",
     description: "Trang thai trung gian, can theo doi them",
   },
   {
     value: OutcomeType.NEGATIVE,
     label: "Negative",
-    color: "text-red-700",
-    bgColor: "bg-red-100",
+    color: "text-error-700",
+    bgColor: "bg-error-100",
     description: "Ket qua tieu cuc, lead khong phu hop",
   },
 ];
@@ -72,10 +72,10 @@ export const getOutcomeTypeOption = (value: OutcomeType): OutcomeTypeOption | un
   OUTCOME_TYPE_OPTIONS.find((option) => option.value === value);
 
 export const getOutcomeTypeColor = (value: OutcomeType): string =>
-  getOutcomeTypeOption(value)?.color ?? "text-gray-500";
+  getOutcomeTypeOption(value)?.color ?? "text-muted-foreground";
 
 export const getOutcomeTypeBgColor = (value: OutcomeType): string =>
-  getOutcomeTypeOption(value)?.bgColor ?? "bg-gray-100";
+  getOutcomeTypeOption(value)?.bgColor ?? "bg-muted";
 
 // =============================================================================
 // PRESET COLORS

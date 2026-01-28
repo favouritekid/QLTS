@@ -151,7 +151,7 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
                       className="flex items-center justify-between p-3 rounded-lg border bg-muted/50"
                     >
                       <div className="flex items-center gap-2">
-                        <Check className="h-4 w-4 text-green-600" />
+                        <Check className="h-4 w-4 text-success-600" />
                         <span className="text-sm font-medium">{roleLabel}</span>
                         <span className="text-xs text-muted-foreground">({role})</span>
                       </div>

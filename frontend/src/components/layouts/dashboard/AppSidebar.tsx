@@ -37,7 +37,7 @@ const AppTitle = ({ isCollapsed }: { isCollapsed: boolean }) => (
           </Button>
           <h1
             className={cn(
-              "text-lg font-bold transition-opacity duration-300",
+              "text-lg font-bold font-display transition-opacity duration-300",
               isCollapsed ? "w-0 opacity-0" : "opacity-100"
             )}
           >

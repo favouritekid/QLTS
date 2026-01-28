@@ -27,7 +27,7 @@ const getRankIcon = (rank: number) => {
     case 1:
       return <Crown className="h-4 w-4 text-yellow-500" />;
     case 2:
-      return <Medal className="h-4 w-4 text-gray-400" />;
+      return <Medal className="h-4 w-4 text-border" />;
     case 3:
       return <Medal className="h-4 w-4 text-amber-600" />;
     default:
@@ -39,12 +39,12 @@ const getRankIcon = (rank: number) => {
 const getRankTrendIndicator = (rankChange: number | null | undefined) => {
   if (rankChange === null || rankChange === undefined) {
     return (
-      <span className="text-[10px] text-blue-500 font-medium">MỚI</span>
+      <span className="text-[10px] text-info-500 font-medium">MỚI</span>
     );
   }
   if (rankChange > 0) {
     return (
-      <div className="flex items-center text-green-600 dark:text-green-400">
+      <div className="flex items-center text-success-600 dark:text-success-500">
         <TrendingUp className="h-3 w-3" />
         <span className="text-[10px] font-medium ml-0.5">+{rankChange}</span>
       </div>
@@ -52,7 +52,7 @@ const getRankTrendIndicator = (rankChange: number | null | undefined) => {
   }
   if (rankChange < 0) {
     return (
-      <div className="flex items-center text-red-500 dark:text-red-400">
+      <div className="flex items-center text-error-500 dark:text-error-500">
         <TrendingDown className="h-3 w-3" />
         <span className="text-[10px] font-medium ml-0.5">{rankChange}</span>
       </div>
@@ -71,7 +71,7 @@ const getRankBg = (rank: number, isCurrentUser: boolean) => {
     case 1:
       return "bg-yellow-50 dark:bg-yellow-950/30 border-yellow-200 dark:border-yellow-800";
     case 2:
-      return "bg-gray-50 dark:bg-gray-950/30 border-gray-200 dark:border-gray-700";
+      return "bg-border/40 dark:bg-border/20 border-border dark:border-border";
     case 3:
       return "bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800";
     default:

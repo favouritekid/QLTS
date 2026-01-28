@@ -92,10 +92,10 @@ const getScoreLabel = (score: number) => {
 };
 
 const getScoreColor = (score: number) => {
-  if (score >= 70) return "text-emerald-600 bg-emerald-50";
-  if (score >= 50) return "text-blue-600 bg-blue-50";
-  if (score >= 30) return "text-amber-600 bg-amber-50";
-  return "text-gray-500 bg-gray-50";
+  if (score >= 70) return "text-success-600 bg-success-50";
+  if (score >= 50) return "text-info-600 bg-info-50";
+  if (score >= 30) return "text-warning-600 bg-warning-50";
+  return "text-muted-foreground bg-muted";
 };
 
 export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps) {
@@ -199,10 +199,10 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
   if (isError || !lead) {
     return (
       <div className="container mx-auto py-6">
-        <Card className="border-red-200 bg-red-50">
+        <Card className="border-error-200 bg-error-50">
           <CardHeader>
-            <CardTitle className="text-red-900">Lỗi Tải Lead</CardTitle>
-            <CardDescription className="text-red-700">
+            <CardTitle className="text-error-900">Lỗi Tải Lead</CardTitle>
+            <CardDescription className="text-error-700">
               {error?.message || "Không tìm thấy lead"}
             </CardDescription>
           </CardHeader>
@@ -217,9 +217,9 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
   }
 
   return (
-    <div className="flex flex-col min-h-[calc(100vh-4rem)] bg-slate-50">
+    <div className="flex flex-col min-h-[calc(100vh-4rem)] bg-muted">
       {/* ===== WORKFLOW TABS ===== */}
-      <div className="bg-white border-b border-slate-200 px-6">
+      <div className="bg-card border-b border-border px-6">
         <WorkflowBreadcrumb
           currentPhase={workflowContext?.current_phase}
           hasAdmissionProfile={workflowContext?.has_admission_profile}
@@ -227,7 +227,7 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
       </div>
 
       {/* ===== HEADER: ACTION ZONE ===== */}
-      <div className="bg-white border-b border-slate-200 px-6 py-4">
+      <div className="bg-card border-b border-border px-6 py-4">
         <div className="flex items-center justify-between">
           {/* Left: Lead Info */}
           <div className="flex items-center gap-4">
@@ -238,8 +238,8 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
             </Avatar>
             <div>
               <div className="flex items-center gap-3">
-                <h1 className="text-xl font-bold text-slate-900">{lead.full_name}</h1>
-                <span className="text-sm text-slate-400">#{lead.id}</span>
+                <h1 className="text-xl font-bold font-display text-foreground">{lead.full_name}</h1>
+                <span className="text-sm text-muted-foreground">#{lead.id}</span>
                 {lead.consultation_status && (
                   <Badge
                     variant="outline"
@@ -253,10 +253,10 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
                   </Badge>
                 )}
               </div>
-              <div className="flex items-center gap-4 mt-1.5 text-sm text-slate-600">
+              <div className="flex items-center gap-4 mt-1.5 text-sm text-muted-foreground">
                 {lead.offering && (
                   <span className="flex items-center gap-1.5">
-                    <GraduationCap className="w-4 h-4 text-slate-400" />
+                    <GraduationCap className="w-4 h-4 text-muted-foreground" />
                     {lead.offering.program?.name || lead.offering.offering_type}
                   </span>
                 )}
@@ -265,35 +265,35 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
                   <span className={cn("font-semibold", getScoreColor(lead.lead_score).split(" ")[0])}>
                     {lead.lead_score} điểm
                   </span>
-                  <span className="text-slate-400">• {getScoreLabel(lead.lead_score)}</span>
+                  <span className="text-muted-foreground">• {getScoreLabel(lead.lead_score)}</span>
                 </span>
               </div>
             </div>
           </div>
 
           {/* Center: PHONE - Primary Action */}
-          <div className="flex items-center gap-3 bg-slate-50 rounded-2xl p-3 border border-slate-200">
+          <div className="flex items-center gap-3 bg-muted rounded-2xl p-3 border border-border">
             <div className="flex flex-col items-end">
               <div className="flex items-center gap-2">
-                <span className="text-lg font-bold text-slate-900">{lead.phone}</span>
+                <span className="text-lg font-bold text-foreground">{lead.phone}</span>
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-6 w-6 p-0 text-slate-400 hover:text-slate-600"
+                  className="h-6 w-6 p-0 text-muted-foreground hover:text-muted-foreground"
                   onClick={() => handleCopyPhone(lead.phone)}
                 >
                   {phoneCopied ? (
-                    <Check className="h-3.5 w-3.5 text-green-600" />
+                    <Check className="h-3.5 w-3.5 text-success-600" />
                   ) : (
                     <Copy className="h-3.5 w-3.5" />
                   )}
                 </Button>
               </div>
-              <span className="text-xs text-slate-400">SĐT chính</span>
+              <span className="text-xs text-muted-foreground">SĐT chính</span>
             </div>
             <Button
               size="lg"
-              className="bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white font-semibold rounded-xl shadow-lg shadow-emerald-200 hover:shadow-emerald-300 transition-all hover:scale-105 active:scale-95"
+              className="bg-gradient-to-r from-success-500 to-success-600 hover:from-success-600 hover:to-success-700 text-white font-semibold rounded-xl shadow-lg shadow-success-200 hover:shadow-success-300 transition-all hover:scale-105 active:scale-95"
               onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
             >
               <PhoneCall className="mr-2 h-5 w-5" />
@@ -342,7 +342,7 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onClick={() => setDeleteDialogOpen(true)}
-                  className="text-red-600"
+                  className="text-error-600"
                 >
                   <Trash2 className="mr-2 h-4 w-4" />
                   Xoá lead
@@ -399,7 +399,7 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
             {/* Quick Consultation Form */}
             <Card
               id="quick-consultation-section"
-              className="rounded-2xl border-slate-200 transition-all duration-300"
+              className="rounded-2xl border-border transition-all duration-300"
             >
               <CardHeader className="pb-3">
                 <div className="flex items-center gap-3">
@@ -420,7 +420,7 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
             </Card>
 
             {/* Recent Consultation History - Compact */}
-            <Card className="rounded-2xl border-slate-200">
+            <Card className="rounded-2xl border-border">
               <CardHeader className="pb-3 flex flex-row items-center justify-between">
                 <CardTitle className="text-sm font-semibold">Lịch sử tư vấn gần đây</CardTitle>
                 <Button variant="link" size="sm" className="text-xs text-indigo-600 p-0 h-auto">
@@ -434,21 +434,21 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
 
             {/* Quick Stats */}
             <div className="grid grid-cols-4 gap-3">
-              <Card className="rounded-2xl border-slate-200 text-center p-4">
+              <Card className="rounded-2xl border-border text-center p-4">
                 <div className="text-2xl font-bold text-indigo-600">
                   {lead.consultation_count}
                 </div>
                 <div className="text-xs text-muted-foreground">Lần liên hệ</div>
               </Card>
-              <Card className="rounded-2xl border-slate-200 text-center p-4">
-                <div className="text-2xl font-bold text-emerald-600">{successfulContacts}</div>
+              <Card className="rounded-2xl border-border text-center p-4">
+                <div className="text-2xl font-bold text-success-600">{successfulContacts}</div>
                 <div className="text-xs text-muted-foreground">Kết nối thành công</div>
               </Card>
-              <Card className="rounded-2xl border-slate-200 text-center p-4">
+              <Card className="rounded-2xl border-border text-center p-4">
                 <div className="text-2xl font-bold text-amber-600">{daysInPipeline}</div>
                 <div className="text-xs text-muted-foreground">Ngày từ lúc tạo</div>
               </Card>
-              <Card className="rounded-2xl border-slate-200 text-center p-4">
+              <Card className="rounded-2xl border-border text-center p-4">
                 <div className="text-2xl font-bold text-purple-600">{lead.days_in_stage}</div>
                 <div className="text-xs text-muted-foreground">Ngày trong giai đoạn</div>
               </Card>
@@ -496,7 +496,7 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
             <AlertDialogAction
               onClick={handleDelete}
               disabled={deleteMutation.isPending}
-              className="bg-red-600 hover:bg-red-700"
+              className="bg-error-600 hover:bg-error-700"
             >
               {deleteMutation.isPending ? "Đang xoá..." : "Xoá Lead"}
             </AlertDialogAction>

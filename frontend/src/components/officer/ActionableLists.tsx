@@ -49,7 +49,7 @@ export function ActionableLists({ lists }: ActionableListsProps) {
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
-            <TrendingUp className="h-5 w-5 text-green-600" />
+            <TrendingUp className="h-5 w-5 text-success-600" />
             <CardTitle>High-Value Leads</CardTitle>
           </div>
           <CardDescription>
@@ -105,7 +105,7 @@ export function ActionableLists({ lists }: ActionableListsProps) {
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
-            <AlertTriangle className="h-5 w-5 text-yellow-600" />
+            <AlertTriangle className="h-5 w-5 text-warning-600" />
             <CardTitle>Stale Leads</CardTitle>
           </div>
           <CardDescription>
@@ -152,7 +152,7 @@ export function ActionableLists({ lists }: ActionableListsProps) {
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
-            <Calendar className="h-5 w-5 text-blue-600" />
+            <Calendar className="h-5 w-5 text-info-600" />
             <CardTitle>Today&apos;s Schedule</CardTitle>
           </div>
           <CardDescription>

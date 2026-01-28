@@ -40,7 +40,7 @@ export function AdmissionLayout({
   groupedValidationErrors
 }: AdmissionLayoutProps) {
   return (
-    <div className="flex flex-col min-h-screen bg-gray-50/50">
+    <div className="flex flex-col min-h-screen bg-muted/50">
        {/* 1. Sticky Header */}
        <div className="sticky top-0 z-30 bg-background border-b shadow-sm">
           <AdmissionHeader profile={profile} validation={validation} />

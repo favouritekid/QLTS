@@ -290,7 +290,7 @@ export function OfferingAcademicInfoManagement({
                                 {info.is_deleted ? (
                                   <DropdownMenuItem
                                     onClick={() => handleRestore(info)}
-                                    className="text-green-600"
+                                    className="text-success-600"
                                     disabled={restoreAcademicInfoMutation.isPending}
                                   >
                                     <RotateCcw className="mr-2 h-4 w-4" />
@@ -299,7 +299,7 @@ export function OfferingAcademicInfoManagement({
                                 ) : (
                                   <DropdownMenuItem
                                     onClick={() => handleDeleteClick(info)}
-                                    className="text-red-600"
+                                    className="text-error-600"
                                   >
                                     <Trash2 className="mr-2 h-4 w-4" />
                                     Xóa
@@ -346,7 +346,7 @@ export function OfferingAcademicInfoManagement({
             <AlertDialogCancel>Hủy</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleConfirmDelete}
-              className="bg-red-600 hover:bg-red-700"
+              className="bg-error-600 hover:bg-error-700"
             >
               Xóa
             </AlertDialogAction>

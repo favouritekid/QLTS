@@ -79,7 +79,7 @@ export function PageHeader({
         {/* Title Section */}
         <div>
           <h1 className={cn(
-            "text-3xl font-bold tracking-tight",
+            "text-3xl font-bold tracking-tight font-display",
             icon && "flex items-center gap-2"
           )}>
             {icon}

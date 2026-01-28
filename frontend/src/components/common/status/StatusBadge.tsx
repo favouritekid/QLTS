@@ -18,12 +18,12 @@ const statusBadgeVariants = cva(
   {
     variants: {
       variant: {
-        // Legacy variants (backward compatible)
-        success: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400",
-        warning: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400",
-        danger: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
-        info: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
-        neutral: "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-400",
+        // Semantic variants (using CSS tokens)
+        success: "bg-success-100 text-success-700 dark:bg-success-500/20 dark:text-success-500",
+        warning: "bg-warning-100 text-warning-700 dark:bg-warning-500/20 dark:text-warning-500",
+        danger: "bg-error-100 text-error-700 dark:bg-error-500/20 dark:text-error-500",
+        info: "bg-info-100 text-info-700 dark:bg-info-500/20 dark:text-info-500",
+        neutral: "bg-muted text-muted-foreground dark:bg-muted dark:text-muted-foreground",
         primary: "bg-primary/10 text-primary dark:bg-primary/20",
         secondary: "bg-secondary text-secondary-foreground",
 
@@ -182,11 +182,11 @@ export function StatusBadge({
         <span
           className={cn(
             "h-1.5 w-1.5 rounded-full",
-            variant === "success" && "bg-green-500",
-            variant === "warning" && "bg-yellow-500",
-            variant === "danger" && "bg-red-500",
-            variant === "info" && "bg-blue-500",
-            variant === "neutral" && "bg-gray-500",
+            variant === "success" && "bg-success-500",
+            variant === "warning" && "bg-warning-500",
+            variant === "danger" && "bg-error-500",
+            variant === "info" && "bg-info-500",
+            variant === "neutral" && "bg-muted-foreground",
             variant === "primary" && "bg-primary",
             variant === "secondary" && "bg-secondary-foreground",
             // Semantic variants use currentColor

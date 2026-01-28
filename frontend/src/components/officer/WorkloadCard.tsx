@@ -62,14 +62,14 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
   const circumference = 2 * Math.PI * 40;
   const strokeDashoffset = circumference - (utilizationPercentage / 100) * circumference;
 
-  const utilizationColor = 
-    utilizationPercentage >= 90 ? "text-red-500" : 
-    utilizationPercentage >= 70 ? "text-amber-500" : 
-    "text-green-500";
+  const utilizationColor =
+    utilizationPercentage >= 90 ? "text-error-500" :
+    utilizationPercentage >= 70 ? "text-warning-500" :
+    "text-success-500";
 
-  const strokeColor = 
-    utilizationPercentage >= 90 ? "stroke-red-500" : 
-    utilizationPercentage >= 70 ? "stroke-amber-500" : 
+  const strokeColor =
+    utilizationPercentage >= 90 ? "stroke-error-500" :
+    utilizationPercentage >= 70 ? "stroke-warning-500" :
     "stroke-primary";
 
   return (
@@ -80,11 +80,11 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
             <Briefcase className="h-4 w-4" />
             Khối lượng công việc
           </CardTitle>
-          <Badge 
+          <Badge
             variant={isAvailable ? "default" : "secondary"}
             className={cn(
               "text-xs",
-              isAvailable && "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+              isAvailable && "bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-400"
             )}
           >
             <CircleDot className="h-3 w-3 mr-1" />
@@ -146,7 +146,7 @@ export function WorkloadCard({ statusOverview }: WorkloadCardProps) {
               </span>
               <span className={cn(
                 "font-medium",
-                remainingCapacity <= 5 ? "text-amber-600" : "text-green-600"
+                remainingCapacity <= 5 ? "text-warning-600" : "text-success-600"
               )}>
                 {remainingCapacity} leads
               </span>

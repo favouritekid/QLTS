@@ -46,17 +46,17 @@ interface PriorityActionCardProps {
 const typeConfig = {
   hot_lead: {
     icon: Flame,
-    color: "text-red-500",
+    color: "text-error-500",
     label: "Hot",
   },
   overdue: {
     icon: AlertTriangle,
-    color: "text-amber-500",
+    color: "text-warning-500",
     label: "Quá hạn",
   },
   scheduled: {
     icon: Calendar,
-    color: "text-blue-500",
+    color: "text-info-500",
     label: "Đã hẹn",
   },
   follow_up: {
@@ -66,16 +66,16 @@ const typeConfig = {
   },
   new_lead: {
     icon: Sparkles,
-    color: "text-green-500",
+    color: "text-success-500",
     label: "Mới",
   },
 };
 
 // Lead score badge color based on score
 const getScoreBadgeClass = (score: number) => {
-  if (score >= 80) return "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400";
-  if (score >= 60) return "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400";
-  return "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400";
+  if (score >= 80) return "bg-error-100 text-error-700 dark:bg-error-900/30 dark:text-error-400";
+  if (score >= 60) return "bg-warning-100 text-warning-700 dark:bg-warning-900/30 dark:text-warning-400";
+  return "bg-muted text-muted-foreground dark:bg-muted dark:text-muted-foreground";
 };
 
 export function PriorityActionCard({
@@ -98,7 +98,7 @@ export function PriorityActionCard({
       className={cn(
         "group p-3 rounded-lg border bg-card transition-all duration-200",
         "hover:border-primary/30 hover:bg-muted/50",
-        action.priority === "urgent" && "border-l-2 border-l-red-500"
+        action.priority === "urgent" && "border-l-2 border-l-error-500"
       )}
     >
       <div className="flex items-center gap-3">
@@ -157,7 +157,7 @@ export function PriorityActionCard({
           <Button
             size="icon"
             variant="ghost"
-            className="h-7 w-7 text-blue-500 hover:text-blue-600 hover:bg-blue-50"
+            className="h-7 w-7 text-info-500 hover:text-info-600 hover:bg-info-50"
             title="Chat Zalo"
             onClick={(e) => {
               e.preventDefault();

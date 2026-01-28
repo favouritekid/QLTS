@@ -39,7 +39,7 @@ export function OrganizationTreeClient({ initialData }: OrganizationTreeClientPr
     <div className="container mx-auto py-6 space-y-6">
       {/* Page Header */}
       <div>
-        <h1 className="text-3xl font-bold">Cây Đơn Vị Tổ Chức</h1>
+        <h1 className="text-3xl font-bold font-display">Cây Đơn Vị Tổ Chức</h1>
         <p className="text-muted-foreground mt-2">
           Hiển thị cấu trúc tổ chức với thông tin ngành học và thống kê tổng hợp
         </p>

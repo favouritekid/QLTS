@@ -27,7 +27,7 @@ export function SubjectGroupPanel() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Môn học & Tổ hợp xét tuyển</h1>
+        <h1 className="text-3xl font-bold font-display">Môn học & Tổ hợp xét tuyển</h1>
         <p className="text-muted-foreground mt-2">
           Quản lý danh sách môn học và các tổ hợp môn (A00, A01...)
         </p>

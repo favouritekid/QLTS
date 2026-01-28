@@ -44,8 +44,8 @@ const INSIGHTS_DOCS = [
     id: "engagement",
     label: "Mức độ tương tác",
     icon: Users,
-    color: "text-blue-600",
-    bgColor: "bg-blue-100",
+    color: "text-info-600",
+    bgColor: "bg-info-100",
     summary: "Đo lường mức độ chăm sóc lead thông qua lịch sử tư vấn và kết quả liên hệ.",
     interpretation: {
       high: { range: "≥70", meaning: "Lead được chăm sóc tốt, tương tác đều đặn" },
@@ -73,8 +73,8 @@ const INSIGHTS_DOCS = [
     id: "fit",
     label: "Độ phù hợp",
     icon: Target,
-    color: "text-green-600",
-    bgColor: "bg-green-100",
+    color: "text-success-600",
+    bgColor: "bg-success-100",
     summary: "Đánh giá mức độ phù hợp của lead với chương trình, kết hợp dữ liệu hồ sơ và đánh giá chủ quan của bạn.",
     interpretation: {
       high: { range: "≥70", meaning: "Rất phù hợp - khả năng chuyển đổi cao" },
@@ -100,8 +100,8 @@ const INSIGHTS_DOCS = [
     id: "urgency",
     label: "Mức độ khẩn cấp",
     icon: Clock,
-    color: "text-orange-600",
-    bgColor: "bg-orange-100",
+    color: "text-warning-600",
+    bgColor: "bg-warning-100",
     // Urgency: màu ngược - cao = đỏ cảnh báo, thấp = xanh an toàn
     isReversedColors: true,
     summary: "Cho biết lead này có cần được liên hệ ngay không. Điểm càng cao = càng cần ưu tiên.",
@@ -194,18 +194,18 @@ export function InsightsHelperDrawer({ trigger }: InsightsHelperDrawerProps) {
                     <div className="flex items-start gap-2">
                       <span className={cn(
                         "font-semibold min-w-[50px]",
-                        doc.isReversedColors ? "text-red-600" : "text-green-600"
+                        doc.isReversedColors ? "text-error-600" : "text-success-600"
                       )}>{doc.interpretation.high.range}</span>
                       <span className="text-muted-foreground">{doc.interpretation.high.meaning}</span>
                     </div>
                     <div className="flex items-start gap-2">
-                      <span className="text-yellow-600 font-semibold min-w-[50px]">{doc.interpretation.medium.range}</span>
+                      <span className="text-warning-600 font-semibold min-w-[50px]">{doc.interpretation.medium.range}</span>
                       <span className="text-muted-foreground">{doc.interpretation.medium.meaning}</span>
                     </div>
                     <div className="flex items-start gap-2">
                       <span className={cn(
                         "font-semibold min-w-[50px]",
-                        doc.isReversedColors ? "text-green-600" : "text-gray-500"
+                        doc.isReversedColors ? "text-success-600" : "text-muted-foreground"
                       )}>{doc.interpretation.low.range}</span>
                       <span className="text-muted-foreground">{doc.interpretation.low.meaning}</span>
                     </div>
@@ -230,7 +230,7 @@ export function InsightsHelperDrawer({ trigger }: InsightsHelperDrawerProps) {
                           <span className="text-muted-foreground">{item.label}</span>
                           <span className={cn(
                             "font-semibold",
-                            item.points.startsWith("-") ? "text-red-500" : "text-primary"
+                            item.points.startsWith("-") ? "text-error-500" : "text-primary"
                           )}>{item.points}</span>
                         </div>
                       ))}

@@ -8,7 +8,7 @@ export default function AuditLogsPage() {
     <div className="space-y-6">
       {/* Header */}
       <header>
-        <h1 className="text-3xl font-bold tracking-tight">Audit Logs</h1>
+        <h1 className="text-3xl font-bold font-display tracking-tight">Audit Logs</h1>
         <p className="text-muted-foreground">
           Xem lịch sử thay đổi dữ liệu trong hệ thống.
         </p>

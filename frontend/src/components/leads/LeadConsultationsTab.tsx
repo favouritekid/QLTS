@@ -137,7 +137,7 @@ export function LeadConsultationsTab({
                         size="sm"
                         onClick={() => setConsultationToDelete(consultation)}
                       >
-                        <Trash2 className="h-4 w-4 text-red-600" />
+                        <Trash2 className="h-4 w-4 text-error-600" />
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -163,7 +163,7 @@ export function LeadConsultationsTab({
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDelete}
-              className="bg-red-600 hover:bg-red-700"
+              className="bg-error-600 hover:bg-error-700"
             >
               Delete
             </AlertDialogAction>

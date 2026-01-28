@@ -78,25 +78,25 @@ export function TuitionTab({ profile }: TuitionTabProps) {
               <p className="text-xl font-bold">{formatCurrency(tuition.total_amount)}</p>
             </div>
             
-            <div className="p-4 bg-green-50 rounded-lg">
-              <p className="text-sm text-green-600">Học bổng/Giảm</p>
-              <p className="text-xl font-bold text-green-700">
+            <div className="p-4 bg-success-50 rounded-lg">
+              <p className="text-sm text-success-600">Học bổng/Giảm</p>
+              <p className="text-xl font-bold text-success-700">
                 - {formatCurrency(tuition.discount_amount)}
               </p>
             </div>
-            
-            <div className="p-4 bg-blue-50 rounded-lg">
-              <p className="text-sm text-blue-600">Đã thanh toán</p>
-              <p className="text-xl font-bold text-blue-700">
+
+            <div className="p-4 bg-info-50 rounded-lg">
+              <p className="text-sm text-info-600">Đã thanh toán</p>
+              <p className="text-xl font-bold text-info-700">
                 {formatCurrency(tuition.paid_amount)}
               </p>
             </div>
             
-            <div className={`p-4 rounded-lg ${isPaid ? "bg-green-50" : "bg-orange-50"}`}>
-              <p className={`text-sm ${isPaid ? "text-green-600" : "text-orange-600"}`}>
+            <div className={`p-4 rounded-lg ${isPaid ? "bg-success-50" : "bg-warning-50"}`}>
+              <p className={`text-sm ${isPaid ? "text-success-600" : "text-warning-600"}`}>
                 Còn lại
               </p>
-              <p className={`text-xl font-bold ${isPaid ? "text-green-700" : "text-orange-700"}`}>
+              <p className={`text-xl font-bold ${isPaid ? "text-success-700" : "text-warning-700"}`}>
                 {formatCurrency(remainingAmount)}
               </p>
             </div>
@@ -109,13 +109,13 @@ export function TuitionTab({ profile }: TuitionTabProps) {
             <div className="flex items-center gap-2">
               {isPaid ? (
                 <>
-                  <CheckCircle className="h-5 w-5 text-green-500" />
-                  <span className="font-medium text-green-700">Đã thanh toán đủ</span>
+                  <CheckCircle className="h-5 w-5 text-success-500" />
+                  <span className="font-medium text-success-700">Đã thanh toán đủ</span>
                 </>
               ) : (
                 <>
-                  <Clock className="h-5 w-5 text-orange-500" />
-                  <span className="font-medium text-orange-700">Chưa thanh toán đủ</span>
+                  <Clock className="h-5 w-5 text-warning-500" />
+                  <span className="font-medium text-warning-700">Chưa thanh toán đủ</span>
                 </>
               )}
             </div>
@@ -155,8 +155,8 @@ export function TuitionTab({ profile }: TuitionTabProps) {
                   className="flex items-center justify-between p-3 border rounded-lg"
                 >
                   <div className="flex items-center gap-3">
-                    <div className="p-2 bg-green-100 rounded">
-                      <CheckCircle className="h-4 w-4 text-green-600" />
+                    <div className="p-2 bg-success-100 rounded">
+                      <CheckCircle className="h-4 w-4 text-success-600" />
                     </div>
                     <div>
                       <p className="font-medium">{formatCurrency(payment.amount)}</p>

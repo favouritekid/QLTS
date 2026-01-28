@@ -134,7 +134,7 @@ function DeletedLeadsTable({
   if (leads.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-center">
-        <CheckCircle className="h-12 w-12 text-green-500 mb-4" />
+        <CheckCircle className="h-12 w-12 text-success-500 mb-4" />
         <h3 className="text-lg font-medium">Không có lead nào bị xóa</h3>
         <p className="text-muted-foreground text-sm mt-1">
           Tất cả leads đều đang hoạt động bình thường.
@@ -275,7 +275,7 @@ function DeletedConsultationsTable({
   if (consultations.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-12 text-center">
-        <CheckCircle className="h-12 w-12 text-green-500 mb-4" />
+        <CheckCircle className="h-12 w-12 text-success-500 mb-4" />
         <h3 className="text-lg font-medium">
           Không có ghi nhận tư vấn nào bị xóa
         </h3>
@@ -414,7 +414,7 @@ export function DeletedItemsManager() {
       <Card>
         <CardContent className="py-12">
           <div className="flex flex-col items-center text-center">
-            <AlertCircle className="h-12 w-12 text-red-500 mb-4" />
+            <AlertCircle className="h-12 w-12 text-error-500 mb-4" />
             <h3 className="text-lg font-medium">Không thể tải dữ liệu</h3>
             <p className="text-muted-foreground text-sm mt-1">
               Vui lòng thử lại sau hoặc liên hệ admin.
@@ -452,7 +452,7 @@ export function DeletedItemsManager() {
           </CardHeader>
           <CardContent>
             <div className="flex items-center gap-2">
-              <Trash2 className="h-5 w-5 text-red-500" />
+              <Trash2 className="h-5 w-5 text-error-500" />
               <span className="text-2xl font-bold">
                 {isLoading ? (
                   <Skeleton className="h-8 w-12 inline-block" />

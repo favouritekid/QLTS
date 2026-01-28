@@ -27,27 +27,27 @@ export function HealthCheckItem({
   const config = {
     success: {
       icon: CheckCircle2,
-      color: "text-green-600",
-      bg: "bg-green-50",
-      border: "border-green-200",
+      color: "text-success-600",
+      bg: "bg-success-50",
+      border: "border-success-200",
     },
     warning: {
       icon: AlertTriangle,
-      color: "text-amber-600",
-      bg: "bg-amber-50",
-      border: "border-amber-200",
+      color: "text-warning-600",
+      bg: "bg-warning-50",
+      border: "border-warning-200",
     },
     error: {
       icon: XCircle,
-      color: "text-red-600",
-      bg: "bg-red-50",
-      border: "border-red-200",
+      color: "text-error-600",
+      bg: "bg-error-50",
+      border: "border-error-200",
     },
     locked: {
       icon: Lock,
-      color: "text-gray-400",
-      bg: "bg-gray-50",
-      border: "border-gray-200",
+      color: "text-muted-foreground",
+      bg: "bg-muted",
+      border: "border-border",
     },
   }
 

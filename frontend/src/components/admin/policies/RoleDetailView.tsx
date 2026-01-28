@@ -86,7 +86,7 @@ export function RoleDetailView({ roleName }: RoleDetailViewProps) {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-2xl font-bold">Permission Breakdown for {data.role}</h2>
+        <h2 className="text-2xl font-bold font-display">Permission Breakdown for {data.role}</h2>
         <p className="text-muted-foreground">
           Understanding where this role&apos;s permissions come from
         </p>

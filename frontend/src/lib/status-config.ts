@@ -37,14 +37,14 @@ export const ADMISSION_STATUS_CONFIG: Record<string, StatusUIConfig> = {
   draft: {
     label: 'Nháp',
     badgeVariant: 'secondary',
-    badgeColor: 'bg-gray-100 text-gray-700',
+    badgeColor: 'bg-muted text-muted-foreground',
     showBanner: false,
     allowedActions: ['save', 'submit'],
   },
   submitted: {
     label: 'Chờ duyệt',
     badgeVariant: 'default',
-    badgeColor: 'bg-blue-100 text-blue-700',
+    badgeColor: 'bg-info-100 text-info-700',
     showBanner: true,
     bannerType: 'info',
     bannerMessage: 'Hồ sơ đang chờ xét duyệt',
@@ -53,7 +53,7 @@ export const ADMISSION_STATUS_CONFIG: Record<string, StatusUIConfig> = {
   resubmitted: {
     label: 'Đã nộp lại',
     badgeVariant: 'default',
-    badgeColor: 'bg-blue-100 text-blue-700',
+    badgeColor: 'bg-info-100 text-info-700',
     showBanner: true,
     bannerType: 'info',
     bannerMessage: 'Hồ sơ đã được nộp lại và đang chờ xét duyệt',
@@ -62,7 +62,7 @@ export const ADMISSION_STATUS_CONFIG: Record<string, StatusUIConfig> = {
   approved: {
     label: 'Đã duyệt',
     badgeVariant: 'default',
-    badgeColor: 'bg-green-100 text-green-700',
+    badgeColor: 'bg-success-100 text-success-700',
     showBanner: true,
     bannerType: 'success',
     bannerMessage: 'Hồ sơ đã được phê duyệt',
@@ -71,7 +71,7 @@ export const ADMISSION_STATUS_CONFIG: Record<string, StatusUIConfig> = {
   rejected: {
     label: 'Từ chối',
     badgeVariant: 'destructive',
-    badgeColor: 'bg-red-100 text-red-700',
+    badgeColor: 'bg-error-100 text-error-700',
     showBanner: true,
     bannerType: 'warning',
     bannerMessage: 'Hồ sơ bị từ chối. Vui lòng chỉnh sửa và nộp lại.',
@@ -94,21 +94,21 @@ export const LEAD_STATUS_CONFIG: Record<string, StatusUIConfig> = {
   new: {
     label: 'Mới',
     badgeVariant: 'default',
-    badgeColor: 'bg-blue-100 text-blue-700',
+    badgeColor: 'bg-info-100 text-info-700',
     showBanner: false,
     allowedActions: ['contact', 'assign'],
   },
   contacted: {
     label: 'Đã liên hệ',
     badgeVariant: 'secondary',
-    badgeColor: 'bg-yellow-100 text-yellow-700',
+    badgeColor: 'bg-warning-100 text-warning-700',
     showBanner: false,
     allowedActions: ['follow_up', 'convert'],
   },
   qualified: {
     label: 'Đủ điều kiện',
     badgeVariant: 'default',
-    badgeColor: 'bg-green-100 text-green-700',
+    badgeColor: 'bg-success-100 text-success-700',
     showBanner: false,
     allowedActions: ['convert'],
   },
@@ -122,7 +122,7 @@ export const LEAD_STATUS_CONFIG: Record<string, StatusUIConfig> = {
   lost: {
     label: 'Mất',
     badgeVariant: 'destructive',
-    badgeColor: 'bg-red-100 text-red-700',
+    badgeColor: 'bg-error-100 text-error-700',
     showBanner: false,
     allowedActions: ['reactivate'],
   },
@@ -136,7 +136,7 @@ export const LEAD_STATUS_CONFIG: Record<string, StatusUIConfig> = {
 export const DEFAULT_STATUS_CONFIG: StatusUIConfig = {
   label: 'Không xác định',
   badgeVariant: 'outline',
-  badgeColor: 'bg-gray-100 text-gray-600',
+  badgeColor: 'bg-muted text-muted-foreground',
   showBanner: false,
   allowedActions: [],
 }

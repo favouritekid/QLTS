@@ -44,7 +44,7 @@ export function WelcomeScreen({ onStart }: WelcomeScreenProps) {
           <div className="space-y-6">
             <div className="flex gap-4">
               <div className="flex-shrink-0">
-                <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold">
+                <div className="w-10 h-10 rounded-full bg-info-100 text-info-600 flex items-center justify-center font-bold">
                   1
                 </div>
               </div>
@@ -55,23 +55,23 @@ export function WelcomeScreen({ onStart }: WelcomeScreenProps) {
                 </p>
                 <ul className="space-y-2 text-sm text-muted-foreground">
                   <li className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-green-600" />
+                    <CheckCircle2 className="h-4 w-4 text-success-600" />
                     Đơn vị tổ chức (Khoa, Phòng ban)
                   </li>
                   <li className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-green-600" />
+                    <CheckCircle2 className="h-4 w-4 text-success-600" />
                     Hệ đào tạo (Chính quy, Vừa làm vừa học)
                   </li>
                   <li className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-green-600" />
+                    <CheckCircle2 className="h-4 w-4 text-success-600" />
                     Phương thức xét tuyển (Học bạ, Điểm thi...)
                   </li>
                   <li className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-green-600" />
+                    <CheckCircle2 className="h-4 w-4 text-success-600" />
                     Loại giấy tờ (Học bạ, CCCD...)
                   </li>
                   <li className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-green-600" />
+                    <CheckCircle2 className="h-4 w-4 text-success-600" />
                     Tổ hợp môn (A00, A01...)
                   </li>
                 </ul>
@@ -91,15 +91,15 @@ export function WelcomeScreen({ onStart }: WelcomeScreenProps) {
                 </p>
                 <ul className="space-y-2 text-sm text-muted-foreground">
                   <li className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-green-600" />
+                    <CheckCircle2 className="h-4 w-4 text-success-600" />
                     Ngành đào tạo (CNTT, Kinh tế...)
                   </li>
                   <li className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-green-600" />
+                    <CheckCircle2 className="h-4 w-4 text-success-600" />
                     Chương trình tuyển sinh (CNTT Chính quy...)
                   </li>
                   <li className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-green-600" />
+                    <CheckCircle2 className="h-4 w-4 text-success-600" />
                     Thông tin năm học (Chỉ tiêu, Học phí)
                   </li>
                 </ul>
@@ -108,7 +108,7 @@ export function WelcomeScreen({ onStart }: WelcomeScreenProps) {
 
             <div className="flex gap-4">
               <div className="flex-shrink-0">
-                <div className="w-10 h-10 rounded-full bg-green-100 text-green-600 flex items-center justify-center font-bold">
+                <div className="w-10 h-10 rounded-full bg-success-100 text-success-600 flex items-center justify-center font-bold">
                   3
                 </div>
               </div>
@@ -119,19 +119,19 @@ export function WelcomeScreen({ onStart }: WelcomeScreenProps) {
                 </p>
                 <ul className="space-y-2 text-sm text-muted-foreground">
                   <li className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-green-600" />
+                    <CheckCircle2 className="h-4 w-4 text-success-600" />
                     Thiết lập tiêu chí xét tuyển cho từng phương thức
                   </li>
                   <li className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-green-600" />
+                    <CheckCircle2 className="h-4 w-4 text-success-600" />
                     Cấu hình yêu cầu hồ sơ giấy tờ
                   </li>
                   <li className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-green-600" />
+                    <CheckCircle2 className="h-4 w-4 text-success-600" />
                     Tạo đợt tuyển sinh (Phương thức + Tiêu chí + Hồ sơ)
                   </li>
                   <li className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-green-600" />
+                    <CheckCircle2 className="h-4 w-4 text-success-600" />
                     Kích hoạt đợt tuyển sinh cho thí sinh đăng ký
                   </li>
                 </ul>

@@ -24,10 +24,10 @@ type FilterType = "all" | "hot_lead" | "overdue" | "scheduled" | "new_lead";
 
 const filterConfig: Record<FilterType, { label: string; icon?: typeof Flame; color?: string }> = {
   all: { label: "Tất cả" },
-  hot_lead: { label: "Hot", icon: Flame, color: "text-red-500" },
+  hot_lead: { label: "Hot", icon: Flame, color: "text-error-500" },
   overdue: { label: "Quá hạn", icon: AlertTriangle, color: "text-amber-500" },
-  scheduled: { label: "Lịch hẹn", icon: Calendar, color: "text-blue-500" },
-  new_lead: { label: "Mới", icon: Sparkles, color: "text-green-500" },
+  scheduled: { label: "Lịch hẹn", icon: Calendar, color: "text-info-500" },
+  new_lead: { label: "Mới", icon: Sparkles, color: "text-success-500" },
 };
 
 export function PriorityActionsPanel({ actions }: PriorityActionsPanelProps) {

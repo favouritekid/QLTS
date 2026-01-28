@@ -176,7 +176,7 @@ export function DocumentChecklist({ profile }: DocumentChecklistProps) {
                 <Button
                   onClick={handleBatchVerify}
                   disabled={verifyMutation.isPending}
-                  className="bg-green-600 hover:bg-green-700"
+                  className="bg-success-600 hover:bg-success-700"
                 >
                   <CheckCircle2 className="w-4 h-4 mr-2" />
                   {verifyMutation.isPending
@@ -188,14 +188,14 @@ export function DocumentChecklist({ profile }: DocumentChecklistProps) {
 
             {/* Rejection Info */}
             {mandatoryDocs.some((doc) => doc.status === "rejected") && (
-              <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
-                <div className="text-sm font-semibold text-red-700 mb-2">
+              <div className="mt-4 p-3 bg-error-50 border border-error-200 rounded-lg">
+                <div className="text-sm font-semibold text-error-700 mb-2">
                   Tài liệu bị từ chối:
                 </div>
                 {mandatoryDocs
                   .filter((doc) => doc.status === "rejected" && doc.rejection_reason)
                   .map((doc) => (
-                    <div key={doc.code} className="text-xs text-red-600 mb-1">
+                    <div key={doc.code} className="text-xs text-error-600 mb-1">
                       • <strong>{doc.label}</strong>: {doc.rejection_reason}
                     </div>
                   ))}
@@ -241,7 +241,7 @@ function DocumentRow({
 
       <TableCell className="text-center">
         {status === "verified" ? (
-          <Badge className="bg-green-600 hover:bg-green-700 gap-1">
+          <Badge className="bg-success-600 hover:bg-success-700 gap-1">
             <CheckCircle2 className="w-3 h-3" />
             Đã xác nhận
           </Badge>
@@ -275,7 +275,7 @@ function DocumentRow({
           // Show verified format as badge
           <Badge
             variant="outline"
-            className="font-normal border-green-200 bg-green-50 text-green-700"
+            className="font-normal border-success-200 bg-success-50 text-success-700"
           >
             {getFormatLabel(doc.verified_format)}
           </Badge>
@@ -283,7 +283,7 @@ function DocumentRow({
           // Show user-declared format
           <Badge
             variant="outline"
-            className="font-normal border-blue-200 bg-blue-50 text-blue-700"
+            className="font-normal border-info-200 bg-info-50 text-info-700"
           >
             {getFormatLabel(doc.actual_submission_format)}
           </Badge>
@@ -302,7 +302,7 @@ function DocumentRow({
                   <Button
                     size="icon"
                     variant="ghost"
-                    className="h-8 w-8 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                    className="h-8 w-8 text-info-600 hover:text-info-700 hover:bg-info-50"
                     onClick={() => {
                       const url = getDocumentUrl(doc.file_path)
                       if (url) window.open(url, "_blank")
@@ -324,7 +324,7 @@ function DocumentRow({
                   <Button
                     size="icon"
                     variant="ghost"
-                    className="h-8 w-8 text-red-600 hover:text-red-700 hover:bg-red-50"
+                    className="h-8 w-8 text-error-600 hover:text-error-700 hover:bg-error-50"
                     onClick={handleReject}
                     disabled={rejectMutation.isPending}
                   >

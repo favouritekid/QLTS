@@ -24,10 +24,10 @@ const STATUS_LABELS: Record<string, string> = {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  draft: "bg-gray-100 text-gray-700",
-  approved: "bg-green-100 text-green-700",
-  rejected: "bg-red-100 text-red-700",
-  enrolled: "bg-blue-100 text-blue-700",
+  draft: "bg-muted text-muted-foreground",
+  approved: "bg-success-100 text-success-700",
+  rejected: "bg-error-100 text-error-700",
+  enrolled: "bg-info-100 text-info-700",
 }
 
 export default function AdmissionsPage() {
@@ -43,7 +43,7 @@ export default function AdmissionsPage() {
         <div className="flex items-center gap-3">
           <ClipboardCheck className="h-8 w-8 text-primary" />
           <div>
-            <h1 className="text-2xl font-bold">Hồ sơ tuyển sinh</h1>
+            <h1 className="text-2xl font-bold font-display">Hồ sơ tuyển sinh</h1>
             <p className="text-muted-foreground">Quản lý và theo dõi hồ sơ tuyển sinh</p>
           </div>
         </div>
@@ -80,10 +80,10 @@ export default function AdmissionsPage() {
       )}
 
       {isError && (
-        <Card className="border-red-200 bg-red-50">
+        <Card className="border-error-200 bg-error-50">
           <CardHeader>
-            <CardTitle className="text-red-900">Lỗi tải dữ liệu</CardTitle>
-            <CardDescription className="text-red-700">
+            <CardTitle className="text-error-900">Lỗi tải dữ liệu</CardTitle>
+            <CardDescription className="text-error-700">
               Không thể tải danh sách hồ sơ. Vui lòng thử lại.
             </CardDescription>
           </CardHeader>
@@ -112,7 +112,7 @@ export default function AdmissionsPage() {
                     <User className="h-4 w-4 text-muted-foreground" />
                     {profile.lead?.full_name || `Lead #${profile.lead_id}`}
                   </CardTitle>
-                  <Badge className={STATUS_COLORS[profile.status] || "bg-gray-100"}>
+                  <Badge className={STATUS_COLORS[profile.status] || "bg-muted"}>
                     {STATUS_LABELS[profile.status] || profile.status}
                   </Badge>
                 </div>

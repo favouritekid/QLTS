@@ -151,8 +151,8 @@ function PhaseItem({
         "flex items-center gap-1.5 px-2 py-1 rounded-md transition-all",
         isClickable && "cursor-pointer",
         // State-based styling
-        state === "completed" && "bg-emerald-50 text-emerald-700",
-        state === "current" && "bg-blue-100 text-blue-800 font-medium ring-1 ring-blue-300",
+        state === "completed" && "bg-success-50 text-success-700",
+        state === "current" && "bg-info-100 text-info-800 font-medium ring-1 ring-info-300",
         state === "pending" && "bg-muted/50 text-muted-foreground"
       )}
       onClick={onClick}
@@ -180,7 +180,7 @@ function PhaseItem({
                   className={cn(
                     "h-3 w-3 mx-0.5",
                     state === "completed"
-                      ? "text-emerald-400"
+                      ? "text-success-400"
                       : "text-muted-foreground/40"
                   )}
                 />
@@ -204,7 +204,7 @@ function PhaseItem({
           className={cn(
             "h-4 w-4 mx-1",
             state === "completed"
-              ? "text-emerald-400"
+              ? "text-success-400"
               : "text-muted-foreground/40"
           )}
         />
@@ -292,8 +292,8 @@ export function MiniBreadcrumb({ currentPhase, className }: MiniBreadcrumbProps)
                   key={phase.id}
                   className={cn(
                     "h-2 w-2 rounded-full transition-all",
-                    state === "completed" && "bg-emerald-500",
-                    state === "current" && "bg-blue-500 ring-1 ring-offset-1 ring-blue-400",
+                    state === "completed" && "bg-success-500",
+                    state === "current" && "bg-info-500 ring-1 ring-offset-1 ring-info-400",
                     state === "pending" && "bg-muted-foreground/30"
                   )}
                 />

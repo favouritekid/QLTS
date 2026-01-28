@@ -23,7 +23,7 @@ export const LEAD_STATUS_OPTIONS: LeadStatusOption[] = [
   {
     value: "new",
     label: "Mới",
-    color: "bg-blue-500",
+    color: "bg-info-500",
     description: "Lead mới chưa được xử lý",
   },
   {
@@ -41,25 +41,25 @@ export const LEAD_STATUS_OPTIONS: LeadStatusOption[] = [
   {
     value: "qualified",
     label: "Đủ điều kiện",
-    color: "bg-emerald-500",
+    color: "bg-success-500",
     description: "Lead đủ điều kiện chuyển đổi",
   },
   {
     value: "unqualified",
     label: "Không đủ điều kiện",
-    color: "bg-gray-500",
+    color: "bg-muted-foreground",
     description: "Lead không đủ điều kiện",
   },
   {
     value: "converted",
     label: "Đã chuyển đổi",
-    color: "bg-green-500",
+    color: "bg-success-500",
     description: "Đã chuyển đổi thành sinh viên",
   },
   {
     value: "rejected",
     label: "Đã từ chối",
-    color: "bg-red-500",
+    color: "bg-error-500",
     description: "Lead bị từ chối",
   },
 ];
@@ -70,7 +70,7 @@ export const getLeadStatusOption = (value: LeadStatus): LeadStatusOption | undef
 
 // Helper to get status color
 export const getLeadStatusColor = (value: LeadStatus): string =>
-  getLeadStatusOption(value)?.color ?? "bg-gray-400";
+  getLeadStatusOption(value)?.color ?? "bg-muted-foreground";
 
 // Helper to get status label
 export const getLeadStatusLabel = (value: LeadStatus): string =>

@@ -128,7 +128,7 @@ export function ScoreSnapshot({ profile }: ScoreSnapshotProps) {
                     <TableCell className="text-right">
                       {score !== null && score !== undefined && subjectStatus !== null ? (
                         isPassing ? (
-                          <Badge className="bg-green-600">Đạt</Badge>
+                          <Badge className="bg-success-600">Đạt</Badge>
                         ) : (
                           <Badge variant="destructive">Liệt</Badge>
                         )
@@ -141,9 +141,9 @@ export function ScoreSnapshot({ profile }: ScoreSnapshotProps) {
               })}
 
               {/* Total Row */}
-              <TableRow className="bg-blue-50 font-bold border-t-2">
+              <TableRow className="bg-info-50 font-bold border-t-2">
                 <TableCell>Tổng điểm</TableCell>
-                <TableCell className="text-right text-xl text-blue-700">
+                <TableCell className="text-right text-xl text-info-700">
                   {totalScore !== null && totalScore !== undefined
                     ? totalScore.toFixed(2)
                     : "N/A"}
@@ -152,7 +152,7 @@ export function ScoreSnapshot({ profile }: ScoreSnapshotProps) {
                   {/* ✅ THIN CLIENT: Use backend-computed status, NOT local calculation */}
                   {totalScore !== null && totalScore !== undefined && scoreStatus?.total_status !== null ? (
                     scoreStatus?.total_status === "passing" ? (
-                      <Badge className="bg-green-600 text-base px-3 py-1">
+                      <Badge className="bg-success-600 text-base px-3 py-1">
                         Đạt chuẩn
                       </Badge>
                     ) : (

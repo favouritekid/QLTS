@@ -100,9 +100,9 @@ const isWeakStudent = (lead: Lead) => {
 const getMethodConfig = (method?: string) => {
   switch (method) {
     case "phone":
-      return { icon: Phone, color: "text-emerald-600", bg: "bg-emerald-100", label: "Gọi điện" };
+      return { icon: Phone, color: "text-success-600", bg: "bg-success-100", label: "Gọi điện" };
     case "email":
-      return { icon: Mail, color: "text-blue-600", bg: "bg-blue-100", label: "Email" };
+      return { icon: Mail, color: "text-info-600", bg: "bg-info-100", label: "Email" };
     case "video_call":
     case "video":
       return { icon: Video, color: "text-purple-600", bg: "bg-purple-100", label: "Video" };
@@ -111,7 +111,7 @@ const getMethodConfig = (method?: string) => {
     case "in_person":
       return { icon: User, color: "text-amber-600", bg: "bg-amber-100", label: "Gặp mặt" };
     default:
-      return { icon: PhoneCall, color: "text-slate-600", bg: "bg-slate-100", label: "Tư vấn" };
+      return { icon: PhoneCall, color: "text-muted-foreground", bg: "bg-muted", label: "Tư vấn" };
   }
 };
 
@@ -119,11 +119,11 @@ const getMethodConfig = (method?: string) => {
 const getOutcomeStyles = (outcomeType?: string | null) => {
   switch (outcomeType) {
     case "positive":
-      return { bg: "bg-emerald-50", border: "border-emerald-200", text: "text-emerald-700" };
+      return { bg: "bg-success-50", border: "border-success-200", text: "text-success-700" };
     case "negative":
-      return { bg: "bg-red-50", border: "border-red-200", text: "text-red-700" };
+      return { bg: "bg-error-50", border: "border-error-200", text: "text-error-700" };
     default:
-      return { bg: "bg-blue-50", border: "border-blue-200", text: "text-blue-700" };
+      return { bg: "bg-info-50", border: "border-info-200", text: "text-info-700" };
   }
 };
 
@@ -141,9 +141,9 @@ function InfoRow({
   const isEmpty = value === null || value === undefined || value === "";
 
   return (
-    <div className={cn("p-2.5 bg-slate-50 rounded-xl", className)}>
-      <div className="text-xs text-slate-400">{label}</div>
-      <div className={cn("text-sm font-medium", isEmpty ? "text-slate-400 italic" : "text-slate-700")}>
+    <div className={cn("p-2.5 bg-muted rounded-xl", className)}>
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className={cn("text-sm font-medium", isEmpty ? "text-muted-foreground italic" : "text-foreground")}>
         {displayValue}
       </div>
     </div>
@@ -162,9 +162,9 @@ export function LeadInfoTabs({
   const recentTimeline = timeline?.slice(0, 5) || [];
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+    <div className="bg-card rounded-2xl border border-border overflow-hidden">
       {/* Tab Headers */}
-      <div className="flex border-b border-slate-200">
+      <div className="flex border-b border-border">
         {tabs.map((tab) => (
           <button
             key={tab.id}
@@ -173,7 +173,7 @@ export function LeadInfoTabs({
               "flex-1 px-4 py-3 text-sm font-medium transition-colors",
               activeTab === tab.id
                 ? "text-indigo-600 bg-indigo-50 border-b-2 border-indigo-600"
-                : "text-slate-500 hover:text-slate-700 hover:bg-slate-50"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted"
             )}
           >
             {tab.label}
@@ -188,51 +188,51 @@ export function LeadInfoTabs({
           <div className="space-y-4">
             {/* Contact Info */}
             <div>
-              <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
                 Liên hệ
               </h3>
               <div className="space-y-2">
-                <div className="flex items-center justify-between p-2.5 bg-slate-50 rounded-xl">
+                <div className="flex items-center justify-between p-2.5 bg-muted rounded-xl">
                   <div className="flex items-center gap-3">
-                    <Phone className="w-4 h-4 text-slate-400" />
+                    <Phone className="w-4 h-4 text-muted-foreground" />
                     <CopyableCell
                       value={lead.phone}
                       label="số điện thoại"
-                      className="text-sm font-medium text-slate-700"
+                      className="text-sm font-medium text-foreground"
                     />
                   </div>
-                  <span className="text-xs text-emerald-600 font-medium">Chính</span>
+                  <span className="text-xs text-success-600 font-medium">Chính</span>
                 </div>
 
                 {lead.phone2 && (
-                  <div className="flex items-center justify-between p-2.5 hover:bg-slate-50 rounded-xl transition-colors">
+                  <div className="flex items-center justify-between p-2.5 hover:bg-muted rounded-xl transition-colors">
                     <div className="flex items-center gap-3">
-                      <Phone className="w-4 h-4 text-slate-400" />
+                      <Phone className="w-4 h-4 text-muted-foreground" />
                       <CopyableCell
                         value={lead.phone2}
                         label="số điện thoại phụ"
-                        className="text-sm text-slate-600"
+                        className="text-sm text-muted-foreground"
                       />
                     </div>
-                    <span className="text-xs text-slate-400">Phụ</span>
+                    <span className="text-xs text-muted-foreground">Phụ</span>
                   </div>
                 )}
 
                 {lead.email && (
-                  <div className="flex items-center gap-3 p-2.5 hover:bg-slate-50 rounded-xl transition-colors">
-                    <Mail className="w-4 h-4 text-slate-400" />
+                  <div className="flex items-center gap-3 p-2.5 hover:bg-muted rounded-xl transition-colors">
+                    <Mail className="w-4 h-4 text-muted-foreground" />
                     <a
                       href={`mailto:${lead.email}`}
-                      className="text-sm text-blue-600 hover:underline truncate"
+                      className="text-sm text-info-600 hover:underline truncate"
                     >
                       {lead.email}
                     </a>
                   </div>
                 )}
 
-                <div className="flex items-center gap-3 p-2.5 hover:bg-slate-50 rounded-xl transition-colors">
-                  <MapPin className="w-4 h-4 text-slate-400" />
-                  <span className={cn("text-sm", lead.location ? "text-slate-600" : "text-slate-400 italic")}>
+                <div className="flex items-center gap-3 p-2.5 hover:bg-muted rounded-xl transition-colors">
+                  <MapPin className="w-4 h-4 text-muted-foreground" />
+                  <span className={cn("text-sm", lead.location ? "text-muted-foreground" : "text-muted-foreground italic")}>
                     {lead.location || "N/A"}
                   </span>
                 </div>
@@ -241,7 +241,7 @@ export function LeadInfoTabs({
 
             {/* Personal Info */}
             <div>
-              <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
                 Thông tin cá nhân
               </h3>
               <div className="grid grid-cols-2 gap-2">
@@ -257,31 +257,31 @@ export function LeadInfoTabs({
 
             {/* Education - Warning for weak student */}
             <div>
-              <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
                 Học vấn
               </h3>
               {isWeakStudent(lead) ? (
-                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl">
+                <div className="p-3 bg-warning-50 border border-warning-200 rounded-xl">
                   <div className="flex items-center gap-2 mb-2">
-                    <AlertCircle className="w-4 h-4 text-amber-500" />
-                    <span className="text-xs font-semibold text-amber-700">Lưu ý khi tư vấn</span>
+                    <AlertCircle className="w-4 h-4 text-warning-500" />
+                    <span className="text-xs font-semibold text-warning-700">Lưu ý khi tư vấn</span>
                   </div>
                   <div className="grid grid-cols-3 gap-2">
                     <div>
-                      <div className="text-xs text-amber-600">Trình độ</div>
-                      <div className="text-sm font-semibold text-amber-800">
+                      <div className="text-xs text-warning-600">Trình độ</div>
+                      <div className="text-sm font-semibold text-warning-800">
                         {getEducationLevelLabel(lead.education_level)}
                       </div>
                     </div>
                     <div>
-                      <div className="text-xs text-amber-600">Học lực</div>
-                      <div className="text-sm font-semibold text-amber-800">
+                      <div className="text-xs text-warning-600">Học lực</div>
+                      <div className="text-sm font-semibold text-warning-800">
                         {getAcademicPerformanceLabel(lead.academic_performance)}
                       </div>
                     </div>
                     <div>
-                      <div className="text-xs text-amber-600">GPA</div>
-                      <div className="text-sm font-semibold text-amber-800">
+                      <div className="text-xs text-warning-600">GPA</div>
+                      <div className="text-sm font-semibold text-warning-800">
                         {lead.gpa ?? "N/A"}
                       </div>
                     </div>
@@ -298,21 +298,21 @@ export function LeadInfoTabs({
 
             {/* Source & Assignment */}
             <div>
-              <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
                 Nguồn & Phân công
               </h3>
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-slate-500">Nguồn</span>
-                  <span className="text-sm font-medium text-slate-700 flex items-center gap-1.5">
+                  <span className="text-sm text-muted-foreground">Nguồn</span>
+                  <span className="text-sm font-medium text-foreground flex items-center gap-1.5">
                     <Globe className="w-3.5 h-3.5" />
                     {getSourceLabel(lead.source)}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-slate-500">Tư vấn viên</span>
+                  <span className="text-sm text-muted-foreground">Tư vấn viên</span>
                   {lead.assigned_officer ? (
-                    <span className="text-sm font-medium text-slate-700">
+                    <span className="text-sm font-medium text-foreground">
                       {lead.assigned_officer.full_name}
                     </span>
                   ) : (
@@ -363,7 +363,7 @@ export function LeadInfoTabs({
                       "p-3 rounded-xl border transition-colors",
                       index === 0
                         ? outcomeStyles.bg + " " + outcomeStyles.border
-                        : "bg-white border-slate-200 hover:bg-slate-50"
+                        : "bg-card border-border hover:bg-muted"
                     )}
                   >
                     {/* Row 1: Icon + Status + Time */}
@@ -383,26 +383,26 @@ export function LeadInfoTabs({
                                 style={{ backgroundColor: statusColor }}
                               />
                             )}
-                            <span className={cn("text-sm font-medium truncate", index === 0 ? outcomeStyles.text : "text-slate-800")}>
+                            <span className={cn("text-sm font-medium truncate", index === 0 ? outcomeStyles.text : "text-foreground")}>
                               {statusName}
                             </span>
                           </div>
                           {/* Actor */}
                           {actorName && (
-                            <div className="text-xs text-slate-500">{actorName}</div>
+                            <div className="text-xs text-muted-foreground">{actorName}</div>
                           )}
                         </div>
                       </div>
 
                       {/* Timestamp */}
                       <div className="text-right flex-shrink-0">
-                        <div className="text-xs font-medium text-slate-600">
+                        <div className="text-xs font-medium text-muted-foreground">
                           {new Date(item.timestamp).toLocaleTimeString("vi-VN", {
                             hour: "2-digit",
                             minute: "2-digit",
                           })}
                         </div>
-                        <div className="text-xs text-slate-400">
+                        <div className="text-xs text-muted-foreground/70">
                           {new Date(item.timestamp).toLocaleDateString("vi-VN", {
                             day: "2-digit",
                             month: "2-digit",
@@ -413,12 +413,12 @@ export function LeadInfoTabs({
 
                     {/* Row 2: Notes (if any, not auto-generated) */}
                     {notes && !notes.startsWith("Ghi nhận:") && !notes.startsWith("Ghi nhận nhanh:") && (
-                      <p className="text-xs text-slate-500 italic pl-9 truncate">"{notes}"</p>
+                      <p className="text-xs text-muted-foreground italic pl-9 truncate">"{notes}"</p>
                     )}
 
                     {/* Row 3: Scheduled follow-up */}
                     {scheduledAt && (
-                      <div className="flex items-center gap-1 text-xs text-blue-600 pl-9 mt-1">
+                      <div className="flex items-center gap-1 text-xs text-info-600 pl-9 mt-1">
                         <Clock className="w-3 h-3" />
                         <span>Hẹn: {new Date(scheduledAt).toLocaleString("vi-VN", {
                           day: "2-digit",
@@ -433,10 +433,10 @@ export function LeadInfoTabs({
               })
             ) : (
               <div className="text-center py-8">
-                <div className="w-12 h-12 bg-slate-100 rounded-2xl flex items-center justify-center mx-auto mb-3">
-                  <Calendar className="w-6 h-6 text-slate-400" />
+                <div className="w-12 h-12 bg-muted rounded-2xl flex items-center justify-center mx-auto mb-3">
+                  <Calendar className="w-6 h-6 text-muted-foreground" />
                 </div>
-                <p className="text-sm text-slate-500">Chưa có lịch sử tư vấn</p>
+                <p className="text-sm text-muted-foreground">Chưa có lịch sử tư vấn</p>
               </div>
             )}
           </div>
@@ -447,24 +447,24 @@ export function LeadInfoTabs({
           <div>
             {lead.admission_profile ? (
               <div className="space-y-4">
-                <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
+                <div className="p-4 bg-success-50 border border-success-200 rounded-xl">
                   <div className="flex items-center gap-2 mb-2">
-                    <FileText className="w-4 h-4 text-emerald-600" />
-                    <span className="text-sm font-semibold text-emerald-800">
+                    <FileText className="w-4 h-4 text-success-600" />
+                    <span className="text-sm font-semibold text-success-800">
                       Hồ sơ tuyển sinh #{lead.admission_profile.id}
                     </span>
                   </div>
                   <div className="grid grid-cols-2 gap-2 text-sm">
                     <div>
-                      <span className="text-emerald-600">Trạng thái:</span>{" "}
-                      <span className="font-medium text-emerald-800">
+                      <span className="text-success-600">Trạng thái:</span>{" "}
+                      <span className="font-medium text-success-800">
                         {lead.admission_profile.status}
                       </span>
                     </div>
                     {lead.admission_profile.student_code && (
                       <div>
-                        <span className="text-emerald-600">Mã SV:</span>{" "}
-                        <span className="font-medium text-emerald-800">
+                        <span className="text-success-600">Mã SV:</span>{" "}
+                        <span className="font-medium text-success-800">
                           {lead.admission_profile.student_code}
                         </span>
                       </div>
@@ -478,10 +478,10 @@ export function LeadInfoTabs({
               </div>
             ) : (
               <div className="text-center py-8">
-                <div className="w-12 h-12 bg-slate-100 rounded-2xl flex items-center justify-center mx-auto mb-3">
-                  <FileText className="w-6 h-6 text-slate-400" />
+                <div className="w-12 h-12 bg-muted rounded-2xl flex items-center justify-center mx-auto mb-3">
+                  <FileText className="w-6 h-6 text-muted-foreground" />
                 </div>
-                <p className="text-sm text-slate-500">Chưa có hồ sơ tuyển sinh</p>
+                <p className="text-sm text-muted-foreground">Chưa có hồ sơ tuyển sinh</p>
                 {lead.offering_id && (
                   <Button
                     variant="link"
@@ -500,8 +500,8 @@ export function LeadInfoTabs({
         {activeTab === "audit" && (
           <div>
             <div className="flex items-center gap-2 mb-4">
-              <History className="w-4 h-4 text-slate-500" />
-              <h3 className="text-sm font-semibold text-slate-600">
+              <History className="w-4 h-4 text-muted-foreground" />
+              <h3 className="text-sm font-semibold text-muted-foreground">
                 Lịch sử thay đổi
               </h3>
             </div>

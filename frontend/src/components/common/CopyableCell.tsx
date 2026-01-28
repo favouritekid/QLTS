@@ -108,7 +108,7 @@ export function CopyableCell({
             {/* Value */}
             <span className={cn(
               "transition-colors",
-              copied && "text-green-600 dark:text-green-400"
+              copied && "text-success-600 dark:text-success-400"
             )}>
               {displayValue ?? value}
             </span>
@@ -122,7 +122,7 @@ export function CopyableCell({
                   : "opacity-0 group-hover:opacity-60"
               )}>
                 {copied ? (
-                  <Check className="h-3 w-3 text-green-600 dark:text-green-400" />
+                  <Check className="h-3 w-3 text-success-600 dark:text-success-400" />
                 ) : (
                   <Copy className="h-3 w-3 text-muted-foreground" />
                 )}

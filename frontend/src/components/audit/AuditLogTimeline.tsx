@@ -54,17 +54,17 @@ const ACTION_CONFIG: Record<
   created: {
     icon: Plus,
     label: "Tạo mới",
-    color: "text-green-600 bg-green-100",
+    color: "text-success-600 bg-success-100",
   },
   updated: {
     icon: Pencil,
     label: "Cập nhật",
-    color: "text-blue-600 bg-blue-100",
+    color: "text-info-600 bg-info-100",
   },
   deleted: {
     icon: Trash2,
     label: "Xóa",
-    color: "text-red-600 bg-red-100",
+    color: "text-error-600 bg-error-100",
   },
   restored: {
     icon: RotateCcw,
@@ -74,7 +74,7 @@ const ACTION_CONFIG: Record<
   status_changed: {
     icon: ArrowRight,
     label: "Đổi trạng thái",
-    color: "text-orange-600 bg-orange-100",
+    color: "text-warning-600 bg-warning-100",
   },
 };
 
@@ -104,7 +104,7 @@ function getActionConfig(action: string) {
     ACTION_CONFIG[action] || {
       icon: Clock,
       label: action,
-      color: "text-gray-600 bg-gray-100",
+      color: "text-muted-foreground bg-muted",
     }
   );
 }
@@ -144,9 +144,9 @@ function ChangeDetail({
       <span className="font-medium text-muted-foreground">
         {formatFieldLabel(field)}:
       </span>
-      <span className="text-red-600 line-through">{formatValue(oldValue)}</span>
+      <span className="text-error-600 line-through">{formatValue(oldValue)}</span>
       <ArrowRight className="h-3 w-3 text-muted-foreground" />
-      <span className="text-green-600">{formatValue(newValue)}</span>
+      <span className="text-success-600">{formatValue(newValue)}</span>
     </div>
   );
 }

@@ -148,7 +148,7 @@ export function SubjectGroupTable() {
         </div>
 
         {isEdit && item && item.subjects && item.subjects.length > 0 && (
-          <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <div className="p-4 bg-info-50 border border-info-200 rounded-lg">
             <Label className="text-sm font-semibold mb-2 block">Các môn trong tổ hợp:</Label>
             <div className="flex flex-wrap gap-2">
               {item.subjects.map((subject) => (

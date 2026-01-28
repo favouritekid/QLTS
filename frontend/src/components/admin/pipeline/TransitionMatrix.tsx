@@ -218,7 +218,7 @@ export function TransitionMatrix() {
                               className={cn(
                                 "flex items-center space-x-3 rounded-md border p-3 transition-all",
                                 isAllowed
-                                  ? "border-green-200 bg-green-50 dark:border-green-900 dark:bg-green-900/20"
+                                  ? "border-success-200 bg-success-50 dark:border-success-900 dark:bg-success-900/20"
                                   : "bg-background hover:bg-accent",
                                 isSelf && "bg-muted cursor-not-allowed opacity-50"
                               )}
@@ -230,7 +230,7 @@ export function TransitionMatrix() {
                                 disabled={isSelf || isMutating}
                                 className={cn(
                                   isAllowed &&
-                                    "data-[state=checked]:border-green-600 data-[state=checked]:bg-green-600"
+                                    "data-[state=checked]:border-success-600 data-[state=checked]:bg-success-600"
                                 )}
                               />
                               <label

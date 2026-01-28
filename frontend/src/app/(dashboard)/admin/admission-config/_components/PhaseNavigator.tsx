@@ -97,7 +97,7 @@ export function PhaseNavigator({
     <div className={cn("w-64 border-r bg-muted/10 p-4 space-y-4", className)}>
       {/* Header */}
       <div className="mb-6">
-        <h2 className="text-lg font-semibold">Cấu hình Tuyển sinh</h2>
+        <h2 className="text-lg font-semibold font-display">Cấu hình Tuyển sinh</h2>
         <p className="text-sm text-muted-foreground">Trình hướng dẫn thiết lập</p>
       </div>
 

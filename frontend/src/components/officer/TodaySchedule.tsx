@@ -175,7 +175,7 @@ function MiniCalendar({
             {day}
             {/* Red dot indicator for days with activities */}
             {day !== null && hasActivity(day) && (
-              <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-red-500 rounded-full" />
+              <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-error-500 rounded-full" />
             )}
           </button>
         ))}

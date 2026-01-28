@@ -53,15 +53,15 @@ interface LeadDetailPanelProps {
 const getAssignmentStatusColor = (status: string) => {
   switch (status) {
     case "pending":
-      return "bg-yellow-100 text-yellow-700 border-yellow-200";
+      return "bg-warning-100 text-warning-700 border-warning-200";
     case "assigned":
-      return "bg-green-100 text-green-700 border-green-200";
+      return "bg-success-100 text-success-700 border-success-200";
     case "failed":
-      return "bg-red-100 text-red-700 border-red-200";
+      return "bg-error-100 text-error-700 border-error-200";
     case "reassign_pending":
       return "bg-orange-100 text-orange-700 border-orange-200";
     default:
-      return "bg-gray-100 text-gray-700 border-gray-200";
+      return "bg-muted text-muted-foreground border-border";
   }
 };
 
@@ -82,9 +82,9 @@ const getAssignmentStatusLabel = (status: string) => {
 
 // ✅ TECHNICAL DEBT FIX: Score display color helper
 const getScoreColor = (score: number) => {
-  if (score >= 80) return "text-red-600 bg-red-50 border-red-200";
-  if (score >= 50) return "text-yellow-600 bg-yellow-50 border-yellow-200";
-  return "text-gray-600 bg-gray-50 border-gray-200";
+  if (score >= 80) return "text-error-600 bg-error-50 border-error-200";
+  if (score >= 50) return "text-warning-600 bg-warning-50 border-warning-200";
+  return "text-muted-foreground bg-muted border-border";
 };
 
 const getInitials = (name: string) => {
@@ -181,7 +181,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
             </AvatarFallback>
           </Avatar>
           <div className="min-w-0 flex-1 space-y-1">
-            <h2 className="truncate text-lg font-semibold">{lead.full_name}</h2>
+            <h2 className="truncate text-lg font-semibold font-display">{lead.full_name}</h2>
             <div className="flex flex-wrap items-center gap-1.5">
               {/* Pipeline Stage Badge */}
               {lead.pipeline_stage &&
@@ -334,7 +334,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-6 px-2 text-[10px] text-blue-600 hover:bg-blue-50"
+                    className="h-6 px-2 text-[10px] text-info-600 hover:bg-info-50"
                     onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
                   >
                     <Phone className="h-3 w-3 mr-1" />
@@ -343,7 +343,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-6 px-2 text-[10px] text-blue-600 hover:bg-blue-50"
+                    className="h-6 px-2 text-[10px] text-info-600 hover:bg-info-50"
                     onClick={() => window.open(`https://zalo.me/${lead.phone?.replace(/\D/g, '')}`, "_blank")}
                   >
                     <span className="font-bold mr-1">Z</span>
@@ -353,7 +353,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-6 px-2 text-[10px] text-blue-600 hover:bg-blue-50"
+                      className="h-6 px-2 text-[10px] text-info-600 hover:bg-info-50"
                       onClick={() => window.open(`mailto:${lead.email}`, "_blank")}
                     >
                       <Mail className="h-3 w-3 mr-1" />
@@ -375,7 +375,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                     <div 
                       className={cn(
                         "h-full rounded-full transition-all duration-500",
-                        lead.lead_score >= 70 ? "bg-emerald-500" : lead.lead_score >= 40 ? "bg-blue-500" : "bg-slate-400"
+                        lead.lead_score >= 70 ? "bg-success-500" : lead.lead_score >= 40 ? "bg-info-500" : "bg-muted-foreground/50"
                       )}
                       style={{ width: `${Math.min(lead.lead_score, 100)}%` }}
                     />
@@ -384,7 +384,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                 <div className="space-y-1">
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-muted-foreground">Độ khẩn cấp</span>
-                    <span className={cn("font-bold", lead.cached_urgency_score >= 70 && "text-red-600")}>
+                    <span className={cn("font-bold", lead.cached_urgency_score >= 70 && "text-error-600")}>
                       {lead.cached_urgency_score}%
                     </span>
                   </div>
@@ -392,7 +392,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                     <div 
                       className={cn(
                         "h-full rounded-full transition-all duration-500",
-                        lead.cached_urgency_score >= 70 ? "bg-red-500" : lead.cached_urgency_score >= 40 ? "bg-amber-400" : "bg-green-500"
+                        lead.cached_urgency_score >= 70 ? "bg-error-500" : lead.cached_urgency_score >= 40 ? "bg-warning-400" : "bg-success-500"
                       )}
                       style={{ width: `${Math.min(lead.cached_urgency_score, 100)}%` }}
                     />
@@ -525,7 +525,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
           {/* ================================================== */}
           {/* SECTION 2: Ghi nhận tư vấn (Keep as-is) */}
           {/* ================================================== */}
-          <Card className="border-slate-200 bg-slate-50">
+          <Card className="border-border bg-muted/50">
             <CardHeader className="px-4 py-3">
               <CardTitle className="flex items-center gap-2 text-sm font-medium">
                 <Zap className="h-4 w-4 text-amber-500" />

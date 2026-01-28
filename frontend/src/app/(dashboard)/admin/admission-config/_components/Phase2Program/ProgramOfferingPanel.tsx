@@ -266,7 +266,7 @@ export function ProgramOfferingPanel() {
           </div>
         </div>
 
-        <div className="border rounded-lg p-4 bg-slate-50 space-y-4">
+        <div className="border rounded-lg p-4 bg-muted space-y-4">
           <h3 className="font-medium flex items-center gap-2">
             Cấu hình Xét tuyển (Scoring Rules)
           </h3>
@@ -369,7 +369,7 @@ export function ProgramOfferingPanel() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Chương trình Tuyển sinh</h1>
+        <h1 className="text-3xl font-bold font-display">Chương trình Tuyển sinh</h1>
         <p className="text-muted-foreground mt-2">
           Quản lý các chương trình tuyển sinh (kết hợp giữa ngành và hệ đào tạo)
         </p>
@@ -377,11 +377,11 @@ export function ProgramOfferingPanel() {
 
       {/* Warning if dependencies are missing */}
       {(majors.length === 0 || offeringTypes.length === 0) && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-          <p className="text-sm text-yellow-800 font-medium">
+        <div className="bg-warning-50 border border-warning-200 rounded-lg p-4">
+          <p className="text-sm text-warning-800 font-medium">
             Yêu cầu dữ liệu
           </p>
-          <p className="text-sm text-yellow-700 mt-1">
+          <p className="text-sm text-warning-700 mt-1">
             {majors.length === 0 && "Chưa có Ngành đào tạo. Vui lòng tạo Ngành trước tại Bước 2.1."}
             {majors.length === 0 && offeringTypes.length === 0 && " Đồng thời, "}
             {offeringTypes.length === 0 && "Chưa có Hệ đào tạo. Vui lòng tạo Hệ đào tạo trước tại Bước 1.2."}

@@ -65,15 +65,15 @@ function getTypeIcon(type: string) {
 function getTypeColor(type: string) {
   switch (type) {
     case "Khoa":
-      return "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200";
+      return "bg-info-100 text-info-800 dark:bg-info-900 dark:text-info-200";
     case "Bộ môn":
-      return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
+      return "bg-success-100 text-success-800 dark:bg-success-900 dark:text-success-200";
     case "Phòng ban":
       return "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200";
     case "Trung tâm":
       return "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200";
     default:
-      return "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200";
+      return "bg-muted text-muted-foreground";
   }
 }
 
@@ -393,13 +393,13 @@ export function OrganizationTreeView({
               </div>
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">Học phí thấp nhất</div>
-                <div className="text-sm font-semibold text-green-600">
+                <div className="text-sm font-semibold text-success-600">
                   {formatCurrency(overallStats.minTuition)}
                 </div>
               </div>
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">Học phí cao nhất</div>
-                <div className="text-sm font-semibold text-red-600">
+                <div className="text-sm font-semibold text-error-600">
                   {formatCurrency(overallStats.maxTuition)}
                 </div>
               </div>

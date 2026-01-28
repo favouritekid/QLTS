@@ -113,7 +113,7 @@ export function BulkActionsBar({
           variant="ghost"
           size="sm"
           onClick={() => onBulkDelete(selectedLeads)}
-          className="h-8 gap-1.5 text-red-600 hover:text-red-700"
+          className="h-8 gap-1.5 text-error-600 hover:text-error-700"
         >
           <Trash2 className="h-4 w-4" />
           Xóa

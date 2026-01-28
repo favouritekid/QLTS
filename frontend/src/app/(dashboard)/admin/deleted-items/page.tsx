@@ -8,7 +8,7 @@ export default function DeletedItemsPage() {
     <div className="space-y-6">
       {/* Header */}
       <header>
-        <h1 className="text-3xl font-bold tracking-tight">Mục đã xóa</h1>
+        <h1 className="text-3xl font-bold font-display tracking-tight">Mục đã xóa</h1>
         <p className="text-muted-foreground">
           Xem và khôi phục các mục đã bị xóa (soft delete).
         </p>

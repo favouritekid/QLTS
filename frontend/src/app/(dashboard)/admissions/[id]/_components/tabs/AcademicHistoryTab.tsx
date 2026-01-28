@@ -37,9 +37,9 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
 
   return (
     <div className="space-y-8">
-        <Card className="shadow-sm border-gray-200">
+        <Card className="shadow-sm border-border">
             <CardHeader className="pb-2">
-                <CardTitle className="text-lg font-semibold flex items-center gap-2 text-gray-700">
+                <CardTitle className="text-lg font-semibold flex items-center gap-2 text-foreground">
                 <GraduationCap className="h-5 w-5" />
                 Lịch sử học tập
                 </CardTitle>
@@ -52,9 +52,9 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                 {/* LIST */}
                 <div className="space-y-4">
                     {fields.map((field, index) => (
-                    <div key={field.id} className="p-4 border rounded-lg bg-gray-50/50 relative group transition-colors hover:bg-white hover:border-blue-200 hover:shadow-sm">
+                    <div key={field.id} className="p-4 border rounded-lg bg-muted/50 relative group transition-colors hover:bg-card hover:border-info-200 hover:shadow-sm">
                         <div className="flex items-center justify-between mb-4">
-                            <span className="text-sm font-medium text-gray-600 uppercase tracking-wide">Trường #{index + 1}</span>
+                            <span className="text-sm font-medium text-muted-foreground uppercase tracking-wide">Trường #{index + 1}</span>
                             {isEditable && (
                                 <Button
                                 type="button"
@@ -197,7 +197,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
 
                 {/* EMPTY STATE */}
                 {fields.length === 0 && (
-                     <div className="text-center py-8 text-muted-foreground bg-gray-50/50 rounded-lg border border-dashed border-gray-200">
+                     <div className="text-center py-8 text-muted-foreground bg-muted/50 rounded-lg border border-dashed border-border">
                         <p>— Chưa có lịch sử học tập —</p>
                     </div>
                 )}

@@ -109,7 +109,7 @@ export function AdmissionReadinessChecklist({
             <div
               className={cn(
                 "h-full transition-all duration-300",
-                progressPercent === 100 ? "bg-green-500" : "bg-blue-500"
+                progressPercent === 100 ? "bg-success-500" : "bg-info-500"
               )}
               style={{ width: `${progressPercent}%` }}
             />
@@ -130,8 +130,8 @@ export function AdmissionReadinessChecklist({
             {/* Status icon */}
             <div className="mt-0.5 shrink-0">
               {item.completed ? (
-                <div className="h-4 w-4 rounded-full bg-green-100 flex items-center justify-center">
-                  <Check className="h-2.5 w-2.5 text-green-600" />
+                <div className="h-4 w-4 rounded-full bg-success-100 flex items-center justify-center">
+                  <Check className="h-2.5 w-2.5 text-success-600" />
                 </div>
               ) : (
                 <Circle className="h-4 w-4 text-muted-foreground/50" />

@@ -141,19 +141,19 @@ export function TemplateList({ initialData }: TemplateListProps) {
   const getCategoryColor = (cat: string | null) => {
     switch (cat) {
       case "lead":
-        return "bg-blue-100 text-blue-800";
+        return "bg-info-100 text-info-800";
       case "consultation":
         return "bg-purple-100 text-purple-800";
       case "application":
-        return "bg-green-100 text-green-800";
+        return "bg-success-100 text-success-800";
       case "finance":
-        return "bg-yellow-100 text-yellow-800";
+        return "bg-warning-100 text-warning-800";
       case "dorm":
         return "bg-orange-100 text-orange-800";
       case "system":
-        return "bg-gray-100 text-gray-800";
+        return "bg-muted text-muted-foreground";
       default:
-        return "bg-slate-100 text-slate-800";
+        return "bg-muted text-muted-foreground";
     }
   };
 
@@ -162,7 +162,7 @@ export function TemplateList({ initialData }: TemplateListProps) {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+          <h1 className="text-3xl font-bold font-display tracking-tight flex items-center gap-2">
             <FileText className="h-8 w-8" />
             Notification Templates
           </h1>

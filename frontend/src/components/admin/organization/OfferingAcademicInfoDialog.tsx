@@ -250,7 +250,7 @@ export function OfferingAcademicInfoDialog({
           <DialogDescription>
             Loại hình: <strong>{offering.offering_type}</strong>
             {isPastYear && isEditMode && (
-              <span className="mt-1 block font-medium text-yellow-600">
+              <span className="mt-1 block font-medium text-warning-600">
                 ⚠️ Đây là dữ liệu lịch sử (năm {academicInfo?.academic_year}). Chỉ có thể cập nhật
                 thông tin mô tả, không thể sửa dữ liệu tài chính.
               </span>
@@ -267,7 +267,7 @@ export function OfferingAcademicInfoDialog({
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>
-                    Năm học <span className="text-red-500">*</span>
+                    Năm học <span className="text-error-500">*</span>
                   </FormLabel>
                   <FormControl>
                     <Input

@@ -705,13 +705,13 @@ export function validatePhoneNumber(phone: string): boolean {
  * @see ADMISSION_ARCHITECTURE_VIOLATION_REPORT.md Violation #5
  */
 const STATUS_COLORS: Record<string, string> = {
-  draft: "bg-gray-100 text-gray-800",
-  submitted: "bg-yellow-100 text-yellow-800",
-  resubmitted: "bg-amber-100 text-amber-800",
-  approved: "bg-green-100 text-green-800",
-  rejected: "bg-red-100 text-red-800",
-  confirmed: "bg-emerald-100 text-emerald-800",
-  enrolled: "bg-blue-100 text-blue-800",
+  draft: "bg-muted text-muted-foreground",
+  submitted: "bg-warning-100 text-warning-800",
+  resubmitted: "bg-warning-100 text-warning-800",
+  approved: "bg-success-100 text-success-800",
+  rejected: "bg-error-100 text-error-800",
+  confirmed: "bg-success-100 text-success-800",
+  enrolled: "bg-info-100 text-info-800",
   overridden: "bg-purple-100 text-purple-800",
 }
 
@@ -720,7 +720,7 @@ const STATUS_COLORS: Record<string, string> = {
  * Phase 3 Fix: Accepts any string status with fallback for unknown values
  */
 export function getStatusColor(status: string): string {
-  return STATUS_COLORS[status] ?? "bg-gray-100 text-gray-800"
+  return STATUS_COLORS[status] ?? "bg-muted text-muted-foreground"
 }
 
 /**

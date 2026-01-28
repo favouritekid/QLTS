@@ -163,7 +163,7 @@ export function PermissionSimulatorTab() {
           <Alert variant={result.is_allowed ? "default" : "destructive"}>
             <div className="flex items-center gap-2">
               {result.is_allowed ? (
-                <CheckCircle2 className="h-5 w-5 text-green-600" />
+                <CheckCircle2 className="h-5 w-5 text-success-600" />
               ) : (
                 <XCircle className="h-5 w-5" />
               )}

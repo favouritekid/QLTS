@@ -97,17 +97,17 @@ const getOutcomeColorClasses = (
 ): string => {
   if (isCurrentStatus) {
     // Current status always highlighted with ring
-    return "border-2 border-blue-500 bg-blue-100 font-medium text-blue-800 hover:bg-blue-150";
+    return "border-2 border-info-500 bg-info-100 font-medium text-info-700 hover:bg-info-100/80";
   }
 
   switch (outcomeType) {
     case "positive":
-      return "border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100";
+      return "border border-success-200 bg-success-50 text-success-700 hover:bg-success-100";
     case "negative":
-      return "border border-red-200 bg-red-50 text-red-600 hover:bg-red-100";
+      return "border border-error-200 bg-error-50 text-error-600 hover:bg-error-100";
     case "neutral":
     default:
-      return "border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100";
+      return "border border-info-200 bg-info-50 text-info-700 hover:bg-info-100";
   }
 };
 
@@ -493,7 +493,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
   // Error state
   if (isError) {
     return (
-      <div className="rounded-md bg-red-50 p-4 text-sm text-red-600">
+      <div className="rounded-md bg-error-50 p-4 text-sm text-error-600">
         <p className="font-medium">Không thể tải trạng thái</p>
         <p className="mt-1 text-xs">{error?.message || "Lỗi không xác định"}</p>
       </div>
@@ -640,9 +640,9 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
 
         {/* Enhanced Schedule Preview */}
         {scheduleOption !== "none" && (
-          <div className="flex items-center gap-2 rounded-md border border-blue-100 bg-blue-50 px-3 py-2">
-            <CalendarClock className="h-4 w-4 flex-shrink-0 text-blue-600" />
-            <span className="text-sm font-medium text-blue-700">
+          <div className="flex items-center gap-2 rounded-md border border-info-100 bg-info-50 px-3 py-2">
+            <CalendarClock className="h-4 w-4 flex-shrink-0 text-info-600" />
+            <span className="text-sm font-medium text-info-700">
               {getSchedulePreviewText(scheduleOption, customDateTime)}
             </span>
           </div>
@@ -659,7 +659,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
               <span className="font-medium">Trạng thái liên hệ</span>
               <Badge
                 variant="secondary"
-                className="ml-1 h-4 bg-amber-100 px-1.5 text-[10px] text-amber-700"
+                className="ml-1 h-4 bg-warning-100 px-1.5 text-[10px] text-warning-700"
               >
                 không đổi trạng thái
               </Badge>
@@ -676,10 +676,10 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                   size="sm"
                   className={cn(
                     "h-7 flex-shrink-0 px-2.5 text-xs",
-                    "border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100",
+                    "border border-warning-200 bg-warning-50 text-warning-700 hover:bg-warning-100",
                     "transition-all hover:scale-[1.02]",
                     // Pending highlight
-                    pendingStatus?.id === status.id && "ring-2 ring-blue-500 ring-offset-1 scale-105"
+                    pendingStatus?.id === status.id && "ring-2 ring-info-500 ring-offset-1 scale-105"
                   )}
                   onClick={() => {
                     if (universalHasDraggedRef.current) {
@@ -746,7 +746,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                             "opacity-80", // Slightly dimmed to indicate it's a revert
                             "transition-all hover:scale-[1.02]",
                             // Pending highlight
-                            pendingStatus?.id === status.id && "ring-2 ring-blue-500 ring-offset-1 scale-105 opacity-100"
+                            pendingStatus?.id === status.id && "ring-2 ring-info-500 ring-offset-1 scale-105 opacity-100"
                           )}
                           onClick={() => {
                             if (resultHasDraggedRef.current) {
@@ -789,7 +789,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                               getOutcomeColorClasses(status.outcome_type, isCurrentStatus),
                               "transition-all hover:scale-[1.02]",
                               // Pending highlight
-                              pendingStatus?.id === status.id && "ring-2 ring-blue-500 ring-offset-1 scale-105"
+                              pendingStatus?.id === status.id && "ring-2 ring-info-500 ring-offset-1 scale-105"
                             )}
                             onClick={() => {
                               if (resultHasDraggedRef.current) {
@@ -834,7 +834,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                             getOutcomeColorClasses(status.outcome_type),
                             "transition-all hover:scale-[1.02]",
                             // Pending highlight
-                            pendingStatus?.id === status.id && "ring-2 ring-blue-500 ring-offset-1 scale-105"
+                            pendingStatus?.id === status.id && "ring-2 ring-info-500 ring-offset-1 scale-105"
                           )}
                           onClick={() => {
                             if (resultHasDraggedRef.current) {
@@ -891,23 +891,23 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
 
               {/* ✅ INLINE DELAYED COMMIT CONFIRMATION BAR */}
               {pendingStatus && (
-                <div className="mt-3 overflow-hidden rounded-lg border border-blue-200 bg-blue-50">
+                <div className="mt-3 overflow-hidden rounded-lg border border-info-200 bg-info-50">
                   {/* Progress bar (shrinks from right to left) */}
-                  <div 
-                    className="h-1 bg-blue-500 transition-all duration-1000 ease-linear"
+                  <div
+                    className="h-1 bg-info-500 transition-all duration-1000 ease-linear"
                     style={{ width: `${(countdown / 3) * 100}%` }}
                   />
-                  
+
                   {/* Content */}
                   <div className="flex items-center justify-between gap-2 px-3 py-2">
                     {/* Left: Status info */}
                     <div className="flex items-center gap-2 min-w-0">
-                      <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-blue-600" />
-                      <span className="text-sm text-blue-700 truncate">
+                      <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-info-600" />
+                      <span className="text-sm text-info-700 truncate">
                         Sẽ lưu: <strong>{pendingStatus.name}</strong>
                       </span>
                     </div>
-                    
+
                     {/* Right: Actions + Timer */}
                     <div className="flex items-center gap-2 flex-shrink-0">
                       {/* Undo button */}
@@ -915,18 +915,18 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                         type="button"
                         variant="ghost"
                         size="sm"
-                        className="h-7 px-2 text-xs text-gray-600 hover:text-gray-800 hover:bg-gray-100"
+                        className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted"
                         onClick={cancelPending}
                       >
                         Hoàn tác
                       </Button>
-                      
+
                       {/* Save now button with keyboard hint */}
                       <Button
                         type="button"
                         variant="default"
                         size="sm"
-                        className="h-7 px-3 text-xs bg-blue-600 hover:bg-blue-700"
+                        className="h-7 px-3 text-xs bg-info-600 hover:bg-info-700"
                         onClick={() => commitSave(pendingStatus)}
                         disabled={addConsultation.isPending}
                         title="Ctrl+Enter để lưu nhanh"
@@ -936,15 +936,15 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                         ) : (
                           <>
                             Lưu ngay
-                            <kbd className="ml-1.5 hidden sm:inline-flex items-center px-1 py-0.5 text-[9px] font-mono bg-blue-700 rounded">
+                            <kbd className="ml-1.5 hidden sm:inline-flex items-center px-1 py-0.5 text-[9px] font-mono bg-info-700 rounded">
                               ⌘↵
                             </kbd>
                           </>
                         )}
                       </Button>
-                      
+
                       {/* Countdown timer */}
-                      <span className="text-xs font-medium text-blue-600 w-4 text-center">
+                      <span className="text-xs font-medium text-info-600 w-4 text-center">
                         {countdown}s
                       </span>
                     </div>

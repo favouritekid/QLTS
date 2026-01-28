@@ -41,23 +41,23 @@ const priorityConfig: Record<
   { color: string; bgColor: string; label: string }
 > = {
   critical: {
-    color: "text-red-600 dark:text-red-400",
-    bgColor: "bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-900",
+    color: "text-error-600 dark:text-error-400",
+    bgColor: "bg-error-50 dark:bg-error-950/30 border-error-200 dark:border-error-900",
     label: "Khẩn cấp",
   },
   high: {
-    color: "text-amber-600 dark:text-amber-400",
-    bgColor: "bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900",
+    color: "text-warning-600 dark:text-warning-400",
+    bgColor: "bg-warning-50 dark:bg-warning-950/30 border-warning-200 dark:border-warning-900",
     label: "Cao",
   },
   medium: {
-    color: "text-blue-600 dark:text-blue-400",
-    bgColor: "bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-900",
+    color: "text-info-600 dark:text-info-400",
+    bgColor: "bg-info-50 dark:bg-info-950/30 border-info-200 dark:border-info-900",
     label: "Trung bình",
   },
   low: {
-    color: "text-green-600 dark:text-green-400",
-    bgColor: "bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-900",
+    color: "text-success-600 dark:text-success-400",
+    bgColor: "bg-success-50 dark:bg-success-950/30 border-success-200 dark:border-success-900",
     label: "Thấp",
   },
 };
@@ -136,8 +136,8 @@ export function RecommendationsPanel({ limit = 5, className }: RecommendationsPa
           </div>
         ) : recommendations.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-8 text-center">
-            <div className="h-12 w-12 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center mb-3">
-              <PartyPopper className="h-6 w-6 text-green-600 dark:text-green-400" />
+            <div className="h-12 w-12 rounded-full bg-success-100 dark:bg-success-900/30 flex items-center justify-center mb-3">
+              <PartyPopper className="h-6 w-6 text-success-600 dark:text-success-400" />
             </div>
             <p className="text-sm font-medium">Tuyệt vời!</p>
             <p className="text-xs text-muted-foreground mt-1">
@@ -177,10 +177,10 @@ function RecommendationCard({ recommendation }: { recommendation: Recommendation
         <div
           className={cn(
             "h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0",
-            recommendation.priority === "critical" && "bg-red-100 dark:bg-red-900/50",
-            recommendation.priority === "high" && "bg-amber-100 dark:bg-amber-900/50",
-            recommendation.priority === "medium" && "bg-blue-100 dark:bg-blue-900/50",
-            recommendation.priority === "low" && "bg-green-100 dark:bg-green-900/50"
+            recommendation.priority === "critical" && "bg-error-100 dark:bg-error-900/50",
+            recommendation.priority === "high" && "bg-warning-100 dark:bg-warning-900/50",
+            recommendation.priority === "medium" && "bg-info-100 dark:bg-info-900/50",
+            recommendation.priority === "low" && "bg-success-100 dark:bg-success-900/50"
           )}
         >
           <Icon className={cn("h-4 w-4", config.color)} />

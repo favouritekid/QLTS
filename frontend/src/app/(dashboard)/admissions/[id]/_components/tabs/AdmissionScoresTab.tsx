@@ -120,11 +120,11 @@ export function AdmissionScoresTab({ form, isEditable, appliedRules }: Admission
     return (
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg flex items-center gap-2 text-red-600">
+          <CardTitle className="text-lg flex items-center gap-2 text-error-600">
             <AlertCircle className="h-5 w-5" />
             Lỗi cấu hình
           </CardTitle>
-          <CardDescription className="text-red-700">
+          <CardDescription className="text-error-700">
             Hồ sơ này chưa có thông tin cấu hình xét tuyển (Applied Rules is null). 
             Vui lòng kiểm tra lại cấu hình đợt tuyển sinh.
           </CardDescription>
@@ -138,11 +138,11 @@ export function AdmissionScoresTab({ form, isEditable, appliedRules }: Admission
     return (
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg flex items-center gap-2 text-yellow-600">
+          <CardTitle className="text-lg flex items-center gap-2 text-warning-600">
             <AlertCircle className="h-5 w-5" />
             Thiếu cấu hình tổ hợp môn
           </CardTitle>
-          <CardDescription className="text-yellow-700">
+          <CardDescription className="text-warning-700">
             Phương thức <strong>{admissionMethod}</strong> chưa được cấu hình tổ hợp môn xét tuyển.
             Vui lòng liên hệ quản trị viên để cập nhật.
           </CardDescription>
@@ -189,41 +189,41 @@ export function AdmissionScoresTab({ form, isEditable, appliedRules }: Admission
       </CardHeader>
       <CardContent className="space-y-6">
         {/* ✅ NEW: Display Scoring Configuration */}
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-2">
-          <div className="flex items-center gap-2 text-sm font-medium text-blue-900">
+        <div className="bg-info-50 border border-info-200 rounded-lg p-4 space-y-2">
+          <div className="flex items-center gap-2 text-sm font-medium text-info-900">
             <Info className="h-4 w-4" />
             Thông tin cấu hình
           </div>
           <div className="grid grid-cols-2 gap-4 text-sm">
             {minGpa && (
               <div>
-                <span className="text-gray-600">Điểm GPA tối thiểu:</span>{" "}
-                <strong className="text-gray-900">{minGpa}</strong>
+                <span className="text-muted-foreground">Điểm GPA tối thiểu:</span>{" "}
+                <strong className="text-foreground">{minGpa}</strong>
               </div>
             )}
             {minScore && (
               <div>
-                <span className="text-gray-600">Điểm sàn:</span>{" "}
-                <strong className="text-gray-900">{minScore}</strong>
+                <span className="text-muted-foreground">Điểm sàn:</span>{" "}
+                <strong className="text-foreground">{minScore}</strong>
               </div>
             )}
             {minSubjectScore && (
               <div>
-                <span className="text-gray-600">Điểm liệt (tối thiểu/môn):</span>{" "}
-                <strong className="text-red-600">{minSubjectScore}</strong>
+                <span className="text-muted-foreground">Điểm liệt (tối thiểu/môn):</span>{" "}
+                <strong className="text-error-600">{minSubjectScore}</strong>
               </div>
             )}
             <div>
-              <span className="text-gray-600">Phương pháp tính điểm:</span>{" "}
-              <strong className="text-gray-900">
+              <span className="text-muted-foreground">Phương pháp tính điểm:</span>{" "}
+              <strong className="text-foreground">
                 {scoringMethod === 'sum' && 'Tổng điểm'}
                 {scoringMethod === 'average' && 'Trung bình'}
                 {scoringMethod === 'weighted' && 'Trọng số'}
               </strong>
             </div>
             <div>
-              <span className="text-gray-600">Chế độ chọn môn:</span>{" "}
-              <strong className="text-gray-900">
+              <span className="text-muted-foreground">Chế độ chọn môn:</span>{" "}
+              <strong className="text-foreground">
                 {subjectSelectionMode === 'fixed' && 'Cố định'}
                 {subjectSelectionMode === 'best_n' && `${requiredSubjectCount} môn cao nhất`}
                 {subjectSelectionMode === 'any_n' && `Bất kỳ ${requiredSubjectCount} môn`}
@@ -231,8 +231,8 @@ export function AdmissionScoresTab({ form, isEditable, appliedRules }: Admission
             </div>
             {maxPossibleScore && (
               <div>
-                <span className="text-gray-600">Điểm tối đa:</span>{" "}
-                <strong className="text-gray-900">{maxPossibleScore}</strong>
+                <span className="text-muted-foreground">Điểm tối đa:</span>{" "}
+                <strong className="text-foreground">{maxPossibleScore}</strong>
               </div>
             )}
           </div>
@@ -279,7 +279,7 @@ export function AdmissionScoresTab({ form, isEditable, appliedRules }: Admission
               <FormItem>
                 <FormLabel className="flex items-center gap-2">
                   <BookOpen className="h-4 w-4" />
-                  Tổ hợp môn xét tuyển <span className="text-red-500">*</span>
+                  Tổ hợp môn xét tuyển <span className="text-error-500">*</span>
                 </FormLabel>
                 <Select
                   value={field.value || ""}
@@ -354,9 +354,9 @@ export function AdmissionScoresTab({ form, isEditable, appliedRules }: Admission
 
             {minScore && (
               <div className={`p-3 rounded-lg flex items-start gap-2 ${
-                totalScore >= minScore 
-                  ? 'bg-green-50 text-green-800 dark:bg-green-950 dark:text-green-200' 
-                  : 'bg-red-50 text-red-800 dark:bg-red-950 dark:text-red-200'
+                totalScore >= minScore
+                  ? 'bg-success-50 text-success-800 dark:bg-success-950 dark:text-success-200'
+                  : 'bg-error-50 text-error-800 dark:bg-error-950 dark:text-error-200'
               }`}>
                 <AlertCircle className="h-5 w-5 mt-0.5 shrink-0" />
                 <div className="text-sm">

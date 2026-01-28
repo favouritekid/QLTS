@@ -55,7 +55,7 @@ export default function GlobalError({
         <AlertCircle className="h-16 w-16 text-destructive mx-auto" />
 
         <div className="space-y-2">
-          <h1 className="text-2xl font-bold">Something went wrong!</h1>
+          <h1 className="text-2xl font-bold font-display">Something went wrong!</h1>
           <p className="text-muted-foreground">
             {error.message || 'An unexpected error occurred'}
           </p>

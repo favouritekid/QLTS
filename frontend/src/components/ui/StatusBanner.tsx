@@ -73,9 +73,9 @@ export function StatusBanner({
       variant={config.bannerType === 'error' ? 'destructive' : 'default'}
       className={cn(
         "mb-6",
-        config.bannerType === 'success' && "border-green-200 bg-green-50 text-green-800",
-        config.bannerType === 'info' && "border-blue-200 bg-blue-50 text-blue-800",
-        config.bannerType === 'warning' && "border-yellow-200 bg-yellow-50 text-yellow-800",
+        config.bannerType === 'success' && "border-success-200 bg-success-50 text-success-800",
+        config.bannerType === 'info' && "border-info-200 bg-info-50 text-info-800",
+        config.bannerType === 'warning' && "border-warning-200 bg-warning-50 text-warning-800",
         className
       )}
     >
@@ -105,15 +105,15 @@ export function AdmissionPendingBanner({ status, className }: AdmissionPendingBa
   if (!isPending) return null
   
   return (
-    <Alert 
+    <Alert
       className={cn(
-        "mb-6 border-yellow-200 bg-yellow-50",
+        "mb-6 border-warning-200 bg-warning-50",
         className
       )}
     >
-      <Clock className="h-4 w-4 text-yellow-600" />
-      <AlertTitle className="text-yellow-800">Đang chờ duyệt</AlertTitle>
-      <AlertDescription className="text-yellow-700">
+      <Clock className="h-4 w-4 text-warning-600" />
+      <AlertTitle className="text-warning-800">Đang chờ duyệt</AlertTitle>
+      <AlertDescription className="text-warning-700">
         Hồ sơ của bạn đã được nộp và đang chờ phê duyệt từ bộ phận tuyển sinh.
         Bạn sẽ nhận được thông báo khi có kết quả.
       </AlertDescription>
@@ -140,7 +140,7 @@ interface ErrorSectionProps {
   title: string
   icon: React.ComponentType<{ className?: string }>
   errors: string[]
-  color?: "red" | "yellow" | "blue"
+  color?: "error" | "warning" | "info"
   expandedSections: Set<string>
   toggleSection: (section: string) => void
 }
@@ -150,7 +150,7 @@ function ErrorSection({
   title,
   icon: Icon,
   errors: sectionErrors,
-  color = "red",
+  color = "error",
   expandedSections,
   toggleSection
 }: ErrorSectionProps) {
@@ -158,13 +158,13 @@ function ErrorSection({
 
   const isExpanded = expandedSections.has(id)
   const colorClasses = {
-    red: "text-red-700 bg-red-50 hover:bg-red-100",
-    yellow: "text-yellow-700 bg-yellow-50 hover:bg-yellow-100",
-    blue: "text-blue-700 bg-blue-50 hover:bg-blue-100"
+    error: "text-error-700 bg-error-50 hover:bg-error-100",
+    warning: "text-warning-700 bg-warning-50 hover:bg-warning-100",
+    info: "text-info-700 bg-info-50 hover:bg-info-100"
   }
 
   return (
-    <div className="border-l-4 border-red-400 pl-3 py-2">
+    <div className="border-l-4 border-error-400 pl-3 py-2">
       <button
         onClick={() => toggleSection(id)}
         className={cn(
@@ -187,7 +187,7 @@ function ErrorSection({
       {isExpanded && (
         <ul className="list-disc pl-9 mt-2 space-y-1 text-sm">
           {sectionErrors.map((err, i) => (
-            <li key={i} className="text-gray-700">{err}</li>
+            <li key={i} className="text-muted-foreground">{err}</li>
           ))}
         </ul>
       )}
@@ -261,7 +261,7 @@ export function ValidationErrorsBanner({ errors, className }: ValidationErrorsBa
   return (
     <Alert
       variant="destructive"
-      className={cn("mb-6 border-red-300", className)}
+      className={cn("mb-6 border-error-300", className)}
     >
       <AlertCircle className="h-5 w-5" />
       <AlertTitle className="text-base font-semibold">
@@ -275,7 +275,7 @@ export function ValidationErrorsBanner({ errors, className }: ValidationErrorsBa
             title="Điểm số & Thành tích học tập"
             icon={GraduationCap}
             errors={grouped.gpa}
-            color="red"
+            color="error"
             expandedSections={expandedSections}
             toggleSection={toggleSection}
           />
@@ -286,7 +286,7 @@ export function ValidationErrorsBanner({ errors, className }: ValidationErrorsBa
             title="Tài liệu & Minh chứng"
             icon={FileText}
             errors={grouped.docs}
-            color="yellow"
+            color="warning"
             expandedSections={expandedSections}
             toggleSection={toggleSection}
           />
@@ -297,7 +297,7 @@ export function ValidationErrorsBanner({ errors, className }: ValidationErrorsBa
             title="Thông tin cá nhân (CCCD/CMND)"
             icon={UserCircle}
             errors={grouped.personal}
-            color="red"
+            color="error"
             expandedSections={expandedSections}
             toggleSection={toggleSection}
           />
@@ -308,7 +308,7 @@ export function ValidationErrorsBanner({ errors, className }: ValidationErrorsBa
             title="Thông tin gia đình"
             icon={UserCircle}
             errors={grouped.family}
-            color="yellow"
+            color="warning"
             expandedSections={expandedSections}
             toggleSection={toggleSection}
           />
@@ -319,7 +319,7 @@ export function ValidationErrorsBanner({ errors, className }: ValidationErrorsBa
             title="Quá trình học tập"
             icon={GraduationCap}
             errors={grouped.academic}
-            color="yellow"
+            color="warning"
             expandedSections={expandedSections}
             toggleSection={toggleSection}
           />
@@ -331,7 +331,7 @@ export function ValidationErrorsBanner({ errors, className }: ValidationErrorsBa
               title="Vấn đề khác"
               icon={AlertTriangle}
               errors={grouped.other}
-              color="red"
+              color="error"
               expandedSections={expandedSections}
               toggleSection={toggleSection}
             />

@@ -43,7 +43,7 @@ export function ExecutiveSummaryHeader({ profile }: ExecutiveSummaryHeaderProps)
               <div className="flex items-center gap-2">
                 <span className="font-medium text-foreground">CCCD:</span>
                 <span className="font-mono">
-                  {profile.citizen_id || <span className="text-red-500">Chưa nhập</span>}
+                  {profile.citizen_id || <span className="text-error-500">Chưa nhập</span>}
                 </span>
               </div>
 
@@ -62,7 +62,7 @@ export function ExecutiveSummaryHeader({ profile }: ExecutiveSummaryHeaderProps)
           {/* Right: Status Badge */}
           <div className="flex-shrink-0">
             {isEligible ? (
-              <Badge className="text-base px-5 py-2.5 bg-green-600 hover:bg-green-700">
+              <Badge className="text-base px-5 py-2.5 bg-success-600 hover:bg-success-700">
                 <CheckCircle2 className="mr-2 h-5 w-5" />
                 Đủ Điều Kiện
               </Badge>

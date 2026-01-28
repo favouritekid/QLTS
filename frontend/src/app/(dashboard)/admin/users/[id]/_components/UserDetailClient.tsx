@@ -58,7 +58,7 @@ export function UserDetailClient({ userId, initialData }: UserDetailClientProps)
           <Button variant="ghost" size="icon" onClick={() => router.back()}>
             <ArrowLeft className="h-5 w-5" />
           </Button>
-          <h1 className="text-3xl font-bold">User Not Found</h1>
+          <h1 className="text-3xl font-bold font-display">User Not Found</h1>
         </div>
         <Card>
           <CardContent className="pt-6">
@@ -82,16 +82,16 @@ export function UserDetailClient({ userId, initialData }: UserDetailClientProps)
   }
 
   const statusColors: Record<string, string> = {
-    active: "bg-green-500/10 text-green-500 border-green-500/20",
-    pending: "bg-yellow-500/10 text-yellow-500 border-yellow-500/20",
-    banned: "bg-red-500/10 text-red-500 border-red-500/20",
+    active: "bg-success-500/10 text-success-500 border-success-500/20",
+    pending: "bg-warning-500/10 text-warning-500 border-warning-500/20",
+    banned: "bg-error-500/10 text-error-500 border-error-500/20",
   };
 
   const roleColors: Record<string, string> = {
     admin: "bg-purple-500/10 text-purple-500 border-purple-500/20",
-    manager: "bg-blue-500/10 text-blue-500 border-blue-500/20",
+    manager: "bg-info-500/10 text-info-500 border-info-500/20",
     officer: "bg-cyan-500/10 text-cyan-500 border-cyan-500/20",
-    user: "bg-gray-500/10 text-gray-500 border-gray-500/20",
+    user: "bg-muted text-muted-foreground border-border",
   };
 
   return (
@@ -103,7 +103,7 @@ export function UserDetailClient({ userId, initialData }: UserDetailClientProps)
             <ArrowLeft className="h-5 w-5" />
           </Button>
           <div>
-            <h1 className="text-3xl font-bold">{user.full_name || user.username}</h1>
+            <h1 className="text-3xl font-bold font-display">{user.full_name || user.username}</h1>
             <p className="text-muted-foreground">@{user.username}</p>
           </div>
         </div>

@@ -93,7 +93,7 @@ export function ResetPasswordForm() {
   return (
     <div className="bg-card mx-auto w-full max-w-md space-y-6 rounded border p-6 shadow-md md:p-8">
       <div className="space-y-2 text-center">
-        <h1 className="text-2xl font-bold">Đặt Lại Mật Khẩu</h1>
+        <h1 className="text-2xl font-bold font-display">Đặt Lại Mật Khẩu</h1>
         <p className="text-muted-foreground">Nhập mật khẩu mới của bạn dưới đây.</p>
       </div>
       <Form {...form}>

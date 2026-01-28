@@ -147,13 +147,13 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
     const iconClass = "h-5 w-5";
     switch (type) {
       case "success":
-        return <Check className={cn(iconClass, "text-green-500")} />;
+        return <Check className={cn(iconClass, "text-success-500")} />;
       case "error":
-        return <X className={cn(iconClass, "text-red-500")} />;
+        return <X className={cn(iconClass, "text-error-500")} />;
       case "warning":
-        return <Bell className={cn(iconClass, "text-yellow-500")} />;
+        return <Bell className={cn(iconClass, "text-warning-500")} />;
       case "admin_update":
-        return <Bell className={cn(iconClass, "text-blue-500")} />;
+        return <Bell className={cn(iconClass, "text-info-500")} />;
       default:
         return <Bell className={cn(iconClass, "text-muted-foreground")} />;
     }

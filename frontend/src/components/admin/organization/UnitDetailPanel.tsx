@@ -61,7 +61,7 @@ export function UnitDetailPanel({ unit, onUnitDeleted }: UnitDetailPanelProps) {
           <div className="space-y-1">
             <div className="flex items-center gap-2">
               <Building2 className="h-5 w-5 text-muted-foreground" />
-              <h1 className="text-2xl font-bold">{unit.name}</h1>
+              <h1 className="text-2xl font-bold font-display">{unit.name}</h1>
             </div>
             {unit.description && (
               <p className="text-sm text-muted-foreground">{unit.description}</p>

@@ -176,7 +176,7 @@ export function PipelineStageDialog({
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>
-                      Mã giai đoạn <span className="text-red-500">*</span>
+                      Mã giai đoạn <span className="text-error-500">*</span>
                     </FormLabel>
                     <FormControl>
                       <Input
@@ -201,7 +201,7 @@ export function PipelineStageDialog({
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>
-                    Tên giai đoạn <span className="text-red-500">*</span>
+                    Tên giai đoạn <span className="text-error-500">*</span>
                   </FormLabel>
                   <FormControl>
                     <Input
@@ -225,7 +225,7 @@ export function PipelineStageDialog({
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>
-                    Thứ tự <span className="text-red-500">*</span>
+                    Thứ tự <span className="text-error-500">*</span>
                   </FormLabel>
                   <FormControl>
                     <Input

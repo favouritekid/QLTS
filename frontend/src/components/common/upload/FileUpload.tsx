@@ -304,7 +304,7 @@ export function FileUpload({
                   <Loader2 className="h-5 w-5 animate-spin text-primary" />
                 )}
                 {fileItem.status === "success" && (
-                  <CheckCircle className="h-5 w-5 text-green-500" />
+                  <CheckCircle className="h-5 w-5 text-success-500" />
                 )}
                 {fileItem.status === "error" && (
                   <AlertCircle className="h-5 w-5 text-destructive" />

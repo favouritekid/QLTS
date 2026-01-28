@@ -147,7 +147,7 @@ export function SharedDocumentConfigPanel() {
   return (
     <div className="space-y-6">
       {/* 1. Select Offering Type */}
-      <div className="flex items-center gap-4 p-4 border rounded-lg bg-slate-50">
+      <div className="flex items-center gap-4 p-4 border rounded-lg bg-muted">
         <Label className="w-32">Loại hình đào tạo:</Label>
         <Select 
           value={selectedOfferingTypeId?.toString()} 
@@ -198,7 +198,7 @@ export function SharedDocumentConfigPanel() {
                       return (
                         <div 
                           key={type.id} 
-                          className={`grid grid-cols-12 p-3 items-center border-b last:border-0 hover:bg-slate-50 ${isSelected ? 'bg-blue-50/50' : ''}`}
+                          className={`grid grid-cols-12 p-3 items-center border-b last:border-0 hover:bg-muted ${isSelected ? 'bg-info-50/50' : ''}`}
                         >
                           <div className="col-span-6 flex items-center gap-3">
                             <Checkbox 
@@ -257,7 +257,7 @@ export function SharedDocumentConfigPanel() {
           </CardContent>
         </Card>
       ) : (
-        <div className="flex flex-col items-center justify-center p-12 border-2 border-dashed rounded-lg text-muted-foreground bg-slate-50">
+        <div className="flex flex-col items-center justify-center p-12 border-2 border-dashed rounded-lg text-muted-foreground bg-muted">
           <p>Vui lòng chọn loại hình đào tạo để cấu hình</p>
         </div>
       )}

@@ -442,25 +442,25 @@ const NOTIFICATION_TYPES = [
     value: "info",
     label: "Thông tin",
     description: "Thông báo mang tính thông tin",
-    color: "bg-blue-100 text-blue-800",
+    color: "bg-info-100 text-info-800",
   },
   {
     value: "success",
     label: "Thành công",
     description: "Thông báo hành động thành công",
-    color: "bg-green-100 text-green-800",
+    color: "bg-success-100 text-success-800",
   },
   {
     value: "warning",
     label: "Cảnh báo",
     description: "Thông báo cần chú ý",
-    color: "bg-yellow-100 text-yellow-800",
+    color: "bg-warning-100 text-warning-800",
   },
   {
     value: "error",
     label: "Lỗi",
     description: "Thông báo lỗi hoặc thất bại",
-    color: "bg-red-100 text-red-800",
+    color: "bg-error-100 text-error-800",
   },
 ];
 
@@ -587,7 +587,7 @@ function StepIndicator({ currentStep }: { currentStep: number }) {
                 className={`
                   flex items-center justify-center w-10 h-10 rounded-full border-2 transition-all
                   ${isActive ? "border-primary bg-primary text-primary-foreground" : ""}
-                  ${isCompleted ? "border-green-500 bg-green-500 text-white" : ""}
+                  ${isCompleted ? "border-success-500 bg-success-500 text-white" : ""}
                   ${!isActive && !isCompleted ? "border-muted-foreground/30 text-muted-foreground" : ""}
                 `}
               >
@@ -597,7 +597,7 @@ function StepIndicator({ currentStep }: { currentStep: number }) {
                 className={`
                   text-xs mt-1 font-medium
                   ${isActive ? "text-primary" : ""}
-                  ${isCompleted ? "text-green-600" : ""}
+                  ${isCompleted ? "text-success-600" : ""}
                   ${!isActive && !isCompleted ? "text-muted-foreground" : ""}
                 `}
               >
@@ -608,7 +608,7 @@ function StepIndicator({ currentStep }: { currentStep: number }) {
               <div
                 className={`
                   h-0.5 flex-1 mx-2 mb-6 transition-all
-                  ${isCompleted ? "bg-green-500" : "bg-muted-foreground/20"}
+                  ${isCompleted ? "bg-success-500" : "bg-muted-foreground/20"}
                 `}
               />
             )}
@@ -860,10 +860,10 @@ export function NotificationRuleWizard({
 
             {/* Quick Templates */}
             {currentStep === 1 && !isEditMode && (
-              <Card className="bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200">
+              <Card className="bg-gradient-to-r from-info-50 to-indigo-50 border-info-200">
                 <CardHeader className="pb-3">
                   <CardTitle className="text-sm flex items-center gap-2">
-                    <Zap className="h-4 w-4 text-blue-600" />
+                    <Zap className="h-4 w-4 text-info-600" />
                     Kịch bản mẫu - Bắt đầu nhanh
                     <HelpTooltip content="Click vào kịch bản mẫu để tự động điền form theo các trường hợp phổ biến" />
                   </CardTitle>
@@ -1123,8 +1123,8 @@ export function NotificationRuleWizard({
                                           <p className="text-xs text-muted-foreground mt-1">
                                             {option.description}
                                           </p>
-                                          <div className="mt-2 bg-blue-50 border-l-2 border-blue-400 px-2 py-1.5 rounded">
-                                            <p className="text-xs text-blue-700">
+                                          <div className="mt-2 bg-info-50 border-l-2 border-info-400 px-2 py-1.5 rounded">
+                                            <p className="text-xs text-info-700">
                                               💡 {option.example}
                                             </p>
                                           </div>
@@ -1389,11 +1389,11 @@ export function NotificationRuleWizard({
 
                           {/* Preview */}
                           {conditionField && conditionValue && (
-                            <div className="bg-blue-50 border-l-2 border-blue-400 px-3 py-2 rounded">
-                              <p className="text-xs font-medium text-blue-900 mb-1">
+                            <div className="bg-info-50 border-l-2 border-info-400 px-3 py-2 rounded">
+                              <p className="text-xs font-medium text-info-900 mb-1">
                                 📝 Điều kiện hiện tại:
                               </p>
-                              <code className="text-xs text-blue-700">
+                              <code className="text-xs text-info-700">
                                 {conditionField} {conditionOperator} &ldquo;{conditionValue}&rdquo;
                               </code>
                             </div>
@@ -1452,10 +1452,10 @@ export function NotificationRuleWizard({
 
                     {/* Template Variables Helper */}
                     {availableVariables.length > 0 && (
-                      <Card className="bg-blue-50 border-blue-200">
+                      <Card className="bg-info-50 border-info-200">
                         <CardHeader className="pb-3">
                           <CardTitle className="text-sm flex items-center gap-2">
-                            <Sparkles className="h-4 w-4 text-blue-600" />
+                            <Sparkles className="h-4 w-4 text-info-600" />
                             Biến tự động
                             <HelpTooltip content="Click vào biến để chèn vào tiêu đề hoặc nội dung. Giá trị sẽ tự động thay thế khi gửi thông báo." />
                           </CardTitle>

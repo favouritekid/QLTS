@@ -19,7 +19,7 @@ export function AdmissionHeader({ profile }: AdmissionHeaderProps) {
   return (
     <div className="h-12 px-6 flex items-center gap-3">
       {/* Profile ID */}
-      <h1 className="text-base font-semibold">
+      <h1 className="text-base font-semibold font-display">
         Hồ sơ #{profile?.lead_id || "---"}
       </h1>
 

@@ -246,7 +246,7 @@ export function AcademicInfoPanel() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Thông tin Tuyển sinh chi tiết</h1>
+        <h1 className="text-3xl font-bold font-display">Thông tin Tuyển sinh chi tiết</h1>
         <p className="text-muted-foreground mt-2">
           Cấu hình chi tiết theo năm học (Học phí, Chỉ tiêu...)
         </p>
@@ -254,11 +254,11 @@ export function AcademicInfoPanel() {
 
       {/* Warning if no offerings */}
       {offerings.length === 0 && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-          <p className="text-sm text-yellow-800 font-medium">
+        <div className="bg-warning-50 border border-warning-200 rounded-lg p-4">
+          <p className="text-sm text-warning-800 font-medium">
             Yêu cầu dữ liệu
           </p>
-          <p className="text-sm text-yellow-700 mt-1">
+          <p className="text-sm text-warning-700 mt-1">
             Chưa có chương trình tuyển sinh nào. Vui lòng tạo chương trình trước tại Bước 2.2.
           </p>
         </div>
@@ -348,7 +348,7 @@ export function AcademicInfoPanel() {
                       </TableCell>
                       <TableCell>
                         {item.is_published ? (
-                          <Badge className="bg-green-500">Đã công bố</Badge>
+                          <Badge className="bg-success-500">Đã công bố</Badge>
                         ) : (
                           <Badge variant="secondary">Nháp</Badge>
                         )}
@@ -360,7 +360,7 @@ export function AcademicInfoPanel() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                              className="text-info-600 hover:text-info-700 hover:bg-info-50"
                               onClick={() => handleNavigate(item, 'view')}
                               title="Xem cấu hình tuyển sinh"
                             >
@@ -371,7 +371,7 @@ export function AcademicInfoPanel() {
                              <Button
                               variant="ghost"
                               size="sm"
-                              className="text-green-600 hover:text-green-700 hover:bg-green-50"
+                              className="text-success-600 hover:text-success-700 hover:bg-success-50"
                               onClick={() => handleNavigate(item, 'add')}
                               title="Thêm cấu hình tuyển sinh"
                             >

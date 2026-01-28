@@ -275,7 +275,7 @@ export function ConsultationStatusDialog({
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>
-                      Mã trạng thái <span className="text-red-500">*</span>
+                      Mã trạng thái <span className="text-error-500">*</span>
                     </FormLabel>
                     <FormControl>
                       <Input placeholder="VD: hen_lai" {...field} disabled={isSubmitting} />
@@ -296,7 +296,7 @@ export function ConsultationStatusDialog({
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>
-                    Tên trạng thái <span className="text-red-500">*</span>
+                    Tên trạng thái <span className="text-error-500">*</span>
                   </FormLabel>
                   <FormControl>
                     <Input placeholder="VD: Hẹn lại" {...field} disabled={isSubmitting} />
@@ -315,7 +315,7 @@ export function ConsultationStatusDialog({
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>
-                      Giai đoạn Pipeline <span className="text-red-500">*</span>
+                      Giai đoạn Pipeline <span className="text-error-500">*</span>
                     </FormLabel>
                     <Select
                       onValueChange={field.onChange}
@@ -359,7 +359,7 @@ export function ConsultationStatusDialog({
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>
-                    Màu sắc <span className="text-red-500">*</span>
+                    Màu sắc <span className="text-error-500">*</span>
                   </FormLabel>
                   <div className="flex gap-2">
                     <FormControl>
@@ -404,7 +404,7 @@ export function ConsultationStatusDialog({
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>
-                    Loại kết quả <span className="text-red-500">*</span>
+                    Loại kết quả <span className="text-error-500">*</span>
                   </FormLabel>
                   <Select
                     onValueChange={field.onChange}
@@ -419,17 +419,17 @@ export function ConsultationStatusDialog({
                     <SelectContent>
                       <SelectItem value="positive">
                         <span className="flex items-center gap-2">
-                          <span className="text-green-500">●</span> Tích cực
+                          <span className="text-success-500">●</span> Tích cực
                         </span>
                       </SelectItem>
                       <SelectItem value="neutral">
                         <span className="flex items-center gap-2">
-                          <span className="text-gray-500">●</span> Trung lập
+                          <span className="text-muted-foreground">●</span> Trung lập
                         </span>
                       </SelectItem>
                       <SelectItem value="negative">
                         <span className="flex items-center gap-2">
-                          <span className="text-red-500">●</span> Tiêu cực
+                          <span className="text-error-500">●</span> Tiêu cực
                         </span>
                       </SelectItem>
                     </SelectContent>
@@ -489,7 +489,7 @@ export function ConsultationStatusDialog({
               control={form.control}
               name="updates_pipeline"
               render={({ field }) => (
-                <FormItem className="flex flex-row items-start space-y-0 space-x-3 rounded-md border p-4 bg-blue-50 border-blue-200">
+                <FormItem className="flex flex-row items-start space-y-0 space-x-3 rounded-md border p-4 bg-info-50 border-info-200">
                   <FormControl>
                     <ShadcnCheckbox checked={field.value} onCheckedChange={field.onChange} />
                   </FormControl>
@@ -510,7 +510,7 @@ export function ConsultationStatusDialog({
               control={form.control}
               name="counts_for_funnel"
               render={({ field }) => (
-                <FormItem className="flex flex-row items-start space-y-0 space-x-3 rounded-md border p-4 bg-green-50 border-green-200">
+                <FormItem className="flex flex-row items-start space-y-0 space-x-3 rounded-md border p-4 bg-success-50 border-success-200">
                   <FormControl>
                     <ShadcnCheckbox checked={field.value} onCheckedChange={field.onChange} />
                   </FormControl>
@@ -602,7 +602,7 @@ export function ConsultationStatusDialog({
                   render={({ field }) => (
                     <FormItem className="mb-4">
                       <FormLabel>
-                        Phase <span className="text-red-500">*</span>
+                        Phase <span className="text-error-500">*</span>
                       </FormLabel>
                       <Select
                         onValueChange={field.onChange}
@@ -637,7 +637,7 @@ export function ConsultationStatusDialog({
                 render={({ field }) => (
                   <FormItem className="mb-4">
                     <FormLabel>
-                      Status Type <span className="text-red-500">*</span>
+                      Status Type <span className="text-error-500">*</span>
                     </FormLabel>
                     <Select
                       onValueChange={field.onChange}
@@ -676,7 +676,7 @@ export function ConsultationStatusDialog({
                 render={({ field }) => (
                   <FormItem className="mb-4">
                     <FormLabel>
-                      Selectable Mode <span className="text-red-500">*</span>
+                      Selectable Mode <span className="text-error-500">*</span>
                     </FormLabel>
                     <Select
                       onValueChange={field.onChange}

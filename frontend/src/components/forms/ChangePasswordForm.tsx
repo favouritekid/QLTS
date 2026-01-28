@@ -122,14 +122,14 @@ export function ChangePasswordForm() {
 
   return (
     <div className="w-full max-w-xl space-y-4">
-      <h2 className="text-xl font-semibold">Đổi Mật Khẩu</h2>
+      <h2 className="text-xl font-semibold font-display">Đổi Mật Khẩu</h2>
 
       {/* C2 SECURITY FIX: Forced password change warning */}
       {isForced && (
-        <Alert className="border-red-500 bg-red-50">
-          <ShieldAlert className="h-5 w-5 text-red-600" />
-          <AlertTitle className="text-red-800">Yêu cầu Đổi Mật Khẩu</AlertTitle>
-          <AlertDescription className="text-red-700">
+        <Alert className="border-error-500 bg-error-50">
+          <ShieldAlert className="h-5 w-5 text-error-600" />
+          <AlertTitle className="text-error-800">Yêu cầu Đổi Mật Khẩu</AlertTitle>
+          <AlertDescription className="text-error-700">
             <p>
               Tài khoản của bạn đã được đánh dấu cần <strong>đổi mật khẩu ngay lập tức</strong>.
               Điều này có thể do bạn đã báo cáo một đăng nhập đáng ngờ.

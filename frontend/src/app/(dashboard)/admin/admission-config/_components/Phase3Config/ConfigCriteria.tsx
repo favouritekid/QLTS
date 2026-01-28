@@ -369,19 +369,19 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
 
           {/* Selected Groups as Chips */}
           {selectedGroupsDetails.length > 0 && (
-            <div className="flex flex-wrap gap-2 p-3 bg-blue-50 border border-blue-200 rounded-md">
+            <div className="flex flex-wrap gap-2 p-3 bg-info-50 border border-info-200 rounded-md">
               {selectedGroupsDetails.map((group: SubjectGroup) => (
                 <Badge
                   key={group.id}
                   variant="secondary"
-                  className="flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-800 hover:bg-blue-200"
+                  className="flex items-center gap-1 px-2 py-1 bg-info-100 text-info-800 hover:bg-info-200"
                 >
                   <span className="font-medium">{group.code}</span>
                   <span className="text-xs opacity-75">({group.name})</span>
                   <button
                     type="button"
                     onClick={() => handleRemoveGroup(group.id)}
-                    className="ml-1 hover:bg-blue-300 rounded-full p-0.5"
+                    className="ml-1 hover:bg-info-300 rounded-full p-0.5"
                   >
                     <X className="h-3 w-3" />
                   </button>
@@ -403,7 +403,7 @@ export function ConfigCriteria({ path, onNext, onBack }: ConfigCriteriaProps) {
               <button
                 type="button"
                 onClick={() => setSearchQuery("")}
-                className="absolute right-3 top-1/2 transform -translate-y-1/2 hover:bg-gray-100 rounded-full p-1"
+                className="absolute right-3 top-1/2 transform -translate-y-1/2 hover:bg-muted rounded-full p-1"
               >
                 <X className="h-4 w-4 text-muted-foreground" />
               </button>

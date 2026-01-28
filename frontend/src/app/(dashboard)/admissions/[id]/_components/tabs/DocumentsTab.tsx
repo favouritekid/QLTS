@@ -50,27 +50,27 @@ const STATUS_CONFIG: Record<string, {
 }> = {
   missing: {
     label: "Chưa nộp",
-    color: "bg-gray-100 text-gray-700",
+    color: "bg-muted text-muted-foreground",
     icon: AlertCircle,
   },
   uploaded: {
     label: "Đã tải",
-    color: "bg-blue-100 text-blue-700",
+    color: "bg-info-100 text-info-700",
     icon: Check,
   },
   paper_submitted: {
     label: "Đã nộp",
-    color: "bg-green-100 text-green-700",
+    color: "bg-success-100 text-success-700",
     icon: Check,
   },
   verified: {
     label: "Đã xác minh",
-    color: "bg-green-100 text-green-700",
+    color: "bg-success-100 text-success-700",
     icon: Check,
   },
   rejected: {
     label: "Không hợp lệ",
-    color: "bg-red-100 text-red-700",
+    color: "bg-error-100 text-error-700",
     icon: XCircle,
   },
 }
@@ -100,7 +100,7 @@ const FORMAT_CONFIG: Record<string, {
 function getStatusConfig(status: string) {
   return STATUS_CONFIG[status] ?? {
     label: status,
-    color: "bg-gray-100 text-gray-700",
+    color: "bg-muted text-muted-foreground",
     icon: AlertCircle,
   }
 }
@@ -349,7 +349,7 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
                         <p className="font-medium flex items-center gap-1 truncate">
                           {doc.label}
                           {doc.is_mandatory && (
-                            <span className="text-red-500 text-xs">*</span>
+                            <span className="text-error-500 text-xs">*</span>
                           )}
                         </p>
                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -358,7 +358,7 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
                             <span>• {new Date(doc.uploaded_at).toLocaleDateString("vi-VN")}</span>
                           )}
                           {doc.status === "rejected" && doc.rejection_reason && (
-                            <span className="text-red-600 font-medium">
+                            <span className="text-error-600 font-medium">
                               • Lý do: {doc.rejection_reason}
                             </span>
                           )}
@@ -452,7 +452,7 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
                       
                       {/* Paper already submitted indicator */}
                       {isPaperDoc && doc.status === "paper_submitted" && (
-                        <Check className="h-4 w-4 text-green-600" />
+                        <Check className="h-4 w-4 text-success-600" />
                       )}
                       
                       {/* Reject Button (Officer Only) */}
@@ -460,7 +460,7 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
                         <Button
                           size="sm"
                           variant="ghost"
-                          className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                          className="text-error-600 hover:text-error-700 hover:bg-error-50"
                           onClick={() => handleRejectClick(doc.code, doc.label)}
                           title="Từ chối tài liệu"
                         >
@@ -477,7 +477,7 @@ export function DocumentsTab({ profile, isEditable }: DocumentsTabProps) {
                         <Button
                           size="sm"
                           variant="ghost"
-                          className="text-amber-600 hover:text-amber-700 hover:bg-amber-50"
+                          className="text-warning-600 hover:text-warning-700 hover:bg-warning-50"
                           onClick={() => {
                             if (confirm(`Hoàn tác tài liệu "${doc.label}"?\n\nTài liệu sẽ về trạng thái "Chưa nộp" và file sẽ bị xóa (nếu có).`)) {
                               resetMutation.mutate(doc.code)

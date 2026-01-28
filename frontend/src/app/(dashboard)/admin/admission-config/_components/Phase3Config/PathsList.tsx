@@ -106,7 +106,7 @@ export function PathsList({ context, onNavigate, onBack }: PathsListProps) {
     switch (status) {
       case "active":
         return (
-          <Badge className="bg-green-500">
+          <Badge className="bg-success-500">
             <CheckCircle2 className="h-3 w-3 mr-1" />
             Hoạt động
           </Badge>
@@ -141,7 +141,7 @@ export function PathsList({ context, onNavigate, onBack }: PathsListProps) {
               Đổi Ngữ cảnh
             </Button>
           </div>
-          <h1 className="text-3xl font-bold">Các đợt Tuyển sinh</h1>
+          <h1 className="text-3xl font-bold font-display">Các đợt Tuyển sinh</h1>
           <p className="text-muted-foreground mt-2">
             Năm học {context.academicYear}
           </p>
@@ -205,7 +205,7 @@ export function PathsList({ context, onNavigate, onBack }: PathsListProps) {
                     <TableCell>
                       <div className="flex flex-col gap-1">
                         {path.criteria ? (
-                          <span className="text-sm text-green-600 flex items-center gap-1">
+                          <span className="text-sm text-success-600 flex items-center gap-1">
                             <CheckCircle2 className="h-3 w-3" />
                             Đã cấu hình tiêu chí
                           </span>

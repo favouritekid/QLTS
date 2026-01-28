@@ -302,7 +302,7 @@ export function MajorProgramPanel() {
                 id="is_heavy"
                 checked={formData.is_heavy}
                 onChange={(e) => updateForm({ is_heavy: e.target.checked })}
-                className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                className="h-4 w-4 rounded border-border text-primary focus:ring-primary"
               />
               <Label htmlFor="is_heavy" className="cursor-pointer">
                 Ngành nặng nhọc, độc hại
@@ -365,7 +365,7 @@ export function MajorProgramPanel() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Chương trình đào tạo</h1>
+        <h1 className="text-3xl font-bold font-display">Chương trình đào tạo</h1>
         <p className="text-muted-foreground mt-2">
           Quản lý danh mục các ngành, nghề đào tạo (CNTT, Kinh tế, Kỹ thuật...)
         </p>

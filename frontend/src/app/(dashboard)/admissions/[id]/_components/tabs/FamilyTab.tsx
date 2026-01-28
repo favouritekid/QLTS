@@ -79,7 +79,7 @@ export function FamilyTab({ form, isEditable }: FamilyTabProps) {
 
            {/* Empty State / Validation Alert */}
            {guardians.length === 0 && (
-               <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-md text-amber-800">
+               <div className="flex items-start gap-3 p-4 bg-warning-50 border border-warning-200 rounded-md text-warning-800">
                   <div className="mt-0.5">⚠️</div>
                   <div className="text-sm">
                       <p className="font-medium">Chưa có người giám hộ chính</p>
@@ -103,9 +103,9 @@ export function FamilyTab({ form, isEditable }: FamilyTabProps) {
       </Card>
 
       {/* 2. THÀNH VIÊN KHÁC (OPTIONAL) */}
-      <Card className="shadow-sm border-gray-200">
+      <Card className="shadow-sm border-border">
         <CardHeader className="pb-2">
-            <CardTitle className="text-lg font-semibold flex items-center gap-2 text-gray-700">
+            <CardTitle className="text-lg font-semibold flex items-center gap-2 text-foreground">
                 <Users className="w-5 h-5" />
                 Thành viên khác
             </CardTitle>
@@ -134,7 +134,7 @@ export function FamilyTab({ form, isEditable }: FamilyTabProps) {
 
            {/* Empty State - Neutral */}
            {others.length === 0 && (
-               <div className="text-center py-8 text-muted-foreground bg-gray-50/50 rounded-lg border border-dashed border-gray-200">
+               <div className="text-center py-8 text-muted-foreground bg-muted/50 rounded-lg border border-dashed border-border">
                   <p>— Chưa có thông tin thành viên khác —</p>
                </div>
            )}
@@ -223,7 +223,7 @@ function MemberRow({ form, index, isEditable, onRemove, isPrimary }: { form: Use
                 
                 {isEditable && (
                     <div className="md:col-span-1 flex items-end justify-end pb-2">
-                        <Button variant="ghost" size="icon" onClick={onRemove} className="text-destructive hover:bg-red-50">
+                        <Button variant="ghost" size="icon" onClick={onRemove} className="text-destructive hover:bg-error-50">
                             <Trash2 className="w-4 h-4" />
                         </Button>
                     </div>
@@ -231,7 +231,7 @@ function MemberRow({ form, index, isEditable, onRemove, isPrimary }: { form: Use
             </div>
             {isPrimary && (
                 <div className="absolute top-2 right-2">
-                    <Badge variant="secondary" className="bg-blue-100 text-blue-700">Giám hộ chính</Badge>
+                    <Badge variant="secondary" className="bg-info-100 text-info-700">Giám hộ chính</Badge>
                 </div>
             )}
         </div>

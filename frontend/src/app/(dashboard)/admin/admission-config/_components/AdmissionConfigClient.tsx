@@ -127,7 +127,7 @@ function Phase1Content({ step }: { step: string }) {
       return (
         <div className="space-y-6">
           <div>
-            <h1 className="text-3xl font-bold">Giai đoạn 1: Dữ liệu Danh mục</h1>
+            <h1 className="text-3xl font-bold font-display">Giai đoạn 1: Dữ liệu Danh mục</h1>
             <p className="text-muted-foreground mt-2">
               Unknown step: {step}
             </p>
@@ -149,7 +149,7 @@ function Phase2Content({ step }: { step: string }) {
       return (
         <div className="space-y-6">
           <div>
-            <h1 className="text-3xl font-bold">Giai đoạn 2: Chương trình Đào tạo</h1>
+            <h1 className="text-3xl font-bold font-display">Giai đoạn 2: Chương trình Đào tạo</h1>
             <p className="text-muted-foreground mt-2">
               Unknown step: {step}
             </p>

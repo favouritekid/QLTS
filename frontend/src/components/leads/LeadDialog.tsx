@@ -163,8 +163,8 @@ function ValidationIndicator({
       )}
       {state === "valid" && (
         <>
-          <Check className="h-3.5 w-3.5 text-green-600" />
-          <span className="text-xs text-green-600">Hợp lệ</span>
+          <Check className="h-3.5 w-3.5 text-success-600" />
+          <span className="text-xs text-success-600">Hợp lệ</span>
         </>
       )}
       {state === "invalid" && (
@@ -426,7 +426,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                           <Input
                             className={cn(
                               "pl-10 pr-8",
-                              duplicateValidation.phone.state === "valid" && "border-green-500",
+                              duplicateValidation.phone.state === "valid" && "border-success-500",
                               duplicateValidation.phone.state === "invalid" && "border-destructive"
                             )}
                             placeholder="0901234567"
@@ -436,7 +436,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                             <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />
                           )}
                           {duplicateValidation.phone.state === "valid" && (
-                            <Check className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-green-600" />
+                            <Check className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-success-600" />
                           )}
                           {duplicateValidation.phone.state === "invalid" && (
                             <AlertCircle className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-destructive" />
@@ -544,7 +544,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
               {isCreate && (isAdmin || managerUsesDistribution) && selectedOfferingId && (
                 <div className="rounded-lg border bg-muted/50 p-3 space-y-1">
                   <div className="flex items-center gap-2 text-sm font-medium">
-                    <Info className="h-4 w-4 text-blue-500" />
+                    <Info className="h-4 w-4 text-info-500" />
                     Xem trước phân phối
                   </div>
                   {isLoadingPreview ? (
@@ -555,10 +555,10 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                   ) : distributionPreview?.has_config ? (
                     <div className="text-sm">
                       <span className="text-muted-foreground">Đơn vị nhận: </span>
-                      <span className="font-medium text-green-600">{distributionPreview.next_unit_name}</span>
+                      <span className="font-medium text-success-600">{distributionPreview.next_unit_name}</span>
                     </div>
                   ) : (
-                    <div className="text-sm text-amber-600">Chưa có cấu hình phân phối</div>
+                    <div className="text-sm text-warning-600">Chưa có cấu hình phân phối</div>
                   )}
                 </div>
               )}

@@ -472,7 +472,7 @@ export default function KpiConfigPage() {
       {/* Header */}
       <div className="flex justify-between items-center">
         <div>
-            <h1 className="text-2xl font-bold flex items-center gap-2">
+            <h1 className="text-2xl font-bold font-display flex items-center gap-2">
             <Target className="h-6 w-6 text-primary" />
             Cấu hình KPI
           </h1>
@@ -578,7 +578,7 @@ export default function KpiConfigPage() {
                             onClick={() => restoreMutation.mutate(config.id)}
                             title="Khôi phục"
                           >
-                            <RefreshCw className="h-4 w-4 text-green-600" />
+                            <RefreshCw className="h-4 w-4 text-success-600" />
                           </Button>
                         ) : (
                           <>

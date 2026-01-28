@@ -60,7 +60,7 @@ export function ConfigReview({ path, onBack, onFinish }: ConfigReviewProps) {
         {/* 1. Basic Info */}
         <section className="space-y-3">
           <h3 className="font-semibold text-lg flex items-center">
-            <CheckCircle2 className="h-4 w-4 mr-2 text-green-600" />
+            <CheckCircle2 className="h-4 w-4 mr-2 text-success-600" />
             Thông tin chung
           </h3>
           <div className="grid grid-cols-2 gap-4 text-sm border p-4 rounded-md bg-muted/20">
@@ -90,7 +90,7 @@ export function ConfigReview({ path, onBack, onFinish }: ConfigReviewProps) {
         {/* 2. Criteria */}
         <section className="space-y-3">
           <h3 className="font-semibold text-lg flex items-center">
-            <CheckCircle2 className="h-4 w-4 mr-2 text-green-600" />
+            <CheckCircle2 className="h-4 w-4 mr-2 text-success-600" />
             Tiêu chí xét tuyển
           </h3>
           {path.criteria ? (
@@ -139,7 +139,7 @@ export function ConfigReview({ path, onBack, onFinish }: ConfigReviewProps) {
               )}
             </div>
           ) : (
-            <div className="text-sm text-yellow-600 border border-yellow-200 bg-yellow-50 p-4 rounded-md">
+            <div className="text-sm text-warning-600 border border-warning-200 bg-warning-50 p-4 rounded-md">
               Chưa cấu hình tiêu chí. Vui lòng quay lại Bước 2.
             </div>
           )}
@@ -148,7 +148,7 @@ export function ConfigReview({ path, onBack, onFinish }: ConfigReviewProps) {
         {/* 3. Document Requirements */}
         <section className="space-y-3">
           <h3 className="font-semibold text-lg flex items-center">
-            <CheckCircle2 className="h-4 w-4 mr-2 text-green-600" />
+            <CheckCircle2 className="h-4 w-4 mr-2 text-success-600" />
             Hồ sơ yêu cầu
           </h3>
           {loadingDocuments ? (
@@ -187,7 +187,7 @@ export function ConfigReview({ path, onBack, onFinish }: ConfigReviewProps) {
               </div>
             </div>
           ) : (
-            <div className="text-sm text-yellow-600 border border-yellow-200 bg-yellow-50 p-4 rounded-md">
+            <div className="text-sm text-warning-600 border border-warning-200 bg-warning-50 p-4 rounded-md">
               Chưa cấu hình hồ sơ. Vui lòng quay lại Bước 3.
             </div>
           )}
@@ -220,7 +220,7 @@ export function ConfigReview({ path, onBack, onFinish }: ConfigReviewProps) {
               <Button 
                 onClick={handleActivate} 
                 disabled={!path.can_activate || isActivating || path.status === "active"}
-                className={path.status === "active" ? "bg-green-600 hover:bg-green-700" : ""}
+                className={path.status === "active" ? "bg-success-600 hover:bg-success-700" : ""}
               >
                 {isActivating ? (
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />

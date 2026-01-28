@@ -147,7 +147,7 @@ export function OfferingTypePanel() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Loại hình Đào tạo</h1>
+        <h1 className="text-3xl font-bold font-display">Loại hình Đào tạo</h1>
         <p className="text-muted-foreground mt-2">
           Quản lý các loại hình đào tạo (Chính quy, Vừa làm vừa học, Liên thông...)
         </p>

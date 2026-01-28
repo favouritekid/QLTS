@@ -215,9 +215,9 @@ export function UnitSettingsTab({ unit, onUnitDeleted }: UnitSettingsTabProps) {
           </Card>
 
           {/* Danger Zone */}
-          <Card className="border-red-200 dark:border-red-900">
+          <Card className="border-error-200 dark:border-error-900">
             <CardHeader>
-              <CardTitle className="text-base text-red-600 dark:text-red-400">
+              <CardTitle className="text-base text-error-600 dark:text-error-400">
                 Vùng nguy hiểm
               </CardTitle>
               <CardDescription>
@@ -284,7 +284,7 @@ export function UnitSettingsTab({ unit, onUnitDeleted }: UnitSettingsTabProps) {
             <AlertDialogCancel>Hủy</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleConfirmDelete}
-              className="bg-red-600 hover:bg-red-700"
+              className="bg-error-600 hover:bg-error-700"
             >
               Xóa đơn vị
             </AlertDialogAction>

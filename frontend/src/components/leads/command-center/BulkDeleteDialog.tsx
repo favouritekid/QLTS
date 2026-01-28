@@ -74,7 +74,7 @@ export function BulkDeleteDialog({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent className="sm:max-w-md">
         <AlertDialogHeader>
-          <AlertDialogTitle className="flex items-center gap-2 text-red-600">
+          <AlertDialogTitle className="flex items-center gap-2 text-error-600">
             <AlertTriangle className="h-5 w-5" />
             Xóa {count} lead?
           </AlertDialogTitle>
@@ -82,16 +82,16 @@ export function BulkDeleteDialog({
           <AlertDialogDescription asChild>
             <div className="space-y-3 text-sm text-muted-foreground">
               <span>
-                Hành động này <strong className="text-red-600">không thể hoàn tác</strong>. 
+                Hành động này <strong className="text-error-600">không thể hoàn tác</strong>.
                 Các lead sau sẽ bị xóa vĩnh viễn:
               </span>
               
               {/* Lead names preview */}
-              <div className="max-h-40 overflow-y-auto rounded-md border border-red-200 bg-red-50 p-3">
+              <div className="max-h-40 overflow-y-auto rounded-md border border-error-200 bg-error-50 p-3">
                 <ul className="space-y-1 text-sm">
                   {leads.slice(0, 10).map((lead) => (
                     <li key={lead.id} className="flex items-center gap-2 truncate">
-                      <Trash2 className="h-3 w-3 shrink-0 text-red-500" />
+                      <Trash2 className="h-3 w-3 shrink-0 text-error-500" />
                       <span>{lead.full_name}</span>
                       {lead.phone && (
                         <span className="text-muted-foreground">({lead.phone})</span>

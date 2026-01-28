@@ -28,10 +28,10 @@ interface LeadScoringCollapsibleProps {
 
 // Score color utility
 const getScoreColor = (score: number) => {
-  if (score >= 70) return "text-green-600 bg-green-50";
-  if (score >= 50) return "text-blue-600 bg-blue-50";
-  if (score >= 30) return "text-yellow-600 bg-yellow-50";
-  return "text-gray-500 bg-gray-50";
+  if (score >= 70) return "text-success-600 bg-success-50";
+  if (score >= 50) return "text-info-600 bg-info-50";
+  if (score >= 30) return "text-warning-600 bg-warning-50";
+  return "text-muted-foreground bg-muted";
 };
 
 const getScoreLabel = (score: number) => {
@@ -177,8 +177,8 @@ export function LeadScoringCollapsible({
                       className={cn(
                         "text-sm",
                         i < (insights.officer_rating ?? 0)
-                          ? "text-yellow-500"
-                          : "text-gray-300"
+                          ? "text-warning-500"
+                          : "text-border"
                       )}
                     >
                       ★

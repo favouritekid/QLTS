@@ -138,7 +138,7 @@ export function FeaturePolicyTab({ roleName: propRoleName }: FeaturePolicyTabPro
                       {feature.display_name}
                     </Label>
                     {feature.enabled && (
-                      <CheckCircle2 className="h-4 w-4 text-green-600" />
+                      <CheckCircle2 className="h-4 w-4 text-success-600" />
                     )}
                   </div>
                   <p className="text-sm text-muted-foreground">

@@ -120,8 +120,8 @@ export function SyncDashboard() {
         <CardContent>
           <div className="grid gap-4 md:grid-cols-3">
             <div className="flex items-center gap-4">
-              <div className="rounded-full bg-blue-100 p-3 dark:bg-blue-900">
-                <Database className="h-6 w-6 text-blue-600 dark:text-blue-400" />
+              <div className="rounded-full bg-info-100 p-3 dark:bg-info-900">
+                <Database className="h-6 w-6 text-info-600 dark:text-info-400" />
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Tổng số Users</p>
@@ -130,8 +130,8 @@ export function SyncDashboard() {
             </div>
 
             <div className="flex items-center gap-4">
-              <div className="rounded-full bg-green-100 p-3 dark:bg-green-900">
-                <CheckCircle2 className="h-6 w-6 text-green-600 dark:text-green-400" />
+              <div className="rounded-full bg-success-100 p-3 dark:bg-success-900">
+                <CheckCircle2 className="h-6 w-6 text-success-600 dark:text-success-400" />
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Đã đồng bộ</p>
@@ -140,8 +140,8 @@ export function SyncDashboard() {
             </div>
 
             <div className="flex items-center gap-4">
-              <div className="rounded-full bg-red-100 p-3 dark:bg-red-900">
-                <AlertCircle className="h-6 w-6 text-red-600 dark:text-red-400" />
+              <div className="rounded-full bg-error-100 p-3 dark:bg-error-900">
+                <AlertCircle className="h-6 w-6 text-error-600 dark:text-error-400" />
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Chưa đồng bộ</p>

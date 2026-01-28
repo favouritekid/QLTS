@@ -126,13 +126,13 @@ const SYSTEM_EVENTS = [
 ];
 
 const NOTIFICATION_TYPES = [
-  { value: "info", label: "Info", color: "bg-blue-100 text-blue-800" },
-  { value: "success", label: "Success", color: "bg-green-100 text-green-800" },
-  { value: "warning", label: "Warning", color: "bg-yellow-100 text-yellow-800" },
-  { value: "error", label: "Error", color: "bg-red-100 text-red-800" },
+  { value: "info", label: "Info", color: "bg-info-100 text-info-800" },
+  { value: "success", label: "Success", color: "bg-success-100 text-success-800" },
+  { value: "warning", label: "Warning", color: "bg-warning-100 text-warning-800" },
+  { value: "error", label: "Error", color: "bg-error-100 text-error-800" },
   { value: "reminder", label: "Reminder", color: "bg-purple-100 text-purple-800" },
   { value: "admin_update", label: "Admin Update", color: "bg-indigo-100 text-indigo-800" },
-  { value: "system", label: "System", color: "bg-gray-100 text-gray-800" },
+  { value: "system", label: "System", color: "bg-muted text-muted-foreground" },
 ];
 
 const CHANNELS = [

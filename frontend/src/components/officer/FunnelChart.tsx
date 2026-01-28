@@ -103,7 +103,7 @@ const getContrastTextColor = (stageColor: string): string => {
   const match = stageColor.match(/hsl\((\d+)\s+(\d+)%\s+(\d+)%\)/);
   if (match) {
     const lightness = parseInt(match[3]);
-    return lightness > 60 ? 'text-gray-800' : 'text-white';
+    return lightness > 60 ? 'text-foreground' : 'text-white';
   }
   return 'text-white'; // Default fallback
 };
@@ -145,24 +145,24 @@ const getConversionStatus = (rate: number | null): {
     status: "neutral",
     label: "Chưa có dữ liệu"
   };
-  if (rate >= 70) return { 
-    color: "bg-emerald-50 dark:bg-emerald-950/20",
-    textColor: "text-emerald-700 dark:text-emerald-400",
-    borderColor: "border-emerald-200 dark:border-emerald-800",
+  if (rate >= 70) return {
+    color: "bg-success-50 dark:bg-success-950/20",
+    textColor: "text-success-700 dark:text-success-400",
+    borderColor: "border-success-200 dark:border-success-800",
     status: "good",
     label: "Tốt"
   };
-  if (rate >= 50) return { 
-    color: "bg-amber-50 dark:bg-amber-950/20",
-    textColor: "text-amber-700 dark:text-amber-400", 
-    borderColor: "border-amber-200 dark:border-amber-800",
+  if (rate >= 50) return {
+    color: "bg-warning-50 dark:bg-warning-950/20",
+    textColor: "text-warning-700 dark:text-warning-400",
+    borderColor: "border-warning-200 dark:border-warning-800",
     status: "warning",
     label: "Theo dõi"
   };
-  return { 
-    color: "bg-red-50 dark:bg-red-950/20",
-    textColor: "text-red-700 dark:text-red-400",
-    borderColor: "border-red-200 dark:border-red-800",
+  return {
+    color: "bg-error-50 dark:bg-error-950/20",
+    textColor: "text-error-700 dark:text-error-400",
+    borderColor: "border-error-200 dark:border-error-800",
     status: "critical",
     label: "Cần hành động"
   };
@@ -319,16 +319,16 @@ export function FunnelChart({ funnel, previousPeriodConversion, config }: Funnel
                     <span className="text-sm text-muted-foreground">Tổng chuyển đổi:</span>
                     <span className={cn(
                       "text-lg font-bold",
-                      overallConversion >= 10 ? "text-emerald-600" : 
-                      overallConversion >= 5 ? "text-amber-600" : "text-red-600"
+                      overallConversion >= 10 ? "text-success-600" :
+                      overallConversion >= 5 ? "text-warning-600" : "text-error-600"
                     )}>
                       {overallConversion.toFixed(1)}%
                     </span>
                     {conversionTrend !== null && (
                       <div className={cn(
                         "flex items-center gap-0.5 text-xs",
-                        conversionTrend > 0 ? "text-emerald-600" : 
-                        conversionTrend < 0 ? "text-red-600" : "text-muted-foreground"
+                        conversionTrend > 0 ? "text-success-600" :
+                        conversionTrend < 0 ? "text-error-600" : "text-muted-foreground"
                       )}>
                         {conversionTrend > 0 ? <TrendingUp className="h-3 w-3" /> :
                          conversionTrend < 0 ? <TrendingDown className="h-3 w-3" /> :
@@ -375,7 +375,7 @@ export function FunnelChart({ funnel, previousPeriodConversion, config }: Funnel
                         <div 
                           className={cn(
                             "flex items-center gap-2 py-1 px-2 my-0.5 cursor-help transition-colors",
-                            isBottleneck && "ring-1 ring-red-400 rounded"
+                            isBottleneck && "ring-1 ring-error-400 rounded"
                           )}
                         >
                           <ArrowDown className={cn("h-3 w-3", conversionStatus.textColor)} />
@@ -388,7 +388,7 @@ export function FunnelChart({ funnel, previousPeriodConversion, config }: Funnel
                             </span>
                           )}
                           {isBottleneck && (
-                            <AlertTriangle className="h-3 w-3 text-red-500" />
+                            <AlertTriangle className="h-3 w-3 text-error-500" />
                           )}
                         </div>
                       </TooltipTrigger>
@@ -403,10 +403,10 @@ export function FunnelChart({ funnel, previousPeriodConversion, config }: Funnel
                             <p className="text-white/90">
                               <span className="font-medium text-white">Tỷ lệ chuyển đổi (30 ngày):</span>
                               {" "}
-                              {metrics.conversion !== null 
-                                ? <span className={cn("font-bold", 
-                                    metrics.conversion >= 70 ? "text-emerald-300" :
-                                    metrics.conversion >= 50 ? "text-amber-300" : "text-red-300"
+                              {metrics.conversion !== null
+                                ? <span className={cn("font-bold",
+                                    metrics.conversion >= 70 ? "text-success-300" :
+                                    metrics.conversion >= 50 ? "text-warning-300" : "text-error-300"
                                   )}>{metrics.conversion.toFixed(0)}%</span>
                                 : <span className="text-white/50">Chưa có dữ liệu</span>
                               }
@@ -428,22 +428,22 @@ export function FunnelChart({ funnel, previousPeriodConversion, config }: Funnel
                               {`• "${stage.stage_name}": ${stage.lead_count} leads`}
                             </p>
                             {metrics.dropOff > 0 && (
-                              <p className="text-amber-300 pl-2">
+                              <p className="text-warning-300 pl-2">
                                 • Chênh lệch: -{metrics.dropOff} leads ({metrics.dropOffPercent.toFixed(0)}%)
                               </p>
                             )}
                           </div>
                           
                           {/* Status */}
-                          <p className={cn("font-medium pt-1 border-t border-white/20", 
-                            metrics.conversion !== null && metrics.conversion >= 70 ? "text-emerald-300" :
-                            metrics.conversion !== null && metrics.conversion >= 50 ? "text-amber-300" : "text-red-300"
+                          <p className={cn("font-medium pt-1 border-t border-white/20",
+                            metrics.conversion !== null && metrics.conversion >= 70 ? "text-success-300" :
+                            metrics.conversion !== null && metrics.conversion >= 50 ? "text-warning-300" : "text-error-300"
                           )}>
                             Đánh giá: {conversionStatus.label}
                           </p>
                           
                           {isBottleneck && (
-                            <p className="text-red-300 font-medium bg-red-500/30 p-1.5 rounded">
+                            <p className="text-error-300 font-medium bg-error-500/30 p-1.5 rounded">
                               ⚠️ Điểm nghẽn chính - cần review quy trình
                             </p>
                           )}
@@ -467,7 +467,7 @@ export function FunnelChart({ funnel, previousPeriodConversion, config }: Funnel
                         <button
                           className={cn(
                             "relative group transition-all duration-200 hover:brightness-110 h-14 w-full flex-1",
-                            isBottleneck && "ring-2 ring-red-400/50 ring-offset-1"
+                            isBottleneck && "ring-2 ring-error-400/50 ring-offset-1"
                           )}
                           onClick={() => handleStageClick(stage.stage_id)}
                         >
@@ -496,8 +496,8 @@ export function FunnelChart({ funnel, previousPeriodConversion, config }: Funnel
                           <p className="font-medium">{stage.stage_name}: {stage.lead_count} leads</p>
                           {stage.outcome_breakdown && (
                             <div className="flex gap-3 text-muted-foreground">
-                              <span className="text-emerald-600">+{stage.outcome_breakdown.positive}</span>
-                              <span className="text-red-500">−{stage.outcome_breakdown.negative}</span>
+                              <span className="text-success-600">+{stage.outcome_breakdown.positive}</span>
+                              <span className="text-error-500">−{stage.outcome_breakdown.negative}</span>
                               <span>○{stage.outcome_breakdown.neutral}</span>
                             </div>
                           )}
@@ -512,7 +512,7 @@ export function FunnelChart({ funnel, previousPeriodConversion, config }: Funnel
                         {stage.lead_count}
                       </span>
                       {stage.outcome_breakdown && stage.outcome_breakdown.negative > 0 && (
-                        <span className="text-xs text-red-500 font-medium">
+                        <span className="text-xs text-error-500 font-medium">
                           −{stage.outcome_breakdown.negative}
                         </span>
                       )}
@@ -543,17 +543,17 @@ export function FunnelChart({ funnel, previousPeriodConversion, config }: Funnel
                           className={cn(
                             "flex items-center gap-2 p-3 rounded-lg border transition-colors text-left",
                             "hover:bg-accent/50",
-                            isPositive && "border-emerald-200 bg-emerald-50/50 dark:border-emerald-800 dark:bg-emerald-950/20",
-                            isNegative && "border-red-200 bg-red-50/50 dark:border-red-800 dark:bg-red-950/20",
-                            !isPositive && !isNegative && "border-gray-200 bg-gray-50/50 dark:border-gray-700 dark:bg-gray-900/20"
+                            isPositive && "border-success-200 bg-success-50/50 dark:border-success-800 dark:bg-success-950/20",
+                            isNegative && "border-error-200 bg-error-50/50 dark:border-error-800 dark:bg-error-950/20",
+                            !isPositive && !isNegative && "border-border bg-muted/50 dark:border-border dark:bg-muted/20"
                           )}
                         >
                           {isPositive ? (
-                            <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                            <CheckCircle2 className="h-4 w-4 text-success-600 shrink-0" />
                           ) : isNegative ? (
-                            <XCircle className="h-4 w-4 text-red-500 shrink-0" />
+                            <XCircle className="h-4 w-4 text-error-500 shrink-0" />
                           ) : (
-                            <PauseCircle className="h-4 w-4 text-gray-500 shrink-0" />
+                            <PauseCircle className="h-4 w-4 text-muted-foreground shrink-0" />
                           )}
                           <div className="flex-1 min-w-0">
                             <p className="text-xs text-muted-foreground truncate">
@@ -561,8 +561,8 @@ export function FunnelChart({ funnel, previousPeriodConversion, config }: Funnel
                             </p>
                             <p className={cn(
                               "text-sm font-semibold tabular-nums",
-                              isPositive && "text-emerald-700 dark:text-emerald-400",
-                              isNegative && "text-red-600 dark:text-red-400"
+                              isPositive && "text-success-700 dark:text-success-400",
+                              isNegative && "text-error-600 dark:text-error-400"
                             )}>
                               {stage.lead_count} <span className="font-normal text-xs">({percent.toFixed(1)}%)</span>
                             </p>
@@ -586,7 +586,7 @@ export function FunnelChart({ funnel, previousPeriodConversion, config }: Funnel
               <span>Tổng đầu vào: <strong className="text-foreground">{totalLeads}</strong></span>
             </div>
             {totalDropoff > 0 && (
-              <div className="flex items-center gap-1.5 text-red-600">
+              <div className="flex items-center gap-1.5 text-error-600">
                 <AlertTriangle className="h-3 w-3" />
                 <span>
                   Drop-off: {totalDropoff} ({(totalDropoff / Math.max(totalLeads, 1) * 100).toFixed(0)}%)

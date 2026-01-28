@@ -244,7 +244,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
               <Command className="text-primary h-5 w-5" />
             </div>
             <div>
-              <h1 className="text-xl font-bold tracking-tight">Trung Tâm Quản Lý Lead</h1>
+              <h1 className="text-xl font-bold font-display tracking-tight">Trung Tâm Quản Lý Lead</h1>
               <p className="text-muted-foreground text-xs">
                 {leadsPage?.total_count?.toLocaleString() || 0} lead
               </p>
@@ -334,7 +334,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
             ) : isError ? (
               <div className="flex h-40 items-center justify-center">
                 <div className="text-center">
-                  <p className="text-sm font-medium text-red-600">Lỗi tải lead</p>
+                  <p className="text-sm font-medium text-error-600">Lỗi tải lead</p>
                   <p className="text-muted-foreground mt-1 text-xs">
                     {error?.message || "Lỗi không xác định"}
                   </p>
@@ -411,7 +411,7 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Hủy</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700">
+            <AlertDialogAction onClick={confirmDelete} className="bg-error-600 hover:bg-error-700">
               Xoá
             </AlertDialogAction>
           </AlertDialogFooter>

@@ -31,11 +31,11 @@ const getActivityStatus = (nextActivityAt: string | null | undefined): ActivityS
 const getActivityIconColor = (status: ActivityStatus): string => {
   switch (status) {
     case "overdue":
-      return "text-red-500";
+      return "text-error-500";
     case "today":
-      return "text-amber-500";
+      return "text-warning-500";
     case "future":
-      return "text-blue-500";
+      return "text-info-500";
     default:
       return "";
   }
@@ -50,41 +50,41 @@ interface LeadCardProps {
 const getStatusColor = (status: LeadStatus) => {
   switch (status) {
     case "new":
-      return "bg-blue-500";
+      return "bg-info-500";
     case "assigned":
       return "bg-purple-500";
     case "contacted":
       return "bg-cyan-500";
     case "qualified":
-      return "bg-emerald-500";
+      return "bg-success-500";
     case "unqualified":
-      return "bg-gray-500";
+      return "bg-muted-foreground";
     case "converted":
-      return "bg-green-500";
+      return "bg-success-500";
     case "rejected":
-      return "bg-red-500";
+      return "bg-error-500";
     default:
-      return "bg-gray-500";
+      return "bg-muted-foreground";
   }
 };
 
 const getScoreColor = (score: number) => {
-  if (score >= 80) return "bg-red-100 text-red-700 border-red-200";
-  if (score >= 50) return "bg-yellow-100 text-yellow-700 border-yellow-200";
-  return "bg-gray-100 text-gray-700 border-gray-200";
+  if (score >= 80) return "bg-error-100 text-error-700 border-error-200";
+  if (score >= 50) return "bg-warning-100 text-warning-700 border-warning-200";
+  return "bg-muted text-muted-foreground border-border";
 };
 
 // Get border color based on score
 const getScoreBorderColor = (score: number) => {
-  if (score >= 70) return "border-l-emerald-500";
+  if (score >= 70) return "border-l-success-500";
   if (score >= 40) return "border-l-amber-500";
-  return "border-l-gray-300";
+  return "border-l-border";
 };
 
 // Get background based on status
 const getStatusBackground = (status: string, score: number) => {
-  if (status === "new") return "bg-blue-50/50 hover:bg-blue-50";
-  if (score <= 20) return "bg-gray-50/50 hover:bg-gray-100";
+  if (status === "new") return "bg-info-50/50 hover:bg-info-50";
+  if (score <= 20) return "bg-muted/50 hover:bg-muted";
   return "hover:bg-accent/50";
 };
 
@@ -98,8 +98,8 @@ export const LeadCard = React.memo(function LeadCard({
   // Determine border color priority: selected > activity > score
   const getBorderClass = () => {
     if (isSelected) return "border-l-primary bg-primary/5 ring-1 ring-primary/20";
-    if (activityStatus === "overdue") return "border-l-red-500 bg-red-50/50 hover:bg-red-50";
-    if (activityStatus === "today") return "border-l-amber-500 bg-amber-50/50 hover:bg-amber-50";
+    if (activityStatus === "overdue") return "border-l-error-500 bg-error-50/50 hover:bg-error-50";
+    if (activityStatus === "today") return "border-l-warning-500 bg-warning-50/50 hover:bg-warning-50";
     return cn(getScoreBorderColor(lead.lead_score), getStatusBackground(lead.status, lead.lead_score));
   };
 

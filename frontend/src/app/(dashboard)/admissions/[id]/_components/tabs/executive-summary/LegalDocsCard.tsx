@@ -36,10 +36,10 @@ export function LegalDocsCard({ profile }: LegalDocsCardProps) {
     : AlertCircle
 
   const statusColor = isComplete
-    ? "text-green-600"
+    ? "text-success-600"
     : hasWarning
-    ? "text-amber-600"
-    : "text-red-600"
+    ? "text-warning-600"
+    : "text-error-600"
 
   return (
     <Card>
@@ -69,18 +69,18 @@ export function LegalDocsCard({ profile }: LegalDocsCardProps) {
 
         {/* Warning Alert for optional fields */}
         {step1Status === "warning" && (
-          <Alert variant="default" className="bg-amber-50 border-amber-200 mt-3">
-            <AlertCircle className="h-4 w-4 text-amber-600" />
-            <AlertDescription className="text-sm text-amber-800">
+          <Alert variant="default" className="bg-warning-50 border-warning-200 mt-3">
+            <AlertCircle className="h-4 w-4 text-warning-600" />
+            <AlertDescription className="text-sm text-warning-800">
               Một số trường không bắt buộc chưa điền (Email, Nơi sinh, ...)
             </AlertDescription>
           </Alert>
         )}
 
         {step2Status === "warning" && (
-          <Alert variant="default" className="bg-amber-50 border-amber-200 mt-3">
-            <AlertCircle className="h-4 w-4 text-amber-600" />
-            <AlertDescription className="text-sm text-amber-800">
+          <Alert variant="default" className="bg-warning-50 border-warning-200 mt-3">
+            <AlertCircle className="h-4 w-4 text-warning-600" />
+            <AlertDescription className="text-sm text-warning-800">
               Chưa có thông tin gia đình hoặc người giám hộ
             </AlertDescription>
           </Alert>

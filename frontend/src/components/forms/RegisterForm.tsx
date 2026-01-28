@@ -79,7 +79,7 @@ export function RegisterForm() {
   return (
     <div className="bg-card mx-auto w-full max-w-md space-y-6 rounded border p-6 shadow-md md:p-8">
       <div className="space-y-2 text-center">
-        <h1 className="text-3xl font-bold">Tạo tài khoản</h1>
+        <h1 className="text-3xl font-bold font-display">Tạo tài khoản</h1>
         <p className="text-muted-foreground">Nhập thông tin của bạn để đăng ký</p>
       </div>
       <Form {...form}>

@@ -66,17 +66,17 @@ const getEventConfig = (eventType: string, method?: string) => {
       case "phone":
         return {
           icon: Phone,
-          color: "text-emerald-600",
-          bgColor: "bg-emerald-50",
-          ringColor: "ring-emerald-200",
+          color: "text-success-600",
+          bgColor: "bg-success-50",
+          ringColor: "ring-success-200",
           label: "Cuộc gọi",
         };
       case "email":
         return {
           icon: Mail,
-          color: "text-blue-600",
-          bgColor: "bg-blue-50",
-          ringColor: "ring-blue-200",
+          color: "text-info-600",
+          bgColor: "bg-info-50",
+          ringColor: "ring-info-200",
           label: "Email",
         };
       case "video":
@@ -91,9 +91,9 @@ const getEventConfig = (eventType: string, method?: string) => {
       case "in_person":
         return {
           icon: User,
-          color: "text-amber-600",
-          bgColor: "bg-amber-50",
-          ringColor: "ring-amber-200",
+          color: "text-warning-600",
+          bgColor: "bg-warning-50",
+          ringColor: "ring-warning-200",
           label: "Gặp trực tiếp",
         };
       case "sms":
@@ -107,9 +107,9 @@ const getEventConfig = (eventType: string, method?: string) => {
       default:
         return {
           icon: MessageSquare,
-          color: "text-slate-600",
-          bgColor: "bg-slate-100",
-          ringColor: "ring-slate-200",
+          color: "text-muted-foreground",
+          bgColor: "bg-muted",
+          ringColor: "ring-border",
           label: "Tư vấn",
         };
     }
@@ -129,9 +129,9 @@ const getEventConfig = (eventType: string, method?: string) => {
   // Default
   return {
     icon: Clock,
-    color: "text-slate-600",
-    bgColor: "bg-slate-100",
-    ringColor: "ring-slate-200",
+    color: "text-muted-foreground",
+    bgColor: "bg-muted",
+    ringColor: "ring-border",
     label: "Hoạt động",
   };
 };
@@ -141,22 +141,22 @@ const getOutcomeStyles = (outcomeType?: string | null) => {
   switch (outcomeType) {
     case "positive":
       return {
-        badgeBg: "bg-emerald-100",
-        badgeText: "text-emerald-700",
-        badgeBorder: "border-emerald-200",
+        badgeBg: "bg-success-100",
+        badgeText: "text-success-700",
+        badgeBorder: "border-success-200",
       };
     case "negative":
       return {
-        badgeBg: "bg-red-100",
-        badgeText: "text-red-700",
-        badgeBorder: "border-red-200",
+        badgeBg: "bg-error-100",
+        badgeText: "text-error-700",
+        badgeBorder: "border-error-200",
       };
     case "neutral":
     default:
       return {
-        badgeBg: "bg-blue-100",
-        badgeText: "text-blue-700",
-        badgeBorder: "border-blue-200",
+        badgeBg: "bg-info-100",
+        badgeText: "text-info-700",
+        badgeBorder: "border-info-200",
       };
   }
 };
@@ -226,7 +226,7 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
 
   if (timeline.length === 0) {
     return (
-      <div className="text-center py-12 text-muted-foreground bg-slate-50/50 rounded-lg border border-dashed">
+      <div className="text-center py-12 text-muted-foreground bg-muted/50 rounded-lg border border-dashed">
         <MessageSquare className="h-10 w-10 mx-auto mb-3 opacity-20" />
         <p className="font-medium">Chưa có hoạt động nào</p>
         <p className="text-xs mt-1">Lịch sử tương tác sẽ xuất hiện tại đây</p>
@@ -264,7 +264,7 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
           return (
             <div
               key={`${event.id}-${index}`}
-              className="flex items-start gap-3 p-3 bg-slate-50 hover:bg-slate-100 rounded-xl transition-colors"
+              className="flex items-start gap-3 p-3 bg-muted hover:bg-muted/80 rounded-xl transition-colors"
             >
               {/* Icon */}
               <div className={cn("w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0", config.bgColor)}>
@@ -294,25 +294,25 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                         {statusName}
                       </Badge>
                     ) : (
-                      <span className="text-sm font-medium text-slate-800 truncate">{statusName}</span>
+                      <span className="text-sm font-medium text-foreground truncate">{statusName}</span>
                     )}
 
                     {/* Method label */}
                     {isConsultation && config.label !== "Tư vấn" && (
-                      <span className="text-[10px] text-slate-400 hidden sm:inline">
+                      <span className="text-[10px] text-muted-foreground hidden sm:inline">
                         {config.label}
                       </span>
                     )}
                   </div>
 
                   {/* Timestamp */}
-                  <span className="text-xs text-slate-400 flex-shrink-0">
+                  <span className="text-xs text-muted-foreground flex-shrink-0">
                     {format(parseISO(event.timestamp || ""), "dd/MM HH:mm")}
                   </span>
                 </div>
 
                 {/* Row 2: Actor + Notes */}
-                <div className="flex items-center gap-2 text-xs text-slate-500">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   {actorName && (
                     <>
                       <span className="font-medium">{actorName}</span>
@@ -320,7 +320,7 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                     </>
                   )}
                   {scheduledAt && (
-                    <span className="text-blue-600 flex items-center gap-1">
+                    <span className="text-info-600 flex items-center gap-1">
                       <Calendar className="w-3 h-3" />
                       Hẹn {format(parseISO(scheduledAt), "dd/MM HH:mm")}
                     </span>
@@ -329,7 +329,7 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
 
                 {/* Row 3: Notes (truncated) */}
                 {notes && !notes.startsWith("Ghi nhận:") && (
-                  <p className="text-xs text-slate-500 truncate mt-1 italic">"{notes}"</p>
+                  <p className="text-xs text-muted-foreground truncate mt-1 italic">"{notes}"</p>
                 )}
               </div>
             </div>
@@ -339,7 +339,7 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
         {/* Show more indicator if there are more items */}
         {effectiveLimit && timeline.length > effectiveLimit && (
           <div className="text-center pt-1">
-            <span className="text-xs text-slate-400">
+            <span className="text-xs text-muted-foreground">
               +{timeline.length - effectiveLimit} hoạt động khác
             </span>
           </div>
@@ -599,9 +599,9 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                                 variant="outline"
                                 className={cn(
                                   "text-xs font-normal gap-1",
-                                  outcomeType === "positive" && "border-emerald-200 bg-emerald-50 text-emerald-700",
-                                  outcomeType === "negative" && "border-red-200 bg-red-50 text-red-700",
-                                  outcomeType === "neutral" && "border-slate-200 bg-slate-50 text-slate-600"
+                                  outcomeType === "positive" && "border-success-200 bg-success-50 text-success-700",
+                                  outcomeType === "negative" && "border-error-200 bg-error-50 text-error-700",
+                                  outcomeType === "neutral" && "border-border bg-muted text-muted-foreground"
                                 )}
                               >
                                 {outcomeType === "positive" && "✓ Tích cực"}
@@ -614,7 +614,7 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                             {isConsultation && consultData?.scheduled_at && (
                               <Badge
                                 variant="outline"
-                                className="text-xs font-normal gap-1 border-blue-200 bg-blue-50 text-blue-700"
+                                className="text-xs font-normal gap-1 border-info-200 bg-info-50 text-info-700"
                               >
                                 <Calendar className="h-3 w-3" />
                                 Hẹn: {format(parseISO(consultData.scheduled_at), "dd/MM HH:mm")}
@@ -625,7 +625,7 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                             {isConsultation && consultData?.duration_minutes && consultData.duration_minutes > 0 && (
                               <Badge
                                 variant="outline"
-                                className="text-xs font-normal gap-1 border-slate-200 bg-slate-50 text-slate-600"
+                                className="text-xs font-normal gap-1 border-border bg-muted text-muted-foreground"
                               >
                                 <Clock className="h-3 w-3" />
                                 {consultData.duration_minutes} phút
@@ -639,7 +639,7 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
                                 className={cn(
                                   "text-xs font-normal gap-1",
                                   (eventData as { method?: string }).method === "automatic" && "border-purple-200 bg-purple-50 text-purple-700",
-                                  (eventData as { method?: string }).method === "officer_reassign" && "border-blue-200 bg-blue-50 text-blue-700",
+                                  (eventData as { method?: string }).method === "officer_reassign" && "border-info-200 bg-info-50 text-info-700",
                                   (eventData as { method?: string }).method === "manual" && "border-orange-200 bg-orange-50 text-orange-700"
                                 )}
                               >
@@ -688,7 +688,7 @@ export function LeadTimelineTab({ leadId, maxItems, compact, limit }: LeadTimeli
             <AlertDialogCancel>Hủy</AlertDialogCancel>
             <AlertDialogAction
               onClick={confirmDelete}
-              className="bg-red-600 hover:bg-red-700"
+              className="bg-error-600 hover:bg-error-700"
             >
               Xóa
             </AlertDialogAction>

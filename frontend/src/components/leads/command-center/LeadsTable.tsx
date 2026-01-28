@@ -400,9 +400,9 @@ export function LeadsTable({
           const score = row.original.lead_score ?? 0;
           // Color coding based on score ranges
           let colorClass = "text-muted-foreground";
-          if (score >= 70) colorClass = "text-green-600 font-semibold";
-          else if (score >= 50) colorClass = "text-blue-600 font-medium";
-          else if (score >= 30) colorClass = "text-yellow-600";
+          if (score >= 70) colorClass = "text-success-600 font-semibold";
+          else if (score >= 50) colorClass = "text-info-600 font-medium";
+          else if (score >= 30) colorClass = "text-warning-600";
           return (
             <div className={cn("text-sm text-right tabular-nums pr-2", colorClass)}>
               {score}
@@ -779,7 +779,7 @@ export function LeadsTable({
                         // ✅ Phase 2: Enhanced selected row - prominent background, left border, and subtle shadow
                         isSelected && "bg-primary/10 border-l-primary border-l-3 hover:bg-primary/15 shadow-sm",
                         // Focused row (keyboard nav) - visible highlight
-                        isFocused && !isSelected && "bg-blue-50 dark:bg-blue-950/30 border-l-blue-500 border-l-2"
+                        isFocused && !isSelected && "bg-info-50 dark:bg-info-950/30 border-l-info-500 border-l-2"
                       )}
                       style={{ 
                         height: virtualRow.size,

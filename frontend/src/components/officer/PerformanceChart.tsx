@@ -144,7 +144,7 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
             <Tooltip
               contentStyle={{
                 backgroundColor: "rgba(255, 255, 255, 0.95)", // High opacity white
-                border: "1px solid #e2e8f0", // border-slate-200
+                border: "1px solid hsl(var(--border))", // border
                 borderRadius: "6px",
                 fontSize: "12px",
                 boxShadow: "0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)", // shadow-lg
@@ -215,7 +215,7 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
             <Line
               type="monotone"
               dataKey="Chuyển đổi"
-              stroke="#10b981" // Emerald-500
+              stroke="hsl(var(--success-500))" // success-500
               strokeWidth={2}
               dot={false}
               activeDot={{ r: 6, fill: "#10b981", strokeWidth: 0 }}
@@ -234,7 +234,7 @@ export function PerformanceChart({ trends, dailyGoal = 5, teamAverage }: Perform
             <span>TB tư vấn/ngày: {avgConsultations}</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="h-2 w-2 rounded-full ring-2 ring-emerald-500/20 bg-emerald-500" />
+            <div className="h-2 w-2 rounded-full ring-2 ring-success-500/20 bg-success-500" />
             <span>Tỉ lệ: {totals.consultations > 0 ? Math.round((totals.converted / totals.consultations) * 100) : 0}%</span>
           </div>
           {teamAverage !== undefined && (

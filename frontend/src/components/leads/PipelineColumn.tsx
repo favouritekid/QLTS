@@ -18,13 +18,13 @@ interface PipelineColumnProps {
 }
 
 const STAGE_COLORS: Record<string, string> = {
-  new_lead: "bg-blue-100 border-blue-300",
-  contacted: "bg-yellow-100 border-yellow-300",
+  new_lead: "bg-info-100 border-info-300",
+  contacted: "bg-warning-100 border-warning-300",
   consultation_scheduled: "bg-orange-100 border-orange-300",
-  consultation_completed: "bg-green-100 border-green-300",
+  consultation_completed: "bg-success-100 border-success-300",
   application_submitted: "bg-teal-100 border-teal-300",
-  enrolled: "bg-emerald-100 border-emerald-300",
-  lost: "bg-red-100 border-red-300",
+  enrolled: "bg-success-100 border-success-300",
+  lost: "bg-error-100 border-error-300",
 };
 
 export function PipelineColumn({ stage, leads, isActiveDropZone }: PipelineColumnProps) {
@@ -32,19 +32,19 @@ export function PipelineColumn({ stage, leads, isActiveDropZone }: PipelineColum
     id: stage.id,
   });
 
-  const columnColor = STAGE_COLORS[stage.id] || "bg-gray-100 border-gray-300";
+  const columnColor = STAGE_COLORS[stage.id] || "bg-muted border-border";
   const leadIds = leads.map((lead) => lead.id);
 
   // Determine conversion trend
   const conversionRate = stage.conversion_rate || 0;
   let TrendIcon = Minus;
-  let trendColor = "text-gray-500";
+  let trendColor = "text-muted-foreground";
   if (conversionRate > 75) {
     TrendIcon = TrendingUp;
-    trendColor = "text-green-600";
+    trendColor = "text-success-600";
   } else if (conversionRate < 40) {
     TrendIcon = TrendingDown;
-    trendColor = "text-red-600";
+    trendColor = "text-error-600";
   }
 
   return (

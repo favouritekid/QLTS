@@ -229,7 +229,7 @@ export function ContextSelector({ onContextSelected }: ContextSelectorProps) {
                           <span>
                             {offering.program?.name || `Program #${offering.program_id}`} - {offering.offering_type}
                           </span>
-                          {isConfigured && <Check className="h-4 w-4 text-green-500" />}
+                          {isConfigured && <Check className="h-4 w-4 text-success-500" />}
                         </div>
                       </SelectItem>
                     );
@@ -261,7 +261,7 @@ export function ContextSelector({ onContextSelected }: ContextSelectorProps) {
                 </div>
               ) : (
                 <div className="flex items-start gap-3">
-                  <Calendar className="h-5 w-5 text-green-600 mt-0.5" />
+                  <Calendar className="h-5 w-5 text-success-600 mt-0.5" />
                   <div>
                     <p className="font-medium">Đã tìm thấy Thông tin</p>
                     <p className="text-sm text-muted-foreground mt-1">

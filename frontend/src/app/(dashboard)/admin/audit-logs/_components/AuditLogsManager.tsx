@@ -82,17 +82,17 @@ const ACTION_CONFIG: Record<
   created: {
     icon: Plus,
     label: "Tạo mới",
-    color: "bg-green-100 text-green-700",
+    color: "bg-success-100 text-success-700",
   },
   updated: {
     icon: Pencil,
     label: "Cập nhật",
-    color: "bg-blue-100 text-blue-700",
+    color: "bg-info-100 text-info-700",
   },
   deleted: {
     icon: Trash2,
     label: "Xóa",
-    color: "bg-red-100 text-red-700",
+    color: "bg-error-100 text-error-700",
   },
   restored: {
     icon: RotateCcw,
@@ -115,7 +115,7 @@ function getActionConfig(action: string) {
     ACTION_CONFIG[action] || {
       icon: Clock,
       label: action,
-      color: "bg-gray-100 text-gray-700",
+      color: "bg-muted text-muted-foreground",
     }
   );
 }
@@ -241,11 +241,11 @@ function AuditLogRow({ entry }: { entry: AuditLogEntry }) {
             {Object.entries(entry.changes).slice(0, 2).map(([field, change]) => (
               <div key={field} className="truncate">
                 <span className="font-medium">{field}:</span>{" "}
-                <span className="text-red-600 line-through">
+                <span className="text-error-600 line-through">
                   {formatValue(change.old)}
                 </span>{" "}
                 <ArrowRight className="h-2 w-2 inline text-muted-foreground" />{" "}
-                <span className="text-green-600">{formatValue(change.new)}</span>
+                <span className="text-success-600">{formatValue(change.new)}</span>
               </div>
             ))}
             {Object.keys(entry.changes).length > 2 && (
@@ -257,11 +257,11 @@ function AuditLogRow({ entry }: { entry: AuditLogEntry }) {
         ) : entry.field_name ? (
           <div className="text-xs">
             <span className="font-medium">{entry.field_name}:</span>{" "}
-            <span className="text-red-600 line-through">
+            <span className="text-error-600 line-through">
               {formatValue(entry.old_value)}
             </span>{" "}
             <ArrowRight className="h-2 w-2 inline text-muted-foreground" />{" "}
-            <span className="text-green-600">{formatValue(entry.new_value)}</span>
+            <span className="text-success-600">{formatValue(entry.new_value)}</span>
           </div>
         ) : (
           <span className="text-xs text-muted-foreground">{entry.reason || "-"}</span>

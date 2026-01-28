@@ -469,7 +469,7 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
 
             {/* Show Best N Info Alert */}
             {isBestNMode && (
-                <Alert className="mb-4 bg-blue-50 text-blue-800 border-blue-200">
+                <Alert className="mb-4 bg-info-50 text-info-800 border-info-200">
                   <CheckCircle2 className="h-4 w-4" />
                   <AlertDescription>
                     Hệ thống sẽ tự động chọn <strong>{requiredSubjectCount} môn có điểm cao nhất</strong> trong các môn hợp lệ để xét tuyển.
@@ -553,9 +553,9 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
                           name={`admission_scores.subject_scores.${subject}`}
                           render={({ field }) => (
                             <FormItem>
-                              <FormLabel className={isHighlighted ? "text-green-700 font-bold flex items-center gap-1" : ""}>
+                              <FormLabel className={isHighlighted ? "text-success-700 font-bold flex items-center gap-1" : ""}>
                                 {label}
-                                {isHighlighted && <CheckCircle2 className="w-3 h-3 text-green-600" />}
+                                {isHighlighted && <CheckCircle2 className="w-3 h-3 text-success-600" />}
                               </FormLabel>
                               <FormControl>
                                 <Input
@@ -571,7 +571,7 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
                                       e.target.value ? parseFloat(e.target.value) : null
                                     )
                                   }
-                                  className={isHighlighted ? "border-green-500 bg-green-50 ring-green-500/20" : ""}
+                                  className={isHighlighted ? "border-success-500 bg-success-50 ring-success-500/20" : ""}
                                 />
                               </FormControl>
                               <FormMessage />
@@ -618,8 +618,8 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
             !selectedCriterion || isQualified === null
               ? "bg-muted/50"
               : isQualified
-              ? "bg-green-50 border-green-200"
-              : "bg-red-50 border-red-200"
+              ? "bg-success-50 border-success-200"
+              : "bg-error-50 border-error-200"
           }
         >
           <CardHeader>
@@ -629,9 +629,9 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
               ) : isQualified === null ? (
                 <AlertCircle className="text-amber-500" />
               ) : isQualified ? (
-                <CheckCircle2 className="text-green-600" />
+                <CheckCircle2 className="text-success-600" />
               ) : (
-                <XCircle className="text-red-600" />
+                <XCircle className="text-error-600" />
               )}
               KẾT QUẢ XÉT TUYỂN
             </CardTitle>
@@ -684,9 +684,9 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
                       </p>
                       <div className="text-sm space-y-1">
                           {Array.from(highlightedSubjects).map(subjCode => (
-                              <div key={subjCode} className="flex justify-between items-center bg-green-50/50 px-2 py-1 rounded border border-green-100">
+                              <div key={subjCode} className="flex justify-between items-center bg-success-50/50 px-2 py-1 rounded border border-success-100">
                                   <span>{SUBJECT_LABELS[subjCode] || subjCode}</span>
-                                  <span className="font-bold text-green-700">
+                                  <span className="font-bold text-success-700">
                                       {profile?.admission_scores?.subject_scores?.[subjCode] ?? "—"}
                                   </span>
                               </div>
@@ -705,11 +705,11 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
                   <div className="flex justify-between items-center font-semibold">
                     <span>Kết quả:</span>
                     <span className={
-                      isQualified === null 
-                        ? "text-amber-600" 
-                        : isQualified 
-                          ? "text-green-700" 
-                          : "text-red-700"
+                      isQualified === null
+                        ? "text-warning-600"
+                        : isQualified
+                          ? "text-success-700"
+                          : "text-error-700"
                     }>
                       {isQualified === null 
                         ? "Đang xử lý..." 
@@ -721,7 +721,7 @@ export function ScoresTab({ form, isEditable, appliedRules, profile }: ScoresTab
                   
                   {/* Show actual validation errors from backend when not qualified */}
                   {!isQualified && profile?.validation_errors && profile.validation_errors.length > 0 && (
-                    <div className="text-xs text-red-600 mt-2 space-y-1">
+                    <div className="text-xs text-error-600 mt-2 space-y-1">
                       {profile.validation_errors.map((err, i) => (
                         <p key={i}>→ {err}</p>
                       ))}

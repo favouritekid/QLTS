@@ -43,9 +43,9 @@ export function CoverageMatrix({ context, onNavigate }: CoverageMatrixProps) {
   // Render check/cross icon
   const renderCheckIcon = (value: boolean) => {
     return value ? (
-      <CheckCircle2 className="h-5 w-5 text-green-600" />
+      <CheckCircle2 className="h-5 w-5 text-success-600" />
     ) : (
-      <XCircle className="h-5 w-5 text-red-500" />
+      <XCircle className="h-5 w-5 text-error-500" />
     );
   };
 
@@ -53,7 +53,7 @@ export function CoverageMatrix({ context, onNavigate }: CoverageMatrixProps) {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "active":
-        return <Badge className="bg-green-500">Hoạt động</Badge>;
+        return <Badge className="bg-success-500">Hoạt động</Badge>;
       case "draft":
         return <Badge variant="secondary">Nháp</Badge>;
       case "inactive":
@@ -73,7 +73,7 @@ export function CoverageMatrix({ context, onNavigate }: CoverageMatrixProps) {
             Quay lại Danh sách
           </Button>
         </div>
-        <h1 className="text-3xl font-bold">Ma trận Phủ</h1>
+        <h1 className="text-3xl font-bold font-display">Ma trận Phủ</h1>
         <p className="text-muted-foreground mt-2">
           Kiểm tra tình trạng sẵn sàng của các đợt tuyển sinh cho Năm học {context.academicYear}
         </p>
@@ -81,7 +81,7 @@ export function CoverageMatrix({ context, onNavigate }: CoverageMatrixProps) {
 
       {/* Summary Card */}
       {!isLoading && matrixData && (
-        <Card className={allReady ? "border-green-500" : "border-amber-500"}>
+        <Card className={allReady ? "border-success-500" : "border-amber-500"}>
           <CardContent className="pt-6">
             <div className="flex items-center justify-between">
               <div>
@@ -93,7 +93,7 @@ export function CoverageMatrix({ context, onNavigate }: CoverageMatrixProps) {
                 </p>
               </div>
               {allReady ? (
-                <div className="flex items-center gap-2 text-green-600">
+                <div className="flex items-center gap-2 text-success-600">
                   <CheckCircle2 className="h-6 w-6" />
                   <span className="font-medium">Tất cả đã sẵn sàng!</span>
                 </div>
@@ -146,7 +146,7 @@ export function CoverageMatrix({ context, onNavigate }: CoverageMatrixProps) {
                   {rows.map((row: CoverageRow) => (
                     <TableRow
                       key={row.path_id}
-                      className={row.can_activate ? "bg-green-50/50" : ""}
+                      className={row.can_activate ? "bg-success-50/50" : ""}
                     >
                       <TableCell>
                         <div>
@@ -177,7 +177,7 @@ export function CoverageMatrix({ context, onNavigate }: CoverageMatrixProps) {
                             ))}
                           </ul>
                         ) : (
-                          <span className="text-sm text-green-600">Không có lỗi</span>
+                          <span className="text-sm text-success-600">Không có lỗi</span>
                         )}
                       </TableCell>
                     </TableRow>

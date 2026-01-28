@@ -113,7 +113,7 @@ export function OfficerRatingInput({
                       compact ? "h-4 w-4" : "h-5 w-5",
                       star <= displayRating
                         ? "fill-amber-400 text-amber-400"
-                        : "fill-transparent text-gray-300 hover:text-amber-200"
+                        : "fill-transparent text-border hover:text-amber-200"
                     )}
                   />
                 </button>

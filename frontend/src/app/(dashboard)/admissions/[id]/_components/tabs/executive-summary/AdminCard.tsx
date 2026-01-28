@@ -44,10 +44,10 @@ export function AdminCard({ profile }: AdminCardProps) {
     : AlertTriangle
 
   const statusColor = isComplete
-    ? "text-green-600"
+    ? "text-success-600"
     : hasPending
-    ? "text-amber-600"
-    : "text-red-600"
+    ? "text-warning-600"
+    : "text-error-600"
 
   return (
     <Card>
@@ -63,28 +63,28 @@ export function AdminCard({ profile }: AdminCardProps) {
 
       <CardContent className="space-y-3">
         {/* Documents Summary */}
-        <div 
-          className={`rounded-lg p-3.5 border ${ 
+        <div
+          className={`rounded-lg p-3.5 border ${
             verifiedCount === mandatoryCount && mandatoryCount > 0
-              ? "bg-gradient-to-br from-green-50 to-green-100 border-green-200"
-              : "bg-gradient-to-br from-amber-50 to-amber-100 border-amber-200"
+              ? "bg-gradient-to-br from-success-50 to-success-100 border-success-200"
+              : "bg-gradient-to-br from-warning-50 to-warning-100 border-warning-200"
           }`}
         >
           <div className="flex justify-between items-center text-sm mb-1">
-            <span 
+            <span
               className={`font-medium ${
                 verifiedCount === mandatoryCount && mandatoryCount > 0
-                  ? "text-green-900"
-                  : "text-amber-900"
+                  ? "text-success-900"
+                  : "text-warning-900"
               }`}
             >
               Tài liệu đã nộp / Bắt buộc
             </span>
-            <span 
+            <span
               className={`font-bold text-lg ${
                 verifiedCount === mandatoryCount && mandatoryCount > 0
-                  ? "text-green-700"
-                  : "text-amber-700"
+                  ? "text-success-700"
+                  : "text-warning-700"
               }`}
             >
               {submittedCount} / {mandatoryCount}
@@ -92,19 +92,19 @@ export function AdminCard({ profile }: AdminCardProps) {
           </div>
 
           {missingCount > 0 && (
-            <div className="text-xs text-red-600 font-medium">
+            <div className="text-xs text-error-600 font-medium">
               Còn thiếu: {missingCount} tài liệu
             </div>
           )}
 
           {missingCount === 0 && verifiedCount < mandatoryCount && (
-            <div className="text-xs text-amber-700 font-medium">
+            <div className="text-xs text-warning-700 font-medium">
               Đã nộp đủ, chờ xác nhận ({verifiedCount}/{mandatoryCount} đã duyệt)
             </div>
           )}
 
           {verifiedCount === mandatoryCount && mandatoryCount > 0 && (
-            <div className="text-xs text-green-700 font-medium flex items-center gap-1">
+            <div className="text-xs text-success-700 font-medium flex items-center gap-1">
               <CheckCircle2 className="w-3 h-3" />
               Đã xác nhận đầy đủ
             </div>

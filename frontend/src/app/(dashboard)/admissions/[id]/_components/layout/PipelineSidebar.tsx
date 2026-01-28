@@ -123,8 +123,8 @@ export function PipelineSidebar({
                     <div className={cn(
                         "w-8 h-8 rounded-full flex items-center justify-center border",
                         isActive ? "border-primary text-primary" : "border-muted bg-background",
-                        status === "success" && !isActive && "bg-green-50 border-green-200 text-green-600",
-                        status === "error" && !isActive && "bg-red-50 border-red-200 text-red-600"
+                        status === "success" && !isActive && "bg-success-50 border-success-200 text-success-600",
+                        status === "error" && !isActive && "bg-error-50 border-error-200 text-error-600"
                     )}>
                         <span className="text-xs">{step.id}</span>
                     </div>
@@ -133,7 +133,7 @@ export function PipelineSidebar({
 
                 {/* Phase 3: Error Count Badge - Positioned like notification */}
                 {stepErrorCount[step.id] > 0 && (
-                  <div className="absolute -top-1 -right-1 flex items-center justify-center min-w-[20px] h-5 px-1.5 bg-red-500 text-white text-xs font-semibold rounded-full border-2 border-background">
+                  <div className="absolute -top-1 -right-1 flex items-center justify-center min-w-[20px] h-5 px-1.5 bg-error-500 text-white text-xs font-semibold rounded-full border-2 border-background">
                     {stepErrorCount[step.id]}
                   </div>
                 )}
@@ -162,32 +162,32 @@ export function PipelineSidebar({
       {/* Issues Summary (Collapsible) - Grouped by Category */}
       {validationErrors.length > 0 && (
         <Collapsible open={isIssuesOpen} onOpenChange={setIsIssuesOpen} className="px-1">
-          <CollapsibleTrigger className="flex items-center justify-between w-full px-3 py-2 rounded-lg bg-red-50 border border-red-200 hover:bg-red-100 transition-colors">
-            <div className="flex items-center gap-2 text-sm font-medium text-red-700">
+          <CollapsibleTrigger className="flex items-center justify-between w-full px-3 py-2 rounded-lg bg-error-50 border border-error-200 hover:bg-error-100 transition-colors">
+            <div className="flex items-center gap-2 text-sm font-medium text-error-700">
               <AlertCircle className="w-4 h-4" />
               <span>Vấn đề cần sửa ({validationErrors.length})</span>
             </div>
             {isIssuesOpen ? (
-              <ChevronUp className="w-4 h-4 text-red-600" />
+              <ChevronUp className="w-4 h-4 text-error-600" />
             ) : (
-              <ChevronDown className="w-4 h-4 text-red-600" />
+              <ChevronDown className="w-4 h-4 text-error-600" />
             )}
           </CollapsibleTrigger>
 
-          <CollapsibleContent className="mt-2 px-3 py-2 bg-white border border-red-100 rounded-lg max-h-[300px] overflow-y-auto">
+          <CollapsibleContent className="mt-2 px-3 py-2 bg-white border border-error-100 rounded-lg max-h-[300px] overflow-y-auto">
             {/* Grouped Errors Display */}
             {groupedValidationErrors ? (
               <div className="space-y-3">
                 {/* Personal Info Section */}
                 {groupedValidationErrors.personal_info && groupedValidationErrors.personal_info.count > 0 && (
                   <div>
-                    <h4 className="text-xs font-semibold text-gray-800 mb-1.5">
+                    <h4 className="text-xs font-semibold text-foreground mb-1.5">
                       {groupedValidationErrors.personal_info.category} ({groupedValidationErrors.personal_info.count})
                     </h4>
-                    <ul className="text-xs text-gray-700 space-y-1 ml-2">
+                    <ul className="text-xs text-muted-foreground space-y-1 ml-2">
                       {groupedValidationErrors.personal_info.errors.map((error, idx) => (
                         <li key={idx} className="flex items-start gap-2">
-                          <span className="text-red-500 mt-0.5">•</span>
+                          <span className="text-error-500 mt-0.5">•</span>
                           <span className="leading-relaxed">{error}</span>
                         </li>
                       ))}
@@ -198,13 +198,13 @@ export function PipelineSidebar({
                 {/* Documents Section */}
                 {groupedValidationErrors.documents && groupedValidationErrors.documents.count > 0 && (
                   <div>
-                    <h4 className="text-xs font-semibold text-gray-800 mb-1.5">
+                    <h4 className="text-xs font-semibold text-foreground mb-1.5">
                       {groupedValidationErrors.documents.category} ({groupedValidationErrors.documents.count})
                     </h4>
-                    <ul className="text-xs text-gray-700 space-y-1 ml-2">
+                    <ul className="text-xs text-muted-foreground space-y-1 ml-2">
                       {groupedValidationErrors.documents.errors.map((error, idx) => (
                         <li key={idx} className="flex items-start gap-2">
-                          <span className="text-red-500 mt-0.5">•</span>
+                          <span className="text-error-500 mt-0.5">•</span>
                           <span className="leading-relaxed">{error}</span>
                         </li>
                       ))}
@@ -215,13 +215,13 @@ export function PipelineSidebar({
                 {/* Scores Section */}
                 {groupedValidationErrors.scores && groupedValidationErrors.scores.count > 0 && (
                   <div>
-                    <h4 className="text-xs font-semibold text-gray-800 mb-1.5">
+                    <h4 className="text-xs font-semibold text-foreground mb-1.5">
                       {groupedValidationErrors.scores.category} ({groupedValidationErrors.scores.count})
                     </h4>
-                    <ul className="text-xs text-gray-700 space-y-1 ml-2">
+                    <ul className="text-xs text-muted-foreground space-y-1 ml-2">
                       {groupedValidationErrors.scores.errors.map((error, idx) => (
                         <li key={idx} className="flex items-start gap-2">
-                          <span className="text-red-500 mt-0.5">•</span>
+                          <span className="text-error-500 mt-0.5">•</span>
                           <span className="leading-relaxed">{error}</span>
                         </li>
                       ))}
@@ -231,10 +231,10 @@ export function PipelineSidebar({
               </div>
             ) : (
               /* Fallback to flat list if grouped data not available */
-              <ul className="text-xs text-gray-700 space-y-1.5">
+              <ul className="text-xs text-muted-foreground space-y-1.5">
                 {validationErrors.map((error, idx) => (
                   <li key={idx} className="flex items-start gap-2">
-                    <span className="text-red-500 mt-0.5">•</span>
+                    <span className="text-error-500 mt-0.5">•</span>
                     <span className="leading-relaxed">{error}</span>
                   </li>
                 ))}

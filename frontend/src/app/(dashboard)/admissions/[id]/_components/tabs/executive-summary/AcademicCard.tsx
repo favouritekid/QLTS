@@ -35,10 +35,10 @@ export function AcademicCard({ profile }: AcademicCardProps) {
     : AlertTriangle
 
   const statusColor = isComplete
-    ? "text-green-600"
+    ? "text-success-600"
     : hasError
-    ? "text-red-600"
-    : "text-amber-600"
+    ? "text-error-600"
+    : "text-warning-600"
 
   // Determine which score to display
   const methodType = profile.applied_rules?.method_type
@@ -63,14 +63,14 @@ export function AcademicCard({ profile }: AcademicCardProps) {
 
       <CardContent className="space-y-3">
         {/* Score Display - Large */}
-        <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4 border border-blue-200">
+        <div className="bg-gradient-to-br from-info-50 to-info-100 rounded-lg p-4 border border-info-200">
           {isGpaOnly ? (
             // GPA-only method
             <div className="text-center">
-              <div className="text-xs font-medium text-blue-600 mb-1">
+              <div className="text-xs font-medium text-info-600 mb-1">
                 Điểm Trung Bình (GPA)
               </div>
-              <div className="text-4xl font-bold text-blue-700">
+              <div className="text-4xl font-bold text-info-700">
                 {gpa !== null && gpa !== undefined ? gpa.toFixed(2) : "N/A"}
               </div>
               <div className="text-xs text-muted-foreground mt-1">
@@ -80,7 +80,7 @@ export function AcademicCard({ profile }: AcademicCardProps) {
           ) : (
             // Subject-based method
             <div className="text-center">
-              <div className="text-xs font-medium text-blue-600 mb-1">
+              <div className="text-xs font-medium text-info-600 mb-1">
                 Tổng Điểm Xét Tuyển
                 {selectedGroup && (
                   <span className="ml-1 font-semibold">
@@ -88,7 +88,7 @@ export function AcademicCard({ profile }: AcademicCardProps) {
                   </span>
                 )}
               </div>
-              <div className="text-4xl font-bold text-blue-700">
+              <div className="text-4xl font-bold text-info-700">
                 {totalScore !== null && totalScore !== undefined
                   ? totalScore.toFixed(2)
                   : "N/A"}

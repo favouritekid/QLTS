@@ -249,7 +249,7 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
                                   }
                                   className={`h-5 px-1.5 text-[10px] ${
                                     status.outcome_type === "positive"
-                                      ? "bg-green-600 hover:bg-green-700"
+                                      ? "bg-success-600 hover:bg-success-700"
                                       : ""
                                   }`}
                                 >
@@ -277,7 +277,7 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
                                 {!status.updates_pipeline && (
                                   <Badge
                                     variant="outline"
-                                    className="border-blue-500 text-blue-700 bg-blue-50 h-5 px-1.5 text-[10px]"
+                                    className="border-info-500 text-info-700 bg-info-50 h-5 px-1.5 text-[10px]"
                                   >
                                     Không cập nhật
                                   </Badge>

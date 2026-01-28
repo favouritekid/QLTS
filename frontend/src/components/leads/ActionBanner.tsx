@@ -101,11 +101,11 @@ function getActionBannerConfig(lead: Lead): BannerConfig | null {
       message: `Hẹn gọi lại ${formatTimeAgo(overdueDate)} — Cần liên hệ ngay`,
       actionPrimary: "Gọi ngay",
       actionSecondary: "Đánh dấu hoàn thành",
-      gradient: "from-red-50 to-rose-50",
-      iconBg: "bg-red-100",
-      iconColor: "text-red-600",
-      textColor: "text-red-800",
-      badgeColor: "bg-red-200 text-red-800",
+      gradient: "from-error-50 to-rose-50",
+      iconBg: "bg-error-100",
+      iconColor: "text-error-600",
+      textColor: "text-error-800",
+      badgeColor: "bg-error-200 text-error-800",
       icon: AlertTriangle,
     };
   }
@@ -127,11 +127,11 @@ function getActionBannerConfig(lead: Lead): BannerConfig | null {
         message: `Có lịch hẹn lúc ${formatScheduledTime(scheduledDate)}`,
         actionPrimary: isSoon ? "Gọi ngay" : null,
         actionSecondary: "Đánh dấu hoàn thành",
-        gradient: "from-amber-50 to-orange-50",
-        iconBg: "bg-amber-100",
-        iconColor: "text-amber-600",
-        textColor: "text-amber-800",
-        badgeColor: "bg-amber-200 text-amber-800",
+        gradient: "from-warning-50 to-orange-50",
+        iconBg: "bg-warning-100",
+        iconColor: "text-warning-600",
+        textColor: "text-warning-800",
+        badgeColor: "bg-warning-200 text-warning-800",
         icon: Bell,
       };
     }
@@ -187,7 +187,7 @@ export function ActionBanner({ lead, onCall, onMarkComplete, className }: Action
       className={cn(
         "flex items-center justify-between p-4 rounded-2xl border",
         `bg-gradient-to-r ${config.gradient}`,
-        config.type === "overdue" ? "border-red-200" : "border-amber-200",
+        config.type === "overdue" ? "border-error-200" : "border-warning-200",
         className
       )}
     >
@@ -229,8 +229,8 @@ export function ActionBanner({ lead, onCall, onMarkComplete, className }: Action
             className={cn(
               "text-sm font-medium text-white",
               config.type === "overdue"
-                ? "bg-red-500 hover:bg-red-600"
-                : "bg-amber-500 hover:bg-amber-600"
+                ? "bg-error-500 hover:bg-error-600"
+                : "bg-warning-500 hover:bg-warning-600"
             )}
             onClick={handleCall}
           >

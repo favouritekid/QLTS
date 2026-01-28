@@ -128,15 +128,15 @@ export function SystemMonitoringDashboard() {
       case "healthy":
       case "connected":
       case "online":
-        return <CheckCircle className="h-5 w-5 text-green-500" />;
+        return <CheckCircle className="h-5 w-5 text-success-500" />;
       case "degraded":
       case "no_workers":
-        return <AlertTriangle className="h-5 w-5 text-yellow-500" />;
+        return <AlertTriangle className="h-5 w-5 text-warning-500" />;
       case "error":
       case "unknown":
-        return <XCircle className="h-5 w-5 text-red-500" />;
+        return <XCircle className="h-5 w-5 text-error-500" />;
       default:
-        return <Activity className="h-5 w-5 text-gray-500" />;
+        return <Activity className="h-5 w-5 text-muted-foreground" />;
     }
   };
 
@@ -146,10 +146,10 @@ export function SystemMonitoringDashboard() {
       case "healthy":
       case "connected":
       case "online":
-        return <Badge variant="default" className="bg-green-500">OK</Badge>;
+        return <Badge variant="default" className="bg-success-500">OK</Badge>;
       case "degraded":
       case "no_workers":
-        return <Badge variant="secondary" className="bg-yellow-500">Warning</Badge>;
+        return <Badge variant="secondary" className="bg-warning-500">Warning</Badge>;
       case "error":
       case "unknown":
         return <Badge variant="destructive">Error</Badge>;
@@ -240,7 +240,7 @@ export function SystemMonitoringDashboard() {
                   {getStatusBadge(overview?.database.status || "unknown")}
                 </div>
                 {overview?.database.error && (
-                  <p className="text-xs text-red-500">{overview.database.error}</p>
+                  <p className="text-xs text-error-500">{overview.database.error}</p>
                 )}
               </div>
             )}

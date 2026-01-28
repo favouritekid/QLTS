@@ -72,10 +72,10 @@ const getSourceLabel = (source: string | null | undefined) => {
 };
 
 const getScoreColor = (score: number) => {
-  if (score >= 70) return "bg-green-100 text-green-700 border-green-200";
-  if (score >= 50) return "bg-blue-100 text-blue-700 border-blue-200";
-  if (score >= 30) return "bg-yellow-100 text-yellow-700 border-yellow-200";
-  return "bg-gray-100 text-gray-600 border-gray-200";
+  if (score >= 70) return "bg-success-100 text-success-700 border-success-200";
+  if (score >= 50) return "bg-info-100 text-info-700 border-info-200";
+  if (score >= 30) return "bg-warning-100 text-warning-700 border-warning-200";
+  return "bg-muted text-muted-foreground border-border";
 };
 
 const getScoreLabel = (score: number) => {
@@ -141,7 +141,7 @@ function InfoRow({
         <Icon className={cn("h-3.5 w-3.5 shrink-0", isEmpty ? "text-muted-foreground/50" : "text-muted-foreground")} />
         <span className="text-xs text-muted-foreground shrink-0">{label}:</span>
         {isLink && href && !isEmpty ? (
-          <a href={href} className="text-sm text-blue-600 hover:underline truncate">
+          <a href={href} className="text-sm text-info-600 hover:underline truncate">
             {displayValue}
           </a>
         ) : (
@@ -177,7 +177,7 @@ export function LeadSidebar({ lead, timeline, onAssign, hideHeader, compact }: L
                 </AvatarFallback>
               </Avatar>
               <div className="min-w-0 flex-1">
-                <h2 className="font-semibold text-base truncate">{lead.full_name}</h2>
+                <h2 className="font-semibold font-display text-base truncate">{lead.full_name}</h2>
                 <p className="text-xs text-muted-foreground">Lead #{lead.id}</p>
               </div>
             </div>
@@ -243,7 +243,7 @@ export function LeadSidebar({ lead, timeline, onAssign, hideHeader, compact }: L
           <Button
             variant="ghost"
             size="sm"
-            className="h-6 px-2 text-xs text-blue-600 hover:bg-blue-50"
+            className="h-6 px-2 text-xs text-info-600 hover:bg-info-50"
             onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
           >
             Gọi
@@ -270,7 +270,7 @@ export function LeadSidebar({ lead, timeline, onAssign, hideHeader, compact }: L
               displayValue={
                 <a
                   href={`mailto:${lead.email}`}
-                  className="text-blue-600 hover:underline truncate"
+                  className="text-info-600 hover:underline truncate"
                 >
                   {lead.email}
                 </a>

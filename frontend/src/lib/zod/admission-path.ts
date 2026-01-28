@@ -335,15 +335,15 @@ export type CoverageMatrixResponse = z.infer<typeof coverageMatrixResponseSchema
 export function getPathStatusColor(status: AdmissionPathStatus): string {
   switch (status) {
     case "draft":
-      return "bg-gray-100 text-gray-800"
+      return "bg-muted text-muted-foreground"
     case "active":
-      return "bg-green-100 text-green-800"
+      return "bg-success-100 text-success-800"
     case "inactive":
-      return "bg-yellow-100 text-yellow-800"
+      return "bg-warning-100 text-warning-800"
     case "archived":
-      return "bg-red-100 text-red-800"
+      return "bg-error-100 text-error-800"
     default:
-      return "bg-gray-100 text-gray-800"
+      return "bg-muted text-muted-foreground"
   }
 }
 

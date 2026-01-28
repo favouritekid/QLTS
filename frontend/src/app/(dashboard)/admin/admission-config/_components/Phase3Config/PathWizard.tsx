@@ -54,7 +54,7 @@ function StepIndicator({ currentStep, step, title }: { currentStep: number; step
   return (
     <div className={`flex items-center gap-2 ${isCurrent ? "text-primary font-medium" : "text-muted-foreground"}`}>
       {isCompleted ? (
-        <CheckCircle2 className="h-5 w-5 text-green-600" />
+        <CheckCircle2 className="h-5 w-5 text-success-600" />
       ) : isCurrent ? (
         <div className="h-5 w-5 rounded-full border-2 border-primary flex items-center justify-center text-xs">
           {step}
@@ -119,7 +119,7 @@ export function PathWizard({ context, pathId, onNavigate, initialStep = 1 }: Pat
         </div>
         
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-bold">
+          <h1 className="text-2xl font-bold font-display">
             {activePathId ? "Cấu hình Đợt Tuyển sinh" : "Thêm mới Đợt Tuyển sinh"}
           </h1>
           {/* Stepper */}

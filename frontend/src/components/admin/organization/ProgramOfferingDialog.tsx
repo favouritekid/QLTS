@@ -217,7 +217,7 @@ export function ProgramOfferingDialog({
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>
-                    Loại hình đào tạo <span className="text-red-500">*</span>
+                    Loại hình đào tạo <span className="text-error-500">*</span>
                   </FormLabel>
                   <Select
                     onValueChange={field.onChange}

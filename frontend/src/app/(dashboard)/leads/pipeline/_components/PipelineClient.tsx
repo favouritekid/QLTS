@@ -58,12 +58,12 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
   if (isError || !pipeline) {
     return (
       <PageContainer>
-        <Card className="border-red-200 bg-red-50">
+        <Card className="border-error-200 bg-error-50">
           <CardHeader>
-            <CardTitle className="text-red-900">Error Loading Pipeline</CardTitle>
+            <CardTitle className="text-error-900">Error Loading Pipeline</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-red-700 mb-4">
+            <p className="text-error-700 mb-4">
               {error?.message || "Failed to load pipeline data"}
             </p>
             <Button onClick={() => refetch()}>

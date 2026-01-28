@@ -421,7 +421,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
     return (
       <div className="space-y-6">
         <header>
-          <h1 className="text-3xl font-bold tracking-tight">Quản Lý Người Dùng</h1>
+          <h1 className="text-3xl font-bold font-display tracking-tight">Quản Lý Người Dùng</h1>
           <p className="text-muted-foreground">Quản lý người dùng, vai trò và quyền hạn.</p>
         </header>
         <Card>
@@ -438,7 +438,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
       {/* Header */}
       <header className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Quản Lý Người Dùng</h1>
+          <h1 className="text-3xl font-bold font-display tracking-tight">Quản Lý Người Dùng</h1>
           <p className="text-muted-foreground">Quản lý người dùng, vai trò và quyền hạn.</p>
         </div>
         <div className="flex gap-2">
