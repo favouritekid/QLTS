@@ -3,7 +3,7 @@
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
 import {
   Table,
   TableBody,
@@ -110,15 +110,13 @@ export function LeadConsultationsTab({
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Badge
-                        variant="outline"
-                        style={{
-                          backgroundColor: consultation.consultation_status?.color_code ? `${consultation.consultation_status.color_code}20` : undefined,
-                          borderColor: consultation.consultation_status?.color_code
-                        }}
+                      <DynamicColorBadge
+                        color={consultation.consultation_status?.color_code}
+                        variant="subtle"
+                        size="sm"
                       >
                         {consultation.consultation_status?.name || `Status #${consultation.consultation_status_id}`}
-                      </Badge>
+                      </DynamicColorBadge>
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2 max-w-xs">

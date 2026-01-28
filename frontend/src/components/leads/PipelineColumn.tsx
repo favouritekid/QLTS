@@ -8,6 +8,8 @@ import { TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { LeadKanbanCard } from "./LeadKanbanCard";
+import { STAGE_COLORS } from "@/types/pipeline.types";
+import { sanitizeColorCode } from "@/lib/utils";
 import type { PipelineStageWithStats } from "@/types/pipeline.types";
 import type { Lead } from "@/types/lead.types";
 
@@ -17,22 +19,20 @@ interface PipelineColumnProps {
   isActiveDropZone?: boolean;
 }
 
-const STAGE_COLORS: Record<string, string> = {
-  new_lead: "bg-info-100 border-info-300",
-  contacted: "bg-warning-100 border-warning-300",
-  consultation_scheduled: "bg-orange-100 border-orange-300",
-  consultation_completed: "bg-success-100 border-success-300",
-  application_submitted: "bg-teal-100 border-teal-300",
-  enrolled: "bg-success-100 border-success-300",
-  lost: "bg-error-100 border-error-300",
-};
+// Get column background style from hex color
+const getColumnStyle = (hexColor: string) => ({
+  backgroundColor: `${hexColor}15`, // 8% opacity for light background
+  borderColor: `${hexColor}40`, // 25% opacity for border
+});
 
 export function PipelineColumn({ stage, leads, isActiveDropZone }: PipelineColumnProps) {
   const { setNodeRef, isOver } = useDroppable({
     id: stage.id,
   });
 
-  const columnColor = STAGE_COLORS[stage.id] || "bg-muted border-border";
+  // Use stage.color_code from database, fallback to centralized STAGE_COLORS
+  const stageHexColor = sanitizeColorCode(stage.color_code) || STAGE_COLORS[stage.id] || "#6B7280";
+  const columnStyle = getColumnStyle(stageHexColor);
   const leadIds = leads.map((lead) => lead.id);
 
   // Determine conversion trend
@@ -56,7 +56,7 @@ export function PipelineColumn({ stage, leads, isActiveDropZone }: PipelineColum
           : ""
       } transition-all duration-200`}
     >
-      <Card className={`h-full flex flex-col ${columnColor} border-2`}>
+      <Card className="h-full flex flex-col border-2" style={columnStyle}>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <div>
