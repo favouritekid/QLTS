@@ -153,11 +153,11 @@ function getActionBannerConfig(lead: Lead): BannerConfig | null {
       message: `Điểm: ${lead.lead_score} — Cần liên hệ sớm để không bỏ lỡ cơ hội`,
       actionPrimary: "Gọi ngay",
       actionSecondary: null,
-      gradient: "from-orange-50 to-amber-50",
-      iconBg: "bg-orange-100",
-      iconColor: "text-orange-600",
-      textColor: "text-orange-800",
-      badgeColor: "bg-orange-200 text-orange-800",
+      gradient: "from-orange-50 to-amber-50 dark:from-orange-950/30 dark:to-amber-950/30",
+      iconBg: "bg-orange-100 dark:bg-orange-900/50",
+      iconColor: "text-orange-600 dark:text-orange-400",
+      textColor: "text-orange-800 dark:text-orange-200",
+      badgeColor: "bg-orange-200 text-orange-800 dark:bg-orange-900/50 dark:text-orange-200",
       icon: Flame,
     };
   }

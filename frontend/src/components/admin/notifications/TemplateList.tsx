@@ -141,15 +141,15 @@ export function TemplateList({ initialData }: TemplateListProps) {
   const getCategoryColor = (cat: string | null) => {
     switch (cat) {
       case "lead":
-        return "bg-info-100 text-info-800";
+        return "bg-info-100 text-info-800 dark:bg-info-900/50 dark:text-info-300";
       case "consultation":
-        return "bg-purple-100 text-purple-800";
+        return "bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300";
       case "application":
-        return "bg-success-100 text-success-800";
+        return "bg-success-100 text-success-800 dark:bg-success-900/50 dark:text-success-300";
       case "finance":
-        return "bg-warning-100 text-warning-800";
+        return "bg-warning-100 text-warning-800 dark:bg-warning-900/50 dark:text-warning-300";
       case "dorm":
-        return "bg-orange-100 text-orange-800";
+        return "bg-orange-100 text-orange-800 dark:bg-orange-900/50 dark:text-orange-300";
       case "system":
         return "bg-muted text-muted-foreground";
       default:

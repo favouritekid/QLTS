@@ -44,15 +44,15 @@ export const LeadStats = React.memo(function LeadStats({
       title: "Điểm cao",
       value: highScoreCount,
       icon: Flame,
-      color: "text-orange-600",
-      bgColor: "bg-orange-50",
+      color: "text-orange-600 dark:text-orange-400",
+      bgColor: "bg-orange-50 dark:bg-orange-950/30",
     },
     {
       title: "Tỉ lệ chuyển đổi",
       value: `${conversionRate}%`,
       icon: TrendingUp,
-      color: "text-purple-600",
-      bgColor: "bg-purple-50",
+      color: "text-purple-600 dark:text-purple-400",
+      bgColor: "bg-purple-50 dark:bg-purple-950/30",
     },
   ];
 

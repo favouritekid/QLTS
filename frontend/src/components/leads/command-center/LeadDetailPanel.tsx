@@ -59,7 +59,7 @@ const getAssignmentStatusColor = (status: string) => {
     case "failed":
       return "bg-error-100 text-error-700 border-error-200";
     case "reassign_pending":
-      return "bg-orange-100 text-orange-700 border-orange-200";
+      return "bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-900/50 dark:text-orange-300 dark:border-orange-800";
     default:
       return "bg-muted text-muted-foreground border-border";
   }
@@ -329,7 +329,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                 {/* Quick Action Buttons in Header */}
                 <div className="flex items-center gap-1">
                   {lead.is_hot_lead && (
-                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 bg-orange-50 text-orange-600 border-orange-200">
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 bg-orange-50 text-orange-600 border-orange-200 dark:bg-orange-950/50 dark:text-orange-400 dark:border-orange-800">
                       🔥 Hot
                     </Badge>
                   )}

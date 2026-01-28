@@ -98,12 +98,12 @@ const ACTION_CONFIG: Record<
   restored: {
     icon: RotateCcw,
     label: "Khôi phục",
-    color: "bg-purple-100 text-purple-700",
+    color: "bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300",
   },
   status_changed: {
     icon: ArrowRight,
     label: "Đổi trạng thái",
-    color: "bg-orange-100 text-orange-700",
+    color: "bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300",
   },
 };
 
