@@ -31,7 +31,15 @@ import {
   History,
   ExternalLink,
   RefreshCcw,
+  MoreVertical,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn, sanitizeColorCode } from "@/lib/utils";
 import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
 import { useLead } from "@/hooks/useLeads";
@@ -173,195 +181,160 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
       key={leadId}
       className="flex h-full flex-col"
     >
-      {/* Header */}
-      <div className="bg-background shrink-0 border-b p-4">
-        <div className="flex items-start gap-4">
-          <Avatar className="h-14 w-14">
-            <AvatarFallback className="bg-primary/10 text-primary text-base font-semibold">
-              {getInitials(lead.full_name)}
-            </AvatarFallback>
-          </Avatar>
-          <div className="min-w-0 flex-1 space-y-1">
-            <h2 className="truncate text-lg font-semibold font-display">{lead.full_name}</h2>
-            <div className="flex flex-wrap items-center gap-1.5">
-              {/* Pipeline Stage Badge */}
-              {lead.pipeline_stage &&
-                (() => {
-                  const stageColor =
-                    sanitizeColorCode(lead.pipeline_stage.color_code) || STAGE_COLORS[lead.pipeline_stage.id];
-                  return (
-                    <Badge
-                      variant="outline"
-                      className={cn("border-0 font-medium", stageColor && "text-white")}
-                      style={{
-                        backgroundColor: stageColor || undefined,
-                      }}
-                    >
-                      {lead.pipeline_stage.name}
-                    </Badge>
-                  );
-                })()}
+      {/* Header - Mobile Optimized, Full Width Rows */}
+      {/* Note: pr-10 to avoid Sheet close button overlap */}
+      <div className="bg-background shrink-0 border-b p-3 pr-10 space-y-2">
+        {/* Row 1: Avatar + Name + Assignment Status */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <Avatar className="h-9 w-9 shrink-0">
+              <AvatarFallback className="bg-primary/10 text-primary text-xs font-semibold">
+                {getInitials(lead.full_name)}
+              </AvatarFallback>
+            </Avatar>
+            <h2 className="truncate text-sm font-semibold font-display">
+              {lead.full_name}
+            </h2>
+          </div>
+          {lead.assignment_status && (
+            <Badge
+              variant="outline"
+              className={cn("text-[10px] shrink-0", getAssignmentStatusColor(lead.assignment_status))}
+            >
+              {getAssignmentStatusLabel(lead.assignment_status)}
+            </Badge>
+          )}
+        </div>
 
-              {/* Consultation Status Badge - Current status within the stage */}
-              {lead.consultation_status && (
-                <DynamicColorBadge
-                  color={lead.consultation_status.color_code}
-                  variant="dot"
-                  size="sm"
-                >
-                  {lead.consultation_status.name}
-                </DynamicColorBadge>
-              )}
+        {/* Row 2: Status Badges - space between */}
+        <div className="flex items-center justify-between gap-2">
+          {/* Pipeline Stage Badge */}
+          {lead.pipeline_stage ? (() => {
+            const stageColor =
+              sanitizeColorCode(lead.pipeline_stage.color_code) || STAGE_COLORS[lead.pipeline_stage.id];
+            return (
+              <Badge
+                variant="outline"
+                className={cn("border-0 font-medium text-[10px]", stageColor && "text-white")}
+                style={{ backgroundColor: stageColor || undefined }}
+              >
+                {lead.pipeline_stage.name}
+              </Badge>
+            );
+          })() : <span />}
 
-              {/* ✅ TECHNICAL DEBT FIX: Assignment Status Badge */}
-              {lead.assignment_status && (
-                <Badge
-                  variant="outline"
-                  className={cn("text-xs", getAssignmentStatusColor(lead.assignment_status))}
-                >
-                  {getAssignmentStatusLabel(lead.assignment_status)}
-                </Badge>
-              )}
-              
-              {/* ✅ TECHNICAL DEBT FIX: Overdue Indicator */}
-              {lead.is_overdue && (
-                <Badge variant="destructive" className="text-xs">
-                  Quá hạn
-                </Badge>
-              )}
-            </div>
+          {/* Consultation Status Badge */}
+          {lead.consultation_status ? (
+            <DynamicColorBadge
+              color={lead.consultation_status.color_code}
+              variant="dot"
+              size="sm"
+            >
+              {lead.consultation_status.name}
+            </DynamicColorBadge>
+          ) : <span />}
+        </div>
+
+        {/* Row 3: Action Buttons - space between */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5">
+            <Button variant="outline" size="sm" className="h-7 px-2 text-xs" asChild>
+              <Link href={`/leads/${lead.id}`}>
+                <ExternalLink className="h-3.5 w-3.5 mr-1" />
+                Xem
+              </Link>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
+            >
+              <Phone className="h-3.5 w-3.5 mr-1" />
+              Gọi
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={() => window.open(`https://zalo.me/${lead.phone?.replace(/\D/g, '')}`, "_blank")}
+            >
+              <span className="font-bold mr-1">Z</span>
+              Zalo
+            </Button>
           </div>
 
-          {/* Action Buttons with Tooltips */}
-          <TooltipProvider delayDuration={200}>
-            <div className="flex shrink-0 items-center gap-1">
-              {/* Link: Xem đầy đủ */}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" asChild className="h-8 w-8" aria-label="Xem đầy đủ">
-                    <Link href={`/leads/${lead.id}`}>
-                      <ExternalLink className="h-4 w-4" />
-                    </Link>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Xem đầy đủ</TooltipContent>
-              </Tooltip>
-
-              {/* Action: Sửa */}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" onClick={() => onEdit(lead)} className="h-8 w-8" aria-label="Chỉnh sửa lead">
-                    <Edit className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Chỉnh sửa lead</TooltipContent>
-              </Tooltip>
-
-              {/* Action: Gán (chỉ hiển thị khi chưa được gán) */}
+          {/* More Actions Dropdown */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+                <MoreVertical className="h-4 w-4" />
+                <span className="sr-only">Menu</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuItem onClick={() => onEdit(lead)}>
+                <Edit className="mr-2 h-4 w-4" />
+                Chỉnh sửa
+              </DropdownMenuItem>
+              {lead.email && (
+                <DropdownMenuItem onClick={() => window.open(`mailto:${lead.email}`, "_blank")}>
+                  <Mail className="mr-2 h-4 w-4" />
+                  Gửi email
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator />
               {!lead.assigned_officer && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button variant="ghost" size="icon" onClick={() => onAssign(lead)} className="h-8 w-8" aria-label="Gán cho cán bộ">
-                      <UserPlus className="h-4 w-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Gán cho cán bộ</TooltipContent>
-                </Tooltip>
+                <DropdownMenuItem onClick={() => onAssign(lead)}>
+                  <UserPlus className="mr-2 h-4 w-4" />
+                  Gán cho cán bộ
+                </DropdownMenuItem>
               )}
-
-              {/* Action: Phân công lại (chỉ hiển thị khi đã được gán) */}
               {lead.assigned_officer && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => setReassignOpen(true)}
-                      className="h-8 w-8"
-                      aria-label="Yêu cầu phân công lại"
-                    >
-                      <RefreshCcw className="h-4 w-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Yêu cầu phân công lại</TooltipContent>
-                </Tooltip>
+                <DropdownMenuItem onClick={() => setReassignOpen(true)}>
+                  <RefreshCcw className="mr-2 h-4 w-4" />
+                  Phân công lại
+                </DropdownMenuItem>
               )}
-
-              {/* Destructive Action: Xóa */}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => onDelete(lead)}
-                    className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
-                    aria-label="Xóa lead"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent className="bg-destructive text-destructive-foreground">Xóa lead</TooltipContent>
-              </Tooltip>
-            </div>
-          </TooltipProvider>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => onDelete(lead)}
+                className="text-destructive focus:text-destructive"
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Xóa lead
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
       {/* Scrollable Content */}
       <ScrollArea className="flex-1" ref={scrollAreaRef}>
-        <div className="space-y-4 p-4">
+        <div className="space-y-3 p-3 sm:space-y-4 sm:p-4">
           {/* ================================================== */}
           {/* SECTION 1: Thông tin học viên (Combined) */}
           {/* ================================================== */}
           <Card>
-            <CardHeader className="px-4 py-2.5">
-              <CardTitle className="flex items-center justify-between text-sm font-medium">
-                <span className="flex items-center gap-2">
-                  <User className="h-4 w-4 text-primary" />
-                  Thông tin học viên
-                </span>
-                {/* Quick Action Buttons in Header */}
-                <div className="flex items-center gap-1">
-                  {lead.is_hot_lead && (
-                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 bg-orange-50 text-orange-600 border-orange-200 dark:bg-orange-950/50 dark:text-orange-400 dark:border-orange-800">
-                      🔥 Hot
-                    </Badge>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 px-2 text-[10px] text-info-600 hover:bg-info-50"
-                    onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
-                  >
-                    <Phone className="h-3 w-3 mr-1" />
-                    Gọi
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 px-2 text-[10px] text-info-600 hover:bg-info-50"
-                    onClick={() => window.open(`https://zalo.me/${lead.phone?.replace(/\D/g, '')}`, "_blank")}
-                  >
-                    <span className="font-bold mr-1">Z</span>
-                    Zalo
-                  </Button>
-                  {lead.email && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 px-2 text-[10px] text-info-600 hover:bg-info-50"
-                      onClick={() => window.open(`mailto:${lead.email}`, "_blank")}
-                    >
-                      <Mail className="h-3 w-3 mr-1" />
-                      Email
-                    </Button>
-                  )}
-                </div>
+            <CardHeader className="px-3 py-2 sm:px-4 sm:py-2.5">
+              <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                <User className="h-4 w-4 text-primary shrink-0" />
+                <span>Thông tin</span>
+                {lead.is_hot_lead && (
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5 bg-orange-50 text-orange-600 border-orange-200 dark:bg-orange-950/50 dark:text-orange-400 dark:border-orange-800">
+                    🔥 Hot
+                  </Badge>
+                )}
+                {lead.is_overdue && (
+                  <Badge variant="destructive" className="text-[10px] px-1.5 py-0 h-5">
+                    Quá hạn
+                  </Badge>
+                )}
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3 px-4 pt-0 pb-4">
+            <CardContent className="space-y-3 px-3 pt-0 pb-3 sm:px-4 sm:pb-4">
               {/* Score Indicators */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-2 sm:gap-3">
                 <div className="space-y-1">
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-muted-foreground">Điểm Lead</span>
@@ -416,10 +389,10 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                 </div>
               )}
 
-              {/* 2-Column Info Layout */}
-              <div className="flex gap-4 pt-2 border-t text-xs">
+              {/* 2-Column Info Layout - Stack on mobile */}
+              <div className="flex flex-col gap-3 pt-2 border-t text-xs sm:flex-row sm:gap-4">
                 {/* Left Column: Contact & Personal Info */}
-                <div className="flex-1 space-y-1.5">
+                <div className="flex-1 space-y-1.5 min-w-0">
                   {/* Phone - Always Visible */}
                   <div className="flex items-center gap-2 h-5">
                     <Phone className="text-muted-foreground h-3 w-3 shrink-0" />
@@ -461,7 +434,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
                 </div>
 
                 {/* Right Column: Stats & Program */}
-                <div className="flex-1 space-y-1.5">
+                <div className="flex-1 space-y-1.5 min-w-0">
                   {/* Consultation Count */}
                   <div className="flex items-center justify-between h-5">
                     <span className="text-muted-foreground">Số lần tư vấn:</span>
@@ -498,11 +471,11 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
               </div>
 
               {/* Footer: Phụ trách + Rating (Merged) */}
-              <div className="flex items-center justify-between pt-2 border-t">
-                <div className="flex items-center gap-2 text-xs">
+              <div className="flex flex-col gap-2 pt-2 border-t sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-2 text-xs min-w-0">
                   <UserPlus className="h-3 w-3 text-muted-foreground shrink-0" />
-                  <span className="text-muted-foreground">Phụ trách:</span>
-                  <span className="font-medium">
+                  <span className="text-muted-foreground shrink-0">Phụ trách:</span>
+                  <span className="font-medium truncate">
                     {lead.assigned_officer?.full_name || "Chưa phân công"}
                   </span>
                 </div>
@@ -522,13 +495,13 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
           {/* SECTION 2: Ghi nhận tư vấn (Keep as-is) */}
           {/* ================================================== */}
           <Card className="border-border bg-muted/50">
-            <CardHeader className="px-4 py-3">
+            <CardHeader className="px-3 py-2.5 sm:px-4 sm:py-3">
               <CardTitle className="flex items-center gap-2 text-sm font-medium">
-                <Zap className="h-4 w-4 text-amber-500" />
+                <Zap className="h-4 w-4 text-amber-500 shrink-0" />
                 Ghi nhận tư vấn
               </CardTitle>
             </CardHeader>
-            <CardContent className="px-4 pt-0 pb-4">
+            <CardContent className="px-3 pt-0 pb-3 sm:px-4 sm:pb-4">
               <QuickConsultationSection leadId={lead.id} />
             </CardContent>
           </Card>
@@ -537,13 +510,13 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
           {/* SECTION 3: Lịch sử tư vấn (with maxItems) */}
           {/* ================================================== */}
           <Card>
-            <CardHeader className="px-4 py-3">
+            <CardHeader className="px-3 py-2.5 sm:px-4 sm:py-3">
               <CardTitle className="flex items-center gap-2 text-sm font-medium">
-                <History className="text-muted-foreground h-4 w-4" />
+                <History className="text-muted-foreground h-4 w-4 shrink-0" />
                 Lịch sử tư vấn
               </CardTitle>
             </CardHeader>
-            <CardContent className="px-4 pt-0 pb-4">
+            <CardContent className="px-3 pt-0 pb-3 sm:px-4 sm:pb-4">
               <LeadTimelineTab leadId={lead.id} maxItems={3} />
             </CardContent>
           </Card>

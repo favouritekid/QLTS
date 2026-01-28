@@ -118,6 +118,12 @@ node_modules/
 # Testing
 /coverage
 
+# Playwright
+frontend/test-results/
+frontend/playwright-report/
+frontend/playwright/.cache/
+frontend/src/test/.auth/
+
 # Next.js build output
 .next/
 out/

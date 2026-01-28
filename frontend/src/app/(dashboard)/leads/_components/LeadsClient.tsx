@@ -33,6 +33,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 
 import { useLeads, useDeleteLead, useExportLeads, useImportLeads, leadsKeys } from "@/hooks/useLeads";
 import { leadsApi } from "@/lib/api/leads";
@@ -65,9 +67,15 @@ interface LeadsClientProps {
 export function LeadsClient({ initialData }: LeadsClientProps) {
   // ✅ Option D: Use extracted filter hook
   const { state: filterState, handlers: filterHandlers, apiFilters } = useLeadsFilter();
-  
+
   // ✅ Phase 1: Query client for prefetching
   const queryClient = useQueryClient();
+
+  // ✅ Mobile responsiveness: Detect desktop vs mobile
+  const isDesktop = useMediaQuery("(min-width: 1024px)");
+
+  // Mobile detail sheet state
+  const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
 
   // Selection & Dialog states
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
@@ -154,7 +162,11 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
 
   const handleLeadSelect = useCallback((lead: Lead) => {
     setSelectedLeadId(lead.id);
-  }, []);
+    // On mobile, open the detail sheet
+    if (!isDesktop) {
+      setMobileDetailOpen(true);
+    }
+  }, [isDesktop]);
 
   const handleEdit = useCallback((lead: Lead) => {
     setSelectedLead(lead);
@@ -308,78 +320,159 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
         totalCount={leadsPage?.total_count || 0}
       />
 
-      {/* Main Content - Split View with Independent Scroll */}
-      <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1">
-        {/* Left: Data Table (65%) */}
-        <ResizablePanel defaultSize={65} minSize={45} maxSize={80}>
-          <div className="flex h-full flex-col overflow-y-auto">
-            {isLoading ? (
-              // ✅ Phase 1: Staggered skeleton animation for better perceived performance
-              <div className="space-y-2 p-4">
-                {Array.from({ length: 10 }).map((_, i) => (
-                  <motion.div
-                    key={i}
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: i * 0.05, duration: 0.2 }}
-                  >
-                    <Skeleton className="h-12 w-full" />
-                  </motion.div>
-                ))}
-              </div>
-            ) : isError ? (
-              <div className="flex h-40 items-center justify-center">
-                <div className="text-center">
-                  <p className="text-sm font-medium text-error-600">Lỗi tải lead</p>
-                  <p className="text-muted-foreground mt-1 text-xs">
-                    {error?.message || "Lỗi không xác định"}
-                  </p>
+      {/* Main Content - Responsive Layout */}
+      {/* Desktop (lg+): Split View with ResizablePanel */}
+      {/* Mobile (<lg): Full-width table + Sheet for detail */}
+      {isDesktop ? (
+        // Desktop: Split View with Independent Scroll
+        <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1">
+          {/* Left: Data Table (65%) */}
+          <ResizablePanel defaultSize={65} minSize={45} maxSize={80}>
+            <div className="flex h-full flex-col overflow-y-auto">
+              {isLoading ? (
+                <div className="space-y-2 p-4">
+                  {Array.from({ length: 10 }).map((_, i) => (
+                    <motion.div
+                      key={i}
+                      initial={{ opacity: 0, x: -10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: i * 0.05, duration: 0.2 }}
+                    >
+                      <Skeleton className="h-12 w-full" />
+                    </motion.div>
+                  ))}
                 </div>
-              </div>
-            ) : (
-              <LeadsTable
-                leads={filteredLeads}
-                selectedLeadId={selectedLeadId}
-                onSelectLead={handleLeadSelect}
-                onEditLead={handleEdit}
-                onDeleteLead={handleDelete}
-                page={filterState.page}
-                pageSize={filterState.pageSize}
-                totalCount={leadsPage?.total_count || 0}
-                onPageChange={filterHandlers.setPage}
-                onBulkAssign={handleBulkAssign}
-                onBulkChangeStage={handleBulkChangeStage}
-                onBulkExport={handleBulkExport}
-                onBulkDelete={handleBulkDelete}
-                resetSelectionKey={resetSelectionKey}
-                // ✅ Phase 3: Contextual empty state props
-                hasFilters={!!(filterState.statusFilters.length || filterState.sourceFilters.length || filterState.offeringFilters.length || filterState.stageFilters.length || filterState.officerFilters.length || filterState.dateFrom || filterState.dateTo)}
-                searchQuery={filterState.search}
-                onResetFilters={filterHandlers.resetFilters}
-                onCreateLead={() => {
-                  setSelectedLead(null);
-                  setDialogMode("create");
-                  setLeadDialogOpen(true);
-                }}
+              ) : isError ? (
+                <div className="flex h-40 items-center justify-center">
+                  <div className="text-center">
+                    <p className="text-sm font-medium text-error-600">Lỗi tải lead</p>
+                    <p className="text-muted-foreground mt-1 text-xs">
+                      {error?.message || "Lỗi không xác định"}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <LeadsTable
+                  leads={filteredLeads}
+                  selectedLeadId={selectedLeadId}
+                  onSelectLead={handleLeadSelect}
+                  onEditLead={handleEdit}
+                  onDeleteLead={handleDelete}
+                  page={filterState.page}
+                  pageSize={filterState.pageSize}
+                  totalCount={leadsPage?.total_count || 0}
+                  onPageChange={filterHandlers.setPage}
+                  onBulkAssign={handleBulkAssign}
+                  onBulkChangeStage={handleBulkChangeStage}
+                  onBulkExport={handleBulkExport}
+                  onBulkDelete={handleBulkDelete}
+                  resetSelectionKey={resetSelectionKey}
+                  hasFilters={!!(filterState.statusFilters.length || filterState.sourceFilters.length || filterState.offeringFilters.length || filterState.stageFilters.length || filterState.officerFilters.length || filterState.dateFrom || filterState.dateTo)}
+                  searchQuery={filterState.search}
+                  onResetFilters={filterHandlers.resetFilters}
+                  onCreateLead={() => {
+                    setSelectedLead(null);
+                    setDialogMode("create");
+                    setLeadDialogOpen(true);
+                  }}
+                />
+              )}
+            </div>
+          </ResizablePanel>
+
+          <ResizableHandle withHandle />
+
+          {/* Right: Detail Panel (35%) - Independent Scroll */}
+          <ResizablePanel defaultSize={35} minSize={25} maxSize={50}>
+            <div ref={detailPanelRef} className="h-full overflow-y-auto bg-background">
+              <LeadDetailPanel
+                leadId={selectedLeadId}
+                onEdit={handleEdit}
+                onDelete={handleDelete}
+                onAssign={handleAssign}
               />
-            )}
-          </div>
-        </ResizablePanel>
+            </div>
+          </ResizablePanel>
+        </ResizablePanelGroup>
+      ) : (
+        // Mobile: Full-width table (detail panel in Sheet)
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {isLoading ? (
+            <div className="space-y-2 p-4">
+              {Array.from({ length: 10 }).map((_, i) => (
+                <motion.div
+                  key={i}
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: i * 0.05, duration: 0.2 }}
+                >
+                  <Skeleton className="h-12 w-full" />
+                </motion.div>
+              ))}
+            </div>
+          ) : isError ? (
+            <div className="flex h-40 items-center justify-center">
+              <div className="text-center">
+                <p className="text-sm font-medium text-error-600">Lỗi tải lead</p>
+                <p className="text-muted-foreground mt-1 text-xs">
+                  {error?.message || "Lỗi không xác định"}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <LeadsTable
+              leads={filteredLeads}
+              selectedLeadId={selectedLeadId}
+              onSelectLead={handleLeadSelect}
+              onEditLead={handleEdit}
+              onDeleteLead={handleDelete}
+              page={filterState.page}
+              pageSize={filterState.pageSize}
+              totalCount={leadsPage?.total_count || 0}
+              onPageChange={filterHandlers.setPage}
+              onBulkAssign={handleBulkAssign}
+              onBulkChangeStage={handleBulkChangeStage}
+              onBulkExport={handleBulkExport}
+              onBulkDelete={handleBulkDelete}
+              resetSelectionKey={resetSelectionKey}
+              hasFilters={!!(filterState.statusFilters.length || filterState.sourceFilters.length || filterState.offeringFilters.length || filterState.stageFilters.length || filterState.officerFilters.length || filterState.dateFrom || filterState.dateTo)}
+              searchQuery={filterState.search}
+              onResetFilters={filterHandlers.resetFilters}
+              onCreateLead={() => {
+                setSelectedLead(null);
+                setDialogMode("create");
+                setLeadDialogOpen(true);
+              }}
+            />
+          )}
+        </div>
+      )}
 
-        <ResizableHandle withHandle />
-
-        {/* Right: Detail Panel (35%) - Independent Scroll */}
-        <ResizablePanel defaultSize={35} minSize={25} maxSize={50}>
-          <div ref={detailPanelRef} className="h-full overflow-y-auto bg-background">
+      {/* Mobile: Detail Panel Sheet */}
+      <Sheet open={mobileDetailOpen} onOpenChange={setMobileDetailOpen}>
+        <SheetContent side="right" className="w-[85vw] sm:w-[400px] sm:max-w-md p-0">
+          <SheetHeader className="sr-only">
+            <SheetTitle>Chi tiết Lead</SheetTitle>
+          </SheetHeader>
+          <div className="h-full overflow-y-auto">
             <LeadDetailPanel
               leadId={selectedLeadId}
-              onEdit={handleEdit}
-              onDelete={handleDelete}
-              onAssign={handleAssign}
+              onEdit={(lead) => {
+                setMobileDetailOpen(false);
+                handleEdit(lead);
+              }}
+              onDelete={(lead) => {
+                setMobileDetailOpen(false);
+                handleDelete(lead);
+              }}
+              onAssign={(lead) => {
+                setMobileDetailOpen(false);
+                handleAssign(lead);
+              }}
             />
           </div>
-        </ResizablePanel>
-      </ResizablePanelGroup>
+        </SheetContent>
+      </Sheet>
 
       {/* Dialogs */}
       <LeadDialog

@@ -1,4 +1,8 @@
 import { defineConfig, devices } from '@playwright/test'
+import path from 'path'
+
+// Path to store authentication state
+const authFile = path.join(__dirname, 'src/test/.auth/user.json')
 
 /**
  * See https://playwright.dev/docs/test-configuration.
@@ -42,29 +46,56 @@ export default defineConfig({
 
   /* Configure projects for major browsers */
   projects: [
+    // Authentication setup - runs first and saves state
+    {
+      name: 'setup',
+      testMatch: /auth\.setup\.ts/,
+    },
+
+    // Desktop browsers (depend on auth setup)
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: authFile,
+      },
+      dependencies: ['setup'],
     },
 
     {
       name: 'firefox',
-      use: { ...devices['Desktop Firefox'] },
+      use: {
+        ...devices['Desktop Firefox'],
+        storageState: authFile,
+      },
+      dependencies: ['setup'],
     },
 
     {
       name: 'webkit',
-      use: { ...devices['Desktop Safari'] },
+      use: {
+        ...devices['Desktop Safari'],
+        storageState: authFile,
+      },
+      dependencies: ['setup'],
     },
 
-    /* Test against mobile viewports. */
+    // Mobile viewports (depend on auth setup)
     {
-      name: 'Mobile Chrome',
-      use: { ...devices['Pixel 5'] },
+      name: 'Mobile_Chrome',
+      use: {
+        ...devices['Pixel 5'],
+        storageState: authFile,
+      },
+      dependencies: ['setup'],
     },
     {
-      name: 'Mobile Safari',
-      use: { ...devices['iPhone 12'] },
+      name: 'Mobile_Safari',
+      use: {
+        ...devices['iPhone 12'],
+        storageState: authFile,
+      },
+      dependencies: ['setup'],
     },
 
     /* Test against branded browsers. */
