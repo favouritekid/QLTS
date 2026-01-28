@@ -20,6 +20,7 @@ import { useLead } from "@/hooks/useLeads"
 import { useQuery } from "@tanstack/react-query"
 import { api } from "@/lib/api/client"
 import { toast } from "sonner"
+import { PageContainer } from "@/components/layouts/PageContainer"
 
 // Type for admission method from backend
 interface AdmissionMethod {
@@ -90,7 +91,7 @@ export default function CreateAdmissionPage() {
   const activeMethods = methods.filter(m => m.is_active)
   
   return (
-    <div className="container mx-auto py-6 max-w-2xl">
+    <PageContainer maxWidth="sm">
       <Button 
         variant="ghost" 
         size="sm" 
@@ -222,6 +223,6 @@ export default function CreateAdmissionPage() {
           </div>
         </CardContent>
       </Card>
-    </div>
+    </PageContainer>
   )
 }

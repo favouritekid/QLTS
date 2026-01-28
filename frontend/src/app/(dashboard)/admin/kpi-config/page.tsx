@@ -76,6 +76,7 @@ import { useAdminUsersList } from "@/hooks/useAdminUsers";
 import { useOrganizationUnits } from "@/hooks/useOrganization";
 import { OrganizationUnit } from "@/types/organization.types";
 import { cn } from "@/lib/utils";
+import { PageContainer } from "@/components/layouts/PageContainer";
 
 // =============================================================================
 // TYPES
@@ -468,7 +469,7 @@ export default function KpiConfigPage() {
   }
 
   return (
-    <div className="container mx-auto py-6 space-y-6">
+    <PageContainer maxWidth="full">
       {/* Header */}
       <div className="flex justify-between items-center">
         <div>
@@ -1116,6 +1117,6 @@ export default function KpiConfigPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageContainer>
   );
 }

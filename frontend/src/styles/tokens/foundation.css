@@ -129,7 +129,24 @@
   --table-row-height: 2.5rem;         /* 40px - dense */
   --table-row-height-compact: 2rem;   /* 32px - extra dense */
 
-  /* Sidebar width */
-  --sidebar-width: 15rem;             /* 240px */
-  --sidebar-width-collapsed: 3.5rem;  /* 56px */
+  /* =========================================================================
+   * LAYOUT TOKENS - Standardized layout dimensions
+   * ========================================================================= */
+  /* Sidebar */
+  --sidebar-width: 256px;             /* 16rem - expanded */
+  --sidebar-width-collapsed: 72px;    /* 4.5rem - collapsed */
+
+  /* Header */
+  --header-height: 56px;              /* 3.5rem */
+
+  /* Content */
+  --content-max-width: 1600px;        /* 100rem - max content width */
+
+  /* Page Padding */
+  --page-padding-x: 1rem;             /* 16px - horizontal */
+  --page-padding-y: 1.5rem;           /* 24px - vertical */
+
+  /* Section & Content Gaps */
+  --section-gap: 1.5rem;              /* 24px - between major sections */
+  --content-gap: 1rem;                /* 16px - between content items */
 }

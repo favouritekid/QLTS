@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ClipboardCheck, User, Calendar, ArrowRight } from "lucide-react"
 import { useListAdmissions } from "@/hooks/admissions"
+import { PageContainer } from "@/components/layouts/PageContainer"
 
 const STATUS_LABELS: Record<string, string> = {
   draft: "Nháp",
@@ -38,8 +39,8 @@ export default function AdmissionsPage() {
   )
 
   return (
-    <div className="container mx-auto py-6">
-      <div className="flex items-center justify-between mb-6">
+    <PageContainer maxWidth="xl">
+      <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <ClipboardCheck className="h-8 w-8 text-primary" />
           <div>
@@ -142,6 +143,6 @@ export default function AdmissionsPage() {
           ))}
         </div>
       )}
-    </div>
+    </PageContainer>
   )
 }

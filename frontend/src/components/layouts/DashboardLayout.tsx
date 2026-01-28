@@ -36,8 +36,9 @@ export function DashboardLayout({
     return () => window.removeEventListener("resize", handleResize);
   }, [setSidebarCollapsed]);
 
-  // Calculate total top offset: header (56px) + banner if visible
-  const headerHeight = 56; // h-14 = 56px
+  // Calculate total top offset: header + banner if visible
+  // Uses CSS variable --header-height (56px) for consistency
+  const headerHeight = 56; // var(--header-height)
   const totalTopOffset = headerHeight + (showSecurityBanner ? SECURITY_BANNER_HEIGHT : 0);
 
   return (
@@ -62,8 +63,9 @@ export function DashboardLayout({
         <div
           className={cn(
             "flex flex-1 flex-col transition-all duration-300 ease-in-out",
-            "lg:ml-[72px]",
-            !isSidebarCollapsed && "lg:ml-64"
+            // Uses CSS vars: --sidebar-width-collapsed (72px), --sidebar-width (256px)
+            "lg:ml-[var(--sidebar-width-collapsed)]",
+            !isSidebarCollapsed && "lg:ml-[var(--sidebar-width)]"
           )}
         >
           {/* Security Banner - Shows when password change required */}

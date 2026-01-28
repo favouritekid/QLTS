@@ -91,6 +91,7 @@ import { api } from "@/lib/api/client";
 import { API_ENDPOINTS } from "@/lib/api/endpoints";
 import { toast } from "sonner";
 import type { UsersPage } from "@/types/api.types";
+import { PageContainer } from "@/components/layouts/PageContainer";
 
 interface AdminUsersClientProps {
   initialData: UsersPage; // ✅ Initial data from server
@@ -419,7 +420,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
 
   if (error) {
     return (
-      <div className="space-y-6">
+      <PageContainer maxWidth="xl">
         <header>
           <h1 className="text-3xl font-bold font-display tracking-tight">Quản Lý Người Dùng</h1>
           <p className="text-muted-foreground">Quản lý người dùng, vai trò và quyền hạn.</p>
@@ -429,12 +430,12 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
             <p className="text-destructive">Lỗi tải người dùng: {error.message}</p>
           </CardContent>
         </Card>
-      </div>
+      </PageContainer>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <PageContainer maxWidth="xl">
       {/* Header */}
       <header className="flex items-center justify-between">
         <div>
@@ -681,6 +682,6 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </PageContainer>
   );
 }

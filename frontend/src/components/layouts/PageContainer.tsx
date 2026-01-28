@@ -42,7 +42,8 @@ export function PageContainer({
 
   return (
     <div className={cn(
-      "container mx-auto py-6 space-y-6",
+      // Uses CSS vars: --page-padding-y and --section-gap for consistency
+      "container mx-auto py-[var(--page-padding-y)] space-y-[var(--section-gap)]",
       maxWidthClasses[maxWidth],
       className
     )}>

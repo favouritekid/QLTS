@@ -18,8 +18,8 @@ export function Main({ children, className }: { children: React.ReactNode; class
         className
       )}
     >
-      {/* Container với max-width và spacing */}
-      <div className="mx-auto w-full max-w-[1600px] space-y-4">
+      {/* Container với max-width và spacing - uses --content-max-width and --content-gap */}
+      <div className="mx-auto w-full max-w-[var(--content-max-width)] space-y-[var(--content-gap)]">
         {/* Breadcrumbs Navigation - wrapped in Suspense for prerender compat */}
         <Suspense fallback={<div className="h-6 mb-2" />}>
           <Breadcrumbs className="mb-2" />
