@@ -84,6 +84,13 @@ class PipelineStage(Base):
         server_default="false",
         comment="Whether this is a final stage (Won/Lost/Closed)"
     )
+    color_code = Column(
+        String(7),
+        nullable=False,
+        default="#6B7280",
+        server_default="#6B7280",
+        comment="Hex color code for UI (e.g., #3B82F6)"
+    )
 
     # Relationships
     leads = relationship("Lead", back_populates="pipeline_stage")

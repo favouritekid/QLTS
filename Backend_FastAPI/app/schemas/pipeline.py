@@ -21,6 +21,11 @@ class PipelineStageBase(BaseModel):
         default=False,
         description="Whether this is a final stage (Won/Lost/Closed)"
     )
+    color_code: str = Field(
+        default="#6B7280",
+        pattern=r"^#[0-9a-fA-F]{6}$",
+        description="Hex color code for UI (e.g., #3B82F6)"
+    )
     # ✅ 2. Thêm config để ép Pydantic dùng value của Enum
     model_config = ConfigDict(use_enum_values=True, from_attributes=True)
 
@@ -41,7 +46,8 @@ class PipelineStageUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=3, max_length=255)
     order: Optional[int] = Field(None, ge=0)
     is_final_stage: Optional[bool] = None
-    
+    color_code: Optional[str] = Field(None, pattern=r"^#[0-9a-fA-F]{6}$")
+
     model_config = ConfigDict(use_enum_values=True)
 
 

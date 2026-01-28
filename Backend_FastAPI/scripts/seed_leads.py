@@ -38,15 +38,15 @@ OFFICER_IDS = [7, 8, 9]
 # Unit IDs (officers 7,8 in unit 2, officer 9 in unit 17)
 OFFICER_UNITS = {7: 2, 8: 2, 9: 17}
 
-# Pipeline Stages with distribution weights
+# Pipeline Stages with distribution weights and colors
 PIPELINE_STAGES = [
-    {"id": "stg01", "name": "Chưa tư vấn", "weight": 15, "is_final": False},
-    {"id": "stg02", "name": "Đang tư vấn", "weight": 25, "is_final": False},
-    {"id": "stg03", "name": "Đã nộp hồ sơ", "weight": 12, "is_final": False},
-    {"id": "stg04", "name": "Chờ nhập học", "weight": 10, "is_final": False},
-    {"id": "stg05", "name": "Đã nộp học phí", "weight": 13, "is_final": False},
-    {"id": "stg06", "name": "Đã nhập học", "weight": 15, "is_final": True},
-    {"id": "stg07", "name": "Không đi học", "weight": 10, "is_final": True},
+    {"id": "stg01", "name": "Chưa tư vấn", "weight": 15, "is_final": False, "color_code": "#3B82F6"},  # Blue
+    {"id": "stg02", "name": "Đang tư vấn", "weight": 25, "is_final": False, "color_code": "#F59E0B"},  # Amber
+    {"id": "stg03", "name": "Đã nộp hồ sơ", "weight": 12, "is_final": False, "color_code": "#8B5CF6"},  # Purple
+    {"id": "stg04", "name": "Chờ nhập học", "weight": 10, "is_final": False, "color_code": "#06B6D4"},  # Cyan
+    {"id": "stg05", "name": "Đã nộp học phí", "weight": 13, "is_final": False, "color_code": "#10B981"},  # Emerald
+    {"id": "stg06", "name": "Đã nhập học", "weight": 15, "is_final": True, "color_code": "#22C55E"},  # Green
+    {"id": "stg07", "name": "Không đi học", "weight": 10, "is_final": True, "color_code": "#EF4444"},  # Red
 ]
 
 # Consultation statuses mapped to stages (from consultation_status.csv)
