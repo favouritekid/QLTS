@@ -86,7 +86,7 @@ function ScoreIndicator({
         </span>
         <span className={cn(
           "text-sm font-bold tabular-nums",
-          variant === "hot" && value >= 70 && "text-orange-600",
+          variant === "hot" && value >= 70 && "text-orange-600 dark:text-orange-400",
           variant === "urgent" && value >= 70 && "text-error-600",
         )}>
           {value}
@@ -168,7 +168,7 @@ export function LeadInsightsCard({
             Lead Insights
           </span>
           {lead.is_hot_lead && (
-            <span className="flex items-center gap-1 text-orange-600 text-xs font-medium bg-orange-100 dark:bg-orange-950 px-2 py-0.5 rounded-full">
+            <span className="flex items-center gap-1 text-orange-600 dark:text-orange-400 text-xs font-medium bg-orange-100 dark:bg-orange-950 px-2 py-0.5 rounded-full">
               <Flame className="h-3 w-3" />
               Hot Lead
             </span>

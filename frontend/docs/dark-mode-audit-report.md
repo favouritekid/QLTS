@@ -204,20 +204,22 @@ className="bg-orange-100 text-orange-700"
 className="bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300"
 ```
 
-### 6.3 Files to Update
+### 6.3 Files Updated
 
-1. `src/app/(dashboard)/admin/audit-logs/_components/AuditLogsManager.tsx`
-2. `src/components/leads/ActionBanner.tsx`
-3. `src/components/leads/command-center/LeadStats.tsx`
-4. `src/components/leads/command-center/LeadDetailPanel.tsx`
-5. `src/components/admin/notifications/NotificationRuleForm.tsx`
-6. `src/components/admin/notifications/TemplateList.tsx`
+1. `src/app/(dashboard)/admin/audit-logs/_components/AuditLogsManager.tsx` ✅
+2. `src/components/leads/ActionBanner.tsx` ✅
+3. `src/components/leads/command-center/LeadStats.tsx` ✅
+4. `src/components/leads/command-center/LeadDetailPanel.tsx` ✅
+5. `src/components/admin/notifications/NotificationRuleForm.tsx` ✅
+6. `src/components/admin/notifications/TemplateList.tsx` ✅
+7. `src/components/leads/LeadInsightsCard.tsx` ✅ (additional)
 
 ### 6.4 Low Priority (Nice to Have)
 
 1. Consider creating semantic tokens for purple/orange accent colors
 2. Add `--accent-purple` and `--accent-orange` variables
 3. Audit admission.css for dark mode completeness
+4. Consider migrating to `next-themes` for more robust provider (current manual implementation works but lacks SSR optimization)
 
 ---
 
