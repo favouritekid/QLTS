@@ -11,7 +11,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { cn, sanitizeColorCode } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
 import { format, isToday, isPast, parseISO } from "date-fns";
 import { vi } from "date-fns/locale";
 import type { Lead, LeadStatus } from "@/types/lead.types";
@@ -185,16 +186,14 @@ export const LeadCard = React.memo(function LeadCard({
 
           {/* Consultation Status Badge */}
           {lead.consultation_status && (
-            <Badge
+            <DynamicColorBadge
+              color={lead.consultation_status.color_code}
               variant="outline"
+              size="sm"
               className="text-[10px] px-1.5 py-0"
-              style={{
-                borderColor: sanitizeColorCode(lead.consultation_status.color_code),
-                color: sanitizeColorCode(lead.consultation_status.color_code)
-              }}
             >
               {lead.consultation_status.name}
-            </Badge>
+            </DynamicColorBadge>
           )}
         </div>
       </div>

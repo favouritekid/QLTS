@@ -45,12 +45,16 @@
   --success-600: #16a34a;
   --success-700: #15803d;
 
-  /* Warning (Amber) */
+  /* Warning (Amber) - includes extended shades for amber/orange mappings */
   --warning-50:  #fffbeb;
   --warning-100: #fef3c7;
+  --warning-200: #fde68a;
+  --warning-300: #fcd34d;
+  --warning-400: #fbbf24;
   --warning-500: #f59e0b;
   --warning-600: #d97706;
   --warning-700: #b45309;
+  --warning-800: #92400e;
 
   /* Error/Danger (Red) */
   --error-50:  #fef2f2;
@@ -65,6 +69,26 @@
   --info-500: #0ea5e9;
   --info-600: #0284c7;
   --info-700: #0369a1;
+
+  /* Purple (for stages, categories) */
+  --purple-50:  #faf5ff;
+  --purple-100: #f3e8ff;
+  --purple-200: #e9d5ff;
+  --purple-500: #a855f7;
+  --purple-600: #9333ea;
+  --purple-700: #7e22ce;
+  --purple-800: #6b21a8;
+
+  /* Cyan (for lead sources, info variants) */
+  --cyan-50:  #ecfeff;
+  --cyan-100: #cffafe;
+  --cyan-200: #a5f3fc;
+  --cyan-500: #06b6d4;
+  --cyan-600: #0891b2;
+  --cyan-700: #0e7490;
+  --cyan-800: #155e75;
+/* Indigo (for special UI elements) */  --indigo-50:  #eef2ff;  --indigo-100: #e0e7ff;  --indigo-600: #4f46e5;  --indigo-700: #4338ca;  /* Violet (alternative purple) */  --violet-100: #ede9fe;  --violet-200: #ddd6fe;  --violet-600: #7c3aed;  /* Zinc (cool gray alternative) */  --zinc-600: #52525b;  --zinc-950: #09090b;  /* Amber (maps to warning shades) */  --amber-50:  var(--warning-50);  --amber-100: var(--warning-100);  --amber-200: var(--warning-200);  --amber-400: var(--warning-400);  --amber-500: var(--warning-500);  --amber-600: var(--warning-600);  --amber-700: var(--warning-700);  --amber-800: var(--warning-800);  /* Orange (maps to warning shades) */  --orange-50:  var(--warning-50);  --orange-100: var(--warning-100);  --orange-200: var(--warning-200);  --orange-500: var(--warning-500);  --orange-600: var(--warning-600);  --orange-700: var(--warning-700);  --orange-800: var(--warning-800);
+/* Yellow (attention/pending states) */  --yellow-50:  #fefce8;  --yellow-500: #eab308;  --yellow-200: #fef08a;  /* Pink (special/feminine elements) */  --pink-100: #fce7f3;  --pink-800: #9d174d;  /* Teal (info/health variants) */  --teal-100: #ccfbf1;  --teal-300: #5eead4;
 
   /* =========================================================================
    * THEME COLORS - Using warm grays

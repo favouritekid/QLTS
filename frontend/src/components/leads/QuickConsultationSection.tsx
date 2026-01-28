@@ -28,6 +28,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { DateTimePicker } from "@/components/common/form";
 import { cn, sanitizeColorCode } from "@/lib/utils";
+import { ColorDot } from "@/components/ui/dynamic-color-badge";
 import { useAllowedNextStatuses } from "@/hooks/usePipeline";
 import { useAddConsultation, useLead } from "@/hooks/useLeads";
 import type { ConsultationStatus, ConsultationCreate, ConsultationMethod } from "@/types/lead.types";
@@ -693,10 +694,7 @@ export function QuickConsultationSection({ leadId, onSuccess }: QuickConsultatio
                   {savingStatusId === status.id ? (
                     <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
                   ) : (
-                    <span
-                      className="mr-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full"
-                      style={{ backgroundColor: sanitizeColorCode(status.color_code) }}
-                    />
+                    <ColorDot color={status.color_code} size="sm" className="mr-1.5" />
                   )}
                   {status.name}
                 </Button>

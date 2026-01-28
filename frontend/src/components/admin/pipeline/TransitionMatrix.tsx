@@ -8,7 +8,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import { cn, sanitizeColorCode } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { ColorDot } from "@/components/ui/dynamic-color-badge";
 import {
   usePipelineStages,
   useConsultationStatuses,
@@ -132,14 +133,15 @@ export function TransitionMatrix() {
                           )}
                         >
                           <div className="flex items-center gap-3">
-                            <div
+                            <ColorDot
+                              color={status.color_code}
+                              size="md"
                               className={cn(
-                                "h-3 w-3 rounded-full ring-2 ring-offset-1",
+                                "ring-2 ring-offset-1",
                                 selectedFromId === status.id
                                   ? "ring-primary-foreground"
                                   : "ring-transparent"
                               )}
-                              style={{ backgroundColor: sanitizeColorCode(status.color_code) }}
                             />
                             <span className="font-medium">{status.name}</span>
                           </div>
@@ -174,10 +176,7 @@ export function TransitionMatrix() {
             </div>
             {selectedFromId && (
               <Badge variant="outline" className="gap-2 px-3 py-1 text-sm">
-                <div
-                  className="h-2 w-2 rounded-full"
-                  style={{ backgroundColor: sanitizeColorCode(selectedFromStatus?.color_code) }}
-                />
+                <ColorDot color={selectedFromStatus?.color_code} size="sm" />
                 {selectedFromStatus?.name}
               </Badge>
             )}
@@ -237,10 +236,7 @@ export function TransitionMatrix() {
                                 htmlFor={`to-${toStatus.id}`}
                                 className="flex flex-1 cursor-pointer items-center gap-2 text-sm leading-none font-medium peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
                               >
-                                <div
-                                  className="h-2 w-2 rounded-full"
-                                  style={{ backgroundColor: sanitizeColorCode(toStatus.color_code) }}
-                                />
+                                <ColorDot color={toStatus.color_code} size="sm" />
                                 {toStatus.name}
                               </label>
                             </div>

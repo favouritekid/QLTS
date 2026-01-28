@@ -581,7 +581,7 @@ export default function KpiConfigPage() {
                             variant="ghost"
                             size="icon"
                             onClick={() => restoreMutation.mutate(config.id)}
-                            title="Khôi phục"
+                            aria-label="Khôi phục"
                           >
                             <RefreshCw className="h-4 w-4 text-success-600" />
                           </Button>
@@ -591,6 +591,7 @@ export default function KpiConfigPage() {
                               variant="ghost"
                               size="icon"
                               onClick={() => handleEdit(config)}
+                              aria-label="Chỉnh sửa"
                             >
                               <Pencil className="h-4 w-4" />
                             </Button>
@@ -598,6 +599,7 @@ export default function KpiConfigPage() {
                               variant="ghost"
                               size="icon"
                               onClick={() => setDeleteConfigId(config.id)}
+                              aria-label="Xóa"
                             >
                               <Trash2 className="h-4 w-4 text-destructive" />
                             </Button>
@@ -731,7 +733,7 @@ export default function KpiConfigPage() {
                                   size="icon"
                                   onClick={() => syncTargetMutation.mutate(target.id)}
                                   disabled={syncTargetMutation.isPending}
-                                  title="Đồng bộ YTD"
+                                  aria-label="Đồng bộ YTD"
                                 >
                                   <RefreshCw className={cn("h-4 w-4", syncTargetMutation.isPending && "animate-spin")} />
                                 </Button>
@@ -740,6 +742,7 @@ export default function KpiConfigPage() {
                                 variant="ghost"
                                 size="icon"
                                 onClick={() => handleEditTarget(target)}
+                                aria-label="Chỉnh sửa"
                               >
                                 <Pencil className="h-4 w-4" />
                               </Button>
@@ -747,6 +750,7 @@ export default function KpiConfigPage() {
                                 variant="ghost"
                                 size="icon"
                                 onClick={() => setDeleteTargetId(target.id)}
+                                aria-label="Xóa"
                               >
                                 <Trash2 className="h-4 w-4 text-destructive" />
                               </Button>

@@ -27,6 +27,7 @@ import { LEAD_STATUS_OPTIONS, LEAD_SOURCE_OPTIONS } from "@/constants";
 import { usePipelineStages } from "@/hooks/usePipeline";
 import { useAdminUsersList } from "@/hooks/useAdminUsers";
 import { STAGE_COLORS } from "@/types/pipeline.types";
+import { ColorDot } from "@/components/ui/dynamic-color-badge";
 import { useAuth } from "@/hooks/useAuth";
 import { isAdmin as checkIsAdmin, canFilterByOfficer as checkCanFilterByOfficer } from "@/lib/utils/permissions";
 
@@ -242,10 +243,7 @@ export const LeadFilters = React.memo(function LeadFilters({
                       htmlFor={`stage-${stage.id}`}
                       className="flex cursor-pointer items-center gap-2 text-sm font-normal"
                     >
-                      <span
-                        className="h-2.5 w-2.5 rounded-full"
-                        style={{ backgroundColor: STAGE_COLORS[stage.id] || "#6B7280" }}
-                      />
+                      <ColorDot color={STAGE_COLORS[stage.id]} size="sm" />
                       {stage.name}
                     </Label>
                   </div>

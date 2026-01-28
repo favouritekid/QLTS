@@ -78,7 +78,7 @@ export function ThemeToggle() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full">
+        <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full" aria-label="Chuyển đổi giao diện">
           <div className="relative flex items-center justify-center transition-transform duration-300">
             {getCurrentIcon()}
           </div>

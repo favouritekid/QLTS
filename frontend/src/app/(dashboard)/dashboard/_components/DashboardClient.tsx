@@ -11,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageContainer } from "@/components/layouts/PageContainer";
+import { PageHeader } from "@/components/layouts/PageHeader";
 import { Users, TrendingUp, DollarSign, Activity, UserCheck, UserX, UserPlus, Shield } from "lucide-react";
 import type { User, UserStatistics } from "@/types/api.types";
 
@@ -97,25 +98,25 @@ export function DashboardClient({ initialUser, initialStats }: DashboardClientPr
   return (
     <PageContainer className="animate-fade-in">
       {/* Page Header */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="space-y-1">
-          <h1 className="text-2xl font-bold font-display tracking-tight md:text-3xl">Bảng Điều Khiển</h1>
-          <p className="text-muted-foreground text-sm">
+      <PageHeader
+        title="Bảng Điều Khiển"
+        description={
+          <>
             Chào mừng trở lại,{" "}
             <span className="text-foreground font-medium">{user?.username || "Khách"}</span>!
-          </p>
-        </div>
-
-        {/* Buttons */}
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm">
-            Tải Báo Cáo
-          </Button>
-          <Button onClick={() => logout()} variant="destructive" size="sm">
-            Đăng Xuất
-          </Button>
-        </div>
-      </div>
+          </>
+        }
+        actions={
+          <>
+            <Button variant="outline" size="sm">
+              Tải Báo Cáo
+            </Button>
+            <Button onClick={() => logout()} variant="destructive" size="sm">
+              Đăng Xuất
+            </Button>
+          </>
+        }
+      />
 
       {/* Stats Grid */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

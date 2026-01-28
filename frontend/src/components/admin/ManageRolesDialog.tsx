@@ -193,6 +193,7 @@ export function ManageRolesDialog({ open, onOpenChange, user }: ManageRolesDialo
                     size="icon"
                     onClick={handleAssignRole}
                     disabled={!selectedRole || isPending}
+                    aria-label="Thêm vai trò"
                   >
                     <Plus className="h-4 w-4" />
                   </Button>

@@ -93,7 +93,7 @@ function MetricCard({ metricKey, value, isMain }: MetricCardProps) {
       "rounded-lg border p-3 transition-all",
       isMain 
         ? "bg-gradient-to-br from-violet-50 to-purple-50 border-violet-200 shadow-sm" 
-        : "bg-white/50 hover:bg-white hover:shadow-sm",
+        : "bg-card/50 hover:bg-card hover:shadow-sm dark:bg-card/30",
       config.borderColor
     )}>
       <div className="flex items-start justify-between mb-2">

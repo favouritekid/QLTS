@@ -336,6 +336,7 @@ export function FileUpload({
                 className="shrink-0 h-8 w-8"
                 onClick={() => handleRemove(fileItem.id)}
                 disabled={fileItem.status === "uploading"}
+                aria-label="Xóa file"
               >
                 <X className="h-4 w-4" />
               </Button>

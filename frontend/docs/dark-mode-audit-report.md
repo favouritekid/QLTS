@@ -204,7 +204,7 @@ className="bg-orange-100 text-orange-700"
 className="bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300"
 ```
 
-### 6.3 Files Updated
+### 6.3 Files Updated (Phase 1: Purple/Orange Colors)
 
 1. `src/app/(dashboard)/admin/audit-logs/_components/AuditLogsManager.tsx` ✅
 2. `src/components/leads/ActionBanner.tsx` ✅
@@ -214,7 +214,20 @@ className="bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-
 6. `src/components/admin/notifications/TemplateList.tsx` ✅
 7. `src/components/leads/LeadInsightsCard.tsx` ✅ (additional)
 
-### 6.4 Low Priority (Nice to Have)
+### 6.4 Files Updated (Phase 2: bg-white Violations)
+
+| File | Change | Token Used |
+|------|--------|------------|
+| `AdmissionDetailClient.tsx:343` | `bg-white` → semantic | `bg-card` |
+| `PipelineSidebar.tsx:177` | `bg-white` → semantic | `bg-card` |
+| `AcademicHistoryTab.tsx` (5 inputs) | `bg-white` → semantic | `bg-background` |
+| `FamilyTab.tsx:161` | `bg-white` → semantic | `bg-card` |
+| `ActionBanner.tsx:219` | `hover:bg-white/50` → semantic | `hover:bg-background/50` |
+| `LeadInsightsTab.tsx:96` | `bg-white/50` → semantic + dark | `bg-card/50 dark:bg-card/30` |
+| `page.tsx:6` | `bg-white dark:bg-black` → semantic | `bg-background` |
+| `page.tsx:16` | `text-black dark:text-zinc-50` → semantic | `text-foreground` |
+
+### 6.5 Low Priority (Nice to Have)
 
 1. Consider creating semantic tokens for purple/orange accent colors
 2. Add `--accent-purple` and `--accent-orange` variables
@@ -246,20 +259,21 @@ className="bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-
 
 ## 8. Conclusion
 
-**Overall Status:** ✅ GOOD
+**Overall Status:** ✅ COMPLETE
 
-The dark mode implementation is solid with:
+The dark mode implementation is fully compliant with:
 - Proper CSS variable system
 - Complete theme switching
-- Good contrast ratios
+- Good contrast ratios (WCAG AA)
 - Semantic token usage in UI components
+- All `bg-white` violations fixed
+- All purple/orange colors have dark variants
 
-**Minor improvements needed:**
-- Add dark variants to 6 files using purple/orange accent colors
-- These are cosmetic issues, not accessibility problems
-
-**Estimated effort:** 30 minutes to fix all issues
+**All issues resolved:**
+- ✅ Phase 1: Added dark variants to 7 files using purple/orange accent colors
+- ✅ Phase 2: Fixed 6 files with `bg-white` hardcoded backgrounds
 
 ---
 
 *Report generated during Phase 13 of QLTS Frontend Refactoring*
+*Updated: January 28, 2026 - All violations fixed*

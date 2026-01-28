@@ -101,6 +101,7 @@ export function DataTableToolbar<TData>({
               size="icon"
               className="h-4 w-4 p-0 hover:bg-transparent"
               onClick={() => table.getColumn(filter.id)?.setFilterValue(undefined)}
+              aria-label="Xóa bộ lọc"
             >
               <X className="h-3 w-3" />
             </Button>

@@ -34,6 +34,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { usePipelineStages } from "@/hooks/usePipeline";
 import { useBulkUpdateLeadsStage } from "@/hooks/useLeads";
 import { STAGE_COLORS } from "@/types/pipeline.types";
+import { ColorDot, DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
 import type { Lead } from "@/types/lead.types";
 import { toast } from "sonner";
 
@@ -116,10 +117,7 @@ export function BulkStageDialog({
                 {pipelineStages.map((stage) => (
                   <SelectItem key={stage.id} value={stage.id}>
                     <div className="flex items-center gap-2">
-                      <span
-                        className="h-2.5 w-2.5 rounded-full"
-                        style={{ backgroundColor: STAGE_COLORS[stage.id] || "#6B7280" }}
-                      />
+                      <ColorDot color={STAGE_COLORS[stage.id]} size="sm" />
                       {stage.name}
                     </div>
                   </SelectItem>
@@ -134,9 +132,9 @@ export function BulkStageDialog({
               <AlertCircle className="h-4 w-4" />
               <AlertDescription>
                 <strong>{count}</strong> lead sẽ được chuyển sang giai đoạn{" "}
-                <strong style={{ color: STAGE_COLORS[selectedStage.id] }}>
+                <DynamicColorBadge color={STAGE_COLORS[selectedStage.id]} variant="solid" size="sm">
                   {selectedStage.name}
-                </strong>
+                </DynamicColorBadge>
               </AlertDescription>
             </Alert>
           )}

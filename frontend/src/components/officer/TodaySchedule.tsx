@@ -126,22 +126,24 @@ function MiniCalendar({
     <div className="space-y-2">
       {/* Month Navigation */}
       <div className="flex items-center justify-between">
-        <Button 
-          variant="ghost" 
-          size="icon" 
+        <Button
+          variant="ghost"
+          size="icon"
           className="h-6 w-6"
           onClick={goToPrevMonth}
+          aria-label="Tháng trước"
         >
           <ChevronLeft className="h-4 w-4" />
         </Button>
         <span className="text-sm font-medium">
           {viewDate.toLocaleDateString("vi-VN", { month: "long", year: "numeric" })}
         </span>
-        <Button 
-          variant="ghost" 
-          size="icon" 
+        <Button
+          variant="ghost"
+          size="icon"
           className="h-6 w-6"
           onClick={goToNextMonth}
+          aria-label="Tháng sau"
         >
           <ChevronRight className="h-4 w-4" />
         </Button>

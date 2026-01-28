@@ -232,7 +232,7 @@ export const LeadListItem = React.memo(function LeadListItem({
               e.stopPropagation();
               window.location.href = `tel:${lead.phone}`;
             }}
-            title="Call"
+            aria-label="Gọi điện"
           >
             <Phone className="h-3.5 w-3.5" />
           </Button>
@@ -244,7 +244,7 @@ export const LeadListItem = React.memo(function LeadListItem({
               e.stopPropagation();
               window.location.href = `mailto:${lead.email}`;
             }}
-            title="Email"
+            aria-label="Gửi email"
           >
             <Mail className="h-3.5 w-3.5" />
           </Button>
@@ -257,7 +257,7 @@ export const LeadListItem = React.memo(function LeadListItem({
                 e.stopPropagation();
                 onQuickAssign(lead);
               }}
-              title="Assign"
+              aria-label="Phân công"
             >
               <UserPlus className="h-3.5 w-3.5" />
             </Button>

@@ -53,4 +53,29 @@
   --color-chart-3: var(--chart-3);
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
+
+  /* ==========================================================================
+   * Dynamic Colors - For database-driven colors (stages, statuses)
+   * These provide fallback values when API colors are unavailable
+   * ========================================================================== */
+
+  /* Stage Colors (Pipeline) */
+  --color-stage-new: var(--info-500);
+  --color-stage-contacted: var(--purple-500);
+  --color-stage-qualified: var(--warning-500);
+  --color-stage-proposal: var(--pink-500);
+  --color-stage-negotiation: var(--primary-500);
+  --color-stage-won: var(--success-500);
+  --color-stage-lost: var(--error-500);
+  --color-stage-default: var(--gray-500);
+
+  /* Status Colors (Consultation) */
+  --color-status-default: var(--gray-500);
+  --color-status-pending: var(--warning-500);
+  --color-status-success: var(--success-500);
+  --color-status-error: var(--error-500);
+
+  /* Dynamic Color Text Variants */
+  --color-dynamic-text-light: #ffffff;
+  --color-dynamic-text-dark: var(--gray-900);
 }

@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { ColorDot } from "@/components/ui/dynamic-color-badge";
 import { CopyableCell } from "@/components/common/CopyableCell";
 import { AuditLogTimeline } from "@/components/audit/AuditLogTimeline";
 import { LEAD_SOURCE_OPTIONS } from "@/constants";
@@ -378,10 +379,7 @@ export function LeadInfoTabs({
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5">
                             {statusColor && (
-                              <span
-                                className="w-2 h-2 rounded-full flex-shrink-0"
-                                style={{ backgroundColor: statusColor }}
-                              />
+                              <ColorDot color={statusColor} size="sm" />
                             )}
                             <span className={cn("text-sm font-medium truncate", index === 0 ? outcomeStyles.text : "text-foreground")}>
                               {statusName}

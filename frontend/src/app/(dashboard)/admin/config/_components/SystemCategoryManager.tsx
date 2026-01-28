@@ -258,6 +258,7 @@ export function SystemCategoryManager() {
                         onClick={() => handleOpenEdit(item)}
                         disabled
                         title="Edit not supported via API"
+                        aria-label="Chỉnh sửa"
                       >
                         <Pencil className="h-4 w-4" />
                       </Button>
@@ -266,6 +267,7 @@ export function SystemCategoryManager() {
                         size="icon"
                         onClick={() => handleDelete(item.id)}
                         title="Delete category"
+                        aria-label="Xóa"
                       >
                         <Trash2 className="text-destructive h-4 w-4" />
                       </Button>

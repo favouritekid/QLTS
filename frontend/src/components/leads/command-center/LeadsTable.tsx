@@ -69,7 +69,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { cn, sanitizeColorCode } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
 import type { Lead } from "@/types/lead.types";
 import { LEAD_SOURCE_OPTIONS } from "@/constants";
 import { STAGE_COLORS } from "@/types/pipeline.types";
@@ -346,20 +347,21 @@ export function LeadsTable({
         size: 110,
       }),
 
-      // Consultation Status column - text color from status.color
+      // Consultation Status column - using DynamicColorBadge
       columnHelper.accessor("consultation_status", {
         header: "Trạng thái TĐ",
         cell: ({ row }) => {
           const status = row.original.consultation_status;
           if (!status) return <span className="text-muted-foreground">—</span>;
           return (
-            <Badge
-              variant="secondary"
-              className="text-[10px] h-5 px-2 font-medium whitespace-nowrap"
-              style={{ color: sanitizeColorCode(status.color || status.color_code, "inherit") }}
+            <DynamicColorBadge
+              color={status.color || status.color_code}
+              variant="subtle"
+              size="sm"
+              className="text-[10px] h-5 px-2 whitespace-nowrap"
             >
               {status.name}
-            </Badge>
+            </DynamicColorBadge>
           );
         },
         size: 110,

@@ -145,7 +145,7 @@ export function PriorityActionCard({
             size="icon"
             variant="ghost"
             className="h-7 w-7"
-            title="Gọi điện"
+            aria-label="Gọi điện"
             onClick={(e) => {
               e.preventDefault();
               onCall?.(action.lead_id);
@@ -158,7 +158,7 @@ export function PriorityActionCard({
             size="icon"
             variant="ghost"
             className="h-7 w-7 text-info-500 hover:text-info-600 hover:bg-info-50"
-            title="Chat Zalo"
+            aria-label="Chat Zalo"
             onClick={(e) => {
               e.preventDefault();
               onZalo?.(action.lead_id, action.phone);
@@ -171,7 +171,7 @@ export function PriorityActionCard({
             size="icon"
             variant="ghost"
             className="h-7 w-7"
-            title="Xem chi tiết"
+            aria-label="Xem chi tiết"
             asChild
           >
             <Link href={`/leads/${action.lead_id}`}>

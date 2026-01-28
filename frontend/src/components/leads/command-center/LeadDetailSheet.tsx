@@ -239,6 +239,7 @@ export function LeadDetailSheet({
                 variant="destructive"
                 size="icon"
                 onClick={() => onDelete(lead)}
+                aria-label="Xóa lead"
               >
                 <Trash2 className="h-4 w-4" />
               </Button>

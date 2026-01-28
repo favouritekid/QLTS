@@ -216,7 +216,7 @@ export function ActionBanner({ lead, onCall, onMarkComplete, className }: Action
           <Button
             variant="ghost"
             size="sm"
-            className={cn("text-sm font-medium", config.textColor, "hover:bg-white/50")}
+            className={cn("text-sm font-medium", config.textColor, "hover:bg-background/50")}
             onClick={onMarkComplete}
           >
             <CheckCircle className="w-4 h-4 mr-1" />

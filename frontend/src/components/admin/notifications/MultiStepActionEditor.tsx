@@ -169,6 +169,7 @@ function ActionStep({
                 className="h-5 w-5"
                 onClick={onMoveUp}
                 disabled={index === 0}
+                aria-label="Di chuyển lên"
               >
                 <ChevronUp className="h-3 w-3" />
               </Button>
@@ -179,6 +180,7 @@ function ActionStep({
                 className="h-5 w-5"
                 onClick={onMoveDown}
                 disabled={index === totalSteps - 1}
+                aria-label="Di chuyển xuống"
               >
                 <ChevronDown className="h-3 w-3" />
               </Button>
@@ -190,6 +192,7 @@ function ActionStep({
               variant="ghost"
               size="icon"
               onClick={() => setExpanded(!expanded)}
+              aria-label={expanded ? "Thu gọn" : "Mở rộng"}
             >
               <GripVertical className="h-4 w-4" />
             </Button>
@@ -202,6 +205,7 @@ function ActionStep({
                 size="icon"
                 onClick={onRemove}
                 className="text-destructive hover:text-destructive"
+                aria-label="Xóa bước"
               >
                 <Trash2 className="h-4 w-4" />
               </Button>

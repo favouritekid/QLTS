@@ -32,6 +32,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { ColorDot } from "@/components/ui/dynamic-color-badge";
 import type { LeadStatus } from "@/types/lead.types";
 import { LEAD_STATUS_OPTIONS, LEAD_SOURCE_OPTIONS } from "@/constants";
 import { usePipelineStages } from "@/hooks/usePipeline";
@@ -373,10 +374,7 @@ export function LeadFilterBar({
                     htmlFor={`bar-stage-${stage.id}`}
                     className="flex cursor-pointer items-center gap-2 text-sm font-normal"
                   >
-                    <span
-                      className="h-2.5 w-2.5 rounded-full"
-                      style={{ backgroundColor: STAGE_COLORS[stage.id] || "#6B7280" }}
-                    />
+                    <ColorDot color={STAGE_COLORS[stage.id]} size="sm" />
                     {stage.name}
                   </Label>
                 </div>

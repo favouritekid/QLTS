@@ -251,6 +251,7 @@ export function CRUDTable<T extends CRUDEntity, TFormValues>({
                                   variant="ghost"
                                   size="icon"
                                   onClick={() => handleOpenEdit(item)}
+                                  aria-label="Chỉnh sửa"
                                 >
                                   <Pencil className="h-4 w-4" />
                                 </Button>
@@ -261,6 +262,7 @@ export function CRUDTable<T extends CRUDEntity, TFormValues>({
                                   variant="ghost"
                                   size="icon"
                                   onClick={() => handleDelete(item.id, item.name)}
+                                  aria-label="Xóa"
                                 >
                                   <Trash2 className="h-4 w-4 text-destructive" />
                                 </Button>

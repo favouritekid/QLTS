@@ -528,6 +528,7 @@ export function NotificationRuleList({ initialData }: NotificationRuleListProps)
                                       onClick={() => handleEditClick(rule.id)}
                                       disabled={deleteMutation.isPending}
                                       title="Chỉnh sửa"
+                                      aria-label="Chỉnh sửa"
                                     >
                                       <Edit className="h-4 w-4" />
                                     </Button>
@@ -537,6 +538,7 @@ export function NotificationRuleList({ initialData }: NotificationRuleListProps)
                                       onClick={() => setDeleteRuleId(rule.id)}
                                       disabled={deleteMutation.isPending}
                                       title="Xóa"
+                                      aria-label="Xóa"
                                     >
                                       <Trash2 className="h-4 w-4 text-destructive" />
                                     </Button>

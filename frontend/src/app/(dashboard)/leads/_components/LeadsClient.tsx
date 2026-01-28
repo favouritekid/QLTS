@@ -20,6 +20,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Upload, Command } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/layouts/PageHeader";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   AlertDialog,
@@ -236,40 +237,35 @@ export function LeadsClient({ initialData }: LeadsClientProps) {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      {/* Header - Compact */}
-      <div className="bg-background/95 supports-[backdrop-filter]:bg-background/60 shrink-0 border-b backdrop-blur">
-        <div className="flex items-center justify-between px-4 py-3">
-          <div className="flex items-center gap-3">
-            <div className="bg-primary/10 rounded-lg p-2">
-              <Command className="text-primary h-5 w-5" />
-            </div>
-            <div>
-              <h1 className="text-xl font-bold font-display tracking-tight">Trung Tâm Quản Lý Lead</h1>
-              <p className="text-muted-foreground text-xs">
-                {leadsPage?.total_count?.toLocaleString() || 0} lead
-              </p>
-            </div>
-          </div>
-          {/* Hidden file input for import */}
-          <input
-            type="file"
-            accept=".csv,.xlsx"
-            onChange={handleImport}
-            className="hidden"
-            id="import-file"
-          />
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => document.getElementById("import-file")?.click()}
-            disabled={importMutation.isPending}
-            className="h-8"
-          >
-            <Upload className="mr-1.5 h-3.5 w-3.5" />
-            Nhập
-          </Button>
-        </div>
-      </div>
+      {/* Header - Sticky */}
+      <PageHeader
+        variant="sticky"
+        title="Trung Tâm Quản Lý Lead"
+        icon={<Command className="text-primary h-5 w-5" />}
+        description={`${leadsPage?.total_count?.toLocaleString() || 0} lead`}
+        actions={
+          <>
+            {/* Hidden file input for import */}
+            <input
+              type="file"
+              accept=".csv,.xlsx"
+              onChange={handleImport}
+              className="hidden"
+              id="import-file"
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => document.getElementById("import-file")?.click()}
+              disabled={importMutation.isPending}
+              className="h-8"
+            >
+              <Upload className="mr-1.5 h-3.5 w-3.5" />
+              Nhập
+            </Button>
+          </>
+        }
+      />
 
       {/* Stats Cards */}
       <div className="shrink-0 border-b px-4 py-2">

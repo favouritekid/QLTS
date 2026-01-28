@@ -340,7 +340,7 @@ export function AdmissionDetailClient({
         groupedValidationErrors={groupedValidationErrors}
       >
         {/* TAB CONTENT */}
-        <div className="bg-white rounded-lg shadow-sm min-h-[500px] p-1">
+        <div className="bg-card rounded-lg shadow-sm min-h-[500px] p-1">
           {currentStep === 1 && <PersonalInfoTab profile={profile} form={form} isEditable={can('edit')} />}
           {currentStep === 2 && <FamilyTab form={form} isEditable={can('edit')} />}
           {currentStep === 3 && <AcademicHistoryTab form={form} isEditable={can('edit')} />}

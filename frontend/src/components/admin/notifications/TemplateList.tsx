@@ -326,6 +326,7 @@ export function TemplateList({ initialData }: TemplateListProps) {
                           size="icon"
                           onClick={() => handleEditClick(template.id)}
                           disabled={deleteMutation.isPending}
+                          aria-label="Chỉnh sửa"
                         >
                           <Edit className="h-4 w-4" />
                         </Button>
@@ -338,6 +339,7 @@ export function TemplateList({ initialData }: TemplateListProps) {
                             template.usage_count > 0 ||
                             deleteMutation.isPending
                           }
+                          aria-label="Xóa"
                           title={
                             template.is_system
                               ? "Cannot delete system template"

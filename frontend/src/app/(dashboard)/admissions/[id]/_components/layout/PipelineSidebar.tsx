@@ -174,7 +174,7 @@ export function PipelineSidebar({
             )}
           </CollapsibleTrigger>
 
-          <CollapsibleContent className="mt-2 px-3 py-2 bg-white border border-error-100 rounded-lg max-h-[300px] overflow-y-auto">
+          <CollapsibleContent className="mt-2 px-3 py-2 bg-card border border-error-100 dark:border-error-900 rounded-lg max-h-[300px] overflow-y-auto">
             {/* Grouped Errors Display */}
             {groupedValidationErrors ? (
               <div className="space-y-3">

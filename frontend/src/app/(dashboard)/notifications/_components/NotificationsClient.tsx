@@ -443,6 +443,7 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
                                     className="h-8 w-8"
                                     onClick={() => handleMarkAsRead(notification.id)}
                                     title="Đánh dấu đã đọc"
+                                    aria-label="Đánh dấu đã đọc"
                                   >
                                     <Check className="h-4 w-4" />
                                   </Button>
@@ -453,6 +454,7 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
                                   className="h-8 w-8 text-destructive hover:text-destructive"
                                   onClick={() => handleDelete(notification.id)}
                                   title="Xoá"
+                                  aria-label="Xóa thông báo"
                                 >
                                   <Trash2 className="h-4 w-4" />
                                 </Button>

@@ -33,6 +33,7 @@ import {
   RefreshCcw,
 } from "lucide-react";
 import { cn, sanitizeColorCode } from "@/lib/utils";
+import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
 import { useLead } from "@/hooks/useLeads";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
 import { QuickConsultationSection } from "@/components/leads/QuickConsultationSection";
@@ -203,20 +204,13 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
 
               {/* Consultation Status Badge - Current status within the stage */}
               {lead.consultation_status && (
-                <Badge
-                  variant="outline"
-                  className="text-xs font-medium gap-1"
-                  style={{
-                    borderColor: lead.consultation_status.color_code || "#6b7280",
-                    color: lead.consultation_status.color_code || "#6b7280",
-                  }}
+                <DynamicColorBadge
+                  color={lead.consultation_status.color_code}
+                  variant="dot"
+                  size="sm"
                 >
-                  <div
-                    className="h-1.5 w-1.5 rounded-full"
-                    style={{ backgroundColor: lead.consultation_status.color_code || "#6b7280" }}
-                  />
                   {lead.consultation_status.name}
-                </Badge>
+                </DynamicColorBadge>
               )}
 
               {/* ✅ TECHNICAL DEBT FIX: Assignment Status Badge */}

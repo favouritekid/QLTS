@@ -49,7 +49,9 @@ import {
   useAllowedNextStatuses,
 } from "@/hooks/usePipeline";
 import type { ConsultationStatus, PipelineStage, OutcomeType } from "@/types/pipeline.types";
+import { SelectableMode } from "@/types/pipeline.types";
 import { OUTCOME_TYPE_OPTIONS, getOutcomeTypeColor } from "@/constants/consultation.constants";
+import { useAuth } from "@/hooks/useAuth"; 
 
 // =============================================================================
 // TYPES
@@ -107,6 +109,7 @@ interface StatusWithStage extends ConsultationStatus {
 function processStatuses(
   statuses: ConsultationStatus[],
   stages: PipelineStage[],
+  userRole: string | undefined, // ✅ Added userRole for permission checks
   options: {
     filterStageId?: string;
     filterOutcomeType?: OutcomeType;
@@ -132,6 +135,17 @@ function processStatuses(
       };
     })
     .filter((status) => {
+      // ✅ FSM v3.0 Permission Logic
+      // 1. SYSTEM statuses are never manually selectable
+      if (status.selectable_mode === SelectableMode.SYSTEM) return false;
+
+      // 2. ROLE statuses require admin/manager privileges
+      if (status.selectable_mode === SelectableMode.ROLE) {
+        // Simple role check - can be expanded if needed
+        const isPrivileged = userRole === "admin" || userRole === "manager";
+        if (!isPrivileged) return false;
+      }
+
       // Filter by allowed IDs (for status transitions)
       if (allowedStatusIds && allowedStatusIds.length > 0 && !allowedStatusIds.includes(status.id)) return false;
 
@@ -410,6 +424,10 @@ export function SmartConsultationStatusSelector({
     useFsmEngine ? leadId : undefined
   );
   const { data: stages = [], isLoading: stagesLoading } = usePipelineStages();
+  
+  // ✅ Get current user to check permissions
+  const { user } = useAuth();
+  const userRole = user?.role;
 
   // Use FSM statuses when enabled, otherwise use all statuses
   const statuses = useFsmEngine ? fsmStatuses : allStatuses;
@@ -419,7 +437,7 @@ export function SmartConsultationStatusSelector({
   // Process statuses with filtering
   const processedStatuses = useMemo(
     () =>
-      processStatuses(statuses, stages, {
+      processStatuses(statuses, stages, userRole, {
         filterStageId,
         filterOutcomeType,
         excludeStatusIds,
@@ -427,7 +445,7 @@ export function SmartConsultationStatusSelector({
         finalOnly,
         nonFinalOnly,
       }),
-    [statuses, stages, filterStageId, filterOutcomeType, excludeStatusIds, allowedStatusIds, finalOnly, nonFinalOnly]
+    [statuses, stages, userRole, filterStageId, filterOutcomeType, excludeStatusIds, allowedStatusIds, finalOnly, nonFinalOnly]
   );
 
   // Render based on variant

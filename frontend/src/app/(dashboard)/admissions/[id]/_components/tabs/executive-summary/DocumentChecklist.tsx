@@ -307,6 +307,7 @@ function DocumentRow({
                       const url = getDocumentUrl(doc.file_path)
                       if (url) window.open(url, "_blank")
                     }}
+                    aria-label="Xem tài liệu"
                   >
                     <Eye className="h-4 w-4" />
                   </Button>
@@ -327,6 +328,7 @@ function DocumentRow({
                     className="h-8 w-8 text-error-600 hover:text-error-700 hover:bg-error-50"
                     onClick={handleReject}
                     disabled={rejectMutation.isPending}
+                    aria-label="Từ chối tài liệu"
                   >
                     <XCircle className="h-4 w-4" />
                   </Button>

@@ -24,6 +24,7 @@ import {
 } from "@/hooks/usePipeline";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { ColorDot } from "@/components/ui/dynamic-color-badge";
 import { PageContainer } from "@/components/layouts/PageContainer";
 import { PageHeader } from "@/components/layouts/PageHeader";
 import { PipelineStageDialog } from "@/components/admin/PipelineStageDialog";
@@ -137,13 +138,14 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
                         {stage.is_final_stage && <Badge variant="destructive">Giai đoạn cuối</Badge>}
                       </div>
                       <div className="flex gap-2">
-                        <Button size="sm" variant="outline" onClick={() => handleEditStage(stage)}>
+                        <Button size="sm" variant="outline" onClick={() => handleEditStage(stage)} aria-label="Chỉnh sửa giai đoạn">
                           <Pencil className="h-4 w-4" />
                         </Button>
                         <Button
                           size="sm"
                           variant="outline"
                           onClick={() => setDeletingStageId(stage.id)}
+                          aria-label="Xóa giai đoạn"
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
@@ -211,10 +213,7 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
                             <CardHeader className="p-4 pb-2">
                               <div className="flex items-start justify-between">
                                 <div className="flex items-center gap-2">
-                                  <div
-                                    className="ring-border h-3 w-3 rounded-full ring-1 ring-offset-1"
-                                    style={{ backgroundColor: status.color_code }}
-                                  />
+                                  <ColorDot color={status.color_code} size="md" className="ring-border ring-1 ring-offset-1" />
                                   <span className="font-semibold">{status.name}</span>
                                 </div>
                                 <div className="flex gap-1">
@@ -223,6 +222,7 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
                                     variant="ghost"
                                     className="h-7 w-7"
                                     onClick={() => handleEditStatus(status)}
+                                    aria-label="Chỉnh sửa trạng thái"
                                   >
                                     <Pencil className="h-3.5 w-3.5" />
                                   </Button>
@@ -231,6 +231,7 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
                                     variant="ghost"
                                     className="text-destructive hover:text-destructive h-7 w-7"
                                     onClick={() => setDeletingStatusId(status.id)}
+                                    aria-label="Xóa trạng thái"
                                   >
                                     <Trash2 className="h-3.5 w-3.5" />
                                   </Button>
@@ -321,6 +322,7 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
                                   variant="ghost"
                                   className="h-7 w-7"
                                   onClick={() => handleEditStatus(status)}
+                                  aria-label="Chỉnh sửa trạng thái"
                                 >
                                   <Pencil className="h-3.5 w-3.5" />
                                 </Button>
@@ -329,6 +331,7 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
                                   variant="ghost"
                                   className="text-destructive h-7 w-7"
                                   onClick={() => setDeletingStatusId(status.id)}
+                                  aria-label="Xóa trạng thái"
                                 >
                                   <Trash2 className="h-3.5 w-3.5" />
                                 </Button>

@@ -81,7 +81,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                     {...field}
                                     placeholder="VD: THPT Nguyễn Huệ"
                                     disabled={!isEditable}
-                                    className="bg-white"
+                                    className="bg-background"
                                     />
                                 </FormControl>
                                 <FormMessage />
@@ -104,7 +104,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                         min={1900}
                                         max={2100}
                                         disabled={!isEditable}
-                                        className="bg-white"
+                                        className="bg-background"
                                         onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}
                                     />
                                     </FormControl>
@@ -126,7 +126,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                         min={1900}
                                         max={2100}
                                         disabled={!isEditable}
-                                        className="bg-white"
+                                        className="bg-background"
                                         onChange={(e) => field.onChange(parseInt(e.target.value) || 0)}
                                     />
                                     </FormControl>
@@ -153,7 +153,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                         placeholder="0.0 - 10.0"
                                         disabled={!isEditable}
                                         value={field.value ?? ""}
-                                        className="bg-white"
+                                        className="bg-background"
                                         onChange={(e) => field.onChange(e.target.value ? parseFloat(e.target.value) : null)}
                                     />
                                     </FormControl>
@@ -170,7 +170,7 @@ export function AcademicHistoryTab({ form, isEditable }: AcademicHistoryTabProps
                                     <FormLabel className="text-xs">Trình độ</FormLabel>
                                     <Select onValueChange={field.onChange} value={field.value || ""} disabled={!isEditable}>
                                     <FormControl>
-                                        <SelectTrigger className="bg-white">
+                                        <SelectTrigger className="bg-background">
                                         <SelectValue placeholder="Chọn" />
                                         </SelectTrigger>
                                     </FormControl>
