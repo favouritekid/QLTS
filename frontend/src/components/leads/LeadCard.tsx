@@ -188,7 +188,7 @@ export const LeadCard = React.memo(function LeadCard({
           {lead.consultation_status && (
             <DynamicColorBadge
               color={lead.consultation_status.color_code}
-              variant="outline"
+              variant="subtle"
               size="sm"
               className="text-[10px] px-1.5 py-0"
             >

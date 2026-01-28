@@ -227,7 +227,7 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
           {lead.consultation_status ? (
             <DynamicColorBadge
               color={lead.consultation_status.color_code}
-              variant="dot"
+              variant="subtle"
               size="sm"
             >
               {lead.consultation_status.name}
