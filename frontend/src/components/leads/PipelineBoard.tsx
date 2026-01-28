@@ -124,7 +124,7 @@ export function PipelineBoard({ pipeline }: PipelineBoardProps) {
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
-      <div className="flex gap-4 overflow-x-auto pb-4">
+      <div className="flex gap-4 overflow-x-auto pb-4 snap-x snap-mandatory lg:snap-none -mx-4 px-4 lg:mx-0 lg:px-0">
         <SortableContext items={stageIds} strategy={horizontalListSortingStrategy}>
           {sortedStages.map((stage) => (
             <PipelineColumn

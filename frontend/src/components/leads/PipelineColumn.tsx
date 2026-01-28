@@ -50,7 +50,7 @@ export function PipelineColumn({ stage, leads, isActiveDropZone }: PipelineColum
   return (
     <div
       ref={setNodeRef}
-      className={`flex-shrink-0 w-80 ${
+      className={`flex-shrink-0 w-[85vw] sm:w-72 lg:w-80 snap-center lg:snap-align-none ${
         isOver || isActiveDropZone
           ? "ring-2 ring-primary ring-offset-2"
           : ""

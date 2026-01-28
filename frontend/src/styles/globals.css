@@ -25,3 +25,54 @@
     font-family: var(--font-sans);
   }
 }
+
+/* Components Layer - Mobile Utilities */
+@layer components {
+  /* Touch target utilities - 44px minimum per iOS HIG */
+  .touch-target {
+    @apply min-h-[44px] min-w-[44px];
+  }
+
+  .touch-target-sm {
+    @apply min-h-[40px] min-w-[40px];
+  }
+
+  .touch-target-lg {
+    @apply min-h-[48px] min-w-[48px];
+  }
+
+  /* Safe area utilities for notched devices */
+  .safe-area-pt {
+    padding-top: env(safe-area-inset-top);
+  }
+
+  .safe-area-pb {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .safe-area-pl {
+    padding-left: env(safe-area-inset-left);
+  }
+
+  .safe-area-pr {
+    padding-right: env(safe-area-inset-right);
+  }
+
+  .safe-area-p {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+
+  /* Mobile scroll indicators */
+  .scroll-shadow-x {
+    background:
+      linear-gradient(to right, var(--background) 0%, transparent 10%),
+      linear-gradient(to left, var(--background) 0%, transparent 10%);
+    background-size: 20px 100%, 20px 100%;
+    background-position: left center, right center;
+    background-repeat: no-repeat;
+    background-attachment: local, local;
+  }
+}
