@@ -174,23 +174,19 @@ export function getColumns(options?: ColumnOptions): ColumnDef<AdmissionProfileR
       size: 120,
     }) as ColumnDef<AdmissionProfileResponse, unknown>,
 
-    // Program column
-    columnHelper.accessor(
-      (row) => row.lead?.offering?.program?.name ?? "-",
-      {
-        id: "program",
-        header: "Chương trình",
-        cell: ({ getValue }) => {
-          const program = getValue() as string
-          return (
-            <span className="text-sm truncate max-w-[150px] block">
-              {program}
-            </span>
-          )
-        },
-        size: 150,
-      }
-    ) as ColumnDef<AdmissionProfileResponse, unknown>,
+    // Program column (uses denormalized program_name field)
+    columnHelper.accessor("program_name", {
+      header: "Chương trình",
+      cell: ({ getValue }) => {
+        const program = getValue() ?? "-"
+        return (
+          <span className="text-sm truncate max-w-[150px] block">
+            {program}
+          </span>
+        )
+      },
+      size: 150,
+    }) as ColumnDef<AdmissionProfileResponse, unknown>,
 
     // Created date column
     columnHelper.accessor("created_at", {

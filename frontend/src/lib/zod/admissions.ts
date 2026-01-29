@@ -435,6 +435,9 @@ export const admissionProfileResponseSchema = z.object({
   // Nested relationships (optional)
   lead: z.any().optional().nullable(),
   student: z.any().optional().nullable(),
+
+  // Denormalized fields for list display
+  program_name: z.string().optional().nullable(),
   
   // =========================================================================
   // Phase 7: Frontend Thin Client Fields (computed by backend)
