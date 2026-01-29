@@ -12,9 +12,11 @@ Benefits:
 - Separates SQL from business logic
 """
 
+from datetime import datetime
 from typing import List, Optional, Tuple
+import unicodedata
 
-from sqlalchemy import select, or_, and_, func
+from sqlalchemy import select, or_, and_, func, desc, asc
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -85,6 +87,13 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         skip: int = 0,
         limit: int = 50,
         unit_id: Optional[int] = None,
+        search: Optional[str] = None,
+        statuses: Optional[List[str]] = None,
+        major_ids: Optional[List[int]] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        sort_by: str = "created_at",
+        order: str = "desc",
         **filters
     ) -> Tuple[List[models.AdmissionProfile], int]:
         """
@@ -94,7 +103,14 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             skip: Number of records to skip
             limit: Maximum records to return
             unit_id: Filter by lead.unit_id (for IDOR protection)
-            **filters: Filter parameters (status, lead_id)
+            search: Search term for name, email, citizen_id
+            statuses: List of statuses to filter (multi-select)
+            major_ids: List of major/program IDs to filter
+            date_from: Filter profiles created after this date
+            date_to: Filter profiles created before this date
+            sort_by: Field to sort by (created_at, updated_at, full_name)
+            order: Sort order (asc, desc)
+            **filters: Additional filter parameters (status, lead_id)
 
         Returns:
             Tuple of (List of AdmissionProfile instances, total_count)
@@ -106,11 +122,37 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         if unit_id is not None:
             base_conditions.append(models.Lead.unit_id == unit_id)
 
-        if filters.get("status"):
+        # Multi-status filter (new)
+        if statuses and len(statuses) > 0:
+            base_conditions.append(models.AdmissionProfile.status.in_(statuses))
+        # Backward compatibility: single status from filters
+        elif filters.get("status"):
             base_conditions.append(models.AdmissionProfile.status == filters["status"])
 
         if filters.get("lead_id"):
             base_conditions.append(models.AdmissionProfile.lead_id == filters["lead_id"])
+
+        # Search filter (name, email, citizen_id)
+        if search:
+            # Normalize Unicode for Vietnamese diacritics
+            normalized_search = unicodedata.normalize('NFC', search.strip())
+            search_term = f"%{normalized_search}%"
+            search_conditions = or_(
+                models.Lead.full_name.ilike(search_term),
+                models.Lead.email.ilike(search_term),
+                models.AdmissionProfile.citizen_id.ilike(search_term),
+            )
+            base_conditions.append(search_conditions)
+
+        # Major/Program filter via Lead.offering_id
+        if major_ids and len(major_ids) > 0:
+            base_conditions.append(models.Lead.offering_id.in_(major_ids))
+
+        # Date range filter
+        if date_from:
+            base_conditions.append(models.AdmissionProfile.created_at >= date_from)
+        if date_to:
+            base_conditions.append(models.AdmissionProfile.created_at <= date_to)
 
         # Count query
         count_query = (
@@ -123,6 +165,17 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         count_result = await self.db.execute(count_query)
         total_count = count_result.scalar() or 0
 
+        # Determine sort column and order
+        sort_column = models.AdmissionProfile.created_at  # default
+        if sort_by == "updated_at":
+            sort_column = models.AdmissionProfile.updated_at
+        elif sort_by == "full_name":
+            sort_column = models.Lead.full_name
+        elif sort_by == "status":
+            sort_column = models.AdmissionProfile.status
+
+        order_func = desc if order == "desc" else asc
+
         # Data query with pagination
         data_query = (
             select(models.AdmissionProfile)
@@ -133,6 +186,7 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
                 selectinload(models.AdmissionProfile.subject_scores).selectinload(ProfileSubjectScore.subject),
                 selectinload(models.AdmissionProfile.documents).joinedload(ProfileDocument.document_type),
             )
+            .order_by(order_func(sort_column))
             .offset(skip)
             .limit(limit)
         )

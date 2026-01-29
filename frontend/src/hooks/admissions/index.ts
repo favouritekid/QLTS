@@ -27,14 +27,20 @@ export {
   useCreateAdmission,
   useUpdateAdmission,
   useSubmitAdmission,
-  useApproveAdmission,  // ✅ NEW
-  useRejectAdmission,   // ✅ NEW
+  useApproveAdmission,
+  useRejectAdmission,
   useEnrollStudent,
   useDeleteAdmission,
   useUploadAdmissionDocument,
   useMarkPaperSubmitted,
   useVerifyDocument,
   useRejectDocument,
+  useResetDocument,
+  // Bulk Actions
+  useBulkApproveAdmissions,
+  useBulkRejectAdmissions,
+  useBulkAssignAdmissions,
+  useExportAdmissions,
 } from "./useAdmissions"
 
 // ============================================================================

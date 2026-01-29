@@ -18,8 +18,9 @@ Endpoints:
 - POST /api/admissions/{id}/enroll - Enroll student (ACID transaction)
 """
 
-from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File, Form
+from datetime import datetime
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
@@ -63,21 +64,33 @@ def get_client_ip(request: Request) -> str:
 )
 async def list_admission_profiles(
     request: Request,
-    status: str | None = None,
-    page: int = 1,
-    page_size: int = 20,
+    status: str | None = Query(None, description="Filter by status (comma-separated for multi-select)"),
+    search: str | None = Query(None, description="Search by name, email, or citizen ID"),
+    major_id: str | None = Query(None, description="Filter by major/program ID (comma-separated)"),
+    date_from: datetime | None = Query(None, description="Filter from date (created_at)"),
+    date_to: datetime | None = Query(None, description="Filter to date (created_at)"),
+    sort_by: str = Query("created_at", description="Sort field (created_at, updated_at, full_name, status)"),
+    order: str = Query("desc", description="Sort order (asc, desc)"),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Items per page"),
     db: AsyncSession = Depends(database.get_db),
     current_user: models.User = CasbinAuth,
 ):
     """
-    List AdmissionProfiles accessible to current user with pagination.
+    List AdmissionProfiles accessible to current user with pagination and filters.
 
     **Security:**
     - Admin: Can see all profiles
     - Officer: Only profiles where lead.unit_id == user.unit_id
 
     **Query Parameters:**
-    - status: Filter by status (draft, approved, rejected, enrolled)
+    - status: Filter by status (comma-separated for multi-select, e.g., "draft,submitted")
+    - search: Search by name, email, or citizen ID
+    - major_id: Filter by major/program ID (comma-separated)
+    - date_from: Filter profiles created after this date
+    - date_to: Filter profiles created before this date
+    - sort_by: Sort field (created_at, updated_at, full_name, status)
+    - order: Sort order (asc, desc)
     - page: Page number (default: 1)
     - page_size: Items per page (default: 20, max: 100)
 
@@ -88,12 +101,30 @@ async def list_admission_profiles(
     skip = (page - 1) * page_size
     limit = min(page_size, 100)
 
+    # Parse comma-separated values
+    statuses: Optional[List[str]] = None
+    if status:
+        statuses = [s.strip() for s in status.split(",") if s.strip()]
+
+    major_ids: Optional[List[int]] = None
+    if major_id:
+        try:
+            major_ids = [int(m.strip()) for m in major_id.split(",") if m.strip()]
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid major_id format")
+
     profiles, total_count = await admission_service.get_profiles(
         db=db,
         skip=skip,
         limit=limit,
-        status_filter=status,
         current_user=current_user,
+        search=search,
+        statuses=statuses,
+        major_ids=major_ids,
+        date_from=date_from,
+        date_to=date_to,
+        sort_by=sort_by,
+        order=order,
     )
 
     return schemas.AdmissionsPage(
@@ -1342,6 +1373,220 @@ async def send_confirmation_link(
             sent_to_email=lead.email if lead else None,
             sent_to_phone=lead.phone if lead else None,
         )
-    
+
     except BadRequest as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+# ==============================================================================
+# BULK ACTION ENDPOINTS (Manager/Admin only)
+# ==============================================================================
+
+
+@router.post(
+    "/bulk/approve",
+    response_model=schemas.BulkActionResponse,
+    summary="Bulk approve admission profiles",
+    description="""
+    Approve multiple admission profiles at once.
+
+    **Permissions:** Manager or Admin only.
+    **IDOR:** Only profiles accessible to the user will be processed.
+
+    **Error Handling:**
+    - Profiles that fail validation are skipped
+    - Returns success/failure counts and details
+    """,
+)
+@limiter.limit(RateLimits.DATA_WRITE)
+async def bulk_approve_admissions(
+    request: Request,
+    body: schemas.BulkApproveRequest,
+    current_user: models.User = Depends(deps.require_admin_or_manager),
+    db: AsyncSession = Depends(database.get_db),
+):
+    """Bulk approve multiple admission profiles."""
+    try:
+        result = await admission_service.bulk_approve(
+            db=db,
+            profile_ids=body.profile_ids,
+            approver=current_user,
+            notes=body.notes,
+        )
+
+        await db.commit()
+
+        return schemas.BulkActionResponse(**result)
+
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post(
+    "/bulk/reject",
+    response_model=schemas.BulkActionResponse,
+    summary="Bulk reject admission profiles",
+    description="""
+    Reject multiple admission profiles at once with a reason.
+
+    **Permissions:** Manager or Admin only.
+    **IDOR:** Only profiles accessible to the user will be processed.
+
+    **Error Handling:**
+    - Profiles that fail validation are skipped
+    - Returns success/failure counts and details
+    """,
+)
+@limiter.limit(RateLimits.DATA_WRITE)
+async def bulk_reject_admissions(
+    request: Request,
+    body: schemas.BulkRejectRequest,
+    current_user: models.User = Depends(deps.require_admin_or_manager),
+    db: AsyncSession = Depends(database.get_db),
+):
+    """Bulk reject multiple admission profiles with reason."""
+    try:
+        result = await admission_service.bulk_reject(
+            db=db,
+            profile_ids=body.profile_ids,
+            rejector=current_user,
+            reason=body.reason,
+        )
+
+        await db.commit()
+
+        return schemas.BulkActionResponse(**result)
+
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post(
+    "/bulk/assign",
+    response_model=schemas.BulkActionResponse,
+    summary="Bulk assign admission profiles to officer",
+    description="""
+    Assign multiple admission profiles to a specific officer.
+
+    **Permissions:** Manager or Admin only.
+    **IDOR:** Only profiles accessible to the user will be processed.
+
+    **Note:** This updates the lead.assigned_officer_id for each profile's lead.
+    """,
+)
+@limiter.limit(RateLimits.DATA_WRITE)
+async def bulk_assign_admissions(
+    request: Request,
+    body: schemas.BulkAssignRequest,
+    current_user: models.User = Depends(deps.require_admin_or_manager),
+    db: AsyncSession = Depends(database.get_db),
+):
+    """Bulk assign admission profiles to an officer."""
+    try:
+        result = await admission_service.bulk_assign(
+            db=db,
+            profile_ids=body.profile_ids,
+            officer_id=body.officer_id,
+            assigner=current_user,
+        )
+
+        await db.commit()
+
+        return schemas.BulkActionResponse(**result)
+
+    except BadRequest as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get(
+    "/export",
+    summary="Export admissions to CSV",
+    description="""
+    Export admission profiles to CSV format with optional filters.
+
+    **Permissions:** Any authenticated staff member.
+    **Filters:** Same as list endpoint (status, search, major_id, date_from, date_to).
+    """,
+)
+@limiter.limit(RateLimits.DATA_READ)
+async def export_admissions_csv(
+    request: Request,
+    status: str | None = Query(None, description="Filter by status (comma-separated)"),
+    search: str | None = Query(None, description="Search by name, email, or citizen ID"),
+    major_id: str | None = Query(None, description="Filter by major/program ID (comma-separated)"),
+    date_from: datetime | None = Query(None, description="Filter from date"),
+    date_to: datetime | None = Query(None, description="Filter to date"),
+    db: AsyncSession = Depends(database.get_db),
+    current_user: models.User = CasbinAuth,
+):
+    """Export admission profiles to CSV format."""
+    import csv
+    import io
+    from fastapi.responses import StreamingResponse
+
+    # Parse filters
+    statuses = [s.strip() for s in status.split(",")] if status else None
+    major_ids = [int(m.strip()) for m in major_id.split(",") if m.strip().isdigit()] if major_id else None
+
+    # Determine unit_id for non-admin users (IDOR protection)
+    unit_id = None if current_user.role == "admin" else current_user.unit_id
+
+    # Get all profiles matching filters (no pagination for export)
+    profiles, _ = await admission_service.get_profiles(
+        db=db,
+        skip=0,
+        limit=10000,  # Max export limit
+        unit_id=unit_id,
+        search=search,
+        statuses=statuses,
+        major_ids=major_ids,
+        date_from=date_from,
+        date_to=date_to,
+        sort_by="created_at",
+        order="desc",
+    )
+
+    # Create CSV in memory
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Header row
+    writer.writerow([
+        "ID",
+        "Họ tên",
+        "Email",
+        "Số điện thoại",
+        "CMND/CCCD",
+        "Trạng thái",
+        "Tiến độ hoàn thiện",
+        "Chương trình",
+        "Ngày tạo",
+        "Ngày cập nhật",
+    ])
+
+    # Data rows
+    for profile in profiles:
+        lead = profile.lead
+        writer.writerow([
+            profile.id,
+            lead.full_name if lead else "",
+            lead.email if lead else "",
+            lead.phone if lead else "",
+            profile.citizen_id or "",
+            profile.status,
+            f"{profile.completion_percentage}%",
+            lead.offering.program.name if lead and lead.offering and lead.offering.program else "",
+            profile.created_at.strftime("%Y-%m-%d %H:%M") if profile.created_at else "",
+            profile.updated_at.strftime("%Y-%m-%d %H:%M") if profile.updated_at else "",
+        ])
+
+    # Prepare response
+    output.seek(0)
+
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename=admissions_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        },
+    )

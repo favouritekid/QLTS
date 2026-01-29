@@ -1282,8 +1282,14 @@ async def get_profiles(
     db: AsyncSession,
     skip: int,
     limit: int,
-    status_filter: Optional[str],
     current_user: models.User,
+    search: Optional[str] = None,
+    statuses: Optional[List[str]] = None,
+    major_ids: Optional[List[int]] = None,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    sort_by: str = "created_at",
+    order: str = "desc",
 ) -> Tuple[List[models.AdmissionProfile], int]:
     """
     Get filtered list of admission profiles with total count.
@@ -1295,19 +1301,20 @@ async def get_profiles(
         db: Database session
         skip: Pagination offset
         limit: Page size
-        status_filter: Optional status filter
         current_user: Current authenticated user
+        search: Search term for name, email, citizen_id
+        statuses: List of statuses to filter (multi-select)
+        major_ids: List of major/program IDs to filter
+        date_from: Filter profiles created after this date
+        date_to: Filter profiles created before this date
+        sort_by: Field to sort by
+        order: Sort order (asc, desc)
 
     Returns:
         Tuple of (List of AdmissionProfile, total_count)
     """
     from app.repositories import AdmissionRepository
     admission_repo = AdmissionRepository(db)
-
-    # Build filters
-    filters = {}
-    if status_filter:
-        filters["status"] = status_filter
 
     # IDOR: Pass unit_id to repository for non-admin users (DB-level filter)
     unit_filter = None if current_user.role == UserRole.ADMIN else current_user.unit_id
@@ -1317,7 +1324,13 @@ async def get_profiles(
         skip=skip,
         limit=min(limit, 100),
         unit_id=unit_filter,
-        **filters
+        search=search,
+        statuses=statuses,
+        major_ids=major_ids,
+        date_from=date_from,
+        date_to=date_to,
+        sort_by=sort_by,
+        order=order,
     )
 
     return profiles, total_count
@@ -3794,3 +3807,231 @@ async def verify_and_confirm(
         )
     
     return profile, _notification_callback
+
+
+# ==============================================================================
+# BULK ACTION FUNCTIONS
+# ==============================================================================
+
+async def bulk_approve(
+    db: AsyncSession,
+    profile_ids: List[int],
+    approver: models.User,
+    notes: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Bulk approve multiple admission profiles.
+
+    Security:
+    - Only Manager/Admin can approve
+    - IDOR: Verifies each profile is accessible to user
+
+    Args:
+        db: Database session
+        profile_ids: List of profile IDs to approve
+        approver: User performing the approval
+        notes: Optional approval notes
+
+    Returns:
+        Dict with success_count, failed_count, failed_ids, errors, message
+    """
+    from app.repositories import AdmissionRepository
+
+    if approver.role not in [UserRole.ADMIN, UserRole.MANAGER]:
+        raise PermissionDeniedError("Only Managers or Admins can approve profiles")
+
+    repo = AdmissionRepository(db)
+    success_count = 0
+    failed_ids = []
+    errors: Dict[int, str] = {}
+
+    for profile_id in profile_ids:
+        try:
+            # Get profile with IDOR check
+            profile = await repo.get_profile_by_id_with_lead(profile_id)
+            if not profile:
+                failed_ids.append(profile_id)
+                errors[profile_id] = "Profile not found"
+                continue
+
+            # Check IDOR for non-admin
+            if approver.role != UserRole.ADMIN and profile.lead.unit_id != approver.unit_id:
+                failed_ids.append(profile_id)
+                errors[profile_id] = "Permission denied"
+                continue
+
+            # Check if profile can be approved (status must be submitted/resubmitted)
+            if profile.status not in ["submitted", "resubmitted"]:
+                failed_ids.append(profile_id)
+                errors[profile_id] = f"Cannot approve profile with status '{profile.status}'"
+                continue
+
+            # Perform approval
+            now = datetime.now(timezone.utc)
+            profile.status = "approved"
+            profile.approved_at = now
+            profile.approved_by_id = approver.id
+            profile.approval_notes = notes
+            profile.version += 1
+
+            success_count += 1
+
+        except Exception as e:
+            log.error("Bulk approve failed for profile", profile_id=profile_id, error=str(e))
+            failed_ids.append(profile_id)
+            errors[profile_id] = str(e)
+
+    await db.flush()
+
+    return {
+        "success_count": success_count,
+        "failed_count": len(failed_ids),
+        "failed_ids": failed_ids,
+        "errors": errors if errors else None,
+        "message": f"Approved {success_count} of {len(profile_ids)} profiles",
+    }
+
+
+async def bulk_reject(
+    db: AsyncSession,
+    profile_ids: List[int],
+    rejector: models.User,
+    reason: str,
+) -> Dict[str, Any]:
+    """
+    Bulk reject multiple admission profiles.
+
+    Security:
+    - Only Manager/Admin can reject
+    - IDOR: Verifies each profile is accessible to user
+
+    Args:
+        db: Database session
+        profile_ids: List of profile IDs to reject
+        rejector: User performing the rejection
+        reason: Rejection reason (required)
+
+    Returns:
+        Dict with success_count, failed_count, failed_ids, errors, message
+    """
+    from app.repositories import AdmissionRepository
+
+    if rejector.role not in [UserRole.ADMIN, UserRole.MANAGER]:
+        raise PermissionDeniedError("Only Managers or Admins can reject profiles")
+
+    repo = AdmissionRepository(db)
+    success_count = 0
+    failed_ids = []
+    errors: Dict[int, str] = {}
+
+    for profile_id in profile_ids:
+        try:
+            profile = await repo.get_profile_by_id_with_lead(profile_id)
+            if not profile:
+                failed_ids.append(profile_id)
+                errors[profile_id] = "Profile not found"
+                continue
+
+            if rejector.role != UserRole.ADMIN and profile.lead.unit_id != rejector.unit_id:
+                failed_ids.append(profile_id)
+                errors[profile_id] = "Permission denied"
+                continue
+
+            if profile.status not in ["submitted", "resubmitted"]:
+                failed_ids.append(profile_id)
+                errors[profile_id] = f"Cannot reject profile with status '{profile.status}'"
+                continue
+
+            now = datetime.now(timezone.utc)
+            profile.status = "rejected"
+            profile.rejected_at = now
+            profile.rejected_by_id = rejector.id
+            profile.rejection_reason = reason
+            profile.version += 1
+
+            success_count += 1
+
+        except Exception as e:
+            log.error("Bulk reject failed for profile", profile_id=profile_id, error=str(e))
+            failed_ids.append(profile_id)
+            errors[profile_id] = str(e)
+
+    await db.flush()
+
+    return {
+        "success_count": success_count,
+        "failed_count": len(failed_ids),
+        "failed_ids": failed_ids,
+        "errors": errors if errors else None,
+        "message": f"Rejected {success_count} of {len(profile_ids)} profiles",
+    }
+
+
+async def bulk_assign(
+    db: AsyncSession,
+    profile_ids: List[int],
+    officer_id: int,
+    assigner: models.User,
+) -> Dict[str, Any]:
+    """
+    Bulk assign profiles to an officer (updates lead.assigned_officer_id).
+
+    Security:
+    - Manager/Admin can assign within their unit
+    - IDOR: Verifies each profile is accessible to user
+
+    Args:
+        db: Database session
+        profile_ids: List of profile IDs to assign
+        officer_id: ID of the officer to assign to
+        assigner: User performing the assignment
+
+    Returns:
+        Dict with success_count, failed_count, failed_ids, errors, message
+    """
+    from app.repositories import AdmissionRepository
+
+    if assigner.role not in [UserRole.ADMIN, UserRole.MANAGER]:
+        raise PermissionDeniedError("Only Managers or Admins can assign profiles")
+
+    # Verify officer exists
+    officer = await db.get(models.User, officer_id)
+    if not officer:
+        raise ResourceNotFoundError("Officer not found")
+
+    repo = AdmissionRepository(db)
+    success_count = 0
+    failed_ids = []
+    errors: Dict[int, str] = {}
+
+    for profile_id in profile_ids:
+        try:
+            profile = await repo.get_profile_by_id_with_lead(profile_id)
+            if not profile:
+                failed_ids.append(profile_id)
+                errors[profile_id] = "Profile not found"
+                continue
+
+            if assigner.role != UserRole.ADMIN and profile.lead.unit_id != assigner.unit_id:
+                failed_ids.append(profile_id)
+                errors[profile_id] = "Permission denied"
+                continue
+
+            # Update lead assignment
+            profile.lead.assigned_officer_id = officer_id
+            success_count += 1
+
+        except Exception as e:
+            log.error("Bulk assign failed for profile", profile_id=profile_id, error=str(e))
+            failed_ids.append(profile_id)
+            errors[profile_id] = str(e)
+
+    await db.flush()
+
+    return {
+        "success_count": success_count,
+        "failed_count": len(failed_ids),
+        "failed_ids": failed_ids,
+        "errors": errors if errors else None,
+        "message": f"Assigned {success_count} of {len(profile_ids)} profiles to officer",
+    }

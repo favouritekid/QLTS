@@ -153,6 +153,11 @@ from .admission import (
     AdmissionsPage,
     AdmissionSubmitResponse,
     EnrollStudentResponse,
+    # Bulk action schemas
+    BulkApproveRequest,
+    BulkRejectRequest,
+    BulkAssignRequest,
+    BulkActionResponse,
     # Document upload
     DocumentUploadResponse,
     DocumentRejectRequest,

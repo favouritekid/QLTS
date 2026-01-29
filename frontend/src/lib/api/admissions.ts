@@ -12,6 +12,11 @@ import type {
   AdmissionSubmitResponse,
   EnrollStudentResponse,
   AdmissionsPage,
+  AdmissionListParams,
+  BulkApproveRequest,
+  BulkRejectRequest,
+  BulkAssignRequest,
+  BulkActionResponse,
 } from '@/lib/zod/admissions'
 
 // ============================================
@@ -22,7 +27,7 @@ import type {
  * Get list of admissions with pagination and filters
  */
 export async function listAdmissions(
-  params?: { page?: number; page_size?: number; status?: string }
+  params?: AdmissionListParams
 ): Promise<AdmissionsPage> {
   const response = await api.get<AdmissionsPage>('/api/admissions', { params })
   return response.data
@@ -242,14 +247,82 @@ export async function resetDocument(
   return response.data
 }
 
+// ============================================
+// BULK ACTIONS
+// ============================================
+
+/**
+ * Bulk approve multiple admission profiles
+ * POST /api/admissions/bulk/approve
+ *
+ * Permissions: Manager or Admin only
+ */
+export async function bulkApproveAdmissions(
+  data: BulkApproveRequest
+): Promise<BulkActionResponse> {
+  const response = await api.post<BulkActionResponse>(
+    '/api/admissions/bulk/approve',
+    data
+  )
+  return response.data
+}
+
+/**
+ * Bulk reject multiple admission profiles
+ * POST /api/admissions/bulk/reject
+ *
+ * Permissions: Manager or Admin only
+ */
+export async function bulkRejectAdmissions(
+  data: BulkRejectRequest
+): Promise<BulkActionResponse> {
+  const response = await api.post<BulkActionResponse>(
+    '/api/admissions/bulk/reject',
+    data
+  )
+  return response.data
+}
+
+/**
+ * Bulk assign multiple admission profiles to an officer
+ * POST /api/admissions/bulk/assign
+ *
+ * Permissions: Manager or Admin only
+ */
+export async function bulkAssignAdmissions(
+  data: BulkAssignRequest
+): Promise<BulkActionResponse> {
+  const response = await api.post<BulkActionResponse>(
+    '/api/admissions/bulk/assign',
+    data
+  )
+  return response.data
+}
+
+/**
+ * Export admissions to CSV
+ * GET /api/admissions/export
+ *
+ * Returns: Blob for file download
+ */
+export async function exportAdmissionsCsv(
+  params?: Omit<AdmissionListParams, 'page' | 'page_size'>
+): Promise<Blob> {
+  const response = await api.get('/api/admissions/export', {
+    params,
+    responseType: 'blob',
+  })
+  return response.data
+}
+
 export const admissionsApi = {
   listAdmissions,
   getAdmission,
   createAdmission,
   updateAdmission,
   submitAdmission,
-  approveAdmission,  // ✅ NEW
-  rejectAdmission,   // ✅ NEW
+  approveAdmission,
+  rejectAdmission,
   enrollStudent,
   deleteAdmission,
   uploadAdmissionDocument,
@@ -257,6 +330,11 @@ export const admissionsApi = {
   verifyDocumentFormat,
   rejectDocument,
   resetDocument,
+  // Bulk actions
+  bulkApproveAdmissions,
+  bulkRejectAdmissions,
+  bulkAssignAdmissions,
+  exportAdmissionsCsv,
 }
 
 export default admissionsApi

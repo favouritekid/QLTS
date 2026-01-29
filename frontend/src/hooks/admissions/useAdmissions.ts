@@ -15,6 +15,10 @@ import { admissionsApi } from "@/lib/api/admissions"
 import type {
   AdmissionProfileResponse,
   AdmissionProfileUpdate,
+  AdmissionListParams,
+  BulkApproveRequest,
+  BulkRejectRequest,
+  BulkAssignRequest,
 } from "@/lib/zod/admissions"
 
 // Phase 7: Architecture Standards
@@ -37,15 +41,19 @@ export const admissionsKeys = {
 // QUERIES
 // ============================================
 
-export function useListAdmissions(
-  filters?: { status?: string; page?: number; page_size?: number }
-) {
+export function useListAdmissions(filters?: AdmissionListParams) {
   return useQuery({
-    queryKey: admissionsKeys.list(filters),
+    queryKey: admissionsKeys.list(filters as Record<string, unknown> | undefined),
     queryFn: () => admissionsApi.listAdmissions({
       page: filters?.page ?? 1,
       page_size: filters?.page_size ?? 20,
       status: filters?.status,
+      search: filters?.search,
+      major_id: filters?.major_id,
+      date_from: filters?.date_from,
+      date_to: filters?.date_to,
+      sort_by: filters?.sort_by,
+      order: filters?.order,
     }),
     staleTime: 15000, // 15 seconds
     refetchOnWindowFocus: true,
@@ -398,5 +406,126 @@ export function useResetDocument(id: number) {
     onError: (error: AxiosError<ApiErrorResponse>) => {
       handleApiError(error, { context: "hoàn tác tài liệu" })
     }
+  })
+}
+
+// ============================================
+// BULK ACTION MUTATIONS
+// ============================================
+
+/**
+ * Bulk Approve Hook
+ * Manager/Admin action - approve multiple profiles at once
+ */
+export function useBulkApproveAdmissions() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data: BulkApproveRequest) =>
+      admissionsApi.bulkApproveAdmissions(data),
+    onSuccess: (result) => {
+      if (result.success_count > 0) {
+        toast.success(`Đã phê duyệt ${result.success_count} hồ sơ`, {
+          description: result.failed_count > 0
+            ? `${result.failed_count} hồ sơ thất bại`
+            : undefined
+        })
+      } else {
+        toast.error("Không thể phê duyệt hồ sơ nào", {
+          description: result.message
+        })
+      }
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, { context: "phê duyệt hàng loạt" })
+    },
+  })
+}
+
+/**
+ * Bulk Reject Hook
+ * Manager/Admin action - reject multiple profiles at once
+ */
+export function useBulkRejectAdmissions() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data: BulkRejectRequest) =>
+      admissionsApi.bulkRejectAdmissions(data),
+    onSuccess: (result) => {
+      if (result.success_count > 0) {
+        toast.success(`Đã từ chối ${result.success_count} hồ sơ`, {
+          description: result.failed_count > 0
+            ? `${result.failed_count} hồ sơ thất bại`
+            : undefined
+        })
+      } else {
+        toast.error("Không thể từ chối hồ sơ nào", {
+          description: result.message
+        })
+      }
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, { context: "từ chối hàng loạt" })
+    },
+  })
+}
+
+/**
+ * Bulk Assign Hook
+ * Manager/Admin action - assign multiple profiles to an officer
+ */
+export function useBulkAssignAdmissions() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (data: BulkAssignRequest) =>
+      admissionsApi.bulkAssignAdmissions(data),
+    onSuccess: (result) => {
+      if (result.success_count > 0) {
+        toast.success(`Đã phân công ${result.success_count} hồ sơ`, {
+          description: result.failed_count > 0
+            ? `${result.failed_count} hồ sơ thất bại`
+            : undefined
+        })
+      } else {
+        toast.error("Không thể phân công hồ sơ nào", {
+          description: result.message
+        })
+      }
+      queryClient.invalidateQueries({ queryKey: admissionsKeys.lists() })
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, { context: "phân công hàng loạt" })
+    },
+  })
+}
+
+/**
+ * Export Admissions Hook
+ * Download admissions as CSV file
+ */
+export function useExportAdmissions() {
+  return useMutation({
+    mutationFn: (params?: Omit<AdmissionListParams, 'page' | 'page_size'>) =>
+      admissionsApi.exportAdmissionsCsv(params),
+    onSuccess: (blob) => {
+      // Create download link
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `admissions_export_${new Date().toISOString().slice(0, 10)}.csv`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+
+      toast.success("Xuất file CSV thành công")
+    },
+    onError: (error: AxiosError<ApiErrorResponse>) => {
+      handleApiError(error, { context: "xuất file CSV" })
+    },
   })
 }

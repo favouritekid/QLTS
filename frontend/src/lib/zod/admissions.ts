@@ -796,3 +796,70 @@ export const rejectRequestSchema = z.object({
 
 export type RejectRequest = z.infer<typeof rejectRequestSchema>
 
+// ==============================================================================
+// BULK ACTION SCHEMAS
+// ==============================================================================
+
+/**
+ * Bulk Approve Request Schema
+ * Used for POST /api/admissions/bulk/approve
+ */
+export const bulkApproveRequestSchema = z.object({
+  profile_ids: z.array(z.number().int().positive()).min(1).max(100),
+  notes: z.string().max(1000).optional(),
+})
+
+export type BulkApproveRequest = z.infer<typeof bulkApproveRequestSchema>
+
+/**
+ * Bulk Reject Request Schema
+ * Used for POST /api/admissions/bulk/reject
+ */
+export const bulkRejectRequestSchema = z.object({
+  profile_ids: z.array(z.number().int().positive()).min(1).max(100),
+  reason: z.string().min(10, "Lý do từ chối phải có ít nhất 10 ký tự").max(1000),
+})
+
+export type BulkRejectRequest = z.infer<typeof bulkRejectRequestSchema>
+
+/**
+ * Bulk Assign Request Schema
+ * Used for POST /api/admissions/bulk/assign
+ */
+export const bulkAssignRequestSchema = z.object({
+  profile_ids: z.array(z.number().int().positive()).min(1).max(100),
+  officer_id: z.number().int().positive(),
+})
+
+export type BulkAssignRequest = z.infer<typeof bulkAssignRequestSchema>
+
+/**
+ * Bulk Action Response Schema
+ * Used for bulk approve/reject/assign responses
+ */
+export const bulkActionResponseSchema = z.object({
+  success_count: z.number().int(),
+  failed_count: z.number().int(),
+  failed_ids: z.array(z.number().int()),
+  errors: z.record(z.string(), z.string()).optional().nullable(),
+  message: z.string(),
+})
+
+export type BulkActionResponse = z.infer<typeof bulkActionResponseSchema>
+
+/**
+ * Admission List Params
+ * Query parameters for GET /api/admissions
+ */
+export interface AdmissionListParams {
+  page?: number
+  page_size?: number
+  status?: string       // comma-separated for multi-select
+  search?: string
+  major_id?: string     // comma-separated
+  date_from?: string    // ISO date string
+  date_to?: string      // ISO date string
+  sort_by?: 'created_at' | 'updated_at' | 'full_name' | 'status'
+  order?: 'asc' | 'desc'
+}
+

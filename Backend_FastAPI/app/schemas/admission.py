@@ -692,6 +692,37 @@ class AdmissionsPage(BaseModel):
     profiles: List[AdmissionProfileResponse]
 
 
+# ==============================================================================
+# BULK ACTION SCHEMAS
+# ==============================================================================
+
+class BulkApproveRequest(BaseModel):
+    """Request schema for bulk approve action."""
+    profile_ids: List[int] = Field(..., min_length=1, max_length=100, description="List of profile IDs to approve")
+    notes: Optional[str] = Field(None, max_length=1000, description="Optional approval notes")
+
+
+class BulkRejectRequest(BaseModel):
+    """Request schema for bulk reject action."""
+    profile_ids: List[int] = Field(..., min_length=1, max_length=100, description="List of profile IDs to reject")
+    reason: str = Field(..., min_length=10, max_length=1000, description="Rejection reason (required)")
+
+
+class BulkAssignRequest(BaseModel):
+    """Request schema for bulk assign to officer action."""
+    profile_ids: List[int] = Field(..., min_length=1, max_length=100, description="List of profile IDs to assign")
+    officer_id: int = Field(..., description="ID of the officer to assign profiles to")
+
+
+class BulkActionResponse(BaseModel):
+    """Response schema for bulk actions."""
+    success_count: int = Field(..., description="Number of successfully processed profiles")
+    failed_count: int = Field(..., description="Number of failed profiles")
+    failed_ids: List[int] = Field(default_factory=list, description="IDs of profiles that failed")
+    errors: Optional[Dict[int, str]] = Field(None, description="Error messages per failed profile ID")
+    message: str = Field(..., description="Summary message")
+
+
 class AdmissionSubmitResponse(BaseModel):
     """
     Schema for submit endpoint response.
