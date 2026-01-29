@@ -208,6 +208,236 @@ test.describe("Mobile Responsive - Sheet/Drawer", () => {
   });
 });
 
+// =============================================================================
+// RESPONSIVE FORM LAYOUT TESTS
+// =============================================================================
+
+test.describe("Mobile Responsive - LeadDialog FormLayout", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto("/leads");
+    await page.waitForLoadState("networkidle");
+    // Open create lead dialog
+    await page.locator('button:has-text("Thêm")').first().click();
+    await expect(page.locator('[role="dialog"]')).toBeVisible();
+  });
+
+  test("form fields should stack vertically on mobile (FormRow)", async ({ page }) => {
+    const dialog = page.locator('[role="dialog"]');
+
+    // Get the form container
+    const form = dialog.locator("form");
+    await expect(form).toBeVisible();
+
+    // Find the first row with two fields (Name + Phone)
+    // On mobile, these should be stacked (each taking full width)
+    const nameField = dialog.locator('input[placeholder*="Nguyễn"]');
+    const phoneField = dialog.locator('input[placeholder*="0901234567"]');
+
+    await expect(nameField).toBeVisible();
+    await expect(phoneField).toBeVisible();
+
+    const nameBox = await nameField.boundingBox();
+    const phoneBox = await phoneField.boundingBox();
+
+    expect(nameBox).toBeTruthy();
+    expect(phoneBox).toBeTruthy();
+
+    if (nameBox && phoneBox) {
+      // On mobile (390px), fields should be stacked (phone below name)
+      // Verify phone field is below name field, not beside it
+      expect(phoneBox.y).toBeGreaterThan(nameBox.y);
+
+      // Both fields should take similar width (full column width)
+      const widthDiff = Math.abs(nameBox.width - phoneBox.width);
+      expect(widthDiff).toBeLessThan(50); // Allow some variation for padding
+    }
+  });
+
+  test("form actions should stack with primary button first on mobile", async ({ page }) => {
+    const dialog = page.locator('[role="dialog"]');
+
+    // Find the action buttons
+    const submitButton = dialog.locator('button[type="submit"]:has-text("Tạo Lead")');
+    const cancelButton = dialog.locator('button:has-text("Hủy")');
+
+    await expect(submitButton).toBeVisible();
+    await expect(cancelButton).toBeVisible();
+
+    const submitBox = await submitButton.boundingBox();
+    const cancelBox = await cancelButton.boundingBox();
+
+    expect(submitBox).toBeTruthy();
+    expect(cancelBox).toBeTruthy();
+
+    if (submitBox && cancelBox) {
+      // With flex-col-reverse, submit button should appear ABOVE cancel on mobile
+      // (primary action is more prominent/accessible at top)
+      expect(submitBox.y).toBeLessThan(cancelBox.y);
+
+      // Both buttons should be full width on mobile
+      expect(submitBox.width).toBeGreaterThan(200);
+      expect(cancelBox.width).toBeGreaterThan(200);
+    }
+  });
+
+  test("form action buttons should have acceptable touch height", async ({ page }) => {
+    const dialog = page.locator('[role="dialog"]');
+
+    // Check primary action buttons (not collapsible triggers or icon-only buttons)
+    const submitButton = dialog.locator('button[type="submit"]:has-text("Tạo Lead")');
+    const cancelButton = dialog.locator('button:has-text("Hủy")');
+
+    await expect(submitButton).toBeVisible();
+    await expect(cancelButton).toBeVisible();
+
+    const submitBox = await submitButton.boundingBox();
+    const cancelBox = await cancelButton.boundingBox();
+
+    // Button uses default size (h-9 = 36px on desktop, may vary on mobile)
+    // Minimum acceptable touch target is 32px (h-8), ideal is 44px per WCAG
+    if (submitBox) {
+      expect(submitBox.height).toBeGreaterThanOrEqual(32);
+    }
+    if (cancelBox) {
+      expect(cancelBox.height).toBeGreaterThanOrEqual(32);
+    }
+  });
+});
+
+test.describe("Mobile Responsive - LeadsTable RowActions", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto("/leads");
+    await page.waitForLoadState("networkidle");
+  });
+
+  test("should show action sheet on mobile when clicking row actions", async ({ page }) => {
+    // Wait for table to load
+    const tableBody = page.locator("tbody");
+    await expect(tableBody).toBeVisible({ timeout: 10000 });
+
+    // Find the action button (three dots menu)
+    const actionButton = page.locator('button:has(svg.lucide-more-horizontal)').first();
+
+    // Check if there are leads in the table
+    if (await actionButton.isVisible({ timeout: 5000 })) {
+      // Click the action button
+      await actionButton.click();
+
+      // On mobile, MobileActionSheet should appear (bottom sheet)
+      // It uses data-state="open" from the Sheet component
+      const actionSheet = page.locator('[role="dialog"][data-state="open"]');
+
+      // Wait for action sheet to appear
+      await expect(actionSheet).toBeVisible({ timeout: 5000 });
+
+      // Check that it's positioned at the bottom (side="bottom")
+      const sheetBox = await actionSheet.boundingBox();
+      const viewportSize = page.viewportSize();
+
+      expect(sheetBox).toBeTruthy();
+      expect(viewportSize).toBeTruthy();
+
+      if (sheetBox && viewportSize) {
+        // Bottom sheet should be in the lower portion of the screen
+        expect(sheetBox.y + sheetBox.height).toBeGreaterThan(viewportSize.height * 0.5);
+      }
+
+      // Check for action items
+      const editAction = actionSheet.locator('text=Chỉnh sửa');
+      const deleteAction = actionSheet.locator('text=Xóa');
+
+      await expect(editAction).toBeVisible();
+      await expect(deleteAction).toBeVisible();
+
+      // Check for cancel button
+      const cancelButton = actionSheet.locator('button:has-text("Hủy")');
+      await expect(cancelButton).toBeVisible();
+    }
+  });
+
+  test("action sheet items should have touch-friendly height", async ({ page }) => {
+    // Find and click the action button
+    const actionButton = page.locator('button:has(svg.lucide-more-horizontal)').first();
+
+    if (await actionButton.isVisible({ timeout: 5000 })) {
+      await actionButton.click();
+
+      const actionSheet = page.locator('[role="dialog"][data-state="open"]');
+      await expect(actionSheet).toBeVisible({ timeout: 5000 });
+
+      // Check action item height (should be min 48px per MOBILE_STANDARDIZATION.md)
+      const actionItem = actionSheet.locator('button:has-text("Chỉnh sửa")');
+      const box = await actionItem.boundingBox();
+
+      expect(box).toBeTruthy();
+      if (box) {
+        expect(box.height).toBeGreaterThanOrEqual(48);
+      }
+    }
+  });
+
+  test("action sheet should close when cancel is clicked", async ({ page }) => {
+    const actionButton = page.locator('button:has(svg.lucide-more-horizontal)').first();
+
+    if (await actionButton.isVisible({ timeout: 5000 })) {
+      await actionButton.click();
+
+      const actionSheet = page.locator('[role="dialog"][data-state="open"]');
+      await expect(actionSheet).toBeVisible({ timeout: 5000 });
+
+      // Click cancel button
+      const cancelButton = actionSheet.locator('button:has-text("Hủy")');
+      await cancelButton.click();
+
+      // Action sheet should close
+      await expect(actionSheet).not.toBeVisible({ timeout: 3000 });
+    }
+  });
+});
+
+test.describe("Mobile Responsive - ConsultationDialog", () => {
+  test("consultation dialog actions should stack on mobile", async ({ page }) => {
+    await page.goto("/leads");
+    await page.waitForLoadState("networkidle");
+
+    // Try to open a lead and then consultation dialog
+    // This test requires existing lead data
+    const tableRow = page.locator("tbody tr").first();
+
+    if (await tableRow.isVisible({ timeout: 5000 })) {
+      // Click on row to select lead
+      await tableRow.click();
+
+      // Look for consultation button in detail panel
+      const consultationButton = page.locator('button:has-text("Lên lịch tư vấn")');
+
+      if (await consultationButton.isVisible({ timeout: 5000 })) {
+        await consultationButton.click();
+
+        const dialog = page.locator('[role="dialog"]:has-text("Lên lịch tư vấn")');
+        await expect(dialog).toBeVisible({ timeout: 5000 });
+
+        // Check form actions are stacked
+        const submitButton = dialog.locator('button[type="submit"]');
+        const cancelButton = dialog.locator('button:has-text("Hủy")');
+
+        if (await submitButton.isVisible() && await cancelButton.isVisible()) {
+          const submitBox = await submitButton.boundingBox();
+          const cancelBox = await cancelButton.boundingBox();
+
+          expect(submitBox).toBeTruthy();
+          expect(cancelBox).toBeTruthy();
+
+          if (submitBox && cancelBox) {
+            // Submit should be above cancel (flex-col-reverse)
+            expect(submitBox.y).toBeLessThan(cancelBox.y);
+          }
+        }
+      }
+    }
+  });
+});
+
 // Visual regression tests (optional - requires baseline images)
 test.describe("Visual Regression - Mobile", () => {
   test.skip("leads page mobile layout", async ({ page }) => {
