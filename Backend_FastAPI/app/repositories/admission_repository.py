@@ -181,9 +181,9 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             select(models.AdmissionProfile)
             .join(models.Lead)
             .options(
-                joinedload(models.AdmissionProfile.lead)
-                    .joinedload(models.Lead.offering)
-                    .joinedload(models.ProgramOffering.program),
+                selectinload(models.AdmissionProfile.lead)
+                    .selectinload(models.Lead.offering)
+                    .selectinload(models.ProgramOffering.program),
                 selectinload(models.AdmissionProfile.student),
                 selectinload(models.AdmissionProfile.subject_scores).selectinload(ProfileSubjectScore.subject),
                 selectinload(models.AdmissionProfile.documents).joinedload(ProfileDocument.document_type),
