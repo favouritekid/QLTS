@@ -22,7 +22,12 @@
       "WebSearch",
       "Bash(DEBUG=*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(cd:*)",
+      "Bash(node scripts/scan-ui-violations.js:*)",
+      "Bash(node:*)",
+      "Bash(npm run lint:*)",
+      "Bash(npx playwright test:*)"
     ]
   }
 }

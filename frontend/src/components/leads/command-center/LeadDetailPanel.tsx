@@ -41,6 +41,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn, sanitizeColorCode } from "@/lib/utils";
+import { useIsMobile } from "@/hooks/useMediaQuery";
+import { MobileActionSheet } from "@/components/common/MobileActionSheet";
 import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
 import { useLead } from "@/hooks/useLeads";
 import { LeadTimelineTab } from "@/components/leads/LeadTimelineTab";
@@ -121,7 +123,9 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
   const { data: lead, isLoading } = useLead(leadId || 0, !!leadId);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [reassignOpen, setReassignOpen] = useState(false);
+  const [actionSheetOpen, setActionSheetOpen] = useState(false);
   const [daysSinceContact, setDaysSinceContact] = useState<number | null>(null);
+  const isMobile = useIsMobile();
 
   // Calculate days since last contact on client side only to avoid hydration mismatch
   useEffect(() => {
@@ -264,48 +268,123 @@ export function LeadDetailPanel({ leadId, onEdit, onDelete, onAssign }: LeadDeta
             </Button>
           </div>
 
-          {/* More Actions Dropdown */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+          {/* More Actions - Mobile: ActionSheet, Desktop: Dropdown */}
+          {isMobile ? (
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0"
+                onClick={() => setActionSheetOpen(true)}
+              >
                 <MoreVertical className="h-4 w-4" />
                 <span className="sr-only">Menu</span>
               </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuItem onClick={() => onEdit(lead)}>
-                <Edit className="mr-2 h-4 w-4" />
-                Chỉnh sửa
-              </DropdownMenuItem>
-              {lead.email && (
-                <DropdownMenuItem onClick={() => window.open(`mailto:${lead.email}`, "_blank")}>
-                  <Mail className="mr-2 h-4 w-4" />
-                  Gửi email
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuSeparator />
-              {!lead.assigned_officer && (
-                <DropdownMenuItem onClick={() => onAssign(lead)}>
-                  <UserPlus className="mr-2 h-4 w-4" />
-                  Gán cho cán bộ
-                </DropdownMenuItem>
-              )}
-              {lead.assigned_officer && (
-                <DropdownMenuItem onClick={() => setReassignOpen(true)}>
-                  <RefreshCcw className="mr-2 h-4 w-4" />
-                  Phân công lại
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                onClick={() => onDelete(lead)}
-                className="text-destructive focus:text-destructive"
+              <MobileActionSheet
+                open={actionSheetOpen}
+                onOpenChange={setActionSheetOpen}
+                title="Thao tác"
               >
-                <Trash2 className="mr-2 h-4 w-4" />
-                Xóa lead
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+                <MobileActionSheet.Item
+                  icon={Edit}
+                  onClick={() => {
+                    setActionSheetOpen(false);
+                    onEdit(lead);
+                  }}
+                >
+                  Chỉnh sửa
+                </MobileActionSheet.Item>
+                {lead.email && (
+                  <MobileActionSheet.Item
+                    icon={Mail}
+                    onClick={() => {
+                      setActionSheetOpen(false);
+                      window.open(`mailto:${lead.email}`, "_blank");
+                    }}
+                  >
+                    Gửi email
+                  </MobileActionSheet.Item>
+                )}
+                <MobileActionSheet.Divider />
+                {!lead.assigned_officer && (
+                  <MobileActionSheet.Item
+                    icon={UserPlus}
+                    onClick={() => {
+                      setActionSheetOpen(false);
+                      onAssign(lead);
+                    }}
+                  >
+                    Gán cho cán bộ
+                  </MobileActionSheet.Item>
+                )}
+                {lead.assigned_officer && (
+                  <MobileActionSheet.Item
+                    icon={RefreshCcw}
+                    onClick={() => {
+                      setActionSheetOpen(false);
+                      setReassignOpen(true);
+                    }}
+                  >
+                    Phân công lại
+                  </MobileActionSheet.Item>
+                )}
+                <MobileActionSheet.Divider />
+                <MobileActionSheet.Item
+                  icon={Trash2}
+                  variant="destructive"
+                  onClick={() => {
+                    setActionSheetOpen(false);
+                    onDelete(lead);
+                  }}
+                >
+                  Xóa lead
+                </MobileActionSheet.Item>
+                <MobileActionSheet.Cancel onClick={() => setActionSheetOpen(false)} />
+              </MobileActionSheet>
+            </>
+          ) : (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+                  <MoreVertical className="h-4 w-4" />
+                  <span className="sr-only">Menu</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem onClick={() => onEdit(lead)}>
+                  <Edit className="mr-2 h-4 w-4" />
+                  Chỉnh sửa
+                </DropdownMenuItem>
+                {lead.email && (
+                  <DropdownMenuItem onClick={() => window.open(`mailto:${lead.email}`, "_blank")}>
+                    <Mail className="mr-2 h-4 w-4" />
+                    Gửi email
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator />
+                {!lead.assigned_officer && (
+                  <DropdownMenuItem onClick={() => onAssign(lead)}>
+                    <UserPlus className="mr-2 h-4 w-4" />
+                    Gán cho cán bộ
+                  </DropdownMenuItem>
+                )}
+                {lead.assigned_officer && (
+                  <DropdownMenuItem onClick={() => setReassignOpen(true)}>
+                    <RefreshCcw className="mr-2 h-4 w-4" />
+                    Phân công lại
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => onDelete(lead)}
+                  className="text-destructive focus:text-destructive"
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Xóa lead
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
       </div>
 
