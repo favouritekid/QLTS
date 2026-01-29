@@ -82,8 +82,8 @@ export async function listAuditLogs(
 
   const queryString = params.toString();
   const url = queryString
-    ? `/admin/audit-logs?${queryString}`
-    : "/admin/audit-logs";
+    ? `/api/admin/audit-logs?${queryString}`
+    : "/api/admin/audit-logs";
 
   const response = await apiClient.get<AuditLogListResponse>(url);
   return response.data;
@@ -103,8 +103,8 @@ export async function getEntityAuditHistory(
 
   const queryString = params.toString();
   const url = queryString
-    ? `/admin/audit-logs/entity/${entityType}/${entityId}?${queryString}`
-    : `/admin/audit-logs/entity/${entityType}/${entityId}`;
+    ? `/api/admin/audit-logs/entity/${entityType}/${entityId}?${queryString}`
+    : `/api/admin/audit-logs/entity/${entityType}/${entityId}`;
 
   const response = await apiClient.get<AuditLogListResponse>(url);
   return response.data;
@@ -122,8 +122,8 @@ export async function getAuditLogSummary(
 
   const queryString = params.toString();
   const url = queryString
-    ? `/admin/audit-logs/summary?${queryString}`
-    : "/admin/audit-logs/summary";
+    ? `/api/admin/audit-logs/summary?${queryString}`
+    : "/api/admin/audit-logs/summary";
 
   const response = await apiClient.get<AuditLogSummary>(url);
   return response.data;
