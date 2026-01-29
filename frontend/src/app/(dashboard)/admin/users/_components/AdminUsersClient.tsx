@@ -71,6 +71,14 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  BaseCard,
+  CardHeader as BaseCardHeader,
+  CardBody,
+  CardField,
+  CardMeta,
+  CardActions,
+} from "@/components/ui/base-card";
 import { getAvatarUrl } from "@/lib/utils";
 import {
   AlertDialog,
@@ -764,7 +772,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
 }
 
 // =============================================================================
-// MOBILE CARD COMPONENT
+// MOBILE CARD COMPONENT - Using BaseCard System
 // =============================================================================
 
 interface UserCardProps {
@@ -782,81 +790,79 @@ function UserCard({ user, isSelected, onSelect, onEdit, onDelete, onSetPassword,
   const statusVariant = user.status === "active" ? "default" : user.status === "pending" ? "secondary" : "destructive";
 
   return (
-    <Card className={cn(isSelected && "ring-2 ring-primary")}>
-      <CardContent className="p-4">
-        <div className="flex items-start gap-3">
-          {/* Checkbox */}
-          <Checkbox
-            checked={isSelected}
-            onCheckedChange={onSelect}
-            aria-label={`Chọn ${user.username}`}
-            className="mt-1"
-          />
-
-          {/* Avatar */}
-          <Avatar className="h-10 w-10 flex-shrink-0">
-            <AvatarImage src={getAvatarUrl(user.avatar_url)} alt={user.username} />
-            <AvatarFallback>{user.username.slice(0, 2).toUpperCase()}</AvatarFallback>
-          </Avatar>
-
-          {/* Content */}
-          <div className="flex-1 min-w-0">
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0 flex-1">
-                <Link href={`/admin/users/${user.id}`} className="font-medium hover:underline line-clamp-1">
-                  {user.full_name || user.username}
-                </Link>
-                <p className="text-xs text-muted-foreground">@{user.username}</p>
-              </div>
-
-              {/* Actions */}
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-7 w-7 flex-shrink-0">
-                    <MoreVertical className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuLabel>Thao tác</DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem asChild>
-                    <Link href={`/admin/users/${user.id}`}>
-                      <Eye className="mr-2 h-4 w-4" />
-                      Xem chi tiết
-                    </Link>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={onEdit}>
-                    <Edit className="mr-2 h-4 w-4" />
-                    Sửa người dùng
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={onSetPassword}>
-                    <Key className="mr-2 h-4 w-4" />
-                    Đặt mật khẩu
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={onManageRoles}>
-                    <Shield className="mr-2 h-4 w-4" />
-                    Quản lý vai trò
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={onDelete}>
-                    <Trash2 className="mr-2 h-4 w-4" />
-                    Xoá người dùng
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-
-            {/* Email */}
-            <p className="text-sm text-muted-foreground mt-1 truncate">{user.email}</p>
-
-            {/* Badges */}
-            <div className="flex flex-wrap items-center gap-2 mt-2">
-              <Badge variant={roleVariant}>{user.role}</Badge>
-              <Badge variant={statusVariant}>{user.status}</Badge>
-            </div>
+    <BaseCard
+      selected={isSelected}
+      onSelect={onSelect}
+      showCheckbox
+    >
+      {/* Header: Name with Avatar */}
+      <BaseCardHeader
+        title={
+          <div className="flex items-center gap-2">
+            <Avatar className="h-8 w-8 flex-shrink-0">
+              <AvatarImage src={getAvatarUrl(user.avatar_url)} alt={user.username} />
+              <AvatarFallback>{user.username.slice(0, 2).toUpperCase()}</AvatarFallback>
+            </Avatar>
+            <Link
+              href={`/admin/users/${user.id}`}
+              className="hover:underline"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {user.full_name || user.username}
+            </Link>
           </div>
-        </div>
-      </CardContent>
-    </Card>
+        }
+        subtitle={`@${user.username}`}
+      />
+
+      {/* Body: Email */}
+      <CardBody>
+        <CardField label="Email" value={user.email} />
+      </CardBody>
+
+      {/* Meta: Role + Status badges */}
+      <CardMeta>
+        <Badge variant={roleVariant}>{user.role}</Badge>
+        <Badge variant={statusVariant}>{user.status}</Badge>
+      </CardMeta>
+
+      {/* Actions */}
+      <CardActions>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="h-8 w-8">
+              <MoreVertical className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuLabel>Thao tác</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem asChild>
+              <Link href={`/admin/users/${user.id}`}>
+                <Eye className="mr-2 h-4 w-4" />
+                Xem chi tiết
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onEdit}>
+              <Edit className="mr-2 h-4 w-4" />
+              Sửa người dùng
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onSetPassword}>
+              <Key className="mr-2 h-4 w-4" />
+              Đặt mật khẩu
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onManageRoles}>
+              <Shield className="mr-2 h-4 w-4" />
+              Quản lý vai trò
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={onDelete}>
+              <Trash2 className="mr-2 h-4 w-4" />
+              Xoá người dùng
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </CardActions>
+    </BaseCard>
   );
 }

@@ -34,17 +34,25 @@ import {
   ArrowRight,
   CheckCircle,
   XCircle,
-  MoreHorizontal,
+  MoreVertical,
 } from "lucide-react"
 import Link from "next/link"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Progress } from "@/components/ui/progress"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  BaseCard,
+  CardHeader as BaseCardHeader,
+  CardBody,
+  CardMeta,
+  CardTime,
+  CardActions,
+} from "@/components/ui/base-card"
 import {
   Select,
   SelectContent,
@@ -608,7 +616,7 @@ export function AdmissionsClient() {
 }
 
 // =============================================================================
-// MOBILE CARD COMPONENT
+// MOBILE CARD COMPONENT - Using BaseCard System
 // =============================================================================
 
 interface AdmissionCardProps {
@@ -622,79 +630,62 @@ function AdmissionCard({ profile, isSelected, onSelect }: AdmissionCardProps) {
   const eligibilityConfig = ELIGIBILITY_CONFIG[profile.eligibility_status] ?? { label: "-", color: "bg-muted" }
 
   return (
-    <Card className={cn(isSelected && "ring-2 ring-primary")}>
-      <CardHeader className="pb-2">
-        <div className="flex items-start gap-3">
-          {/* Checkbox */}
-          <Checkbox
-            checked={isSelected}
-            onCheckedChange={onSelect}
-            aria-label={`Chọn ${profile.lead?.full_name ?? "hồ sơ"}`}
-            className="mt-1"
-          />
+    <BaseCard
+      selected={isSelected}
+      onSelect={onSelect}
+      showCheckbox
+    >
+      {/* Header: Name + Status Badge */}
+      <BaseCardHeader
+        title={
+          <Link
+            href={`/admissions/${profile.id}`}
+            className="hover:underline"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {profile.lead?.full_name ?? `Lead #${profile.lead_id}`}
+          </Link>
+        }
+        subtitle={`Hồ sơ #${profile.id}`}
+        badge={<Badge className={statusConfig.color}>{statusConfig.label}</Badge>}
+      />
 
-          {/* Content */}
-          <div className="flex-1 min-w-0">
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0 flex-1">
-                <Link
-                  href={`/admissions/${profile.id}`}
-                  className="font-medium hover:underline line-clamp-1"
-                >
-                  {profile.lead?.full_name ?? `Lead #${profile.lead_id}`}
-                </Link>
-                <p className="text-xs text-muted-foreground">
-                  Hồ sơ #{profile.id}
-                </p>
-              </div>
-
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <Badge className={statusConfig.color}>
-                  {statusConfig.label}
-                </Badge>
-
-                {/* Actions */}
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon" className="h-7 w-7">
-                      <MoreHorizontal className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem asChild>
-                      <Link href={`/admissions/${profile.id}`}>
-                        Xem chi tiết
-                      </Link>
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            </div>
-          </div>
-        </div>
-      </CardHeader>
-
-      <CardContent className="pt-0 pl-12">
-        {/* Progress */}
-        <div className="flex items-center gap-2 mb-2">
+      {/* Body: Progress bar */}
+      <CardBody>
+        <div className="flex items-center gap-2">
           <Progress value={profile.completion_percent} className="h-2 flex-1" />
           <span className="text-xs text-muted-foreground w-8">
             {profile.completion_percent}%
           </span>
         </div>
+      </CardBody>
 
-        {/* Info row */}
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-          <span className="flex items-center gap-1">
-            <Calendar className="h-3 w-3" />
-            {format(new Date(profile.created_at), "dd/MM/yyyy", { locale: vi })}
-          </span>
-          <Badge variant="outline" className={cn("text-xs", eligibilityConfig.color)}>
-            {eligibilityConfig.label}
-          </Badge>
-        </div>
-      </CardContent>
-    </Card>
+      {/* Meta: Date + Eligibility */}
+      <CardMeta>
+        <CardTime date={profile.created_at} format="date" showIcon />
+        <Badge variant="outline" className={cn("text-xs", eligibilityConfig.color)}>
+          {eligibilityConfig.label}
+        </Badge>
+      </CardMeta>
+
+      {/* Actions */}
+      <CardActions>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="h-8 w-8">
+              <MoreVertical className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem asChild>
+              <Link href={`/admissions/${profile.id}`}>
+                Xem chi tiết
+              </Link>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </CardActions>
+    </BaseCard>
   )
 }
 

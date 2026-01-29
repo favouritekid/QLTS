@@ -7,7 +7,17 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { format } from "date-fns";
 import { vi } from "date-fns/locale";
-import { CalendarIcon, Loader2, Pencil, Plus, Trash2, Percent, Banknote } from "lucide-react";
+import { CalendarIcon, Loader2, Pencil, Plus, Trash2, Percent, Banknote, MoreVertical } from "lucide-react";
+import {
+  BaseCard,
+  CardHeader as BaseCardHeader,
+  CardBody,
+  CardField,
+  CardMeta,
+  CardTime,
+  CardActions,
+} from "@/components/ui/base-card";
+import { MobileActionSheet } from "@/components/common/MobileActionSheet";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -97,6 +107,113 @@ const policyFormSchema = z.object({
 });
 
 type PolicyFormValues = z.infer<typeof policyFormSchema>;
+
+// =============================================================================
+// MOBILE POLICY CARD COMPONENT
+// =============================================================================
+
+interface MobilePolicyCardProps {
+  policy: TuitionDiscountPolicy;
+  onEdit: (policy: TuitionDiscountPolicy) => void;
+  onDelete: (policy: TuitionDiscountPolicy) => void;
+  formatCurrency: (value: number) => string;
+}
+
+function MobilePolicyCard({ policy, onEdit, onDelete, formatCurrency }: MobilePolicyCardProps) {
+  const [actionSheetOpen, setActionSheetOpen] = useState(false);
+
+  return (
+    <BaseCard showCheckbox={false}>
+      <BaseCardHeader
+        title={policy.name}
+        subtitle={<code className="bg-muted rounded px-1.5 py-0.5 text-xs">{policy.code}</code>}
+        badge={
+          policy.is_active ? (
+            policy.is_expired ? (
+              <Badge variant="destructive">Hết hạn</Badge>
+            ) : (
+              <Badge variant="default">Hoạt động</Badge>
+            )
+          ) : (
+            <Badge variant="secondary">Tạm dừng</Badge>
+          )
+        }
+      />
+      <CardBody>
+        <CardField
+          label="Giá trị"
+          value={
+            policy.discount_type === "percentage"
+              ? `${policy.discount_value}%`
+              : formatCurrency(policy.discount_value)
+          }
+        />
+        {(policy.valid_from || policy.valid_to) && (
+          <CardField
+            label="Hiệu lực"
+            value={
+              <>
+                {policy.valid_from && format(new Date(policy.valid_from), "dd/MM/yyyy")}
+                {policy.valid_from && policy.valid_to && " - "}
+                {policy.valid_to && format(new Date(policy.valid_to), "dd/MM/yyyy")}
+              </>
+            }
+          />
+        )}
+      </CardBody>
+      <CardMeta>
+        {policy.discount_type === "percentage" ? (
+          <Badge variant="secondary">
+            <Percent className="mr-1 h-3 w-3" />
+            Phần trăm
+          </Badge>
+        ) : (
+          <Badge variant="outline">
+            <Banknote className="mr-1 h-3 w-3" />
+            Số tiền
+          </Badge>
+        )}
+      </CardMeta>
+      <CardActions>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          onClick={() => setActionSheetOpen(true)}
+        >
+          <MoreVertical className="h-4 w-4" />
+        </Button>
+      </CardActions>
+
+      {/* Mobile Action Sheet */}
+      <MobileActionSheet
+        open={actionSheetOpen}
+        onOpenChange={setActionSheetOpen}
+        title={policy.name}
+      >
+        <MobileActionSheet.Item
+          icon={Pencil}
+          onClick={() => {
+            setActionSheetOpen(false);
+            onEdit(policy);
+          }}
+        >
+          Chỉnh sửa
+        </MobileActionSheet.Item>
+        <MobileActionSheet.Item
+          icon={Trash2}
+          variant="destructive"
+          onClick={() => {
+            setActionSheetOpen(false);
+            onDelete(policy);
+          }}
+        >
+          Xóa
+        </MobileActionSheet.Item>
+      </MobileActionSheet>
+    </BaseCard>
+  );
+}
 
 // =============================================================================
 // CLIENT COMPONENT
@@ -279,107 +396,123 @@ export function TuitionDiscountClient({ initialData }: TuitionDiscountClientProp
                 <Skeleton key={i} className="h-12 w-full" />
               ))}
             </div>
+          ) : data?.items.length === 0 ? (
+            <TableEmptyState
+              title="Chưa có chính sách giảm giá"
+              description="Nhấn 'Thêm chính sách' để tạo chính sách giảm giá học phí mới"
+            />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Mã</TableHead>
-                  <TableHead>Tên chính sách</TableHead>
-                  <TableHead>Loại</TableHead>
-                  <TableHead>Giá trị</TableHead>
-                  <TableHead>Hiệu lực</TableHead>
-                  <TableHead>Trạng thái</TableHead>
-                  <TableHead className="text-right">Thao tác</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data?.items.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={7} className="h-32">
-                      <TableEmptyState
-                        title="Chưa có chính sách giảm giá"
-                        description="Nhấn 'Thêm chính sách' để tạo chính sách giảm giá học phí mới"
-                      />
-                    </TableCell>
-                  </TableRow>
-                )}
+            <>
+              {/* Desktop: Table */}
+              <div className="hidden md:block">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Mã</TableHead>
+                      <TableHead>Tên chính sách</TableHead>
+                      <TableHead>Loại</TableHead>
+                      <TableHead>Giá trị</TableHead>
+                      <TableHead>Hiệu lực</TableHead>
+                      <TableHead>Trạng thái</TableHead>
+                      <TableHead className="text-right">Thao tác</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {data?.items.map((policy) => (
+                      <TableRow key={policy.id}>
+                        <TableCell className="font-mono text-sm">{policy.code}</TableCell>
+                        <TableCell>
+                          <div className="font-medium">{policy.name}</div>
+                          {policy.description && (
+                            <div className="text-muted-foreground text-xs truncate max-w-[300px]">
+                              {policy.description}
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {policy.discount_type === "percentage" ? (
+                            <Badge variant="secondary">
+                              <Percent className="mr-1 h-3 w-3" />
+                              Phần trăm
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline">
+                              <Banknote className="mr-1 h-3 w-3" />
+                              Số tiền
+                            </Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="font-medium">
+                          {policy.discount_type === "percentage"
+                            ? `${policy.discount_value}%`
+                            : formatCurrency(policy.discount_value)}
+                        </TableCell>
+                        <TableCell>
+                          {policy.valid_from || policy.valid_to ? (
+                            <div className="text-xs">
+                              {policy.valid_from && (
+                                <div>Từ: {format(new Date(policy.valid_from), "dd/MM/yyyy")}</div>
+                              )}
+                              {policy.valid_to && (
+                                <div>Đến: {format(new Date(policy.valid_to), "dd/MM/yyyy")}</div>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground text-xs">Không giới hạn</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {policy.is_active ? (
+                            policy.is_expired ? (
+                              <Badge variant="destructive">Hết hạn</Badge>
+                            ) : (
+                              <Badge variant="default">Hoạt động</Badge>
+                            )
+                          ) : (
+                            <Badge variant="secondary">Tạm dừng</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => openEditDialog(policy)}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setPolicyToDelete(policy);
+                              setDeleteDialogOpen(true);
+                            }}
+                          >
+                            <Trash2 className="text-destructive h-4 w-4" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+
+              {/* Mobile: Cards */}
+              <div className="md:hidden space-y-2">
                 {data?.items.map((policy) => (
-                  <TableRow key={policy.id}>
-                    <TableCell className="font-mono text-sm">{policy.code}</TableCell>
-                    <TableCell>
-                      <div className="font-medium">{policy.name}</div>
-                      {policy.description && (
-                        <div className="text-muted-foreground text-xs truncate max-w-[300px]">
-                          {policy.description}
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {policy.discount_type === "percentage" ? (
-                        <Badge variant="secondary">
-                          <Percent className="mr-1 h-3 w-3" />
-                          Phần trăm
-                        </Badge>
-                      ) : (
-                        <Badge variant="outline">
-                          <Banknote className="mr-1 h-3 w-3" />
-                          Số tiền
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="font-medium">
-                      {policy.discount_type === "percentage"
-                        ? `${policy.discount_value}%`
-                        : formatCurrency(policy.discount_value)}
-                    </TableCell>
-                    <TableCell>
-                      {policy.valid_from || policy.valid_to ? (
-                        <div className="text-xs">
-                          {policy.valid_from && (
-                            <div>Từ: {format(new Date(policy.valid_from), "dd/MM/yyyy")}</div>
-                          )}
-                          {policy.valid_to && (
-                            <div>Đến: {format(new Date(policy.valid_to), "dd/MM/yyyy")}</div>
-                          )}
-                        </div>
-                      ) : (
-                        <span className="text-muted-foreground text-xs">Không giới hạn</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {policy.is_active ? (
-                        policy.is_expired ? (
-                          <Badge variant="destructive">Hết hạn</Badge>
-                        ) : (
-                          <Badge variant="default">Hoạt động</Badge>
-                        )
-                      ) : (
-                        <Badge variant="secondary">Tạm dừng</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => openEditDialog(policy)}
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setPolicyToDelete(policy);
-                          setDeleteDialogOpen(true);
-                        }}
-                      >
-                        <Trash2 className="text-destructive h-4 w-4" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
+                  <MobilePolicyCard
+                    key={policy.id}
+                    policy={policy}
+                    onEdit={openEditDialog}
+                    onDelete={(policy) => {
+                      setPolicyToDelete(policy);
+                      setDeleteDialogOpen(true);
+                    }}
+                    formatCurrency={formatCurrency}
+                  />
                 ))}
-              </TableBody>
-            </Table>
+              </div>
+            </>
           )}
         </CardContent>
       </Card>

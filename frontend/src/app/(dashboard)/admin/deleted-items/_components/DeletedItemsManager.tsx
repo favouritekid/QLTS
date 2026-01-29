@@ -24,6 +24,15 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
+  BaseCard,
+  CardHeader as BaseCardHeader,
+  CardBody,
+  CardField,
+  CardMeta,
+  CardTime,
+  CardActions,
+} from "@/components/ui/base-card";
+import {
   Table,
   TableBody,
   TableCell,
@@ -145,73 +154,131 @@ function DeletedLeadsTable({
 
   return (
     <>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Lead</TableHead>
-            <TableHead>Liên hệ</TableHead>
-            <TableHead>Consultations</TableHead>
-            <TableHead>Ngày xóa</TableHead>
-            <TableHead className="text-right">Thao tác</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {leads.map((lead) => (
-            <TableRow key={lead.id}>
-              <TableCell>
-                <div className="flex items-center gap-2">
-                  <User className="h-4 w-4 text-muted-foreground" />
-                  <div>
-                    <div className="font-medium">{lead.full_name}</div>
-                    <div className="text-xs text-muted-foreground">
-                      ID: #{lead.id}
+      {/* Desktop: Table */}
+      <div className="hidden md:block">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Lead</TableHead>
+              <TableHead>Liên hệ</TableHead>
+              <TableHead>Consultations</TableHead>
+              <TableHead>Ngày xóa</TableHead>
+              <TableHead className="text-right">Thao tác</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {leads.map((lead) => (
+              <TableRow key={lead.id}>
+                <TableCell>
+                  <div className="flex items-center gap-2">
+                    <User className="h-4 w-4 text-muted-foreground" />
+                    <div>
+                      <div className="font-medium">{lead.full_name}</div>
+                      <div className="text-xs text-muted-foreground">
+                        ID: #{lead.id}
+                      </div>
                     </div>
                   </div>
-                </div>
-              </TableCell>
-              <TableCell>
-                <div className="space-y-1 text-sm">
-                  {lead.phone && (
-                    <div className="flex items-center gap-1.5">
-                      <Phone className="h-3 w-3 text-muted-foreground" />
-                      {lead.phone}
-                    </div>
-                  )}
-                  {lead.email && (
-                    <div className="flex items-center gap-1.5">
-                      <Mail className="h-3 w-3 text-muted-foreground" />
-                      {lead.email}
-                    </div>
-                  )}
-                </div>
-              </TableCell>
-              <TableCell>
-                <Badge variant="secondary">{lead.consultation_count}</Badge>
-              </TableCell>
-              <TableCell className="text-sm text-muted-foreground">
-                {format(new Date(lead.deleted_at), "dd/MM/yyyy HH:mm", {
-                  locale: vi,
-                })}
-              </TableCell>
-              <TableCell className="text-right">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setConfirmLeadId(lead.id)}
-                  disabled={isRestoring}
-                >
-                  {isRestoring ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <RotateCcw className="h-4 w-4" />
-                  )}
-                  <span className="ml-1.5">Khôi phục</span>
-                </Button>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+                </TableCell>
+                <TableCell>
+                  <div className="space-y-1 text-sm">
+                    {lead.phone && (
+                      <div className="flex items-center gap-1.5">
+                        <Phone className="h-3 w-3 text-muted-foreground" />
+                        {lead.phone}
+                      </div>
+                    )}
+                    {lead.email && (
+                      <div className="flex items-center gap-1.5">
+                        <Mail className="h-3 w-3 text-muted-foreground" />
+                        {lead.email}
+                      </div>
+                    )}
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <Badge variant="secondary">{lead.consultation_count}</Badge>
+                </TableCell>
+                <TableCell className="text-sm text-muted-foreground">
+                  {format(new Date(lead.deleted_at), "dd/MM/yyyy HH:mm", {
+                    locale: vi,
+                  })}
+                </TableCell>
+                <TableCell className="text-right">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setConfirmLeadId(lead.id)}
+                    disabled={isRestoring}
+                  >
+                    {isRestoring ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <RotateCcw className="h-4 w-4" />
+                    )}
+                    <span className="ml-1.5">Khôi phục</span>
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+
+      {/* Mobile: Cards */}
+      <div className="md:hidden space-y-2">
+        {leads.map((lead) => (
+          <BaseCard key={lead.id} showCheckbox={false}>
+            <BaseCardHeader
+              title={lead.full_name}
+              subtitle={`ID: #${lead.id}`}
+              badge={
+                <Badge variant="secondary">
+                  {lead.consultation_count} tư vấn
+                </Badge>
+              }
+            />
+            <CardBody>
+              {lead.phone && (
+                <CardField
+                  icon={<Phone className="h-3 w-3" />}
+                  label="SĐT"
+                  value={lead.phone}
+                />
+              )}
+              {lead.email && (
+                <CardField
+                  icon={<Mail className="h-3 w-3" />}
+                  label="Email"
+                  value={lead.email}
+                />
+              )}
+            </CardBody>
+            <CardMeta>
+              <Badge variant="destructive" className="gap-1">
+                <Trash2 className="h-3 w-3" />
+                Đã xóa
+              </Badge>
+              <CardTime date={lead.deleted_at} format="datetime" />
+            </CardMeta>
+            <CardActions>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setConfirmLeadId(lead.id)}
+                disabled={isRestoring}
+              >
+                {isRestoring ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RotateCcw className="h-4 w-4" />
+                )}
+                <span className="ml-1.5">Khôi phục</span>
+              </Button>
+            </CardActions>
+          </BaseCard>
+        ))}
+      </div>
 
       {/* Confirm Dialog */}
       <AlertDialog
@@ -288,73 +355,126 @@ function DeletedConsultationsTable({
 
   return (
     <>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Lead</TableHead>
-            <TableHead>Trạng thái</TableHead>
-            <TableHead>Ghi chú</TableHead>
-            <TableHead>Ngày xóa</TableHead>
-            <TableHead className="text-right">Thao tác</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {consultations.map((consultation) => (
-            <TableRow key={consultation.id}>
-              <TableCell>
-                <div className="flex items-center gap-2">
-                  <User className="h-4 w-4 text-muted-foreground" />
-                  <div>
-                    <div className="font-medium">{consultation.lead_name}</div>
-                    <div className="text-xs text-muted-foreground">
-                      Lead ID: #{consultation.lead_id}
+      {/* Desktop: Table */}
+      <div className="hidden md:block">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Lead</TableHead>
+              <TableHead>Trạng thái</TableHead>
+              <TableHead>Ghi chú</TableHead>
+              <TableHead>Ngày xóa</TableHead>
+              <TableHead className="text-right">Thao tác</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {consultations.map((consultation) => (
+              <TableRow key={consultation.id}>
+                <TableCell>
+                  <div className="flex items-center gap-2">
+                    <User className="h-4 w-4 text-muted-foreground" />
+                    <div>
+                      <div className="font-medium">{consultation.lead_name}</div>
+                      <div className="text-xs text-muted-foreground">
+                        Lead ID: #{consultation.lead_id}
+                      </div>
                     </div>
                   </div>
-                </div>
-              </TableCell>
-              <TableCell>
-                {consultation.consultation_status_name ? (
+                </TableCell>
+                <TableCell>
+                  {consultation.consultation_status_name ? (
+                    <Badge variant="outline">
+                      {consultation.consultation_status_name}
+                    </Badge>
+                  ) : (
+                    <span className="text-muted-foreground text-sm">-</span>
+                  )}
+                </TableCell>
+                <TableCell>
+                  {consultation.notes ? (
+                    <div className="flex items-start gap-1.5 max-w-xs">
+                      <MessageSquare className="h-3.5 w-3.5 text-muted-foreground mt-0.5 flex-shrink-0" />
+                      <span className="text-sm truncate">{consultation.notes}</span>
+                    </div>
+                  ) : (
+                    <span className="text-muted-foreground text-sm">-</span>
+                  )}
+                </TableCell>
+                <TableCell className="text-sm text-muted-foreground">
+                  {format(new Date(consultation.deleted_at), "dd/MM/yyyy HH:mm", {
+                    locale: vi,
+                  })}
+                </TableCell>
+                <TableCell className="text-right">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setConfirmId(consultation.id)}
+                    disabled={isRestoring}
+                  >
+                    {isRestoring ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <RotateCcw className="h-4 w-4" />
+                    )}
+                    <span className="ml-1.5">Khôi phục</span>
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+
+      {/* Mobile: Cards */}
+      <div className="md:hidden space-y-2">
+        {consultations.map((consultation) => (
+          <BaseCard key={consultation.id} showCheckbox={false}>
+            <BaseCardHeader
+              title={consultation.lead_name}
+              subtitle={`Lead ID: #${consultation.lead_id}`}
+              badge={
+                consultation.consultation_status_name ? (
                   <Badge variant="outline">
                     {consultation.consultation_status_name}
                   </Badge>
+                ) : undefined
+              }
+            />
+            <CardBody>
+              {consultation.notes && (
+                <CardField
+                  icon={<MessageSquare className="h-3 w-3" />}
+                  label="Ghi chú"
+                  value={consultation.notes}
+                />
+              )}
+            </CardBody>
+            <CardMeta>
+              <Badge variant="destructive" className="gap-1">
+                <Trash2 className="h-3 w-3" />
+                Đã xóa
+              </Badge>
+              <CardTime date={consultation.deleted_at} format="datetime" />
+            </CardMeta>
+            <CardActions>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setConfirmId(consultation.id)}
+                disabled={isRestoring}
+              >
+                {isRestoring ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
-                  <span className="text-muted-foreground text-sm">-</span>
+                  <RotateCcw className="h-4 w-4" />
                 )}
-              </TableCell>
-              <TableCell>
-                {consultation.notes ? (
-                  <div className="flex items-start gap-1.5 max-w-xs">
-                    <MessageSquare className="h-3.5 w-3.5 text-muted-foreground mt-0.5 flex-shrink-0" />
-                    <span className="text-sm truncate">{consultation.notes}</span>
-                  </div>
-                ) : (
-                  <span className="text-muted-foreground text-sm">-</span>
-                )}
-              </TableCell>
-              <TableCell className="text-sm text-muted-foreground">
-                {format(new Date(consultation.deleted_at), "dd/MM/yyyy HH:mm", {
-                  locale: vi,
-                })}
-              </TableCell>
-              <TableCell className="text-right">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setConfirmId(consultation.id)}
-                  disabled={isRestoring}
-                >
-                  {isRestoring ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <RotateCcw className="h-4 w-4" />
-                  )}
-                  <span className="ml-1.5">Khôi phục</span>
-                </Button>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+                <span className="ml-1.5">Khôi phục</span>
+              </Button>
+            </CardActions>
+          </BaseCard>
+        ))}
+      </div>
 
       {/* Confirm Dialog */}
       <AlertDialog open={confirmId !== null} onOpenChange={() => setConfirmId(null)}>

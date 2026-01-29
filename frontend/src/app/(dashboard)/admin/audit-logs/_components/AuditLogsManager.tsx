@@ -48,6 +48,13 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { TableEmptyState } from "@/components/common/EmptyState";
 import {
+  BaseCard,
+  CardHeader as BaseCardHeader,
+  CardBody,
+  CardMeta,
+  CardTime,
+} from "@/components/ui/base-card";
+import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
@@ -303,6 +310,104 @@ function LoadingRows() {
   );
 }
 
+// Mobile Card Component using BaseCard System
+function AuditLogCard({ entry }: { entry: AuditLogEntry }) {
+  const config = getActionConfig(entry.action);
+  const Icon = config.icon;
+
+  return (
+    <BaseCard showCheckbox={false}>
+      {/* Header: Action badge + Entity */}
+      <BaseCardHeader
+        title={
+          <div className="flex items-center gap-2">
+            <Badge variant="secondary">{entry.entity_type}</Badge>
+            <span className="text-muted-foreground">#{entry.entity_id}</span>
+          </div>
+        }
+        badge={
+          <Badge variant="outline" className={cn("gap-1", config.color)}>
+            <Icon className="h-3 w-3" />
+            {config.label}
+          </Badge>
+        }
+      />
+
+      {/* Body: Changes detail */}
+      <CardBody>
+        {entry.changes ? (
+          <div className="text-xs space-y-1">
+            {Object.entries(entry.changes).slice(0, 3).map(([field, change]) => (
+              <div key={field} className="flex items-center gap-1 flex-wrap">
+                <span className="font-medium">{field}:</span>
+                <span className="text-error-600 line-through">
+                  {formatValue(change.old)}
+                </span>
+                <ArrowRight className="h-2 w-2 text-muted-foreground" />
+                <span className="text-success-600">{formatValue(change.new)}</span>
+              </div>
+            ))}
+            {Object.keys(entry.changes).length > 3 && (
+              <span className="text-muted-foreground">
+                +{Object.keys(entry.changes).length - 3} thay đổi khác
+              </span>
+            )}
+          </div>
+        ) : entry.field_name ? (
+          <div className="text-xs flex items-center gap-1 flex-wrap">
+            <span className="font-medium">{entry.field_name}:</span>
+            <span className="text-error-600 line-through">
+              {formatValue(entry.old_value)}
+            </span>
+            <ArrowRight className="h-2 w-2 text-muted-foreground" />
+            <span className="text-success-600">{formatValue(entry.new_value)}</span>
+          </div>
+        ) : (
+          <span className="text-xs text-muted-foreground">{entry.reason || "Không có chi tiết"}</span>
+        )}
+      </CardBody>
+
+      {/* Meta: Actor + Time */}
+      <CardMeta>
+        {entry.actor ? (
+          <span className="flex items-center gap-1 text-xs">
+            <User className="h-3 w-3 text-muted-foreground" />
+            {entry.actor.full_name || entry.actor.username}
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground">System</span>
+        )}
+        <CardTime date={entry.created_at} format="datetime" />
+      </CardMeta>
+    </BaseCard>
+  );
+}
+
+// Mobile Loading Cards
+function LoadingCards() {
+  return (
+    <div className="space-y-3">
+      {[1, 2, 3, 4, 5].map((i) => (
+        <Card key={i}>
+          <CardContent className="p-4">
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-5 w-16" />
+                <Skeleton className="h-5 w-20" />
+              </div>
+              <Skeleton className="h-4 w-full" />
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-4 w-20" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
 // ============================================================================
 // MAIN COMPONENT
 // ============================================================================
@@ -417,8 +522,8 @@ export function AuditLogsManager() {
             )}
           </div>
 
-          {/* Table */}
-          <div className="border rounded-lg">
+          {/* Desktop: Table */}
+          <div className="hidden md:block border rounded-lg">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -448,6 +553,28 @@ export function AuditLogsManager() {
                 )}
               </TableBody>
             </Table>
+          </div>
+
+          {/* Mobile: Cards */}
+          <div className="md:hidden">
+            {isLoading ? (
+              <LoadingCards />
+            ) : !data?.items || data.items.length === 0 ? (
+              <Card>
+                <CardContent className="py-8">
+                  <TableEmptyState
+                    title="Không có dữ liệu audit log"
+                    description="Các hoạt động trong hệ thống sẽ được ghi lại ở đây"
+                  />
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="space-y-2">
+                {data.items.map((entry) => (
+                  <AuditLogCard key={entry.id} entry={entry} />
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Pagination */}

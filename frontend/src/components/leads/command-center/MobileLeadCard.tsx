@@ -2,23 +2,28 @@
 /**
  * MobileLeadCard - Card-based lead display for mobile devices
  *
- * Provides a touch-friendly interface for viewing and interacting with leads
- * on mobile devices. Shows key information at a glance with swipe actions.
+ * Uses BaseCard System for consistent layout.
+ * Provides a touch-friendly interface for viewing and interacting with leads.
  */
 "use client";
 
 import React from "react";
-import { format } from "date-fns";
-import { vi } from "date-fns/locale";
-import { Phone, MoreVertical, ChevronRight, Zap } from "lucide-react";
-import { cn, sanitizeColorCode } from "@/lib/utils";
+import { Phone, MoreVertical, Zap, Edit, Trash2, UserPlus, ArrowRightLeft } from "lucide-react";
+import { sanitizeColorCode } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
 import { UrgencyBadge } from "@/components/common/UrgencyBadge";
 import { MobileActionSheet } from "@/components/common/MobileActionSheet";
-import { Edit, Trash2, UserPlus, ArrowRightLeft } from "lucide-react";
+import {
+  BaseCard,
+  CardHeader,
+  CardBody,
+  CardField,
+  CardMeta,
+  CardTime,
+  CardActions,
+} from "@/components/ui/base-card";
 import type { Lead } from "@/types/lead.types";
 import { LEAD_SOURCE_OPTIONS } from "@/constants";
 import { STAGE_COLORS } from "@/types/pipeline.types";
@@ -58,108 +63,82 @@ export function MobileLeadCard({
     STAGE_COLORS[lead.pipeline_stage?.id || ""] ||
     "#6B7280";
 
-  // Format last activity
-  const lastActivity = lead.last_consultation_at
-    ? format(new Date(lead.last_consultation_at), "dd/MM", { locale: vi })
-    : null;
+  // Handle card click - only trigger if action sheet is closed
+  const handleCardClick = () => {
+    if (!actionSheetOpen) {
+      onSelect(lead);
+    }
+  };
 
   return (
-    <div
-      className={cn(
-        "relative flex items-start gap-3 rounded-lg border bg-card p-3",
-        "transition-all duration-150 active:bg-muted/50",
-        isSelected && "border-primary bg-primary/5 ring-1 ring-primary/20"
-      )}
+    <BaseCard
+      selected={isSelected || isChecked}
+      onSelect={(checked) => onCheck?.(checked)}
+      showCheckbox={showCheckbox}
+      onClick={handleCardClick}
+      className="active:bg-muted/50"
     >
-      {/* Checkbox (optional) */}
-      {showCheckbox && (
-        <div className="pt-0.5">
-          <Checkbox
-            checked={isChecked}
-            onCheckedChange={(checked) => onCheck?.(!!checked)}
-            aria-label={`Chọn ${lead.full_name}`}
-            className="h-5 w-5"
-          />
-        </div>
-      )}
-
-      {/* Main content - Tappable area */}
-      <button
-        type="button"
-        className="flex-1 min-w-0 text-left"
-        onClick={() => onSelect(lead)}
-      >
-        {/* Top row: Name + Urgency */}
-        <div className="flex items-center gap-2 mb-1">
-          <span className="font-medium text-sm truncate flex-1">
-            {lead.full_name}
-          </span>
-          {lead.cached_urgency_score !== undefined && lead.cached_urgency_score > 0 && (
+      {/* Header: Name + Urgency Badge */}
+      <CardHeader
+        title={lead.full_name}
+        badge={
+          lead.cached_urgency_score !== undefined && lead.cached_urgency_score > 0 ? (
             <UrgencyBadge score={lead.cached_urgency_score} compact />
-          )}
-        </div>
+          ) : undefined
+        }
+      />
 
-        {/* Phone number */}
-        <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-2">
-          <Phone className="h-3 w-3" />
-          <span>{lead.phone || "Chưa có SĐT"}</span>
-        </div>
+      {/* Body: Phone number */}
+      <CardBody>
+        <CardField
+          icon={<Phone className="h-3 w-3" />}
+          label="SĐT"
+          value={lead.phone || "Chưa có"}
+        />
+      </CardBody>
 
-        {/* Bottom row: Stage + Source + Score */}
-        <div className="flex items-center gap-1.5 flex-wrap">
-          {/* Stage badge */}
-          {lead.pipeline_stage && (
-            <DynamicColorBadge
-              color={stageColor}
-              className="text-[10px] h-5 px-1.5"
-            >
-              {lead.pipeline_stage.name}
-            </DynamicColorBadge>
-          )}
+      {/* Meta: Stage + Source + Score + Last activity */}
+      <CardMeta>
+        {/* Stage badge */}
+        {lead.pipeline_stage && (
+          <DynamicColorBadge color={stageColor}>
+            {lead.pipeline_stage.name}
+          </DynamicColorBadge>
+        )}
 
-          {/* Source */}
-          <Badge variant="outline" className="text-[10px] h-5 px-1.5">
-            {getSourceLabel(lead.source)}
+        {/* Source */}
+        <Badge variant="outline">
+          {getSourceLabel(lead.source)}
+        </Badge>
+
+        {/* Lead score (if high) */}
+        {lead.lead_score > 70 && (
+          <Badge
+            variant="secondary"
+            className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+          >
+            <Zap className="h-2.5 w-2.5 mr-0.5" />
+            {lead.lead_score}
           </Badge>
+        )}
 
-          {/* Lead score (if high) */}
-          {lead.lead_score > 70 && (
-            <Badge
-              variant="secondary"
-              className="text-[10px] h-5 px-1.5 bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
-            >
-              <Zap className="h-2.5 w-2.5 mr-0.5" />
-              {lead.lead_score}
-            </Badge>
-          )}
-
-          {/* Last activity */}
-          {lastActivity && (
-            <span className="text-[10px] text-muted-foreground ml-auto">
-              {lastActivity}
-            </span>
-          )}
-        </div>
-      </button>
+        {/* Last activity */}
+        {lead.last_consultation_at && (
+          <CardTime date={lead.last_consultation_at} format="date" className="ml-auto" />
+        )}
+      </CardMeta>
 
       {/* Actions */}
-      <div className="flex items-center gap-1">
-        {/* More actions button */}
+      <CardActions>
         <Button
           variant="ghost"
           size="icon"
-          className="h-8 w-8 shrink-0"
-          onClick={(e) => {
-            e.stopPropagation();
-            setActionSheetOpen(true);
-          }}
+          className="h-8 w-8"
+          onClick={() => setActionSheetOpen(true)}
         >
           <MoreVertical className="h-4 w-4" />
         </Button>
-
-        {/* Chevron indicator */}
-        <ChevronRight className="h-4 w-4 text-muted-foreground/50" />
-      </div>
+      </CardActions>
 
       {/* Action Sheet */}
       <MobileActionSheet
@@ -209,7 +188,7 @@ export function MobileLeadCard({
           Xóa lead
         </MobileActionSheet.Item>
       </MobileActionSheet>
-    </div>
+    </BaseCard>
   );
 }
 

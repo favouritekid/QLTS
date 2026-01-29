@@ -64,6 +64,16 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
+  BaseCard,
+  CardHeader as BaseCardHeader,
+  CardBody,
+  CardField,
+  CardFieldRow,
+  CardMeta,
+  CardActions,
+} from "@/components/ui/base-card";
+import { type RowSelectionState } from "@tanstack/react-table";
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -75,6 +85,97 @@ import {
 } from "@/components/ui/alert-dialog";
 
 import { DistributionRuleDialog } from "@/components/admin/distribution/DistributionRuleDialog";
+import { MobileActionSheet } from "@/components/common/MobileActionSheet";
+
+// =============================================================================
+// MOBILE RULE CARD COMPONENT
+// =============================================================================
+
+interface MobileRuleCardProps {
+  rule: DistributionRule;
+  isSelected: boolean;
+  onSelect: (checked: boolean) => void;
+  onEdit: (rule: DistributionRule) => void;
+  onDelete: (rule: DistributionRule) => void;
+  onToggle: (rule: DistributionRule) => void;
+}
+
+function MobileRuleCard({ rule, isSelected, onSelect, onEdit, onDelete, onToggle }: MobileRuleCardProps) {
+  const [actionSheetOpen, setActionSheetOpen] = useState(false);
+
+  return (
+    <BaseCard
+      selected={isSelected}
+      onSelect={onSelect}
+      showCheckbox
+    >
+      <BaseCardHeader
+        title={rule.offering_name || `Offering ID: ${rule.offering_id}`}
+        subtitle={rule.unit_name || `Unit ID: ${rule.unit_id}`}
+        badge={
+          <Badge variant={rule.is_active ? "default" : "secondary"}>
+            {rule.is_active ? "Hoạt động" : "Tạm dừng"}
+          </Badge>
+        }
+      />
+      <CardBody>
+        <CardFieldRow>
+          <CardField label="Trọng số" value={rule.weight} />
+          <CardField label="Ưu tiên" value={rule.priority} />
+        </CardFieldRow>
+      </CardBody>
+      <CardActions>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          onClick={() => setActionSheetOpen(true)}
+        >
+          <MoreVertical className="h-4 w-4" />
+        </Button>
+      </CardActions>
+
+      {/* Mobile Action Sheet */}
+      <MobileActionSheet
+        open={actionSheetOpen}
+        onOpenChange={setActionSheetOpen}
+        title={rule.offering_name || `Rule #${rule.id}`}
+      >
+        <MobileActionSheet.Item
+          icon={Pencil}
+          onClick={() => {
+            setActionSheetOpen(false);
+            onEdit(rule);
+          }}
+        >
+          Chỉnh sửa
+        </MobileActionSheet.Item>
+        <MobileActionSheet.Item
+          onClick={() => {
+            setActionSheetOpen(false);
+            onToggle(rule);
+          }}
+        >
+          {rule.is_active ? "Tạm dừng" : "Kích hoạt"}
+        </MobileActionSheet.Item>
+        <MobileActionSheet.Item
+          icon={Trash2}
+          variant="destructive"
+          onClick={() => {
+            setActionSheetOpen(false);
+            onDelete(rule);
+          }}
+        >
+          Xóa
+        </MobileActionSheet.Item>
+      </MobileActionSheet>
+    </BaseCard>
+  );
+}
+
+// =============================================================================
+// CLIENT COMPONENT
+// =============================================================================
 
 interface DistributionClientProps {
   initialData?: DistributionRule[];
@@ -86,7 +187,7 @@ export function DistributionClient({ initialData }: DistributionClientProps) {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [sortBy, setSortBy] = useState<string>("priority");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
-  const [rowSelection, setRowSelection] = useState({});
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingRule, setEditingRule] = useState<DistributionRule | null>(null);
   const [ruleToDelete, setRuleToDelete] = useState<DistributionRule | null>(null);
@@ -323,6 +424,7 @@ export function DistributionClient({ initialData }: DistributionClientProps) {
     state: {
       rowSelection,
     },
+    getRowId: (row) => String(row.id),
   });
 
   const handleCreateRule = () => {
@@ -447,25 +549,33 @@ export function DistributionClient({ initialData }: DistributionClientProps) {
                 <Skeleton key={i} className="h-12 w-full" />
               ))}
             </div>
+          ) : filteredRules.length === 0 ? (
+            <div className="p-6">
+              <TableEmptyState
+                title="Chưa có luật phân phối"
+                description="Tạo luật phân phối mới để tự động gán lead cho cán bộ"
+              />
+            </div>
           ) : (
-            <div className="rounded-md border">
-              <Table>
-                <TableHeader>
-                  {table.getHeaderGroups().map((headerGroup) => (
-                    <TableRow key={headerGroup.id}>
-                      {headerGroup.headers.map((header) => (
-                        <TableHead key={header.id}>
-                          {header.isPlaceholder
-                            ? null
-                            : flexRender(header.column.columnDef.header, header.getContext())}
-                        </TableHead>
-                      ))}
-                    </TableRow>
-                  ))}
-                </TableHeader>
-                <TableBody>
-                  {table.getRowModel().rows?.length ? (
-                    table.getRowModel().rows.map((row) => (
+            <>
+              {/* Desktop: Table */}
+              <div className="hidden md:block rounded-md border">
+                <Table>
+                  <TableHeader>
+                    {table.getHeaderGroups().map((headerGroup) => (
+                      <TableRow key={headerGroup.id}>
+                        {headerGroup.headers.map((header) => (
+                          <TableHead key={header.id}>
+                            {header.isPlaceholder
+                              ? null
+                              : flexRender(header.column.columnDef.header, header.getContext())}
+                          </TableHead>
+                        ))}
+                      </TableRow>
+                    ))}
+                  </TableHeader>
+                  <TableBody>
+                    {table.getRowModel().rows.map((row) => (
                       <TableRow key={row.id} data-state={row.getIsSelected() && "selected"}>
                         {row.getVisibleCells().map((cell) => (
                           <TableCell key={cell.id}>
@@ -473,20 +583,48 @@ export function DistributionClient({ initialData }: DistributionClientProps) {
                           </TableCell>
                         ))}
                       </TableRow>
-                    ))
-                  ) : (
-                    <TableRow>
-                      <TableCell colSpan={columns.length} className="h-32">
-                        <TableEmptyState
-                          title="Chưa có luật phân phối"
-                          description="Tạo luật phân phối mới để tự động gán lead cho cán bộ"
-                        />
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </div>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+
+              {/* Mobile: Cards */}
+              <div className="md:hidden p-4 space-y-2">
+                {/* Select All header */}
+                <div className="flex items-center gap-2 px-1 py-2">
+                  <Checkbox
+                    checked={table.getIsAllPageRowsSelected()}
+                    onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
+                    aria-label="Chọn tất cả"
+                  />
+                  <span className="text-sm text-muted-foreground">Chọn tất cả</span>
+                </div>
+
+                {/* Rule Cards */}
+                {filteredRules.map((rule) => (
+                  <MobileRuleCard
+                    key={rule.id}
+                    rule={rule}
+                    isSelected={rowSelection[String(rule.id)] ?? false}
+                    onSelect={(checked) => {
+                      setRowSelection((prev) => ({
+                        ...prev,
+                        [String(rule.id)]: checked,
+                      }));
+                    }}
+                    onEdit={(rule) => {
+                      setEditingRule(rule);
+                      setIsDialogOpen(true);
+                    }}
+                    onDelete={setRuleToDelete}
+                    onToggle={(rule) => toggleMutation.mutate({
+                      id: rule.id,
+                      isActive: !rule.is_active
+                    })}
+                  />
+                ))}
+              </div>
+            </>
           )}
         </CardContent>
       </Card>
