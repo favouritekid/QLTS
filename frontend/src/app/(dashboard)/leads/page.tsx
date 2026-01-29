@@ -27,20 +27,21 @@ import { LeadsClient } from './_components/LeadsClient';
  */
 function LeadsLoading() {
   return (
-    <div className="h-full flex flex-col p-6 space-y-4">
+    <div className="h-full flex flex-col p-4 sm:p-6 space-y-4">
       <div className="space-y-2">
-        <Skeleton className="h-8 w-64" />
-        <Skeleton className="h-4 w-96" />
+        <Skeleton className="h-8 w-48 sm:w-64" />
+        <Skeleton className="h-4 w-64 sm:w-96" />
       </div>
-      <div className="grid grid-cols-4 gap-4">
+      {/* Stats cards - 2 cols on mobile, 4 cols on desktop */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
         {[...Array(4)].map((_, i) => (
-          <Skeleton key={i} className="h-24 rounded-lg" />
+          <Skeleton key={i} className="h-20 sm:h-24 rounded-lg" />
         ))}
       </div>
-      <div className="flex-1 grid grid-cols-3 gap-4">
-        <Skeleton className="h-full rounded-lg" />
-        <Skeleton className="h-full rounded-lg" />
-        <Skeleton className="h-full rounded-lg" />
+      {/* Main content - single column on mobile, 3 cols on lg */}
+      <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <Skeleton className="h-48 lg:h-full rounded-lg lg:col-span-2" />
+        <Skeleton className="h-48 lg:h-full rounded-lg hidden lg:block" />
       </div>
     </div>
   );

@@ -423,8 +423,8 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
     return (
       <PageContainer maxWidth="xl">
         <header>
-          <h1 className="text-3xl font-bold font-display tracking-tight">Quản Lý Người Dùng</h1>
-          <p className="text-muted-foreground">Quản lý người dùng, vai trò và quyền hạn.</p>
+          <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Quản Lý Người Dùng</h1>
+          <p className="text-muted-foreground text-sm sm:text-base">Quản lý người dùng, vai trò và quyền hạn.</p>
         </header>
         <Card>
           <CardContent className="pt-6">
@@ -437,42 +437,46 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
 
   return (
     <PageContainer maxWidth="xl">
-      {/* Header */}
-      <header className="flex items-center justify-between">
+      {/* Header - Responsive: stack on mobile */}
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold font-display tracking-tight">Quản Lý Người Dùng</h1>
-          <p className="text-muted-foreground">Quản lý người dùng, vai trò và quyền hạn.</p>
+          <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Quản Lý Người Dùng</h1>
+          <p className="text-muted-foreground text-sm sm:text-base">Quản lý người dùng, vai trò và quyền hạn.</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={handleExportCSV} disabled={!data?.users.length}>
+          <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={handleExportCSV} disabled={!data?.users.length}>
             <Download className="mr-2 h-4 w-4" />
-            Xuất CSV
+            <span className="hidden xs:inline">Xuất CSV</span>
+            <span className="xs:hidden">Xuất</span>
           </Button>
-          <Button onClick={handleCreateUser}>
+          <Button size="sm" className="flex-1 sm:flex-none" onClick={handleCreateUser}>
             <Plus className="mr-2 h-4 w-4" />
-            Thêm Người Dùng
+            <span className="hidden xs:inline">Thêm Người Dùng</span>
+            <span className="xs:hidden">Thêm</span>
           </Button>
         </div>
       </header>
 
-      {/* Bulk Actions Bar */}
+      {/* Bulk Actions Bar - Responsive: wrap on mobile */}
       {selectedCount > 0 && (
         <Card className="border-primary">
-          <CardContent className="flex items-center justify-between p-4">
+          <CardContent className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
             <div className="flex items-center gap-2">
               <CheckSquare className="text-primary h-5 w-5" />
-              <span className="font-medium">{selectedCount} người dùng được chọn</span>
+              <span className="font-medium text-sm sm:text-base">{selectedCount} người dùng được chọn</span>
             </div>
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={() => table.resetRowSelection()}>
-                <Square className="mr-2 h-4 w-4" />
-                Bỏ chọn tất cả
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={() => table.resetRowSelection()}>
+                <Square className="mr-1.5 h-4 w-4" />
+                <span className="hidden sm:inline">Bỏ chọn tất cả</span>
+                <span className="sm:hidden">Bỏ chọn</span>
               </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm">
-                    <Edit className="mr-2 h-4 w-4" />
-                    Đổi trạng thái
+                  <Button variant="outline" size="sm" className="flex-1 sm:flex-none">
+                    <Edit className="mr-1.5 h-4 w-4" />
+                    <span className="hidden sm:inline">Đổi trạng thái</span>
+                    <span className="sm:hidden">Trạng thái</span>
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
@@ -489,9 +493,9 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-              <Button variant="destructive" size="sm" onClick={handleOpenBulkDelete}>
-                <Trash2 className="mr-2 h-4 w-4" />
-                Xoá đã chọn
+              <Button variant="destructive" size="sm" className="flex-1 sm:flex-none" onClick={handleOpenBulkDelete}>
+                <Trash2 className="mr-1.5 h-4 w-4" />
+                Xoá
               </Button>
             </div>
           </CardContent>
@@ -552,8 +556,8 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
               ))}
             </div>
           ) : (
-            <div className="rounded-md border">
-              <Table>
+            <div className="overflow-x-auto rounded-md border">
+              <Table className="min-w-[700px]">
                 <TableHeader>
                   {table.getHeaderGroups().map((headerGroup) => (
                     <TableRow key={headerGroup.id}>
@@ -595,13 +599,13 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
         </CardContent>
       </Card>
 
-      {/* Pagination */}
+      {/* Pagination - Responsive: stack on mobile */}
       {data && data.total_count > 10 && (
-        <div className="flex items-center justify-between">
-          <div className="text-muted-foreground text-sm">
-            Hiển thị {(page - 1) * 10 + 1} đến {Math.min(page * 10, data.total_count)} / {data.total_count} người dùng
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-muted-foreground text-xs sm:text-sm text-center sm:text-left">
+            Hiển thị {(page - 1) * 10 + 1}-{Math.min(page * 10, data.total_count)} / {data.total_count}
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 justify-center sm:justify-end">
             <Button
               variant="outline"
               size="sm"

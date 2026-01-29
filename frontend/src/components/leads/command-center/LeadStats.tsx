@@ -58,14 +58,14 @@ export const LeadStats = React.memo(function LeadStats({
 
   if (isLoading) {
     return (
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-4">
         {[...Array(4)].map((_, i) => (
           <Card key={i} className="animate-pulse">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <div className="h-4 w-20 bg-muted rounded" />
+              <div className="h-4 w-16 sm:w-20 bg-muted rounded" />
             </CardHeader>
             <CardContent>
-              <div className="h-8 w-16 bg-muted rounded" />
+              <div className="h-6 sm:h-8 w-12 sm:w-16 bg-muted rounded" />
             </CardContent>
           </Card>
         ))}
@@ -74,19 +74,19 @@ export const LeadStats = React.memo(function LeadStats({
   }
 
   return (
-    <div className="grid gap-4 md:grid-cols-4">
+    <div className="grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-4">
       {stats.map((stat) => (
         <Card key={stat.title} className="hover:shadow-md transition-shadow">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 p-3 pb-1 sm:p-4 sm:pb-2">
+            <CardTitle className="text-xs sm:text-sm font-medium text-muted-foreground">
               {stat.title}
             </CardTitle>
-            <div className={`p-2 rounded-lg ${stat.bgColor}`}>
-              <stat.icon className={`h-4 w-4 ${stat.color}`} />
+            <div className={`p-1.5 sm:p-2 rounded-lg ${stat.bgColor}`}>
+              <stat.icon className={`h-3.5 w-3.5 sm:h-4 sm:w-4 ${stat.color}`} />
             </div>
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stat.value}</div>
+          <CardContent className="p-3 pt-0 sm:p-4 sm:pt-0">
+            <div className="text-xl sm:text-2xl font-bold">{stat.value}</div>
           </CardContent>
         </Card>
       ))}
