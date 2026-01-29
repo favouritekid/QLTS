@@ -12,6 +12,7 @@ Benefits:
 - Separates SQL from business logic
 """
 
+import unicodedata
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
@@ -249,8 +250,12 @@ class LeadRepository(BaseRepository[models.Lead]):
                 filters.append(models.Lead.source.in_(sources))
 
         # Apply search
+        # ✅ FIX: Normalize Unicode to NFC format for Vietnamese diacritics
+        # Windows/browsers may send NFD (decomposed) but DB stores NFC (composed)
+        # Example: "Hùng" NFD = "Hu" + combining accent vs NFC = single char "ù"
         if search:
-            search_term = f"%{search.strip()}%"
+            normalized_search = unicodedata.normalize('NFC', search.strip())
+            search_term = f"%{normalized_search}%"
             search_conditions = or_(
                 models.Lead.full_name.ilike(search_term),
                 models.Lead.email.ilike(search_term),
