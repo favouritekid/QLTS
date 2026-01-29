@@ -9,7 +9,8 @@
  */
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
+import { SwipeableTabs } from "@/components/common/SwipeableContainer";
 import {
   Phone,
   Mail,
@@ -162,6 +163,16 @@ export function LeadInfoTabs({
 
   const recentTimeline = timeline?.slice(0, 5) || [];
 
+  // Get current tab index for swipe navigation
+  const activeIndex = tabs.findIndex((t) => t.id === activeTab);
+
+  // Handle swipe tab change
+  const handleTabChange = useCallback((index: number) => {
+    if (index >= 0 && index < tabs.length) {
+      setActiveTab(tabs[index].id);
+    }
+  }, []);
+
   return (
     <div className="bg-card rounded-2xl border border-border overflow-hidden">
       {/* Tab Headers */}
@@ -182,8 +193,13 @@ export function LeadInfoTabs({
         ))}
       </div>
 
-      {/* Tab Content */}
-      <div className="p-4">
+      {/* Tab Content - Swipeable on mobile */}
+      <SwipeableTabs
+        activeIndex={activeIndex}
+        onTabChange={handleTabChange}
+        tabCount={tabs.length}
+        className="p-4"
+      >
         {/* Overview Tab */}
         {activeTab === "overview" && (
           <div className="space-y-4">
@@ -506,7 +522,7 @@ export function LeadInfoTabs({
             <AuditLogTimeline entityType="Lead" entityId={lead.id} />
           </div>
         )}
-      </div>
+      </SwipeableTabs>
     </div>
   );
 }

@@ -9,9 +9,12 @@ import {
   DragOverlay,
   DragStartEvent,
   PointerSensor,
+  TouchSensor,
+  KeyboardSensor,
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
+import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
 
 import { PipelineColumn } from "./PipelineColumn";
@@ -31,11 +34,24 @@ export function PipelineBoard({ pipeline }: PipelineBoardProps) {
 
   const moveLead = useMoveLeadToStage();
 
+  // Touch-optimized sensor configuration
+  // - TouchSensor: 250ms delay to distinguish from scroll, 5px tolerance
+  // - PointerSensor: 8px distance for mouse/trackpad
+  // - KeyboardSensor: Accessibility support
   const sensors = useSensors(
+    useSensor(TouchSensor, {
+      activationConstraint: {
+        delay: 250, // Hold 250ms before drag starts (prevents accidental drags while scrolling)
+        tolerance: 5, // Allow 5px movement during delay
+      },
+    }),
     useSensor(PointerSensor, {
       activationConstraint: {
-        distance: 8, // 8px movement required before drag starts
+        distance: 8, // 8px movement required before drag starts (for mouse/trackpad)
       },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
     })
   );
 

@@ -678,10 +678,22 @@ const prefersReducedMotion =
 
 ### 10.3 Strategic (1-2 ngày)
 
-- [ ] **Swipe gestures**: Implement react-swipeable cho navigation
-- [ ] **Touch-optimized drag-drop**: Tune dnd-kit sensors
-- [ ] **Mobile testing framework**: Setup Playwright mobile viewports
-- [ ] **Design tokens mobile**: Tạo CSS variables cho mobile-specific values
+- [x] **Swipe gestures**: Implement react-swipeable cho navigation ✅
+  - Created `useSwipeNavigation` hook
+  - Created `SwipeableContainer`, `SwipeableTabs`, `DismissibleContainer` components
+  - Applied to `LeadInfoTabs` for tab swiping on mobile
+- [x] **Touch-optimized drag-drop**: Tune dnd-kit sensors ✅
+  - Added `TouchSensor` with 250ms delay to prevent accidental drags
+  - Added `KeyboardSensor` for accessibility
+  - Configured activation constraints for touch vs pointer
+- [x] **Mobile testing framework**: Setup Playwright mobile viewports ✅
+  - Added comprehensive tests in `mobile-responsive.spec.ts`
+  - Added desktop tests in `desktop-responsive.spec.ts`
+  - 131 tests passing across Mobile_Chrome, Mobile_Safari, chromium, firefox, webkit
+- [x] **Design tokens mobile**: Tạo CSS variables cho mobile-specific values ✅
+  - Added touch target tokens (`--touch-target-min`, `--touch-target-recommended`)
+  - Added safe area tokens (`--safe-area-*`)
+  - Added mobile spacing, input, dialog tokens in `foundation.css`
 
 ---
 

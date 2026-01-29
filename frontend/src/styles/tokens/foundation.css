@@ -149,4 +149,40 @@
   /* Section & Content Gaps */
   --section-gap: 1.5rem;              /* 24px - between major sections */
   --content-gap: 1rem;                /* 16px - between content items */
+
+  /* =========================================================================
+   * MOBILE-SPECIFIC TOKENS
+   * Per MOBILE_STANDARDIZATION.md guidelines
+   * ========================================================================= */
+  /* Touch Targets - iOS HIG (44px) & Material Design (48px) */
+  --touch-target-min: 44px;           /* Minimum per iOS HIG */
+  --touch-target-recommended: 48px;   /* Recommended per Material */
+  --touch-target-spacing: 8px;        /* Minimum gap between targets */
+
+  /* Mobile Spacing - Compact for small screens */
+  --spacing-mobile-page: 1rem;        /* 16px - page margins */
+  --spacing-mobile-card: 0.75rem;     /* 12px - card internal padding */
+  --spacing-mobile-gap: 0.5rem;       /* 8px - gap between items */
+
+  /* Safe Areas - iPhone notch/dynamic island */
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-left: env(safe-area-inset-left, 0px);
+  --safe-area-right: env(safe-area-inset-right, 0px);
+
+  /* Mobile Navigation */
+  --bottom-nav-height: 64px;          /* Standard bottom nav */
+  --bottom-nav-height-safe: calc(64px + var(--safe-area-bottom));
+
+  /* Mobile Input Sizing - Prevent iOS zoom */
+  --input-height-mobile: 2.75rem;     /* 44px - touch-friendly */
+  --input-font-mobile: 1rem;          /* 16px - prevents iOS auto-zoom */
+
+  /* Mobile Dialog/Sheet */
+  --dialog-max-height-mobile: 85vh;   /* Leave space for safe areas */
+  --sheet-width-mobile: 85vw;         /* Bottom sheet width */
+
+  /* Mobile Typography - Slightly larger for readability */
+  --text-body-mobile: 0.875rem;       /* 14px - body on mobile */
+  --text-label-mobile: 0.75rem;       /* 12px - labels */
 }
