@@ -44,6 +44,8 @@ import {
   ChevronRight,
   GripVertical,
   Zap,
+  Edit,
+  Trash2,
 } from "lucide-react";
 import {
   Table,
@@ -70,7 +72,9 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn, sanitizeColorCode } from "@/lib/utils";
+import { useIsMobile } from "@/hooks/useMediaQuery";
 import { DynamicColorBadge } from "@/components/ui/dynamic-color-badge";
+import { MobileActionSheet } from "@/components/common/MobileActionSheet";
 import type { Lead } from "@/types/lead.types";
 import { LEAD_SOURCE_OPTIONS } from "@/constants";
 import { STAGE_COLORS } from "@/types/pipeline.types";
@@ -135,6 +139,91 @@ const columnHelper = createColumnHelper<Lead>();
 
 const getSourceLabel = (value: string) =>
   LEAD_SOURCE_OPTIONS.find((o) => o.value === value)?.label || value;
+
+// =============================================================================
+// ROW ACTIONS COMPONENT - Responsive (mobile: action sheet, desktop: dropdown)
+// =============================================================================
+
+interface RowActionsProps {
+  lead: Lead;
+  onEdit: (lead: Lead) => void;
+  onDelete: (lead: Lead) => void;
+}
+
+function RowActions({ lead, onEdit, onDelete }: RowActionsProps) {
+  const isMobile = useIsMobile();
+  const [actionSheetOpen, setActionSheetOpen] = React.useState(false);
+
+  if (isMobile) {
+    return (
+      <>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 w-8 p-0"
+          onClick={(e) => {
+            e.stopPropagation();
+            setActionSheetOpen(true);
+          }}
+        >
+          <MoreHorizontal className="h-4 w-4" />
+        </Button>
+        <MobileActionSheet
+          open={actionSheetOpen}
+          onOpenChange={setActionSheetOpen}
+          title={lead.full_name}
+        >
+          <MobileActionSheet.Item
+            icon={Edit}
+            onClick={() => {
+              setActionSheetOpen(false);
+              onEdit(lead);
+            }}
+          >
+            Chỉnh sửa
+          </MobileActionSheet.Item>
+          <MobileActionSheet.Item
+            icon={Trash2}
+            variant="destructive"
+            onClick={() => {
+              setActionSheetOpen(false);
+              onDelete(lead);
+            }}
+          >
+            Xóa
+          </MobileActionSheet.Item>
+          <MobileActionSheet.Cancel onClick={() => setActionSheetOpen(false)} />
+        </MobileActionSheet>
+      </>
+    );
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 w-8 p-0"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <MoreHorizontal className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onClick={() => onEdit(lead)}>
+          Chỉnh sửa
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          onClick={() => onDelete(lead)}
+          className="text-destructive"
+        >
+          Xóa
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
 // =============================================================================
 // MAIN COMPONENT
@@ -480,33 +569,15 @@ export function LeadsTable({
         size: 50,
       }),
 
-      // Actions column
+      // Actions column - Responsive (mobile: action sheet, desktop: dropdown)
       columnHelper.display({
         id: "actions",
         cell: ({ row }) => (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 w-8 p-0"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => onEditLead(row.original)}>
-                Chỉnh sửa
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => onDeleteLead(row.original)}
-                className="text-destructive"
-              >
-                Xóa
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <RowActions
+            lead={row.original}
+            onEdit={onEditLead}
+            onDelete={onDeleteLead}
+          />
         ),
         size: 50,
         enableResizing: false,

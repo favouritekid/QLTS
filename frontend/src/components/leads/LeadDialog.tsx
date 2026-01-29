@@ -29,7 +29,6 @@ import { FormDialog } from "@/components/ui/form-dialog";
 import {
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -68,6 +67,7 @@ import { SmartUnitSelector, SmartOfferingSelector } from "@/components/common/se
 import { LEAD_SOURCE_OPTIONS } from "@/constants";
 import { useDuplicateValidation } from "@/hooks/useDuplicateValidation";
 import { cn } from "@/lib/utils";
+import { FormRow, FormActions } from "@/components/common/form/ResponsiveFormLayout";
 import type { Lead } from "@/types/lead.types";
 
 // Vietnam phone regex - matches backend validation
@@ -392,7 +392,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
             {/* ========== ESSENTIAL FIELDS (Always visible) ========== */}
             <div className="space-y-4">
               {/* Row 1: Name + Phone */}
-              <div className="grid grid-cols-2 gap-4">
+              <FormRow columns={2}>
                 <FormField
                   control={form.control}
                   name="full_name"
@@ -451,10 +451,10 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                     </FormItem>
                   )}
                 />
-              </div>
+              </FormRow>
 
               {/* Row 2: Source + Unit */}
-              <div className="grid grid-cols-2 gap-4">
+              <FormRow columns={2}>
                 <FormField
                   control={form.control}
                   name="source"
@@ -516,7 +516,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                     );
                   }}
                 />
-              </div>
+              </FormRow>
 
               {/* Row 3: Offering (Ngành quan tâm) */}
               <FormField
@@ -617,7 +617,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                     <h3 className="text-sm font-semibold">Liên hệ bổ sung</h3>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
+                  <FormRow columns={2}>
                     <FormField
                       control={form.control}
                       name="email"
@@ -658,7 +658,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                         </FormItem>
                       )}
                     />
-                  </div>
+                  </FormRow>
                 </div>
 
                 {/* Personal Info */}
@@ -668,7 +668,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                     <h3 className="text-sm font-semibold">Thông tin cá nhân</h3>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-4">
+                  <FormRow columns={3}>
                     <FormField
                       control={form.control}
                       name="birth_year"
@@ -730,7 +730,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                         </FormItem>
                       )}
                     />
-                  </div>
+                  </FormRow>
                 </div>
 
                 {/* Academic Info */}
@@ -740,7 +740,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                     <h3 className="text-sm font-semibold">Thông tin học vấn</h3>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-4">
+                  <FormRow columns={3}>
                     <FormField
                       control={form.control}
                       name="education_level"
@@ -813,7 +813,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                         </FormItem>
                       )}
                     />
-                  </div>
+                  </FormRow>
 
                   <FormField
                     control={form.control}
@@ -842,7 +842,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
             </Collapsible>
 
             {/* ========== FOOTER BUTTONS ========== */}
-            <DialogFooter className="flex-col sm:flex-row gap-2">
+            <FormActions stackOnMobile showDivider>
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
                 Hủy
               </Button>
@@ -871,7 +871,7 @@ export function LeadDialog({ open, onOpenChange, lead, mode }: LeadDialogProps) 
                 {isSubmitting && !createAnother && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {isCreate ? "Tạo Lead" : "Lưu thay đổi"}
               </Button>
-            </DialogFooter>
+            </FormActions>
           </form>
         </Form>
       </DialogContent>

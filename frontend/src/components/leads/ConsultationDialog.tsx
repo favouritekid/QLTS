@@ -12,10 +12,10 @@ import { FormDialog, useFormDialogClose } from "@/components/ui/form-dialog";
 import {
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { FormActions } from "@/components/common/form/ResponsiveFormLayout";
 import {
   Form,
   FormControl,
@@ -397,13 +397,13 @@ export function ConsultationDialog({
               />
             )}
 
-            <DialogFooter>
+            <FormActions stackOnMobile showDivider>
               <CancelButton disabled={isSubmitting} />
               <Button type="submit" disabled={isSubmitting}>
                 {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {isCreate ? "Lưu lịch hẹn" : "Cập Nhật"}
               </Button>
-            </DialogFooter>
+            </FormActions>
           </form>
         </Form>
       </DialogContent>
