@@ -38,6 +38,7 @@ import {
   getPaginationRowModel,
   ColumnDef,
   flexRender,
+  type RowSelectionState,
 } from "@tanstack/react-table";
 
 import { Button } from "@/components/ui/button";
@@ -93,6 +94,7 @@ import { toast } from "sonner";
 import type { UsersPage } from "@/types/api.types";
 import { PageContainer } from "@/components/layouts/PageContainer";
 import { TableEmptyState } from "@/components/common/EmptyState";
+import { cn } from "@/lib/utils";
 
 interface AdminUsersClientProps {
   initialData: UsersPage; // ✅ Initial data from server
@@ -105,7 +107,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [sortBy, setSortBy] = useState<string>("id");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
-  const [rowSelection, setRowSelection] = useState({});
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [userToDelete, setUserToDelete] = useState<User | null>(null);
   const [userDialogOpen, setUserDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<"create" | "edit">("create");
@@ -320,6 +322,7 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
     },
     manualPagination: true,
     pageCount: data ? Math.ceil(data.total_count / 10) : 0,
+    getRowId: (row) => String(row.id), // Ensure consistent row ID for mobile/desktop selection
   });
 
   const handleEditUser = (user: User) => {
@@ -546,8 +549,8 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
         </CardContent>
       </Card>
 
-      {/* Users Table */}
-      <Card>
+      {/* Users Table - Desktop */}
+      <Card className="hidden md:block">
         <CardContent className="p-0">
           {isLoading ? (
             <div className="space-y-2 p-6">
@@ -598,6 +601,72 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
           )}
         </CardContent>
       </Card>
+
+      {/* Users Cards - Mobile */}
+      <div className="md:hidden space-y-3">
+        {isLoading ? (
+          // Mobile skeleton
+          Array.from({ length: 5 }).map((_, i) => (
+            <Card key={i}>
+              <CardContent className="p-4">
+                <div className="flex items-start gap-3">
+                  <Skeleton className="h-10 w-10 rounded-full" />
+                  <div className="flex-1 space-y-2">
+                    <Skeleton className="h-4 w-32" />
+                    <Skeleton className="h-3 w-24" />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))
+        ) : data?.users && data.users.length > 0 ? (
+          <>
+            {/* Select All header */}
+            <div className="flex items-center gap-2 px-1 py-2">
+              <Checkbox
+                checked={table.getIsAllPageRowsSelected()}
+                onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
+                aria-label="Chọn tất cả"
+              />
+              <span className="text-sm text-muted-foreground">Chọn tất cả</span>
+            </div>
+
+            {/* User Cards */}
+            {data.users.map((user) => (
+              <UserCard
+                key={user.id}
+                user={user}
+                isSelected={rowSelection[String(user.id)] ?? false}
+                onSelect={(checked) => {
+                  setRowSelection((prev) => ({
+                    ...prev,
+                    [String(user.id)]: checked,
+                  }))
+                }}
+                onEdit={() => handleEditUser(user)}
+                onDelete={() => setUserToDelete(user)}
+                onSetPassword={() => {
+                  setSetPasswordUser(user);
+                  setSetPasswordDialogOpen(true);
+                }}
+                onManageRoles={() => {
+                  setManageRolesUser(user);
+                  setManageRolesDialogOpen(true);
+                }}
+              />
+            ))}
+          </>
+        ) : (
+          <Card>
+            <CardContent className="py-8">
+              <TableEmptyState
+                title={search ? "Không tìm thấy người dùng" : "Chưa có người dùng nào"}
+                description={search ? "Thử tìm kiếm với từ khóa khác" : "Thêm người dùng mới để bắt đầu"}
+              />
+            </CardContent>
+          </Card>
+        )}
+      </div>
 
       {/* Pagination - Responsive: stack on mobile */}
       {data && data.total_count > 10 && (
@@ -691,5 +760,103 @@ export function AdminUsersClient({ initialData }: AdminUsersClientProps) {
         </AlertDialogContent>
       </AlertDialog>
     </PageContainer>
+  );
+}
+
+// =============================================================================
+// MOBILE CARD COMPONENT
+// =============================================================================
+
+interface UserCardProps {
+  user: User;
+  isSelected: boolean;
+  onSelect: (checked: boolean) => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  onSetPassword: () => void;
+  onManageRoles: () => void;
+}
+
+function UserCard({ user, isSelected, onSelect, onEdit, onDelete, onSetPassword, onManageRoles }: UserCardProps) {
+  const roleVariant = user.role === "admin" ? "default" : user.role === "manager" ? "secondary" : "outline";
+  const statusVariant = user.status === "active" ? "default" : user.status === "pending" ? "secondary" : "destructive";
+
+  return (
+    <Card className={cn(isSelected && "ring-2 ring-primary")}>
+      <CardContent className="p-4">
+        <div className="flex items-start gap-3">
+          {/* Checkbox */}
+          <Checkbox
+            checked={isSelected}
+            onCheckedChange={onSelect}
+            aria-label={`Chọn ${user.username}`}
+            className="mt-1"
+          />
+
+          {/* Avatar */}
+          <Avatar className="h-10 w-10 flex-shrink-0">
+            <AvatarImage src={getAvatarUrl(user.avatar_url)} alt={user.username} />
+            <AvatarFallback>{user.username.slice(0, 2).toUpperCase()}</AvatarFallback>
+          </Avatar>
+
+          {/* Content */}
+          <div className="flex-1 min-w-0">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <Link href={`/admin/users/${user.id}`} className="font-medium hover:underline line-clamp-1">
+                  {user.full_name || user.username}
+                </Link>
+                <p className="text-xs text-muted-foreground">@{user.username}</p>
+              </div>
+
+              {/* Actions */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-7 w-7 flex-shrink-0">
+                    <MoreVertical className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuLabel>Thao tác</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem asChild>
+                    <Link href={`/admin/users/${user.id}`}>
+                      <Eye className="mr-2 h-4 w-4" />
+                      Xem chi tiết
+                    </Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={onEdit}>
+                    <Edit className="mr-2 h-4 w-4" />
+                    Sửa người dùng
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={onSetPassword}>
+                    <Key className="mr-2 h-4 w-4" />
+                    Đặt mật khẩu
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={onManageRoles}>
+                    <Shield className="mr-2 h-4 w-4" />
+                    Quản lý vai trò
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={onDelete}>
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Xoá người dùng
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+
+            {/* Email */}
+            <p className="text-sm text-muted-foreground mt-1 truncate">{user.email}</p>
+
+            {/* Badges */}
+            <div className="flex flex-wrap items-center gap-2 mt-2">
+              <Badge variant={roleVariant}>{user.role}</Badge>
+              <Badge variant={statusVariant}>{user.status}</Badge>
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
