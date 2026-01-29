@@ -84,6 +84,7 @@ import { CopyableCell } from "@/components/common/CopyableCell";
 import { ActivityIndicator } from "@/components/common/ActivityIndicator";
 import { UrgencyBadge } from "@/components/common/UrgencyBadge";
 import { EmptyLeadsState } from "./EmptyLeadsState";
+import { MobileLeadList } from "./MobileLeadCard";
 
 // =============================================================================
 // TYPES
@@ -720,17 +721,108 @@ export function LeadsTable({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [table, focusedRowIndex, onSelectLead, onEditLead, onSearchFocus, handleClearSelection]);
 
+  // Check if mobile
+  const isMobile = useIsMobile();
+
   // Loading skeleton
   if (isLoading) {
     return (
       <div className="space-y-2 p-4">
-        {Array.from({ length: 10 }).map((_, i) => (
-          <Skeleton key={i} className="h-12 w-full" />
+        {Array.from({ length: isMobile ? 5 : 10 }).map((_, i) => (
+          <Skeleton key={i} className={isMobile ? "h-20 w-full rounded-lg" : "h-12 w-full"} />
         ))}
       </div>
     );
   }
 
+  // ==========================================================================
+  // MOBILE VIEW - Card-based layout for better touch experience
+  // ==========================================================================
+  if (isMobile) {
+    return (
+      <div className="flex h-full flex-col">
+        {/* Mobile Header */}
+        <div className="flex items-center justify-between border-b px-3 py-2">
+          <span className="text-muted-foreground text-sm">
+            {selectedLeads.length > 0 ? (
+              <span className="text-primary font-medium">{selectedLeads.length} đã chọn</span>
+            ) : (
+              `${totalCount.toLocaleString()} lead`
+            )}
+          </span>
+        </div>
+
+        {/* Mobile List */}
+        <div className="flex-1 overflow-y-auto">
+          {leads.length === 0 ? (
+            <div className="p-4">
+              <EmptyLeadsState
+                hasFilters={hasFilters}
+                searchQuery={searchQuery}
+                totalCount={totalCount}
+                onResetFilters={onResetFilters}
+                onCreateLead={onCreateLead}
+              />
+            </div>
+          ) : (
+            <MobileLeadList
+              leads={leads}
+              selectedLeadId={selectedLeadId}
+              onSelectLead={onSelectLead}
+              onEditLead={onEditLead}
+              onDeleteLead={onDeleteLead}
+            />
+          )}
+        </div>
+
+        {/* Mobile Pagination */}
+        <div className="flex items-center justify-between border-t px-3 py-2">
+          <span className="text-muted-foreground text-xs">
+            {leads.length > 0 ? (page - 1) * pageSize + 1 : 0}-{Math.min(page * pageSize, totalCount)} / {totalCount}
+          </span>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onPageChange?.(page - 1)}
+              disabled={page <= 1}
+              className="h-8 w-8 p-0"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <span className="text-muted-foreground min-w-[60px] text-center text-xs">
+              {page}/{totalPages || 1}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onPageChange?.(page + 1)}
+              disabled={page >= totalPages}
+              className="h-8 w-8 p-0"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+
+        {/* Bulk Actions Bar */}
+        {onBulkAssign && onBulkChangeStage && onBulkExport && onBulkDelete && (
+          <BulkActionsBar
+            selectedLeads={selectedLeads}
+            onClearSelection={handleClearSelection}
+            onBulkAssign={onBulkAssign}
+            onBulkChangeStage={onBulkChangeStage}
+            onBulkExport={onBulkExport}
+            onBulkDelete={onBulkDelete}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // ==========================================================================
+  // DESKTOP VIEW - Table with virtualization
+  // ==========================================================================
   return (
     <div className="flex h-full flex-col" ref={tableContainerRef} tabIndex={0}>
       {/* Toolbar */}
