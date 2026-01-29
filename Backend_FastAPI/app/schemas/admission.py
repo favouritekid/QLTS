@@ -565,6 +565,12 @@ class AdmissionProfileResponse(BaseModel):
     lead: Optional["LeadShallowForAdmission"] = None
     student: Optional["StudentShallowForAdmission"] = None
 
+    # Denormalized fields for list display (avoids nested relationship loading issues)
+    program_name: Optional[str] = Field(
+        None,
+        description="Program name from lead.offering.program (denormalized for list view)"
+    )
+
     # =========================================================================
     # Phase 7: Frontend Thin Client Compliance Fields
     # =========================================================================
@@ -660,23 +666,6 @@ class AdmissionProfileResponse(BaseModel):
     )
 
 
-class ProgramShallowForAdmission(BaseModel):
-    """Minimal Program info for AdmissionProfileResponse."""
-    id: int
-    name: str
-    code: Optional[str] = None
-
-    model_config = ConfigDict(from_attributes=True)
-
-
-class OfferingShallowForAdmission(BaseModel):
-    """Minimal Offering info for AdmissionProfileResponse."""
-    id: int
-    program: Optional[ProgramShallowForAdmission] = None
-
-    model_config = ConfigDict(from_attributes=True)
-
-
 class LeadShallowForAdmission(BaseModel):
     """Minimal Lead info for AdmissionProfileResponse."""
     id: int
@@ -684,7 +673,6 @@ class LeadShallowForAdmission(BaseModel):
     phone: Optional[str] = None
     email: Optional[str] = None
     unit_id: Optional[int] = None
-    offering: Optional[OfferingShallowForAdmission] = None
 
     model_config = ConfigDict(from_attributes=True)
 

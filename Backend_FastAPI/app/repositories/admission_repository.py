@@ -200,6 +200,14 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
         result = await self.db.execute(data_query)
         profiles = list(result.scalars().all())
 
+        # Extract program_name while in async context (avoids MissingGreenlet during serialization)
+        for profile in profiles:
+            program_name = None
+            if profile.lead and profile.lead.offering and profile.lead.offering.program:
+                program_name = profile.lead.offering.program.name
+            # Set as transient attribute for Pydantic serialization
+            object.__setattr__(profile, 'program_name', program_name)
+
         return profiles, total_count
 
     # =========================================================================
