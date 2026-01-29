@@ -23,11 +23,13 @@ const nextConfig: NextConfig = {
     ? [
         // Common mobile device testing IPs
         "http://192.168.88.125", // Without port
+        "http://192.168.88.125:80", // With port 80 (nginx/proxy)
         "http://192.168.88.125:3000", // With port 3000
         "http://192.168.88.125:3001", // With port 3001
 
         // Additional device IP from previous setup
         "http://192.168.0.120",
+        "http://192.168.0.120:80",
         "http://192.168.0.120:3000",
         "http://192.168.0.120:3001",
       ]
