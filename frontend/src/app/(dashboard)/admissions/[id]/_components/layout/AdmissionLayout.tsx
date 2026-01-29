@@ -46,7 +46,7 @@ export function AdmissionLayout({
           <AdmissionHeader profile={profile} validation={validation} />
        </div>
 
-       <div className="flex flex-1 container max-w-7xl mx-auto pt-6 gap-8">
+       <div className="flex flex-1 container max-w-7xl mx-auto px-4 md:px-6 pt-4 md:pt-6 gap-4 md:gap-8">
           {/* 3. Sidebar Nav */}
           <aside className="w-56 hidden lg:block flex-shrink-0 sticky top-24 h-fit">
              <PipelineSidebar

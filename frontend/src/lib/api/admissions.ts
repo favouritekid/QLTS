@@ -11,6 +11,7 @@ import type {
   AdmissionProfileUpdate,
   AdmissionSubmitResponse,
   EnrollStudentResponse,
+  AdmissionsPage,
 } from '@/lib/zod/admissions'
 
 // ============================================
@@ -22,8 +23,8 @@ import type {
  */
 export async function listAdmissions(
   params?: { page?: number; page_size?: number; status?: string }
-): Promise<AdmissionProfileResponse[]> {
-  const response = await api.get<AdmissionProfileResponse[]>('/api/admissions', { params })
+): Promise<AdmissionsPage> {
+  const response = await api.get<AdmissionsPage>('/api/admissions', { params })
   return response.data
 }
 

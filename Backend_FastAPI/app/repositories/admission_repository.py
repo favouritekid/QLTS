@@ -12,9 +12,9 @@ Benefits:
 - Separates SQL from business logic
 """
 
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
-from sqlalchemy import select, or_, and_
+from sqlalchemy import select, or_, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
@@ -79,6 +79,70 @@ class AdmissionRepository(BaseRepository[models.AdmissionProfile]):
             
         result = await self.db.execute(query)
         return list(result.scalars().all())
+
+    async def get_filtered_with_count(
+        self,
+        skip: int = 0,
+        limit: int = 50,
+        unit_id: Optional[int] = None,
+        **filters
+    ) -> Tuple[List[models.AdmissionProfile], int]:
+        """
+        Get filtered list of admission profiles with pagination AND total count.
+
+        Args:
+            skip: Number of records to skip
+            limit: Maximum records to return
+            unit_id: Filter by lead.unit_id (for IDOR protection)
+            **filters: Filter parameters (status, lead_id)
+
+        Returns:
+            Tuple of (List of AdmissionProfile instances, total_count)
+        """
+        # Base query for filtering
+        base_conditions = []
+
+        # IDOR Filter: Filter at DB level for non-admin users
+        if unit_id is not None:
+            base_conditions.append(models.Lead.unit_id == unit_id)
+
+        if filters.get("status"):
+            base_conditions.append(models.AdmissionProfile.status == filters["status"])
+
+        if filters.get("lead_id"):
+            base_conditions.append(models.AdmissionProfile.lead_id == filters["lead_id"])
+
+        # Count query
+        count_query = (
+            select(func.count(models.AdmissionProfile.id))
+            .join(models.Lead)
+        )
+        if base_conditions:
+            count_query = count_query.where(and_(*base_conditions))
+
+        count_result = await self.db.execute(count_query)
+        total_count = count_result.scalar() or 0
+
+        # Data query with pagination
+        data_query = (
+            select(models.AdmissionProfile)
+            .join(models.Lead)
+            .options(
+                joinedload(models.AdmissionProfile.lead),
+                selectinload(models.AdmissionProfile.student),
+                selectinload(models.AdmissionProfile.subject_scores).selectinload(ProfileSubjectScore.subject),
+                selectinload(models.AdmissionProfile.documents).joinedload(ProfileDocument.document_type),
+            )
+            .offset(skip)
+            .limit(limit)
+        )
+        if base_conditions:
+            data_query = data_query.where(and_(*base_conditions))
+
+        result = await self.db.execute(data_query)
+        profiles = list(result.scalars().all())
+
+        return profiles, total_count
 
     # =========================================================================
     # CREATE PROFILE METHODS

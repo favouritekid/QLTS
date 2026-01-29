@@ -1284,9 +1284,9 @@ async def get_profiles(
     limit: int,
     status_filter: Optional[str],
     current_user: models.User,
-) -> List[models.AdmissionProfile]:
+) -> Tuple[List[models.AdmissionProfile], int]:
     """
-    Get filtered list of admission profiles.
+    Get filtered list of admission profiles with total count.
 
     Security:
     - IDOR: Automatically filters by unit_id for non-admin users.
@@ -1299,7 +1299,7 @@ async def get_profiles(
         current_user: Current authenticated user
 
     Returns:
-        List of AdmissionProfile
+        Tuple of (List of AdmissionProfile, total_count)
     """
     from app.repositories import AdmissionRepository
     admission_repo = AdmissionRepository(db)
@@ -1312,15 +1312,15 @@ async def get_profiles(
     # IDOR: Pass unit_id to repository for non-admin users (DB-level filter)
     unit_filter = None if current_user.role == UserRole.ADMIN else current_user.unit_id
 
-    # Get profiles using repository
-    profiles = await admission_repo.get_filtered(
+    # Get profiles using repository with count
+    profiles, total_count = await admission_repo.get_filtered_with_count(
         skip=skip,
         limit=min(limit, 100),
         unit_id=unit_filter,
         **filters
     )
 
-    return profiles
+    return profiles, total_count
 
 
 async def get_profile(

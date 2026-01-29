@@ -15,7 +15,7 @@ interface UIState {
 export const useUIStore = create<UIState>()(
   persist(
     (set) => ({
-      isSidebarCollapsed: false,
+      isSidebarCollapsed: true, // Default to collapsed/hidden for mobile-first safety
 
       setSidebarCollapsed: (collapsed: boolean) => {
         set({ isSidebarCollapsed: collapsed });

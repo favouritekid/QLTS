@@ -17,13 +17,13 @@ export function AdmissionHeader({ profile }: AdmissionHeaderProps) {
   const statusConfig = profile?.status ? getStatusConfig(profile.status, "admission") : null
 
   return (
-    <div className="h-12 px-6 flex items-center gap-3">
+    <div className="min-h-12 px-4 md:px-6 py-2 md:py-0 flex flex-wrap items-center gap-2 md:gap-3">
       {/* Profile ID */}
-      <h1 className="text-base font-semibold font-display">
+      <h1 className="text-sm md:text-base font-semibold font-display">
         Hồ sơ #{profile?.lead_id || "---"}
       </h1>
 
-      <span className="text-muted-foreground">·</span>
+      <span className="text-muted-foreground hidden sm:inline">·</span>
 
       {/* Status Badge */}
       {statusConfig && (
@@ -35,10 +35,10 @@ export function AdmissionHeader({ profile }: AdmissionHeaderProps) {
         </Badge>
       )}
 
-      <span className="text-muted-foreground">·</span>
+      <span className="text-muted-foreground hidden md:inline">·</span>
 
       {/* Officer Name */}
-      <span className="text-sm text-muted-foreground">
+      <span className="text-xs md:text-sm text-muted-foreground hidden md:inline">
         Phụ trách: {profile?.lead?.assigned_officer?.full_name || "Chưa phân công"}
       </span>
     </div>

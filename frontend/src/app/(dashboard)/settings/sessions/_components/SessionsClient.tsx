@@ -57,7 +57,7 @@ export function SessionsClient({ initialData }: SessionsClientProps) {
     revokeSessionMutation.isPending || revokeAllOthersMutation.isPending;
 
   return (
-    <div className="container max-w-4xl py-8">
+    <div className="max-w-4xl space-y-4 md:space-y-6">
       {/* Success Message */}
       {successMessage && (
         <Alert className="mb-6 border-success-500 bg-success-50">

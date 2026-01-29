@@ -28,20 +28,20 @@ export function generateStaticParams() {
  */
 function AdmissionDetailLoading() {
   return (
-    <div className="space-y-6">
+    <div className="px-4 md:px-6 py-4 md:py-6 space-y-4 md:space-y-6">
       {/* Header Skeleton */}
       <Card>
         <CardHeader>
-          <div className="flex justify-between">
+          <div className="flex flex-col sm:flex-row sm:justify-between gap-3">
             <div className="space-y-2">
-              <Skeleton className="h-6 w-48" />
-              <Skeleton className="h-4 w-32" />
+              <Skeleton className="h-6 w-40 sm:w-48" />
+              <Skeleton className="h-4 w-28 sm:w-32" />
             </div>
-            <Skeleton className="h-8 w-24" />
+            <Skeleton className="h-8 w-20 sm:w-24" />
           </div>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Skeleton className="h-10 w-full" />
             <Skeleton className="h-10 w-full" />
           </div>

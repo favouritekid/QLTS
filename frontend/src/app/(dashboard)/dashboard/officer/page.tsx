@@ -49,14 +49,14 @@ function DashboardContent() {
   // === LOADING STATE ===
   if (isLoading) {
     return (
-      <div className="container mx-auto p-6 space-y-6">
-        <div className="flex items-center justify-between">
-          <Skeleton className="h-10 w-64" />
-          <Skeleton className="h-10 w-80" />
+      <div className="container mx-auto px-4 py-4 md:p-6 space-y-4 md:space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <Skeleton className="h-10 w-full sm:w-64" />
+          <Skeleton className="h-10 w-full sm:w-80" />
         </div>
 
         {/* KPI Cards Skeleton */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
           {[1, 2, 3, 4].map((i) => (
             <Skeleton key={i} className="h-32" />
           ))}
@@ -73,7 +73,7 @@ function DashboardContent() {
   // === ERROR STATE ===
   if (error) {
     return (
-      <div className="container mx-auto p-6">
+      <div className="container mx-auto px-4 py-4 md:p-6">
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>
@@ -132,7 +132,7 @@ function DashboardContent() {
     stats.kpis.consultations_today >= stats.kpis.consultations_target;
 
   return (
-    <div className="container mx-auto p-6 space-y-6">
+    <div className="container mx-auto px-4 py-4 md:p-6 space-y-4 md:space-y-6">
       {/* Header with Date Range Filter and Scope Filter */}
       <SmartHeader
         isGoalMet={isGoalMet}
@@ -145,10 +145,10 @@ function DashboardContent() {
       <KPICardsGrid kpis={stats.kpis} />
 
       {/* Main Content: Bento Grid 75/25 */}
-      <div className="grid gap-6 lg:grid-cols-[1fr_350px]">
+      <div className="grid gap-4 md:gap-6 lg:grid-cols-[1fr_350px]">
         {/* Left Column - Charts + Recommendations */}
-        <div className="space-y-6">
-          <div className="grid gap-6 md:grid-cols-2">
+        <div className="space-y-4 md:space-y-6">
+          <div className="grid gap-4 md:gap-6 md:grid-cols-2">
             <PerformanceChart 
               trends={performanceTrends} 
               dailyGoal={stats.kpis.consultations_target}
@@ -161,7 +161,7 @@ function DashboardContent() {
         </div>
 
         {/* Right Column - Action Center */}
-        <div className="space-y-6">
+        <div className="space-y-4 md:space-y-6">
           {/* Phase 6: Annual Progress */}
           <AnnualProgressCard progress={stats.annual_progress} />
           <WorkloadCard statusOverview={stats.status_overview} />

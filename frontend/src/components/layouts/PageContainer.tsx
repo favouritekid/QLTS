@@ -11,6 +11,7 @@ interface PageContainerProps {
  * PageContainer - Standardized wrapper for page content
  *
  * Provides consistent container, padding, and spacing across all pages.
+ * Mobile-optimized with proper overflow handling.
  *
  * @param maxWidth - Controls the maximum width of the container
  *   - sm: max-w-2xl (672px) - Best for forms, settings
@@ -42,8 +43,12 @@ export function PageContainer({
 
   return (
     <div className={cn(
-      // Uses CSS vars: --page-padding-y and --section-gap for consistency
-      "container mx-auto py-[var(--page-padding-y)] space-y-[var(--section-gap)]",
+      // Width constraint - full width on mobile, max-width on larger screens
+      "w-full mx-auto",
+      // Spacing - uses CSS vars for consistency
+      "py-[var(--page-padding-y)] space-y-[var(--section-gap)]",
+      // Overflow handling - prevent content from expanding beyond container
+      "min-w-0",
       maxWidthClasses[maxWidth],
       className
     )}>

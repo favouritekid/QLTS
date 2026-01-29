@@ -207,11 +207,11 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
                 <LayoutGrid className="h-4 w-4" />
               </ToggleGroupItem>
             </ToggleGroup>
-            
+
             {unreadCount > 0 && (
-              <Button onClick={handleMarkAllAsRead} disabled={markAllAsRead.isPending} variant="outline">
-                <CheckCheck className="mr-2 h-4 w-4" />
-                Đánh dấu tất cả đã đọc
+              <Button onClick={handleMarkAllAsRead} disabled={markAllAsRead.isPending} variant="outline" size="sm">
+                <CheckCheck className="h-4 w-4 sm:mr-2" />
+                <span className="hidden sm:inline">Đánh dấu tất cả đã đọc</span>
               </Button>
             )}
           </div>
@@ -293,7 +293,7 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
                 />
             </div>
             <Select value={typeFilter} onValueChange={setTypeFilter}>
-                <SelectTrigger className="w-[180px]">
+                <SelectTrigger className="w-full sm:w-[180px]">
                 <SelectValue placeholder="Loại thông báo" />
                 </SelectTrigger>
                 <SelectContent>
@@ -485,9 +485,9 @@ export function NotificationsClient({ initialData }: NotificationsClientProps) {
 
       {/* Pagination */}
       {!isLoading && notifications.length > 0 && totalCount > pageSize && (
-        <div className="flex items-center justify-between border-t pt-4">
-          <p className="text-muted-foreground text-sm">
-            Hiển thị {(page - 1) * pageSize + 1} đến {Math.min(page * pageSize, totalCount)} / {totalCount} thông báo
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 border-t pt-4">
+          <p className="text-muted-foreground text-sm text-center sm:text-left">
+            Hiển thị {(page - 1) * pageSize + 1} - {Math.min(page * pageSize, totalCount)} / {totalCount}
           </p>
           <div className="flex gap-2">
             <Button

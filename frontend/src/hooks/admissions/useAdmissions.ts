@@ -42,9 +42,14 @@ export function useListAdmissions(
 ) {
   return useQuery({
     queryKey: admissionsKeys.list(filters),
-    queryFn: () => admissionsApi.listAdmissions(filters),
+    queryFn: () => admissionsApi.listAdmissions({
+      page: filters?.page ?? 1,
+      page_size: filters?.page_size ?? 20,
+      status: filters?.status,
+    }),
     staleTime: 15000, // 15 seconds
     refetchOnWindowFocus: true,
+    placeholderData: (previousData) => previousData, // Keep showing old data while fetching new page
   })
 }
 

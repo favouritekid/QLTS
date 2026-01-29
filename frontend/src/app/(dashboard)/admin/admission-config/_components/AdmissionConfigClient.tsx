@@ -8,10 +8,15 @@
  * - Phase2Content: Program management
  * - ContextSelector: Context selection for Phase 3
  * - Phase3Content: Admission path configuration
+ *
+ * Mobile Responsive:
+ * - Desktop (lg+): Sidebar always visible
+ * - Mobile (<lg): Sidebar hidden, accessible via Sheet drawer
  */
 
 "use client";
 
+import { useState } from "react";
 import { useAdmissionConfigState } from "@/hooks/admissions/useAdmissionConfigState";
 import { PhaseNavigator } from "./PhaseNavigator";
 import { WelcomeScreen } from "./WelcomeScreen";
@@ -27,7 +32,14 @@ import { ContextSelector } from "./Phase3Config/ContextSelector";
 import { PathsList } from "./Phase3Config/PathsList";
 import { CoverageMatrix } from "./Phase3Config/CoverageMatrix";
 import { PathWizard } from "./Phase3Config/PathWizard";
-import { Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { Loader2, Menu } from "lucide-react";
 import type { SelectionContext, Phase3View, AdmissionConfigState } from "./shared/types";
 
 // ============================================
@@ -36,6 +48,7 @@ import type { SelectionContext, Phase3View, AdmissionConfigState } from "./share
 
 export function AdmissionConfigClient() {
   const { currentState, navigate, isLoading } = useAdmissionConfigState();
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
 
   // Show loading state while checking data availability
   if (isLoading) {
@@ -60,16 +73,54 @@ export function AdmissionConfigClient() {
 
   // Main layout with sidebar
   return (
-    <div className="flex h-screen overflow-hidden">
-      {/* Sidebar Navigator */}
-      <PhaseNavigator
-        currentState={currentState}
-        onNavigate={navigate}
-      />
+    <div className="flex flex-col lg:flex-row min-h-screen">
+      {/* Mobile Header with Menu Button */}
+      <div className="lg:hidden sticky top-0 z-40 flex items-center gap-3 border-b bg-background px-4 py-3">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-9 w-9"
+          onClick={() => setIsMobileNavOpen(true)}
+          aria-label="Mở menu điều hướng"
+        >
+          <Menu className="h-5 w-5" />
+        </Button>
+        <div>
+          <h1 className="text-lg font-semibold font-display">Cấu hình Tuyển sinh</h1>
+          <p className="text-xs text-muted-foreground">
+            {currentState.type === "phase1" && "Giai đoạn 1: Dữ liệu Danh mục"}
+            {currentState.type === "phase2" && "Giai đoạn 2: Chương trình"}
+            {(currentState.type === "phase3" || currentState.type === "select-context") && "Giai đoạn 3: Cấu hình"}
+          </p>
+        </div>
+      </div>
+
+      {/* Mobile Navigation Sheet */}
+      <Sheet open={isMobileNavOpen} onOpenChange={setIsMobileNavOpen}>
+        <SheetContent side="left" className="w-[85vw] max-w-[300px] p-0">
+          <SheetHeader className="sr-only">
+            <SheetTitle>Menu điều hướng</SheetTitle>
+          </SheetHeader>
+          <PhaseNavigator
+            currentState={currentState}
+            onNavigate={navigate}
+            onClose={() => setIsMobileNavOpen(false)}
+            className="w-full border-r-0 h-full"
+          />
+        </SheetContent>
+      </Sheet>
+
+      {/* Desktop Sidebar Navigator - Hidden on mobile */}
+      <div className="hidden lg:block">
+        <PhaseNavigator
+          currentState={currentState}
+          onNavigate={navigate}
+        />
+      </div>
 
       {/* Main Content Area */}
       <main className="flex-1 overflow-y-auto">
-        <div className="p-8">
+        <div className="p-4 md:p-6 lg:p-8">
           {/* Phase 1: Master Data */}
           {currentState.type === "phase1" && (
             <Phase1Content step={currentState.step} />

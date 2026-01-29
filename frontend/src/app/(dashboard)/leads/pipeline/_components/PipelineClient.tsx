@@ -44,13 +44,13 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
   if (isLoading) {
     return (
       <PageContainer>
-        <Skeleton className="h-10 w-64" />
-        <div className="grid gap-4 md:grid-cols-4">
+        <Skeleton className="h-10 w-48 sm:w-64" />
+        <div className="grid grid-cols-2 gap-3 md:gap-4 md:grid-cols-4">
           {[...Array(4)].map((_, i) => (
             <Skeleton key={i} className="h-24" />
           ))}
         </div>
-        <Skeleton className="h-[600px]" />
+        <Skeleton className="h-[400px] md:h-[600px]" />
       </PageContainer>
     );
   }
@@ -234,7 +234,7 @@ export function PipelineClient({ initialData }: PipelineClientProps) {
       )}
 
       {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 md:gap-4 md:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Total Leads</CardTitle>

@@ -1,6 +1,7 @@
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TableSkeleton } from '@/components/ui/skeletons'
+import { PageContainer } from '@/components/layouts/PageContainer'
 
 /**
  * Admissions/Applications Loading State
@@ -9,14 +10,13 @@ import { TableSkeleton } from '@/components/ui/skeletons'
  */
 export default function AdmissionsLoading() {
   return (
-    <div className="container mx-auto p-6">
+    <PageContainer maxWidth="xl">
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <Skeleton className="h-8 w-40" />
             <div className="flex gap-2">
-              <Skeleton className="h-10 w-28" />
-              <Skeleton className="h-10 w-28" />
+              <Skeleton className="h-10 w-full sm:w-28" />
             </div>
           </div>
         </CardHeader>
@@ -24,6 +24,6 @@ export default function AdmissionsLoading() {
           <TableSkeleton rows={8} />
         </CardContent>
       </Card>
-    </div>
+    </PageContainer>
   )
 }

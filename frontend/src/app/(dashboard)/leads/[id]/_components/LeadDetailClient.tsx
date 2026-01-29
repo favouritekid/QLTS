@@ -166,7 +166,7 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
   if (isLoading) {
     return (
       <div className="flex flex-col h-[calc(100vh-4rem)]">
-        <div className="border-b px-6 py-4">
+        <div className="border-b px-4 md:px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <Skeleton className="h-14 w-14 rounded-2xl" />
@@ -179,13 +179,13 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
             <Skeleton className="h-10 w-40" />
           </div>
         </div>
-        <div className="flex-1 p-6">
-          <div className="grid grid-cols-12 gap-6">
-            <div className="col-span-4 space-y-4">
+        <div className="flex-1 p-4 md:p-6">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-6">
+            <div className="lg:col-span-4 space-y-4">
               <Skeleton className="h-64 w-full" />
               <Skeleton className="h-32 w-full" />
             </div>
-            <div className="col-span-8 space-y-4">
+            <div className="lg:col-span-8 space-y-4">
               <Skeleton className="h-96 w-full" />
               <Skeleton className="h-32 w-full" />
             </div>
@@ -198,7 +198,7 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
   // Error state
   if (isError || !lead) {
     return (
-      <div className="container mx-auto py-6">
+      <div className="container mx-auto px-4 py-4 md:py-6">
         <Card className="border-error-200 bg-error-50">
           <CardHeader>
             <CardTitle className="text-error-900">Lỗi Tải Lead</CardTitle>
@@ -219,7 +219,7 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
   return (
     <div className="flex flex-col min-h-[calc(100vh-4rem)] bg-muted">
       {/* ===== WORKFLOW TABS ===== */}
-      <div className="bg-card border-b border-border px-6">
+      <div className="bg-card border-b border-border px-4 md:px-6">
         <WorkflowBreadcrumb
           currentPhase={workflowContext?.current_phase}
           hasAdmissionProfile={workflowContext?.has_admission_profile}
@@ -227,23 +227,24 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
       </div>
 
       {/* ===== HEADER: ACTION ZONE ===== */}
-      <div className="bg-card border-b border-border px-6 py-4">
-        <div className="flex items-center justify-between">
+      <div className="bg-card border-b border-border px-4 md:px-6 py-4">
+        {/* Mobile: Stack vertically, Desktop: Horizontal */}
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
           {/* Left: Lead Info */}
-          <div className="flex items-center gap-4">
-            <Avatar className="h-14 w-14 rounded-2xl border-2 border-background shadow-lg">
-              <AvatarFallback className="rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 text-white text-xl font-bold">
+          <div className="flex items-center gap-3 md:gap-4">
+            <Avatar className="h-12 w-12 md:h-14 md:w-14 rounded-2xl border-2 border-background shadow-lg shrink-0">
+              <AvatarFallback className="rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 text-white text-lg md:text-xl font-bold">
                 {getInitials(lead.full_name)}
               </AvatarFallback>
             </Avatar>
-            <div>
-              <div className="flex items-center gap-3">
-                <h1 className="text-xl font-bold font-display text-foreground">{lead.full_name}</h1>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2 md:gap-3">
+                <h1 className="text-lg md:text-xl font-bold font-display text-foreground truncate">{lead.full_name}</h1>
                 <span className="text-sm text-muted-foreground">#{lead.id}</span>
                 {lead.consultation_status && (
                   <Badge
                     variant="outline"
-                    className="border-0 font-medium"
+                    className="border-0 font-medium shrink-0"
                     style={{
                       backgroundColor: `${lead.consultation_status.color_code}20`,
                       color: lead.consultation_status.color_code,
@@ -253,33 +254,33 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
                   </Badge>
                 )}
               </div>
-              <div className="flex items-center gap-4 mt-1.5 text-sm text-muted-foreground">
+              <div className="flex flex-wrap items-center gap-2 md:gap-4 mt-1 md:mt-1.5 text-xs md:text-sm text-muted-foreground">
                 {lead.offering && (
-                  <span className="flex items-center gap-1.5">
-                    <GraduationCap className="w-4 h-4 text-muted-foreground" />
-                    {lead.offering.program?.name || lead.offering.offering_type}
+                  <span className="flex items-center gap-1 md:gap-1.5">
+                    <GraduationCap className="w-3.5 h-3.5 md:w-4 md:h-4 text-muted-foreground" />
+                    <span className="truncate max-w-[120px] md:max-w-none">{lead.offering.program?.name || lead.offering.offering_type}</span>
                   </span>
                 )}
-                <span className="flex items-center gap-1.5">
-                  <Target className="w-4 h-4 text-amber-500" />
+                <span className="flex items-center gap-1 md:gap-1.5">
+                  <Target className="w-3.5 h-3.5 md:w-4 md:h-4 text-amber-500" />
                   <span className={cn("font-semibold", getScoreColor(lead.lead_score).split(" ")[0])}>
                     {lead.lead_score} điểm
                   </span>
-                  <span className="text-muted-foreground">• {getScoreLabel(lead.lead_score)}</span>
+                  <span className="text-muted-foreground hidden sm:inline">• {getScoreLabel(lead.lead_score)}</span>
                 </span>
               </div>
             </div>
           </div>
 
           {/* Center: PHONE - Primary Action */}
-          <div className="flex items-center gap-3 bg-muted rounded-2xl p-3 border border-border">
-            <div className="flex flex-col items-end">
+          <div className="flex items-center gap-3 bg-muted rounded-xl md:rounded-2xl p-2 md:p-3 border border-border">
+            <div className="flex flex-col items-start md:items-end flex-1 min-w-0">
               <div className="flex items-center gap-2">
-                <span className="text-lg font-bold text-foreground">{lead.phone}</span>
+                <span className="text-base md:text-lg font-bold text-foreground">{lead.phone}</span>
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-6 w-6 p-0 text-muted-foreground hover:text-muted-foreground"
+                  className="h-6 w-6 p-0 text-muted-foreground hover:text-muted-foreground shrink-0"
                   onClick={() => handleCopyPhone(lead.phone)}
                   aria-label={phoneCopied ? "Đã sao chép" : "Sao chép số điện thoại"}
                 >
@@ -293,12 +294,13 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
               <span className="text-xs text-muted-foreground">SĐT chính</span>
             </div>
             <Button
-              size="lg"
-              className="bg-gradient-to-r from-success-500 to-success-600 hover:from-success-600 hover:to-success-700 text-white font-semibold rounded-xl shadow-lg shadow-success-200 hover:shadow-success-300 transition-all hover:scale-105 active:scale-95"
+              size="default"
+              className="bg-gradient-to-r from-success-500 to-success-600 hover:from-success-600 hover:to-success-700 text-white font-semibold rounded-xl shadow-lg shadow-success-200 hover:shadow-success-300 transition-all hover:scale-105 active:scale-95 md:size-lg shrink-0"
               onClick={() => window.open(`tel:${lead.phone}`, "_blank")}
             >
-              <PhoneCall className="mr-2 h-5 w-5" />
-              GỌI NGAY
+              <PhoneCall className="mr-1.5 md:mr-2 h-4 w-4 md:h-5 md:w-5" />
+              <span className="hidden sm:inline">GỌI NGAY</span>
+              <span className="sm:hidden">Gọi</span>
             </Button>
           </div>
 
@@ -355,7 +357,7 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
       </div>
 
       {/* ===== ACTION BANNER ===== */}
-      <div className="px-6 pt-4">
+      <div className="px-4 md:px-6 pt-4">
         <ActionBanner
           lead={lead}
           onMarkComplete={handleMarkComplete}
@@ -363,7 +365,7 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
       </div>
 
       {/* ===== MAIN CONTENT: 12-column grid (4 + 8) ===== */}
-      <div className="px-6 py-4 flex-1">
+      <div className="px-4 md:px-6 py-4 flex-1">
         <div className="grid grid-cols-12 gap-4">
           {/* ===== LEFT PANEL (4 cols): Reference Info ===== */}
           <div className="col-span-12 lg:col-span-4 space-y-4">
@@ -434,7 +436,7 @@ export function LeadDetailClient({ leadId, initialData }: LeadDetailClientProps)
             </Card>
 
             {/* Quick Stats */}
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <Card className="rounded-2xl border-border text-center p-4">
                 <div className="text-2xl font-bold text-indigo-600">
                   {lead.consultation_count}

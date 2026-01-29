@@ -139,11 +139,11 @@ function LoginHistoryCard({
 
   return (
     <Card className={item.is_suspicious ? "border-warning-400 bg-warning-50/50" : ""}>
-      <CardContent className="p-4">
-        <div className="flex items-start justify-between gap-4">
+      <CardContent className="p-3 md:p-4">
+        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 md:gap-4">
           {/* Left: Device info and status badges */}
           <div className="flex-1 space-y-2">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-1.5 md:gap-2 text-sm md:text-base">
               <DeviceIcon type={item.device_type} />
               <span className="font-medium">
                 {item.browser || "Trình duyệt không xác định"}
@@ -199,7 +199,7 @@ function LoginHistoryCard({
           </div>
 
           {/* Right: Status and actions */}
-          <div className="flex flex-col items-end gap-2">
+          <div className="flex flex-col items-start md:items-end gap-2">
             {item.user_response === "confirmed" && (
               <Badge variant="default" className="bg-success-600">
                 <ShieldCheck className="mr-1 h-3 w-3" />
@@ -212,10 +212,10 @@ function LoginHistoryCard({
                 Đã bảo mật
               </Badge>
             )}
-            
+
             {/* Response buttons for suspicious logins without response */}
             {item.is_suspicious && !item.user_response && (
-              <div className="flex flex-col gap-2 items-end">
+              <div className="flex flex-col gap-2 items-start md:items-end w-full md:w-auto">
                 {/* C3 SECURITY FIX: Warning for stale logins */}
                 {isStale && (
                   <div className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded flex items-center gap-1">
@@ -223,16 +223,16 @@ function LoginHistoryCard({
                     <span>Đăng nhập cũ hơn 7 ngày - không thể xác nhận</span>
                   </div>
                 )}
-                <div className="flex gap-2">
+                <div className="flex gap-2 w-full md:w-auto">
                   <Button
                     size="sm"
                     variant="outline"
                     onClick={() => onConfirm(item.id)}
                     disabled={isStale}
-                    className={isStale
+                    className={`flex-1 md:flex-none ${isStale
                       ? "text-muted-foreground cursor-not-allowed"
                       : "text-success-600 hover:text-success-700 hover:bg-success-50"
-                    }
+                    }`}
                     title={isStale ? "Không thể xác nhận đăng nhập cũ hơn 7 ngày" : "Xác nhận đây là bạn"}
                   >
                     <CheckCircle2 className="mr-1 h-3 w-3" />
@@ -242,7 +242,7 @@ function LoginHistoryCard({
                     size="sm"
                     variant="outline"
                     onClick={() => onSecure(item.id)}
-                    className="text-error-600 hover:text-error-700 hover:bg-error-50"
+                    className="flex-1 md:flex-none text-error-600 hover:text-error-700 hover:bg-error-50"
                   >
                     <ShieldAlert className="mr-1 h-3 w-3" />
                     Không phải tôi

@@ -134,11 +134,11 @@ export function EditProfileForm() {
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
             {/* Avatar Section */}
-            <div className="flex items-center gap-6">
+            <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-6">
               <div className="relative">
-                <Avatar className="h-24 w-24">
+                <Avatar className="h-20 w-20 sm:h-24 sm:w-24">
                   <AvatarImage src={displayAvatarUrl} alt={user.username} />
-                  <AvatarFallback className="text-2xl">{avatarFallback}</AvatarFallback>
+                  <AvatarFallback className="text-xl sm:text-2xl">{avatarFallback}</AvatarFallback>
                 </Avatar>
                 <button
                   type="button"
@@ -149,7 +149,7 @@ export function EditProfileForm() {
                   <Camera className="h-4 w-4" />
                 </button>
               </div>
-              <div className="space-y-1">
+              <div className="space-y-1 text-center sm:text-left">
                 <p className="text-sm font-medium">Ảnh Đại Diện</p>
                 <p className="text-muted-foreground text-xs">
                   Nhấn vào biểu tượng máy ảnh để tải ảnh đại diện mới. JPG, PNG hoặc GIF. Tối đa 5MB.

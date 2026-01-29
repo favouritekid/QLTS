@@ -558,6 +558,19 @@ export type AdmissionProfileResponse = z.infer<
 >
 
 /**
+ * Paginated Admissions Response Schema
+ * Used for GET /api/admissions response
+ */
+export const admissionsPageSchema = z.object({
+  total_count: z.number(),
+  page: z.number(),
+  page_size: z.number(),
+  profiles: z.array(admissionProfileResponseSchema),
+})
+
+export type AdmissionsPage = z.infer<typeof admissionsPageSchema>
+
+/**
  * Submit Response Schema
  * Used for POST /api/admissions/{id}/submit response
  * 

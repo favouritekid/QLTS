@@ -684,6 +684,14 @@ class StudentShallowForAdmission(BaseModel):
 AdmissionProfileResponse.model_rebuild()
 
 
+class AdmissionsPage(BaseModel):
+    """Paginated admissions response with metadata."""
+    total_count: int
+    page: int
+    page_size: int
+    profiles: List[AdmissionProfileResponse]
+
+
 class AdmissionSubmitResponse(BaseModel):
     """
     Schema for submit endpoint response.

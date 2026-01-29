@@ -9,17 +9,18 @@ export function Main({ children, className }: { children: React.ReactNode; class
   return (
     <main
       className={cn(
-        // Padding và spacing - Padding sẽ tạo khoảng cách xung quanh content
+        // Padding và spacing - Responsive padding for mobile
         "flex-1 p-3 md:p-4 lg:p-6",
-        // Overflow control
-        "overflow-x-hidden overflow-y-auto",
+        // Overflow control - allow vertical scroll, contain horizontal within children
+        "overflow-y-auto overflow-x-hidden",
         // Min height để đảm bảo chiếm toàn bộ viewport
         "min-h-[calc(100vh-3.5rem)]",
         className
       )}
     >
       {/* Container với max-width và spacing - uses --content-max-width and --content-gap */}
-      <div className="mx-auto w-full max-w-[var(--content-max-width)] space-y-[var(--content-gap)]">
+      {/* w-full + min-w-0 + max-w-full ensures container stays within bounds */}
+      <div className="mx-auto w-full min-w-0 max-w-full lg:max-w-[var(--content-max-width)] space-y-[var(--content-gap)]">
         {/* Breadcrumbs Navigation - wrapped in Suspense for prerender compat */}
         <Suspense fallback={<div className="h-6 mb-2" />}>
           <Breadcrumbs className="mb-2" />

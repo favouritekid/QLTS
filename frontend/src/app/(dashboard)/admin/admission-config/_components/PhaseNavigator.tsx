@@ -30,6 +30,8 @@ interface PhaseNavigatorProps {
   currentState: AdmissionConfigState;
   onNavigate: (state: AdmissionConfigState) => void;
   className?: string;
+  /** Callback to close mobile sheet when navigating */
+  onClose?: () => void;
 }
 
 interface StepConfig {
@@ -63,6 +65,7 @@ export function PhaseNavigator({
   currentState,
   onNavigate,
   className,
+  onClose,
 }: PhaseNavigatorProps) {
   const isPhase1Active = currentState.type === "phase1";
   const isPhase2Active = currentState.type === "phase2";
@@ -86,11 +89,15 @@ export function PhaseNavigator({
     } else {
       onNavigate({ type: "phase2", step: stepId as Phase2Step });
     }
+    // Close mobile sheet after navigation
+    onClose?.();
   };
 
   // Navigate to Phase 3
   const handlePhase3Click = () => {
     onNavigate({ type: "select-context" });
+    // Close mobile sheet after navigation
+    onClose?.();
   };
 
   return (

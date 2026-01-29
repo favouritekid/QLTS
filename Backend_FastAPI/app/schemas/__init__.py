@@ -150,6 +150,7 @@ from .admission import (
     AdmissionProfileCreate,
     AdmissionProfileUpdate,
     AdmissionProfileResponse,
+    AdmissionsPage,
     AdmissionSubmitResponse,
     EnrollStudentResponse,
     # Document upload

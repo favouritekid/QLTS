@@ -82,7 +82,8 @@ export function PageHeader({
   return (
     <header
       className={cn(
-        "flex items-center justify-between",
+        // Mobile: stack vertically, Desktop: side by side
+        "flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between",
         // Sticky variant styles
         isSticky && [
           "sticky top-0 z-10",
@@ -95,7 +96,7 @@ export function PageHeader({
         className
       )}
     >
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 min-w-0">
         {/* Back Button */}
         {backButton && (
           <Button variant="ghost" size="icon" asChild>
@@ -139,7 +140,7 @@ export function PageHeader({
 
       {/* Actions Area */}
       {actions && (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-shrink-0">
           {actions}
         </div>
       )}
