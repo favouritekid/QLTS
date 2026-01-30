@@ -4,13 +4,13 @@ import type { Lead } from "@/types/lead.types";
 
 import { useState } from "react";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/components/ui/responsive-dialog";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -119,19 +119,19 @@ export function ReassignLeadDialog({
   const quotaExceeded = !hasManagerAccess && quota && quota.remaining_today <= 0;
   
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[425px]">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
+    <ResponsiveDialog open={open} onOpenChange={onOpenChange}>
+      <ResponsiveDialogContent className="sm:max-w-[425px]">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle className="flex items-center gap-2">
             <RefreshCcw className="h-5 w-5" />
             Phân công lại Lead
-          </DialogTitle>
-          <DialogDescription>
+          </ResponsiveDialogTitle>
+          <ResponsiveDialogDescription>
             {hasManagerAccess 
               ? "Chọn nhân viên mới và lý do phân công lại."
               : "Gửi yêu cầu phân công lại lead này cho nhân viên khác."}
-          </DialogDescription>
-        </DialogHeader>
+          </ResponsiveDialogDescription>
+        </ResponsiveDialogHeader>
         
         <div className="space-y-4 py-4">
           {/* Lead Info */}
@@ -201,7 +201,7 @@ export function ReassignLeadDialog({
           )}
         </div>
         
-        <DialogFooter>
+        <ResponsiveDialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Hủy
           </Button>
@@ -214,9 +214,9 @@ export function ReassignLeadDialog({
             )}
             {hasManagerAccess ? "Phân công lại" : "Gửi yêu cầu"}
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </ResponsiveDialogFooter>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }
 

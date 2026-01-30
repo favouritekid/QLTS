@@ -10,13 +10,13 @@ import { AlertTriangle } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/components/ui/responsive-dialog"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 
@@ -54,18 +54,18 @@ export function BulkRejectDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-[425px]">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
+    <ResponsiveDialog open={open} onOpenChange={handleClose}>
+      <ResponsiveDialogContent className="sm:max-w-[425px]">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle className="flex items-center gap-2">
             <AlertTriangle className="h-5 w-5 text-error-500" />
             Từ chối hàng loạt
-          </DialogTitle>
-          <DialogDescription>
+          </ResponsiveDialogTitle>
+          <ResponsiveDialogDescription>
             Bạn sắp từ chối <strong>{selectedCount}</strong> hồ sơ tuyển sinh.
             Vui lòng nhập lý do từ chối.
-          </DialogDescription>
-        </DialogHeader>
+          </ResponsiveDialogDescription>
+        </ResponsiveDialogHeader>
 
         <div className="grid gap-4 py-4">
           <div className="grid gap-2">
@@ -92,7 +92,7 @@ export function BulkRejectDialog({
           </div>
         </div>
 
-        <DialogFooter>
+        <ResponsiveDialogFooter>
           <Button
             variant="outline"
             onClick={handleClose}
@@ -107,8 +107,8 @@ export function BulkRejectDialog({
           >
             {isLoading ? "Đang xử lý..." : `Từ chối ${selectedCount} hồ sơ`}
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </ResponsiveDialogFooter>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   )
 }

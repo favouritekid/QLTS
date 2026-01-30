@@ -10,13 +10,13 @@ import { UserPlus, Loader2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/components/ui/responsive-dialog"
 import {
   Select,
   SelectContent,
@@ -68,17 +68,17 @@ export function BulkAssignDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-[425px]">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
+    <ResponsiveDialog open={open} onOpenChange={handleClose}>
+      <ResponsiveDialogContent className="sm:max-w-[425px]">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle className="flex items-center gap-2">
             <UserPlus className="h-5 w-5 text-primary" />
             Phân công hàng loạt
-          </DialogTitle>
-          <DialogDescription>
+          </ResponsiveDialogTitle>
+          <ResponsiveDialogDescription>
             Phân công <strong>{selectedCount}</strong> hồ sơ tuyển sinh cho cán bộ xử lý.
-          </DialogDescription>
-        </DialogHeader>
+          </ResponsiveDialogDescription>
+        </ResponsiveDialogHeader>
 
         <div className="grid gap-4 py-4">
           <div className="grid gap-2">
@@ -120,7 +120,7 @@ export function BulkAssignDialog({
           </div>
         </div>
 
-        <DialogFooter>
+        <ResponsiveDialogFooter>
           <Button variant="outline" onClick={handleClose} disabled={isLoading}>
             Hủy
           </Button>
@@ -131,8 +131,8 @@ export function BulkAssignDialog({
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Phân công {selectedCount} hồ sơ
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </ResponsiveDialogFooter>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   )
 }

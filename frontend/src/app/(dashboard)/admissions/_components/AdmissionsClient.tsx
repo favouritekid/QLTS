@@ -86,6 +86,7 @@ import { Calendar as CalendarComponent } from "@/components/ui/calendar"
 import { PageContainer } from "@/components/layouts/PageContainer"
 import { EmptyState, ErrorEmptyState } from "@/components/common/EmptyState"
 import { Pagination } from "@/components/common/table/Pagination"
+import { MobileFilterSheet } from "@/components/common/MobileFilterSheet"
 import { cn } from "@/lib/utils"
 
 import {
@@ -136,6 +137,7 @@ export function AdmissionsClient() {
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
 
   // Dialog state
+  const [filterSheetOpen, setFilterSheetOpen] = useState(false)
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false)
   const [assignDialogOpen, setAssignDialogOpen] = useState(false)
 
