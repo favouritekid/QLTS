@@ -28,8 +28,17 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Plus, Pencil, Trash2, Loader2, List, Upload } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2, List, Upload, MoreVertical } from "lucide-react";
 import type { AxiosError } from "axios";
+import { MobileActionSheet } from "@/components/common/MobileActionSheet";
+import {
+  BaseCard,
+  CardHeader as BaseCardHeader,
+  CardBody,
+  CardField,
+  CardMeta,
+  CardActions,
+} from "@/components/ui/base-card";
 
 // ============================================
 // TYPES
@@ -49,6 +58,82 @@ interface CategoryFormData {
   code: string;
   name: string;
   description?: string;
+}
+
+// ============================================
+// MOBILE CATEGORY CARD
+// ============================================
+
+interface MobileCategoryCardProps {
+  item: SystemCategory;
+  onEdit: (item: SystemCategory) => void;
+  onDelete: (id: number) => void;
+}
+
+function MobileCategoryCard({ item, onEdit, onDelete }: MobileCategoryCardProps) {
+  const [actionSheetOpen, setActionSheetOpen] = useState(false);
+
+  return (
+    <BaseCard showCheckbox={false}>
+      <BaseCardHeader
+        title={item.name}
+        subtitle={<code className="bg-muted rounded px-1.5 py-0.5 text-xs">{item.code}</code>}
+        badge={
+          <Badge variant={item.is_active ? "default" : "secondary"}>
+            {item.is_active ? "Active" : "Inactive"}
+          </Badge>
+        }
+      />
+      {item.description && (
+        <CardBody>
+          <p className="text-sm text-muted-foreground">{item.description}</p>
+        </CardBody>
+      )}
+      <CardMeta>
+        <span className="text-xs text-muted-foreground">
+          Thứ tự: {item.display_order}
+        </span>
+      </CardMeta>
+      <CardActions>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          onClick={() => setActionSheetOpen(true)}
+        >
+          <MoreVertical className="h-4 w-4" />
+        </Button>
+      </CardActions>
+
+      {/* Mobile Action Sheet */}
+      <MobileActionSheet
+        open={actionSheetOpen}
+        onOpenChange={setActionSheetOpen}
+        title={item.name}
+      >
+        <MobileActionSheet.Item
+          icon={Pencil}
+          disabled
+          onClick={() => {
+            setActionSheetOpen(false);
+            onEdit(item);
+          }}
+        >
+          Chỉnh sửa (Không hỗ trợ)
+        </MobileActionSheet.Item>
+        <MobileActionSheet.Item
+          icon={Trash2}
+          variant="destructive"
+          onClick={() => {
+            setActionSheetOpen(false);
+            onDelete(item.id);
+          }}
+        >
+          Xóa
+        </MobileActionSheet.Item>
+      </MobileActionSheet>
+    </BaseCard>
+  );
 }
 
 // Category Types
@@ -223,60 +308,77 @@ export function SystemCategoryManager() {
             <p className="text-xs mt-1">Click &quot;Add New&quot; to create one.</p>
           </div>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-[120px]">Code</TableHead>
-                <TableHead>Name</TableHead>
-                <TableHead>Description</TableHead>
-                <TableHead className="w-[80px]">Order</TableHead>
-                <TableHead className="w-[100px]">Status</TableHead>
-                <TableHead className="w-[120px] text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
+          <>
+            {/* Desktop: Table */}
+            <div className="hidden md:block">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[120px]">Code</TableHead>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Description</TableHead>
+                    <TableHead className="w-[80px]">Order</TableHead>
+                    <TableHead className="w-[100px]">Status</TableHead>
+                    <TableHead className="w-[120px] text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {categories.map((item) => (
+                    <TableRow key={item.id}>
+                      <TableCell>
+                        <code className="bg-muted rounded px-2 py-1 text-xs">{item.code}</code>
+                      </TableCell>
+                      <TableCell className="font-medium">{item.name}</TableCell>
+                      <TableCell className="text-muted-foreground text-sm">
+                        {item.description || "—"}
+                      </TableCell>
+                      <TableCell>{item.display_order}</TableCell>
+                      <TableCell>
+                        <Badge variant={item.is_active ? "default" : "secondary"}>
+                          {item.is_active ? "Active" : "Inactive"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-2">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleOpenEdit(item)}
+                            disabled
+                            title="Edit not supported via API"
+                            aria-label="Chỉnh sửa"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDelete(item.id)}
+                            title="Delete category"
+                            aria-label="Xóa"
+                          >
+                            <Trash2 className="text-destructive h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+
+            {/* Mobile: Cards */}
+            <div className="md:hidden space-y-2">
               {categories.map((item) => (
-                <TableRow key={item.id}>
-                  <TableCell>
-                    <code className="bg-muted rounded px-2 py-1 text-xs">{item.code}</code>
-                  </TableCell>
-                  <TableCell className="font-medium">{item.name}</TableCell>
-                  <TableCell className="text-muted-foreground text-sm">
-                    {item.description || "—"}
-                  </TableCell>
-                  <TableCell>{item.display_order}</TableCell>
-                  <TableCell>
-                    <Badge variant={item.is_active ? "default" : "secondary"}>
-                      {item.is_active ? "Active" : "Inactive"}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-2">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleOpenEdit(item)}
-                        disabled
-                        title="Edit not supported via API"
-                        aria-label="Chỉnh sửa"
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleDelete(item.id)}
-                        title="Delete category"
-                        aria-label="Xóa"
-                      >
-                        <Trash2 className="text-destructive h-4 w-4" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
+                <MobileCategoryCard
+                  key={item.id}
+                  item={item}
+                  onEdit={handleOpenEdit}
+                  onDelete={handleDelete}
+                />
               ))}
-            </TableBody>
-          </Table>
+            </div>
+          </>
         )}
 
         {/* Info Note */}

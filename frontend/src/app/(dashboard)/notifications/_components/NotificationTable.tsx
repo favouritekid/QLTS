@@ -1,7 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import { formatDistanceToNow } from "date-fns";
-import { Check, MoreHorizontal, Trash2 } from "lucide-react";
+import { Check, MoreVertical, Trash2 } from "lucide-react";
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
@@ -20,9 +21,143 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Card } from "@/components/ui/card";
+import { MobileActionSheet } from "@/components/common/MobileActionSheet";
 import { cn } from "@/lib/utils";
 import type { Notification } from "@/types/api.types";
+
+// =============================================================================
+// MOBILE NOTIFICATION CARD
+// =============================================================================
+
+interface MobileNotificationCardProps {
+  notification: Notification;
+  isSelected: boolean;
+  onSelect: (checked: boolean) => void;
+  onMarkAsRead: () => void;
+  onDelete: () => void;
+  getNotificationIcon: (type: Notification["type"]) => React.ReactNode;
+}
+
+function MobileNotificationCard({
+  notification,
+  isSelected,
+  onSelect,
+  onMarkAsRead,
+  onDelete,
+  getNotificationIcon,
+}: MobileNotificationCardProps) {
+  const [actionSheetOpen, setActionSheetOpen] = useState(false);
+
+  return (
+    <div
+      className={cn(
+        "p-3 rounded-lg border bg-card",
+        !notification.is_read && "border-l-4 border-l-primary bg-muted/30"
+      )}
+    >
+      <div className="flex gap-3">
+        {/* Checkbox */}
+        <div className="pt-0.5">
+          <Checkbox
+            checked={isSelected}
+            onCheckedChange={(checked) => onSelect(checked === true)}
+            aria-label={`Chọn ${notification.title}`}
+          />
+        </div>
+
+        {/* Icon */}
+        <div className="flex-shrink-0 pt-0.5">
+          {getNotificationIcon(notification.type)}
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 min-w-0 space-y-1">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              {notification.link ? (
+                <Link
+                  href={notification.link}
+                  className={cn(
+                    "text-sm hover:underline line-clamp-2",
+                    !notification.is_read && "font-semibold"
+                  )}
+                >
+                  {notification.title}
+                </Link>
+              ) : (
+                <p
+                  className={cn(
+                    "text-sm line-clamp-2",
+                    !notification.is_read && "font-semibold"
+                  )}
+                >
+                  {notification.title}
+                </p>
+              )}
+            </div>
+
+            {/* Actions button */}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 flex-shrink-0"
+              onClick={() => setActionSheetOpen(true)}
+            >
+              <MoreVertical className="h-4 w-4" />
+              <span className="sr-only">Mở menu</span>
+            </Button>
+          </div>
+
+          <p className="text-xs text-muted-foreground line-clamp-1">
+            {notification.message}
+          </p>
+
+          <p
+            className="text-xs text-muted-foreground"
+            suppressHydrationWarning
+          >
+            {formatDistanceToNow(new Date(notification.created_at), {
+              addSuffix: true,
+            })}
+          </p>
+        </div>
+      </div>
+
+      {/* Mobile Action Sheet */}
+      <MobileActionSheet
+        open={actionSheetOpen}
+        onOpenChange={setActionSheetOpen}
+        title={notification.title}
+      >
+        {!notification.is_read && (
+          <MobileActionSheet.Item
+            icon={Check}
+            onClick={() => {
+              setActionSheetOpen(false);
+              onMarkAsRead();
+            }}
+          >
+            Đánh dấu đã đọc
+          </MobileActionSheet.Item>
+        )}
+        <MobileActionSheet.Item
+          icon={Trash2}
+          variant="destructive"
+          onClick={() => {
+            setActionSheetOpen(false);
+            onDelete();
+          }}
+        >
+          Xóa
+        </MobileActionSheet.Item>
+      </MobileActionSheet>
+    </div>
+  );
+}
+
+// =============================================================================
+// NOTIFICATION TABLE
+// =============================================================================
 
 interface NotificationTableProps {
   notifications: Notification[];
@@ -76,97 +211,15 @@ export function NotificationTable({
 
         {/* Notification Cards */}
         {notifications.map((notification) => (
-          <Card
+          <MobileNotificationCard
             key={notification.id}
-            className={cn(
-              "p-3",
-              !notification.is_read && "border-l-4 border-l-primary bg-muted/30"
-            )}
-          >
-            <div className="flex gap-3">
-              {/* Checkbox */}
-              <div className="pt-0.5">
-                <Checkbox
-                  checked={selectedIds.includes(notification.id)}
-                  onCheckedChange={(checked) =>
-                    onSelect(notification.id, checked === true)
-                  }
-                  aria-label={`Chọn ${notification.title}`}
-                />
-              </div>
-
-              {/* Icon */}
-              <div className="flex-shrink-0 pt-0.5">
-                {getNotificationIcon(notification.type)}
-              </div>
-
-              {/* Content */}
-              <div className="flex-1 min-w-0 space-y-1">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    {notification.link ? (
-                      <Link
-                        href={notification.link}
-                        className={cn(
-                          "text-sm hover:underline line-clamp-2",
-                          !notification.is_read && "font-semibold"
-                        )}
-                      >
-                        {notification.title}
-                      </Link>
-                    ) : (
-                      <p
-                        className={cn(
-                          "text-sm line-clamp-2",
-                          !notification.is_read && "font-semibold"
-                        )}
-                      >
-                        {notification.title}
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Actions dropdown */}
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon" className="h-7 w-7 flex-shrink-0">
-                        <MoreHorizontal className="h-4 w-4" />
-                        <span className="sr-only">Mở menu</span>
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      {!notification.is_read && (
-                        <DropdownMenuItem onClick={() => onMarkAsRead(notification.id)}>
-                          <Check className="mr-2 h-4 w-4" />
-                          Đánh dấu đã đọc
-                        </DropdownMenuItem>
-                      )}
-                      <DropdownMenuItem
-                        onClick={() => onDelete(notification.id)}
-                        className="text-destructive focus:text-destructive"
-                      >
-                        <Trash2 className="mr-2 h-4 w-4" />
-                        Xóa
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-
-                <p className="text-xs text-muted-foreground line-clamp-1">
-                  {notification.message}
-                </p>
-
-                <p
-                  className="text-xs text-muted-foreground"
-                  suppressHydrationWarning
-                >
-                  {formatDistanceToNow(new Date(notification.created_at), {
-                    addSuffix: true,
-                  })}
-                </p>
-              </div>
-            </div>
-          </Card>
+            notification={notification}
+            isSelected={selectedIds.includes(notification.id)}
+            onSelect={(checked) => onSelect(notification.id, checked)}
+            onMarkAsRead={() => onMarkAsRead(notification.id)}
+            onDelete={() => onDelete(notification.id)}
+            getNotificationIcon={getNotificationIcon}
+          />
         ))}
       </div>
 
@@ -254,7 +307,7 @@ export function NotificationTable({
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button variant="ghost" className="h-8 w-8 p-0">
-                        <MoreHorizontal className="h-4 w-4" />
+                        <MoreVertical className="h-4 w-4" />
                         <span className="sr-only">Mở menu</span>
                       </Button>
                     </DropdownMenuTrigger>
