@@ -260,7 +260,7 @@ export function FileUpload({
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           className={cn(
-            "border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors",
+            "border-2 border-dashed rounded-lg p-6 min-h-[120px] md:min-h-0 text-center cursor-pointer transition-colors",
             isDragging && "border-primary bg-primary/5",
             disabled && "opacity-50 cursor-not-allowed",
             hasError && "border-destructive",
@@ -333,7 +333,7 @@ export function FileUpload({
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="shrink-0 h-8 w-8"
+                className="shrink-0 h-10 w-10 md:h-8 md:w-8"
                 onClick={() => handleRemove(fileItem.id)}
                 disabled={fileItem.status === "uploading"}
                 aria-label="Xóa file"

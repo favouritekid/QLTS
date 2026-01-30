@@ -67,7 +67,7 @@ export function NotificationDropdown() {
         <Button
           variant="ghost"
           size="icon"
-          className="relative h-9 w-9 rounded-full"
+          className="relative h-11 w-11 md:h-9 md:w-9 rounded-full"
           aria-label="Thông báo"
         >
           <Bell className="h-5 w-5" />
@@ -100,7 +100,7 @@ export function NotificationDropdown() {
             <Button
               variant="ghost"
               size="sm"
-              className="h-7 text-xs"
+              className="h-9 md:h-7 text-xs"
               onClick={handleMarkAllAsRead}
               disabled={markAllAsRead.isPending}
             >
@@ -217,7 +217,7 @@ export function NotificationDropdown() {
               <Link href="/notifications" onClick={() => setIsOpen(false)}>
                 <Button
                   variant="ghost"
-                  className="h-8 w-full text-xs font-medium"
+                  className="h-10 md:h-8 w-full text-xs font-medium"
                 >
                   Xem tất cả thông báo
                 </Button>

@@ -114,7 +114,7 @@ export function DataTableToolbar<TData>({
             variant="ghost"
             size="sm"
             onClick={handleResetFilters}
-            className="h-8 px-2 lg:px-3"
+            className="h-10 md:h-8 px-3 lg:px-3"
           >
             Xoa bo loc
             <X className="ml-2 h-4 w-4" />
@@ -131,7 +131,7 @@ export function DataTableToolbar<TData>({
         {showColumnToggle && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="ml-auto h-8">
+              <Button variant="outline" size="sm" className="ml-auto h-10 md:h-8">
                 <Settings2 className="mr-2 h-4 w-4" />
                 Cot
               </Button>

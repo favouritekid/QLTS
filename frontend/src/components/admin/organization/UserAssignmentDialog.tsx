@@ -3,13 +3,13 @@
 
 import { useState, useMemo } from "react";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  ResponsiveDialog,
+  ResponsiveDialogContent,
+  ResponsiveDialogDescription,
+  ResponsiveDialogFooter,
+  ResponsiveDialogHeader,
+  ResponsiveDialogTitle,
+} from "@/components/ui/responsive-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -231,14 +231,14 @@ export function UserAssignmentDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-[600px] h-[80vh] flex flex-col">
-        <DialogHeader>
-          <DialogTitle>Quản lý người dùng</DialogTitle>
-          <DialogDescription>
+    <ResponsiveDialog open={open} onOpenChange={handleOpenChange}>
+      <ResponsiveDialogContent className="sm:max-w-[600px] h-[80vh] flex flex-col">
+        <ResponsiveDialogHeader>
+          <ResponsiveDialogTitle>Quản lý người dùng</ResponsiveDialogTitle>
+          <ResponsiveDialogDescription>
             Chọn người dùng để thêm vào đơn vị &quot;{unit.name}&quot;
-          </DialogDescription>
-        </DialogHeader>
+          </ResponsiveDialogDescription>
+        </ResponsiveDialogHeader>
 
         {/* Search */}
         <div className="relative">
@@ -327,7 +327,7 @@ export function UserAssignmentDialog({
         </ScrollArea>
 
         {/* Footer */}
-        <DialogFooter className="flex items-center justify-between sm:justify-between">
+        <ResponsiveDialogFooter className="flex items-center justify-between sm:justify-between">
           <div className="text-sm text-muted-foreground">
             {selectedUserIds.size} người dùng đã chọn
           </div>
@@ -345,8 +345,8 @@ export function UserAssignmentDialog({
               Lưu thay đổi
             </Button>
           </div>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </ResponsiveDialogFooter>
+      </ResponsiveDialogContent>
+    </ResponsiveDialog>
   );
 }
